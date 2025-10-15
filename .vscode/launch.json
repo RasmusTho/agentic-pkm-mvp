@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Attach to API (debugpy)",
+      "type": "python",
+      "request": "attach",
+      "connect": { "host": "127.0.0.1", "port": 15678 },
+      "pathMappings": [
+        { "localRoot": "/Users/rasmus/workspace/app", "remoteRoot": "/app" }
+      ],
+      "justMyCode": false
+    }
+  ]
+}
