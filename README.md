@@ -1,7 +1,7 @@
 # Agentic PKM API
 
 FastAPI backend plus LangGraph agent pieces for the "Second-Brain" project.  
-The service exposes simple CRUD for `/items`, a `/context` endpoint that returns repo memory, and a callable agent graph via `run_agent.py`.
+The service exposes `/items` CRUD, `/context` for repo memory, `/health` for readiness, `/version` for build info, and a callable agent graph via `run_agent.py`.
 
 ## Getting Started
 1. Create and activate a virtual environment (`python -m venv .venv && source .venv/bin/activate`).
@@ -14,8 +14,15 @@ The service exposes simple CRUD for `/items`, a `/context` endpoint that returns
 - Alembic is configured under `app/alembic/`; run migrations with `alembic -c app/alembic.ini upgrade head`.
 
 ### Agent CLI
-- Invoke the agent workflow with `python run_agent.py`.
-- Upcoming work: add CLI flags (`--task`, `--input`, `--dry-run`) as noted in `docs/ALIGNMENT.md`.
+- Run the workflow with `python run_agent.py --task summarize --input "demo text"`.
+- `--dry-run` previews the payload without executing; `--profile` selects `work|home|creative`.
+- `--input -` reads text from stdin, otherwise pass the content directly.
+
+### API Endpoints
+- `GET /health` returns aggregated readiness details for the SQL DB, DuckDB store, and provenance log.
+- `GET /version` returns `{"version": settings.app_version}` (override via env).
+- `GET /context` streams repo memory for the agent.
+- `GET /items`, `POST /items` provide basic demo CRUD.
 
 ## Testing
 - Execute `pytest` (VS Code picks this up automatically via `.vscode/settings.json`).

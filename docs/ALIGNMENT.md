@@ -12,10 +12,10 @@
 - Alembic migrations are current with baseline `3ddfc7237248_baseline.py`.
 
 ## Near-Term Focus
-- Finish CLI upgrades for `run_agent.py` (`--task`, `--input`, `--dry-run`).
-- Add `/health` and `/version` endpoints for ops readiness.
-- Keep `/items` tests passing; consider router split when CRUD grows.
-- Bring in CI (pytest) plus linting (Ruff) and typing (mypy).
+- Förbered CI-flow med pytest, Ruff och mypy.
+- Dokumentera versionsflöde (hur `settings.app_version` bumpas).
+- Planera rotation/backup för DuckDB + provenance loggar.
+- Utvärdera behov av auth + rate limiting före produktion.
 
 ## Operating Principles
 - Bias for maintainable, well-tested changes; add tests when behavior shifts or bugs are fixed.
@@ -31,3 +31,8 @@
 ## Decision Log
 - 2025-10-18: Context loader added exposing repo memory through `/context`.
 - 2025-10-18: Launch configuration standardized on debugpy attach at port `15678`.
+- 2025-10-19: `run_agent.py` CLI now supports `--task`, `--input`, and `--dry-run` flags (plus tests).
+- 2025-10-19: Added `/health` (DB ping) and `/version` endpoints with tests.
+- 2025-10-19: FastAPI startup migrated to lifespan handler that ensures tables exist.
+- 2025-10-19: `/health` now validates DuckDB connectivity and provenance.jsonl access.
+- 2025-10-19: `/items` endpoints extracted to router with expanded coverage.

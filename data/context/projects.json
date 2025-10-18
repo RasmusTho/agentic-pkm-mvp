@@ -10,11 +10,11 @@
         "Alembic migrations under app/alembic/"
       ],
       "next_actions": [
-        "CLI till run_agent.py: --task/--input/--dry-run",
-        "Lägg till /health och /version endpoints",
-        "Få tests/test_items.py att passera (implementera ev. items-router)",
         "Sätt upp CI med pytest (GitHub Actions)",
-        "Inför Ruff + mypy i dev-flödet"
+        "Inför Ruff + mypy i dev-flödet",
+        "Dokumentera versionsflöde kring settings.app_version",
+        "Planera rotation/backup för DuckDB och provenance.jsonl",
+        "Utvärdera auth och rate limiting inför produktion"
       ]
     }
   ]
