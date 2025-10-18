@@ -126,3 +126,35 @@ chunks:
 ### Testfall (kommande)
 - `tests/test_ingest_poc.py` – validerar att `/ingest` sparar frontmatter + pushar chunkar till Chroma.
 - `tests/test_recall_poc.py` – validerar top-k recall (mockad Chroma tills riktig integration finns).
+
+## Chunking v0.2 – Semantisk & Reviderbar
+
+### Configuration
+- `CHUNK_SIZE`: 800 (default via `settings.chunk_size` / env `CHUNK_SIZE`)
+- `CHUNK_OVERLAP`: 120 (`settings.chunk_overlap`)
+- `CHUNK_POLICY`: `semantic_v1` (förberedd att använda headings + token fallback)
+- `CHUNK_SOURCE`: `headings|tokens`
+- `CHUNK_STATE`: `staging|reviewed|indexed`
+
+### Metadata schema
+```json
+{
+  "chunk_id": "<uuid>",
+  "doc_id": "<item_id>",
+  "hash": "<sha1>",
+  "state": "staging|reviewed|indexed",
+  "source_ref": "<url|git_sha>",
+  "title": "<string>",
+  "tags": ["..."],
+  "trust": "provisional|reviewed",
+  "size": 800,
+  "created": "ISO8601",
+  "policy": "semantic_v1"
+}
+```
+
+### Promotion flow
+```
+staging → reviewed → indexed
+```
+Chunkar genereras alltid i staging (`app.ingest.staging.PendingChunk`). När dokumentet markeras `trust="reviewed"` flyttas chunkarna in i huvudindex (DuckDB + Chroma). Fram tills dess kan sekundära RAG-processer läsa från staging.

@@ -80,5 +80,26 @@
     "provenance-required",
     "modulär pipeline",
     "hybrid retrieval (BM25 + vector)"
-  ]
+  ],
+  "chunking": {
+    "policy": "semantic_v1",
+    "size": 800,
+    "overlap": 120,
+    "states": ["staging", "reviewed", "indexed"],
+    "metadata_fields": [
+      "chunk_id",
+      "doc_id",
+      "hash",
+      "source_ref",
+      "state",
+      "title",
+      "tags",
+      "trust",
+      "size",
+      "created"
+    ],
+    "promotion_flow": ["staging→reviewed", "reviewed→indexed"],
+    "config_source": "ENV or settings",
+    "observability": ["chunk_id", "size", "hash", "created", "review_state"]
+  }
 }

@@ -44,7 +44,8 @@
       "milestones": [
         "M1: /ingest end-to-end",
         "M2: /recall top-k med citeringar",
-        "M3: DailyBriefAgent (cron)"
+        "M3: DailyBriefAgent (cron)",
+        "M4: Semantic Chunking & Two-phase Indexing"
       ],
       "next_actions": [
         "Define frontmatter-spec v0.1 i docs/ALIGNMENT.md",
