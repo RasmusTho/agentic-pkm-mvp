@@ -11,6 +11,7 @@
 - Schedule the script (cron/systemd/GitHub Actions) to run routinely; review `--copy/--truncate` flags depending on whether live readers expect files to remain.
 - Prior to rotation, ensure no long-running agent sessions depend on the files; quiesce the service if necessary.
 - Monitor free disk space and set alerts when the combined storage exceeds the agreed threshold.
+- Use `--max-age-days` alongside `--max-backups` to purge old archives (set policy, e.g. 30 days).
 - Run `pre-commit install` locally so lint/type/test hooks run automatically before each commit.
 
 ## Auth & Rate Limiting

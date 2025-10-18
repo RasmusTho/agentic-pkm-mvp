@@ -36,11 +36,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not recreate empty placeholder files after rotation.",
     )
-    parser.add_argument(
+parser.add_argument(
         "--max-backups",
         type=int,
         default=10,
         help="Maximum number of archives to retain per file (default: 10).",
+    )
+    parser.add_argument(
+        "--max-age-days",
+        type=int,
+        default=None,
+        help="Delete archives older than this many days (default: disabled).",
     )
     parser.add_argument(
         "--dry-run",
@@ -63,6 +69,7 @@ def rotate_file(
     touch: bool,
     dry_run: bool,
     max_backups: int,
+    max_age_days: int | None,
 ) -> None:
     if not source.exists():
         print(f"Skipping {source} (not found)")
@@ -91,10 +98,15 @@ def rotate_file(
             else:
                 source.touch()
 
-        _enforce_max_backups(archive_dir, source.name, max_backups)
+        _enforce_max_backups(archive_dir, source.name, max_backups, max_age_days)
 
 
-def _enforce_max_backups(folder: Path, base_name: str, max_items: int) -> None:
+def _enforce_max_backups(
+    folder: Path,
+    base_name: str,
+    max_items: int,
+    max_age_days: int | None,
+) -> None:
     candidates = sorted(
         folder.glob(f"{base_name}.*"),
         key=lambda path: path.stat().st_mtime,
@@ -103,6 +115,13 @@ def _enforce_max_backups(folder: Path, base_name: str, max_items: int) -> None:
     for path in candidates[: max(0, excess)]:
         print(f"Removing old archive {path}")
         path.unlink(missing_ok=True)
+
+    if max_age_days is not None:
+        cutoff = datetime.now(tz=UTC).timestamp() - max_age_days * 86400
+        for path in candidates:
+            if path.stat().st_mtime < cutoff:
+                print(f"Removing expired archive {path}")
+                path.unlink(missing_ok=True)
 
 
 def main() -> None:
@@ -117,6 +136,7 @@ def main() -> None:
             touch=not args.no_touch,
             dry_run=args.dry_run,
             max_backups=args.max_backups,
+            max_age_days=args.max_age_days,
         )
 
 
