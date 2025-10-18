@@ -11,3 +11,8 @@
 - Schedule the script (cron/systemd/GitHub Actions) to run routinely; review `--copy/--truncate` flags depending on whether live readers expect files to remain.
 - Prior to rotation, ensure no long-running agent sessions depend on the files; quiesce the service if necessary.
 - Monitor free disk space and set alerts when the combined storage exceeds the agreed threshold.
+
+## Auth & Rate Limiting
+- Refer to `docs/AUTH_RATE_LIMITING.md` for implementation guidance (API key dependency + `slowapi` limiter).
+- Store the API key in environment or secret manager; rotate by updating deployments and monitoring logs for legacy usage.
+- Run Redis (or alternative backend) alongside FastAPI to support shared rate-limit counters; configure via env in future work.

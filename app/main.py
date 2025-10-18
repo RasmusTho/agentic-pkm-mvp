@@ -13,10 +13,14 @@ if os.getenv("DEBUGPY") == "1":
         print("Waiting for debugger attach...")
         debugpy.wait_for_client()
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy.orm import Session
 
 from app.api.items import router as items_router
+from app.auth import configure_rate_limit_storage, limiter
 from app.db import Base, engine
 from app.deps import get_db
 from app.health import HealthSummary, health_summary
@@ -31,7 +35,18 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
 
 
+def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={"detail": "Rate limit exceeded"},
+    )
+
+
+configure_rate_limit_storage()
 app = FastAPI(lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+app.add_middleware(SlowAPIMiddleware)
 app.include_router(items_router)
 
 

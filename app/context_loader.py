@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 BASE = Path(__file__).resolve().parents[1] / "data" / "context"
 
@@ -10,7 +10,7 @@ def _read(name: str) -> Any:
         return {}
     return json.loads(p.read_text(encoding="utf-8"))
 
-def load_context() -> Dict[str, Any]:
+def load_context() -> dict[str, Any]:
     return {
         "system": _read("system.json"),
         "projects": _read("projects.json"),

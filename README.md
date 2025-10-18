@@ -87,3 +87,4 @@ The service exposes `/items` CRUD, `/context` for repo memory, `/health` for rea
 
 ## Maintenance
 - Rotate DuckDB/provenance artifacts with `python scripts/rotate_storage.py [--dry-run]` (archives land in `storage/archive/`).
+- Auth + rate limiting roadmap is captured in `docs/AUTH_RATE_LIMITING.md`.

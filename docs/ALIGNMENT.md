@@ -12,7 +12,7 @@
 - Alembic migrations are current with baseline `3ddfc7237248_baseline.py`.
 
 ## Near-Term Focus
-- Utvärdera behov av auth + rate limiting före produktion.
+- Implementera API-nyckel + rate limiting enligt `docs/AUTH_RATE_LIMITING.md`.
 - Utforska observability hooks (strukturerad loggning, metrics).
 - Skapa pre-commit-flöde med Ruff/mypy/pytest lint om det behövs.
 - Planera data governance för arkiverade körningar (retention/purge regler).
@@ -42,3 +42,4 @@
 - 2025-10-19: `scripts/tag_release.py` automatiserar annoterade release-taggar.
 - 2025-10-19: `scripts/rotate_storage.py` roterar DuckDB och provenance-loggar.
 - 2025-10-19: Projektöversikt dokumenterad i `docs/PROJECT_OVERVIEW.md`.
+- 2025-10-19: Auth + rate limiting strategi dokumenterad i `docs/AUTH_RATE_LIMITING.md`.
