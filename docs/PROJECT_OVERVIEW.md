@@ -89,7 +89,7 @@
          v
   Triage Agent (trust = provisional/reviewed)
          |
-         +--> if provisional --> return chunk preview
+         +--> if provisional --> stage chunk preview (no main index)
          |
          v
   Frontmatter Builder (YAML v0.1)
@@ -97,10 +97,10 @@
          v
   Vault Writer (Obsidian Markdown)
          |
-    [Optional human review]
+    [Optional human review -> trust=reviewed]
          |
          v
-  Hybrid Index (DuckDB + Chroma)
+  Hybrid Index (DuckDB + Chroma)  <--- från staging när reviewed
          |
          v
   Recall Agent (top-k, cites, snippet)

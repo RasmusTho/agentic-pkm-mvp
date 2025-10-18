@@ -18,6 +18,7 @@
 - Monitor free disk space and set alerts when the combined storage exceeds the agreed threshold.
 - Use `--max-age-days` alongside `--max-backups` to purge old archives (set policy, e.g. 30 days).
 - Run `pre-commit install` locally so lint/type/test hooks run automatically before each commit.
+- Chunkar skrivs först till staging (DuckDB `chunks_pending`) via `app/ingest/staging.py`; när `trust` sätts till `reviewed` migreras de till huvudindexet.
 
 ## Auth & Rate Limiting
 - Refer to `docs/AUTH_RATE_LIMITING.md` for implementation guidance (API key dependency + `slowapi` limiter).

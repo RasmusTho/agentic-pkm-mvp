@@ -16,6 +16,7 @@
 - Koppla loggar/metrics till observability-stack (t.ex. Grafana).
 - Införa pre-commit-flöde (klar med hooks i repo, rulla ut i teamet).
 - Planera data governance för arkiverade körningar (retention/purge regler).
+- Bygg pipeline som flyttar chunkar från staging till huvudindex efter `trust="reviewed"`.
 - Frontmatter-spec och API-kontrakt för /ingest och /recall (beskrivs nedan).
 
 ## Operating Principles

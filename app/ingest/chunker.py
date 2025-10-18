@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, List
 
 from app.settings import settings
 
@@ -12,7 +12,7 @@ class ChunkConfig:
     overlap: int = settings.chunk_overlap
 
 
-def _tokenize(text: str) -> List[str]:
+def _tokenize(text: str) -> list[str]:
     return text.split()
 
 

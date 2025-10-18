@@ -126,6 +126,7 @@ Response payload:
   "title": "Foo",
   "path": "vault/Foo.md",
   "tags": ["topic/ai"],
+  "trust": "provisional",
   "chunks": [{"id": "chunk-1", "text": "...", "size": 800}]
 }
 ```
@@ -140,3 +141,5 @@ Response payload:
   ]
 }
 ```
+
+Chunklistan är staging-data – först när dokumentet har `trust == "reviewed"` flyttas chunkar till huvudindexet (DuckDB + Chroma). Innan dess kan en sekundär RAG peka mot staging-tabellen.
