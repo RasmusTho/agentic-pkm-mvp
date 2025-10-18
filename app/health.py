@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict
+from typing import TypedDict
 
 import duckdb
 from sqlalchemy import text
@@ -11,7 +11,17 @@ DUCKDB_PATH = Path("storage/agent.duckdb")
 PROVENANCE_PATH = Path("provenance.jsonl")
 
 
-def _check_database(db: Session) -> Dict[str, str]:
+class CheckResult(TypedDict, total=False):
+    status: str
+    detail: str
+
+
+class HealthSummary(TypedDict):
+    status: str
+    checks: dict[str, CheckResult]
+
+
+def _check_database(db: Session) -> CheckResult:
     try:
         db.execute(text("SELECT 1"))
         return {"status": "ok"}
@@ -19,7 +29,7 @@ def _check_database(db: Session) -> Dict[str, str]:
         return {"status": "error", "detail": str(exc)}
 
 
-def _check_duckdb() -> Dict[str, str]:
+def _check_duckdb() -> CheckResult:
     try:
         DUCKDB_PATH.parent.mkdir(parents=True, exist_ok=True)
         with duckdb.connect(str(DUCKDB_PATH), read_only=False) as con:
@@ -29,7 +39,7 @@ def _check_duckdb() -> Dict[str, str]:
         return {"status": "error", "detail": str(exc)}
 
 
-def _check_provenance() -> Dict[str, str]:
+def _check_provenance() -> CheckResult:
     try:
         PROVENANCE_PATH.parent.mkdir(parents=True, exist_ok=True)
         with PROVENANCE_PATH.open("a", encoding="utf-8"):
@@ -39,7 +49,7 @@ def _check_provenance() -> Dict[str, str]:
         return {"status": "error", "detail": str(exc)}
 
 
-def health_summary(db: Session) -> Dict[str, Dict[str, str] | str]:
+def health_summary(db: Session) -> HealthSummary:
     checks = {
         "database": _check_database(db),
         "duckdb": _check_duckdb(),

@@ -28,8 +28,19 @@ checkpointer = SqliteSaver(checkpoint_conn)
 app = graph.compile(checkpointer=checkpointer)
 
 
-def invoke(task: str, profile: str = "work", feedback_text: str | None = None):
-    state = AgentState(run_id=uuid4().hex, task=task, profile=profile, feedback=feedback_text)
+def invoke(
+    task: str,
+    profile: str = "work",
+    input_text: str | None = None,
+    feedback_text: str | None = None,
+) -> AgentState:
+    state = AgentState(
+        run_id=uuid4().hex,
+        task=task,
+        user_input=input_text,
+        profile=profile,
+        feedback=feedback_text,
+    )
     config = {"configurable": {"thread_id": state.run_id}}
-    result = app.invoke(state, config=config)
+    result = app.invoke(state, config=config)  # type: ignore[arg-type]
     return AgentState.model_validate(result)

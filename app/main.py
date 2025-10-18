@@ -1,5 +1,7 @@
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 if os.getenv("DEBUGPY") == "1":
     import debugpy
@@ -14,15 +16,17 @@ if os.getenv("DEBUGPY") == "1":
 from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy.orm import Session
 
+from app.api.items import router as items_router
 from app.db import Base, engine
 from app.deps import get_db
-from app.api.items import router as items_router
-from app.health import health_summary
+from app.health import HealthSummary, health_summary
 from app.settings import settings
+
+from .context_loader import load_context
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     Base.metadata.create_all(bind=engine)
     yield
 
@@ -30,15 +34,14 @@ async def lifespan(_: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.include_router(items_router)
 
-@app.get("/")
-def root():
-    return {"ok": True, "service": "api"}
 
-from .context_loader import load_context
+@app.get("/")
+def root() -> dict[str, bool | str]:
+    return {"ok": True, "service": "api"}
 
 
 @app.get("/health")
-def health(db: Session = Depends(get_db)):
+def health(db: Session = Depends(get_db)) -> HealthSummary:
     summary = health_summary(db)
     if summary["status"] != "ok":
         raise HTTPException(status_code=503, detail=summary)
@@ -46,9 +49,10 @@ def health(db: Session = Depends(get_db)):
 
 
 @app.get("/version")
-def version():
+def version() -> dict[str, str]:
     return {"version": settings.app_version}
 
+
 @app.get("/context")
-def get_context():
+def get_context() -> dict[str, Any]:
     return load_context()

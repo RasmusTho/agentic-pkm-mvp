@@ -12,10 +12,10 @@
 - Alembic migrations are current with baseline `3ddfc7237248_baseline.py`.
 
 ## Near-Term Focus
-- Förbered CI-flow med pytest, Ruff och mypy.
-- Dokumentera versionsflöde (hur `settings.app_version` bumpas).
-- Planera rotation/backup för DuckDB + provenance loggar.
+- Automatisera versionsflödet (skript/taggar kring `settings.app_version`).
+- Scripta rotation/backup för DuckDB och provenance-loggar.
 - Utvärdera behov av auth + rate limiting före produktion.
+- Utforska observability hooks (strukturerad loggning, metrics).
 
 ## Operating Principles
 - Bias for maintainable, well-tested changes; add tests when behavior shifts or bugs are fixed.
@@ -36,3 +36,5 @@
 - 2025-10-19: FastAPI startup migrated to lifespan handler that ensures tables exist.
 - 2025-10-19: `/health` now validates DuckDB connectivity and provenance.jsonl access.
 - 2025-10-19: `/items` endpoints extracted to router with expanded coverage.
+- 2025-10-19: CI pipeline (pytest, Ruff, mypy) established with supporting configs.
+- 2025-10-19: Operations playbook dokumenterar versionering + lagringsrotation.

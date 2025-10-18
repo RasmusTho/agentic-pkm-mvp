@@ -28,6 +28,10 @@ The service exposes `/items` CRUD, `/context` for repo memory, `/health` for rea
 - Execute `pytest` (VS Code picks this up automatically via `.vscode/settings.json`).
 - Tests rely on an in-memory SQLite database and do not require external services.
 
+## Quality Gates
+- Ruff and mypy configs live in `ruff.toml` and `mypy.ini`; install dev deps via `pip install -r dev-requirements.txt`.
+- CI (`.github/workflows/ci.yml`) runs Ruff → mypy → pytest on pushes and pull requests.
+
 ## Debugging
 - `DEBUGPY=1` enables the debugpy listener; by default it binds to port `15678`.
 - Use the **Attach to API (debugpy)** VS Code configuration after starting the server.
@@ -35,3 +39,4 @@ The service exposes `/items` CRUD, `/context` for repo memory, `/health` for rea
 ## Project Memory
 - Alignment, guardrails, and next steps live in `docs/ALIGNMENT.md`.
 - Agent/system context is stored under `data/context/`.
+- Operational runbooks (versioning, storage rotation) live in `docs/OPERATIONS.md`.
