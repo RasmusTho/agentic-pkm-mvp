@@ -7,7 +7,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth import require_api_key
 from app.ingest.service import ingest_text
-from app.schemas.ingest import IngestRequest, IngestResponse, SourceType
+from app.ingest.staging import list_pending_documents, promote_document
+from app.schemas.ingest import (
+    IngestRequest,
+    IngestResponse,
+    PendingDocumentModel,
+    ReviewRequest,
+    SourceType,
+)
 
 router = APIRouter(
     prefix="/ingest",
@@ -80,3 +87,15 @@ def ingest_payload(payload: IngestRequest) -> IngestResponse:
         tags=payload.tags,
         trust="provisional",
     )
+
+
+@router.get("/pending", response_model=list[PendingDocumentModel])
+def list_pending(limit: int = 50) -> list[PendingDocumentModel]:
+    docs = list_pending_documents(limit)
+    return [PendingDocumentModel.from_dataclass(doc) for doc in docs]
+
+
+@router.post("/review")
+def review_document(request: ReviewRequest) -> dict[str, int | bool]:
+    updated = promote_document(request.doc_path, request.new_trust)
+    return {"ok": True, "updated": updated}

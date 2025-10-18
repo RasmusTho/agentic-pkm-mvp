@@ -17,6 +17,9 @@ def test_watcher_processes_text_file(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "processed_dir", "processed", raising=False)
     monkeypatch.setattr(settings, "chunk_size", 4, raising=False)
     monkeypatch.setattr(settings, "chunk_overlap", 1, raising=False)
+    monkeypatch.setattr(
+        settings, "staging_db_path", str(tmp_path / "staging.duckdb"), raising=False
+    )
 
     processed = watcher.process_once()
     assert processed == 1

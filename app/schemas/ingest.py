@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, Field, HttpUrl
+
+from app.ingest.staging import PendingDocument
 
 
 class SourceType(str, Enum):
@@ -37,3 +40,24 @@ class IngestResponse(BaseModel):
     tags: list[str]
     trust: str
     chunks: list[ChunkResult]
+
+
+class PendingDocumentModel(BaseModel):
+    doc_path: str
+    trust: str
+    chunk_count: int
+    first_seen: datetime
+
+    @classmethod
+    def from_dataclass(cls, doc: PendingDocument) -> PendingDocumentModel:
+        return cls(
+            doc_path=doc.doc_path,
+            trust=doc.trust,
+            chunk_count=doc.chunk_count,
+            first_seen=doc.first_seen,
+        )
+
+
+class ReviewRequest(BaseModel):
+    doc_path: str = Field(..., description="Relative path to the document in the vault")
+    new_trust: str = Field("reviewed", description="New trust value, e.g. reviewed or indexed")

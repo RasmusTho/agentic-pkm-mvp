@@ -19,6 +19,7 @@ class Settings(BaseSettings):
         "/Users/rasmus/Library/Mobile Documents/com~apple~CloudDocs/watchfolder/" "processed"
     )
     inbox_subdir: str = "@Inbox"
+    staging_db_path: str = "storage/staging.duckdb"
 
     class Config:
         env_file = ".env"
