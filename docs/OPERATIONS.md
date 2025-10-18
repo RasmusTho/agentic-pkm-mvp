@@ -16,3 +16,7 @@
 - Refer to `docs/AUTH_RATE_LIMITING.md` for implementation guidance (API key dependency + `slowapi` limiter).
 - Store the API key in environment or secret manager; rotate by updating deployments and monitoring logs for legacy usage.
 - Run Redis (or alternative backend) alongside FastAPI to support shared rate-limit counters; configure via env in future work.
+
+## Observability
+- Logs: JSON-formatted via `app/observability.setup_logging()`. Hook into your logging stack (CloudWatch, ELK, etc.).
+- Metrics: enable `METRICS_ENABLED=1` to expose Prometheus metrics under `/metrics` using `prometheus-fastapi-instrumentator` (secure access appropriately).

@@ -10,8 +10,8 @@
         "Alembic migrations under app/alembic/"
       ],
       "next_actions": [
-        "Implementera API-nyckel och slowapi-rate limiting enligt strategin",
-        "Implementera observability hooks (loggning + metrics)",
+        "Rulla ut API-nyckel + rate limiting i deployment (env + Redis)",
+        "Koppla loggar/metrics till observability-stack (t.ex. Grafana)",
         "Gör pre-commit med Ruff/mypy/pytest-lint om det behövs",
         "Planera retention/purge policy för arkiverade körningar"
       ]

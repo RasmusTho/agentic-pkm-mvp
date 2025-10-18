@@ -88,3 +88,7 @@ The service exposes `/items` CRUD, `/context` for repo memory, `/health` for rea
 ## Maintenance
 - Rotate DuckDB/provenance artifacts with `python scripts/rotate_storage.py [--dry-run]` (archives land in `storage/archive/`).
 - Auth + rate limiting roadmap is captured in `docs/AUTH_RATE_LIMITING.md`.
+
+## Observability
+- Structured JSON logs configured via `app/observability.py`; use standard logging levels (`INFO` default).
+- Enable Prometheus metrics by setting `METRICS_ENABLED=1`; `/metrics` endpoint becomes available (consider securing behind reverse proxy).

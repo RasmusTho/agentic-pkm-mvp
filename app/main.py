@@ -24,6 +24,7 @@ from app.auth import configure_rate_limit_storage, limiter
 from app.db import Base, engine
 from app.deps import get_db
 from app.health import HealthSummary, health_summary
+from app.observability import configure_metrics, setup_logging
 from app.settings import settings
 
 from .context_loader import load_context
@@ -42,11 +43,13 @@ def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONRespons
     )
 
 
+setup_logging()
 configure_rate_limit_storage()
 app = FastAPI(lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 app.add_middleware(SlowAPIMiddleware)
+configure_metrics(app)
 app.include_router(items_router)
 
 

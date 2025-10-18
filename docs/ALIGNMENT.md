@@ -43,3 +43,4 @@
 - 2025-10-19: `scripts/rotate_storage.py` roterar DuckDB och provenance-loggar.
 - 2025-10-19: Projektöversikt dokumenterad i `docs/PROJECT_OVERVIEW.md`.
 - 2025-10-19: Auth + rate limiting strategi dokumenterad i `docs/AUTH_RATE_LIMITING.md`.
+- 2025-10-19: Observability hooks (JSON-loggar + Prometheus via `METRICS_ENABLED`) aktiverade i `app/observability.py`.
