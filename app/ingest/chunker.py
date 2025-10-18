@@ -8,8 +8,13 @@ from app.settings import settings
 
 @dataclass(slots=True)
 class ChunkConfig:
-    size: int = settings.chunk_size
-    overlap: int = settings.chunk_overlap
+    size: int | None = None
+    overlap: int | None = None
+
+    def resolve(self) -> tuple[int, int]:
+        size = self.size if self.size is not None else settings.chunk_size
+        overlap = self.overlap if self.overlap is not None else settings.chunk_overlap
+        return size, overlap
 
 
 def _tokenize(text: str) -> list[str]:
@@ -27,8 +32,9 @@ def chunk_text(text: str, config: ChunkConfig | None = None) -> list[str]:
     if not tokens:
         return []
 
-    size = max(cfg.size, 1)
-    overlap = max(min(cfg.overlap, size - 1), 0)
+    size, overlap = cfg.resolve()
+    size = max(size, 1)
+    overlap = max(min(overlap, size - 1), 0)
 
     chunks: list[str] = []
     start = 0

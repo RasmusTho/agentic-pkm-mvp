@@ -35,4 +35,5 @@ class IngestResponse(BaseModel):
     title: str
     path: str
     tags: list[str]
+    trust: str
     chunks: list[ChunkResult]
