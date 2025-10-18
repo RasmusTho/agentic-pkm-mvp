@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import List, Optional
 
 import yaml
 
@@ -12,11 +11,11 @@ class FrontmatterData:
     title: str
     origin: str
     created: date
-    tags: List[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
     trust: str = "provisional"
-    source_ref: Optional[str] = None
-    nodes: List[str] = field(default_factory=list)
-    edges: List[str] = field(default_factory=list)
+    source_ref: str | None = None
+    nodes: list[str] = field(default_factory=list)
+    edges: list[str] = field(default_factory=list)
     chunk_algo: str = "recursive"
     chunk_size: int = 800
     chunk_overlap: int = 120

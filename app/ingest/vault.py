@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
-
 
 SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 
@@ -17,7 +15,7 @@ def ensure_vault_file(
     vault_root: Path,
     title: str,
     body: str,
-    frontmatter: Optional[str] = None,
+    frontmatter: str | None = None,
 ) -> Path:
     """
     Persist a markdown document under the given vault.

@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     rate_limit_default: str = "60/minute"
     metrics_enabled: bool = False
     vault_dir: str = "vault"
+    chunk_size: int = 800
+    chunk_overlap: int = 120
 
     class Config:
         env_file = ".env"
