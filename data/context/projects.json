@@ -1,0 +1,20 @@
+{
+  "projects": [
+    {
+      "key": "agentic-pkm",
+      "name": "Second-Brain / Agentic PKM",
+      "status": "active",
+      "scope": [
+        "FastAPI app under app/",
+        "Agentmoduler under app/agent/",
+        "Alembic migrations under app/alembic/"
+      ],
+      "next_actions": [
+        "Implementera API-nyckel och slowapi-rate limiting enligt strategin",
+        "Implementera observability hooks (loggning + metrics)",
+        "Gör pre-commit med Ruff/mypy/pytest-lint om det behövs",
+        "Planera retention/purge policy för arkiverade körningar"
+      ]
+    }
+  ]
+}

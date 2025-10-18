@@ -1,0 +1,27 @@
+{
+  "repo": {
+    "root_files": [".gitignore", "requirements.txt", "dev-requirements.txt", "run_agent.py"],
+    "vscode": [".vscode/launch.json"]
+  },
+  "runtime": {
+    "editor": "VS Code Remote-SSH",
+    "python": "project .venv or container",
+    "db_local": "storage/agent.duckdb"
+  },
+  "app": {
+    "package_root": "app",
+    "entrypoints": ["app/main.py", "run_agent.py"],
+    "config": ["app/settings.py", "app/.env"],
+    "alembic": {
+      "ini": "app/alembic.ini",
+      "env": "app/alembic/env.py",
+      "versions_dir": "app/alembic/versions",
+      "baseline": "3ddfc7237248_baseline.py"
+    },
+    "agent": ["app/agent/graph.py", "app/agent/models.py", "app/agent/nodes.py"]
+  },
+  "notes": [
+    "DuckDB används lokalt under storage/agent.duckdb",
+    "Alembic är konfigurerat under app/alembic/"
+  ]
+}

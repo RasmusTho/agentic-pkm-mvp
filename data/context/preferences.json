@@ -1,0 +1,6 @@
+{
+  "language": ["sv", "en"],
+  "workstyle": ["kort", "konkret", "en sak i taget"],
+  "engineering": ["TDD där det passar", "OSS-first"],
+  "privacy": ["inga hemligheter i prompts", "håll kontext till öppna filer"]
+}

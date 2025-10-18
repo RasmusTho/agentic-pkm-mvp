@@ -1,6 +1,11 @@
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
+
 if os.getenv("DEBUGPY") == "1":
     import debugpy
+
     port = int(os.getenv("DEBUGPY_PORT", "5678"))
     debugpy.listen(("0.0.0.0", port))
     print(f"debugpy listening on 0.0.0.0:{port}")
@@ -8,36 +13,61 @@ if os.getenv("DEBUGPY") == "1":
         print("Waiting for debugger attach...")
         debugpy.wait_for_client()
 
-from fastapi import FastAPI, Depends
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy.orm import Session
-from db import Base, engine
-from models import Item
-from deps import get_db
 
-app = FastAPI()
+from app.api.items import router as items_router
+from app.auth import configure_rate_limit_storage, limiter
+from app.db import Base, engine
+from app.deps import get_db
+from app.health import HealthSummary, health_summary
+from app.settings import settings
 
-@app.on_event("startup")
-def _create_tables():
+from .context_loader import load_context
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     Base.metadata.create_all(bind=engine)
+    yield
+
+
+def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={"detail": "Rate limit exceeded"},
+    )
+
+
+configure_rate_limit_storage()
+app = FastAPI(lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+app.add_middleware(SlowAPIMiddleware)
+app.include_router(items_router)
+
 
 @app.get("/")
-def root():
+def root() -> dict[str, bool | str]:
     return {"ok": True, "service": "api"}
 
-@app.post("/items")
-def create_item(name: str, db: Session = Depends(get_db)):
-    from sqlalchemy.exc import IntegrityError
-    try:
-        item = Item(name=name)
-        db.add(item)
-        db.commit()
-        db.refresh(item)
-        return {"id": item.id, "name": item.name}
-    except IntegrityError:
-        db.rollback()
-        from fastapi import HTTPException
-        raise HTTPException(status_code=409, detail="Item already exists")
 
-@app.get("/items")
-def list_items(db: Session = Depends(get_db)):
-    return [{"id": i.id, "name": i.name} for i in db.query(Item).all()]
+@app.get("/health")
+def health(db: Session = Depends(get_db)) -> HealthSummary:
+    summary = health_summary(db)
+    if summary["status"] != "ok":
+        raise HTTPException(status_code=503, detail=summary)
+    return summary
+
+
+@app.get("/version")
+def version() -> dict[str, str]:
+    return {"version": settings.app_version}
+
+
+@app.get("/context")
+def get_context() -> dict[str, Any]:
+    return load_context()

@@ -1,19 +1,22 @@
 import os
-os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
+import sys
+from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from fastapi.testclient import TestClient
 
-# make 'db', 'main', etc. importable
-import sys
-sys.path.append("/Users/rasmus/workspace/app")
+os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
 
-from db import Base
-from main import app
-from deps import get_db
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+
+from app.db import Base  # noqa: E402
+from app.deps import get_db  # noqa: E402
+from app.main import app  # noqa: E402
 
 engine = create_engine(
     "sqlite+pysqlite:///:memory:",
