@@ -85,7 +85,11 @@
     "policy": "semantic_v1",
     "size": 800,
     "overlap": 120,
-    "states": ["staging", "reviewed", "indexed"],
+    "states": [
+      "staging",
+      "reviewed",
+      "indexed"
+    ],
     "metadata_fields": [
       "chunk_id",
       "doc_id",
@@ -98,8 +102,42 @@
       "size",
       "created"
     ],
-    "promotion_flow": ["staging→reviewed", "reviewed→indexed"],
+    "promotion_flow": [
+      "staging→reviewed",
+      "reviewed→indexed"
+    ],
     "config_source": "ENV or settings",
-    "observability": ["chunk_id", "size", "hash", "created", "review_state"]
+    "observability": [
+      "chunk_id",
+      "size",
+      "hash",
+      "created",
+      "review_state"
+    ]
+  },
+  "categorization": {
+    "version": "0.1",
+    "states": [
+      "pending",
+      "classified",
+      "reviewed"
+    ],
+    "fields": [
+      "quality.class",
+      "credibility",
+      "factuality",
+      "source_type",
+      "topic.primary",
+      "topic.secondary"
+    ],
+    "validator": "JSONSchema",
+    "method": "LLM rubric classification",
+    "policy": {
+      "auto_review_if": [
+        "low_quality",
+        "unverified",
+        "hypothesis"
+      ]
+    }
   }
 }

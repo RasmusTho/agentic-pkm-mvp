@@ -130,14 +130,13 @@ chunks:
 ## Chunking v0.2 – Semantisk & Reviderbar
 
 ### Configuration
-- `CHUNK_SIZE`: 800 (default via `settings.chunk_size` / env `CHUNK_SIZE`)
-- `CHUNK_OVERLAP`: 120 (`settings.chunk_overlap`)
-- `CHUNK_POLICY`: `semantic_v1` (förberedd att använda headings + token fallback)
-- `CHUNK_SOURCE`: `headings|tokens`
-- `CHUNK_STATE`: `staging|reviewed|indexed`
+CHUNK_SIZE: 800
+CHUNK_OVERLAP: 120
+CHUNK_POLICY: semantic
+CHUNK_SOURCE: headings|tokens
+CHUNK_STATE: staging|reviewed|indexed
 
 ### Metadata schema
-```json
 {
   "chunk_id": "<uuid>",
   "doc_id": "<item_id>",
@@ -151,10 +150,24 @@ chunks:
   "created": "ISO8601",
   "policy": "semantic_v1"
 }
-```
 
 ### Promotion flow
-```
-staging → reviewed → indexed
-```
+staging → review → approve → index(main)
+
 Chunkar genereras alltid i staging (`app.ingest.staging.PendingChunk`). När dokumentet markeras `trust="reviewed"` flyttas chunkarna in i huvudindex (DuckDB + Chroma). Fram tills dess kan sekundära RAG-processer läsa från staging.
+
+## Categorization v0.1 – Semantisk Labeling
+
+### Schema
+{
+  "quality.class": "spam|ham|low_quality|medium|high",
+  "credibility": "unverified|credible|expert_consensus",
+  "factuality": "fact|hypothesis|opinion|satire",
+  "source_type": "email|youtube|article|paper|transcript|chatlog",
+  "topic.primary": "mathematics|psychology|biology|philosophy|politics|economics|literature|history|other",
+  "topic.secondary": ["free-form tags"]
+}
+
+### Flow
+QA_GATE → CATEGORIZE → CHUNK
+CATEGORIZE output is validated and written into frontmatter and metadata index.
