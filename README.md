@@ -40,3 +40,4 @@ The service exposes `/items` CRUD, `/context` for repo memory, `/health` for rea
 - Alignment, guardrails, and next steps live in `docs/ALIGNMENT.md`.
 - Agent/system context is stored under `data/context/`.
 - Operational runbooks (versioning, storage rotation) live in `docs/OPERATIONS.md`.
+- Deep-dive architecture, API, and workflow notes are in `docs/PROJECT_OVERVIEW.md`.

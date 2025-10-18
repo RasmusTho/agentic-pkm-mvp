@@ -38,3 +38,4 @@
 - 2025-10-19: `/items` endpoints extracted to router with expanded coverage.
 - 2025-10-19: CI pipeline (pytest, Ruff, mypy) established with supporting configs.
 - 2025-10-19: Operations playbook dokumenterar versionering + lagringsrotation.
+- 2025-10-19: Projektöversikt dokumenterad i `docs/PROJECT_OVERVIEW.md`.
