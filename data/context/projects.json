@@ -1,0 +1,19 @@
+{
+  "projects": [
+    {
+      "key": "agentic-pkm",
+      "name": "Second-Brain / Agentic PKM",
+      "status": "active",
+      "scope": [
+        "FastAPI app under app/",
+        "Agentmoduler under app/agent/",
+        "Alembic migrations under app/alembic/"
+      ],
+      "next_actions": [
+        "Expose /context endpoint som läser data/context/*.json",
+        "Definiera första e2e-testet i tests/ för /context",
+        "Koppla run_agent.py till app/agent/graph.py med minimal CLI"
+      ]
+    }
+  ]
+}

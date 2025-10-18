@@ -41,3 +41,9 @@ def create_item(name: str, db: Session = Depends(get_db)):
 @app.get("/items")
 def list_items(db: Session = Depends(get_db)):
     return [{"id": i.id, "name": i.name} for i in db.query(Item).all()]
+
+from .context_loader import load_context
+
+@app.get("/context")
+def get_context():
+    return load_context()
