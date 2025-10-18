@@ -1,9 +1,9 @@
 # Operations Playbook
 
-## Version Bump Workflow
-- Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory.
-- Use `--dry-run` first to verify affected files, then review the diff and commit with a message like `chore(version): bump to X.Y.Z`.
-- After merge, tag the release and share any breaking changes; the script appends the decision log entry automatically.
+## Version & Release Workflow
+- Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory (supporting `--dry-run`).
+- Commit the bump with `chore(version): bump to X.Y.Z`, then create an annotated tag using `python scripts/tag_release.py [--dry-run|--push]` (tags default to `v<version>`).
+- Share noteworthy changes after tagging; the bump script already appends to the decision log.
 
 ## Storage Maintenance
 - The FastAPI service writes DuckDB artifacts to `storage/agent.duckdb` and provenance trails to `provenance.jsonl`.

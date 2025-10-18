@@ -15,7 +15,7 @@
 - Scripta rotation/backup för DuckDB och provenance-loggar.
 - Utvärdera behov av auth + rate limiting före produktion.
 - Utforska observability hooks (strukturerad loggning, metrics).
-- Förbered automatiserade release-taggar efter versionsbump.
+- Skapa pre-commit-flöde med Ruff/mypy/pytest lint om det behövs.
 
 ## Operating Principles
 - Bias for maintainable, well-tested changes; add tests when behavior shifts or bugs are fixed.
@@ -39,4 +39,5 @@
 - 2025-10-19: CI pipeline (pytest, Ruff, mypy) established with supporting configs.
 - 2025-10-19: Operations playbook dokumenterar versionering + lagringsrotation.
 - 2025-10-19: `scripts/bump_version.py` infördes för att automatisera versionsflödet.
+- 2025-10-19: `scripts/tag_release.py` automatiserar annoterade release-taggar.
 - 2025-10-19: Projektöversikt dokumenterad i `docs/PROJECT_OVERVIEW.md`.
