@@ -9,6 +9,44 @@
   - `storage/agent.duckdb` for structured provenance/context material.
   - `provenance.jsonl` for append-only run metadata.
 
+```
+              +---------------------------+
+              |        API Clients        |
+              +-------------+-------------+
+                            |
+                        HTTP (REST)
+                            |
+                  +---------v----------+
+                  |   FastAPI app/     |
+                  |  - routers (items) |
+                  |  - health/version  |
+                  |  - context loader  |
+                  +----+----+----+-----+
+                       |    |    |
+          SQLAlchemy    |    |    | LangGraph
+            Session     |    |    v
+                       |    |  +---------+
+                       |    |  | agent/  |
+                       |    |  | nodes   |
+                       |    |  | graph   |
+                       |    |  +----+----+
+                       |    |       |
+                       |    |   provenance
+                       |    |       v
+                       |    |  +-----------+
+                       |    |  | storage/  |
+                       |    |  | agent.duckdb
+                       |    |  +-----------+
+                       |    |
+                       |    +----------------------+
+                       |                           |
+                +------v------+          +---------v---------+
+                |  Postgres   |          | data/context/*.json|
+                | (DATABASE_URL)         | + docs memory     |
+                +-------------+          +-------------------+
+
+```
+
 ## HTTP API
 - `GET /` – simple service heartbeat.
 - `GET /health` – readiness report covering SQL database, DuckDB access, and provenance log writability.

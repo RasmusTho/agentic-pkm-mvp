@@ -42,6 +42,44 @@ The service exposes `/items` CRUD, `/context` for repo memory, `/health` for rea
 - Operational runbooks (versioning, storage rotation) live in `docs/OPERATIONS.md`.
 - Deep-dive architecture, API, and workflow notes are in `docs/PROJECT_OVERVIEW.md`.
 
+## Architecture Snapshot
+```
+              +---------------------------+
+              |        API Clients        |
+              +-------------+-------------+
+                            |
+                        HTTP (REST)
+                            |
+                  +---------v----------+
+                  |   FastAPI app/     |
+                  |  - routers (items) |
+                  |  - health/version  |
+                  |  - context loader  |
+                  +----+----+----+-----+
+                       |    |    |
+          SQLAlchemy    |    |    | LangGraph
+            Session     |    |    v
+                       |    |  +---------+
+                       |    |  | agent/  |
+                       |    |  | nodes   |
+                       |    |  | graph   |
+                       |    |  +----+----+
+                       |    |       |
+                       |    |   provenance
+                       |    |       v
+                       |    |  +-----------+
+                       |    |  | storage/  |
+                       |    |  | agent.duckdb
+                       |    |  +-----------+
+                       |    |
+                       |    +----------------------+
+                       |                           |
+                +------v------+          +---------v---------+
+                |  Postgres   |          | data/context/*.json|
+                | (DATABASE_URL)         | + docs memory     |
+                +-------------+          +-------------------+
+```
+
 ## Versioning
 - Use `python scripts/bump_version.py <new_version>` (add `--dry-run` to preview) to update `settings.app_version` plus related docs.
 - Tag the release after committing the bump and record notable changes in the decision log.
