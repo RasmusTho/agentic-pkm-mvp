@@ -9,7 +9,7 @@ def test_ingest_text_writes_markdown_and_stages(client, tmp_path, monkeypatch):
     def fake_stage(chunks, config=None):
         staged["chunks"] = list(chunks)
 
-    monkeypatch.setattr("app.api.ingest.stage_chunks", fake_stage)
+    monkeypatch.setattr("app.ingest.service.stage_chunks", fake_stage)
     monkeypatch.setattr(settings, "vault_dir", str(tmp_path / "vault"), raising=False)
     monkeypatch.setattr(settings, "chunk_size", 5, raising=False)
     monkeypatch.setattr(settings, "chunk_overlap", 2, raising=False)

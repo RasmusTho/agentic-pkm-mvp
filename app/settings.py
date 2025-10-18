@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     vault_dir: str = "vault"
     chunk_size: int = 800
     chunk_overlap: int = 120
+    watch_dir: str = "incoming"
+    processed_dir: str = "processed"
+    inbox_subdir: str = "Inbox"
 
     class Config:
         env_file = ".env"

@@ -1,19 +1,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
 from pathlib import Path
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth import require_api_key
-from app.ingest.chunker import ChunkConfig, chunk_text
-from app.ingest.frontmatter import FrontmatterData, render_frontmatter
-from app.ingest.staging import PendingChunk, stage_chunks
-from app.ingest.vault import ensure_vault_file
-from app.schemas.ingest import ChunkResult, IngestRequest, IngestResponse, SourceType
-from app.settings import settings
+from app.ingest.service import ingest_text
+from app.schemas.ingest import IngestRequest, IngestResponse, SourceType
 
 router = APIRouter(
     prefix="/ingest",
@@ -79,55 +73,10 @@ def _extract_text(payload: IngestRequest) -> tuple[str, str, str]:
 @router.post("", response_model=IngestResponse, status_code=status.HTTP_202_ACCEPTED)
 def ingest_payload(payload: IngestRequest) -> IngestResponse:
     body_text, origin, inferred_title = _extract_text(payload)
-    title = inferred_title or "Untitled"
-    vault_root = Path(settings.vault_dir)
-
-    fm = render_frontmatter(
-        FrontmatterData(
-            title=title,
-            origin=origin,
-            created=date.today(),
-            tags=payload.tags,
-            trust="provisional",
-            source_ref=origin,
-        )
-    )
-
-    relative_path = ensure_vault_file(vault_root, title, body_text, fm)
-
-    chunk_strings = chunk_text(body_text)
-    chunk_results: list[ChunkResult] = []
-    pending: list[PendingChunk] = []
-    for text in chunk_strings:
-        chunk_id = str(uuid4())
-        size = len(text.split())
-        chunk_results.append(ChunkResult(id=chunk_id, text=text, size=size))
-        pending.append(
-            PendingChunk(
-                id=chunk_id,
-                text=text,
-                size=size,
-                doc_path=str(relative_path),
-                trust="provisional",
-            )
-        )
-
-    stage_chunks(pending, ChunkConfig())
-    logger.info(
-        "ingest.staged",
-        extra={
-            "path": str(relative_path),
-            "tags": payload.tags,
-            "chunks": len(chunk_results),
-            "trust": "provisional",
-        },
-    )
-
-    return IngestResponse(
-        ok=True,
-        title=title,
-        path=str(relative_path),
+    return ingest_text(
+        body_text,
+        origin,
+        inferred_title,
         tags=payload.tags,
         trust="provisional",
-        chunks=chunk_results,
     )
