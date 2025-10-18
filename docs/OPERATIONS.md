@@ -1,10 +1,9 @@
 # Operations Playbook
 
 ## Version Bump Workflow
-- Update `settings.app_version` in `app/settings.py` when releasing new backend capabilities.
-- Reflect the new version in any API documentation (e.g. README) and communicate client-impacting changes.
-- Commit with a clear message (`chore(version): bump to X.Y.Z`) and tag the corresponding git commit.
-- Record noteworthy changes in `docs/ALIGNMENT.md` under the decision log to keep the agent memory aligned.
+- Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory.
+- Use `--dry-run` first to verify affected files, then review the diff and commit with a message like `chore(version): bump to X.Y.Z`.
+- After merge, tag the release and share any breaking changes; the script appends the decision log entry automatically.
 
 ## Storage Maintenance
 - The FastAPI service writes DuckDB artifacts to `storage/agent.duckdb` and provenance trails to `provenance.jsonl`.

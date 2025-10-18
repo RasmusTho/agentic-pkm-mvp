@@ -31,6 +31,7 @@
 
 ## Operations
 - Version bump and storage rotation guidance is captured in `docs/OPERATIONS.md`.
+- Use `python scripts/bump_version.py <new_version>` (with `--dry-run` support) to propagate release versions.
 - Health and readiness behaviours are centralised in `app/health.py`.
 - Future roadmap (auth, observability, automation) tracked in `docs/ALIGNMENT.md` and `data/context/projects.json`.
 

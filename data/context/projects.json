@@ -10,7 +10,7 @@
         "Alembic migrations under app/alembic/"
       ],
       "next_actions": [
-        "Automatisera versionsflöde (skript/taggar för settings.app_version)",
+        "Automatisera release-taggar efter versionsbump",
         "Scripta rotation/backup för DuckDB och provenance.jsonl",
         "Utvärdera auth och rate limiting inför produktion",
         "Implementera observability hooks (loggning + metrics)",
