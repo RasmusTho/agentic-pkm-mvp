@@ -11,7 +11,7 @@
       ],
       "next_actions": [
         "Rulla ut API-nyckel + rate limiting i deployment (env + Redis)",
-        "Koppla loggar/metrics till observability-stack (t.ex. Grafana)",
+        "Automatisera logg/metrics-insamling (t.ex. script för docker compose up)",
         "Gör pre-commit med Ruff/mypy/pytest-lint om det behövs",
         "Planera retention/purge policy för arkiverade körningar (max-age)"
       ]

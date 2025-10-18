@@ -46,3 +46,5 @@
 - 2025-10-19: Observability hooks (JSON-loggar + Prometheus via `METRICS_ENABLED`) aktiverade i `app/observability.py`.
 - 2025-10-19: Pre-commit hooks för ruff/mypy/pytest tillagda (`.pre-commit-config.yaml`).
 - 2025-10-19: Arkivrotation tillåter retention via `--max-age-days` i `scripts/rotate_storage.py`.
+- 2025-10-19: Lokal observability-stack dokumenterad i `docs/OBSERVABILITY_STACK.md`.
+- 2025-10-19: Docker Compose (API + Postgres + Redis) tillagd för stabil lokalbas.

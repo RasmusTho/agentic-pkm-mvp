@@ -92,6 +92,17 @@ The service exposes `/items` CRUD, `/context` for repo memory, `/health` for rea
 ## Observability
 - Structured JSON logs configured via `app/observability.py`; use standard logging levels (`INFO` default).
 - Enable Prometheus metrics by setting `METRICS_ENABLED=1`; `/metrics` endpoint becomes available (consider securing behind reverse proxy).
+- Optional local stack: see `docs/OBSERVABILITY_STACK.md` for Docker Compose (Prometheus + Grafana).
+
+## Containerized Dev
+- Build & run API + dependencies via Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+- Services: FastAPI (`http://localhost:8000`), Postgres (`localhost:5432`), Redis (`localhost:6379`).
+- Compose reads `.env`; override `DATABASE_URL`/`API_KEY` there as needed.
 
 ## Developer Workflow
 - Run `pre-commit install` to activate local hooks (ruff, mypy, pytest) before committing.

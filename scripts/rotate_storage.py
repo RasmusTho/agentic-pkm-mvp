@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not recreate empty placeholder files after rotation.",
     )
-parser.add_argument(
+    parser.add_argument(
         "--max-backups",
         type=int,
         default=10,

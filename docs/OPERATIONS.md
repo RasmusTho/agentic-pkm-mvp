@@ -5,6 +5,11 @@
 - Commit the bump with `chore(version): bump to X.Y.Z`, then create an annotated tag using `python scripts/tag_release.py [--dry-run|--push]` (tags default to `v<version>`).
 - Share noteworthy changes after tagging; the bump script already appends to the decision log.
 
+## Runtime Compose Stack
+- `docker-compose.yaml` spins up FastAPI (`api`), Postgres, and Redis for local development.
+- Ensure `.env` contains the desired secrets before running `docker compose up --build`.
+- Postgres data persists in the `postgres-data` volume; run `docker compose down -v` to wipe.
+
 ## Storage Maintenance
 - The FastAPI service writes DuckDB artifacts to `storage/agent.duckdb` and provenance trails to `provenance.jsonl`.
 - Rotate them with `python scripts/rotate_storage.py [--dry-run|--copy|--truncate]`, which archives into `storage/archive/` by default and keeps a bounded history (`--max-backups`).
@@ -22,3 +27,4 @@
 ## Observability
 - Logs: JSON-formatted via `app/observability.setup_logging()`. Hook into your logging stack (CloudWatch, ELK, etc.).
 - Metrics: enable `METRICS_ENABLED=1` to expose Prometheus metrics under `/metrics` using `prometheus-fastapi-instrumentator` (secure access appropriately).
+- Local Prometheus+Grafana recipe lives in `docs/OBSERVABILITY_STACK.md` (Docker Compose).
