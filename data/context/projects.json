@@ -10,10 +10,10 @@
         "Alembic migrations under app/alembic/"
       ],
       "next_actions": [
-        "Scripta rotation/backup för DuckDB och provenance.jsonl",
         "Utvärdera auth och rate limiting inför produktion",
         "Implementera observability hooks (loggning + metrics)",
-        "Gör pre-commit med Ruff/mypy/pytest-lint om det behövs"
+        "Gör pre-commit med Ruff/mypy/pytest-lint om det behövs",
+        "Planera retention/purge policy för arkiverade körningar"
       ]
     }
   ]

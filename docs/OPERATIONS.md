@@ -7,7 +7,7 @@
 
 ## Storage Maintenance
 - The FastAPI service writes DuckDB artifacts to `storage/agent.duckdb` and provenance trails to `provenance.jsonl`.
-- Implement a recurring rotation policy (e.g. daily cron) to archive and compact these files before they grow too large.
-- Store archived copies under `storage/archive/` or an external bucket with timestamps for traceability.
+- Rotate them with `python scripts/rotate_storage.py [--dry-run|--copy|--truncate]`, which archives into `storage/archive/` by default and keeps a bounded history (`--max-backups`).
+- Schedule the script (cron/systemd/GitHub Actions) to run routinely; review `--copy/--truncate` flags depending on whether live readers expect files to remain.
 - Prior to rotation, ensure no long-running agent sessions depend on the files; quiesce the service if necessary.
 - Monitor free disk space and set alerts when the combined storage exceeds the agreed threshold.

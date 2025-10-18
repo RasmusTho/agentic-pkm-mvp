@@ -84,3 +84,6 @@ The service exposes `/items` CRUD, `/context` for repo memory, `/health` for rea
 - Use `python scripts/bump_version.py <new_version>` (add `--dry-run` to preview) to update `settings.app_version` plus related docs.
 - Create annotated tags with `python scripts/tag_release.py [--dry-run|--push]`; tag names default to `v<version>`.
 - Record notable changes in the decision log after tagging.
+
+## Maintenance
+- Rotate DuckDB/provenance artifacts with `python scripts/rotate_storage.py [--dry-run]` (archives land in `storage/archive/`).

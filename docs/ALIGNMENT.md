@@ -12,10 +12,10 @@
 - Alembic migrations are current with baseline `3ddfc7237248_baseline.py`.
 
 ## Near-Term Focus
-- Scripta rotation/backup för DuckDB och provenance-loggar.
 - Utvärdera behov av auth + rate limiting före produktion.
 - Utforska observability hooks (strukturerad loggning, metrics).
 - Skapa pre-commit-flöde med Ruff/mypy/pytest lint om det behövs.
+- Planera data governance för arkiverade körningar (retention/purge regler).
 
 ## Operating Principles
 - Bias for maintainable, well-tested changes; add tests when behavior shifts or bugs are fixed.
@@ -40,4 +40,5 @@
 - 2025-10-19: Operations playbook dokumenterar versionering + lagringsrotation.
 - 2025-10-19: `scripts/bump_version.py` infördes för att automatisera versionsflödet.
 - 2025-10-19: `scripts/tag_release.py` automatiserar annoterade release-taggar.
+- 2025-10-19: `scripts/rotate_storage.py` roterar DuckDB och provenance-loggar.
 - 2025-10-19: Projektöversikt dokumenterad i `docs/PROJECT_OVERVIEW.md`.

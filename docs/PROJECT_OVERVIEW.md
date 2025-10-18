@@ -68,8 +68,9 @@
 - **CI**: `.github/workflows/ci.yml` runs Ruff → mypy → pytest on pushes and pull requests.
 
 ## Operations
-- Version bump and storage rotation guidance is captured in `docs/OPERATIONS.md`.
+- Version bump, release tagging, and storage rotation guidance is captured in `docs/OPERATIONS.md`.
 - Use `python scripts/bump_version.py <new_version>` (with `--dry-run` support) to update versions, then `python scripts/tag_release.py` to annotate releases.
+- Archive DuckDB/provenance data via `python scripts/rotate_storage.py [--dry-run]` which writes timestamped artifacts under `storage/archive/`.
 - Health and readiness behaviours are centralised in `app/health.py`.
 - Future roadmap (auth, observability, automation) tracked in `docs/ALIGNMENT.md` and `data/context/projects.json`.
 
