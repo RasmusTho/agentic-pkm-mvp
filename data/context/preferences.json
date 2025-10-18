@@ -1,6 +1,35 @@
 {
-  "language": ["sv", "en"],
-  "workstyle": ["kort", "konkret", "en sak i taget"],
-  "engineering": ["TDD där det passar", "OSS-first"],
-  "privacy": ["inga hemligheter i prompts", "håll kontext till öppna filer"]
+  "language": [
+    "sv",
+    "en"
+  ],
+  "workstyle": [
+    "kort",
+    "konkret",
+    "en sak i taget"
+  ],
+  "engineering": [
+    "TDD där det passar",
+    "OSS-first"
+  ],
+  "privacy": [
+    "inga hemligheter i prompts",
+    "håll kontext till öppna filer"
+  ],
+  "dev_style": {
+    "steps": "one-at-a-time",
+    "tests_first": true,
+    "portainer_managed": true,
+    "no_secrets_in_git": true
+  },
+  "coding_guidelines": {
+    "exceptions": "propagera uppåt, logga strukturerat",
+    "formatting": "ruff",
+    "typing": "mypy strict där möjligt"
+  },
+  "api_conventions": {
+    "versioning": "semver in settings.app_version",
+    "errors": "JSON med code,message,trace_id",
+    "docs": "kontrakt i README"
+  }
 }

@@ -16,6 +16,7 @@
 - Koppla loggar/metrics till observability-stack (t.ex. Grafana).
 - Införa pre-commit-flöde (klar med hooks i repo, rulla ut i teamet).
 - Planera data governance för arkiverade körningar (retention/purge regler).
+- Frontmatter-spec och API-kontrakt för /ingest och /recall (beskrivs nedan).
 
 ## Operating Principles
 - Bias for maintainable, well-tested changes; add tests when behavior shifts or bugs are fixed.
@@ -48,3 +49,79 @@
 - 2025-10-19: Arkivrotation tillåter retention via `--max-age-days` i `scripts/rotate_storage.py`.
 - 2025-10-19: Lokal observability-stack dokumenterad i `docs/OBSERVABILITY_STACK.md`.
 - 2025-10-19: Docker Compose (API + Postgres + Redis) tillagd för stabil lokalbas.
+- 2025-10-19: Frontmatter- och API-kontrakt specificerade för agentflödet.
+
+## Frontmatter v0.1
+```yaml
+---
+title: "<auto>"
+origin: "<url|file>"
+created: "YYYY-MM-DD"
+tags: [topic/…, project/…]
+trust: provisional|reviewed
+source_ref: "<sha|url>"
+amg:
+  nodes: ["n:Concept/…","n:Entity/…"]
+  edges: ["e:rel(type):A->B"]
+chunks:
+  algo: "recursive"
+  size: 800
+  overlap: 120
+---
+```
+
+*Markdown filen ska alltid skrivas till Obsidian/vault med ovanstående frontmatter, följt av innehållet (t.ex. sammanfattning eller extraherad text).*
+
+## API-kontrakt (MVP)
+
+### `POST /ingest`
+- **Request** (`multipart/form-data` eller JSON):
+  ```json
+  {
+    "source": {
+      "type": "file|url|text",
+      "path": "/Users/rasmus/Documents/foo.pdf",
+      "url": "https://example.com/foo",
+      "text": "…"
+    },
+    "tags": ["topic/ai", "project/second-brain"],
+    "notes": "valfri kommentar"
+  }
+  ```
+- **Response** (`200 OK`):
+  ```json
+  {
+    "ok": true,
+    "title": "Foo",
+    "path": "vault/Foo.md",
+    "tags": ["topic/ai", "project/second-brain"],
+    "chunks": [
+      {"id": "chunk-1", "text": "...", "size": 800},
+      {"id": "chunk-2", "text": "...", "size": 640}
+    ]
+  }
+  ```
+- Sidolistan (`chunks`) används för att fylla Chroma v2 (`collection=second_brain`) och kopplas till `source_ref`.
+
+### `GET /recall`
+- **Query params**: `q` (frågetext), `k` (antal träffar, default 5)
+- **Response** (`200 OK`):
+  ```json
+  {
+    "query": "hur hänger ontocoding ihop med PKM?",
+    "results": [
+      {
+        "path": "vault/Foo.md",
+        "title": "Foo",
+        "score": 0.83,
+        "snippet": "…highlight…",
+        "tags": ["topic/ai"]
+      }
+    ]
+  }
+  ```
+- Resultatsvaret ska även logga `trace_id` i JSON-loggen så att klienten kan korrelera med loggar.
+
+### Testfall (kommande)
+- `tests/test_ingest_poc.py` – validerar att `/ingest` sparar frontmatter + pushar chunkar till Chroma.
+- `tests/test_recall_poc.py` – validerar top-k recall (mockad Chroma tills riktig integration finns).

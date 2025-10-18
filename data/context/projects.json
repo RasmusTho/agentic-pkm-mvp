@@ -15,6 +15,51 @@
         "Gör pre-commit med Ruff/mypy/pytest-lint om det behövs",
         "Planera retention/purge policy för arkiverade körningar (max-age)"
       ]
+    },
+    {
+      "name": "Agentic PKM MVP",
+      "goal": "Ingest → summarize/tag → Markdown+frontmatter → index → recall.",
+      "scope": {
+        "inputs": [
+          "pdf",
+          "docx",
+          "txt",
+          "url"
+        ],
+        "agents": [
+          "TriageAgent",
+          "RecallAgent"
+        ],
+        "api": [
+          "/ingest",
+          "/recall"
+        ]
+      },
+      "decisions": [
+        "Ollama (llama3.1:8b, nomic-embed-text)",
+        "Chroma v2 collection=second_brain",
+        "Frontmatter i Obsidian-vault"
+      ],
+      "milestones": [
+        "M1: /ingest end-to-end",
+        "M2: /recall top-k med citeringar",
+        "M3: DailyBriefAgent (cron)"
+      ],
+      "next_actions": [
+        "Define frontmatter-spec v0.1 i docs/ALIGNMENT.md",
+        "Konfigurera Chroma v2 collection=second_brain",
+        "Specificera /ingest kontrakt (request/response) i README",
+        "Specificera /recall kontrakt i README",
+        "Lägg testfall: test_ingest_poc, test_recall_poc"
+      ],
+      "acceptance_criteria": [
+        "/ingest returnerar {ok,title,path,tags,chunks}",
+        "Markdown skapas i vault med frontmatter",
+        "Chroma innehåller minst ett dokument",
+        "/recall ger top-k med paths + score"
+      ],
+      "status": "in-progress",
+      "owner": "Rasmus"
     }
   ]
 }

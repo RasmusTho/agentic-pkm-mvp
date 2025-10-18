@@ -106,3 +106,37 @@ docker compose up --build
 
 ## Developer Workflow
 - Run `pre-commit install` to activate local hooks (ruff, mypy, pytest) before committing.
+
+## Upcoming API Contracts
+These specs guide the next implementation milestone:
+
+### `POST /ingest`
+Request payload:
+```json
+{
+  "source": {"type": "file|url|text", "path": "...", "url": "...", "text": "..."},
+  "tags": ["topic/ai", "project/second-brain"],
+  "notes": "optional"
+}
+```
+Response payload:
+```json
+{
+  "ok": true,
+  "title": "Foo",
+  "path": "vault/Foo.md",
+  "tags": ["topic/ai"],
+  "chunks": [{"id": "chunk-1", "text": "...", "size": 800}]
+}
+```
+
+### `GET /recall?q=...&k=5`
+Response payload:
+```json
+{
+  "query": "...",
+  "results": [
+    {"path": "vault/Foo.md", "title": "Foo", "score": 0.83, "snippet": "...", "tags": ["topic/ai"]}
+  ]
+}
+```

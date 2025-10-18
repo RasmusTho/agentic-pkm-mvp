@@ -1,7 +1,14 @@
 {
   "repo": {
-    "root_files": [".gitignore", "requirements.txt", "dev-requirements.txt", "run_agent.py"],
-    "vscode": [".vscode/launch.json"]
+    "root_files": [
+      ".gitignore",
+      "requirements.txt",
+      "dev-requirements.txt",
+      "run_agent.py"
+    ],
+    "vscode": [
+      ".vscode/launch.json"
+    ]
   },
   "runtime": {
     "editor": "VS Code Remote-SSH",
@@ -10,18 +17,68 @@
   },
   "app": {
     "package_root": "app",
-    "entrypoints": ["app/main.py", "run_agent.py"],
-    "config": ["app/settings.py", "app/.env"],
+    "entrypoints": [
+      "app/main.py",
+      "run_agent.py"
+    ],
+    "config": [
+      "app/settings.py",
+      "app/.env"
+    ],
     "alembic": {
       "ini": "app/alembic.ini",
       "env": "app/alembic/env.py",
       "versions_dir": "app/alembic/versions",
       "baseline": "3ddfc7237248_baseline.py"
     },
-    "agent": ["app/agent/graph.py", "app/agent/models.py", "app/agent/nodes.py"]
+    "agent": [
+      "app/agent/graph.py",
+      "app/agent/models.py",
+      "app/agent/nodes.py"
+    ]
   },
   "notes": [
     "DuckDB används lokalt under storage/agent.duckdb",
     "Alembic är konfigurerat under app/alembic/"
+  ],
+  "architecture": {
+    "orchestrator": "FastAPI",
+    "agents": [
+      "TriageAgent",
+      "RecallAgent",
+      "DailyBriefAgent"
+    ],
+    "pipelines": [
+      "ingest(parse→summarize→tag→frontmatter→index)",
+      "recall(hybrid search→answer)"
+    ],
+    "storage": {
+      "vault": "/DigitalVault",
+      "duckdb": "storage/agent.duckdb",
+      "vector": "Chroma v2: collection=second_brain"
+    },
+    "models": {
+      "llm": "ollama: llama3.1:8b",
+      "embeddings": "ollama: nomic-embed-text"
+    }
+  },
+  "endpoints": [
+    "/",
+    "/health",
+    "/version",
+    "/context",
+    "/ingest",
+    "/recall"
+  ],
+  "env": [
+    "OLLAMA_URL",
+    "CHROMA_URL",
+    "OBSIDIAN_VAULT"
+  ],
+  "principles": [
+    "local-first",
+    "provenance-required",
+    "modulär pipeline",
+    "hybrid retrieval (BM25 + vector)"
   ]
 }
