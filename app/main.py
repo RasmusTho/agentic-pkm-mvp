@@ -19,6 +19,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy.orm import Session
 
+from app.api.ingest import router as ingest_router
 from app.api.items import router as items_router
 from app.auth import configure_rate_limit_storage, limiter
 from app.db import Base, engine
@@ -55,6 +56,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 app.add_middleware(SlowAPIMiddleware)
 configure_metrics(app)
 app.include_router(items_router)
+app.include_router(ingest_router)
 
 
 @app.get("/")
