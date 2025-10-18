@@ -8,11 +8,12 @@ if os.getenv("DEBUGPY") == "1":
         print("Waiting for debugger attach...")
         debugpy.wait_for_client()
 
-from fastapi import FastAPI, Depends
+from fastapi import Depends, FastAPI
 from sqlalchemy.orm import Session
-from db import Base, engine
-from models import Item
-from deps import get_db
+
+from app.db import Base, engine
+from app.deps import get_db
+from app.models import Item
 
 app = FastAPI()
 
