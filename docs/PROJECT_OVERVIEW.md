@@ -78,6 +78,34 @@
 - Kör API+Postgres+Redis via `docker-compose.yaml` för en självbärande dev-basad (se README för instruktioner).
 - Future roadmap (auth, observability, automation) tracked in `docs/ALIGNMENT.md` and `data/context/projects.json`.
 
+## Information Flow (MVP)
+```
+  Source Input
+    (pdf/url/text)
+         |
+         v
+  Parse & Chunk (Docling/LLM)
+         |
+         v
+  Triage Agent (trust = provisional/reviewed)
+         |
+         +--> if provisional --> return chunk preview
+         |
+         v
+  Frontmatter Builder (YAML v0.1)
+         |
+         v
+  Vault Writer (Obsidian Markdown)
+         |
+    [Optional human review]
+         |
+         v
+  Hybrid Index (DuckDB + Chroma)
+         |
+         v
+  Recall Agent (top-k, cites, snippet)
+```
+
 ## Getting Started Recap
 1. `python -m venv .venv && source .venv/bin/activate`
 2. `pip install -r requirements.txt -r dev-requirements.txt`
