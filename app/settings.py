@@ -9,12 +9,16 @@ class Settings(BaseSettings):
     rate_limit_redis_url: str | None = None
     rate_limit_default: str = "60/minute"
     metrics_enabled: bool = False
-    vault_dir: str = "vault"
+    vault_dir: str = (
+        "/Users/rasmus/Library/Mobile Documents/iCloud~md~obsidian/Documents/" "Mimers valv"
+    )
     chunk_size: int = 800
     chunk_overlap: int = 120
-    watch_dir: str = "incoming"
-    processed_dir: str = "processed"
-    inbox_subdir: str = "Inbox"
+    watch_dir: str = "/Users/rasmus/Library/Mobile Documents/com~apple~CloudDocs/" "watchfolder"
+    processed_dir: str = (
+        "/Users/rasmus/Library/Mobile Documents/com~apple~CloudDocs/watchfolder/" "processed"
+    )
+    inbox_subdir: str = "@Inbox"
 
     class Config:
         env_file = ".env"
