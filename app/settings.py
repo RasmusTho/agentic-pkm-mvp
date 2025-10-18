@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     rate_limit_redis_url: str | None = None
     rate_limit_default: str = "60/minute"
     metrics_enabled: bool = False
+    vault_dir: str = "vault"
 
     class Config:
         env_file = ".env"

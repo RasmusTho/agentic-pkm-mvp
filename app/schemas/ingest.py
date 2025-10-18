@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -14,15 +13,15 @@ class SourceType(str, Enum):
 
 class SourcePayload(BaseModel):
     type: SourceType
-    path: Optional[str] = Field(None, description="Filesystem path when type=file")
-    url: Optional[HttpUrl] = Field(None, description="External URL when type=url")
-    text: Optional[str] = Field(None, description="Inline text when type=text")
+    path: str | None = Field(None, description="Filesystem path when type=file")
+    url: HttpUrl | None = Field(None, description="External URL when type=url")
+    text: str | None = Field(None, description="Inline text when type=text")
 
 
 class IngestRequest(BaseModel):
     source: SourcePayload
     tags: list[str] = Field(default_factory=list)
-    notes: Optional[str] = None
+    notes: str | None = None
 
 
 class ChunkResult(BaseModel):
