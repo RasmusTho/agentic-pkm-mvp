@@ -10,9 +10,11 @@
         "Alembic migrations under app/alembic/"
       ],
       "next_actions": [
-        "Expose /context endpoint som läser data/context/*.json",
-        "Definiera första e2e-testet i tests/ för /context",
-        "Koppla run_agent.py till app/agent/graph.py med minimal CLI"
+        "CLI till run_agent.py: --task/--input/--dry-run",
+        "Lägg till /health och /version endpoints",
+        "Få tests/test_items.py att passera (implementera ev. items-router)",
+        "Sätt upp CI med pytest (GitHub Actions)",
+        "Inför Ruff + mypy i dev-flödet"
       ]
     }
   ]
