@@ -1,4 +1,5 @@
 """Rotate DuckDB and provenance log artifacts into timestamped archives."""
+
 from __future__ import annotations
 
 import argparse

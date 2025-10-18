@@ -1,4 +1,5 @@
 """Authentication and rate limiting utilities."""
+
 from __future__ import annotations
 
 from fastapi import Depends, HTTPException, Request, status

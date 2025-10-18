@@ -65,6 +65,7 @@
   - `ruff` for linting/format, configured in `ruff.toml`.
   - `mypy` for static typing, configured in `mypy.ini`.
   - `pytest` for integration/unit tests under `tests/`.
+- **Pre-commit**: run `pre-commit install` to enable local ruff/mypy/pytest hooks.
 - **CI**: `.github/workflows/ci.yml` runs Ruff → mypy → pytest on pushes and pull requests.
 
 ## Operations

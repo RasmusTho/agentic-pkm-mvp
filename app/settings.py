@@ -9,8 +9,10 @@ class Settings(BaseSettings):
     rate_limit_redis_url: str | None = None
     rate_limit_default: str = "60/minute"
     metrics_enabled: bool = False
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+
 
 settings = Settings()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from typing import Any, cast
 from uuid import uuid4
 
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -41,6 +42,6 @@ def invoke(
         profile=profile,
         feedback=feedback_text,
     )
-    config = {"configurable": {"thread_id": state.run_id}}
-    result = app.invoke(state, config=config)  # type: ignore[arg-type]
-    return AgentState.model_validate(result)
+    config: dict[str, Any] = {"configurable": {"thread_id": state.run_id}}
+    result = app.invoke(state, config=config)
+    return AgentState.model_validate(cast(dict[str, Any], result))

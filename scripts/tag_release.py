@@ -1,4 +1,5 @@
 """Create an annotated git tag based on the current app version."""
+
 from __future__ import annotations
 
 import argparse

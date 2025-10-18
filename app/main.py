@@ -36,10 +36,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+def _rate_limit_handler(request: Request, exc: Exception) -> JSONResponse:
+    if isinstance(exc, RateLimitExceeded):
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={"detail": "Rate limit exceeded"},
+        )
     return JSONResponse(
-        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        content={"detail": "Rate limit exceeded"},
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": str(exc)}
     )
 
 

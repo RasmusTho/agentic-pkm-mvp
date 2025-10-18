@@ -12,9 +12,9 @@
 - Alembic migrations are current with baseline `3ddfc7237248_baseline.py`.
 
 ## Near-Term Focus
-- Implementera API-nyckel + rate limiting enligt `docs/AUTH_RATE_LIMITING.md`.
-- Utforska observability hooks (strukturerad loggning, metrics).
-- Skapa pre-commit-flöde med Ruff/mypy/pytest lint om det behövs.
+- Rulla ut API-nyckel + rate limiting i deployment (env + Redis).
+- Koppla loggar/metrics till observability-stack (t.ex. Grafana).
+- Införa pre-commit-flöde (klar med hooks i repo, rulla ut i teamet).
 - Planera data governance för arkiverade körningar (retention/purge regler).
 
 ## Operating Principles
@@ -44,3 +44,4 @@
 - 2025-10-19: Projektöversikt dokumenterad i `docs/PROJECT_OVERVIEW.md`.
 - 2025-10-19: Auth + rate limiting strategi dokumenterad i `docs/AUTH_RATE_LIMITING.md`.
 - 2025-10-19: Observability hooks (JSON-loggar + Prometheus via `METRICS_ENABLED`) aktiverade i `app/observability.py`.
+- 2025-10-19: Pre-commit hooks för ruff/mypy/pytest tillagda (`.pre-commit-config.yaml`).

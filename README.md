@@ -92,3 +92,6 @@ The service exposes `/items` CRUD, `/context` for repo memory, `/health` for rea
 ## Observability
 - Structured JSON logs configured via `app/observability.py`; use standard logging levels (`INFO` default).
 - Enable Prometheus metrics by setting `METRICS_ENABLED=1`; `/metrics` endpoint becomes available (consider securing behind reverse proxy).
+
+## Developer Workflow
+- Run `pre-commit install` to activate local hooks (ruff, mypy, pytest) before committing.

@@ -1,12 +1,14 @@
 """Logging and metrics configuration helpers."""
+
 from __future__ import annotations
 
 import json
 import logging
 import sys
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import Any
 
+from fastapi import FastAPI
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.settings import settings
@@ -39,7 +41,7 @@ def setup_logging() -> None:
 instrumentator = Instrumentator(should_group_status_codes=True)
 
 
-def configure_metrics(app) -> None:
+def configure_metrics(app: FastAPI) -> None:
     if not settings.metrics_enabled:
         return
     instrumentator.instrument(app).expose(app, include_in_schema=False, should_gzip=True)

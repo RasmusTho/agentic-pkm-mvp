@@ -1,4 +1,5 @@
 """Utility to bump ``settings.app_version`` and related documentation."""
+
 from __future__ import annotations
 
 import argparse
