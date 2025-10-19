@@ -32,26 +32,15 @@
 - Privacy: inga hemligheter i prompts; stay within opened context when possible.
 
 ## Decision Log
-- 2025-10-18: Context loader added exposing repo memory through `/context`.
-- 2025-10-18: Launch configuration standardized on debugpy attach at port `15678`.
-- 2025-10-19: `run_agent.py` CLI now supports `--task`, `--input`, and `--dry-run` flags (plus tests).
-- 2025-10-19: Added `/health` (DB ping) and `/version` endpoints with tests.
-- 2025-10-19: FastAPI startup migrated to lifespan handler that ensures tables exist.
-- 2025-10-19: `/health` now validates DuckDB connectivity and provenance.jsonl access.
-- 2025-10-19: `/items` endpoints extracted to router with expanded coverage.
-- 2025-10-19: CI pipeline (pytest, Ruff, mypy) established with supporting configs.
-- 2025-10-19: Operations playbook dokumenterar versionering + lagringsrotation.
-- 2025-10-19: `scripts/bump_version.py` infördes för att automatisera versionsflödet.
-- 2025-10-19: `scripts/tag_release.py` automatiserar annoterade release-taggar.
-- 2025-10-19: `scripts/rotate_storage.py` roterar DuckDB och provenance-loggar.
-- 2025-10-19: Projektöversikt dokumenterad i `docs/PROJECT_OVERVIEW.md`.
-- 2025-10-19: Auth + rate limiting strategi dokumenterad i `docs/AUTH_RATE_LIMITING.md`.
 - 2025-10-19: Observability hooks (JSON-loggar + Prometheus via `METRICS_ENABLED`) aktiverade i `app/observability.py`.
 - 2025-10-19: Pre-commit hooks för ruff/mypy/pytest tillagda (`.pre-commit-config.yaml`).
 - 2025-10-19: Arkivrotation tillåter retention via `--max-age-days` i `scripts/rotate_storage.py`.
-- 2025-10-19: Lokal observability-stack dokumenterad i `docs/OBSERVABILITY_STACK.md`.
-- 2025-10-19: Docker Compose (API + Postgres + Redis) tillagd för stabil lokalbas.
-- 2025-10-19: Frontmatter- och API-kontrakt specificerade för agentflödet.
+- 2025-10-19: Lokal observability-stack dokumenterad i `docs/OBSERVABILITY_STACK.md` och Docker Compose-basen etablerad.
+- 2025-10-19: Frontmatter- och API-kontrakt specificerade för agentflödet (docs/ALIGNMENT.md, README).
+- 2025-10-19: Lokal watcher och vault-ingest (Obsidian `@Inbox`) implementerat via `app/ingest/watcher.py`.
+- 2025-10-19: DuckDB-staging och review endpoints (`/ingest/pending`, `/ingest/review`) tillagda för agentstyrd QA.
+- 2025-10-19: Semantic chunking & categorization scheman dokumenterade i alignment + system context.
+- Äldre poster finns arkiverade i `docs/archive/decision-log-2025-10.md`.
 
 ## Frontmatter v0.1
 ```yaml
