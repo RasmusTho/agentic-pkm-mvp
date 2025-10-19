@@ -100,11 +100,23 @@
     [Optional human review -> trust=reviewed]
          |
          v
-  Hybrid Index (DuckDB + Chroma)  <--- från staging när reviewed
+  Hybrid Index (Postgres FTS + pgvector)
          |
          v
   Recall Agent (top-k, cites, snippet)
 ```
+
+### Ingestion Pipeline (Detaljer)
+- **Ingress**: `POST /ingest` accepterar `{id?, kind?, source_ref?, payload, text}` och dirigeras till `app/search/service.py::ingest_object`.
+- **Storage**: `objects` (JSONB + `search_vector`) och `embeddings` (pgvector) i Postgres uppdateras idempotent (`ON CONFLICT` vid samma `id`).
+- **Embedding**: standarden är en deterministisk hashing-funktion (1536-dimensioner) – byt ut mot extern modell via tjänstlagret när API-nycklar finns.
+- **Benchmarks**: kör `python scripts/bench.py --count 2000 --k 10` efter större importer för att mäta p50/p95-latens.
+
+### Search Service (MVP)
+- `/search` förenar Postgres-FTS (`search_ft`) med pgvector-sök via Reciprocal Rank Fusion.
+- Resultatet returnerar `object_id`, `score` och hela JSONB-payloaden – downstream-klienter ansvarar för rendering.
+- CLI-stödet (`run_agent.py --task recall`) använder samma sökväg och presenterar toppträffar + citat.
+- Alternativa backends (t.ex. Qdrant) utvärderas först om pgvector visar sig otillräckligt; tills dess hålls kodbasen pgvector-fokuserad.
 
 ## Getting Started Recap
 1. `python -m venv .venv && source .venv/bin/activate`

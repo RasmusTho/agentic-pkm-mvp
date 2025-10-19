@@ -66,56 +66,47 @@ chunks:
 ## API-kontrakt (MVP)
 
 ### `POST /ingest`
-- **Request** (`multipart/form-data` eller JSON):
+- **Request** (`application/json`):
   ```json
   {
-    "source": {
-      "type": "file|url|text",
-      "path": "/Users/rasmus/Documents/foo.pdf",
-      "url": "https://example.com/foo",
-      "text": "…"
-    },
-    "tags": ["topic/ai", "project/second-brain"],
-    "notes": "valfri kommentar"
+    "id": "3f0b4f86-...",
+    "kind": "note",
+    "source_ref": "obsidian/Foo.md",
+    "payload": {"title": "Foo", "tags": ["topic/ai"]},
+    "text": "alpha beta"
   }
   ```
-- **Response** (`200 OK`):
+- **Response** (`201 CREATED`):
   ```json
   {
     "ok": true,
-    "title": "Foo",
-    "path": "vault/Foo.md",
-    "tags": ["topic/ai", "project/second-brain"],
-    "chunks": [
-      {"id": "chunk-1", "text": "...", "size": 800},
-      {"id": "chunk-2", "text": "...", "size": 640}
-    ]
+    "object_id": "3f0b4f86-...",
+    "dimensions": 1536,
+    "model": "openai/text-embedding-3-large"
   }
   ```
-- Sidolistan (`chunks`) används för att fylla Chroma v2 (`collection=second_brain`) och kopplas till `source_ref`.
+- Samma `id` kan återanvändas för idempotent uppdatering (`ON CONFLICT` sätter payload och embedding).
 
-### `GET /recall`
-- **Query params**: `q` (frågetext), `k` (antal träffar, default 5)
+### `POST /search`
+- **Body**: `{ "query_text?": "...", "query_embedding?": [ ... ], "k": 10 }`
 - **Response** (`200 OK`):
   ```json
   {
-    "query": "hur hänger ontocoding ihop med PKM?",
-    "results": [
+    "hits": [
       {
-        "path": "vault/Foo.md",
-        "title": "Foo",
-        "score": 0.83,
-        "snippet": "…highlight…",
-        "tags": ["topic/ai"]
+        "object_id": "3f0b4f86-...",
+        "score": 0.0331,
+        "payload": {"title": "Foo", "text": "alpha beta"}
       }
     ]
   }
   ```
-- Resultatsvaret ska även logga `trace_id` i JSON-loggen så att klienten kan korrelera med loggar.
+- `query_text` ger FTS (GIN-index på `search_vector`), `query_embedding` ger pgvector, båda tillsammans ger hybrid (RRF).
 
-### Testfall (kommande)
-- `tests/test_ingest_poc.py` – validerar att `/ingest` sparar frontmatter + pushar chunkar till Chroma.
-- `tests/test_recall_poc.py` – validerar top-k recall (mockad Chroma tills riktig integration finns).
+### Testfall
+- `tests/test_ingest_roundtrip.py` – säkerställer att ingest skriver metadata och embedding till pgvector-indexet.
+- `tests/test_vector_query.py` – kontrollerar närmsta granne via vektorsök.
+- `tests/test_hybrid_rrf.py` – verifierar Reciprocal Rank Fusion mellan FTS- och vektorresultat.
 
 ## Chunking v0.2 – Semantisk & Reviderbar
 
@@ -124,14 +115,14 @@ CHUNK_SIZE: 800
 CHUNK_OVERLAP: 120
 CHUNK_POLICY: semantic
 CHUNK_SOURCE: headings|tokens
-CHUNK_STATE: staging|reviewed|indexed
+CHUNK_STATE: provisional|reviewed
 
 ### Metadata schema
 {
   "chunk_id": "<uuid>",
   "doc_id": "<item_id>",
   "hash": "<sha1>",
-  "state": "staging|reviewed|indexed",
+  "state": "provisional|reviewed",
   "source_ref": "<url|git_sha>",
   "title": "<string>",
   "tags": ["..."],
@@ -142,9 +133,9 @@ CHUNK_STATE: staging|reviewed|indexed
 }
 
 ### Promotion flow
-staging → review → approve → index(main)
+provisional → review → approve → indexed (Postgres)
 
-Chunkar genereras alltid i staging (`app.ingest.staging.PendingChunk`). När dokumentet markeras `trust="reviewed"` flyttas chunkarna in i huvudindex (DuckDB + Chroma). Fram tills dess kan sekundära RAG-processer läsa från staging.
+Embeddings skrivs direkt till Postgres `embeddings`; `state/trust` i payloaden avgör om poster ska exponeras i sökresultat. Promotion innebär att sätta `state=reviewed` och eventuellt berika payload (taggar, källor).
 
 ## Categorization v0.1 – Semantisk Labeling
 
@@ -161,3 +152,17 @@ Chunkar genereras alltid i staging (`app.ingest.staging.PendingChunk`). När dok
 ### Flow
 QA_GATE → CATEGORIZE → CHUNK
 CATEGORIZE output is validated and written into frontmatter and metadata index.
+
+## Triage Criteria v0.1
+- **Trust & kompletthet**: payloadens text ska vara fullständig, läsbar och fri från skräp/duplikat innan `state` höjs till `reviewed`.
+- **Metadata**: säkerställ att JSONB innehåller `title`, `tags`, `source_ref`, `trust/state` och att `text` används för embedding.
+- **Taggar & klassificering**: rapportera saknade obligatoriska taggar (t.ex. `topic/...`, projekt-taggar) eller inkonsekvenser mot roadmapen.
+- **Kvalitetssignaler**: flagga dokument med extremt korta eller repetitiva texter som kräver manuell åtgärd.
+- **Rekommenderad åtgärd**: uppdatera payload och kör `/ingest` igen med samma `id` för att skriva över poster (idempotent `ON CONFLICT`).
+- **Automatisering**: framtida agent-version kan höja `trust` via `search_hybrid`-feedback – definiera heuristiker innan detta aktiveras.
+
+## Recall Agent v0.1
+- **Datakälla**: bygger på Postgres `objects` + `embeddings` (`search_hybrid`/`search_vector`).
+- **Sökstrategi**: hybrid scoring (FTS + pgvector RRF) som returnerar `object_id`, `score`, `payload` (inkl. titel/text).
+- **CLI**: `run_agent.py --task recall --input "query"` nyttjar samma sökväg och skriver ut toppträffar med källor.
+- **Framåt**: fortsätt optimera pgvector-parametrar; utvärdera alternativa backends först om prestanda/problem uppstår.

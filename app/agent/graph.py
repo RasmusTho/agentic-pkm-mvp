@@ -43,5 +43,5 @@ def invoke(
         feedback=feedback_text,
     )
     config: dict[str, Any] = {"configurable": {"thread_id": state.run_id}}
-    result = app.invoke(state, config=config)
+    result = cast(Any, app).invoke(state, config=config)
     return AgentState.model_validate(cast(dict[str, Any], result))

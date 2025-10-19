@@ -6,27 +6,44 @@ The service exposes `/items` CRUD, `/context` for repo memory, `/health` for rea
 ## Getting Started
 1. Create and activate a virtual environment (`python -m venv .venv && source .venv/bin/activate`).
 2. Install dependencies: `pip install -r requirements.txt`.
-3. Copy the sample environment: `cp .env.example .env` and adjust `DATABASE_URL` if needed.
-4. Run the API: `uvicorn app.main:app --reload`.
+3. Copy the sample environment: `cp .env.example .env` and adjust `DB_DSN` (keep `VECTOR_BACKEND=pgvector`).
+4. Run the API: `uvicorn app.main:app --reload --port 8000` (Docker publishes 18000→8000).
 
 ### Database
-- Default configuration expects a local Postgres DSN. For quick experiments you can export `DATABASE_URL=sqlite+pysqlite:///./storage/dev.db`.
-- Alembic is configured under `app/alembic/`; run migrations with `alembic -c app/alembic.ini upgrade head`.
+- The service targets Postgres with the `pgvector` extension. Point `DB_DSN` at your instance (Docker Compose provides `postgres://app:app@postgres:5432/app`).
+- Apply schema changes with Alembic: `alembic -c app/alembic.ini upgrade head` (creates the `objects` + `embeddings` tables and FTS artifacts).
 
 ### Agent CLI
-- Run the workflow with `python run_agent.py --task summarize --input "demo text"`.
-- `--dry-run` previews the payload without executing; `--profile` selects `work|home|creative`.
-- `--input -` reads text from stdin, otherwise pass the content directly.
+- Kör sammanfattningar med `python run_agent.py --task summarize --input "demo text"`.
+- `--task recall --input "query"` nyttjar hybrid-sökningen (Postgres FTS + pgvector) och skriver ut toppträffarna.
+- `--dry-run` visar payloaden utan att exekvera; `--profile` styr guardrails (`work|home|creative`).
+- `--input -` läser från stdin, annars passas texten direkt.
 
 ### API Endpoints
-- `GET /health` returns aggregated readiness details for the SQL DB, DuckDB store, and provenance log.
-- `GET /version` returns `{"version": settings.app_version}` (override via env).
-- `GET /context` streams repo memory for the agent.
-- `GET /items`, `POST /items` provide basic demo CRUD.
+- `GET /health` kontrollerar Postgres-anslutning, DuckDB-provenance och svarar `503` på avvikelser.
+- `GET /version` returnerar `{"version": settings.app_version}`.
+- `GET /context` strömmar agentens kontext (`data/context/*.json`).
+- `POST /ingest` tar `{id?, kind?, source_ref?, payload, text}` och skriver metadata + embeddings till Postgres (`objects`/`embeddings`).
+- `POST /search` accepterar `{query_text?, query_embedding?, k}` och kör FTS, vektorsök eller hybrid (Reciprocal Rank Fusion).
+- `GET /items`, `POST /items` erbjuder enkel CRUD-demo (SQLite i tester, Postgres i drift).
+
+### Search Architecture
+- **Storage**: `objects` (UUID PK, JSONB payload, genererad `search_vector`) + `embeddings` (pgvector, refererar `objects.id`).
+- **FTS**: `search_ft(query, k)` använder `plainto_tsquery('english', ...)` och GIN-indexet på `search_vector`.
+- **Vector**: `PgVectorIndex` kapslar psycopg-anrop (`ivfflat`, `lists=100`); JSONB-filter stöds via `payload @> ...`.
+- **Hybrid**: `search_hybrid` hämtar top-K från FTS + vektor och kombinerar dem med Reciprocal Rank Fusion (`1/(60+rank)` per lista).
+- **Backends**: `VECTOR_BACKEND=pgvector` (enda stödda backend i nuläget).
+
+### Migration from Chroma
+1. Stoppa tjänsten (`docker compose down`).
+2. Ta bort gamla Chroma-volymer (`rm -rf storage/chroma` om de finns).
+3. Uppdatera `.env` till `DB_DSN`, `VECTOR_BACKEND` (ska vara `pgvector`) och `EMBED_MODEL`.
+4. Kör Alembic: `alembic -c app/alembic.ini upgrade head`.
+5. Starta stacken (`docker compose up -d`) och re-ingesta källor via nya `/ingest`.
 
 ## Testing
 - Execute `pytest` (VS Code picks this up automatically via `.vscode/settings.json`).
-- Tests rely on an in-memory SQLite database and do not require external services.
+- Enhetstesterna stubbar pgvector-indexet och kräver inga externa tjänster.
 
 ## Quality Gates
 - Ruff and mypy configs live in `ruff.toml` and `mypy.ini`; install dev deps via `pip install -r dev-requirements.txt`.
@@ -102,44 +119,59 @@ docker compose up --build
 ```
 
 - Services: FastAPI (`http://localhost:8000`), Postgres (`localhost:5432`), Redis (`localhost:6379`).
-- Compose reads `.env`; override `DATABASE_URL`/`API_KEY` there as needed.
+- Services: FastAPI (`http://localhost:18000`), Postgres (`localhost:15432`), Redis (`localhost:6379`).
+- Compose läser `.env`; justera `DB_DSN`, `VECTOR_BACKEND` (lämna som `pgvector`), `API_KEY` m.fl. där.
 
 ## Developer Workflow
 - Run `pre-commit install` to activate local hooks (ruff, mypy, pytest) before committing.
 
-## Upcoming API Contracts
-These specs guide the next implementation milestone:
+## API Contracts & Roadmap
+Aktuell funktionalitet och kommande steg:
 
 ### `POST /ingest`
 Request payload:
 ```json
 {
-  "source": {"type": "file|url|text", "path": "...", "url": "...", "text": "..."},
-  "tags": ["topic/ai", "project/second-brain"],
-  "notes": "optional"
+  "id": "3f0b4f86-...",
+  "kind": "note",
+  "source_ref": "obsidian/inbox/foo.md",
+  "payload": {"title": "Foo", "tags": ["topic/ai"]},
+  "text": "Alpha beta gamma"
 }
 ```
 Response payload:
 ```json
 {
   "ok": true,
-  "title": "Foo",
-  "path": "vault/Foo.md",
-  "tags": ["topic/ai"],
-  "trust": "provisional",
-  "chunks": [{"id": "chunk-1", "text": "...", "size": 800}]
+  "object_id": "3f0b4f86-...",
+  "dimensions": 1536,
+  "model": "openai/text-embedding-3-large"
 }
 ```
 
-### `GET /recall?q=...&k=5`
+### `POST /search`
+Request payload:
+```json
+{
+  "query_text": "alpha",
+  "query_embedding": [0.12, 0.34, ...],
+  "k": 10
+}
+```
 Response payload:
 ```json
 {
-  "query": "...",
-  "results": [
-    {"path": "vault/Foo.md", "title": "Foo", "score": 0.83, "snippet": "...", "tags": ["topic/ai"]}
+  "hits": [
+    {
+      "object_id": "3f0b4f86-...",
+      "score": 0.0331,
+      "payload": {"title": "Foo", "text": "Alpha beta gamma"}
+    }
   ]
 }
 ```
 
-Chunklistan är staging-data – först när dokumentet har `trust == "reviewed"` flyttas chunkar till huvudindexet (DuckDB + Chroma). Innan dess kan en sekundär RAG peka mot staging-tabellen.
+### Nästa steg
+- Behåll pgvector som default; utvärdera alternativa backends (t.ex. Qdrant) först när krav på prestanda kräver det.
+- Experimentera med olika `ivfflat` parametrar (`lists`, `probes`) och utöka benchmarkscriptet.
+- Lägg till streaming- eller batchingstrategier för bulk-ingest om behov uppstår.

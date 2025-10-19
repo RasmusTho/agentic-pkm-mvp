@@ -18,7 +18,15 @@
 - Monitor free disk space and set alerts when the combined storage exceeds the agreed threshold.
 - Use `--max-age-days` alongside `--max-backups` to purge old archives (set policy, e.g. 30 days).
 - Run `pre-commit install` locally so lint/type/test hooks run automatically before each commit.
-- Chunkar skrivs först till staging (DuckDB `chunks_pending`) via `app/ingest/staging.py`; när `trust` sätts till `reviewed` migreras de till huvudindexet.
+- Vektordata lagras nu i Postgres (`objects` + `embeddings`); säkerställ att `pgvector`-extensionen finns och kör `VACUUM ANALYZE embeddings` periodiskt om klustret växer snabbt.
+
+## Ingestion Review Runbook
+1. **Förbered payload** – samla metadata i ett JSONB-kompatibelt dict och råtext i `text`-fältet.
+2. **Ingesta** – `POST /ingest` med `{id?, kind?, source_ref?, payload, text}`. Svarar med `object_id` + modell/dimensioner.
+3. **Validera** – kör `POST /search`:
+   - Endast `query_text` för Lexikal träffbild.
+   - Kombinera `query_text` + `query_embedding` (om extern embedding-generator används) för hybrid RRF.
+4. **Underhåll** – använd `scripts/bench.py` efter större datavolymer för att övervaka latens (p50/p95) och justera `ivfflat`-parametrar vid behov.
 
 ## Auth & Rate Limiting
 - Refer to `docs/AUTH_RATE_LIMITING.md` for implementation guidance (API key dependency + `slowapi` limiter).

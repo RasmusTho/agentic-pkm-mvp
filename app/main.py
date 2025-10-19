@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.api.ingest import router as ingest_router
 from app.api.items import router as items_router
+from app.api.search import router as search_router
 from app.auth import configure_rate_limit_storage, limiter
 from app.db import Base, engine
 from app.deps import get_db
@@ -57,6 +58,7 @@ app.add_middleware(SlowAPIMiddleware)
 configure_metrics(app)
 app.include_router(items_router)
 app.include_router(ingest_router)
+app.include_router(search_router)
 
 
 @app.get("/")

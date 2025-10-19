@@ -1,29 +1,28 @@
-version: "3.9"
-
 services:
   api:
     build: .
     image: agentic-pkm-api:latest
     env_file: .env
     environment:
-      - DATABASE_URL=postgresql+psycopg://app:app@postgres:5432/appdb
+      - DB_DSN=postgresql+psycopg://app:app@postgres:5432/app
+      - VECTOR_BACKEND=pgvector
       - RATE_LIMIT_REDIS_URL=redis://redis:6379/0
     ports:
-      - "8000:8000"
+      - "18001:8000"
     depends_on:
       - postgres
       - redis
 
   postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg16
     environment:
-      - POSTGRES_DB=appdb
+      - POSTGRES_DB=app
       - POSTGRES_USER=app
       - POSTGRES_PASSWORD=app
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "15433:5432"
 
   redis:
     image: redis:7-alpine

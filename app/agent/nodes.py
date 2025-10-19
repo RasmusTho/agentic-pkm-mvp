@@ -7,6 +7,9 @@ from pathlib import Path
 
 import duckdb
 
+from app.search.embeddings import embed_text
+from app.search.service import search_hybrid
+
 from .models import AgentState, ContextItem
 
 DB_PATH = "storage/agent.duckdb"
@@ -22,39 +25,72 @@ def hydrate(state: AgentState) -> AgentState:
     ctx: list[ContextItem] = []
     folder = Path("data/context")
     if folder.exists():
-        for p in folder.glob("*.json"):
-            d = json.loads(p.read_text(encoding="utf-8"))
-            ctx.append(ContextItem(**d))
-    try:
-        with _conn() as con:
-            con.execute(
-                """
-                CREATE TABLE IF NOT EXISTS context(
-                  id TEXT,
-                  text TEXT,
-                  tags LIST(TEXT),
-                  source TEXT,
-                  loaded_at TIMESTAMP
-                )
-                """
-            )
-            rows = con.execute("SELECT id, text, tags, source FROM context").fetchall()
-            for row in rows:
-                ctx.append(
-                    ContextItem(
-                        id=row[0],
-                        text=row[1],
-                        tags=list(row[2] or []),
-                        source=row[3] or "duckdb",
-                    )
-                )
-    except duckdb.Error:
-        pass
+        for path in folder.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if isinstance(data, dict) and {"id", "text"}.issubset(data):
+                try:
+                    ctx.append(ContextItem(**data))
+                except ValueError:
+                    continue
     state.ctx = ctx
     return state
 
 
 def reason(state: AgentState) -> AgentState:
+    if state.task == "recall":
+        return _recall_documents(state)
+    return _summarize_context(state)
+
+
+def _recall_documents(state: AgentState) -> AgentState:
+    query = (state.user_input or "").strip()
+    if not query:
+        state.result = "Ingen sökfråga angiven."
+        state.cites = []
+        state.ctx = []
+        return state
+
+    try:
+        embedding = embed_text(query)
+    except ValueError:
+        state.result = "Frågan kunde inte embedas."
+        state.cites = []
+        state.ctx = []
+        return state
+
+    hits = search_hybrid(query, embedding, k=5)
+    if not hits:
+        state.result = f"Inga träffar för: {query}"
+        state.cites = []
+        state.ctx = []
+        return state
+
+    ctx_items: list[ContextItem] = []
+    lines: list[str] = []
+    for hit in hits:
+        title = hit.payload.get("title") or str(hit.object_id)
+        summary = hit.payload.get("text") or hit.payload.get("content", "")
+        snippet = (summary or "")[:280]
+        lines.append(f"{title} ({hit.score:.3f})\n{snippet}")
+        ctx_items.append(
+            ContextItem(
+                id=str(hit.object_id),
+                text=snippet,
+                tags=[f"score:{hit.score:.3f}"],
+                source="search",
+            )
+        )
+
+    state.ctx = ctx_items
+    state.result = "\n\n".join(lines)
+    state.cites = [str(hit.object_id) for hit in hits]
+    return state
+
+
+def _summarize_context(state: AgentState) -> AgentState:
     if not state.ctx:
         state.result = "No context available."
         state.cites = []
@@ -69,8 +105,8 @@ def reason(state: AgentState) -> AgentState:
 
 def guard(state: AgentState) -> AgentState:
     if state.profile == "work" and state.result:
-        for w in ["hälsa", "diagnos", "privat", "familj"]:
-            state.result = state.result.replace(w, "▇▇")
+        for word in ["hälsa", "diagnos", "privat", "familj"]:
+            state.result = state.result.replace(word, "▇▇")
     return state
 
 
@@ -97,8 +133,8 @@ def log(state: AgentState) -> AgentState:
                 json.dumps(meta),
             ),
         )
-    with open(PROV_JSONL, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"run_id": state.run_id, "ts": ts, "meta": meta}) + "\n")
+    with open(PROV_JSONL, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"run_id": state.run_id, "ts": ts, "meta": meta}) + "\n")
     return state
 
 
