@@ -14,7 +14,9 @@
         "Automatisera logg/metrics-insamling (t.ex. script för docker compose up)",
         "Gör pre-commit med Ruff/mypy/pytest-lint om det behövs",
         "Planera retention/purge policy för arkiverade körningar (max-age)",
-        "Implementera chunk staging -> reviewed pipeline"
+        "Implementera chunk staging -> reviewed pipeline",
+        "Koppla LangGraph-agent till /ingest/pending och /ingest/review",
+        "Drive agent-koppling till /ingest/pending och /ingest/review"
       ]
     },
     {

@@ -18,6 +18,7 @@
 - Planera data governance för arkiverade körningar (retention/purge regler).
 - Bygg pipeline som flyttar chunkar från staging till huvudindex efter `trust="reviewed"`.
 - Frontmatter-spec och API-kontrakt för /ingest och /recall (beskrivs nedan).
+- Stage watcher och review endpoints finns nu; LangGraph-agent behöver kopplas mot `/ingest/pending` + `/ingest/review` för att automatisera QA & promotion.
 
 ## Operating Principles
 - Bias for maintainable, well-tested changes; add tests when behavior shifts or bugs are fixed.
