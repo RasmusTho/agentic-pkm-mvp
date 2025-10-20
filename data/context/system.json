@@ -55,7 +55,7 @@
     "storage": {
       "vault": "/DigitalVault",
       "duckdb": "storage/agent.duckdb",
-      "vector": "Chroma v2: collection=second_brain"
+      "vector": "Postgres pgvector (objects/embeddings)"
     },
     "models": {
       "llm": "ollama: llama3.1:8b",
@@ -72,7 +72,7 @@
   ],
   "env": [
     "OLLAMA_URL",
-    "CHROMA_URL",
+    "DB_DSN",
     "OBSIDIAN_VAULT"
   ],
   "principles": [

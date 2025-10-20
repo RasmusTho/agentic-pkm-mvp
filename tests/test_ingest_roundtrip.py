@@ -28,3 +28,6 @@ def test_ingest_roundtrip(stub_index) -> None:
     assert stored.payload["title"] == "Sample doc"
     assert stored.payload["text"].startswith("Alpha beta")
     assert stored.payload["content"].startswith("Alpha beta")
+    assert stored.payload["object_type"] == "note"
+    assert stored.payload["system_intent"] == "learn"
+    assert stored.payload["emergent_tags"] == []

@@ -40,7 +40,7 @@
       },
       "decisions": [
         "Ollama (llama3.1:8b, nomic-embed-text)",
-        "Chroma v2 collection=second_brain",
+        "Postgres pgvector objects/embeddings schema",
         "Frontmatter i Obsidian-vault"
       ],
       "milestones": [
@@ -52,7 +52,7 @@
       ],
       "next_actions": [
         "Define frontmatter-spec v0.1 i docs/ALIGNMENT.md",
-        "Konfigurera Chroma v2 collection=second_brain",
+        "Konfigurera Postgres pgvector indexering",
         "Specificera /ingest kontrakt (request/response) i README",
         "Specificera /recall kontrakt i README",
         "Lägg testfall: test_ingest_poc, test_recall_poc"
@@ -60,7 +60,7 @@
       "acceptance_criteria": [
         "/ingest returnerar {ok,title,path,tags,chunks}",
         "Markdown skapas i vault med frontmatter",
-        "Chroma innehåller minst ett dokument",
+        "Postgres objects/embeddings innehåller minst ett dokument",
         "/recall ger top-k med paths + score"
       ],
       "status": "in-progress",

@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 import psycopg
 from psycopg.rows import dict_row
 
+from app.ingest import handle_post_ingest, normalize_payload
 from app.search import get_vector_index
 from app.search.embeddings import embed_text
 from app.search.vector_index import VectorResult
@@ -14,15 +15,7 @@ from app.settings import settings
 
 
 def _ensure_payload(payload: dict[str, Any], text: str) -> dict[str, Any]:
-    data = dict(payload)
-    if "text" not in data:
-        data["text"] = text
-    if "content" not in data:
-        data["content"] = text
-    if "title" not in data:
-        first_line = text.strip().splitlines()[0] if text.strip() else ""
-        data["title"] = first_line[:120] or "Untitled"
-    return data
+    return normalize_payload(payload, text)
 
 
 def ingest_object(
@@ -47,6 +40,7 @@ def ingest_object(
         embedding=embedding,
         model=settings.embed_model,
     )
+    handle_post_ingest(target_id, resolved_payload, text)
     return target_id, len(embedding)
 
 

@@ -34,12 +34,10 @@ The service exposes `/items` CRUD, `/context` for repo memory, `/health` for rea
 - **Hybrid**: `search_hybrid` hämtar top-K från FTS + vektor och kombinerar dem med Reciprocal Rank Fusion (`1/(60+rank)` per lista).
 - **Backends**: `VECTOR_BACKEND=pgvector` (enda stödda backend i nuläget).
 
-### Migration from Chroma
-1. Stoppa tjänsten (`docker compose down`).
-2. Ta bort gamla Chroma-volymer (`rm -rf storage/chroma` om de finns).
-3. Uppdatera `.env` till `DB_DSN`, `VECTOR_BACKEND` (ska vara `pgvector`) och `EMBED_MODEL`.
-4. Kör Alembic: `alembic -c app/alembic.ini upgrade head`.
-5. Starta stacken (`docker compose up -d`) och re-ingesta källor via nya `/ingest`.
+### Postgres Vector Store
+- Kör Alembic med `alembic -c app/alembic.ini upgrade head` efter schemaändringar.
+- Säkerställ att `CREATE EXTENSION vector;` har körts i databasen och kör `VACUUM ANALYZE embeddings` vid behov.
+- Avlägsna kvarvarande `storage/chroma/`-mappar om de finns kvar sedan tidigare versioner.
 
 ## Testing
 - Execute `pytest` (VS Code picks this up automatically via `.vscode/settings.json`).
@@ -120,6 +118,8 @@ docker compose up --build
 
 - Services: FastAPI (`http://localhost:8000`), Postgres (`localhost:5432`), Redis (`localhost:6379`).
 - Services: FastAPI (`http://localhost:18000`), Postgres (`localhost:15432`), Redis (`localhost:6379`).
+- API-containern kör `scripts/start_api.sh` vilket kör `alembic upgrade head` före `uvicorn`.
+- Agent-containern kör `python scripts/start_agent_service.py` och läser planer från `config/agent.yaml` samt reflekterar köade filer i `storage/reflect/`.
 - Compose läser `.env`; justera `DB_DSN`, `VECTOR_BACKEND` (lämna som `pgvector`), `API_KEY` m.fl. där.
 
 ## Developer Workflow

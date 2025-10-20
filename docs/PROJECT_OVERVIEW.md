@@ -92,10 +92,12 @@
          +--> if provisional --> stage chunk preview (no main index)
          |
          v
-  Frontmatter Builder (YAML v0.1)
+  Frontmatter Builder (YAML v0.2 – intents & emergent tags)
          |
          v
   Vault Writer (Obsidian Markdown)
+         |
+         +--> Reflection Queue (/storage/reflect) vid låg klarhet
          |
     [Optional human review -> trust=reviewed]
          |
@@ -108,6 +110,8 @@
 
 ### Ingestion Pipeline (Detaljer)
 - **Ingress**: `POST /ingest` accepterar `{id?, kind?, source_ref?, payload, text}` och dirigeras till `app/search/service.py::ingest_object`.
+- **Lifecycle hooks**: `normalize_payload` fyller `object_type`, `system_intent`, `emergent_tags` och triggar reflektion (`/storage/reflect/*.json`) samt uppdaterar analytics/loggar.
+- **Synthesis relationer**: `synthesis_note`-poster loggar relationer `type="synthesizes"` i `logs/relations.jsonl`.
 - **Storage**: `objects` (JSONB + `search_vector`) och `embeddings` (pgvector) i Postgres uppdateras idempotent (`ON CONFLICT` vid samma `id`).
 - **Embedding**: standarden är en deterministisk hashing-funktion (1536-dimensioner) – byt ut mot extern modell via tjänstlagret när API-nycklar finns.
 - **Benchmarks**: kör `python scripts/bench.py --count 2000 --k 10` efter större importer för att mäta p50/p95-latens.

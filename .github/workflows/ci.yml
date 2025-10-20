@@ -37,6 +37,11 @@ jobs:
           . .venv/bin/activate
           mypy app tests
 
+      - name: Alembic upgrade dry-run
+        run: |
+          . .venv/bin/activate
+          alembic -c app/alembic.ini upgrade head --sql > /tmp/alembic.sql
+
       - name: Run pytest
         run: |
           . .venv/bin/activate

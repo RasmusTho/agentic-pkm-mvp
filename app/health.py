@@ -7,6 +7,8 @@ import duckdb
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.agent.repository import AgentRepository
+
 DUCKDB_PATH = Path("storage/agent.duckdb")
 PROVENANCE_PATH = Path("provenance.jsonl")
 
@@ -49,11 +51,22 @@ def _check_provenance() -> CheckResult:
         return {"status": "error", "detail": str(exc)}
 
 
-def health_summary(db: Session) -> HealthSummary:
+def _check_agent(agent_repo: AgentRepository | None) -> CheckResult:
+    if agent_repo is None:
+        return {"status": "degraded", "detail": "agent repository unavailable"}
+    heartbeat = agent_repo.get_last_heartbeat()
+    if not heartbeat:
+        return {"status": "degraded", "detail": "no heartbeat recorded"}
+    detail = f"{heartbeat['status']} @ {heartbeat['last_seen']}"
+    return {"status": "ok", "detail": detail}
+
+
+def health_summary(db: Session, agent_repo: AgentRepository | None = None) -> HealthSummary:
     checks = {
         "database": _check_database(db),
         "duckdb": _check_duckdb(),
         "provenance": _check_provenance(),
     }
+    checks["agent"] = _check_agent(agent_repo)
     status = "ok" if all(c["status"] == "ok" for c in checks.values()) else "degraded"
     return {"status": status, "checks": checks}

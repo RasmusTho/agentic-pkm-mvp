@@ -7,11 +7,29 @@ services:
       - DB_DSN=postgresql+psycopg://app:app@postgres:5432/app
       - VECTOR_BACKEND=pgvector
       - RATE_LIMIT_REDIS_URL=redis://redis:6379/0
+      - AGENT_CONFIG_PATH=/config/agent.yaml
     ports:
-      - "18001:8000"
+      - "18000:8000"
     depends_on:
       - postgres
       - redis
+    volumes:
+      - ./config/agent.yaml:/config/agent.yaml:ro
+    command: ["/app/scripts/start_api.sh"]
+
+  agent:
+    image: agentic-pkm-api:latest
+    env_file: .env
+    environment:
+      - DB_DSN=postgresql+psycopg://app:app@postgres:5432/app
+      - VECTOR_BACKEND=pgvector
+      - AGENT_CONFIG_PATH=/config/agent.yaml
+      - PYTHONPATH=/app
+    command: ["python", "scripts/start_agent_service.py"]
+    depends_on:
+      - postgres
+    volumes:
+      - ./config/agent.yaml:/config/agent.yaml:ro
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -22,7 +40,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
-      - "15433:5432"
+      - "15432:5432"
 
   redis:
     image: redis:7-alpine

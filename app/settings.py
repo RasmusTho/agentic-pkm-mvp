@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     rate_limit_redis_url: str | None = None
     rate_limit_default: str = "60/minute"
     metrics_enabled: bool = False
+    agent_config_path: str = "config/agent.yaml"
 
     # Legacy fields retained for compatibility with ingest/watch tooling
     vault_dir: str = (

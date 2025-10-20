@@ -30,8 +30,7 @@ orjson==3.11.3
 ormsgpack==1.11.0
 packaging==25.0
 pluggy==1.6.0
-psycopg==3.2.10
-psycopg-binary==3.2.10
+psycopg[binary]==3.2.10
 pydantic==2.12.0
 pydantic-settings==2.6.1
 pydantic_core==2.41.1

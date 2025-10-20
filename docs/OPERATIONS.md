@@ -6,9 +6,11 @@
 - Share noteworthy changes after tagging; the bump script already appends to the decision log.
 
 ## Runtime Compose Stack
-- `docker-compose.yaml` spins up FastAPI (`api`), Postgres, and Redis for local development.
+- `docker-compose.yaml` spins up FastAPI (`api`), bakgrundsagenten (`agent`), Postgres och Redis för lokal utveckling.
 - Ensure `.env` contains the desired secrets before running `docker compose up --build`.
 - Postgres data persists in the `postgres-data` volume; run `docker compose down -v` to wipe.
+- API-containern kör `scripts/start_api.sh` som först kör `alembic -c app/alembic.ini upgrade head` innan `uvicorn`.
+- Agent-containern kör `python scripts/start_agent_service.py`; kontrollera `/agent/health` för heartbeats och se till att `config/agent.yaml` mountas read-only.
 
 ## Storage Maintenance
 - The FastAPI service writes DuckDB artifacts to `storage/agent.duckdb` and provenance trails to `provenance.jsonl`.

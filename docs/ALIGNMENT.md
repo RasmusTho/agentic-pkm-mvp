@@ -42,13 +42,21 @@
 - 2025-10-19: Semantic chunking & categorization scheman dokumenterade i alignment + system context.
 - Äldre poster finns arkiverade i `docs/archive/decision-log-2025-10.md`.
 
-## Frontmatter v0.1
+## Inputs to implement
+# Integrate system-level intents and lifecycle loops from "Second Brain Requirements"
+# Add fields and logic to reflect learning, reflection, synthesis, communication and serendipitous discovery
+
+## Frontmatter v0.2
 ```yaml
 ---
-title: "<auto>"
-origin: "<url|file>"
+id: "<uuid>"
+title: ""
+object_type: [note|claim|concept|source|chunk|table|synthesis_note]
+system_intent: [learn|reflect|synthesize|communicate]
+origin: [internal|external]
 created: "YYYY-MM-DD"
 tags: [topic/…, project/…]
+emergent_tags: [serendipity, collaboration, exploration]
 trust: provisional|reviewed
 source_ref: "<sha|url>"
 amg:
@@ -62,6 +70,17 @@ chunks:
 ```
 
 *Markdown filen ska alltid skrivas till Obsidian/vault med ovanstående frontmatter, följt av innehållet (t.ex. sammanfattning eller extraherad text).*
+
+### Reflection & analytics updates
+- `system_intent` styr var i cykeln (learn → reflect → synthesize → communicate) artefakten befinner sig och används för per-intent analys.
+- `emergent_tags` markerar serendipity/collaboration/exploration-signaler och påverkar endast rapportering.
+- Artefakter med `system_intent=reflect` och låg `clarity_score` (<0.6) eller `new_insight=true` placeras i `/storage/reflect/` för återinläsning (se logg `logs/reflection.json`).
+- `synthesis_note` binder samman claims och loggar relationer `type="synthesizes"` under `logs/relations.jsonl`.
+- Emergent analytics uppdateras i `logs/emergent_analytics.json` för grafiska dashboards.
+
+### Lifecycle policies (uppdaterad)
+6) **Reflection & feedback hooks** – artefakter med `system_intent=reflect` triggar nya capture-uppgifter när `clarity_score < 0.6` eller `new_insight=true`; varje händelse loggas och köas via `/storage/reflect/`.
+7) **Emergent analytics** – summera antal per `system_intent` och `emergent_tags` för att visualisera balansen mellan exploration, lärande och kommunikation. Uppdaterad statistik lagras i `logs/emergent_analytics.json`.
 
 ## API-kontrakt (MVP)
 

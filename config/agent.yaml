@@ -1,0 +1,21 @@
+agent_name: background-agent
+scheduler:
+  interval_seconds: 300
+  jitter_seconds: 15
+  max_concurrent_runs: 1
+plan:
+  seed_queries:
+    - "project updates"
+    - "open incidents"
+  max_actions: 3
+plugins:
+  enabled:
+    - retriever
+    - write_note
+    - web_get
+interestingness:
+  novelty_weight: 0.25
+  anomaly_weight: 0.25
+  uncertainty_weight: 0.25
+  value_weight: 0.25
+  score_threshold: 0.6
