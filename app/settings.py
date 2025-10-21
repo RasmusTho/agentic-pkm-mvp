@@ -35,5 +35,17 @@ class Settings(BaseSettings):
     def database_url(self) -> str:
         return self.db_dsn
 
+    @property
+    def psycopg_dsn(self) -> str:
+        """
+        psycopg does not understand SQLAlchemy's driver suffix (e.g. +psycopg),
+        so strip it when establishing raw psycopg connections.
+        """
+        scheme, sep, rest = self.db_dsn.partition("://")
+        if "+psycopg" in scheme:
+            plain_scheme = scheme.split("+", 1)[0]
+            return f"{plain_scheme}{sep}{rest}"
+        return self.db_dsn
+
 
 settings = Settings()

@@ -14,7 +14,7 @@ def get_vector_index() -> VectorIndex:
         raise NotImplementedError(
             f"Vector backend '{backend}' is not supported. Only pgvector is currently available."
         )
-    return PgVectorIndex(settings.db_dsn)
+    return PgVectorIndex(settings.psycopg_dsn)
 
 
 __all__ = ["get_vector_index", "VectorIndex"]

@@ -10,13 +10,13 @@
         "Alembic migrations under app/alembic/"
       ],
       "next_actions": [
-        "Övervaka pgvector-prestanda; utvärdera alternativa backends först om krav uppstår",
-        "Rulla ut API-nyckel + rate limiting i deployment (env + Redis)",
-        "Automatisera logg/metrics-insamling (t.ex. script för docker compose up)",
-        "Gör pre-commit med Ruff/mypy/pytest-lint om det behövs",
-        "Planera retention/purge policy för arkiverade körningar (max-age)",
-        "Kalibrera hybrid-scoren (vikter, cutoff, telemetry)",
-        "Exponera recall-metadata (tags/trust) i API och agent-svar"
+        "Verifiera nya agent-supervisorn: migrations-skip, restart-loop, signalhantering",
+        "Dokumentera supervisorflödet i docs/OPERATIONS.md + UML-sekvens",
+        "Automatisera loggrotation och shipping för /tmp/agent_app.log och /tmp/agent.log",
+        "Sätt upp alerting (Prometheus/Grafana) för >3 agent-omstarter per 10 minuter",
+        "Planera ersättning för legacy watchfolder (ny ingest-trigger)",
+        "Finjustera seed_queries och guardrails efter första MVP-körning",
+        "Dokumentera pgvector-konfiguration och DSN-hantering i ops-playbook"
       ]
     },
     {
@@ -27,7 +27,8 @@
           "pdf",
           "docx",
           "txt",
-          "url"
+          "url",
+          "md"
         ],
         "agents": [
           "TriageAgent",
@@ -39,29 +40,31 @@
         ]
       },
       "decisions": [
-        "Ollama (llama3.1:8b, nomic-embed-text)",
+        "OpenAI text-embedding-3-large för embeddings",
         "Postgres pgvector objects/embeddings schema",
-        "Frontmatter i Obsidian-vault"
+        "Frontmatter i Obsidian-vault",
+        "Supervisor kör run_agent.py i loop (scripts/start_agent_service.py)"
       ],
       "milestones": [
         "M1: /ingest end-to-end",
-        "M2: QA & back-edges",
+        "M2: Agent loop + heartbeat via supervisor",
         "M3: Human Review and Revision",
         "M4: Semantic Chunking & Two-phase Indexing",
         "M5: Semantic Categorization and Labeling"
       ],
       "next_actions": [
-        "Define frontmatter-spec v0.1 i docs/ALIGNMENT.md",
-        "Konfigurera Postgres pgvector indexering",
-        "Specificera /ingest kontrakt (request/response) i README",
-        "Specificera /recall kontrakt i README",
-        "Lägg testfall: test_ingest_poc, test_recall_poc"
+        "Documentera frontmatter-spec v0.1 i docs/ALIGNMENT.md (klar för triage)",
+        "Bygg end-to-end ingest POC (upload → embeddings → vault markdown)",
+        "Implementera /recall kontrakt + swagger-exempel",
+        "Skapa pytest-svit för ingest/recall (test_ingest_poc, test_recall_poc)",
+        "Säkerställ att agent_config.yaml speglar MVP-planer och aktiva plugins"
       ],
       "acceptance_criteria": [
         "/ingest returnerar {ok,title,path,tags,chunks}",
-        "Markdown skapas i vault med frontmatter",
+        "Markdown skapas i vault med frontmatter och indexeras",
         "Postgres objects/embeddings innehåller minst ett dokument",
-        "/recall ger top-k med paths + score"
+        "/recall ger top-k med paths + score + provenance",
+        "Supervisor-övervakad agent rapporterar heartbeats och restart count"
       ],
       "status": "in-progress",
       "owner": "Rasmus"

@@ -42,7 +42,7 @@ from .context_loader import load_context
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     Base.metadata.create_all(bind=engine)
-    repo = PostgresAgentRepository(settings.db_dsn)
+    repo = PostgresAgentRepository(settings.psycopg_dsn)
     config_manager = AgentConfigManager(Path(settings.agent_config_path))
     service = AgentService(repo, config_manager)
     app.state.agent_repository = repo  # type: ignore[attr-defined]

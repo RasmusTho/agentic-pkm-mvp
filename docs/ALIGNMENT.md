@@ -18,7 +18,7 @@
 - Planera data governance för arkiverade körningar (retention/purge regler).
 - Bygg pipeline som flyttar chunkar från staging till huvudindex efter `trust="reviewed"`.
 - Frontmatter-spec och API-kontrakt för /ingest och /recall (beskrivs nedan).
-- Stage watcher och review endpoints finns nu; LangGraph-agent behöver kopplas mot `/ingest/pending` + `/ingest/review` för att automatisera QA & promotion.
+- Automatisera QA-flödet via `/ingest/pending` + `/ingest/review` (endpoints saknas ännu, se TODO) i stället för den tidigare fil-watcher-lösningen.
 
 ## Operating Principles
 - Bias for maintainable, well-tested changes; add tests when behavior shifts or bugs are fixed.
@@ -37,7 +37,7 @@
 - 2025-10-19: Arkivrotation tillåter retention via `--max-age-days` i `scripts/rotate_storage.py`.
 - 2025-10-19: Lokal observability-stack dokumenterad i `docs/OBSERVABILITY_STACK.md` och Docker Compose-basen etablerad.
 - 2025-10-19: Frontmatter- och API-kontrakt specificerade för agentflödet (docs/ALIGNMENT.md, README).
-- 2025-10-19: Lokal watcher och vault-ingest (Obsidian `@Inbox`) implementerat via `app/ingest/watcher.py`.
+- 2025-10-19: (UTFASAD) Lokal watcher och vault-ingest (Obsidian `@Inbox`) fanns under `app/ingest/watcher.py`; funktionen är borttagen och behöver ersättas eller dokumenteras som legacy.
 - 2025-10-19: DuckDB-staging och review endpoints (`/ingest/pending`, `/ingest/review`) tillagda för agentstyrd QA.
 - 2025-10-19: Semantic chunking & categorization scheman dokumenterade i alignment + system context.
 - Äldre poster finns arkiverade i `docs/archive/decision-log-2025-10.md`.

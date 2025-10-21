@@ -26,10 +26,10 @@ def _random_vector(dim: int) -> list[float]:
 
 
 def run_benchmark(count: int, dim: int, k: int) -> BenchmarkResult:
-    with psycopg.connect(settings.db_dsn, autocommit=True) as conn:
+    with psycopg.connect(settings.psycopg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE embeddings, objects RESTART IDENTITY CASCADE")
-    index = PgVectorIndex(settings.db_dsn)
+    index = PgVectorIndex(settings.psycopg_dsn)
     object_ids = []
     for _ in range(count):
         object_id = uuid4()

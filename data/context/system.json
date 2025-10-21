@@ -1,143 +1,57 @@
 {
-  "repo": {
-    "root_files": [
-      ".gitignore",
-      "requirements.txt",
-      "dev-requirements.txt",
-      "run_agent.py"
-    ],
-    "vscode": [
-      ".vscode/launch.json"
-    ]
-  },
-  "runtime": {
-    "editor": "VS Code Remote-SSH",
-    "python": "project .venv or container",
-    "db_local": "storage/agent.duckdb"
-  },
-  "app": {
-    "package_root": "app",
-    "entrypoints": [
-      "app/main.py",
-      "run_agent.py"
-    ],
-    "config": [
-      "app/settings.py",
-      "app/.env"
-    ],
-    "alembic": {
-      "ini": "app/alembic.ini",
-      "env": "app/alembic/env.py",
-      "versions_dir": "app/alembic/versions",
-      "baseline": "3ddfc7237248_baseline.py"
-    },
-    "agent": [
-      "app/agent/graph.py",
-      "app/agent/models.py",
-      "app/agent/nodes.py"
-    ]
-  },
-  "notes": [
-    "DuckDB används lokalt under storage/agent.duckdb",
-    "Alembic är konfigurerat under app/alembic/"
-  ],
-  "architecture": {
-    "orchestrator": "FastAPI",
-    "agents": [
-      "TriageAgent",
-      "RecallAgent",
-      "DailyBriefAgent"
-    ],
-    "pipelines": [
-      "ingest(parse→summarize→tag→frontmatter→index)",
-      "recall(hybrid search→answer)"
-    ],
-    "storage": {
-      "vault": "/DigitalVault",
-      "duckdb": "storage/agent.duckdb",
-      "vector": "Postgres pgvector (objects/embeddings)"
-    },
-    "models": {
-      "llm": "ollama: llama3.1:8b",
-      "embeddings": "ollama: nomic-embed-text"
+  "facts": [
+    {
+      "type": "fact",
+      "title": "Agent service setup (2025-10-21)",
+      "text": "Agent-supervisorn (scripts/start_agent_service.py) laddar .env, skippar Alembic om DB redan är på head, och kör run_agent.py i loop (var 30 s). Supervisorlogg: /tmp/agent.log. Agentlogg: /tmp/agent_app.log. DB: postgresql+psycopg på localhost:15433 (db=app, user=app). Alembic på head (202501140001). Repo: /Users/rasmus/workspace. Venv: .venv. VAULT_DIR: /Users/rasmus/workspace/data/context.",
+      "created": "2025-10-21",
+      "source": "system",
+      "tags": [
+        "agent",
+        "supervisor",
+        "alembic",
+        "postgres",
+        "mvp",
+        "infra"
+      ],
+      "paths": {
+        "repo_root": "/Users/rasmus/workspace",
+        "service": "scripts/start_agent_service.py",
+        "agent": "run_agent.py",
+        "env": "/Users/rasmus/workspace/.env",
+        "venv": "/Users/rasmus/workspace/.venv",
+        "logs": {
+          "supervisor": "/tmp/agent.log",
+          "agent": "/tmp/agent_app.log"
+        },
+        "vault_dir": "/Users/rasmus/workspace/data/context"
+      },
+      "db": {
+        "dsn_masked": "postgresql+psycopg://app:***@localhost:15433/app",
+        "port": 15433,
+        "engine": "pgvector/pg16",
+        "alembic_head": "202501140001"
+      },
+      "behavior": {
+        "restart_interval_seconds": 30,
+        "restart_on_exit_code": "any"
+      }
     }
-  },
-  "endpoints": [
-    "/",
-    "/health",
-    "/version",
-    "/context",
-    "/ingest",
-    "/recall"
   ],
-  "env": [
-    "OLLAMA_URL",
-    "DB_DSN",
-    "OBSIDIAN_VAULT"
-  ],
-  "principles": [
-    "local-first",
-    "provenance-required",
-    "modulär pipeline",
-    "hybrid retrieval (BM25 + vector)"
-  ],
-  "chunking": {
-    "policy": "semantic_v1",
-    "size": 800,
-    "overlap": 120,
-    "states": [
-      "staging",
-      "reviewed",
-      "indexed"
-    ],
-    "metadata_fields": [
-      "chunk_id",
-      "doc_id",
-      "hash",
-      "source_ref",
-      "state",
-      "title",
-      "tags",
-      "trust",
-      "size",
-      "created"
-    ],
-    "promotion_flow": [
-      "staging→reviewed",
-      "reviewed→indexed"
-    ],
-    "config_source": "ENV or settings",
-    "observability": [
-      "chunk_id",
-      "size",
-      "hash",
-      "created",
-      "review_state"
-    ]
-  },
-  "categorization": {
-    "version": "0.1",
-    "states": [
-      "pending",
-      "classified",
-      "reviewed"
-    ],
-    "fields": [
-      "quality.class",
-      "credibility",
-      "factuality",
-      "source_type",
-      "topic.primary",
-      "topic.secondary"
-    ],
-    "validator": "JSONSchema",
-    "method": "LLM rubric classification",
-    "policy": {
-      "auto_review_if": [
-        "low_quality",
-        "unverified",
-        "hypothesis"
-      ]
+  "definitions": [
+    {
+      "name": "agent_service_runner",
+      "category": "service-policy",
+      "description": "Idempotent start: ladda .env, upptäck Alembic HEAD och skippa migration vid head; annars kör upgrade head. Starta agenten och övervaka i loop; logga till /tmp/agent_app.log; hantera SIGTERM/SIGINT för clean shutdown.",
+      "fields": {
+        "migration_timeout_seconds": 180,
+        "restart_interval_seconds": 30,
+        "logs": {
+          "supervisor": "/tmp/agent.log",
+          "agent": "/tmp/agent_app.log"
+        },
+        "alembic_ini": "app/alembic.ini"
+      }
     }
-  }
+  ]
 }

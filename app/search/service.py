@@ -45,7 +45,7 @@ def ingest_object(
 
 
 def _call_sql(query: str, params: Sequence[Any]) -> list[dict[str, Any]]:
-    with psycopg.connect(settings.db_dsn, row_factory=dict_row) as conn:
+    with psycopg.connect(settings.psycopg_dsn, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
             cur.execute(query, params)
             return cur.fetchall()

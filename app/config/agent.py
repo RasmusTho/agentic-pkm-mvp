@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 from typing import Callable
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from watchfiles import watch
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
+logger = logging.getLogger(__name__)
 
 
 class SchedulerConfig(BaseModel):
@@ -71,15 +73,28 @@ class AgentConfigManager:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._subscribers: list[Callable[[AgentConfig], None]] = []
+        self._logger = logging.getLogger(__name__)
 
     def _load(self) -> AgentConfig:
         if not self._path.exists():
             return AgentConfig()
+        raw_text = self._path.read_text(encoding="utf-8")
         try:
-            data = yaml.safe_load(self._path.read_text(encoding="utf-8")) or {}
-        except yaml.YAMLError:
-            data = {}
-        return AgentConfig.model_validate(data)
+            data = yaml.safe_load(raw_text) or {}
+        except yaml.YAMLError as exc:
+            logger.warning(
+                "Failed to parse agent config YAML at %s; falling back to defaults",
+                self._path,
+                exc_info=exc,
+            )
+            return AgentConfig()
+        try:
+            return AgentConfig.model_validate(data)
+        except ValidationError as exc:
+            logger.warning(
+                "Invalid agent config at %s; using defaults", self._path, exc_info=exc
+            )
+            return AgentConfig()
 
     def get_config(self) -> AgentConfig:
         with self._lock:

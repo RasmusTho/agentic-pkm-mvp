@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from contextlib import suppress
 from typing import Callable, Mapping, Sequence
@@ -16,6 +17,8 @@ from .interestingness import extract_candidates, score_candidates
 from .plan import build_plan
 from .reflect import summarize_plan, summarize_results
 from .repository import AgentRepository
+
+logger = logging.getLogger(__name__)
 
 
 class AgentService:
@@ -122,6 +125,7 @@ class AgentService:
 
         try:
             consume_reflection_queue()
-        except Exception:  # pragma: no cover - defensive logging
-            # Reflection failures should not stop primary agent loop
-            pass
+        except Exception as exc:  # pragma: no cover - defensive logging
+            # Reflection failures should not stop primary agent loop,
+            # but we log explicitly so operators can surface the issue.
+            logger.warning("Reflection queue processing failed", exc_info=exc)
