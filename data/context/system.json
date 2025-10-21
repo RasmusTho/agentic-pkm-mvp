@@ -36,6 +36,35 @@
         "restart_interval_seconds": 30,
         "restart_on_exit_code": "any"
       }
+    },
+    {
+      "type": "fact",
+      "title": "Ingest/recall state (2025-10-21)",
+      "text": "/ingest och /search kräver API-nyckel (tom => avstängt). Ingest skriver objects/embeddings i Postgres via app/search/service.py; watcher-pipelinen är borttagen. Dataset behöver seedas för att agentens loop ska ha material att reflektera över.",
+      "created": "2025-10-21",
+      "source": "system",
+      "tags": [
+        "ingest",
+        "recall",
+        "api",
+        "pgvector"
+      ],
+      "paths": {
+        "ingest_api": "app/api/ingest.py",
+        "search_api": "app/api/search.py",
+        "search_service": "app/search/service.py",
+        "schemas": "app/schemas/"
+      },
+      "tests": [
+        "tests/test_ingest_roundtrip.py",
+        "tests/test_vector_query.py",
+        "tests/test_hybrid_rrf.py"
+      ],
+      "status": {
+        "watcher": "removed",
+        "seed_data": "missing",
+        "api_key_required": false
+      }
     }
   ],
   "definitions": [
@@ -51,6 +80,28 @@
           "agent": "/tmp/agent_app.log"
         },
         "alembic_ini": "app/alembic.ini"
+      }
+    },
+    {
+      "name": "mvp_ingest_recall_plan",
+      "category": "roadmap",
+      "description": "End-to-end ingest och recall för MVP: API-es, Postgres-index, vault-frontmatter, agent-supervisor loop.",
+      "fields": {
+        "endpoints": [
+          "POST /ingest",
+          "POST /search"
+        ],
+        "dependencies": [
+          "Postgres+pgvector",
+          "OpenAI text-embedding-3-large",
+          "config/agent.yaml"
+        ],
+        "gaps": [
+          "Seed data saknas",
+          "Promotion endpoints saknas",
+          "Loggrotation för agentloggar"
+        ],
+        "owner": "Rasmus"
       }
     }
   ]

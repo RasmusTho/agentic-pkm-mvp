@@ -6,19 +6,19 @@
 - Make expectations explicit so new changes can be checked against them quickly.
 
 ## Current Stage (Oct 2025)
-- FastAPI backend in `app/` exposes `/`, `/items`, and `/context`.
-- Agent workflow lives under `app/agent/`; `run_agent.py` is the CLI entry point.
-- Data/context JSON drives memory and preferences for the agent.
-- Alembic migrations are current with baseline `3ddfc7237248_baseline.py`.
+- FastAPI backend in `app/` exposes `/`, `/items`, `/ingest`, `/search`, and `/context`.
+- Agent workflow lives under `app/agent/`; `run_agent.py` är fortfarande ett one-shot CLI men körs nu via supervisorn.
+- `scripts/start_agent_service.py` laddar `.env`, skippar Alembic vid HEAD (`202501140001_agent_state`), och loopar `run_agent.py` med 30s backoff.
+- Data/context JSON (preferences, system, projects) styr agentens minne och roadmap.
+- Postgres + pgvector är primär storage; DuckDB används endast för lokal staging.
 
 ## Near-Term Focus
-- Rulla ut API-nyckel + rate limiting i deployment (env + Redis).
-- Koppla loggar/metrics till observability-stack (t.ex. Grafana).
-- Införa pre-commit-flöde (klar med hooks i repo, rulla ut i teamet).
-- Planera data governance för arkiverade körningar (retention/purge regler).
-- Bygg pipeline som flyttar chunkar från staging till huvudindex efter `trust="reviewed"`.
-- Frontmatter-spec och API-kontrakt för /ingest och /recall (beskrivs nedan).
-- Automatisera QA-flödet via `/ingest/pending` + `/ingest/review` (endpoints saknas ännu, se TODO) i stället för den tidigare fil-watcher-lösningen.
+- Verifiera nya agent-supervisorn (migrations-skip, restart-loop, signalhantering) och dokumentera runbooks.
+- Automatisera loggrotation + shipping för `/tmp/agent.log` och `/tmp/agent_app.log`; lägg larm vid >3 omstarter / 10 min.
+- Seed:a en referensdatamängd så agentens loop har material för recall/reflektion.
+- Plocka bort legacy watchfolder-flödet genom att ersätta det med explicit ingest-trigger (script eller UI).
+- Trimma `seed_queries`, guardrails och profiler efter första MVP-körningen.
+- Dokumentera pgvector/DSN-hantering samt API-nyckelstrategi i ops-playbooken.
 
 ## Operating Principles
 - Bias for maintainable, well-tested changes; add tests when behavior shifts or bugs are fixed.
@@ -32,6 +32,7 @@
 - Privacy: inga hemligheter i prompts; stay within opened context when possible.
 
 ## Decision Log
+- 2025-10-21: `scripts/start_agent_service.py` omskriven till idempotent supervisor (Alembic HEAD-detekt, 30s loop, strukturerad loggning).
 - 2025-10-19: Observability hooks (JSON-loggar + Prometheus via `METRICS_ENABLED`) aktiverade i `app/observability.py`.
 - 2025-10-19: Pre-commit hooks för ruff/mypy/pytest tillagda (`.pre-commit-config.yaml`).
 - 2025-10-19: Arkivrotation tillåter retention via `--max-age-days` i `scripts/rotate_storage.py`.

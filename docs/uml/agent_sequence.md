@@ -1,44 +1,47 @@
-# Agent Service Sequence
+# Agent Supervisor Sequence
 
 ```mermaid
 sequenceDiagram
     participant Dev as Developer
-    participant CLI as start_agent_service.py
+    participant Sup as start_agent_service.py
+    participant Env as dotenv (optional)
     participant Alembic as Alembic CLI
     participant PG as Postgres
-    participant ConfigMgr as AgentConfigManager
-    participant Service as AgentService
-    participant Repo as PostgresAgentRepository
-    participant Plugins as Plugin Loader
-    participant Tools as Plugins (retriever, write_note, web_get)
+    participant Agent as run_agent.py
+    participant Graph as LangGraph workflow
+    participant Log as /tmp/agent_app.log
 
-    Dev->>CLI: python scripts/start_agent_service.py
-    CLI->>Alembic: command.upgrade(config, "head")
-    Alembic-->>PG: Apply migrations
-    PG-->>Alembic: Schema up-to-date
-    CLI->>Repo: PostgresAgentRepository(settings.psycopg_dsn)
-    CLI->>ConfigMgr: load config/agent.yaml + start watch thread
-    CLI->>Service: AgentService(repo, config_manager)
-    CLI->>Service: start()
-    Service->>ConfigMgr: get_config()
-    Service->>Repo: record_run_start(run_id, config)
-    Service->>Repo: record_heartbeat(agent_name, run_id, "running")
-    Service->>Plugins: load_tools(config.enabled_plugins)
-    Plugins-->>Service: {"retriever", "write_note", ...}
-    Service->>Tools: execute_plan(actions)
-    Tools-->>Repo: register_task / complete_task
-    Tools-->>Repo: add_memory (write_note)
-    Tools-->>PG: search_hybrid (retriever)
-    Service->>Repo: upsert_interesting_item()
-    Service->>Repo: record_run_complete(..., "completed")
-    Service->>Repo: record_heartbeat(agent_name, run_id, "idle")
-    Service->>ConfigMgr: wait for interval + jitter
-    Service-->>Service: repeat loop until stop signal
+    Dev->>Sup: python scripts/start_agent_service.py
+    Sup->>Env: load .env (if python-dotenv)
+    Env-->>Sup: env merged / skipped
+    Sup->>Alembic: alembic -c app/alembic.ini current
+    Alembic-->>Sup: output (may contain (head))
+    alt Already at head
+        Sup->>Sup: log \"Detected Alembic at HEAD — skipping migrations\"
+    else Needs upgrade
+        Sup->>Alembic: alembic -c app/alembic.ini upgrade head (timeout 180s)
+        Alembic-->>Sup: migrations applied
+    end
+    Sup->>Sup: log \"Starting agent loop…\"
+    loop until SIGTERM/SIGINT
+        Sup->>Agent: spawn python -u run_agent.py
+        Agent->>Log: append stdout/stderr
+        Agent->>Graph: invoke task/profile pipeline
+        Graph-->>Agent: result / error
+        Agent-->>Sup: exit code
+        alt exit==0 and stop not set
+            Sup->>Sup: log \"Agent exited with code 0 — restarting in 30s\"
+        else exit!=0
+            Sup->>Sup: log warning + restart countdown
+        end
+        Sup->>Sup: wait 30s (interrupted by stop_event)
+    end
+    Sup->>Sup: handle shutdown (terminate agent, close loop)
 ```
 
-## Observed/Potential Issues
-- **Local runs assume repo root on `sys.path`**: the script now injects the repository root automatically, but any custom entrypoint must do the same before importing `app.*`.
-- **Empty tool outputs without ingest**: the default plan queries `seed_queries`, but if `/ingest` has never populated `objects`/`embeddings`, retriever returns zero results and downstream interestingness scores nothing.
-- **No watcher pipeline**: docs still reference `app/ingest/watcher.py`, but that module is no longer present, so dropping files into the legacy watch folder has no effect (tracked in `docs/TODO.md`).
-- **Configuration reload**: invalid YAML now triggers a warning and defaults, but consider adding higher-level alerts if repeated.
-- **Reflection queue errors**: failures are logged as warnings; add monitoring if these appear frequently.
+## Updated Observations
+- **Supervisor loop requires data**: utan seedade objekt i Postgres blir `run_agent.py` kortlivad och restarts loggas var 30:e sekund.
+- **Loggrotation saknas**: `/tmp/agent_app.log` växer obegränsat; sätt upp `logrotate` eller container-volymer.
+- **API-nyckel tom**: `.env` har `API_KEY=`; produktion måste sätta nyckel innan `/ingest` och `/search` exponeras.
+- **Legacy watchfolder**: filesystem-droppar gör inget; ersätt med nytt ingest-trigger-script eller ta bort referenser.
+- **Alerting**: övervaka `"Agent exited with code"` och migreringsfel för att fånga trasiga releaser.

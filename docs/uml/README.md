@@ -2,21 +2,20 @@
 
 | Document | Purpose |
 | --- | --- |
-| [`agent_sequence.md`](agent_sequence.md) | Sequence diagram of `scripts/start_agent_service.py` through the agent loop, with runtime caveats. |
-| [`agent_components.md`](agent_components.md) | Component diagram of the agent runtime and storage dependencies, highlighting missing pipelines. |
+| [`agent_sequence.md`](agent_sequence.md) | Sequence diagram of the supervisor: env load → Alembic check → `run_agent.py` restart loop. |
+| [`agent_components.md`](agent_components.md) | Component diagram of supervisor + agent runtime, storage dependencies, and missing ingest/promotion pieces. |
 
 ## Key Issues Highlighted
 
-- **Module imports when running locally**: `scripts/start_agent_service.py` now injects the repo root into `sys.path`, but custom entrypoints must do the same.
-- **Ingestion watcher**: Documentation now flags the watcher as legacy; rebuilding it (see `docs/TODO.md`) would restore filesystem-driven ingest.
-- **Data seeding**: Agent actions depend on Postgres indices populated via `/ingest`; without data the loop does little and interestingness scores never exceed the threshold.
-- **Error visibility**: Reflection queue failures now log warnings with tracebacks; add monitoring if these appear frequently.
-- **Configuration validation**: Invalid YAML triggers logged warnings and defaults; consider richer diagnostics if multiple profiles are introduced.
+- **Supervisor loop kräver data**: utan seedade objekt blir `run_agent.py` kortlivad och övervakaren restartar var 30:e sekund.
+- **Ingestion watcher**: Dokumentationen markerar watchern som legacy; bygg ett ersättningsscript eller ta bort referensen.
+- **Loggrotation & alerting**: `/tmp/agent.log` och `/tmp/agent_app.log` växer annars obegränsat; sätt upp rotation och larm.
+- **Konfigurationsvalidering**: Ogiltig YAML loggas och faller tillbaka till defaults; förbättra diagnostics om flera profiler införs.
 
 ## Missing or Future Files Mentioned in Docs
 
-- `app/ingest/watcher.py` – removed; tracked as a TODO if filesystem ingest returns.
-- `/ingest/pending`, `/ingest/review` endpoints – referenced in alignment notes but not implemented.
-- Structured promotion pipeline scripts (e.g., `scripts/publish_review.py`) – implied in roadmap but absent.
+- `app/ingest/watcher.py` – borttagen; finns som TODO för eventuell återintroduktion.
+- `/ingest/pending`, `/ingest/review` endpoints – refererade i alignment, fortfarande obefintliga.
+- Scripts för promotion/logrotation (`scripts/publish_review.py`, `scripts/rotate_agent_logs.py`) – antydda i roadmap men ej skapade.
 
 Use these diagrams as a living reference when restoring the watcher, adding promotion automation, or wiring additional plugins.

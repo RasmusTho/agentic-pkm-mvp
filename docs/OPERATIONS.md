@@ -10,7 +10,8 @@
 - Ensure `.env` contains the desired secrets before running `docker compose up --build`.
 - Postgres data persists in the `postgres-data` volume; run `docker compose down -v` to wipe.
 - API-containern kör `scripts/start_api.sh` som först kör `alembic -c app/alembic.ini upgrade head` innan `uvicorn`.
-- Agent-containern kör `python scripts/start_agent_service.py`; kontrollera `/agent/health` för heartbeats och se till att `config/agent.yaml` mountas read-only.
+- Agent-containern kör `python scripts/start_agent_service.py`; scriptet laddar `.env`, skippar Alembic när `alembic current` redan visar `(head)`, och startar `python -u run_agent.py` i en 30s restart-loop.
+- Supervisorloggar skrivs till `/tmp/agent.log` (stdout/stderr) och agentens output appendas till `/tmp/agent_app.log`; säkra volymer eller log shipping om containern återskapas.
 
 ## Storage Maintenance
 - The FastAPI service writes DuckDB artifacts to `storage/agent.duckdb` and provenance trails to `provenance.jsonl`.
@@ -21,6 +22,14 @@
 - Use `--max-age-days` alongside `--max-backups` to purge old archives (set policy, e.g. 30 days).
 - Run `pre-commit install` locally so lint/type/test hooks run automatically before each commit.
 - Vektordata lagras nu i Postgres (`objects` + `embeddings`); säkerställ att `pgvector`-extensionen finns och kör `VACUUM ANALYZE embeddings` periodiskt om klustret växer snabbt.
+
+## Agent Supervisor Runbook
+1. **Starta lokalt** – `python scripts/start_agent_service.py` (lägg till `--dry-run` för att verifiera migrationskommandon utan att exekvera). Scriptet laddar `.env` om `python-dotenv` finns installerat; annars används befintligt env.
+2. **Migrationer** – scriptet kör `alembic -c app/alembic.ini current`. Om output redan innehåller `(head)` loggas `Detected Alembic at HEAD — skipping migrations`. Annars körs `upgrade head` med 180s timeout; fel avslutar processen (`exit code 1`).
+3. **Agent-loop** – supervisor kör `python -u run_agent.py` och väntar tills processen avslutas. Exit-kod !=0 loggas och triggar omstart efter 30s (konfigurerat i koden).
+4. **Loggar** – följ `/tmp/agent.log` för supervisorstatus och `/tmp/agent_app.log` för agentens stdout/stderr. Implementera rotation via logrotate eller cron för att undvika växande filer.
+5. **Stoppsignal** – SIGINT/SIGTERM sätter en intern flagga, väntar på att aktiva `run_agent.py` ska avslutas, och stoppar loopens fortsatta restarts. Vid seg nedstängning skickas SIGKILL efter 10s.
+6. **Alerting** – sätt upp larm när samma host loggar `"Agent exited with code"` >3 gånger på 10 minuter; indikerar att `run_agent.py` behöver felsökas eller att det saknas input-data.
 
 ## Ingestion Review Runbook
 1. **Förbered payload** – samla metadata i ett JSONB-kompatibelt dict och råtext i `text`-fältet.

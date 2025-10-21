@@ -119,7 +119,7 @@ docker compose up --build
 - Services: FastAPI (`http://localhost:8000`), Postgres (`localhost:5432`), Redis (`localhost:6379`).
 - Services: FastAPI (`http://localhost:18000`), Postgres (`localhost:15432`), Redis (`localhost:6379`).
 - API-containern kör `scripts/start_api.sh` vilket kör `alembic upgrade head` före `uvicorn`.
-- Agent-containern kör `python scripts/start_agent_service.py` och läser planer från `config/agent.yaml` samt reflekterar köade filer i `storage/reflect/`.
+- Agent-containern kör `python scripts/start_agent_service.py`, laddar `.env`, kör `alembic current`/`upgrade head` vid behov och startar `python -u run_agent.py` i en 30s restart-loop (loggar till `/tmp/agent_app.log`).
 - Compose läser `.env`; justera `DB_DSN`, `VECTOR_BACKEND` (lämna som `pgvector`), `API_KEY` m.fl. där.
 
 ## Developer Workflow
