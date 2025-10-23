@@ -1,5 +1,5 @@
 version: 1
-bus: inproc     # WS on single node; can switch to redis later
+bus: inproc
 agents:
   Ingestor:
     triggers: ["fs.watch:/ingest/raw"]
@@ -24,3 +24,6 @@ agents:
     on: ["curation.review.request"]
     gates_from: "maturity.yaml"
     actions: ["apply_gates","promote_or_feedback"]
+notes:
+  ingestion_trigger_status: "fs.watch planned; current WS uses scripts/ingest_ws.py"
+  reviewer_flow: "minimal"

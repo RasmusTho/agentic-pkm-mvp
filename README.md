@@ -1,12 +1,14 @@
-# Second-Brain / WS Baseline
+# Second-Brain / Walking Skeleton (WS)
+**Source of truth** is the Canvas “AI-assisterat Second Brain — Konsoliderad grund”.
+`data/context/` mirrors Canvas policies; WS runs single node (Docker) with minimal agents,
+BM25-lite (inside API for now), pgvector via Postgres, no reranker, inproc bus.
 
-**Source of truth** for policies, architecture, and agent behavior is the Canvas
-“AI-assisterat Second Brain — Konsoliderad grund”. Files in `data/context/` are the
-versioned, machine-readable mirror. WS scope = single node, minimal agents,
-BM25+pgvector (later), no reranker, inproc bus.
+- Start WS: `docker compose up -d --build` then `GET http://localhost:18000/query?q=hello`
+- Golden set: `golden/*`
+- Context: `data/context/*.yaml`
+- WS overview: `docs/OVERVIEW_WS.md`
+- Legacy docs archived at `docs/legacy/` (kept for reference; superseded by WS + Canvas).
 
-## Quickstart (WS)
-1) docker compose up -d --build
-2) open http://localhost:18000/query?q=hello
-3) scripts/ingest_ws.py  # writes simple audit
-4) scripts/query_ws.py "hello"  # asserts citations
+### LangGraph (POC, decoupled)
+This repo includes a small LangGraph demo under `app/langgraph/` to explore future agent flows.
+It is **not** wired into WS runtime yet. Run: `python app/langgraph/ws_graph.py`
