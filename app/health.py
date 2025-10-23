@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 import duckdb
 from sqlalchemy import text

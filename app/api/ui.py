@@ -28,12 +28,13 @@ def dashboard(
         filters.append(f"Tag: {tag}")
     subtitle = " | ".join(filters)
     subtitle_html = f"<p>{subtitle}</p>" if subtitle else ""
+    empty_row = "<tr><td colspan='4'>No interesting items yet</td></tr>"
+    tbody = f"<tbody>{rows or empty_row}</tbody>"
     return (
         "<html><head><title>Agent Dashboard</title></head>"
         "<body><h1>Interesting Items</h1>"
         f"{subtitle_html}"
         "<table border='1' cellpadding='6'>"
         "<thead><tr><th>#</th><th>Reason</th><th>Score</th><th>Metrics (N/A/U/V)</th></tr></thead>"
-        f"<tbody>{rows or '<tr><td colspan=\"4\">No interesting items yet</td></tr>'}</tbody>"
-        "</table></body></html>"
+        f"{tbody}</table></body></html>"
     )
