@@ -1,0 +1,11 @@
+version: 1
+use_reranker: false
+routing:
+  - if: "intent=='factual' and trust in ['curated','evergreen']"
+    use: ["bm25","vector","graph"]
+  - if: "need_tables==true"
+    use: ["tables_store","figure_extractor"]
+  - if: "intent=='creative'"
+    use: ["creative_corpus","style_guides"]
+weights:
+  trust: {evergreen: 0.6, curated: 0.3, external: 0.1}

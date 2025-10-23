@@ -1,0 +1,12 @@
+version: 1
+retrieval_answering:
+  metrics:
+    faithfulness: {min: 0.8}
+    provenance: {min: 0.8}
+    instruction_following: {min: 0.8}
+    harmful_content: {must: "pass"}
+ingestion_quality:
+  metrics:
+    frontmatter_complete: {must: true}
+    license_present: {must: true}
+    chunk_semantics_ok: {must: true}
