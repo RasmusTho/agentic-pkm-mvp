@@ -1,20 +1,27 @@
 from __future__ import annotations
-
-from functools import lru_cache
-
+from typing import Protocol, Sequence
 from app.settings import settings
+from .vector_index import PgVectorIndex  # använder din befintliga pgvector-implementation
 
-from .vector_index import PgVectorIndex, VectorIndex
+class VectorIndex(Protocol):
+    def upsert(
+        self,
+        *,
+        object_id,
+        kind: str | None,
+        source_ref: str | None,
+        payload: dict,
+        embedding: Sequence[float],
+        model: str,
+    ) -> None: ...
+    def query(
+        self,
+        *,
+        embedding: Sequence[float],
+        k: int = 10,
+        filters: dict | None = None,
+    ): ...
 
-
-@lru_cache(maxsize=1)
 def get_vector_index() -> VectorIndex:
-    backend = (settings.vector_backend or "pgvector").lower()
-    if backend != "pgvector":
-        raise NotImplementedError(
-            f"Vector backend '{backend}' is not supported. Only pgvector is currently available."
-        )
-    return PgVectorIndex(settings.psycopg_dsn)
-
-
-__all__ = ["get_vector_index", "VectorIndex"]
+    # Skapar en PgVectorIndex mot din DATABASE_URL i settings
+    return PgVectorIndex(settings.database_url)
