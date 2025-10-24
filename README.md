@@ -17,3 +17,12 @@ It is **not** wired into WS runtime yet. Run: `python app/langgraph/ws_graph.py`
 - End-to-end: Ingestor → Normalizer → Classifier → Chunker → Deduper → CitationChecker → Indexer → Reviewer → SetEvaluator → Projector
 - Core-6 i DB (AMG), projector speglar whitelist.
 - Index: pgvector + in-memory BM25Lite (MVP).
+
+## Dokumentation
+- docs/SoT-v4.1.md
+- docs/PLAN.md
+- docs/TESTS.md
+- docs/FRONTMATTER.md
+- docs/ARCHITECTURE.md
+- docs/EVENTS.md
+- docs/SCORECARDS.md
