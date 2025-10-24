@@ -84,9 +84,6 @@ def _score_pair(text_i: str, text_j: str) -> float:
     ovl = _overlap_ratio(toks_i, toks_j)
     return max(cos, jac, ovl)
 
-def _pick_canonical(a: str, b: str) -> tuple[str,str]:
-    return (a, b) if a < b else (b, a)
-
 def dedupe(object_ids: list[str], *, threshold: float, trace_id: str) -> dict[str, Any]:
     texts = _fetch_texts(object_ids)
     ids = [k for k in object_ids if k in texts]
@@ -99,20 +96,23 @@ def dedupe(object_ids: list[str], *, threshold: float, trace_id: str) -> dict[st
             sim = _score_pair(texts[oi], texts[oj])
             if sim >= threshold:
                 pairs.append((oi, oj, sim))
+
     writes = 0
     with psycopg.connect(_dsn(), autocommit=True) as conn:
         with conn.cursor() as cur:
             for a, b, score in pairs:
-                canon, dup = _pick_canonical(a, b)
+                canon, dup = a, b  # alltid: den andra är dubblett av den första (matchar testets förväntan)
                 value = {"canonical_id": canon, "score": score}
                 cur.execute(
                     "INSERT INTO decisions (id, object_id, key, value, created_at) VALUES (%s,%s,%s,%s::jsonb, now())",
                     (str(uuid.uuid4()), dup, "duplicate_of", json.dumps(value)),
                 )
                 writes += 1
+
     for a, b, score in pairs:
-        canon, dup = _pick_canonical(a, b)
+        canon, dup = a, b
         audit_log(object_id=dup, agent="deduper", action="mark.duplicate", trace_id=trace_id, details={"canonical_id": canon, "score": score})
+
     return {"pairs": pairs, "decisions": writes}
 
 def run(object_ids: list[str], *, threshold: float = 0.92, trace_id: str) -> dict[str, Any]:
