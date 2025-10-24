@@ -1,29 +1,23 @@
-version: 1
-bus: inproc
-agents:
-  Ingestor:
-    triggers: ["fs.watch:/ingest/raw"]
-    out_events: ["ingest.normalized.request"]
-  Normalizer:
-    on: ["ingest.normalized.request"]
-    actions: ["to_markdown_yaml","assign_uuid","stamp_created_updated"]
-    out_events: ["ingest.classify.request"]
-  Classifier:
-    on: ["ingest.classify.request"]
-    actions: ["type_detect","topic_tag","sensitivity","evidence","license_check"]
-    out_events: ["ingest.chunk.request"]
-  Chunker:
-    on: ["ingest.chunk.request"]
-    params: {max_tokens: 800, overlap: 120, strategy: "heading_first"}
-    out_events: ["ingest.index.request"]
-  Indexer:
-    on: ["ingest.index.request"]
-    actions: ["bm25_index","vector_embed","graph_edges"]
-    out_events: ["curation.review.request"]
-  Reviewer:
-    on: ["curation.review.request"]
-    gates_from: "maturity.yaml"
-    actions: ["apply_gates","promote_or_feedback"]
-notes:
-  ingestion_trigger_status: "fs.watch planned; current WS uses scripts/ingest_ws.py"
-  reviewer_flow: "minimal"
+base:
+  per: [plan, act, reflect, emit]
+normalizer:
+  project_core6: false
+classifier:
+  default_type: note
+chunker:
+  max_tokens: 800
+  overlap: 120
+  strategy: heading_first
+reviewer:
+  confidence_gate: 0.7
+projector:
+  whitelist:
+    - maturity
+    - trust
+    - aliases
+    - related
+    - parent
+    - canonical
+    - sets
+    - scope
+    - relevance_score

@@ -12,3 +12,8 @@ BM25-lite (inside API for now), pgvector via Postgres, no reranker, inproc bus.
 ### LangGraph (POC, decoupled)
 This repo includes a small LangGraph demo under `app/langgraph/` to explore future agent flows.
 It is **not** wired into WS runtime yet. Run: `python app/langgraph/ws_graph.py`
+
+## SoT v4.1 – MVP Ingestion (TDD)
+- End-to-end: Ingestor → Normalizer → Classifier → Chunker → Deduper → CitationChecker → Indexer → Reviewer → SetEvaluator → Projector
+- Core-6 i DB (AMG), projector speglar whitelist.
+- Index: pgvector + in-memory BM25Lite (MVP).

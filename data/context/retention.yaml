@@ -1,0 +1,6 @@
+relevance_v2:
+  keep_if:
+    - provenance>=0.8
+    - answerability>=0.6
+  downrank_if:
+    - age>3650 and context_links<1
