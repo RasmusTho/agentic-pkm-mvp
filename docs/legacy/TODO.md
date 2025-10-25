@@ -1,3 +1,5 @@
+> **DEPRECATED (WS)** This document reflects a previous iteration (FastAPI/SQLAlchemy/LangGraph integrated). It is kept for reference. The WS overview is in docs/OVERVIEW_WS.md and policies in data/context/*.yaml.
+
 # TODO Backlog
 
 - **Restore ingestion watcher** – either rebuild the file-system watcher pipeline (`app/ingest/watcher.py`) or fully document an alternative ingest path so filesystem drops are no longer referenced as active.

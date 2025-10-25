@@ -1,0 +1,22 @@
+name: TDD Task
+description: Ett TDD-steg enligt SoT v4.1
+title: "[TDD] "
+labels: ["tdd","ingestion"]
+body:
+  - type: input
+    id: step
+    attributes:
+      label: Steg
+      description: Normalizer | Classifier | Chunker | Deduper | CitationChecker | Indexer | Reviewer | SetEvaluator | Projector | E2E
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tester (Given/When/Then)
+  - type: textarea
+    id: impl
+    attributes:
+      label: Implementation
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of Done

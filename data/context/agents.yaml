@@ -1,0 +1,23 @@
+base:
+  per: [plan, act, reflect, emit]
+normalizer:
+  project_core6: false
+classifier:
+  default_type: note
+chunker:
+  max_tokens: 800
+  overlap: 120
+  strategy: heading_first
+reviewer:
+  confidence_gate: 0.7
+projector:
+  whitelist:
+    - maturity
+    - trust
+    - aliases
+    - related
+    - parent
+    - canonical
+    - sets
+    - scope
+    - relevance_score

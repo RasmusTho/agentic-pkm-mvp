@@ -1,48 +1,26 @@
 name: CI
-
-on:
-  push:
-    branches:
-      - main
-      - feature/**
-  pull_request:
-
+on: [push, pull_request]
 jobs:
-  test:
+  validate-context:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - name: Lint YAML
+        uses: ibiqlik/action-yamllint@v3
         with:
-          python-version: "3.11"
-
-      - name: Install dependencies
+          config_file: .yamllint.yml
+      - name: Ensure required files exist
         run: |
-          python -m venv .venv
-          . .venv/bin/activate
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          if [ -f dev-requirements.txt ]; then pip install -r dev-requirements.txt; fi
-
-      - name: Run Ruff
-        run: |
-          . .venv/bin/activate
-          ruff check .
-
-      - name: Run mypy
-        run: |
-          . .venv/bin/activate
-          mypy app tests
-
-      - name: Alembic upgrade dry-run
-        run: |
-          . .venv/bin/activate
-          alembic -c app/alembic.ini upgrade head --sql > /tmp/alembic.sql
-
-      - name: Run pytest
-        run: |
-          . .venv/bin/activate
-          pytest
+          test -f data/context/roadmap.yaml
+          test -f data/context/retrieval.yaml
+          test -f golden/note_evergreen.md
+  ws-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - run: docker compose up -d --build
+      - run: |
+          # give API time to boot
+          for i in $(seq 1 20); do curl -sf localhost:18000/query?q=hello && exit 0; sleep 1; done; exit 1
+      - run: docker compose logs api

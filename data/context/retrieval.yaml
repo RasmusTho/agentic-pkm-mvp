@@ -1,0 +1,7 @@
+bm25:
+  backend: lite
+  analyzer: standard
+  min_df: 1
+vector:
+  backend: pgvector
+  dim: 1536

@@ -1,108 +1,11 @@
 {
-  "facts": [
-    {
-      "type": "fact",
-      "title": "Agent service setup (2025-10-21)",
-      "text": "Agent-supervisorn (scripts/start_agent_service.py) laddar .env, skippar Alembic om DB redan är på head, och kör run_agent.py i loop (var 30 s). Supervisorlogg: /tmp/agent.log. Agentlogg: /tmp/agent_app.log. DB: postgresql+psycopg på localhost:15433 (db=app, user=app). Alembic på head (202501140001). Repo: /Users/rasmus/workspace. Venv: .venv. VAULT_DIR: /Users/rasmus/workspace/data/context.",
-      "created": "2025-10-21",
-      "source": "system",
-      "tags": [
-        "agent",
-        "supervisor",
-        "alembic",
-        "postgres",
-        "mvp",
-        "infra"
-      ],
-      "paths": {
-        "repo_root": "/Users/rasmus/workspace",
-        "service": "scripts/start_agent_service.py",
-        "agent": "run_agent.py",
-        "env": "/Users/rasmus/workspace/.env",
-        "venv": "/Users/rasmus/workspace/.venv",
-        "logs": {
-          "supervisor": "/tmp/agent.log",
-          "agent": "/tmp/agent_app.log"
-        },
-        "vault_dir": "/Users/rasmus/workspace/data/context"
-      },
-      "db": {
-        "dsn_masked": "postgresql+psycopg://app:***@localhost:15433/app",
-        "port": 15433,
-        "engine": "pgvector/pg16",
-        "alembic_head": "202501140001"
-      },
-      "behavior": {
-        "restart_interval_seconds": 30,
-        "restart_on_exit_code": "any"
-      }
-    },
-    {
-      "type": "fact",
-      "title": "Ingest/recall state (2025-10-21)",
-      "text": "/ingest och /search kräver API-nyckel (tom => avstängt). Ingest skriver objects/embeddings i Postgres via app/search/service.py; watcher-pipelinen är borttagen. Dataset behöver seedas för att agentens loop ska ha material att reflektera över.",
-      "created": "2025-10-21",
-      "source": "system",
-      "tags": [
-        "ingest",
-        "recall",
-        "api",
-        "pgvector"
-      ],
-      "paths": {
-        "ingest_api": "app/api/ingest.py",
-        "search_api": "app/api/search.py",
-        "search_service": "app/search/service.py",
-        "schemas": "app/schemas/"
-      },
-      "tests": [
-        "tests/test_ingest_roundtrip.py",
-        "tests/test_vector_query.py",
-        "tests/test_hybrid_rrf.py"
-      ],
-      "status": {
-        "watcher": "removed",
-        "seed_data": "missing",
-        "api_key_required": false
-      }
-    }
-  ],
-  "definitions": [
-    {
-      "name": "agent_service_runner",
-      "category": "service-policy",
-      "description": "Idempotent start: ladda .env, upptäck Alembic HEAD och skippa migration vid head; annars kör upgrade head. Starta agenten och övervaka i loop; logga till /tmp/agent_app.log; hantera SIGTERM/SIGINT för clean shutdown.",
-      "fields": {
-        "migration_timeout_seconds": 180,
-        "restart_interval_seconds": 30,
-        "logs": {
-          "supervisor": "/tmp/agent.log",
-          "agent": "/tmp/agent_app.log"
-        },
-        "alembic_ini": "app/alembic.ini"
-      }
-    },
-    {
-      "name": "mvp_ingest_recall_plan",
-      "category": "roadmap",
-      "description": "End-to-end ingest och recall för MVP: API-es, Postgres-index, vault-frontmatter, agent-supervisor loop.",
-      "fields": {
-        "endpoints": [
-          "POST /ingest",
-          "POST /search"
-        ],
-        "dependencies": [
-          "Postgres+pgvector",
-          "OpenAI text-embedding-3-large",
-          "config/agent.yaml"
-        ],
-        "gaps": [
-          "Seed data saknas",
-          "Promotion endpoints saknas",
-          "Loggrotation för agentloggar"
-        ],
-        "owner": "Rasmus"
-      }
-    }
-  ]
+  "mode": "ws-single-node",
+  "services": {
+    "db": {"host": "db", "port": 5432, "ext_port": 15432, "engine": "postgres+pgvector"},
+    "api": {"host": "api", "port": 8000, "ext_port": 18000, "endpoints": ["/query"]},
+    "bus": {"impl": "inproc"}
+  },
+  "ingest_paths": ["/ingest/raw", "/golden"],
+  "canvas_source_of_truth": true,
+  "notes": "Legacy supervisor/agent settings and different ports are deprecated in WS."
 }

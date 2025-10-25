@@ -1,0 +1,9 @@
+version: 1
+prefixes:
+  - topic
+  - domain
+  - status
+controlled:
+  topic: [ai, networking, pkm]
+  domain: [creative, research, ops]
+  status: [seed, note, draft, curated, evergreen, archived]

@@ -1,0 +1,4 @@
+states: [seed, note, promoted, evergreen, archived]
+rules:
+  auto_promotion:
+    seed_to_note_confidence: 0.7

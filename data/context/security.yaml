@@ -1,0 +1,14 @@
+version: 1
+secrets:
+  store: "local_env"   # WS runs local only; upgrade later to sops/1password
+  rotation_days: 90
+retention:
+  embeddings:
+    external_seed: "30d"
+    curated: "365d"
+    evergreen: "none"
+licenses:
+  require_on_import: true
+incident:
+  process: ["triage","contain","post_mortem"]
+pii_policy: "deny_in_ws"

@@ -1,0 +1,10 @@
+version: 1
+panels:
+  - id: queue_depth
+    title: Queue depth
+  - id: p95_latency
+    title: Query latency P95
+  - id: scorecard_fail
+    title: Scorecard failures
+  - id: promotions
+    title: Promotions per day

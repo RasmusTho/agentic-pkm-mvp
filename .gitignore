@@ -5,3 +5,8 @@ env/
 checkpoints.sqlite
 provenance.jsonl
 storage/
+.DS_Store
+*.txt
+locate_search_backends.sh
+repo_tree.txt
+repo_counts.txt
