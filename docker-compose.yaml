@@ -1,51 +1,31 @@
+version: '3.9'
 services:
-  api:
-    build: .
-    image: agentic-pkm-api:latest
-    env_file: .env
+  db:
+    image: postgres:16
     environment:
-      - DB_DSN=postgresql+psycopg://app:app@postgres:5432/app
-      - VECTOR_BACKEND=pgvector
-      - RATE_LIMIT_REDIS_URL=redis://redis:6379/0
-      - AGENT_CONFIG_PATH=/config/agent.yaml
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app
+    ports:
+      - "15432:5432"
+  api:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./:/app
+    command: bash -lc "pip install -r app/requirements.txt requests && uvicorn app.api.app:app --host 0.0.0.0 --port 8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/app
     ports:
       - "18000:8000"
     depends_on:
-      - postgres
-      - redis
+      - db
+  worker:
+    image: python:3.12-slim
+    working_dir: /app
     volumes:
-      - ./config/agent.yaml:/config/agent.yaml:ro
-    command: ["/app/scripts/start_api.sh"]
-
-  agent:
-    image: agentic-pkm-api:latest
-    env_file: .env
+      - ./:/app
+    command: bash -lc "pip install -r app/requirements.txt && python -m app.workers.outbox_worker"
     environment:
-      - DB_DSN=postgresql+psycopg://app:app@postgres:5432/app
-      - VECTOR_BACKEND=pgvector
-      - AGENT_CONFIG_PATH=/config/agent.yaml
-      - PYTHONPATH=/app
-    command: ["python", "scripts/start_agent_service.py"]
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/app
     depends_on:
-      - postgres
-    volumes:
-      - ./config/agent.yaml:/config/agent.yaml:ro
-
-  postgres:
-    image: pgvector/pgvector:pg16
-    environment:
-      - POSTGRES_DB=app
-      - POSTGRES_USER=app
-      - POSTGRES_PASSWORD=app
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "15432:5432"
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
-volumes:
-  postgres-data:
+      - db
