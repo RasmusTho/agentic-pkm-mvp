@@ -1,36 +1,25 @@
-# Versioning & Migrations — SoT v4.2
+# VERSIONING
 
-## Alembic
-All schema migrations live under `app/alembic/versions/`.
+## SoT Schema Version
+- Current: v4.2 (previous: v4.1)
+- v4.2 aligns on:
+  - LangGraph PER wrapper for agents (plan/act/reflect nodes)
+  - Explicit event choreography with ingest.* and curation.*
+  - Unified AMG/SetDB schema covering objects, chunks, embeddings, relations, sets, membership, decisions, audit
 
-Rules:
-1. Never edit existing migrations.
-2. Always merge heads explicitly.
-3. Apply with:
-   PYTHONPATH="$(pwd)" alembic upgrade head
+## Migrations
+- Alembic heads are merged; run:
+  - PYTHONPATH="$(pwd)" alembic upgrade head
+- If multiple heads appear:
+  - PYTHONPATH="$(pwd)" alembic heads
+  - PYTHONPATH="$(pwd)" alembic merge -m "merge heads" <head1> <head2>
+  - Then upgrade head.
 
-## Migration Naming
-<YYYYMMDDHHMM>_<short_description>.py  
-Example: `202510241200_sot42_amg_core.py`
+## Semantics
+- Backward compatible object payloads where possible.
+- Column/index additions are preferred to destructive changes.
+- Bump SOT_VERSION when schema affects data or agent contracts.
 
-## Version Synchronization
-| Layer | Source of Truth |
-|--------|----------------|
-| Database schema | Alembic |
-| File structure | Git |
-| Data context | YAML |
-| Docs | /docs (SoT v4.2) |
-
-## Recovery
-If migrations diverge:
-PYTHONPATH=”$(pwd)” alembic heads
-
-PYTHONPATH=”$(pwd)” alembic merge -m “merge heads”  
-
-PYTHONPATH=”$(pwd)” alembic upgrade head
-
-## Data Upgrades
-For non-breaking migrations (e.g., new metadata fields):
-- Add nullable columns
-- Write a migration script
-- Backfill asynchronously via agent
+## Contracts & Tests
+- Contract tests verify inputs→events→state transitions.
+- E2E tests require: normalized objects, chunk offsets, embeddings ≥ chunks, audit completeness, projector sync.

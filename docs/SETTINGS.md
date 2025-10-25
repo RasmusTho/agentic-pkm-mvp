@@ -1,37 +1,28 @@
-# System Settings — SoT v4.2
+# SETTINGS
 
-## Configuration Layers
-1. **Environment variables** — runtime overrides  
-2. **YAML context files** under `data/context/*` — declarative defaults  
-3. **Database tables** — persistent truth (AMG/SetDB)
+## Required
+- DATABASE_URL: SQLAlchemy/psycopg URL. Example: postgresql+psycopg://app:app@127.0.0.1:15432/app
+- SOT_VERSION: Current Source-of-Truth schema version. Example: 4.2
 
-## Required Environment Variables
-| Variable | Description | Example |
-|-----------|--------------|----------|
-| DATABASE_URL | Postgres connection string | postgresql+psycopg://app:app@127.0.0.1:15432/app |
-| LLM_PROVIDER | Model backend | ollama |
-| LLM_MODEL | Default model | llama3.1:8b |
-| LLM_REASONING_MODEL | Reasoning model | deepseek-r1:8b |
-| TRACE_MODE | Enables trace logs | true |
+## LLM
+- LLM_PROVIDER: ollama|openai|azureopenai|anthropic
+- LLM_MODEL: default chat/model for non-reasoning prompts
+- LLM_REASONING_MODEL: advanced model for deliberate reasoning
+- OLLAMA_HOST: base URL to local server, default http://127.0.0.1:11434
+- LLM_TIMEOUT_SECONDS: default 120
 
-## Optional Variables
-| Variable | Description | Default |
-|-----------|--------------|----------|
-| AGENT_LOG | Path for audit logs | /tmp/agent.log |
-| VECTOR_DIM | Embedding vector dimensions | 1536 |
-| MAX_CHUNK_SIZE | Chunking fallback token limit | 800 |
-| CHUNK_OVERLAP | Overlap between chunks | 120 |
-| RETENTION_DAYS | Default retention for transient objects | 90 |
+## Retrieval
+- VECTOR_BACKEND: pgvector
+- EMBED_MODEL: identifier string for embeddings (e.g. openai/text-embedding-3-large). Tests use a deterministic hashing-based embedding in code.
+- BM25_BACKEND: bm25_lite
 
-## Config Files
-| File | Purpose |
-|------|----------|
-| data/context/maturity.yaml | Defines maturity rules (seed → note → evergreen) |
-| data/context/retrieval.yaml | Retrieval parameters for BM25/vector hybrid search |
-| data/context/retention.yaml | Retention and pruning rules |
-| data/context/agents.yaml | Runtime metadata for agents and event routing |
+## Operational flags
+- LOG_LEVEL: INFO|DEBUG
+- FEATURE_REVIEW_AUTOPROMOTE: true|false (default true)
+- FEATURE_REASONING_ON_REVIEW: true|false (default true)
+- MAX_CHUNK_TOKENS: default 800
+- CHUNK_OVERLAP_TOKENS: default 120
 
-## Initialization
-docker compose -f docker-compose.yaml up -d postgres
-export DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app"
-PYTHONPATH="$(pwd)" alembic upgrade head
+## Conventions
+- All services read from environment first, then fall back to sensible defaults in app/settings.py and agent modules.
+- Never check secrets into the repo. Use .env for local dev only.

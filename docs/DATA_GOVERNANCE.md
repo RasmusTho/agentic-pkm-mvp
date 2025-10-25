@@ -1,38 +1,31 @@
-# Data Governance & Provenance — SoT v4.2
+# DATA GOVERNANCE
 
-## Core Principles
-- **Human-first:** Data serves cognition, not storage.
-- **Traceable:** Every write carries a trace_id.
-- **Reversible:** Nothing is mutated without audit trail.
-- **Trust-aware:** Provenance and confidence guide promotion.
-- **Transparent:** Every object has provenance, maturity, and trust metadata.
+## Truth sources
+- AMG/SetDB in Postgres is the cognitive source of truth.
+- File-frontmatter mirrors only a whitelist via Projector (Core-6 is never mutated).
 
-## Provenance Fields
-| Field | Description |
-|--------|-------------|
-| origin | Original file path or source reference |
-| trust | Confidence score from agents (0–1) |
-| maturity | State from seed → note → evergreen |
-| evidence_level | Factual confidence from evidence |
-| source_ref | External reference (URL, repo, etc.) |
-| review_state | Pending, approved, rejected |
+## Core-6
+- id, type, title, created, updated, origin
+- Stored in payload->core6 for objects; read-only through Projector.
 
-## Promotion Logic
-Reviewer blocks promotion when:
-- trust < 0.7  
-- missing_citations = true  
-- maturity rule not satisfied
+## Trust & Provenance
+- trust: own|provisional|external|conflict
+- Provenance is preserved through audit trail and decisions table.
+- Normalizer preserves content byte-fidelity; any derived data references object_id + offsets.
+
+## Promotion gates (Reviewer)
+- If confidence ≥ 0.7 and no blocking conditions, seed→note auto-promotes.
+- Blocking examples: trust in [external, conflict] AND missing_citations=true.
+- All gate outcomes are logged to audit with decision rationale.
+
+## Idempotency & Duplicates
+- Agents are idempotent. Running the same step twice must not create duplicates.
+- Deduper writes decisions(key=duplicate_of) and relations(canonical).
+
+## Audit/Decisions
+- audit: event_id, object_id, agent, action, ts, trace_id, details
+- decisions: per-object key/value JSON decisions (e.g., type, duplicate_of, missing_citations)
 
 ## Retention
-Retention rules (from retention.yaml):
-- Transient: purge after 30–90 days
-- Golden: never auto-deleted
-- Archival: compressed, read-only
-
-## Separation of Trust
-| Source | Trust Range | Review Required |
-|---------|--------------|----------------|
-| Authored (human) | 0.8–1.0 | No |
-| Imported (known source) | 0.6–0.9 | Yes |
-| AI-generated | 0.4–0.7 | Yes |
-| Unknown | 0–0.5 | Discard |
+- objects/chunks/embeddings are persistent.
+- feedback and reviewer outputs are retained for later evaluation.
