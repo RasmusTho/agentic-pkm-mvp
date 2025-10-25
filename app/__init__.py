@@ -1,1 +1,1 @@
-"""App package initialization."""
+"""Agentic PKM application package."""

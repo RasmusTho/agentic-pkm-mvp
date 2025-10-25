@@ -1,0 +1,73 @@
+name: architecture-ci
+
+on:
+  push:
+    paths:
+      - 'docs/**'
+      - 'api/openapi.yaml'
+      - 'events/asyncapi.yaml'
+      - '.github/workflows/architecture-ci.yaml'
+      - 'app/**'
+      - 'tests/**'
+      - 'importlinter.ini'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'api/openapi.yaml'
+      - 'events/asyncapi.yaml'
+      - '.github/workflows/architecture-ci.yaml'
+      - 'app/**'
+      - 'tests/**'
+      - 'importlinter.ini'
+
+jobs:
+  validate-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm i -g @redocly/cli @asyncapi/cli
+      - name: Lint OpenAPI
+        run: redocly lint api/openapi.yaml
+      - name: Lint AsyncAPI
+        run: asyncapi validate events/asyncapi.yaml
+
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r app/requirements.txt
+      - run: pip install pytest uvicorn requests
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:15432/app
+        run: pytest -q
+
+  arch-imports:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install import-linter
+      - name: Lint imports
+        run: lint-imports
