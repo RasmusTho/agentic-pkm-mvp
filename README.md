@@ -57,6 +57,23 @@ Projector uses insert-or-ignore logic and emits both audit and episodic memory.
 **Operational note:**
 Legacy duplicates are purged automatically in the migration.
 
+### Backfill hygiene job
+
+Use the backfill job to close historical gaps (chunks, embeddings, review/evaluate decisions, projection):
+
+```
+PYTHONPATH="$(pwd)" DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" \
+python -m app.jobs.backfill --limit 200 --trace-id job-backfill-001 --set-name "published"
+```
+
+With the repo’s Makefile:
+
+```
+DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" make backfill
+```
+
+Views for observability (`view_objects_missing_chunks`, `view_chunks_missing_embeddings`, `view_objects_missing_review`, `view_objects_ready_for_projection`) surface remaining gaps and should be empty after a successful run.
+
 Docs
 - docs/ARCHITECTURE.md
 - docs/SYSTEM_OVERVIEW.md

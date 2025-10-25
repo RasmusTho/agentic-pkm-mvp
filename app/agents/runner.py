@@ -7,6 +7,7 @@ from app.agents.deduper.graph import invoke as dedupe_invoke
 from app.agents.reviewer.graph import invoke as review_invoke
 from app.agents.set_evaluator.graph import invoke as evaluate_invoke
 from app.agents.projector.graph import invoke as projector_invoke
+from app.jobs.backfill import run_backfill
 
 def main():
     p = argparse.ArgumentParser()
@@ -19,6 +20,8 @@ def main():
     p.add_argument("--strategy", default="heading_first")
     p.add_argument("--threshold", type=float, default=0.92)
     p.add_argument("--set-name", default="published")
+    p.add_argument("--limit", type=int, default=100)
+    p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
 
     if args.agent == "normalizer":
@@ -36,6 +39,24 @@ def main():
         out = evaluate_invoke(args.object_id, trace_id=args.trace_id, threshold=args.threshold)
     elif args.agent == "projector":
         out = projector_invoke(args.object_id, trace_id=args.trace_id, set_name=args.set_name)
+    elif args.agent == "backfill":
+        summary = run_backfill(
+            trace_id=args.trace_id,
+            limit=args.limit,
+            set_name=args.set_name,
+            dry_run=args.dry_run,
+        )
+        out = {
+            "event": "jobs.backfill.done",
+            "summary": {
+                "chunked": summary.chunked,
+                "indexed": summary.indexed,
+                "reviewed": summary.reviewed,
+                "evaluated": summary.evaluated,
+                "projected": summary.projected,
+                "dry_run": args.dry_run,
+            },
+        }
     else:
         raise SystemExit(f"unknown agent {args.agent}")
 
