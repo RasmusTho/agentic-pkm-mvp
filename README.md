@@ -1,28 +1,110 @@
-# Second-Brain / Walking Skeleton (WS)
-**Source of truth** is the Canvas “AI-assisterat Second Brain — Konsoliderad grund”.
-`data/context/` mirrors Canvas policies; WS runs single node (Docker) with minimal agents,
-BM25-lite (inside API for now), pgvector via Postgres, no reranker, inproc bus.
+# Agentic PKM — SoT v4.2 (MVP Ingestion)
 
-- Start WS: `docker compose up -d --build` then `GET http://localhost:18000/query?q=hello`
-- Golden set: `golden/*`
-- Context: `data/context/*.yaml`
-- WS overview: `docs/OVERVIEW_WS.md`
-- Legacy docs archived at `docs/legacy/` (kept for reference; superseded by WS + Canvas).
+This repository contains an agent-first, LangGraph-based MVP ingestion pipeline for an AI-assisted Second Brain.
+The Source of Truth (SoT) is Postgres (AMG/SetDB) with `pgvector` for embeddings. Obsidian is the human surface; Git is the ground truth; YAML frontmatter is the contract.
 
-### LangGraph (POC, decoupled)
-This repo includes a small LangGraph demo under `app/langgraph/` to explore future agent flows.
-It is **not** wired into WS runtime yet. Run: `python app/langgraph/ws_graph.py`
+## Goals (MVP Ingestion)
+- Run end-to-end on a small corpus: Ingestor → Normalizer → Classifier → Chunker → Deduper → CitationChecker → Indexer → Reviewer → SetEvaluator → Projector.
+- Write audit/trace for every step (a `trace_id` follows each object).
+- Build BM25 + pgvector index and verify chunk provenance (object id + offsets).
+- Reviewer: auto-promote `seed → note` at `confidence ≥ 0.7`, otherwise emit feedback.
+- Projector: mirror only the whitelist (maturity, trust, aliases, related, parent, canonical, sets, scope, relevance_score). Core-6 stays untouched.
 
-## SoT v4.1 – MVP Ingestion (TDD)
-- End-to-end: Ingestor → Normalizer → Classifier → Chunker → Deduper → CitationChecker → Indexer → Reviewer → SetEvaluator → Projector
-- Core-6 i DB (AMG), projector speglar whitelist.
-- Index: pgvector + in-memory BM25Lite (MVP).
+## Architecture
+- Agents are built on LangGraph and share a minimal PER loop (Plan → Execute → Reflect).
+- AMG/SetDB in Postgres 16: objects, chunks, embeddings, relations, sets, membership, decisions, audit.
+- Events (in-proc): `ingest.*`, `curation.*`. Agents consume/emit events; an orchestrator remains thin.
+- File-first: Markdown + YAML frontmatter; Core-6 is stored in DB payload and projected to files (whitelist only).
 
-## Dokumentation
-- docs/SoT-v4.1.md
-- docs/PLAN.md
-- docs/TESTS.md
-- docs/FRONTMATTER.md
-- docs/ARCHITECTURE.md
-- docs/EVENTS.md
-- docs/SCORECARDS.md
+See detailed design in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+## Quickstart
+
+### Prerequisites
+- Python 3.11+
+- Docker and Docker Compose
+- Optional: Ollama for local LLMs: `llama3.1:8b` (general), `deepseek-r1:8b` (reasoning)
+
+### Run Postgres
+```bash
+docker compose -f docker-compose.yaml up -d postgres
+mkdir -p docs
+
+cat > README.md <<'EOF'
+# Agentic PKM — SoT v4.2 (MVP Ingestion)
+This repository contains an agent-first, LangGraph-based MVP ingestion pipeline for an AI-assisted Second Brain.
+The Source of Truth (SoT) is Postgres (AMG/SetDB) with pgvector for embeddings. Obsidian is the human surface; Git is the ground truth; YAML frontmatter is the contract.
+
+## Goals (MVP Ingestion)
+- Run end-to-end on a small corpus: Ingestor → Normalizer → Classifier → Chunker → Deduper → CitationChecker → Indexer → Reviewer → SetEvaluator → Projector.
+- Write audit/trace for every step (a trace_id follows each object).
+- Build BM25 + pgvector index and verify chunk provenance (object id + offsets).
+- Reviewer: auto-promote seed → note at confidence ≥ 0.7, otherwise emit feedback.
+- Projector: mirror only the whitelist (maturity, trust, aliases, related, parent, canonical, sets, scope, relevance_score). Core-6 stays untouched.
+
+## Architecture
+- Agents are built on LangGraph and share a minimal PER loop (Plan → Execute → Reflect).
+- AMG/SetDB in Postgres 16: objects, chunks, embeddings, relations, sets, membership, decisions, audit.
+- Events (in-proc): ingest.*, curation.*. Agents consume/emit events; an orchestrator remains thin.
+- File-first: Markdown + YAML frontmatter; Core-6 is stored in DB payload and projected to files (whitelist only).
+
+See detailed design in docs/ARCHITECTURE.md.
+
+## Quickstart
+### Prerequisites
+- Python 3.11+
+- Docker and Docker Compose
+- Optional: Ollama for local LLMs: llama3.1:8b (general), deepseek-r1:8b (reasoning)
+
+### Run Postgres
+docker compose -f docker-compose.yaml up -d postgres
+
+### Database migration
+export DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app"
+PYTHONPATH="$(pwd)" alembic upgrade head
+
+### Run tests
+PYTHONPATH="$(pwd)" DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" pytest -q
+
+### Local LLMs (optional)
+brew install ollama
+ollama serve &
+ollama pull llama3.1:8b
+ollama pull deepseek-r1:8b
+export LLM_PROVIDER=ollama
+export LLM_MODEL=llama3.1:8b
+export LLM_REASONING_MODEL=deepseek-r1:8b
+
+## Repository Layout
+app/
+  agents/
+    normalizer/
+    classifier/
+    chunker/
+    deduper/
+    citation_checker/
+    indexer/
+    reviewer/
+    set_evaluator/
+    projector/
+    runner.py
+  search/
+    bm25_lite.py
+    embeddings.py
+    vector_index.py
+  alembic/
+docs/
+  ARCHITECTURE.md
+tests/
+  agents/
+  e2e/
+
+## Development Principles
+- Human-first
+- Separation of trust (own/imported/AI-generated)
+- Observability & provenance
+- Reflexivity (reflections, scorecards, feedback loops)
+- TDD
+
+## License
+MIT
