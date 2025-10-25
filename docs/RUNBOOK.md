@@ -1,4 +1,4 @@
-# RUNBOOK — SoT v4.1 MVP Ingestion
+# RUNBOOK — SoT v4.3 Ingestion & Vault Lifecycle
 
 ## 0. Snabbguide (TL;DR)
 1) Starta DB/Redis:
@@ -60,7 +60,7 @@ Reset (farligt – tar bort data):
   PYTHONPATH="$(pwd)" alembic upgrade head
 
 ## 4. Ingestion-pipeline (LangGraph)
-Node-ordning (MVP):
+Node-ordning (v4.3):
   Normalizer → Classifier → Chunker → Deduper → CitationChecker → Indexer → Reviewer → SetEvaluator → Projector
 
 Manuella anrop i tester:
@@ -99,7 +99,31 @@ Minne/CPU-tryck:
   - Stäng onödiga Docker-containrar när du kör lokala LLM.
   - Stoppa oanvända modeller: ollama stop <modell>
 
-## 6. Vanliga fel och snabba åtgärder
+## 6. Backfill and Export
+- Backfill pipeline hygiene:
+  ```
+  make backfill
+  ```
+- Manual export to Obsidian vault:
+  ```
+  PYTHONPATH="$(pwd)" DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" \
+  python scripts/export_objects.py --vault ~/Obsidian/PKM
+  ```
+- Views to inspect outstanding items:
+  - `SELECT * FROM view_objects_missing_chunks;`
+  - `SELECT * FROM view_chunks_missing_embeddings;`
+  - `SELECT * FROM view_objects_missing_review;`
+  - `SELECT * FROM view_objects_ready_for_projection;`
+
+## 7. Verifiera lokalt
+- Kör hela verifikationsskriptet (CI-lite):
+  ```
+  PATH="$(pwd)/.venv/bin:$PATH" scripts/codex_verify.sh
+  ```
+- Om `psql` saknas lokalt kan `PSQL="docker compose exec -T postgres psql"` exporteras innan körning.
+- Resultatet ska avslutas med `OK` samt redovisade objekt/chunk/embedding/audit-räknare.
+
+## 8. Vanliga fel och snabba åtgärder
 “FATAL: database ... does not exist”
   Skapa DB/roll:
     docker compose exec db psql -U app -d app -c "SELECT 1;" || true
@@ -136,7 +160,7 @@ Ollama connection refused (11434)
   Verifiera:
     curl -sS http://127.0.0.1:11434/api/tags
 
-## 7. Städning & artifacts
+## 9. Städning & artifacts
 Repo-karta:
   scripts/repo_map.sh → skriver repo_tree.txt och repo_counts.txt
 Sök backend-signaturer (säkra varningar):
@@ -145,21 +169,20 @@ Ta bort jättestora artifacts:
   rm -f embedding_hits.txt bm25_hits.txt dao_schema_hits.txt
   git update-index --assume-unchanged <fil>  # om genereras lokalt ofta
 
-## 8. CI-snabbtest (≤ 2 min, < 500 docs)
+## 10. CI-snabbtest (≤ 2 min, < 500 docs)
 Lokalt:
   PYTHONPATH="$(pwd)" env DATABASE_URL="$DATABASE_URL" pytest -q -k "not slow" --maxfail=1
 Rök-test:
   PYTHONPATH="$(pwd)" env DATABASE_URL="$DATABASE_URL" pytest -q tests/e2e/test_pipe_graph.py
 
-## 9. Spårbarhet (Audit)
+## 11. Spårbarhet (Audit)
 Varje agent loggar audit med trace_id:
   SELECT * FROM audit WHERE trace_id='...';
 Verifiera idempotens:
   SELECT COUNT(*) FROM objects WHERE id='...';
 
-## 10. När eskalera
+## 12. När eskalera
 - Migreringar blockeras av oförenliga heads
 - Orsaker till OOM kvarstår efter stängning av modeller/containers
 - Indexering producerar 0 embeddings trots chunkar > 0
 - E2E passerar inte lokalt men CI gör – mismatch i env/versioner
-

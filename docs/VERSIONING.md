@@ -1,11 +1,16 @@
 # VERSIONING
 
 ## SoT Schema Version
-- Current: v4.2 (previous: v4.1)
-- v4.2 aligns on:
-  - LangGraph PER wrapper for agents (plan/act/reflect nodes)
-  - Explicit event choreography with ingest.* and curation.*
-  - Unified AMG/SetDB schema covering objects, chunks, embeddings, relations, sets, membership, decisions, audit
+- Current: v4.3 (previous: v4.2)
+- v4.3 highlights:
+  - Obsidian integration & lifecycle mirroring (file-first flows)
+  - Promotion/export/backfill chain (Reviewer → SetEvaluator → Projector → Vault)
+  - Episodic memory standardized across agents
+
+## Release Details
+- Release date: 2025-10-25
+- Tag: `sot-v4.3`
+- Compat: backward compatible with v4.2 data (new columns are additive)
 
 ## Migrations
 - Alembic heads are merged; run:
@@ -16,10 +21,9 @@
   - Then upgrade head.
 
 ## Semantics
-- Backward compatible object payloads where possible.
-- Column/index additions are preferred to destructive changes.
-- Bump SOT_VERSION when schema affects data or agent contracts.
+- Continue adding columns/indexes instead of destructive changes.
+- Promote schema bumps when lifecycle, promotion, or export contracts change.
 
 ## Contracts & Tests
 - Contract tests verify inputs→events→state transitions.
-- E2E tests require: normalized objects, chunk offsets, embeddings ≥ chunks, audit completeness, projector sync.
+- E2E tests require: normalized objects, chunk offsets, embeddings ≥ chunks, audit completeness, promotion/export sync.
