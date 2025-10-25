@@ -44,6 +44,19 @@ Core concepts
 - Event choreography: ingest.* and curation.*
 - Governance: trust, maturity, provenance, promotion gates
 
+## Promotion flow (Reviewer → SetEvaluator → Projector)
+
+1. **Reviewer** computes trust and writes review decisions (allow/block), audit entries, and episodic memories.
+2. **SetEvaluator** aggregates signals (citations, dedupe, embedding density) and writes `evaluate` decisions.
+3. **Projector** reads the latest evaluation; when `promote=true` it inserts membership into the target set.
+
+**Idempotency:**
+`membership` enforces `UNIQUE (set_id, object_id)`.
+Projector uses insert-or-ignore logic and emits both audit and episodic memory.
+
+**Operational note:**
+Legacy duplicates are purged automatically in the migration.
+
 Docs
 - docs/ARCHITECTURE.md
 - docs/SYSTEM_OVERVIEW.md
