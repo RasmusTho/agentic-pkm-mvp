@@ -3,10 +3,12 @@ from typing import Any
 from app.agents.base.graph import PERSpec, build_graph, AgentState
 from app.agents.base.audit import audit_log
 from app.agents.chunker.agent import run as chunker_run
+from app.memory.store import recall
 
 AGENT = "chunker"
 
 def _plan(state: AgentState) -> AgentState:
+    state["memory_context"] = recall(AGENT, "chunked", object_id=None, limit=3)
     state["plan"] = "chunk_heading_first"
     audit_log(object_id=(state.get("input") or {}).get("object_id"), agent=AGENT, action="plan", trace_id=state.get("trace_id"), details={"plan": state["plan"]})
     return state

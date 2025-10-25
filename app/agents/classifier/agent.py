@@ -5,6 +5,7 @@ import psycopg
 from psycopg.rows import dict_row
 from app.llm.adapter import generate
 from app.agents.base.audit import audit_log
+from app.memory.store import remember, recall
 
 def _dsn() -> str:
     return (os.environ.get("DATABASE_URL") or "postgresql+psycopg://app:app@127.0.0.1:15432/app").replace("postgresql+psycopg://","postgresql://")
@@ -70,9 +71,20 @@ def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
                 "INSERT INTO decisions (id, object_id, key, value, created_at) VALUES (%s,%s,%s,%s::jsonb, now())",
                 (str(uuid.uuid4()), object_id, "classification", json.dumps(value)),
             )
+    remember(
+        agent="classifier",
+        kind="classified",
+        object_id=object_id,
+        trace_id=trace_id,
+        data={
+            "labels": value.get("tags"),
+            "confidence": float(value.get("confidence", 0.0)),
+        },
+    )
     audit_log(object_id=object_id, agent="classifier", action="classify", trace_id=trace_id, details=value)
     audit_log(object_id=object_id, agent="classifier", action="metadata.changed", trace_id=trace_id, details={"key":"classification"})
     return {"object_id": object_id, "classification": value, "raw": content}
 
 def run(object_id: str, *, trace_id: str) -> dict[str, Any]:
+    recall("classifier", "classified", object_id=None, limit=3)
     return classify_object(object_id, trace_id=trace_id)

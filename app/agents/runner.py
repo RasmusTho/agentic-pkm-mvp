@@ -4,6 +4,7 @@ from app.agents.normalizer.graph import invoke as normalize_invoke
 from app.agents.classifier.graph import invoke as classify_invoke
 from app.agents.chunker.graph import invoke as chunk_invoke
 from app.agents.deduper.graph import invoke as dedupe_invoke
+from app.agents.reviewer.graph import invoke as review_invoke
 
 def main():
     p = argparse.ArgumentParser()
@@ -26,6 +27,8 @@ def main():
     elif args.agent == "deduper":
         ids = [x for x in (args.object_id or "").split(",") if x]
         out = dedupe_invoke(ids, trace_id=args.trace_id, threshold=args.threshold)
+    elif args.agent == "reviewer":
+        out = review_invoke(args.object_id, trace_id=args.trace_id, threshold=args.threshold)
     else:
         raise SystemExit(f"unknown agent {args.agent}")
 

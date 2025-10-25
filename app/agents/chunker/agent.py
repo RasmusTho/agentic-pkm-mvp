@@ -3,6 +3,7 @@ import json, uuid, re
 from typing import Any, Iterable
 import psycopg
 from psycopg.rows import dict_row
+from app.memory.store import remember, recall
 
 def _dsn() -> str:
     url = (os.environ.get("DATABASE_URL") or "postgresql+psycopg://app:app@127.0.0.1:15432/app").replace("postgresql+psycopg://","postgresql://")
@@ -110,8 +111,21 @@ def chunk(object_id: str, *, max_tokens: int, overlap: int, strategy: str, trace
     if not spans:
         spans = [(full, 0, len(full))]
     n = _write_chunks(object_id, spans)
+    remember(
+        agent="chunker",
+        kind="chunked",
+        object_id=object_id,
+        trace_id=trace_id,
+        data={
+            "chunks": int(n),
+            "max_tokens": int(max_tokens),
+            "overlap": int(overlap),
+            "strategy": str(strategy),
+        },
+    )
     audit_log(object_id=object_id, agent="chunker", action="chunk.done", trace_id=trace_id, details={"chunks": n})
     return {"chunks": n}
 
 def run(object_id: str, *, max_tokens: int = 800, overlap: int = 120, strategy: str = "heading_first", trace_id: str) -> dict[str, Any]:
+    recall("chunker", "chunked", object_id=None, limit=3)
     return chunk(object_id, max_tokens=max_tokens, overlap=overlap, strategy=strategy, trace_id=trace_id)

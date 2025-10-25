@@ -9,6 +9,8 @@ from app.agents.classifier.graph import invoke as classify_invoke
 from app.agents.chunker.graph import invoke as chunk_invoke
 from app.agents.deduper.graph import invoke as dedupe_invoke
 from app.agents.indexer.graph import invoke as index_invoke
+from app.agents.citation_checker.agent import run as citation_run
+from app.agents.reviewer.graph import invoke as review_invoke
 
 def _dsn() -> str:
     return (os.environ.get("DATABASE_URL") or "postgresql+psycopg://app:app@127.0.0.1:15432/app").replace("postgresql+psycopg://","postgresql://")
@@ -20,11 +22,13 @@ def _count(sql: str, *params) -> int:
 
 def test_e2e_pipe(tmp_path: Path):
     trace_id = "t-e2e-graph-1"
+    os.environ.setdefault("LLM_PROVIDER", "mock")
+    os.environ.setdefault("LLM_MOCK_RESPONSE", '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}')
     a = tmp_path / "a.md"
     b = tmp_path / "b.md"
     c = tmp_path / "c.md"
-    a.write_text("# Title\n\nThis is a short note about vector search and embeddings.\nIt references pgvector and BM25.\n")
-    b.write_text("Title\n\nThis is a short note about vector search and embeddings.\nIt references pgvector and bm25!\n")
+    a.write_text("# Title\n\nAccording to the 2023 report, vector search adoption grew 25% last year.\nIt references pgvector and BM25 without citing sources.\n")
+    b.write_text("Title\n\nAccording to the 2023 report, vector search adoption grew 25% last year.\nIt references pgvector and bm25!\nSee https://example.org/report.\n")
     c.write_text("# Different\n\nA totally different topic about LangGraph and PER loops.\n")
 
     r1 = normalize_invoke(str(a), trace_id=trace_id)
@@ -49,9 +53,16 @@ def test_e2e_pipe(tmp_path: Path):
     assert isinstance(dres["output"]["pairs"], list)
 
     for oid in oids:
+        citation_run(oid, trace_id=trace_id)
+
+    reviews = []
+    for oid in oids:
         ix = index_invoke(oid, trace_id=trace_id)
         assert ix["output"]["event"] == "ingest.index.done"
         assert ix["output"]["embeddings"] >= 1
+        rv = review_invoke(oid, trace_id=trace_id, threshold=0.75)
+        assert rv["output"]["event"] == "curation.review.done"
+        reviews.append(rv["output"])
 
     n_objects = _count("SELECT COUNT(*) FROM objects")
     n_chunks = _count("SELECT COUNT(*) FROM chunks")
@@ -59,11 +70,17 @@ def test_e2e_pipe(tmp_path: Path):
     n_dup_decisions = _count("SELECT COUNT(*) FROM decisions WHERE key='duplicate_of'")
     n_emb = _count("SELECT COUNT(*) FROM embeddings")
 
+    n_review_decisions = _count("SELECT COUNT(*) FROM decisions WHERE key='review'")
+
     assert n_objects >= 3
     assert n_chunks >= 3
+    assert any(r["allow"] for r in reviews)
+    assert any(not r["allow"] for r in reviews)
+
     assert n_audit >= 6
     assert n_dup_decisions >= 0
     assert n_emb >= len(oids)
+    assert n_review_decisions >= len(oids)
     for oid in oids:
         per_obj = _count("SELECT COUNT(*) FROM embeddings WHERE object_id=%s", oid)
         assert per_obj >= 1

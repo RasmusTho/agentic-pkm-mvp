@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 import psycopg
 from psycopg.rows import dict_row
 from app.agents.base.audit import audit_log
+from app.memory.store import remember, recall
 
 CORE6_KEYS = ("id","type","title","created","updated","origin")
 
@@ -53,9 +54,20 @@ def normalize_file(path: str, *, trace_id: str) -> UUID:
                 """,
                 (str(object_id), "note", source_ref, json.dumps(payload)),
             )
+    remember(
+        agent="normalizer",
+        kind="normalized",
+        object_id=str(object_id),
+        trace_id=trace_id,
+        data={
+            "core6": core6,
+            "bytes": len(text or ""),
+        },
+    )
     audit_log(object_id=str(object_id), agent="normalizer", action="normalize", trace_id=trace_id, details={"source_ref": source_ref, "bytes": len(raw)})
     return object_id
 
 def run(path: str, *, trace_id: str) -> dict:
+    recall("normalizer", "normalized", object_id=None, limit=3)
     object_id = normalize_file(path, trace_id=trace_id)
     return {"object_id": str(object_id), "trace_id": trace_id}

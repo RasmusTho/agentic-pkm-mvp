@@ -5,8 +5,8 @@ import psycopg
 from psycopg.rows import dict_row
 from app.agents.base.graph import PERSpec, build_graph, AgentState
 from app.agents.base.audit import audit_log
-from app.agents.base.memory import remember
 from app.agents.normalizer.agent import run as normalizer_run
+from app.memory.store import recall
 
 AGENT = "normalizer"
 
@@ -39,6 +39,7 @@ def _fetch_core6(object_id: str | None) -> dict:
 
 def _plan(state: AgentState) -> AgentState:
     inp = state.get("input", {})
+    state["memory_context"] = recall(AGENT, "normalized", object_id=None, limit=3)
     state["plan"] = "normalize_core6"
     audit_log(object_id=inp.get("object_id"), agent=AGENT, action="plan", trace_id=state.get("trace_id"), details={"plan": state["plan"]})
     return state
@@ -53,9 +54,6 @@ def _reflect(state: AgentState) -> AgentState:
     res = state.get("act_result", {})
     ok = bool(res.get("object_id"))
     state["reflection"] = {"ok": ok}
-    oid = res.get("object_id")
-    if oid:
-        remember(agent=AGENT, key="last_normalize", value={"ok": ok}, scope_object_id=oid, ttl_seconds=86400)
     return state
 
 def _emit(state: AgentState) -> AgentState:
