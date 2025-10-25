@@ -1,6 +1,7 @@
 import time
 from app.services.outbox import bootstrap, poll_outbox_one
 from app.services.indexer import handle_ingest_object_created
+from app.observability.trace_log import log_span
 
 def run(interval: float = 0.2) -> None:
     bootstrap()

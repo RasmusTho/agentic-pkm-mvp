@@ -71,3 +71,52 @@ jobs:
       - run: pip install import-linter
       - name: Lint imports
         run: lint-imports
+
+
+  k6-search:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app
+        ports:
+          - 15432:5432
+      api:
+        image: python:3.12-slim
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@db:5432/app
+        ports:
+          - 18000:8000
+        options: >-
+          --health-cmd "bash -lc 'python -m pip install fastapi uvicorn psycopg[binary] pydantic && python - <<PY
+from app.services.outbox import bootstrap
+bootstrap()
+print("ready")
+PY'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r app/requirements.txt || true
+      - run: pip install fastapi uvicorn psycopg[binary] pydantic requests
+      - name: Seed data
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:15432/app
+        run: |
+          python - <<'PY'
+          from app.services.outbox import bootstrap, insert_object_and_outbox
+          from app.agent.events import INGEST_OBJECT_CREATED, new_trace_id
+          bootstrap()
+          insert_object_and_outbox({"uuid":"u-k6","title":"Seed","review_state":"inbox","content":"smoke content for k6 search"}, INGEST_OBJECT_CREATED, new_trace_id())
+          print("seeded")
+          PY
+      - uses: grafana/setup-k6@v1
+      - run: k6 run scripts/k6_search.js
+        env:
+          BASE_URL: http://localhost:18000

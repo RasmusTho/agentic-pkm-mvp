@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 import os
 import psycopg
 from app.services.embedding import deterministic_embedding
 from app.search.cosine import cosine
+from app.observability.trace_log import log_span
 
 router = APIRouter()
 
@@ -12,7 +13,10 @@ def _conn():
     return psycopg.connect(DATABASE_URL)
 
 @router.get("/search")
-async def search(q: str = Query(...)):
+async def search(request: Request, q: str = Query(...)):
+    trace_id = getattr(request.state, "trace_id", None) or request.headers.get("x-trace-id")
+    if trace_id:
+        log_span("api.search", trace_id, {"path":"/search","q": q})
     q_vector = deterministic_embedding(q)
     with _conn() as conn:
         with conn.cursor() as cur:
