@@ -5,6 +5,7 @@ import psycopg
 from psycopg.rows import dict_row
 from app.agents.base.graph import PERSpec, build_graph, AgentState
 from app.agents.base.audit import audit_log
+from app.agents.base.memory import remember
 from app.agents.normalizer.agent import run as normalizer_run
 
 AGENT = "normalizer"
@@ -52,6 +53,9 @@ def _reflect(state: AgentState) -> AgentState:
     res = state.get("act_result", {})
     ok = bool(res.get("object_id"))
     state["reflection"] = {"ok": ok}
+    oid = res.get("object_id")
+    if oid:
+        remember(agent=AGENT, key="last_normalize", value={"ok": ok}, scope_object_id=oid, ttl_seconds=86400)
     return state
 
 def _emit(state: AgentState) -> AgentState:
