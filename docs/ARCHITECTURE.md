@@ -1,87 +1,48 @@
-# Architecture — SoT v4.2 (MVP Ingestion)
+# Architecture — SoT v4.2
 
-## System Overview
-- AMG/SetDB in Postgres 16 with pgvector is the cognitive source of truth:
-  - Tables: objects, chunks, embeddings, relations, sets, membership, decisions, audit.
-  - objects.payload stores Core-6 (projection source of truth).
-- Frontmatter contract: Markdown + YAML; Projector mirrors a whitelist only:
-  - maturity, trust, aliases, related, parent, canonical, sets, scope, relevance_score.
-  - Core-6 (id, type, title, created, updated, origin) is never overwritten by the projector.
-- Event choreography: in-process queue with typed events:
-  - ingest.* (normalization, chunking, indexing), curation.* (classification, dedupe, citation checks, review).
-  - Every event carries trace_id.
+1. Runtime Topology
+- App (Python 3.14): agents, graphs, API
+- Postgres + pgvector: AMG/SetDB (objects, chunks, embeddings, relations, decisions, audit)
+- LLM backends: local (Ollama) and remote (OpenAI, Azure, Anthropic) via env
 
-## Agent Model (LangGraph PER)
-- Each agent follows PER: Plan → Execute → Reflect.
-- Conventions:
-  - Deterministic/idempotent writes (UPSERT).
-  - trace_id in all audit rows.
-  - Structured output: { "event": "...", "object_id": "..." } plus agent fields.
-  - Contract tests + e2e smoke.
+2. Data Model (AMG/SetDB)
+- objects(id, kind, source_ref, ts, payload jsonb, search_vector tsvector)
+- chunks(id, object_id, idx, payload jsonb)
+- embeddings(id, object_id, model, dim, vec vector)
+- relations(src, dst, type, payload jsonb)
+- decisions(id, object_id, key, value jsonb, created_at)
+- audit(id, object_id, agent, action, ts, trace_id, details jsonb)
+Core-6 lives under objects.payload.core6
 
-## Data Model
-- objects: one row per knowledge object; payload includes Core-6 and metadata.
-- chunks: (object_id, idx, offset_start, offset_end, text).
-- embeddings: (id, object_id, model, dim, vec).
-- relations: typed edges (parent, canonical, related, IN_SET, ...).
-- sets/membership: set:core|latent|transient, golden.
-- decisions: key/value agent outputs (duplicate_of, type, trust, missing_citations).
-- audit: (id, object_id, agent, action, ts, trace_id, details).
+3. Event and Graphs (LangGraph)
+- Each agent is a PER loop: Plan, Execute, Reflect
+- Normalizer → ingest.normalize.*
+- Classifier → curation.classify.*
+- Chunker → ingest.chunk.*
+- Deduper → curation.dedupe.*
+- CitationChecker → curation.citation.*
+- Indexer → ingest.index.*
+- Next: Reviewer, SetEvaluator, Projector
 
-## Pipeline (MVP)
-Ingestor → Normalizer → Classifier → Chunker → Deduper → CitationChecker → Indexer → Reviewer → SetEvaluator → Projector
+4. Retrieval
+- BM25-lite over FTS
+- Vector search over pgvector
+- Hybrid: union and re-rank
 
-### Normalizer
-Input: file path
-Output: DB objects with Core-6 in payload
-Idempotent
+5. LLM Abstraction
+- app/llm/adapter.py
+- LLM_PROVIDER, LLM_MODEL, LLM_REASONING_MODEL
 
-### Classifier
-Decisions: type, tags, conservative trust
+6. Observability
+- audit rows for every write
+- trace_id propagated
 
-### Chunker
-Strategy: heading_first with fallback
-Deterministic chunk boundaries, stores byte offsets
+7. Invariants
+- Stable object identity by origin
+- embeddings count ≥ chunk count after indexing
+- Reviewer will gate promotion on trust and citations
 
-### Deduper
-Similarity: max(cosine(hash-emb), jaccard(k=2), token overlap ratio)
-Decision: duplicate_of { canonical_id, score }
-
-### CitationChecker
-Marks missing_citations
-Blocks promotion on low trust + missing citations
-
-### Indexer
-BM25 (in-memory) + pgvector
-Embeds chunks with provenance (object_id, idx, offsets)
-
-### Reviewer
-Gates from maturity.yaml
-Auto-promote seed → note at confidence ≥ 0.7
-
-### SetEvaluator
-Applies set rules and membership
-
-### Projector
-Mirrors whitelist to frontmatter
-Never mutates Core-6
-
-## Events
-{
-  "type": "ingest.index.ready",
-  "attrs": { "object_id": "uuid" },
-  "trace_id": "..."
-}
-
-## Testing & CI
-- Unit tests per agent, fast e2e
-- Deterministic behavior
-- CI runs pytest and short e2e
-
-## Configuration
-- data/context/*: maturity.yaml, retrieval.yaml, retention.yaml, agents.yaml
-- app/settings.py: vector backend, model names, DB URL
-- Env: DATABASE_URL, LLM_PROVIDER, LLM_MODEL, LLM_REASONING_MODEL
-
-## Non-Goals
-- Reranker, autoscaling, advanced QueryRouter/AnswerComposer
+8. Deployment
+- Single node default
+- Scale horizontally via idempotent writes
+- Remote LLM opt-in by env

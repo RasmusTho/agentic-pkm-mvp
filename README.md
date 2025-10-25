@@ -1,110 +1,87 @@
-# Agentic PKM — SoT v4.2 (MVP Ingestion)
+# Agentic PKM – SoT v4.2 (MVP)
 
-This repository contains an agent-first, LangGraph-based MVP ingestion pipeline for an AI-assisted Second Brain.
-The Source of Truth (SoT) is Postgres (AMG/SetDB) with `pgvector` for embeddings. Obsidian is the human surface; Git is the ground truth; YAML frontmatter is the contract.
-
-## Goals (MVP Ingestion)
-- Run end-to-end on a small corpus: Ingestor → Normalizer → Classifier → Chunker → Deduper → CitationChecker → Indexer → Reviewer → SetEvaluator → Projector.
-- Write audit/trace for every step (a `trace_id` follows each object).
-- Build BM25 + pgvector index and verify chunk provenance (object id + offsets).
-- Reviewer: auto-promote `seed → note` at `confidence ≥ 0.7`, otherwise emit feedback.
-- Projector: mirror only the whitelist (maturity, trust, aliases, related, parent, canonical, sets, scope, relevance_score). Core-6 stays untouched.
-
-## Architecture
-- Agents are built on LangGraph and share a minimal PER loop (Plan → Execute → Reflect).
-- AMG/SetDB in Postgres 16: objects, chunks, embeddings, relations, sets, membership, decisions, audit.
-- Events (in-proc): `ingest.*`, `curation.*`. Agents consume/emit events; an orchestrator remains thin.
-- File-first: Markdown + YAML frontmatter; Core-6 is stored in DB payload and projected to files (whitelist only).
-
-See detailed design in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Production-minded personal knowledge system with agentic ingestion, LangGraph PER-loops, hybrid search, and pgvector.
 
 ## Quickstart
 
-### Prerequisites
-- Python 3.11+
-- Docker and Docker Compose
-- Optional: Ollama for local LLMs: `llama3.1:8b` (general), `deepseek-r1:8b` (reasoning)
+### 1) Runtime
+- macOS (M-series) or Linux
+- Docker + Docker Compose
+- Python 3.14
+- (Optional) Ollama for local LLMs
 
-### Run Postgres
+### 2) Install
 ```bash
-docker compose -f docker-compose.yaml up -d postgres
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cat > update_docs.sh <<'SH'
+set -euo pipefail
+
 mkdir -p docs
 
 cat > README.md <<'EOF'
-# Agentic PKM — SoT v4.2 (MVP Ingestion)
-This repository contains an agent-first, LangGraph-based MVP ingestion pipeline for an AI-assisted Second Brain.
-The Source of Truth (SoT) is Postgres (AMG/SetDB) with pgvector for embeddings. Obsidian is the human surface; Git is the ground truth; YAML frontmatter is the contract.
+# Agentic PKM – SoT v4.2 (MVP)
 
-## Goals (MVP Ingestion)
-- Run end-to-end on a small corpus: Ingestor → Normalizer → Classifier → Chunker → Deduper → CitationChecker → Indexer → Reviewer → SetEvaluator → Projector.
-- Write audit/trace for every step (a trace_id follows each object).
-- Build BM25 + pgvector index and verify chunk provenance (object id + offsets).
-- Reviewer: auto-promote seed → note at confidence ≥ 0.7, otherwise emit feedback.
-- Projector: mirror only the whitelist (maturity, trust, aliases, related, parent, canonical, sets, scope, relevance_score). Core-6 stays untouched.
+Production-minded personal knowledge system with agentic ingestion, LangGraph PER loops, hybrid search, and pgvector.
 
-## Architecture
-- Agents are built on LangGraph and share a minimal PER loop (Plan → Execute → Reflect).
-- AMG/SetDB in Postgres 16: objects, chunks, embeddings, relations, sets, membership, decisions, audit.
-- Events (in-proc): ingest.*, curation.*. Agents consume/emit events; an orchestrator remains thin.
-- File-first: Markdown + YAML frontmatter; Core-6 is stored in DB payload and projected to files (whitelist only).
+Quickstart
 
-See detailed design in docs/ARCHITECTURE.md.
-
-## Quickstart
-### Prerequisites
-- Python 3.11+
+1) Runtime
+- macOS (M-series) or Linux
 - Docker and Docker Compose
-- Optional: Ollama for local LLMs: llama3.1:8b (general), deepseek-r1:8b (reasoning)
+- Python 3.14
+- Optional: Ollama for local LLMs
 
-### Run Postgres
+2) Install
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+3) Database
 docker compose -f docker-compose.yaml up -d postgres
-
-### Database migration
 export DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app"
 PYTHONPATH="$(pwd)" alembic upgrade head
 
-### Run tests
-PYTHONPATH="$(pwd)" DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" pytest -q
-
-### Local LLMs (optional)
+4) Local LLM (optional)
 brew install ollama
-ollama serve &
+OLLAMA_FLASH_ATTENTION="1" OLLAMA_KV_CACHE_TYPE="q8_0" ollama serve
 ollama pull llama3.1:8b
 ollama pull deepseek-r1:8b
 export LLM_PROVIDER=ollama
-export LLM_MODEL=llama3.1:8b
-export LLM_REASONING_MODEL=deepseek-r1:8b
+export LLM_MODEL="llama3.1:8b"
+export LLM_REASONING_MODEL="deepseek-r1:8b"
 
-## Repository Layout
-app/
-  agents/
-    normalizer/
-    classifier/
-    chunker/
-    deduper/
-    citation_checker/
-    indexer/
-    reviewer/
-    set_evaluator/
-    projector/
-    runner.py
-  search/
-    bm25_lite.py
-    embeddings.py
-    vector_index.py
-  alembic/
-docs/
-  ARCHITECTURE.md
-tests/
-  agents/
-  e2e/
+5) Run tests
+PYTHONPATH="$(pwd)" env DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" pytest -q
 
-## Development Principles
-- Human-first
-- Separation of trust (own/imported/AI-generated)
-- Observability & provenance
-- Reflexivity (reflections, scorecards, feedback loops)
-- TDD
+6) API (optional)
+docker compose up -d api
+Default: http://localhost:18000
 
-## License
-MIT
+Core concepts
+- AMG/SetDB in Postgres: objects, chunks, embeddings, relations, decisions, audit
+- Core-6 payload on objects: id, type, title, created, updated, origin
+- Hybrid search: BM25-lite and embeddings (pgvector)
+- LangGraph agents with PER loops: Normalizer, Classifier, Chunker, Deduper, CitationChecker, Indexer, Reviewer, SetEvaluator, Projector
+- Event choreography: ingest.* and curation.*
+- Governance: trust, maturity, provenance, promotion gates
+
+Docs
+- docs/ARCHITECTURE.md
+- docs/SYSTEM_OVERVIEW.md
+- docs/SETTINGS.md
+- docs/DATA_GOVERNANCE.md
+- docs/VERSIONING.md
+
+Status (MVP)
+- Normalizer: done
+- Classifier: done
+- Chunker: done
+- Deduper: done
+- CitationChecker: done
+- Indexer: done
+- Reviewer: todo
+- SetEvaluator: todo
+- Projector: todo
+- E2E: done
