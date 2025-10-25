@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Query, Request
+import contextlib
 import os
 import psycopg
 from app.services.embedding import deterministic_embedding
 from app.search.cosine import cosine
-from app.observability.trace_log import log_span
+from app.observability.tracer import start_span
 
 router = APIRouter()
 
@@ -15,13 +16,13 @@ def _conn():
 @router.get("/search")
 async def search(request: Request, q: str = Query(...)):
     trace_id = getattr(request.state, "trace_id", None) or request.headers.get("x-trace-id")
-    if trace_id:
-        log_span("api.search", trace_id, {"path":"/search","q": q})
-    q_vector = deterministic_embedding(q)
-    with _conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("select uuid, title, vector from objects_embeddings join objects using(uuid) limit 50")
-            rows = cur.fetchall()
+    span_cm = start_span("api.search", trace_id, {"path": "/search", "q": q}) if trace_id else contextlib.nullcontext()
+    with span_cm:
+        q_vector = deterministic_embedding(q)
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select uuid, title, vector from objects_embeddings join objects using(uuid) limit 50")
+                rows = cur.fetchall()
     results = []
     for uuid, title, vector in rows:
         score = cosine(q_vector, vector)
