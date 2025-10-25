@@ -1,49 +1,51 @@
-# Agents (PER on LangGraph)
+# AGENTS
 
-All agents implement a minimal PER loop: Plan → Execute → Reflect.
-Each node emits a structured payload: {"event": "...", "object_id": "...", ...}
+## Patterns
+- All agents expose a simple `run(...) -> dict` and a LangGraph PER wrapper `invoke(...) -> {"output": ...}`.
+- Idempotent writes: re-running must not duplicate rows.
+- Every agent logs to `audit` with `agent`, `action`, `trace_id`, and `details`.
 
 ## Normalizer
-Input: file_path
-Output: objects row with payload.core6 populated
-Emits: ingest.normalize.done
+- Input: file path
+- Output: `{"event":"ingest.normalize.done","object_id", "core6":{id,type,title,created,updated,origin}}`
+- Side effects: `objects` upsert, initial `payload` with `core6`, `text`
 
 ## Classifier
-Input: object_id
-Output: decisions: {"type": "...", "tags": [...], "trust": 0..1}
-Emits: curation.classify.done
+- Input: `object_id`
+- Output: `{"event":"curation.classify.done","type","confidence"}`
+- Side effects: `decisions(key="type")`, `audit`
 
 ## Chunker
-Input: object_id
-Output: chunks rows (stable byte offsets), count
-Emits: ingest.chunk.done
+- Input: `object_id`, `max_tokens`, `overlap`, `strategy`
+- Output: `{"event":"ingest.chunk.done","chunks":N}`
+- Side effects: inserts/updates in `chunks` with offsets into source text
 
 ## Deduper
-Input: [object_id]
-Output: decisions duplicate_of {canonical_id, score}, audit marks
-Emits: curation.dedupe.done
+- Input: `[object_id...]`, `threshold`
+- Output: `{"event":"curation.dedupe.done","pairs":[(a,b,score),...]}` 
+- Side effects: `decisions(key="duplicate_of")`, relations from duplicate→canonical, `audit`
 
 ## CitationChecker
-Input: object_id
-Output: decisions missing_citations, trust adjustments
-Emits: curation.citation_check.done
+- Input: `object_id`
+- Output: `{"event":"curation.citation.checked","missing_citations":bool,"trust":"own|provisional|external|conflict"}`
+- Side effects: `decisions(key="missing_citations")`, `decisions(key="trust")`, `audit`
 
 ## Indexer
-Input: object_id
-Output: embeddings for chunks, bm25 refresh
-Emits: ingest.index.done
+- Input: `object_id`
+- Output: `{"event":"ingest.index.done","embeddings":N}`
+- Side effects: BM25 update and pgvector upsert per chunk, `audit`
 
 ## Reviewer
-Input: object_id
-Output: decision promote or feedback with reasons
-Emits: curation.review.done
+- Input: `object_id`
+- Output: `{"event":"curation.review.done","promote":true|false,"reason"}`
+- Policy: gate on trust, citation status, confidence thresholds
+- Side effects: `decisions(key="promotion")`, `audit`
 
 ## SetEvaluator
-Input: object_id
-Output: membership rows per rules
-Emits: curation.set_eval.done
+- Input: `set_id`
+- Output: `{"event":"curation.set.eval.done","score","issues":[...]}`
 
 ## Projector
-Input: object_id
-Output: file frontmatter update (whitelist only)
-Emits: ingest.project.done
+- Input: `object_id`
+- Output: `{"event":"projector.sync.done","files":[...]}`
+- Rule: write-only mirror of whitelisted fields (never mutates DB truth)

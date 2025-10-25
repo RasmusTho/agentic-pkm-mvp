@@ -1,30 +1,29 @@
-# Events
+# EVENTS
 
-All events include: type, attrs, trace_id, ts.
+## Ingest
+- ingest.normalize.request
+- ingest.normalize.done
+- ingest.chunk.request
+- ingest.chunk.done
+- ingest.index.request
+- ingest.index.done
 
-## ingest.normalize.done
-attrs: { object_id }
+## Curation
+- curation.classify.request
+- curation.classify.done
+- curation.dedupe.request
+- curation.dedupe.done
+- curation.citation.request
+- curation.citation.checked
+- curation.review.request
+- curation.review.done
+- curation.set.eval.request
+- curation.set.eval.done
 
-## curation.classify.done
-attrs: { object_id, type, tags, trust }
+## Projector
+- projector.sync.request
+- projector.sync.done
 
-## ingest.chunk.done
-attrs: { object_id, chunks }
-
-## curation.dedupe.done
-attrs: { pairs: [[a,b,score], ...] }
-
-## curation.citation_check.done
-attrs: { object_id, missing: bool }
-
-## ingest.index.done
-attrs: { object_id, embeddings }
-
-## curation.review.done
-attrs: { object_id, promoted: bool, confidence: float }
-
-## curation.set_eval.done
-attrs: { object_id, memberships: [set_id] }
-
-## ingest.project.done
-attrs: { object_id, frontmatter_keys: [key] }
+## Contract
+- Every `.done` carries a minimal contract payload used by downstream steps.
+- All events are mirrored into `audit` with `action` equal to event and `details` containing payload diff.
