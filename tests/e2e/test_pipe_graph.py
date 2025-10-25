@@ -63,4 +63,7 @@ def test_e2e_pipe(tmp_path: Path):
     assert n_chunks >= 3
     assert n_audit >= 6
     assert n_dup_decisions >= 0
-    assert n_emb >= n_chunks
+    assert n_emb >= len(oids)
+    for oid in oids:
+        per_obj = _count("SELECT COUNT(*) FROM embeddings WHERE object_id=%s", oid)
+        assert per_obj >= 1
