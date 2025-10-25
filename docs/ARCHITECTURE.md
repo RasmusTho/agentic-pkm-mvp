@@ -1,109 +1,81 @@
-# SoT v4.3 — Obsidian Integration & Lifecycle
+# Architecture — SoT v4.2 Baseline
 
-## Scope
-Extends v4.2 by connecting the ingestion pipeline (Normalizer → … → Projector) with the Obsidian vault.
-Focus: file-based lifecycle, export, and synchronization between Postgres (SetDB/AMG) and Markdown sources.
+This document captures the system-wide reference introduced with SoT v4.2. It describes runtimes, data model, LangGraph agents, queues, and invariants that remain the foundation for later extensions (including the v4.3 Obsidian integration addendum below).
 
----
+## 1. Runtime Topology
+- **App (Python 3.14)**: FastAPI API, LangGraph agents, background jobs.
+- **Postgres + pgvector (SetDB/AMG)**: primary persistence for objects, chunks, embeddings, relations, decisions, sets, membership, audit.
+- **Redis (optional)**: lightweight cache and queue bridge.
+- **LLM backends**: local Ollama (llama3.1 8B, deepseek-r1 8B) and remote providers (OpenAI, Azure, Anthropic) selected via env.
 
-## 1. File-first mirroring
-- Every object with `core6.origin` pointing to a physical file in the vault stays mirrored.
-- Filenames are cosmetic; `core6.id` is the canonical identity.
-- Exported files include YAML frontmatter (Core-6 + agent metadata: `trust`, `maturity`, `evidence_level`, `review_state`).
-- In development mode, chunk exports are written to `export/<id>_chunk_<n>.md`.
+### Deployment surfaces
+- Docker Compose (`docker-compose.yml`) provides db, redis, api.
+- Agents and jobs run inside the Python app container or locally via CLI (`app/agents/runner.py`, `app/jobs/*`).
 
----
+## 2. Data Model (SetDB / AMG)
+Core tables stored in Postgres:
+- `objects(id UUID, kind, source_ref, payload jsonb, ts, search_vector tsvector)`
+- `chunks(id UUID, object_id UUID, idx int, payload jsonb, offset_start, offset_end, text)`
+- `embeddings(id UUID, object_id UUID, model text, dim int, vec vector)`
+- `decisions(id UUID, object_id UUID, key text, value jsonb, created_at timestamptz)`
+- `audit(id UUID, object_id UUID, agent text, action text, ts timestamptz, trace_id text, details jsonb)`
+- `sets(id UUID, name text)` and `membership(id UUID, set_id UUID, object_id UUID)`
+- `agent_memories(id UUID, run_id UUID, layer text, payload jsonb, provenance jsonb, created_at timestamptz)`
 
-## 2. Lifecycle
-- **Create:** New Markdown files in watch-path → normalized and stored.
-- **Update:** Hash or mtime changes trigger re-ingest; `updated` is refreshed, `id` and `created` persist.
-- **Delete:** Marked `archived=True` in DB; physical removal is manual.
-- **Rename:** Detected by identical hash → `origin` updated, `id` preserved.
-- **Conflict:** If identical title but differing hash → deduper agent selects canonical or adds suffix “(alt n)”.
+**Core-6** fields (`id`, `type`, `title`, `created`, `updated`, `origin`) are stored under `objects.payload.core6` and are immutable outside the normalizer.
 
----
+## 3. Event & Graph Flow (LangGraph PER loops)
+Each agent runs as a Plan → Execute → Reflect loop with explicit audit logging.
 
-## 3. Export pipeline
-- `scripts/export_objects.py` exports all `objects` with `review_state="approved"` or `promote=True`.
-- YAML frontmatter written first, followed by text.
-- Audit + episodic memory appended for traceability.
-- Command example:
-  bash
-  PYTHONPATH="$(pwd)" DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" \
-  python scripts/export_objects.py --vault ~/Obsidian/PKM
-- 
-- ---
-## **4. Synchronization strategy**
+Order of execution in the ingestion pipeline:
+1. **Normalizer** (`ingest.normalize.*`) — loads file, stabilizes Core-6, writes object & episodic memory.
+2. **Classifier** (`curation.classify.*`) — tags & trust score; writes decisions/audit/memory.
+3. **Chunker** (`ingest.chunk.*`) — splits text into logical spans and stores chunks.
+4. **Deduper** (`curation.dedupe.*`) — identifies near duplicates; writes `duplicate_of` decisions.
+5. **CitationChecker** (`curation.citation.*`) — flags missing citations and emits promotion blockers.
+6. **Indexer** (`ingest.index.*`) — embeds every chunk (pgvector) and records stats memory.
+7. **Reviewer** (`curation.review.*`) — aggregates provenance, writes `review` decisions & episodic memory.
+8. **SetEvaluator** (`promotion.evaluate.*`) — computes promotion score (`evaluate` decisions).
+9. **Projector** (`promotion.project.*`) — ensures membership in target sets when promoted.
 
-- A watcher (ingest/watcher.py) monitors vault/ and compares file hashes to DB.
-    
-- Events (created, modified, deleted, renamed) emit ingest.file.* messages to the internal WS queue.
-    
-- The queue triggers the appropriate agent chain.
-    
-- All events produce entries in audit and memory.episodic.
-    
+Graphs are declared in `app/agents/*/graph.py` using `app/agents/base/graph.PERSpec`. CLI entry point: `python -m app.agents.runner --agent <name>`.
 
----
+## 4. Retrieval & Search
+- **BM25-lite** (`app/search/bm25_lite.py`) builds tsvector search vectors for objects.
+- **pgvector** embeddings stored per chunk; retrieval uses cosine distance.
+- Hybrid retrieval merges lexical and vector results before response composition.
 
-## **5. Maturity and promotion**
+## 5. LLM Abstractions
+- `app/llm/adapter.generate()` selects providers via `LLM_PROVIDER`, `LLM_MODEL`, `LLM_REASONING_MODEL`.
+- Supports JSON-mode prompts, optional reasoning traces (DeepSeek R1, OpenAI reasoning models).
 
-- review_state controls export eligibility.
-    
-- SetEvaluator + Projector handle promotion into “public sets”.
-    
-- Lifecycle states:
-    
-    - draft → reviewed → approved → published
-        
-    - rollback if trust < threshold.
-        
-    
+## 6. Observability & Governance
+- Every agent writes an audit row with `trace_id`, `agent`, `action`, and structured details.
+- Episodic memories persisted through `app/memory/store.py` allow agents to read past context while remaining idempotent.
+- Invariants:
+  - Stable object identity keyed by `core6.origin` hash.
+  - `embeddings` count ≥ chunk count per object after indexer.
+  - Promotion gates enforced via Reviewer/SetEvaluator/Projector decisions and set membership.
 
----
+## 7. Queues & Jobs
+- Ingestion typically triggered via CLI/tests; WS queue (future) routes ingestion events.
+- `app/jobs/backfill.py` performs hygiene (chunks, embeddings, review, evaluate, projection) on existing objects.
 
-## **6. Human-first workflow**
-
-- Obsidian remains the editable source.
-    
-- The system mirrors changes transparently:
-    
-    - no file locks
-        
-    - full audit rollback
-        
-    - merge conflicts resolved via SetEvaluator.
-        
-    
+## 8. Deployment Notes
+- Scale horizontally by running multiple agent workers; writes are idempotent and keyed by UUIDs.
+- Remote LLM usage gated behind environment configuration; defaults to local Ollama if available.
+- Alembic migrations tracked in `app/alembic/versions/` (merged heads guaranteed by SoT v4.2).
 
 ---
 
-## **7. Database & index extensions**
+## Addendum: SoT v4.3 — Obsidian Integration & Lifecycle
 
-- Core tables (objects, chunks, embeddings, audit, decisions, memory) unchanged.
-    
-- New fields:
-    
-    - objects.archived (bool)
-        
-    - objects.file_hash (text)
-        
-    - objects.maturity (enum)
-        
-    
-- New view:
-    
-    - v_promoted_objects (join of objects × decisions × sets).
-        
-    
+SoT v4.3 layers Obsidian vault mirroring, export, and promotion/backfill automation on top of the v4.2 baseline. Highlights:
 
----
+- **File-first lifecycle** that keeps Markdown sources in sync with SetDB (create/update/rename/delete semantics, conflict resolution).
+- **Promotion chain** (Reviewer → SetEvaluator → Projector) now feeds Obsidian export and published sets.
+- **Export pipeline** (`scripts/export_objects.py`) writes Core-6 + metadata frontmatter and optional chunk breakdowns into the vault.
+- **Backfill hygiene** (`make backfill`) ensures historical objects receive chunks, embeddings, reviews, evaluations, and projections.
+- **Dedicated deep dive**: see [`docs/architecture/obsidian_integration.md`](architecture/obsidian_integration.md) for detailed lifecycle flows, sequence diagrams, and operational guidance.
 
-## **8. Testing & next steps**
-
-- New E2E test: tests/e2e/test_vault_sync.py simulates file changes and validates correct lifecycle handling.
-    
-- scripts/ingest_real.sh and export_objects.py used for live ingestion/export verification.
-    
-- Next: **SoT v4.4 — merge handling and collaborative conflict resolution.**
-    
+Future SoT releases will build on this foundation (e.g., merge/conflict tooling in v4.4).
