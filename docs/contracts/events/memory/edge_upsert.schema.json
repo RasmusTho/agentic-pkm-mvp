@@ -1,0 +1,15 @@
+{
+  "title": "memory.edge.upsert",
+  "type": "object",
+  "required": ["event","src_id","dst_id","rel","weight","trace_id","ts"],
+  "properties": {
+    "event": { "const": "memory.edge.upsert" },
+    "src_id": { "type": "string" },
+    "dst_id": { "type": "string" },
+    "rel": { "type": "string" },
+    "weight": { "type": "number" },
+    "trace_id": { "type": "string" },
+    "ts": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

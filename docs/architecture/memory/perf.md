@@ -1,2 +1,2 @@
 # Prestanda
-Gränser per post, batch-writes per node, index på agent/kind/key/scope, GIN på value. Retention-svep i bakgrund.
+Batch-writes via transact, begränsade payloads, GIN på value, kant-komprimering för memory_edges, retention-svep i små batchar

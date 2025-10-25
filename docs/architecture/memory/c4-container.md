@@ -1,2 +1,4 @@
 # C4: Container
-Containers: API/Agent-process, Postgres, Ollama. Dataflöde: agent -> memory adapter -> Postgres. Trace_id följer alla writes.
+Containers: API/Agents (LangGraph), Postgres, Ollama
+Dataflöde: agent → memory adapter → DB; reflect kör i samma transaktion som episoder → semantik → procedur
+Observability: audit jsonl + tabell, trace_id obligatoriskt

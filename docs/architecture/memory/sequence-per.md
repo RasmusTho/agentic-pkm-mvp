@@ -1,4 +1,4 @@
 # Sekvens: PER
-Plan: läs proceduralt/semantiskt minne.
-Execute: skriv episodiskt minne och audit.
-Reflect: uppdatera semantiskt/proceduralt minne, scorecards.
+Plan: get/query(kind=procedural|semantic, scope=session|global)
+Execute: put(kind=episodic, scope=session|object), audit
+Reflect: transact {query episodic→derive semantic; upsert edges; update scorecards}; gate-policy körs före commit

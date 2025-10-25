@@ -1,15 +1,16 @@
 {
   "title": "memory.store.done",
   "type": "object",
-  "required": ["event", "agent", "kind", "key", "scope", "row_id", "trace_id", "ts"],
+  "required": ["event","agent","kind","key","scope","row_id","trace_id","run_id","ts"],
   "properties": {
     "event": { "const": "memory.store.done" },
     "agent": { "type": "string" },
-    "kind": { "type": "string" },
+    "kind": { "enum": ["episodic","semantic","procedural"] },
     "key": { "type": "string" },
     "scope": { "type": "string" },
     "row_id": { "type": "string" },
     "trace_id": { "type": "string" },
+    "run_id": { "type": "string" },
     "ts": { "type": "string", "format": "date-time" }
   },
   "additionalProperties": true

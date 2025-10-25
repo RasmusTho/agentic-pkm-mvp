@@ -1,2 +1,2 @@
 # Säkerhet
-DB-ägare som AMG. Minimerad attackyta. Redaction-policy för känsliga fält i episodiskt minne.
+Least-privilege roller, redaction för känsliga nycklar i episodiskt minne, scope-isolering per agent och session

@@ -1,4 +1,4 @@
 # C4: Context
-System: AI-assisterat Second Brain.
-Externa aktörer: Användare, LLM/Ollama, Postgres (AMG/SetDB), Filsystem.
-Gränssnitt: REST/WS för agenter, DB-åtkomst via DAO, event via in-proc queue.
+System: Agentic PKM SoT v4.2
+Externa aktörer: Användare, LLM/Ollama, Postgres (AMG/SetDB), Filsystem
+Gränssnitt: REST/WS, DAO mot AMG/SetDB, in-proc events, LangGraph PER-hooks
