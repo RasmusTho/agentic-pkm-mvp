@@ -1,28 +1,5 @@
 # Agentic PKM – SoT v4.2 (MVP)
 
-Production-minded personal knowledge system with agentic ingestion, LangGraph PER-loops, hybrid search, and pgvector.
-
-## Quickstart
-
-### 1) Runtime
-- macOS (M-series) or Linux
-- Docker + Docker Compose
-- Python 3.14
-- (Optional) Ollama for local LLMs
-
-### 2) Install
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cat > update_docs.sh <<'SH'
-set -euo pipefail
-
-mkdir -p docs
-
-cat > README.md <<'EOF'
-# Agentic PKM – SoT v4.2 (MVP)
-
 Production-minded personal knowledge system with agentic ingestion, LangGraph PER loops, hybrid search, and pgvector.
 
 Quickstart
