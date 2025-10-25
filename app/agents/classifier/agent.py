@@ -37,6 +37,27 @@ def _parse_json_block(s: str) -> dict[str, Any] | None:
     except Exception:
         return None
 
+
+def _as_float(value: Any, default: float = 0.66) -> float:
+    try:
+        if value is None:
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _ensure_labels(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple, set)):
+        return [str(v) for v in value]
+    if isinstance(value, dict):
+        return [str(v) for v in value.values()]
+    return [str(value)]
+
 def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
     row = _fetch_object(object_id)
     if not row:
@@ -55,14 +76,17 @@ def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
     except Exception:
         data = {}
 
-    if not data or not isinstance(data, dict) or float(data.get("confidence",0)) < 0.7:
+    confidence_raw = data.get("confidence") if isinstance(data, dict) else None
+    confidence = _as_float(confidence_raw, default=0.66)
+    if not data or not isinstance(data, dict) or confidence < 0.7:
         data = _heuristic(text)
+        confidence = _as_float(data.get("confidence"), default=0.66)
 
     value = {
-        "type": data.get("type","note"),
-        "tags": data.get("tags",[]),
-        "trust": data.get("trust","provisional"),
-        "confidence": float(data.get("confidence",0.55)),
+        "type": data.get("type", "note"),
+        "tags": _ensure_labels(data.get("tags")),
+        "trust": data.get("trust", "provisional"),
+        "confidence": confidence,
     }
 
     with psycopg.connect(_dsn(), autocommit=True) as conn:
@@ -78,7 +102,7 @@ def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
         trace_id=trace_id,
         data={
             "labels": value.get("tags"),
-            "confidence": float(value.get("confidence", 0.0)),
+            "confidence": confidence,
         },
     )
     audit_log(object_id=object_id, agent="classifier", action="classify", trace_id=trace_id, details=value)

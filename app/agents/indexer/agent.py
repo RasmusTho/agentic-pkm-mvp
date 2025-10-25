@@ -24,6 +24,36 @@ def _write_embedding(embed_id: str, object_id: str, model: str, vec: Sequence[fl
             (embed_id, object_id, model, dim, vec_lit),
         )
 
+
+def _safe_confidence(value: Any) -> float:
+    try:
+        if value is None:
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _latest_classifier_decision(object_id: str) -> tuple[list[str], float]:
+    with psycopg.connect(_dsn(), row_factory=dict_row) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT value FROM decisions WHERE object_id=%s AND key='classification' ORDER BY created_at DESC LIMIT 1",
+            (object_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return ([], 0.0)
+    value = row.get("value") or {}
+    labels = value.get("tags")
+    if isinstance(labels, str):
+        label_list = [labels]
+    elif isinstance(labels, (list, tuple, set)):
+        label_list = [str(v) for v in labels]
+    else:
+        label_list = []
+    confidence = _safe_confidence(value.get("confidence"))
+    return (label_list, confidence)
+
 def _audit(object_id: str | None, agent: str, action: str, trace_id: str | None, details: dict | None) -> None:
     with psycopg.connect(_dsn(), autocommit=True) as conn, conn.cursor() as cur:
         cur.execute(
@@ -33,6 +63,7 @@ def _audit(object_id: str | None, agent: str, action: str, trace_id: str | None,
 
 def index_object(object_id: str, *, model: str, trace_id: str) -> dict[str, Any]:
     recall("indexer", "embedding_stats", object_id=object_id, limit=3)
+    labels, confidence = _latest_classifier_decision(object_id)
     cs = _chunks(object_id)
     if not cs:
         _audit(object_id, "indexer", "no_chunks", trace_id, {})
@@ -42,7 +73,13 @@ def index_object(object_id: str, *, model: str, trace_id: str) -> dict[str, Any]
         e = embed_text(c["text"])
         _write_embedding(str(uuid.uuid4()), object_id, model, e)
         n += 1
-    _audit(object_id, "indexer", "index.done", trace_id, {"embeddings": n})
+    _audit(
+        object_id,
+        "indexer",
+        "index.done",
+        trace_id,
+        {"embeddings": n, "confidence": confidence, "labels": labels},
+    )
     remember(
         agent="indexer",
         kind="embedding_stats",
@@ -51,6 +88,8 @@ def index_object(object_id: str, *, model: str, trace_id: str) -> dict[str, Any]
         data={
             "embeddings": int(n),
             "model": model,
+            "confidence": confidence,
+            "labels": labels,
         },
     )
     return {"embeddings": n}

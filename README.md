@@ -88,7 +88,7 @@ Status (MVP)
 - Deduper: done
 - CitationChecker: done
 - Indexer: done
-- Reviewer: todo
-- SetEvaluator: todo
-- Projector: todo
+- Reviewer: done
+- SetEvaluator: done
+- Projector: done
 - E2E: done
