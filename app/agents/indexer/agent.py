@@ -4,6 +4,7 @@ from typing import Any, Sequence
 import psycopg
 from psycopg.rows import dict_row
 from app.search.embeddings import embed_text
+from app.memory.store import remember, recall
 
 def _dsn() -> str:
     url = os.environ.get("DATABASE_URL") or "postgresql+psycopg://app:app@127.0.0.1:15432/app"
@@ -31,6 +32,7 @@ def _audit(object_id: str | None, agent: str, action: str, trace_id: str | None,
         )
 
 def index_object(object_id: str, *, model: str, trace_id: str) -> dict[str, Any]:
+    recall("indexer", "embedding_stats", object_id=object_id, limit=3)
     cs = _chunks(object_id)
     if not cs:
         _audit(object_id, "indexer", "no_chunks", trace_id, {})
@@ -41,6 +43,16 @@ def index_object(object_id: str, *, model: str, trace_id: str) -> dict[str, Any]
         _write_embedding(str(uuid.uuid4()), object_id, model, e)
         n += 1
     _audit(object_id, "indexer", "index.done", trace_id, {"embeddings": n})
+    remember(
+        agent="indexer",
+        kind="embedding_stats",
+        object_id=object_id,
+        trace_id=trace_id,
+        data={
+            "embeddings": int(n),
+            "model": model,
+        },
+    )
     return {"embeddings": n}
 
 def run(object_id: str, *, trace_id: str, model: str = "offline/hash-emb") -> dict[str, Any]:

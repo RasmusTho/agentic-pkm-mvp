@@ -11,6 +11,8 @@ from app.agents.deduper.graph import invoke as dedupe_invoke
 from app.agents.indexer.graph import invoke as index_invoke
 from app.agents.citation_checker.agent import run as citation_run
 from app.agents.reviewer.graph import invoke as review_invoke
+from app.agents.set_evaluator.graph import invoke as evaluate_invoke
+from app.agents.projector.graph import invoke as project_invoke
 
 def _dsn() -> str:
     return (os.environ.get("DATABASE_URL") or "postgresql+psycopg://app:app@127.0.0.1:15432/app").replace("postgresql+psycopg://","postgresql://")
@@ -56,6 +58,8 @@ def test_e2e_pipe(tmp_path: Path):
         citation_run(oid, trace_id=trace_id)
 
     reviews = []
+    evaluations = []
+    projections = []
     for oid in oids:
         ix = index_invoke(oid, trace_id=trace_id)
         assert ix["output"]["event"] == "ingest.index.done"
@@ -63,6 +67,12 @@ def test_e2e_pipe(tmp_path: Path):
         rv = review_invoke(oid, trace_id=trace_id, threshold=0.75)
         assert rv["output"]["event"] == "curation.review.done"
         reviews.append(rv["output"])
+        ev = evaluate_invoke(oid, trace_id=trace_id, threshold=0.7)
+        assert ev["output"]["event"] == "promotion.evaluate.done"
+        evaluations.append(ev["output"])
+        pj = project_invoke(oid, trace_id=trace_id, set_name="published")
+        assert pj["output"]["event"] in {"promotion.project.done", "promotion.project.skip"}
+        projections.append(pj["output"])
 
     n_objects = _count("SELECT COUNT(*) FROM objects")
     n_chunks = _count("SELECT COUNT(*) FROM chunks")
@@ -71,16 +81,22 @@ def test_e2e_pipe(tmp_path: Path):
     n_emb = _count("SELECT COUNT(*) FROM embeddings")
 
     n_review_decisions = _count("SELECT COUNT(*) FROM decisions WHERE key='review'")
+    n_evaluate_decisions = _count("SELECT COUNT(*) FROM decisions WHERE key='evaluate'")
+    n_projected = sum(_count("SELECT COUNT(*) FROM membership WHERE object_id=%s", oid) for oid in oids)
 
     assert n_objects >= 3
     assert n_chunks >= 3
     assert any(r["allow"] for r in reviews)
     assert any(not r["allow"] for r in reviews)
 
+    assert any(val["promote"] for val in evaluations)
+    assert any(item.get("promote") for item in projections)
     assert n_audit >= 6
     assert n_dup_decisions >= 0
     assert n_emb >= len(oids)
     assert n_review_decisions >= len(oids)
+    assert n_evaluate_decisions >= len(oids)
+    assert n_projected >= 1
     for oid in oids:
         per_obj = _count("SELECT COUNT(*) FROM embeddings WHERE object_id=%s", oid)
         assert per_obj >= 1

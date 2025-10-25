@@ -5,6 +5,8 @@ from app.agents.classifier.graph import invoke as classify_invoke
 from app.agents.chunker.graph import invoke as chunk_invoke
 from app.agents.deduper.graph import invoke as dedupe_invoke
 from app.agents.reviewer.graph import invoke as review_invoke
+from app.agents.set_evaluator.graph import invoke as evaluate_invoke
+from app.agents.projector.graph import invoke as projector_invoke
 
 def main():
     p = argparse.ArgumentParser()
@@ -16,6 +18,7 @@ def main():
     p.add_argument("--overlap", type=int, default=120)
     p.add_argument("--strategy", default="heading_first")
     p.add_argument("--threshold", type=float, default=0.92)
+    p.add_argument("--set-name", default="published")
     args = p.parse_args()
 
     if args.agent == "normalizer":
@@ -29,6 +32,10 @@ def main():
         out = dedupe_invoke(ids, trace_id=args.trace_id, threshold=args.threshold)
     elif args.agent == "reviewer":
         out = review_invoke(args.object_id, trace_id=args.trace_id, threshold=args.threshold)
+    elif args.agent == "set_evaluator":
+        out = evaluate_invoke(args.object_id, trace_id=args.trace_id, threshold=args.threshold)
+    elif args.agent == "projector":
+        out = projector_invoke(args.object_id, trace_id=args.trace_id, set_name=args.set_name)
     else:
         raise SystemExit(f"unknown agent {args.agent}")
 
