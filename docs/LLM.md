@@ -1,31 +1,24 @@
-# LLM Configuration
+# LLM Integration
 
-## Local
-Ollama models:
-- llama3.1:8b for general generation
-- deepseek-r1:8b for reasoning-style outputs
+## Provider abstraction
+Alla anrop går via `app.llm.adapter.generate(messages, reasoning=False)`. Konfiguration via miljövariabler:
 
-Setup:
-brew install ollama
-ollama serve &
-ollama pull llama3.1:8b
-ollama pull deepseek-r1:8b
-export LLM_PROVIDER=ollama
-export LLM_MODEL=llama3.1:8b
-export LLM_REASONING_MODEL=deepseek-r1:8b
+| Var | Betydelse | Exempel |
+|---|---|---|
+| LLM_PROVIDER | ollama, openai, azureopenai, anthropic | ollama |
+| LLM_MODEL | standard chattmodell | llama3.1:8b |
+| LLM_REASONING_MODEL | resonemangsmodell | deepseek-r1:8b |
 
-## Online fallback
-Provider via env:
-export LLM_PROVIDER=openai|anthropic|azure
-export LLM_MODEL="model-id"
-export LLM_REASONING_MODEL="model-id"
-API keys are read from standard provider env vars.
+`reasoning=True` väljer `LLM_REASONING_MODEL`.
 
-## Adapter contract
-generate(messages: list[{"role": "...", "content": "..."}], reasoning=False) -> str
-When reasoning=True the adapter routes to LLM_REASONING_MODEL.
+## Ollama (lokalt)
+Adress `http://127.0.0.1:11434`. Ladda modeller med `ollama pull`. Kör en modell åt gången för att spara RAM.
 
-## Guidelines
-- Deterministic tests avoid LLM calls
-- Agents may use LLMs only in Plan/Reflect steps
-- Always log model and parameters in audit details
+## Fjärr
+Sätt `LLM_PROVIDER=openai` och `OPENAI_API_KEY`. Timeout 120 s.
+
+## Prompting
+Agenter använder korta, uppgiftsbundna prompts. Resonemang loggas endast som utfall.
+
+## Loggning
+Vid `LOG_LEVEL=DEBUG` loggas `{provider, model, tokens_in, tokens_out, duration}` till audit.
