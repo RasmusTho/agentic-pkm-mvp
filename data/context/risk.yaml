@@ -1,11 +1,12 @@
+---
 version: 1
 risks:
   - id: RISK-index-cost
     desc: High embedding cost at scale
-    mitigations: ["TTL_low_trust","batching","dim_reduction"]
+    mitigations: ["TTL_low_trust", "batching", "dim_reduction"]
   - id: RISK-hallucination
     desc: Incorrect answers from low-trust sources
-    mitigations: ["trust_weighting","citation_required","confidence_thresholds"]
+    mitigations: ["trust_weighting", "citation_required", "confidence_thresholds"]
   - id: RISK-pii
     desc: Unintended PII in imports
-    mitigations: ["pii_redact","policy_gate_before_promotion"]
+    mitigations: ["pii_redact", "policy_gate_before_promotion"]

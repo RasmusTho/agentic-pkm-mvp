@@ -1,5 +1,6 @@
+---
 name: CI
-on: [push, pull_request]
+'on': [push, pull_request]
 jobs:
   validate-context:
     runs-on: ubuntu-latest

@@ -1,3 +1,4 @@
+---
 relevance_v2:
   keep_if:
     - provenance>=0.8

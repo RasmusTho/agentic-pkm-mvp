@@ -1,3 +1,4 @@
+---
 agent_name: background-agent
 scheduler:
   interval_seconds: 300

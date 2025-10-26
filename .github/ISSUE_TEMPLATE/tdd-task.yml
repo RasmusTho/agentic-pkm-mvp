@@ -1,7 +1,8 @@
+---
 name: TDD Task
 description: Ett TDD-steg enligt SoT v4.1
 title: "[TDD] "
-labels: ["tdd","ingestion"]
+labels: ["tdd", "ingestion"]
 body:
   - type: input
     id: step

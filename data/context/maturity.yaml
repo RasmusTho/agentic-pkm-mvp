@@ -1,3 +1,4 @@
+---
 states: [seed, note, promoted, evergreen, archived]
 rules:
   auto_promotion:

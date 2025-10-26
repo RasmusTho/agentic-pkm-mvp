@@ -1,3 +1,4 @@
+---
 version: 1
 tables:
   objects: [id, type, title, maturity, trust, origin, license, created, updated]
@@ -6,6 +7,6 @@ tables:
   relations: [src_id, rel, dst_id]   # rel: related|parent|canonical
   audit: [event_id, object_id, agent, action, ts, trace_id, details]
 indexes:
-  - on: chunks.text bm25
-  - on: embeddings.vec vector
-  - on: relations(src_id, rel)
+  - "on": chunks.text bm25
+  - "on": embeddings.vec vector
+  - "on": relations(src_id, rel)

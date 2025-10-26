@@ -1,3 +1,4 @@
+---
 openapi: 3.0.3
 info:
   title: Agentic PKM API
@@ -10,7 +11,7 @@ paths:
         - in: header
           name: x-trace-id
           required: false
-          schema: { type: string }
+          schema: {type: string}
           description: Optional trace correlation id, echoed back by server
       requestBody:
         required: true
@@ -28,7 +29,7 @@ paths:
         - in: header
           name: x-trace-id
           required: false
-          schema: { type: string }
+          schema: {type: string}
           description: Optional trace correlation id, echoed back by server
       responses:
         '200':

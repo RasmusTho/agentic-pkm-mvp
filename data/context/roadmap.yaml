@@ -1,25 +1,26 @@
+---
 version: 1
 milestones:
   - id: WS-0
     name: init_repo
-    goals: ["context_files","golden_set","ci"]
+    goals: ["context_files", "golden_set", "ci"]
     kpis: ["canvas_mirrored"]
   - id: WS-1
     name: ingest_chain_min
-    goals: ["normalizer","classifier","chunker"]
+    goals: ["normalizer", "classifier", "chunker"]
     kpis: ["md_yaml_uuid_visible"]
   - id: WS-2
     name: index_min
-    goals: ["bm25_index","vector_index"]
+    goals: ["bm25_index", "vector_index"]
     kpis: ["search_topk_returns"]
   - id: WS-3
     name: query_compose
-    goals: ["router","answer_composer","citations"]
+    goals: ["router", "answer_composer", "citations"]
     kpis: ["provenance_attached"]
   - id: WS-4
     name: reviewer_audit
-    goals: ["promote_note_to_curated","trace_id_audit"]
-    kpis: ["promotion_visible","trace_end2end"]
+    goals: ["promote_note_to_curated", "trace_id_audit"]
+    kpis: ["promotion_visible", "trace_end2end"]
 exit_criteria_mvp:
   - "p95_response_ms<=2000"
   - "faithfulness>=0.8"
