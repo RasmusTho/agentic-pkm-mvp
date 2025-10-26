@@ -1,6 +1,7 @@
+---
 name: architecture-ci
 
-on:
+'on':
   push:
     paths:
       - 'docs/**'
@@ -29,6 +30,11 @@ jobs:
         with:
           node-version: '20'
       - run: npm i -g @redocly/cli @asyncapi/cli
+      - name: Install Codex CLI
+        run: pip install codex-cli
+      - name: Codex auto-fix (YAML/Workflows)
+        run: codex run docs-guardian --fix
+
       - name: Lint OpenAPI
         run: redocly lint api/openapi.yaml
       - name: Lint AsyncAPI
@@ -91,10 +97,10 @@ jobs:
           - 18000:8000
         options: >-
           --health-cmd "bash -lc 'python -m pip install fastapi uvicorn psycopg[binary] pydantic && python - <<PY
-from app.services.outbox import bootstrap
-bootstrap()
-print("ready")
-PY'"
+            from app.services.outbox import bootstrap
+            bootstrap()
+            print("ready")
+            PY'"
           --health-interval 5s
           --health-timeout 10s
           --health-retries 10

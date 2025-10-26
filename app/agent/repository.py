@@ -344,3 +344,8 @@ class PostgresAgentRepository:
             "system_intent": {row["intent"] or "unknown": int(row["count"]) for row in intent_rows},
             "emergent_tags": {row["tag"] or "": int(row["count"]) for row in tag_rows if row["tag"]},
         }
+
+    def close(self) -> None:
+        """Close any persistent resources."""
+        return None
+
