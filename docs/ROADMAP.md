@@ -1,25 +1,12 @@
-# Roadmap & Status — SoT v4.3
-
-## Current status
-- Normalizer: done
-- Classifier: done
-- Chunker: done
-- Deduper: done
-- CitationChecker: done
-- Indexer: done
-- Reviewer: done
-- SetEvaluator: done
-- Projector: done
-- End-to-end tests: done
-
-## Near-term (SoT v4.4 candidates)
-- Vault rename reconciliation hardening (bidirectional hash tracking)
-- Projector "pretty" export mode (templates & frontmatter policy)
-- Reviewer policy tuning (confidence thresholds, citation weighting)
-- Episodic memory compaction / retention policy knobs
-
-## Future
-- Product branding & iconography
-- Lightweight UI for promotion status
-- Collaborative conflict resolution workflow
-- Extended search facets (people, topics, projects)
+# Roadmap
+## v4.3 (Live)
+- PER-loop + outbox + indexer + CI fitness: DONE
+## v4.3.1 (Obsidian-first)
+- [ ] System/Settings/*.md + JSON Schema + CI-validate
+- [ ] Git-driven watcher (rename→no re-embed; body-diff→re-embed)
+- [ ] YAML roundtrip writer; “inactive” write policy
+- [ ] Docs: plugin-krav och flöden
+## v4.4 (LLM & Merge)
+- [ ] OTel spans kring LLM
+- [ ] Merge- och konfliktpolicy (frontmatter/body)
+- [ ] Ev. Debezium/Kafka outbox
