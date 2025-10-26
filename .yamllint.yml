@@ -1,6 +1,15 @@
 ---
 extends: default
 rules:
-  line-length: disable
+  document-start:
+    present: true
+  line-length:
+    max: 160
+    level: warning
+  truthy:
+    allowed-values: ['true', 'false']
+  braces:
+    max-spaces-inside: 1
+    min-spaces-inside: 0
 ignore: |
   data/context/schema.yaml

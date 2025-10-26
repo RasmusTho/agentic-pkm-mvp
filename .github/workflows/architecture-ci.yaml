@@ -28,36 +28,66 @@ jobs:
       - uses: actions/checkout@v4
       - name: Detect Codex secret
         run: echo "CODEX_API_KEY=${{ secrets.CODEX_API_KEY }}" >> $GITHUB_ENV
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Install lint dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yamllint jsonschema openapi-spec-validator
+          npm install -g jsonlint @redocly/cli @asyncapi/cli
+      - name: Lint YAML/JSON (pre-codex)
+        run: |
+          yamllint -c .yamllint.yml .
+          find data -name "*.json" -not -path "./node_modules/*" -print0 | xargs -0 -r jsonlint -q
       - name: Maybe install Codex CLI
         if: ${{ env.CODEX_API_KEY != '' }}
-        run: pip install codex-cli
-      - name: Maybe run Codex auto-fix
+        run: python -m pip install codex-cli
+      - name: Maybe run Codex autofix
         if: ${{ env.CODEX_API_KEY != '' }}
-        run: codex run docs-guardian --fix
+        run: codex run docs-guardian --fix --context git
         env:
           CODEX_API_KEY: ${{ env.CODEX_API_KEY }}
-
-      - name: Verify YAML and JSON after autofix
+      - name: Lint YAML/JSON (post-codex)
         run: |
-          pip install yamllint
-          yamllint -c .yamllint.yml $(git ls-files '*.yml' '*.yaml')
-          find data -name "*.json" -not -path "./node_modules/*" -exec python -m json.tool {} \;
-
-      - name: Validate JSON & OpenAPI schemas
+          yamllint -c .yamllint.yml . | tee .yamllint.log
+          : > .jsonlint.log
+          find data -name "*.json" -not -path "./node_modules/*" -print0 | while IFS= read -r -d '' file; do
+            echo "checking ${file}" >> .jsonlint.log
+            jsonlint -q "${file}" >> .jsonlint.log 2>&1
+          done
+      - name: Validate JSON schemas
         run: |
-          pip install jsonschema openapi-spec-validator
-          echo "Validating JSON files..."
-          find data -name "*.json" -not -path "./node_modules/*" -exec python -m jsonschema -i {} data/context/schema.yaml \;
-          echo "Validating OpenAPI schema..."
-          python -m openapi_spec_validator api/openapi.yaml
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
 
+          schema = 'data/context/schema.yaml'
+          for root, _, files in os.walk('data'):
+              for name in files:
+                  if not name.endswith('.json'):
+                      continue
+                  path = os.path.join(root, name)
+                  subprocess.run([sys.executable, '-m', 'jsonschema', '-i', path, schema], check=True)
+          PY
+      - name: Validate OpenAPI document
+        run: python -m openapi_spec_validator api/openapi.yaml
       - name: Lint OpenAPI
-        run: redocly lint api/openapi.yaml
-      - name: Lint AsyncAPI
-        run: asyncapi validate events/asyncapi.yaml
+        run: npx --yes @redocly/cli@latest lint api/openapi.yaml
+      - name: Validate AsyncAPI
+        run: npx --yes @asyncapi/cli@latest validate events/asyncapi.yaml
+      - name: Upload lint logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-logs
+          path: |
+            .yamllint.log
+            .jsonlint.log
 
   tests:
     runs-on: ubuntu-latest
