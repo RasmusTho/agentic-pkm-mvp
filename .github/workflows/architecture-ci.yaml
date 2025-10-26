@@ -120,3 +120,39 @@ PY'"
       - run: k6 run scripts/k6_search.js
         env:
           BASE_URL: http://localhost:18000
+
+
+  qas-010:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app
+        ports:
+          - 15432:5432
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r app/requirements.txt || true
+      - run: pip install fastapi uvicorn psycopg[binary] pydantic requests
+      - name: Start API
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:15432/app
+          TRACE_LOG_PATH: /tmp/trace.jsonl
+        run: nohup python -m uvicorn app.api.app:app --host 0.0.0.0 --port 8000 &
+      - name: Start worker
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:15432/app
+          TRACE_LOG_PATH: /tmp/trace.jsonl
+        run: nohup python -m app.workers.outbox_worker &
+      - name: Seed and check latency
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:15432/app
+          QAS010_N: 20
+        run: |
+          sleep 2
+          python scripts/qas010_check.py

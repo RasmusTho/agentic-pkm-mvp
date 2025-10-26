@@ -1,0 +1,35 @@
+openapi: 3.0.3
+info:
+  title: Agentic PKM API
+  version: 0.1.0
+paths:
+  /ingest:
+    post:
+      summary: Ingest a knowledge object
+      parameters:
+        - in: header
+          name: x-trace-id
+          required: false
+          schema: { type: string }
+          description: Optional trace correlation id, echoed back by server
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '202':
+          description: Accepted
+  /search:
+    get:
+      summary: Hybrid search
+      parameters:
+        - in: header
+          name: x-trace-id
+          required: false
+          schema: { type: string }
+          description: Optional trace correlation id, echoed back by server
+      responses:
+        '200':
+          description: Results
