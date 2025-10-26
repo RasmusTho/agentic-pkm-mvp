@@ -106,7 +106,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/app
+      DATABASE_URL: postgresql://app:app@localhost:5432/app
       PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
@@ -161,7 +161,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/app
+      DATABASE_URL: postgresql://app:app@localhost:5432/app
       PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
@@ -186,7 +186,7 @@ jobs:
           import psycopg
           from app.services.embedding import deterministic_embedding
 
-          dsn = os.environ['DATABASE_URL'].replace('postgresql+psycopg://', 'postgresql://')
+          dsn = os.environ['DATABASE_URL']
           sample_id = '11111111-1111-1111-1111-111111111111'
           payload = 'smoke content for k6 search'
           with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
@@ -250,7 +250,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/app
+      DATABASE_URL: postgresql://app:app@localhost:5432/app
       PYTHONPATH: ${{ github.workspace }}
       TRACE_LOG_PATH: /tmp/trace.jsonl
     steps:
@@ -271,7 +271,7 @@ jobs:
           from app.services.outbox import bootstrap
 
           bootstrap()
-          dsn = os.environ['DATABASE_URL'].replace('postgresql+psycopg://', 'postgresql://')
+          dsn = os.environ['DATABASE_URL']
           with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
               cur.execute(
                   "create table if not exists file_state (path text primary key, uuid text, fm_hash text, body_hash text, mtime timestamptz, last_seen timestamptz default now())"

@@ -119,11 +119,13 @@ def sync_markdown(path: str) -> dict[str, Any]:
     note_path = Path(path)
     frontmatter, body = _read_note(note_path)
     injected_uuid = False
+    is_active = active_edit(note_path)
     if "uuid" not in frontmatter or not frontmatter.get("uuid"):
         frontmatter["uuid"] = str(uuid.uuid4())
         injected_uuid = True
         _write_note(note_path, frontmatter, body)
-    if active_edit(note_path):
+        is_active = False
+    if is_active and not injected_uuid:
         append_change(f"Skipped sync for active edit: {note_path}", vault_path=note_path)
         return {"status": "deferred", "uuid": frontmatter["uuid"], "injected_uuid": injected_uuid}
     fm_hash = _hash_dict(frontmatter)
