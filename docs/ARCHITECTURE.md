@@ -90,3 +90,4 @@ Future SoT releases will build on this foundation (e.g., merge/conflict tooling 
 - 4.3.1: Obsidian-first (pågår)
   - System settings som Markdown + JSON Schema
   - Git-driven watcher, rename utan re-embed, body-diff→re-embed
+  - FS fallback watcher (`scripts/fs_watcher.py`) för iCloud/standalone drift + Advanced-URI inboxåtgärder

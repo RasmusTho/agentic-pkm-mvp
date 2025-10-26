@@ -124,7 +124,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
         injected_uuid = True
         _write_note(note_path, frontmatter, body)
     if active_edit(note_path):
-        append_change(f"Skipped sync for active edit: {note_path}")
+        append_change(f"Skipped sync for active edit: {note_path}", vault_path=note_path)
         return {"status": "deferred", "uuid": frontmatter["uuid"], "injected_uuid": injected_uuid}
     fm_hash = _hash_dict(frontmatter)
     body_hash = _hash_text(body)
@@ -152,7 +152,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
         changed = injected_uuid
         if state:
             if state["uuid"] and state["uuid"] != frontmatter["uuid"]:
-                append_conflict(f"UUID mismatch for {note_path}")
+                append_conflict(f"UUID mismatch for {note_path}", vault_path=note_path)
             if state["fm_hash"] != fm_hash or state["body_hash"] != body_hash:
                 changed = True
         else:
@@ -209,7 +209,7 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
         if not state:
             state = _get_state_by_uuid(conn, frontmatter["uuid"])
         if not state:
-            append_change(f"Rename detected without state for {new_path}")
+            append_change(f"Rename detected without state for {new_path}", vault_path=new)
             conn.commit()
             return result
         _update_path_only(

@@ -20,3 +20,11 @@
 ## Settings hot-reload
 - Backend laddar `System/Settings/system.md` när mtime ändras och applicerar policies utan omstart.
 - Felaktig frontmatter (validerad mot `docs/schema/system-settings.schema.json`) loggas och stoppar inte befintliga policies.
+
+## Filesystem fallback
+- `scripts/fs_watcher.py` speglar samma policy som git-watchern och ger offline-idempotens.
+- Aktiv fil (detekterad via `settings.policy()`) skrivs inte tillbaka utan triagemeddelande i Inbox med Advanced-URI-länk.
+
+## Advanced-URI UX
+- Alla Inbox-poster får `obsidian://advanced-uri`-länkar för snabb navigering till berörd fil.
+- Dashboarden `System/Dashboards/*.md` visar senaste händelser via Dataview-tabeller.
