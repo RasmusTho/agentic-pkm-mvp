@@ -1,0 +1,35 @@
+---
+id: docs-guardian
+purpose: "Autoformat and validate YAML/JSON against lint and schema rules."
+tools: [yamllint, prettier, jq, jsonschema]
+scope:
+  include:
+    - ".github/**/*.yml"
+    - ".github/**/*.yaml"
+    - "data/context/*.yaml"
+    - "openapi.yaml"
+    - "data/**/*.json"
+  exclude:
+    - "node_modules/**"
+    - "docs/**/*.md"
+policy:
+  - "no semantic changes"
+  - "auto-fix whitespace, colon, comma, and indentation issues"
+  - "validate JSON structure using jq and jsonschema"
+  - "validate OpenAPI spec using openapi-spec-validator"
+post_actions:
+  - type: pr_comment
+    title: "🧩 Codex Schema Validation Report"
+    body: |
+      Codex has validated all JSON and OpenAPI documents against their schemas.
+
+      **Validated against:**  
+      • `data/context/schema.yaml`  
+      • `api/openapi.yaml`
+
+      **Files corrected:**  
+      {{ files_fixed }}
+
+      **Validation results:**  
+      {{ rules_triggered }}
+    condition: files_fixed > 0

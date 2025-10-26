@@ -35,6 +35,20 @@ jobs:
       - name: Codex auto-fix (YAML/Workflows)
         run: codex run docs-guardian --fix
 
+      - name: Verify YAML and JSON after autofix
+        run: |
+          pip install yamllint
+          yamllint -c .yamllint.yml $(git ls-files '*.yml' '*.yaml')
+          find data -name "*.json" -not -path "./node_modules/*" -exec python -m json.tool {} \;
+
+      - name: Validate JSON & OpenAPI schemas
+        run: |
+          pip install jsonschema openapi-spec-validator
+          echo "Validating JSON files..."
+          find data -name "*.json" -not -path "./node_modules/*" -exec python -m jsonschema -i {} data/context/schema.yaml \;
+          echo "Validating OpenAPI schema..."
+          python -m openapi_spec_validator api/openapi.yaml
+
       - name: Lint OpenAPI
         run: redocly lint api/openapi.yaml
       - name: Lint AsyncAPI

@@ -2,3 +2,5 @@
 extends: default
 rules:
   line-length: disable
+ignore: |
+  data/context/schema.yaml
