@@ -26,14 +26,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Detect Codex secret
+        run: echo "CODEX_API_KEY=${{ secrets.CODEX_API_KEY }}" >> $GITHUB_ENV
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm i -g @redocly/cli @asyncapi/cli
-      - name: Install Codex CLI
+      - name: Maybe install Codex CLI
+        if: ${{ env.CODEX_API_KEY != '' }}
         run: pip install codex-cli
-      - name: Codex auto-fix (YAML/Workflows)
+      - name: Maybe run Codex auto-fix
+        if: ${{ env.CODEX_API_KEY != '' }}
         run: codex run docs-guardian --fix
+        env:
+          CODEX_API_KEY: ${{ env.CODEX_API_KEY }}
 
       - name: Verify YAML and JSON after autofix
         run: |
@@ -187,5 +192,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Detect Codex secret
+        run: echo "CODEX_API_KEY=${{ secrets.CODEX_API_KEY }}" >> $GITHUB_ENV
+      - name: Maybe install Codex CLI
+        if: ${{ env.CODEX_API_KEY != '' }}
+        run: pip install codex-cli
+      - name: Maybe run Codex guard
+        if: ${{ env.CODEX_API_KEY != '' }}
+        run: codex run docs-guardian --fix --context git
+        env:
+          CODEX_API_KEY: ${{ env.CODEX_API_KEY }}
       - run: python scripts/adr_index.py
       - run: python scripts/docs_guard.py
