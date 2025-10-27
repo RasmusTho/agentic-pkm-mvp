@@ -1,3 +1,13 @@
+import pytest
+import os, socket, pytest
+pytestmark = pytest.mark.integration
+try:
+    host = os.getenv('PGHOST','localhost')
+    port = int(os.getenv('PGPORT','15432'))
+    socket.create_connection((host, port), 1).close()
+except Exception:
+    pytestmark = pytest.mark.skip(reason='postgres not available')
+
 import os
 from pathlib import Path
 from uuid import uuid4

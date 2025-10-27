@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.db.dsn import resolve_dsn
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -41,11 +43,7 @@ class Settings(BaseSettings):
         psycopg does not understand SQLAlchemy's driver suffix (e.g. +psycopg),
         so strip it when establishing raw psycopg connections.
         """
-        scheme, sep, rest = self.db_dsn.partition("://")
-        if "+psycopg" in scheme:
-            plain_scheme = scheme.split("+", 1)[0]
-            return f"{plain_scheme}{sep}{rest}"
-        return self.db_dsn
+        return resolve_dsn(self.db_dsn)
 
 
 settings = Settings()

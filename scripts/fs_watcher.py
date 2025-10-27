@@ -8,9 +8,10 @@ from typing import Any
 from urllib.parse import quote
 
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
+from app.ports.sink import DummySink, Sink
 from app.services.inbox import append_change
 from app.services.settings import policy
-from app.services.vault_sync import active_edit, update_path, upsert_object_from_note
+from app.services.vault_sync import active_edit
 
 VAULT = Path(os.getenv("VAULT_DIR", "vault"))
 STATE: dict[str, dict[str, Any]] = {}
@@ -57,10 +58,10 @@ def _ensure_uuid(path: Path, frontmatter: dict[str, Any], body: str) -> bool:
     return False
 
 
-def _handle_rename(path: Path, uuid_value: str, fm_hash: str, body_hash: str) -> bool:
+def _handle_rename(path: Path, uuid_value: str, fm_hash: str, body_hash: str, sink: Sink) -> bool:
     previous_path = UUID_INDEX.get(uuid_value)
     if previous_path and previous_path != str(path):
-        update_path(uuid_value, str(path))
+        sink.update_path(uuid_value, str(path))
         STATE.pop(previous_path, None)
         _record(path, uuid_value, fm_hash, body_hash)
         append_change(f"Updated path for {uuid_value} → {path.name}", vault_path=path, uri=_make_uri(path))
@@ -68,7 +69,16 @@ def _handle_rename(path: Path, uuid_value: str, fm_hash: str, body_hash: str) ->
     return False
 
 
-def scan_once() -> None:
+def _default_sink() -> Sink:
+    if os.getenv("DATABASE_URL"):
+        from app.ports.pg_sink import PgSink
+
+        return PgSink()
+    return DummySink()
+
+
+def scan_once(sink: Sink | None = None) -> None:
+    resolved_sink = sink or _default_sink()
     VAULT.mkdir(parents=True, exist_ok=True)
     current_paths: set[str] = set()
     for note_path in VAULT.rglob("*.md"):
@@ -82,7 +92,7 @@ def scan_once() -> None:
         uuid_value = str(frontmatter.get("uuid"))
         fm_hash = _hash_frontmatter(frontmatter)
         body_hash = _hash_body(body)
-        if _handle_rename(note_path, uuid_value, fm_hash, body_hash):
+        if _handle_rename(note_path, uuid_value, fm_hash, body_hash, resolved_sink):
             continue
         prior = STATE.get(str(note_path))
         if active_edit(note_path):
@@ -90,7 +100,7 @@ def scan_once() -> None:
             continue
         changed_fm = prior is None or prior["fm"] != fm_hash
         changed_body = prior is None or prior["body"] != body_hash
-        upsert_object_from_note(str(note_path), frontmatter, body, changed_fm, changed_body)
+        resolved_sink.upsert_object_from_note(str(note_path), frontmatter, body, changed_fm, changed_body)
         _record(note_path, uuid_value, fm_hash, body_hash)
 
     stale_paths = set(STATE.keys()) - current_paths
@@ -100,8 +110,9 @@ def scan_once() -> None:
 
 
 def run() -> None:
+    sink = _default_sink()
     while True:
-        scan_once()
+        scan_once(sink)
         debounce_ms = policy().get("debounce_ms", 1200)
         interval = max(debounce_ms / 1000.0, 0.2)
         time.sleep(interval)
