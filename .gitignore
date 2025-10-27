@@ -6,6 +6,8 @@ checkpoints.sqlite
 provenance.jsonl
 storage/
 .DS_Store
+.obsidian/
+vault/.obsidian/
 *.txt
 locate_search_backends.sh
 repo_tree.txt

@@ -1,0 +1,48 @@
+uuid: D0A054199FC34C6AA510C8689BE1AF89
+title: System Settings (Canonical)
+version: 0.2.0
+origin: local
+review_state: processed
+trust: own
+source_ref: vault://_system/settings/system-settings.yaml
+runtime:
+  environment: dev
+  database_url: postgresql://app:app@localhost:15432/app
+  enable_outbox: true
+  enable_tracing: true
+ingest:
+  active_vault_path: /Users/rasmus/workspace/vault
+  file_glob:
+  - '**/*.md'
+  - '**/*.yaml'
+  ignore_glob:
+  - _system/**
+  write_policy: write_on_diff
+index:
+  bm25_enabled: true
+  vector_enabled: true
+  embedding_model: deterministic-1536
+  min_confidence: 0.15
+  rules:
+  - when:
+      review_state: inbox
+    action: exclude
+  - when:
+      review_state: archived
+    action: include
+    weight: 0.25
+  - when:
+      review_state: promoted
+    action: include
+    weight: 1.0
+  - when:
+      review_state: evergreen
+    action: include
+    weight: 1.2
+observability:
+  otlp_endpoint: http://localhost:4317
+  jaeger_ui: http://localhost:16686
+  trace_level: info
+events:
+  catalog_path: vault/_system/events/catalog.yaml
+  sla_outbox_to_index_ms: 2000
