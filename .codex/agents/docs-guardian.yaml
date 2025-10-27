@@ -1,0 +1,30 @@
+---
+id: docs-guardian
+purpose: "Autoformat and validate YAML/JSON; report fixes."
+tools: [yamllint, jq, jsonschema]
+scope:
+  include:
+    - ".github/**/*.yml"
+    - ".github/**/*.yaml"
+    - "data/context/*.yaml"
+    - "openapi.yaml"
+    - "data/**/*.json"
+  exclude:
+    - "node_modules/**"
+    - "docs/**/*.md"
+policy:
+  - "no semantic changes"
+  - "auto-fix whitespace, colon, comma, indentation"
+  - "validate JSON via jsonschema; OpenAPI via openapi-spec-validator"
+post_actions:
+  - type: pr_comment
+    title: "✅ Codex CI Repair Summary"
+    body: |
+      Codex repaired CI configuration and lint issues.
+
+      **Jobs addressed:** {{ jobs_touched }}
+      **Files updated:** {{ files_fixed }}
+      **Key fixes:** {{ rules_triggered }}
+
+      CI has re-run lint/tests with readiness checks. See artifacts for logs.
+    condition: files_fixed > 0

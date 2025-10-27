@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/system-settings.schema.json",
+  "type": "object",
+  "required": ["uuid","title","version","runtime","ingest","index","observability","events"],
+  "properties": {
+    "uuid": {"type":"string"},
+    "title": {"type":"string"},
+    "origin": {"type":"string"},
+    "review_state": {"type":"string"},
+    "trust": {"type":"string"},
+    "source_ref": {"type":"string"},
+    "version": {"type":"string"},
+
+    "runtime": {
+      "type":"object",
+      "required":["environment","database_url","enable_outbox","enable_tracing"],
+      "properties":{
+        "environment":{"enum":["dev","prod"]},
+        "database_url":{"type":"string","minLength":1},
+        "enable_outbox":{"type":"boolean"},
+        "enable_tracing":{"type":"boolean"}
+      },
+      "additionalProperties": false
+    },
+
+    "ingest": {
+      "type":"object",
+      "required":["active_vault_path","file_glob","ignore_glob","write_policy"],
+      "properties":{
+        "active_vault_path":{"type":"string","minLength":1},
+        "file_glob":{"type":"array","items":{"type":"string"}},
+        "ignore_glob":{"type":"array","items":{"type":"string"}},
+        "write_policy":{"enum":["write_on_diff","always","never"]}
+      },
+      "additionalProperties": false
+    },
+
+    "index": {
+      "type":"object",
+      "required":["bm25_enabled","vector_enabled","embedding_model","min_confidence","rules"],
+      "properties":{
+        "bm25_enabled":{"type":"boolean"},
+        "vector_enabled":{"type":"boolean"},
+        "embedding_model":{"type":"string"},
+        "min_confidence":{"type":"number","minimum":0,"maximum":1},
+        "rules":{
+          "type":"array",
+          "items":{
+            "type":"object",
+            "required":["when","action"],
+            "properties":{
+              "when":{"type":"object"},
+              "action":{"enum":["include","exclude"]},
+              "weight":{"type":["number","null"]}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "observability": {
+      "type":"object",
+      "required":["otlp_endpoint","jaeger_ui","trace_level"],
+      "properties":{
+        "otlp_endpoint":{"type":"string"},
+        "jaeger_ui":{"type":"string"},
+        "trace_level":{"enum":["debug","info","warn","error"]}
+      },
+      "additionalProperties": false
+    },
+
+    "events": {
+      "type":"object",
+      "required":["catalog_path","sla_outbox_to_index_ms"],
+      "properties":{
+        "catalog_path":{"type":"string"},
+        "sla_outbox_to_index_ms":{"type":"integer","minimum":1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

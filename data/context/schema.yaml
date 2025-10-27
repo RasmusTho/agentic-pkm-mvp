@@ -1,11 +1,79 @@
-version: 1
-tables:
-  objects: [id, type, title, maturity, trust, origin, license, created, updated]
-  chunks: [id, object_id, idx, text, tokens, offset_start, offset_end]
-  embeddings: [chunk_id, vec]
-  relations: [src_id, rel, dst_id]   # rel: related|parent|canonical
-  audit: [event_id, object_id, agent, action, ts, trace_id, details]
-indexes:
-  - on: chunks.text bm25
-  - on: embeddings.vec vector
-  - on: relations(src_id, rel)
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workspace Context Documents",
+  "description": "Schema used to validate context JSON resources under data/context/.",
+  "type": "object",
+  "anyOf": [
+    {
+      "required": ["projects"],
+      "properties": {
+        "projects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {"type": "string"},
+              "name": {"type": "string"},
+              "status": {"type": "string"},
+              "scope": {"type": ["array", "object", "string"]},
+              "next_actions": {"type": "array"},
+              "goal": {"type": "string"},
+              "decisions": {"type": "array"},
+              "milestones": {"type": "array"},
+              "acceptance_criteria": {"type": "array"},
+              "owner": {"type": "string"}
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    {
+      "required": ["language"],
+      "properties": {
+        "language": {"type": "array", "items": {"type": "string"}},
+        "workstyle": {"type": "array", "items": {"type": "string"}},
+        "engineering": {"type": "array", "items": {"type": "string"}},
+        "privacy": {"type": "array", "items": {"type": "string"}},
+        "dev_style": {"type": "object", "additionalProperties": true},
+        "coding_guidelines": {"type": "object", "additionalProperties": true},
+        "api_conventions": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": true
+    },
+    {
+      "required": ["id", "text"],
+      "properties": {
+        "id": {"type": "string"},
+        "text": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "source": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    {
+      "required": ["mode", "services"],
+      "properties": {
+        "mode": {"type": "string"},
+        "services": {
+          "type": "object",
+          "properties": {
+            "db": {"type": "object"},
+            "api": {"type": "object"},
+            "bus": {"type": "object"}
+          },
+          "additionalProperties": true
+        },
+        "ingest_paths": {"type": "array", "items": {"type": "string"}},
+        "canvas_source_of_truth": {"type": "boolean"},
+        "notes": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    {
+      "additionalProperties": true
+    }
+  ],
+  "additionalProperties": true
+}

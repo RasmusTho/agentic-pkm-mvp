@@ -79,3 +79,15 @@ SoT v4.3 layers Obsidian vault mirroring, export, and promotion/backfill automat
 - **Dedicated deep dive**: see [`docs/architecture/obsidian_integration.md`](architecture/obsidian_integration.md) for detailed lifecycle flows, sequence diagrams, and operational guidance.
 
 Future SoT releases will build on this foundation (e.g., merge/conflict tooling in v4.4).
+
+
+## Status & Fitness
+- SoT v4.3: live architecture
+  - PER-loop baslager (plan→act→reflect) med trace_id
+  - Outbox-driven indexering (p95 outbox→index ≤ 2s) — QAS-010 guard i CI
+  - Fake search (deterministisk embedding) — k6 p(95)<250ms — QAS-003 guard i CI
+  - Contracts: OpenAPI/AsyncAPI lintas i CI
+- 4.3.1: Obsidian-first (pågår)
+  - System settings som Markdown + JSON Schema
+  - Git-driven watcher, rename utan re-embed, body-diff→re-embed
+  - FS fallback watcher (`scripts/fs_watcher.py`) för iCloud/standalone drift + Advanced-URI inboxåtgärder

@@ -1,14 +1,49 @@
+---
 name: CI
-on: [push, pull_request]
+'on': [push, pull_request]
 jobs:
   validate-context:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Lint YAML
-        uses: ibiqlik/action-yamllint@v3
+      - uses: actions/setup-python@v5
         with:
-          config_file: .yamllint.yml
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install lint dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yamllint jsonschema
+          npm install -g jsonlint
+      - name: Lint YAML and JSON
+        run: |
+          yamllint -c .yamllint.yml . | tee .yamllint.log
+          : > .jsonlint.log
+          find data -name "*.json" -not -path "./node_modules/*" -print0 | while IFS= read -r -d '' file; do
+            echo "checking ${file}" >> .jsonlint.log
+            jsonlint -q "${file}" >> .jsonlint.log 2>&1
+          done
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+          schema = 'data/context/schema.yaml'
+          for root, _, files in os.walk('data'):
+              for name in files:
+                  if name.endswith('.json'):
+                      path = os.path.join(root, name)
+                      subprocess.run([sys.executable, '-m', 'jsonschema', '-i', path, schema], check=True)
+          PY
+      - name: Upload lint logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validate-context-lint
+          path: |
+            .yamllint.log
+            .jsonlint.log
       - name: Ensure required files exist
         run: |
           test -f data/context/roadmap.yaml
@@ -16,11 +51,33 @@ jobs:
           test -f golden/note_evergreen.md
   ws-smoke:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - run: docker compose up -d --build
-      - run: |
-          # give API time to boot
-          for i in $(seq 1 20); do curl -sf localhost:18000/query?q=hello && exit 0; sleep 1; done; exit 1
-      - run: docker compose logs api
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install API dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r app/requirements.txt
+      - name: Start API
+        run: nohup python -m uvicorn app.api.app:app --host 0.0.0.0 --port 8000 >/tmp/ws-api.log 2>&1 &
+      - name: Wait for readiness
+        run: |
+          deadline=$((SECONDS+90))
+          while [ $SECONDS -lt $deadline ]; do
+            if curl -fsS "http://localhost:8000/docs" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not become ready"
+          cat /tmp/ws-api.log || true
+          exit 1
+      - name: Smoke query
+        run: curl -fsS "http://localhost:8000/query?q=hello"
+      - name: Dump API log on failure
+        if: failure()
+        run: cat /tmp/ws-api.log

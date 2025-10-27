@@ -1,0 +1,92 @@
+from importlib import reload
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from app.ports.sink import DummySink
+
+
+def _load_watcher(monkeypatch, vault_dir: Path):
+    monkeypatch.setenv("VAULT_DIR", str(vault_dir))
+    monkeypatch.setenv("OBSIDIAN_VAULT_NAME", "TestVault")
+    import scripts.fs_watcher as watcher  # type: ignore
+
+    reload(watcher)
+    watcher.STATE.clear()
+    watcher.UUID_INDEX.clear()
+    return watcher
+
+
+def test_scan_injects_uuid_and_upserts(monkeypatch, tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("Plain body", encoding="utf-8")
+
+    watcher = _load_watcher(monkeypatch, vault)
+
+    calls = SimpleNamespace(upsert=None, updates=0, messages=[])
+
+    monkeypatch.setattr(watcher, "active_edit", lambda p: False)
+
+    def fake_append(msg, **kw):
+        calls.messages.append((msg, kw))
+
+    monkeypatch.setattr(watcher, "append_change", fake_append)
+
+    sink = DummySink()
+    watcher.scan_once(sink)
+
+    assert sink.upserts
+    _, fm, _, _, _ = sink.upserts[-1]
+    assert "uuid" in fm
+    assert any("obsidian://advanced-uri" in (kw.get("uri") or "") for _, kw in calls.messages)
+    content = note.read_text(encoding="utf-8")
+    assert "uuid:" in content
+
+
+def test_rename_only_updates_path(monkeypatch, tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "alpha.md"
+    note.write_text("---\nuuid: 1234\n---\n\nBody", encoding="utf-8")
+
+    watcher = _load_watcher(monkeypatch, vault)
+
+    monkeypatch.setattr(watcher, "active_edit", lambda p: False)
+    monkeypatch.setattr(watcher, "append_change", lambda *a, **k: None)
+
+    sink = DummySink()
+    watcher.scan_once(sink)
+    sink.upserts.clear()
+    sink.updates.clear()
+
+    renamed = vault / "beta.md"
+    note.rename(renamed)
+
+    watcher.scan_once(sink)
+
+    assert sink.updates == [("1234", str(renamed))]
+    assert not sink.upserts
+
+
+def test_active_edit_skips(monkeypatch, tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("---\nuuid: 5678\n---\n\nBody", encoding="utf-8")
+
+    watcher = _load_watcher(monkeypatch, vault)
+
+    monkeypatch.setattr(watcher, "active_edit", lambda p: True)
+
+    messages = []
+    monkeypatch.setattr(watcher, "append_change", lambda *a, **k: messages.append((a, k)))
+
+    sink = DummySink()
+    watcher.scan_once(sink)
+
+    assert not sink.upserts
+    assert messages
+    assert "Deferred" in messages[0][0][0]

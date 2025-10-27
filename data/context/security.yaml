@@ -1,3 +1,4 @@
+---
 version: 1
 secrets:
   store: "local_env"   # WS runs local only; upgrade later to sops/1password
@@ -10,5 +11,5 @@ retention:
 licenses:
   require_on_import: true
 incident:
-  process: ["triage","contain","post_mortem"]
+  process: ["triage", "contain", "post_mortem"]
 pii_policy: "deny_in_ws"

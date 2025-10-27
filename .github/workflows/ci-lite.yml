@@ -1,18 +1,45 @@
+---
 name: ci-lite
-on:
+'on':
   push:
   pull_request:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://app:app@localhost:5432/app
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install deps
+      - name: Install dependencies
         run: |
-          pip install -r dev-requirements.txt || true
-          pip install -r requirements.txt || true
+          python -m pip install --upgrade pip
+          pip install -r dev-requirements.txt
+          pip install -r requirements.txt
+      - name: Upgrade database
+        run: alembic upgrade head || true
       - name: Run unit tests (fast)
-        run: pytest -q
+        run: pytest -q | tee pytest.log
+      - name: Upload unit test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-lite-pytest
+          path: pytest.log

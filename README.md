@@ -36,6 +36,8 @@ PYTHONPATH="$(pwd)" env DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:154
 docker compose up -d api
 Default: http://localhost:18000
 
+Configuration source of truth lives in `vault/settings/settings.md`. Initialize the vault layout (folders, templates, settings) via `python3 scripts/dev/init_vault.py` and validate the settings frontmatter with `make smoke`.
+
 Core concepts
 - AMG/SetDB in Postgres: objects, chunks, embeddings, relations, decisions, audit
 - Core-6 payload on objects: id, type, title, created, updated, origin

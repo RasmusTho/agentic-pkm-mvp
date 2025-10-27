@@ -1,3 +1,4 @@
+---
 version: 1
 panels:
   - id: queue_depth

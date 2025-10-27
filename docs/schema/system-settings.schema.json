@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workspace System Settings",
+  "type": "object",
+  "properties": {
+    "sync": {
+      "type": "object",
+      "properties": {
+        "debounce_ms": {"type": "integer", "minimum": 0},
+        "active_edit_grace_s": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": true
+    },
+    "agents": {
+      "type": "object",
+      "properties": {
+        "reembed_on_body_diff": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

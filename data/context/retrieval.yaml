@@ -1,3 +1,4 @@
+---
 bm25:
   backend: lite
   analyzer: standard

@@ -1,6 +1,7 @@
+---
 name: architecture-ci
 
-on:
+'on':
   push:
     paths:
       - 'docs/**'
@@ -25,14 +26,68 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Detect Codex secret
+        run: echo "CODEX_API_KEY=${{ secrets.CODEX_API_KEY }}" >> $GITHUB_ENV
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm i -g @redocly/cli @asyncapi/cli
+      - name: Install lint dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yamllint jsonschema openapi-spec-validator
+          npm install -g jsonlint @redocly/cli @asyncapi/cli
+      - name: Lint YAML/JSON (pre-codex)
+        run: |
+          yamllint -c .yamllint.yml .
+          find data -name "*.json" -not -path "./node_modules/*" -print0 | xargs -0 -r jsonlint -q
+      - name: Maybe install Codex CLI
+        if: ${{ env.CODEX_API_KEY != '' }}
+        run: python -m pip install codex-cli
+      - name: Maybe run Codex autofix
+        if: ${{ env.CODEX_API_KEY != '' }}
+        run: codex run docs-guardian --fix --context git
+        env:
+          CODEX_API_KEY: ${{ env.CODEX_API_KEY }}
+      - name: Lint YAML/JSON (post-codex)
+        run: |
+          yamllint -c .yamllint.yml . | tee .yamllint.log
+          : > .jsonlint.log
+          find data -name "*.json" -not -path "./node_modules/*" -print0 | while IFS= read -r -d '' file; do
+            echo "checking ${file}" >> .jsonlint.log
+            jsonlint -q "${file}" >> .jsonlint.log 2>&1
+          done
+      - name: Validate JSON schemas
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          schema = 'data/context/schema.yaml'
+          for root, _, files in os.walk('data'):
+              for name in files:
+                  if not name.endswith('.json'):
+                      continue
+                  path = os.path.join(root, name)
+                  subprocess.run([sys.executable, '-m', 'jsonschema', '-i', path, schema], check=True)
+          PY
+      - name: Validate OpenAPI document
+        run: python -m openapi_spec_validator api/openapi.yaml
       - name: Lint OpenAPI
-        run: redocly lint api/openapi.yaml
-      - name: Lint AsyncAPI
-        run: asyncapi validate events/asyncapi.yaml
+        run: npx --yes @redocly/cli@latest lint api/openapi.yaml
+      - name: Validate AsyncAPI
+        run: npx --yes @asyncapi/cli@latest validate events/asyncapi.yaml
+      - name: Upload lint logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-logs
+          path: |
+            .yamllint.log
+            .jsonlint.log
 
   tests:
     runs-on: ubuntu-latest
@@ -40,26 +95,39 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
           POSTGRES_DB: app
         ports:
-          - 15432:5432
+          - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
+          --health-cmd "pg_isready -U app"
+          --health-interval 10s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://app:app@localhost:5432/app
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r app/requirements.txt
-      - run: pip install pytest uvicorn requests
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r app/requirements.txt
+          pip install -r dev-requirements.txt
+      - name: Upgrade database
+        run: alembic upgrade head || true
       - name: Run tests
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:15432/app
-        run: pytest -q
+        run: pytest -q | tee pytest.log
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-logs
+          path: pytest.log
 
   arch-imports:
     runs-on: ubuntu-latest
@@ -68,6 +136,198 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install import-linter
+      - name: Install import-linter
+        run: |
+          python -m pip install --upgrade pip
+          pip install import-linter
       - name: Lint imports
         run: lint-imports
+
+
+  k6-search:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://app:app@localhost:5432/app
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r app/requirements.txt
+          pip install -r dev-requirements.txt
+      - name: Bootstrap database
+        run: |
+          python - <<'PY'
+          from app.services.outbox import bootstrap
+          bootstrap()
+          PY
+      - name: Seed search fixture
+        run: |
+          python - <<'PY'
+          import os
+          import psycopg
+          from app.services.embedding import deterministic_embedding
+
+          dsn = os.environ['DATABASE_URL']
+          sample_id = '11111111-1111-1111-1111-111111111111'
+          payload = 'smoke content for k6 search'
+          with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+              cur.execute(
+                  "insert into objects(uuid,title,review_state,content,path) values(%s,%s,%s,%s,%s) on conflict (uuid) do update set title=excluded.title, review_state=excluded.review_state, content=excluded.content, path=excluded.path",
+                  (sample_id, 'Smoke note', 'inbox', payload, 'Notes/smoke.md'),
+              )
+              vec = deterministic_embedding(payload)
+              cur.execute(
+                  "insert into objects_embeddings(uuid, dim, vector) values(%s,%s,%s) on conflict (uuid) do update set dim=excluded.dim, vector=excluded.vector",
+                  (sample_id, len(vec), vec),
+              )
+          PY
+      - name: Start API
+        run: nohup python -m uvicorn app.api.app:app --host 0.0.0.0 --port 8000 >/tmp/api.log 2>&1 &
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+      - name: Wait for API readiness
+        run: |
+          deadline=$((SECONDS+90))
+          while [ $SECONDS -lt $deadline ]; do
+            if curl -fsS http://localhost:8000/docs >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not become ready"
+          cat /tmp/api.log || true
+          exit 1
+      - name: Warm up search endpoint
+        run: |
+          curl -fsS -H "x-trace-id: warmup-k6" "http://localhost:8000/search?q=smoke"
+      - name: Install k6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gpg
+          curl -fsSL https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/k6-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+      - name: Run k6 smoke
+        run: |
+          export BASE_URL="http://localhost:8000"
+          k6 run scripts/k6_search.js
+
+
+  qas-010:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://app:app@localhost:5432/app
+      PYTHONPATH: ${{ github.workspace }}
+      TRACE_LOG_PATH: /tmp/trace.jsonl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r app/requirements.txt
+          pip install -r dev-requirements.txt
+      - name: Bootstrap database
+        run: |
+          python - <<'PY'
+          import psycopg
+          import os
+          from app.services.outbox import bootstrap
+
+          bootstrap()
+          dsn = os.environ['DATABASE_URL']
+          with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+              cur.execute(
+                  "create table if not exists file_state (path text primary key, uuid text, fm_hash text, body_hash text, mtime timestamptz, last_seen timestamptz default now())"
+              )
+          PY
+      - name: Start API
+        run: nohup python -m uvicorn app.api.app:app --host 0.0.0.0 --port 8000 >/tmp/api.log 2>&1 &
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          TRACE_LOG_PATH: ${{ env.TRACE_LOG_PATH }}
+      - name: Start worker
+        run: nohup python -m app.workers.outbox_worker >/tmp/worker.log 2>&1 &
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          TRACE_LOG_PATH: ${{ env.TRACE_LOG_PATH }}
+      - name: Wait for readiness
+        run: |
+          deadline=$((SECONDS+90))
+          while [ $SECONDS -lt $deadline ]; do
+            if curl -fsS http://localhost:8000/docs >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not become ready"
+          cat /tmp/api.log || true
+          cat /tmp/worker.log || true
+          exit 1
+      - name: Warm up API
+        run: |
+          for i in $(seq 1 5); do
+            curl -fsS http://localhost:8000/docs >/dev/null 2>&1 || true
+            sleep 1
+          done
+      - name: Seed and check latency
+        run: python scripts/qas010_check.py
+
+
+  docs-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Detect Codex secret
+        run: echo "CODEX_API_KEY=${{ secrets.CODEX_API_KEY }}" >> $GITHUB_ENV
+      - name: Maybe install Codex CLI
+        if: ${{ env.CODEX_API_KEY != '' }}
+        run: pip install codex-cli
+      - name: Maybe run Codex guard
+        if: ${{ env.CODEX_API_KEY != '' }}
+        run: codex run docs-guardian --fix --context git
+        env:
+          CODEX_API_KEY: ${{ env.CODEX_API_KEY }}
+      - run: python scripts/adr_index.py
+      - run: python scripts/docs_guard.py

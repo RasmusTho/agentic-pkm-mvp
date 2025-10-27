@@ -1,66 +1,72 @@
+# app/services/outbox.py
+from __future__ import annotations
+
 import json
-import os
 from typing import Any, Dict, Optional
+
 import psycopg
+from psycopg.rows import dict_row
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:15432/app")
+from app.db import conn_rw, ensure_schema
 
-BOOTSTRAP_SQL = """
-create table if not exists outbox (
-  id bigserial primary key,
-  topic text not null,
-  payload_json jsonb not null,
-  occurred_at timestamptz not null default now(),
-  delivered_at timestamptz
+# Minimal bootstrap-DDL för outbox. Körs bara om tabellen saknas.
+# (Skapar även index som är säkra att köra flera gånger.)
+_OUTBOX_BOOTSTRAP_SQL = """
+CREATE TABLE IF NOT EXISTS public.outbox (
+  id           bigserial PRIMARY KEY,
+  topic        text NOT NULL,
+  payload      jsonb NOT NULL,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  delivered_at timestamptz NULL,
+  attempts     int NOT NULL DEFAULT 0
 );
-create table if not exists objects (
-  uuid text primary key,
-  title text not null,
-  review_state text not null,
-  content text not null
-);
-create table if not exists objects_embeddings (
-  uuid text primary key,
-  dim int not null,
-  vector double precision[] not null,
-  occurred_at timestamptz not null default now()
-);
+CREATE INDEX IF NOT EXISTS outbox_created_at_idx ON public.outbox (created_at DESC);
+CREATE INDEX IF NOT EXISTS outbox_delivered_null_idx ON public.outbox ((delivered_at IS NULL));
 """
 
-def _conn():
-    return psycopg.connect(DATABASE_URL)
-
 def bootstrap() -> None:
-    with _conn() as conn:
+    """
+    Säkerställ att schema finns och att outbox-tabellen finns.
+    Körs med app-rättigheter efter att ägarskap är fixat.
+    """
+    with conn_rw() as conn:
+        # Kör modulens migrations (om några). Saknar vi rättigheter så
+        # fångar ensure_schema redan InsufficientPrivilege och hoppar över.
+        ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute(BOOTSTRAP_SQL)
+            cur.execute(_OUTBOX_BOOTSTRAP_SQL)
         conn.commit()
 
-def insert_object_and_outbox(obj: Dict[str, Any], topic: str, trace_id: str) -> None:
-    with _conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "insert into objects(uuid,title,review_state,content) values(%s,%s,%s,%s) "
-                "on conflict (uuid) do update set title=excluded.title, review_state=excluded.review_state, content=excluded.content",
-                (obj["uuid"], obj["title"], obj["review_state"], obj["content"]),
-            )
-            payload = dict(obj)
-            payload["trace_id"] = trace_id
-            cur.execute("insert into outbox(topic, payload_json) values(%s,%s)", (topic, json.dumps(payload)))
+def insert_object_and_outbox(payload: Dict[str, Any], topic: str, trace_id: Optional[str]) -> None:
+    """
+    Lägger bara ett meddelande i outbox. Själva objekt-/domänlagringen sker i respektive service.
+    """
+    with conn_rw() as conn, conn.cursor() as cur:
+        cur.execute("SET LOCAL lock_timeout = '2s'")
+        cur.execute("SET LOCAL statement_timeout = '30s'")
+        cur.execute(
+            "INSERT INTO public.outbox(topic, payload) VALUES (%s, %s::jsonb)",
+            (topic, json.dumps(payload)),
+        )
         conn.commit()
 
 def poll_outbox_one(undelivered_only: bool = True) -> Optional[Dict[str, Any]]:
-    sql = "select id, topic, payload_json::text from outbox "
+    """
+    Hämtar äldsta meddelandet (ev. bara icke-levererade), markerar det levererat och returnerar.
+    """
+    sql = "SELECT id, topic, payload::text FROM public.outbox "
     if undelivered_only:
-        sql += "where delivered_at is null "
-    sql += "order by id asc limit 1"
-    with _conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql)
-            row = cur.fetchone()
-            if not row:
-                return None
-            oid, topic, payload_json = row
-            cur.execute("update outbox set delivered_at = now() where id = %s", (oid,))
+        sql += "WHERE delivered_at IS NULL "
+    sql += "ORDER BY id ASC LIMIT 1"
+
+    with conn_rw() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(sql)
+        row = cur.fetchone()
+        if not row:
+            return None
+        oid = row["id"]
+        topic = row["topic"]
+        payload_json = row["payload"]
+        cur.execute("UPDATE public.outbox SET delivered_at = now() WHERE id = %s", (oid,))
         conn.commit()
     return {"id": oid, "topic": topic, "payload": json.loads(payload_json)}
