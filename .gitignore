@@ -16,3 +16,6 @@ samples/
 scripts/codex_verify.sh
 scripts/export_objects.py
 scripts/ingest_real.sh
+
+logs/
+events.jsonl
