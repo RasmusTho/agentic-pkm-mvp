@@ -6,12 +6,11 @@ smoke:
 	pytest -q tests/index/test_rules.py
 	pytest -q tests/index/test_ignore_and_defaults.py
 	pytest -q tests/index/test_ingest_md_malformed.py
-	pytest -q tests/e2e/test_index_rules_e2e.py
-
-.PHONY: query
-query:
-	python3 -m app.cli.query $(term)
-
-.PHONY: index
-index:
-	python3 -c 'from app.index.main import build_from_canonical_settings as b; print(len(b()))'
+	pytest -q tests/promotion/test_event_shapes.py
+	pytest -q tests/promotion/test_policy_move_selection.py
+	pytest -q tests/promotion/test_queue_logic.py
+	pytest -q tests/promotion/test_reconciliation_rules.py
+	pytest -q tests/integration/test_promotion_worker_roundtrip.py
+	pytest -q tests/integration/test_batch_move_nightly.py
+	pytest -q tests/e2e/test_promotion_intent_to_index.py
+	pytest -q tests/smoke/test_promotion_smoke.py

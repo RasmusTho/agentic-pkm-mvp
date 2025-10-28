@@ -11,3 +11,9 @@ Definition of Done (4.3.1):
 - settings.md finns och valideras automatiskt mot schema i CI.
 - make smoke kör testet lokalt och i CI.
 - yaml_roundtrip write_on_diff finns för säkra skrivningar.
+
+## Next Step: Integrate Promotion Agent
+- Implement the full chain: promotion intent → event → frontmatter → index.
+- Verify UX (checkbox disappears, no extra menus).
+- Extend smoke/E2E tests with scenario intent → promoted → index visible.
+- Prepare batch move job (nightly cron via promotion worker).

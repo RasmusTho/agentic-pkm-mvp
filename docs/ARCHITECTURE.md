@@ -40,6 +40,17 @@ Order of execution in the ingestion pipeline:
 
 Graphs are declared in `app/agents/*/graph.py` using `app/agents/base/graph.PERSpec`. CLI entry point: `python -m app.agents.runner --agent <name>`.
 
+### Agents and PER-loop
+
+#### Promotion Agent
+The Promotion Agent executes human intent ("intent to promote") detected in the vault. It operates entirely within the existing PER loop and follows the same event/outbox model as other agents.
+- **Input**: `promote.intent.created` (append-only JSONL)
+- **Output**: `promote.done`, `promote.pending_move`, or `promote.error`
+- **Logic**: cooldown plus idle detection, UUID-level idempotence, file move policy defined in `system-settings.yaml`
+- **Effect**: updates `review_state: promoted`, triggers reindex; physical file move happens asynchronously or in nightly batches.
+
+The Promotion Agent removes the need for visible "processed" or "promoted" stages in the UI; these are now machine states managed automatically.
+
 ## 4. Retrieval & Search
 - **BM25-lite** (`app/search/bm25_lite.py`) builds tsvector search vectors for objects.
 - **pgvector** embeddings stored per chunk; retrieval uses cosine distance.

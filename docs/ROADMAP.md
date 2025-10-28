@@ -27,6 +27,13 @@ Status: Open
 ## v4.4 — Observability & Conflict Resolution
 Status: Planned
 
+### 4.4.B Promotion Agent (Human-First Lifecycle)
+- Introduce promotion intent via a lightweight checkbox or inline command.
+- Event-driven flow: `promote.intent.created` → `promote.done`.
+- Frontmatter (`review_state`) remains the single source of truth; file moves are batch-processed nightly.
+- Implemented using local file-tools—no Obsidian plugin required.
+- UX goal: the promotion checkbox disappears once processed; no extra receipts or UI noise.
+
 - OTel-spårning av LLM-spans till Jaeger.
 - Deterministisk merge-policy för frontmatter/body.
 - Broker-backad outbox (Debezium/Kafka) ≤ 2 s SLA.
