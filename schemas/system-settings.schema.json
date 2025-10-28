@@ -1,8 +1,8 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://example.local/schemas/system-settings.schema.json",
   "type": "object",
-  "required": ["uuid","title","version","runtime","ingest","index","observability","events"],
+  "required": ["uuid","title","version","runtime","ingest","index","sync","observability","events"],
   "properties": {
     "uuid": {"type":"string"},
     "title": {"type":"string"},
@@ -51,12 +51,30 @@
             "required":["when","action"],
             "properties":{
               "when":{"type":"object"},
-              "action":{"enum":["include","exclude"]},
+              "action":{"enum":["include","exclude","soft_exclude"]},
               "weight":{"type":["number","null"]}
             },
             "additionalProperties": false
           }
         }
+      },
+      "additionalProperties": false
+    },
+
+    "sync": {
+      "type":"object",
+      "required":["debounce_ms","inactive_grace_s"],
+      "properties":{
+        "debounce_ms":{"type":"integer","minimum":0},
+        "inactive_grace_s":{"type":"integer","minimum":0}
+      },
+      "additionalProperties": false
+    },
+
+    "agents": {
+      "type":"object",
+      "properties":{
+        "reembed_on_body_diff":{"type":"boolean"}
       },
       "additionalProperties": false
     },

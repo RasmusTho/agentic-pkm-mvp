@@ -84,3 +84,30 @@ def stub_index(monkeypatch) -> StubVectorIndex:
     if hasattr(original_get_vector_index, "cache_clear"):
         original_get_vector_index.cache_clear()
     return index
+
+
+def pytest_addoption(parser) -> None:
+    """Provide minimal timeout flags when pytest-timeout is unavailable."""
+
+    group = parser.getgroup("timeout", "timeout control")
+    try:
+        group.addoption(
+            "--timeout",
+            action="store",
+            type=float,
+            dest="timeout",
+            default=None,
+            help="No-op stub for pytest-timeout's --timeout option.",
+        )
+    except ValueError:
+        pass
+    try:
+        group.addoption(
+            "--timeout-method",
+            action="store",
+            dest="timeout_method",
+            default="signal",
+            help="No-op stub for pytest-timeout's --timeout-method option.",
+        )
+    except ValueError:
+        pass

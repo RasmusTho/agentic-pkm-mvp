@@ -8,7 +8,7 @@ subprocess.run(["git", "fetch", "origin", "+refs/heads/*:refs/remotes/origin/*"]
 changed = subprocess.check_output(["git", "diff", "--name-only", f"{base}...HEAD"], text=True).strip().splitlines()
 changed = [c for c in changed if c]
 code_changed = any(c.startswith("app/") for c in changed)
-allowed_prefixes = ("docs/", "api/", "events/", "System/Settings/")
+allowed_prefixes = ("docs/", "api/", "events/", "vault/_system/settings/", "vault/settings/")
 docs_touched = any(any(c.startswith(prefix) for prefix in allowed_prefixes) for c in changed)
 if code_changed and not docs_touched:
     print("Docs guard: app/** changed but no docs/contracts/settings updated.")

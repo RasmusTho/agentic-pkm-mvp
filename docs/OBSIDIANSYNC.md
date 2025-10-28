@@ -18,8 +18,8 @@
 - Ingen re-embedding triggas vid rename/move; indexering körs endast om filens body ändras.
 
 ## Settings hot-reload
-- Backend laddar `System/Settings/system.md` när mtime ändras och applicerar policies utan omstart.
-- Felaktig frontmatter (validerad mot `docs/schema/system-settings.schema.json`) loggas och stoppar inte befintliga policies.
+- Backend laddar `vault/_system/settings/system-settings.yaml` när mtime ändras och applicerar policies utan omstart.
+- Felaktig YAML (validerad mot `schemas/system-settings.schema.json`) loggas och stoppar inte befintliga policies.
 
 ## Filesystem fallback
 - `scripts/fs_watcher.py` speglar samma policy som git-watchern och ger offline-idempotens.

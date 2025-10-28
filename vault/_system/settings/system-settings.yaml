@@ -1,6 +1,6 @@
 uuid: D0A054199FC34C6AA510C8689BE1AF89
 title: System Settings (Canonical)
-version: 0.2.0
+version: 0.3.0
 origin: local
 review_state: processed
 trust: own
@@ -26,7 +26,8 @@ index:
   rules:
   - when:
       review_state: inbox
-    action: exclude
+    action: soft_exclude
+    weight: 0.05
   - when:
       review_state: archived
     action: include
@@ -39,6 +40,11 @@ index:
       review_state: evergreen
     action: include
     weight: 1.2
+sync:
+  debounce_ms: 1200
+  inactive_grace_s: 5
+agents:
+  reembed_on_body_diff: true
 observability:
   otlp_endpoint: http://localhost:4317
   jaeger_ui: http://localhost:16686

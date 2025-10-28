@@ -11,7 +11,7 @@ Status: Open
 - Vault-struktur uppdaterad med `@Desk` och `@Inbox`
 - Endast `_system/**` hård-ignoreras
 - Indexerings-regler (`index.rules[]`) styr mjuk exkludering:
-  - `review_state: inbox` → exclude
+  - `review_state: inbox` → soft_exclude weight 0.05
   - `review_state: archived` → include weight 0.25
   - `review_state: promoted` → include weight 1.0
   - `review_state: evergreen` → include weight 1.2
