@@ -24,8 +24,12 @@ def query(index: List[Dict[str, Any]], term: str, limit: int = 10) -> List[Tuple
     ranked: List[Tuple[str, float]] = []
     for doc in index:
         body = doc["body"].lower()
-        hit = term_l in body
-        if hit:
+        if term_l in body:
             ranked.append((doc["path"], 1.0 * doc["weight"]))
     ranked.sort(key=lambda x: x[1], reverse=True)
     return ranked[:limit]
+
+def build_index_from_settings(settings: Dict[str, Any]) -> List[Dict[str, Any]]:
+    root = Path(settings["ingest"]["active_vault_path"])
+    rules_cfg = settings["index"]["rules"]
+    return build_index(root, rules_cfg)
