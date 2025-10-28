@@ -27,6 +27,11 @@ def score_for(meta: Dict[str, Any], rules: List[Rule], default_weight: float = 1
         if match_rule(r, meta):
             if r.action == "exclude":
                 return (False, 0.0)
+            if r.action == "soft_exclude":
+                soft_weight = r.weight if r.weight is not None else 0.0
+                weight = float(soft_weight)
+                decision_include = weight > 0.0
+                continue
             if r.action == "include":
                 weight = r.weight if r.weight is not None else weight
                 decision_include = True

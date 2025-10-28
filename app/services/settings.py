@@ -7,26 +7,12 @@ from typing import Any
 import yaml
 from jsonschema import validate
 
-SETTINGS_PATH = Path("System/Settings/system.md")
-SCHEMA_PATH = Path("docs/schema/system-settings.schema.json")
+SETTINGS_PATH = Path("vault/_system/settings/system-settings.yaml")
+SCHEMA_PATH = Path("schemas/system-settings.schema.json")
 
+_cached_path: Path | None = None
 _cached: dict[str, Any] | None = None
 _mtime: float | None = None
-
-
-def _parse_frontmatter(raw: str) -> dict[str, Any]:
-    if not raw.startswith("---"):
-        return {}
-    parts = raw.split("---", 2)
-    if len(parts) < 3:
-        return {}
-    fm_block = parts[1].strip()
-    if not fm_block:
-        return {}
-    data = yaml.safe_load(fm_block) or {}
-    if not isinstance(data, dict):
-        raise ValueError("system settings frontmatter must be a mapping")
-    return data
 
 
 def _load_schema() -> dict[str, Any]:
@@ -35,28 +21,45 @@ def _load_schema() -> dict[str, Any]:
     return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
-def load_settings(force: bool = False) -> dict[str, Any] | None:
-    global _cached, _mtime
-    if not SETTINGS_PATH.exists():
-        return _cached if _cached is not None else None
-    stat = SETTINGS_PATH.stat().st_mtime
-    if not force and _cached is not None and _mtime == stat:
+def _load_yaml(path: Path) -> dict[str, Any]:
+    raw = path.read_text(encoding="utf-8")
+    data = yaml.safe_load(raw) or {}
+    if not isinstance(data, dict):
+        raise ValueError("system settings YAML must decode into a mapping")
+    return data
+
+
+def load_settings(force: bool = False, path: Path | None = None) -> dict[str, Any] | None:
+    global _cached, _mtime, _cached_path
+    if path is None:
+        path = SETTINGS_PATH
+    if not path.exists():
+        return _cached if (_cached is not None and _cached_path == path) else None
+    stat = path.stat().st_mtime
+    if (
+        not force
+        and _cached is not None
+        and _mtime == stat
+        and _cached_path == path
+    ):
         return _cached
-    data = _parse_frontmatter(SETTINGS_PATH.read_text(encoding="utf-8"))
+    data = _load_yaml(path)
     schema = _load_schema()
     if schema:
-        validate(data, schema)
+        validate(instance=data, schema=schema)
     _cached = data
     _mtime = stat
+    _cached_path = path
     return _cached
 
 
-def policy() -> dict[str, Any]:
-    settings = load_settings() or {}
+def policy(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    if settings is None:
+        settings = load_settings() or {}
     sync = settings.get("sync", {})
     agents = settings.get("agents", {})
     return {
-        "debounce_ms": sync.get("debounce_ms", 1200),
-        "inactive_grace_s": sync.get("active_edit_grace_s", 5),
-        "reembed_on_body_diff": agents.get("reembed_on_body_diff", True),
+        "debounce_ms": int(sync.get("debounce_ms", 1200)),
+        "inactive_grace_s": int(sync.get("inactive_grace_s", 5)),
+        "reembed_on_body_diff": bool(agents.get("reembed_on_body_diff", True)),
     }

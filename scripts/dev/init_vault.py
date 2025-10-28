@@ -47,7 +47,7 @@ def write_system_settings_yaml():
     data = {
         "uuid": settings_uuid,
         "title": "System Settings (Canonical)",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "origin": "local",
         "review_state": "processed",
         "trust": "own",
@@ -70,7 +70,7 @@ def write_system_settings_yaml():
             "embedding_model": "deterministic-1536",
             "min_confidence": 0.15,
             "rules": [
-                {"when": {"review_state": "inbox"}, "action": "exclude"},
+                {"when": {"review_state": "inbox"}, "action": "soft_exclude", "weight": 0.05},
                 {"when": {"review_state": "archived"}, "action": "include", "weight": 0.25},
                 {"when": {"review_state": "promoted"}, "action": "include", "weight": 1.0},
                 {"when": {"review_state": "evergreen"}, "action": "include", "weight": 1.2},
@@ -84,6 +84,13 @@ def write_system_settings_yaml():
         "events": {
             "catalog_path": "vault/_system/events/catalog.yaml",
             "sla_outbox_to_index_ms": 2000,
+        },
+        "sync": {
+            "debounce_ms": 1200,
+            "inactive_grace_s": 5,
+        },
+        "agents": {
+            "reembed_on_body_diff": True,
         },
     }
     path = ROOT / "vault/_system/settings/system-settings.yaml"
