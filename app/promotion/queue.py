@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, Any
 import yaml
 from .policy import pick_target as _pick_target
+from app.observability.tracing import current_trace_id, span
 
 ROOT = Path().resolve()
 VAULT = ROOT / "vault"
@@ -20,7 +21,7 @@ def _append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
 def enqueue(path: Path, uuid: str, desired_state: str = "promoted") -> None:
     _append_jsonl(QUEUE, {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "trace_id": hashlib.sha1(f"{uuid}{path}".encode()).hexdigest()[:12],
+        "trace_id": current_trace_id() or hashlib.sha1(f"{uuid}{path}".encode()).hexdigest()[:12],
         "uuid": uuid,
         "path": str(path),
         "desired_state": desired_state,
@@ -85,47 +86,60 @@ def run_once() -> int:
     processed = 0
 
     for ln in lines:
+        ev: Dict[str, Any] | None = None
         try:
-            ev = json.loads(ln)
-            p = Path(ev["path"])
-            if not p.exists():
-                _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                    "level": "warn", "event": "promote.skip.missing", "path": str(p), "uuid": ev.get("uuid")})
-                continue
+            with span("worker.process_event"):
+                ev = json.loads(ln)
+                p = Path(ev["path"])
+                if not p.exists():
+                    _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                        "level": "warn", "event": "promote.skip.missing", "path": str(p),
+                                        "uuid": ev.get("uuid"), "trace_id": current_trace_id()})
+                    continue
 
-            st = p.stat()
-            age = time.time() - st.st_mtime
-            if age < cooldown or age < idle_req:
-                _append_jsonl(QUEUE, ev)
-                continue
+                st = p.stat()
+                age = time.time() - st.st_mtime
+                if age < cooldown or age < idle_req:
+                    _append_jsonl(QUEUE, ev)
+                    continue
 
-            meta, body = _read_frontmatter(p)
-            meta = dict(meta)
-            meta["review_state"] = ev.get("desired_state", "promoted")
+                with span("worker.read_frontmatter"):
+                    meta, body = _read_frontmatter(p)
+                meta = dict(meta)
+                meta["review_state"] = ev.get("desired_state", "promoted")
 
-            # remove intent line(s) like "- [x] Promote" or "- [ ] Promote"
-            cleaned_lines = [ln for ln in body.splitlines() if "Promote" not in ln]
-            new_body = "\n".join(cleaned_lines).strip() + ("\n" if cleaned_lines else "")
+                with span("worker.update_frontmatter"):
+                    cleaned_lines = [ln for ln in body.splitlines() if "Promote" not in ln]
+                    new_body = "\n".join(cleaned_lines).strip() + ("\n" if cleaned_lines else "")
+                    _write_frontmatter(p, meta, new_body)
 
-            _write_frontmatter(p, meta, new_body)
+                new_p = p
+                if move_policy.get("enabled", False):
+                    with span("worker.move_file"):
+                        target_rel = _pick_target(meta, move_policy)
+                        target_dir = VAULT / target_rel
+                        new_p = _safe_move(p, target_dir)
 
-            new_p = p
-            if move_policy.get("enabled", False):
-                target_rel = _pick_target(meta, move_policy)
-                target_dir = VAULT / target_rel
-                new_p = _safe_move(p, target_dir)
+                with span("worker.log_done"):
+                    _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                        "level": "info", "event": "promote.done",
+                                        "uuid": ev.get("uuid"), "from": str(p), "to": str(new_p),
+                                        "trace_id": current_trace_id()})
+                processed += 1
 
+        except json.JSONDecodeError as e:
             _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                "level": "info", "event": "promote.done",
-                                "uuid": ev.get("uuid"), "from": str(p), "to": str(new_p)})
-            processed += 1
-
+                                "level": "error", "event": "promote.skip.decode",
+                                "raw": ln, "err": repr(e), "trace_id": current_trace_id()})
+            continue
         except Exception as e:
-            ev["retries"] = int(ev.get("retries", 0)) + 1
-            if ev["retries"] <= max_retries:
-                _append_jsonl(QUEUE, ev)
+            payload = ev if isinstance(ev, dict) else {"raw": ln}
+            payload["retries"] = int(payload.get("retries", 0)) + 1
+            if payload["retries"] <= max_retries:
+                _append_jsonl(QUEUE, payload)
             _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                                 "level": "error", "event": "promote.error",
-                                "path": ev.get("path"), "uuid": ev.get("uuid"),
-                                "err": repr(e), "retries": ev["retries"]})
+                                "path": payload.get("path"), "uuid": payload.get("uuid"),
+                                "err": repr(e), "retries": payload["retries"],
+                                "trace_id": current_trace_id()})
     return processed

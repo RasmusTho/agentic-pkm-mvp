@@ -6,7 +6,7 @@
 
 - [x] Establish settings source of truth in `vault/_system/settings/system-settings.yaml` and validate locally via schema tests.
 - [ ] Ensure **CI** validates settings against `schemas/system-settings.schema.json` (wire into GH Actions).
-- [ ] Add OTel tracing at agent PER level and make traces visible in Jaeger.
+- [x] Add OTel spans at agent/worker level (visibility in Jaeger pending config).
 - [ ] Define deterministic merge/conflict policy for frontmatter/body (doc + code).
 - [ ] Decide on broker-backed outbox via ADR (Debezium/Kafka spike → measure → decide).
 
@@ -29,13 +29,14 @@
 
 ### Promotion Agent — Next tasks
 
-- [ ] Create thin PER-wrapper: `app/agents/promotion/agent.py` calling `run_once()`, emitting agent-level spans/events.
-- [ ] Add OTel spans in `queue.run_once()` with `trace_id` propagation.
+- [x] Create thin PER-wrapper: `app/agents/promotion/agent.py` calling `run_once()`, emitting agent-level spans/events.
+- [x] Add OTel spans in `queue.run_once()` with `trace_id` propagation.
 - [ ] Finalize `promote.*` event catalog and validate in CI.
 - [ ] Optional: time-window guard (02–06) for launchd.
 - [ ] Ensure promotion smoke is included in GH Actions.
 - [ ] Commit ADR for Promotion Agent and link from `docs/ARCHITECTURE.md`.
 - [ ] Flip `docs/STATUS.md` to Green after wrapper + spans.
+- [ ] Verify spans in Jaeger (enable_tracing=true + OTLP endpoint reachable).
 
 ---
 
@@ -58,3 +59,6 @@
 ---
 **CI Note:** Only `smoke` runs on push/PR. All other workflows are temporarily manual (workflow_dispatch) until v4.4.
 ---
+**Agent run hint:** `make agent-run` executes the thin PER wrapper (delegates to promotion worker).
+**Tracing hint:** Install `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp` locally and set `runtime.enable_tracing: true` in `system-settings.yaml`. Jaeger via OTLP HTTP exporter uses `observability.otlp_endpoint` (or `OTEL_EXPORTER_OTLP_ENDPOINT` env).
+**Doc note:** This file tracks incremental progress during 4.3.1→4.4. Larger narrative edits will roll into ROADMAP after Jaeger verification and merge-policy landing.

@@ -51,6 +51,9 @@ The Promotion Agent executes human intent ("intent to promote") detected in the 
 
 The Promotion Agent removes the need for visible "processed" or "promoted" stages in the UI; these are now machine states managed automatically.
 
+### Promotion Agent (v4.3.1)
+A thin PER wrapper delegates to the existing promotion worker. It reads promotion intents, applies policy (cooldown/idle/idempotence), updates frontmatter (`review_state: promoted`), optionally moves files per move_policy, and logs `promote.*` events. Tracing is optional via a lightweight shim; when enabled, spans cover agent plan/act/reflect and worker steps (read/update/move/log).
+
 ## 4. Retrieval & Search
 - **BM25-lite** (`app/search/bm25_lite.py`) builds tsvector search vectors for objects.
 - **pgvector** embeddings stored per chunk; retrieval uses cosine distance.

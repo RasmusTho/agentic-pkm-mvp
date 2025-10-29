@@ -16,6 +16,9 @@ Status: Open
   - `review_state: promoted` → include weight 1.0
   - `review_state: evergreen` → include weight 1.2
 
+**Delivered**
+- Promotion Agent thin wrapper + interval worker; optional tracing shim instrumented (verification pending).
+
 **Definition of Done**
 - `make smoke` passerar lokalt + i CI.
 - YAML-filen valideras mot schema.
@@ -33,6 +36,11 @@ Status: Planned
 - Frontmatter (`review_state`) remains the single source of truth; file moves are batch-processed nightly.
 - Implemented using local file-tools—no Obsidian plugin required.
 - UX goal: the promotion checkbox disappears once processed; no extra receipts or UI noise.
+
+**In progress**
+- Jaeger verification for promotion spans
+- Deterministic merge/conflict policy (frontmatter/body)
+- Outbox broker ADR (Debezium/Kafka)
 
 - OTel-spårning av LLM-spans till Jaeger.
 - Deterministisk merge-policy för frontmatter/body.

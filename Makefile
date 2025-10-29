@@ -22,3 +22,7 @@ promote-queue:
 .PHONY: promote-run
 promote-run:
 	python3 -m app.promotion.cli run
+
+.PHONY: agent-run
+agent-run:
+	python3 -m app.agents.promotion.agent run
