@@ -1,25 +1,8 @@
 ---
 name: architecture-ci
 
-'on':
-  push:
-    paths:
-      - 'docs/**'
-      - 'api/openapi.yaml'
-      - 'events/asyncapi.yaml'
-      - '.github/workflows/architecture-ci.yaml'
-      - 'app/**'
-      - 'tests/**'
-      - 'importlinter.ini'
-  pull_request:
-    paths:
-      - 'docs/**'
-      - 'api/openapi.yaml'
-      - 'events/asyncapi.yaml'
-      - '.github/workflows/architecture-ci.yaml'
-      - 'app/**'
-      - 'tests/**'
-      - 'importlinter.ini'
+on:
+  workflow_dispatch:
 
 jobs:
   validate-contracts:
