@@ -1,28 +1,19 @@
-from __future__ import annotations
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Dict, Any, Optional
 
-import contextlib
-from typing import Dict, Optional
+_current_trace_id: ContextVar[Optional[str]] = ContextVar("_current_trace_id", default=None)
 
-try:
-    from opentelemetry import trace
-    from opentelemetry.trace import Span
-    _tracer = trace.get_tracer(__name__)
-except Exception:  # pragma: no cover - optional dependency
-    trace = None
-    _tracer = None
+def current_trace_id() -> Optional[str]:
+    return _current_trace_id.get()
 
-from app.observability.trace_log import log_span
-
-@contextlib.contextmanager
-def start_span(name: str, trace_id: str, attributes: Optional[Dict[str, object]] = None):
-    span: Optional[Span] = None
+@contextmanager
+def start_span(name: str, trace_id: Optional[str] = None, attrs: Optional[Dict[str, Any]] = None):
     token = None
-    if trace and _tracer:
-        span = _tracer.start_span(name=name, attributes=attributes or {})
-        token = trace.use_span(span, end_on_exit=True)
     try:
-        log_span(name, trace_id, attributes)
-        yield span
+        if trace_id is not None:
+            token = _current_trace_id.set(trace_id)
+        yield {"name": name, "trace_id": _current_trace_id.get(), "attrs": attrs or {}}
     finally:
         if token is not None:
-            token.__exit__(None, None, None)
+            _current_trace_id.reset(token)

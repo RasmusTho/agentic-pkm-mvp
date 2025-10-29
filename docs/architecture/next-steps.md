@@ -36,7 +36,7 @@
 - [ ] Ensure promotion smoke is included in GH Actions.
 - [ ] Commit ADR for Promotion Agent and link from `docs/ARCHITECTURE.md`.
 - [ ] Flip `docs/STATUS.md` to Green after wrapper + spans.
-- [ ] Verify spans in Jaeger (enable_tracing=true + OTLP endpoint reachable).
+- [x] Verify spans in Jaeger (enable_tracing=true + OTLP endpoint reachable).
 
 ---
 

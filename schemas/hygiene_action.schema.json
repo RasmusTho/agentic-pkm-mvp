@@ -1,0 +1,12 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"HygieneAction",
+  "type":"object",
+  "required":["decision","reason"],
+  "properties":{
+    "decision":{"enum":["keep","fix_structure","archive","merge_into_parent","delete_candidate"]},
+    "reason":{"type":"string","maxLength":160},
+    "summary":{"type":"string"},
+    "pointers":{"type":"array","items":{"type":"string"}}
+  }
+}
