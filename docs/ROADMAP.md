@@ -1,57 +1,41 @@
 # Roadmap — SoT v4.3.1 → v4.4 → v5.0
 
-## v4.3.1 — Obsidian-first (Active)
-Status: Open
-
-**Mål:** Flytta system-settings till kanonisk YAML-fil och etablera dual-layer-design.
-
-- Källsanning: `vault/_system/settings/system-settings.yaml`
-- Läsbar yta: `vault/settings/Overview.md`
-- Testdriven validering: `tests/system/test_settings_schema.py` via `make smoke`
-- Vault-struktur uppdaterad med `@Desk` och `@Inbox`
-- Endast `_system/**` hård-ignoreras
-- Indexerings-regler (`index.rules[]`) styr mjuk exkludering:
-  - `review_state: inbox` → soft_exclude weight 0.05
-  - `review_state: archived` → include weight 0.25
-  - `review_state: promoted` → include weight 1.0
-  - `review_state: evergreen` → include weight 1.2
-
-**Delivered**
-- Promotion Agent thin wrapper + interval worker; optional tracing shim instrumented (verification pending).
-
-**Definition of Done**
-- `make smoke` passerar lokalt + i CI.
-- YAML-filen valideras mot schema.
-- Overview.md refererar rätt kanonisk väg.
-- Docs uppdaterade: ROADMAP, STATUS, architecture/next-steps.
+_Tracks strategic releases and planned features._
 
 ---
 
-## v4.4 — Observability & Conflict Resolution
-Status: Planned
-
-### 4.4.B Promotion Agent (Human-First Lifecycle)
-- Introduce promotion intent via a lightweight checkbox or inline command.
-- Event-driven flow: `promote.intent.created` → `promote.done`.
-- Frontmatter (`review_state`) remains the single source of truth; file moves are batch-processed nightly.
-- Implemented using local file-tools—no Obsidian plugin required.
-- UX goal: the promotion checkbox disappears once processed; no extra receipts or UI noise.
-
-**In progress**
-- Jaeger verification for promotion spans
-- Deterministic merge/conflict policy (frontmatter/body)
-- Outbox broker ADR (Debezium/Kafka)
-
-- OTel-spårning av LLM-spans till Jaeger.
-- Deterministisk merge-policy för frontmatter/body.
-- Broker-backad outbox (Debezium/Kafka) ≤ 2 s SLA.
-- E2E-trace verifieras via `make smoke`.
+## v4.3.1 — Obsidian-First (Delivered)
+- Promotion Agent wrapper + interval worker ✓  
+- Settings schema validated ✓  
+- Smoke tests in CI ✓  
 
 ---
 
-## v5.0 — Reasoning Alpha (förhandsplan)
-Status: Future
+## v4.4 — Semantic Merge & Hygiene (Active)
+**Goal:** resolve semantic conflicts and automate note cleanup.  
+- MergeResolverAgent (LLM + heuristics).  
+- NoteHygieneAgent (archive / salvage / keep).  
+- Event log + CLI tools (events & prompts).  
+- Git merge-driver for `.md /.mdx`.  
+- CI adds merge fixtures + schema lint.  
 
-- Symboliskt lager (triples/claims/rules/provenance).
-- Reasoner/Guard-stubs + SHACL-batchvalidering.
-- Första neurosymboliska loop mellan AMG och reasoning-lager.
+---
+
+## v4.5 — Governance & Authoring UX
+- Block-aware diff and selective HYBRID merges.  
+- Merge→Reviewer→Projector policy integration.  
+- Golden fixtures and QAS guards in CI.  
+
+---
+
+## v4.6 — Optimization & Learning
+- Token budget / locus prompting (optional).  
+- Post-merge critique → adaptive scoring.  
+- Reinforcement of merge heuristics from feedback.  
+
+---
+
+## v5.0 — Reasoning Alpha
+- Symbolic layer (triples / claims / rules / provenance).  
+- Reasoner + SHACL validation.  
+- First neurosymbolic loop between AMG and reasoning layer.  

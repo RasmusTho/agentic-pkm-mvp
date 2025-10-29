@@ -1,14 +1,22 @@
-# STATUS — 2025-10-27
+# STATUS — 2025-10-29
 
-Component | Status | Notes
---------- | ------ | -----
-Promotion intent → promoted → index | 🟢 Green | Local and worker paths verified end-to-end
-Promotion Agent thin wrapper | 🟢 Green | PER wrapper delegates to queue worker; interval job ready
-Optional OTel spans (agent + worker) | 🟡 Added | Instrumented with shim; Jaeger verification pending
-CI (GitHub Actions) | 🟡 Limited | Smoke (settings schema + promotion E2E) auto; remaining workflows manual
-Indexer | 🟢 Stable | Responds to `review_state` updates → promotion reflected immediately
-Outbox / Event Bus | 🟢 Stable | Extended with `promote.*` event types
-Settings Schema | 🟢 Validated | Promotion block (cooldown + move_policy) tracked in system settings
-YAML round-trip (`write_on_diff`) | Stub | CLI helper pending implementation
-Merge/Conflict policy | Planned | Deterministic frontmatter/body resolver targeted for v4.4
-Outbox broker eval | Planned | Debezium/Kafka prototype queued post-promotion agent launch
+_Snapshot of current system health._
+
+| Component | Status | Notes |
+|----------- | ------- | ------|
+| Promotion chain | 🟢 Stable | Intent → Promoted → Indexed |
+| MergeResolverAgent | 🟢 Baseline | LLM judging off by default |
+| NoteHygieneAgent | 🟢 Baseline | Archive + events green |
+| Events / CLI | 🟢 Ready | Tools operational |
+| Git merge driver | 🟡 Partial | Local semanticmd OK; CI next |
+| CI (Smoke + Schema) | 🟡 Partial | Merge tests pending |
+| OTel Spans | 🟢 Enabled | Jaeger endpoint pending |
+| Outbox / Event Bus | 🟢 Stable | promote.*, merge.*, cleanup.* |
+
+### Merge & Hygiene Road to v4.5
+- [x] Baseline agents + tests green  
+- [x] Event log + CLI helpers  
+- [x] Git merge driver wired  
+- [ ] LLM judging enabled in CI  
+- [ ] ASK microflow CLI (A/B/Hybrid)  
+- [ ] Golden fixtures for HYBRID merges  
