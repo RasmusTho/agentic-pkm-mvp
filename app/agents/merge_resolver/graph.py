@@ -1,43 +1,57 @@
-from typing import List, Dict, Any, Tuple
-import re
+from typing import Tuple, List, Dict
 
-_fm_re = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+def _split(text: str) -> Tuple[str, str]:
+    if text.startswith("---"):
+        try:
+            _, fm, rest = text.split("---", 2)
+            return fm.strip(), rest.lstrip("\n")
+        except ValueError:
+            pass
+    return "", text
 
-def _split(md:str)->Tuple[str,str]:
-    m = _fm_re.match(md or "")
-    if not m:
-        return "", md or ""
-    return m.group(1), md[m.end():]
+def _join(fm: str, body: str) -> str:
+    fm_block = f"---\n{fm}\n---\n" if fm else ""
+    return f"{fm_block}{body}"
 
-def diff_conflict_loci(base:str, a:str, b:str)->List[Dict[str,Any]]:
-    loci: List[Dict[str,Any]] = []
-    fmB, bodyB = _split(base)
+def diff_conflict_loci(base: str, a: str, b: str) -> List[Dict[str, str]]:
+    """
+    Minimal, deterministisk lokusupptäckt:
+    - 'yaml' om frontmatter skiljer sig
+    - 'body' om brödtext skiljer sig
+    """
     fmA, bodyA = _split(a)
-    fmR, bodyR = _split(b)
-    if fmA != fmR:
-        loci.append({"kind":"yaml","base":fmB,"a":fmA,"b":fmR,"path":"$.frontmatter"})
-    if bodyA != bodyR:
-        loci.append({"kind":"body","base":bodyB,"a":bodyA,"b":bodyR,"path":"$.body"})
-    if not loci:
-        loci.append({"kind":"noop","base":base,"a":a,"b":b,"path":"$"})
+    fmB, bodyB = _split(b)
+    loci: List[Dict[str, str]] = []
+    if fmA.strip() != fmB.strip():
+        loci.append({"kind": "yaml"})
+    if bodyA.strip() != bodyB.strip():
+        loci.append({"kind": "body"})
     return loci
 
-def apply_decisions(base:str, a:str, b:str, loci, decisions)->str:
-    # Reassemble by replacing per-locus; current loci are coarse (yaml/body),
-    # so return the chosen or hybrid text directly when body-locus driver decided.
+def apply_decisions(base: str, a: str, b: str, loci, decisions) -> str:
+    """
+    Kombinera YAML- och BODY-beslut och assemblar en enda not i slutet.
+    """
+    fmA, bodyA = _split(a)
+    fmB, bodyB = _split(b)
+
+    chosen_fm = fmA
+    chosen_body = bodyA
+
     for loc, dec in zip(loci, decisions):
-        if loc["kind"] == "body":
-            d = dec.get("decision")
+        kind = loc.get("kind")
+        d = dec.get("decision")
+
+        if kind == "yaml":
             if d == "B":
-                return b
-            if d == "HYBRID" and dec.get("hybrid",{}).get("merged_text"):
-                fm, _ = _split(a)
-                return f"---\n{fm}\n---\n{dec['hybrid']['merged_text']}"
-            return a
-        if loc["kind"] == "yaml":
-            # Prefer A unless decision explicitly said B for yaml
-            if dec.get("decision") == "B":
-                _, bodyA = _split(a)
-                fmB, _ = _split(b)
-                return f"---\n{fmB}\n---\n{bodyA}"
-    return a
+                chosen_fm = fmB
+
+        elif kind == "body":
+            if d == "B":
+                chosen_body = bodyB
+            elif d == "HYBRID" and dec.get("hybrid", {}).get("merged_text"):
+                chosen_body = dec["hybrid"]["merged_text"]
+            else:
+                chosen_body = bodyA
+
+    return _join(chosen_fm, chosen_body)
