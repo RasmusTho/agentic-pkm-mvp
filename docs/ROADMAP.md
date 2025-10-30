@@ -16,9 +16,15 @@ _Tracks strategic releases and planned features._
 - Promotion Agent thin wrapper + event pipeline (maintain cadence)
 - MergeResolverAgent rollout:
   - [x] Local semantic merge agent with tests (`merge_note_from_blobs`)
-  - [ ] Expose agent as CLI (`make merge-dryrun`) that prints merged note + status + reason
+  - [x] Expose agent as CLI (`make merge-dryrun`) that prints merged note + status + reason
   - [ ] Register deterministic merge driver for `.md` in git (optional local dev step)
   - [ ] CI smoke includes merge driver roundtrip once CLI lands
+  - Next increment:
+    - Write merged output back to `%A` during Git merges
+    - Emit status and reason to stderr for Git hooks
+    - Exit non-zero when the merge is unresolved
+    - Provide `.gitattributes` and `[merge "semantic-md"]` configuration snippet
+    - Enforce invariants (UUID stable, `review_state` must not regress)
 - NoteHygieneAgent rollout:
   - [x] Hygiene classification implemented and tested
   - [ ] Integrate hygiene step post-merge to clean empty/garbage notes and emit `cleanup.*` events

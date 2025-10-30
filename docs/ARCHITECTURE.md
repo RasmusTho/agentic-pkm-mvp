@@ -67,9 +67,17 @@ _Reference for how the platform actually runs today. Treat this as the system of
   2. `judge_locus()` LLM scoring (strict schema, penalises noisy dumps, preserves references, prevents review_state regressions)
   3. `apply_decisions()` assembles a single frontmatter block and merged body
 - **Output contract:** `(merged_text, info.status, info.reason)`
+- **CLI:** `app/cli/merge_driver.py` wraps `merge_note_from_blobs`, prints the merged note, and returns `(status, reason)` so callers know whether the merge was resolved automatically, requires a prompt, or hit a conflict. The CLI is covered by `tests/cli/test_merge_driver.py`, which now runs under `make smoke`.
 - **Determinism:** fallback heuristics run when LLM output is missing/invalid to guarantee safe merges
 - **Status:** implemented, covered by unit + smoke tests; ready to be invoked as future git merge driver
 - **Future:** callable via planned CLI/merge driver hook
+
+Warning: the merge CLI currently writes the merged note only to stdout; it does not modify the working copy. Git merge driver wiring remains TODO.
+
+#### Developer workflow
+- Run `make merge-dryrun BASE=... A=... B=...` to exercise the semantic merge CLI against conflict triples.
+- Exit code semantics: `0` means the merge is safe to apply as-is; non-zero exits signal that human intervention is required.
+- The CLI is intentionally human-in-the-loop today—review the stdout output and apply it manually until the Git merge driver integration lands.
 
 ### NoteHygieneAgent
 - **Purpose:** identify fragments or garbage after ingestion/merge and salvage or quarantine

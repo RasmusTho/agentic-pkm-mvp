@@ -5,10 +5,11 @@ _Snapshot of current system health._
 | Component | Status | Notes |
 |-----------|--------|-------|
 | Promotion chain | 🟢 Stable | Intent → Promoted → Indexed |
-| MergeResolverAgent | 🟢 Green | Semantic merge (LLM + deterministic fallback); returns status/reason; all tests green |
-| NoteHygieneAgent | 🟢 Green | Salvages link-only notes, archives empty notes, moves oversized dumps; tests green |
+| MergeResolverAgent | 🟢 Green | Semantic merge (LLM + deterministic fallback); returns status/reason; unit + smoke coverage |
+| Semantic merge (CLI) | 🟢 Green | `app/cli/merge_driver.py`; covered by smoke (`tests/cli/test_merge_driver.py`) |
+| NoteHygieneAgent | 🟢 Green | Salvages link-only notes, archives empty notes, moves oversized dumps; unit + smoke coverage |
 | Events / CLI | 🟢 Ready | Tools operational |
-| Git merge driver | 🟡 Partial | Local semanticmd OK; CI next |
+| Git merge driver integration | 🟡 Planned | CLI prints to stdout only; Git wiring pending |
 | CI (Smoke + Schema) | 🟡 Partial | Merge tests pending |
 | OTel Spans | 🟢 Enabled | Jaeger endpoint pending |
 | Outbox / Event Bus | 🟢 Stable | promote.*, merge.*, cleanup.* |
@@ -21,7 +22,7 @@ _Snapshot of current system health._
 - [x] ARCHITECTURE updated with Merge/Hygiene
 - [x] config/agents.yaml tracked
 - [x] JSON-scheman validated in CI for promotion & settings (merge/hygiene schema validation may still be TODO)
-- [x] Tests: merge green, hygiene green
+- [x] Tests: merge green, hygiene green, smoke includes merge CLI
 - [ ] Git-driver active (semanticmd)
 
 ## Merge & Hygiene Road to v4.5
