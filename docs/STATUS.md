@@ -8,6 +8,7 @@ _Snapshot of current system health._
 | Promotion Agent PER wrapper      | 🟢 Green  | Enforces cooldown/idempotence; emits `promote.done`; can schedule batch file moves           |
 | Indexer / Embeddings             | 🟢 Green  | Deterministic embeddings; UUID-stable upsert; hybrid search boosts higher review_state       |
 | Hybrid search (`/search`)        | 🟢 Green  | BM25-style lexical + vector cosine; weighting rules from `system-settings.yaml`              |
+| Capture Layer                    | 🟡 Planned| Agents mirror external sources into vault + Postgres; emit `capture.object.created` events   |
 | system-settings.yaml schema      | 🟢 Green  | Schema-validated in tests; `make smoke` enforces shape                                       |
 | Outbox / event propagation       | 🟡 Stable | File/JSONL outbox + Redis fan-out works locally; broker-backed fanout (Kafka/Debezium) TBD   |
 | OpenTelemetry / Jaeger tracing   | 🟡 Partial| Spans emitted with `trace_id`; Jaeger path proven manually; not yet asserted in CI           |

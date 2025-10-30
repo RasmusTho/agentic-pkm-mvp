@@ -105,6 +105,11 @@ Themes:
   - Lock in expected behaviour of “good” vs “garbage” notes.
   - CI blocks regressions if heuristics drift.
 - Expose merge outcome + rationale to Reviewer / Projector so promoted content always has a provenance trail (“why does this text look like this?”).
+- Capture Agents (External → Vault + DB)
+  - Introduce first `FileDropCaptureAgent` that monitors import folders or APIs.
+  - Writes normalized Markdown into `@Inbox` and mirrors into Postgres.
+  - Emits `capture.object.created` events with provenance.
+  - Foundation for Email/Chat/Web importers in v4.6+.
 
 ---
 

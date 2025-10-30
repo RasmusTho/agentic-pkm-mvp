@@ -118,6 +118,26 @@ We also enforce an SLA / quality gate around propagation times. Example: promoti
 
 ## 4. Pipelines
 
+### Capture Pipeline (External → Vault + DB)
+
+This is how new information enters the system from the outside world — not through manual copy/paste, but via agents that *capture* and normalize data into the user’s knowledge space.
+
+1. A **Capture Agent** (e.g., `FileDropCaptureAgent`, `EmailCaptureAgent`, `ScreenshotOCRAgent`, `ChatLogImporter`, etc.) observes an external source such as a folder, email inbox, or exported data feed.
+2. The agent parses and normalizes the input, producing a Markdown note with YAML frontmatter:
+   - assigns a stable `uuid`
+   - records provenance (`origin`, timestamps, `source_ref`)
+   - sets an initial `review_state` such as `inbox`, `archived`, or `reference_only`
+3. The normalized Markdown note is **written directly into the vault** (usually under an `@Inbox/` or `@Reference/` folder).
+4. The same content (frontmatter + body) is immediately **inserted into Postgres** (`objects`, `chunks`, `embeddings`) for indexing and retrieval.
+5. An event `capture.object.created` is appended to the outbox with a unique `trace_id`.
+
+This ensures that:
+- **Vault and DB are mirrors** — every captured item exists in both.
+- Nothing is lost to a temporary index or external shadow cache.
+- The vault remains a complete surface of memory: both curated and raw.
+
+Capture Agents thus populate the vault automatically, while lifecycle agents (Normalizer, Classifier, Chunker, Indexer, Reviewer, SetEvaluator, Projector, Hygiene, Promotion, MergeResolver) refine and organize it over time.
+
 ### 4.1 Ingestion & Indexing
 1. **Normalizer**  
    - Ingests raw Markdown or external text.
