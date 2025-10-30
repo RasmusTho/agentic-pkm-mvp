@@ -1,162 +1,109 @@
-# Architecture — SoT v4.4 Baseline
+# Architecture — SoT v4.3.1 baseline (on path to v4.4)
 
-_Reference for structure, agents, events, and invariants. This supersedes older v4.2/v4.3 texts._
-
----
-
-## 1) Runtime & Deployment
-
-- **Language:** Python 3.14
-- **App surfaces:** FastAPI API, LangGraph agents, background jobs
-- **Persistence:** Postgres 16 + pgvector (SetDB/AMG)
-- **Cache/Queue:** Redis (optional, bridge/coordination)
-- **LLMs:** Local Ollama (llama3.1:8b, deepseek-r1:8b) and pluggable remotes
-- **Packaging:** Docker Compose (db, redis, api)
-- **Dev workflow:** VS Code Remote-SSH → Mac mini; Portainer for stacks
-- **CLI:** `python -m app.agents.runner --agent <name>`
+_Reference for how the platform actually runs today. Treat this as the system of record._
 
 ---
 
-## 2) Data Model (SetDB / AMG)
-
-Core tables:
-
-- `objects(id UUID PK, kind text, source_ref text, payload jsonb, created_at timestamptz)`
-- `chunks(id UUID PK, object_id UUID, idx int, payload jsonb, offset_start int, offset_end int, text text)`
-- `embeddings(id UUID PK, object_id UUID, model text, dim int, vec vector)`
-- `decisions(id UUID PK, object_id UUID, key text, value jsonb, created_at timestamptz)`
-- `audit(id UUID PK, object_id UUID, agent text, action text, ts timestamptz, trace_id text, details jsonb)`
-- `sets(id UUID PK, name text)` / `membership(id UUID PK, set_id UUID, object_id UUID)`
-- `agent_memories(id UUID PK, run_id UUID, layer text, payload jsonb, provenance jsonb, created_at timestamptz)`
-
-**Core-6** (`id`, `type`, `title`, `created`, `updated`, `origin`) lever i `objects.payload.core6` och är immutabla utanför Normalizer.
-
-> **Pending refactor (documented):** Konsolidera identitet → ta bort `objects.id` och gör `uuid` till enda kanon (PK). Följd-migreringar uppdaterar FK och kodvägar.
+## Runtime & Deployment
+- **Language/runtime:** Python 3.12
+- **Surfaces:** FastAPI APIs, background workers, LangGraph-driven agents orchestrated via PER (Plan → Execute → Reflect) loops
+- **Persistence:** Postgres 16 with pgvector extension, deterministic embedding fallback when vector SIMD unavailable
+- **Queues/outbox:** Filesystem-backed event outbox (JSONL) with optional Redis bridge for fan-out
+- **LLMs:** Local Ollama (llama3 family, deepseek) plus pluggable remote adapters
+- **Packaging:** Docker Compose for local stack (db, api, worker)
+- **CLI entrypoints:** `python -m app.agents.runner --agent <name>`, plus dedicated tools under `app/cli/`
 
 ---
 
-## 3) Events, Outbox & Observability
-
-- **Event log:** JSONL (`events.jsonl`) med `trace_id` på alla domänhändelser.
-- **Topics (kärna):**
-  - **Ingest:** `ingest.object.created`
-  - **Merge:** `merge.intent.created` → `merge.prompt` → `merge.resolved | merge.conflict`
-  - **Promotion:** `promote.intent.created` → `promote.done | promote.pending_move | promote.error`
-  - **Hygiene:** `cleanup.intent.created` → `cleanup.done`
-- **Tracing:** `app/observability/tracer.start_span()` (ContextVar-baserad). Jaeger via OTLP när endpoint är konfad.
-- **Quality gates (CI mål):** QAS-003 (search p95 < 250 ms), QAS-010 (outbox→index ≤ 2 s); OpenAPI/AsyncAPI lint.
+## Data Model & Storage Guarantees
+- **Objects:** `objects(uuid PK, fallback_id bigint, kind, payload jsonb, created_at, updated_at)` — immutable `uuid`; mutable fields live inside `payload`
+- **Chunks / embeddings:** `chunks(uuid PK, object_uuid, idx, text, offset_start, offset_end)` with associated `embeddings` rows (pgvector or deterministic embedding)
+- **Decisions / audit / agent_memories:** deterministic agent outputs captured with `trace_id`, agent name, and PER phase metadata
+- **Vault mirror:** Markdown notes with YAML frontmatter remain the canonical human surface; merges and promotions always write Markdown + YAML
+- **Deterministic safeguards:** UUID immutability enforced at agent layer, `review_state` monotonic (`draft → reviewed → promoted → archived`), provenance references never discarded
+- **Merge semantics:** conflict resolution now semantic (MergeResolverAgent) instead of timestamp-last-write-wins
 
 ---
 
-## 4) Agent Framework (PER)
-
-Alla agenter följer **Plan → Act → Reflect** med audit + events och idempotens.
-
-### 4.1 Ingestion & Curation Pipeline
-
-| Stage | Agent | Input | Output | Notes |
-|---|---|---|---|---|
-| 1 | **Normalizer** | råtext/fil | `objects` (Core-6 stabil), audit | Immutables sätts, origin hash |
-| 2 | **Classifier** | object | decisions(taxonomy/trust) | Taggar, risk/klass |
-| 3 | **Chunker** | object | `chunks` | Logiska spans |
-| 4 | **Deduper** | object/chunks | decisions(duplicate_of) | Near-dup |
-| 5 | **CitationChecker** | chunks | decisions(citation) | Blockers vid saknad källa |
-| 6 | **Indexer** | chunks | `embeddings` + stats | pgvector + BM25-lite |
-| 7 | **Reviewer** | object + provenance | decisions(review) | Sammanställer källor |
-| 8 | **SetEvaluator** | review | decisions(evaluate) | Poäng för promotion |
-| 9 | **Projector** | evaluate | `membership` uppdaterad | Publicerar till sets |
-
-### 4.2 Lifecycle & Governance
-
-| Stage | Agent | Input | Output | Notes |
-|---|---|---|---|---|
-| A | **Promotion Agent** | `promote.intent.created` | `promote.done|pending_move|error` | Uppdaterar `review_state: promoted`, flytt batchas enl. policy |
-| B | **MergeResolverAgent** | base, local, remote | `merge.resolved|prompt|conflict` | Semantisk 3-vägs merge (MD+YAML) |
-| C | **NoteHygieneAgent** | note | `cleanup.done` | Archive/fix_structure/keep |
-
-**Allmänna egenskaper:** PER-loop, audit med `trace_id`, deterministiska writes, återstartbar körning.
+## Eventing & Observability
+- **Outbox-driven events:** every agent run emits domain events (e.g. `ingest.object.created`, `merge.intent.created`, `promote.done`, `cleanup.done`) into `events.jsonl`
+- **PER loop instrumentation:** each Plan/Execute/Reflect cycle records audit rows and emits events atomically
+- **Tracing:** all agents wrap execution in `start_span("agent.name", trace_id, {...})`; when `runtime.enable_tracing=true` spans are exported via OTLP to Jaeger
+- **Trace context:** `trace_id` propagates through events, audit tables, and CLI tooling for replay/debug
 
 ---
 
-## 5) MergeResolverAgent (semantic, structure-aware)
+## Pipelines
+### Ingestion & Indexing
+1. **Normalizer** ingests raw files/content, creates `objects` rows, locks immutables
+2. **Classifier** annotates taxonomy and trust decisions
+3. **Chunker** slices Markdown into semantic spans recorded in `chunks`
+4. **Indexer** writes embeddings (pgvector or deterministic), updates search indices
+5. **Reviewer & SetEvaluator** score readiness; **Projector** publishes eligible objects into public sets
 
-**Mål:** Välj högst semantisk kvalitet; bevara provenance; minimera manuella konflikter.
+### Merge Flow
+- `merge.intent.created` event triggers MergeResolverAgent
+- Semantic comparison merges Markdown/YAML, emits `merge.resolved`, `merge.prompted`, or `merge.conflict`
+- Deterministic fallbacks run if LLM output is absent/invalid; uuid/review_state invariants enforced before commit
 
-**Inputs:** `base`, `local (A)`, `remote (B)`; YAML-frontmatter + body.
+### Hygiene Flow
+- `cleanup.intent.created` fires NoteHygieneAgent post-ingest or post-merge
+- Agent salvages minimal notes, archives empties, or relocates noisy dumps, guaranteeing the vault stays usable
+- Emits `cleanup.done` with remediation details
 
-**Plan**
-1) 3-vägs diff → **loci** för YAML-nycklar + Markdown-body (rubriknivåer kan nyttjas senare).  
-2) Policyevaluering av invariants (immutables/enumprogression) före modell.
-
-**Act**
-- **LLM-Arbiter** (temp=0, strikt JSON-schema) beslutar per locus: `A|B|HYBRID|ASK`.
-- **Heuristik fallback:** Om A saknar men B har unika länkar/fakta → HYBRID(A + refs från B).
-- **Git-integration:** `.gitattributes` → `merge=semanticmd` → `app/services/merge_driver.py`.
-
-**Reflect**
-- Verifiera invariants + återbygg hash/version-vector.
-- Emit `merge.resolved` eller `merge.prompt` (ASK-fall).
-
-**Invariants**
-- `uuid` och övriga immutables får inte ändras.
-- `review_state` får endast röra sig frammåt (draft→reviewed→promoted).
-- Proveniens union/dedup: källor förloras aldrig.
-- Kodblock >80 rader i icke-kodnoter penaliseras i scoring.
+### Promotion Flow
+- Promotion Agent consumes `promote.intent.created`
+- Applies cooldown/idle policy, updates frontmatter (`review_state: promoted`), may queue batch file moves, emits `promote.done`
+- Acts as thin wrapper over event pipeline, replacing manual Obsidian updates
 
 ---
 
-## 6) NoteHygieneAgent (quality maintenance)
+## Agents (PER Loops)
+### MergeResolverAgent
+- **Purpose:** resolve conflicts between divergent Markdown notes that include YAML frontmatter
+- **Inputs:** `(base, a, b)` note blobs
+- **Flow:**
+  1. `diff_conflict_loci()` separates YAML keys from body loci
+  2. `judge_locus()` LLM scoring (strict schema, penalises noisy dumps, preserves references, prevents review_state regressions)
+  3. `apply_decisions()` assembles a single frontmatter block and merged body
+- **Output contract:** `(merged_text, info.status, info.reason)`
+- **Determinism:** fallback heuristics run when LLM output is missing/invalid to guarantee safe merges
+- **Status:** implemented, covered by unit + smoke tests; ready to be invoked as future git merge driver
+- **Future:** callable via planned CLI/merge driver hook
 
-**Klassificering**
-- **archive** – tom eller nästan tom → flytt till `Archive/Trash/YYYY-MM/<slug>.md`, emit `cleanup.done`.
-- **fix_structure** – kort (≤ ~80 tokens) → generera `## Summary` + `## Pointers` från text + länkar.
-- **keep** – behåll.
+### NoteHygieneAgent
+- **Purpose:** identify fragments or garbage after ingestion/merge and salvage or quarantine
+- **Behaviours:**
+  - Title + URL only → keep minimal cleaned note with salvage summary
+  - Frontmatter-only / empty body → set `review_state: archived`
+  - Oversized JSON/log dumps in non-technical notes → move to attachment/parking path, leave reference pointer
+- **Events:** emits `cleanup.*` outcomes documenting action taken
+- **Guarantee:** prevents noisy content from poisoning downstream promotion/indexing
+- **Status:** implemented and tested
 
-**Events:** `cleanup.done` inkluderar målpath och `uuid` för spårbarhet.
+### Promotion Agent (recap)
+- **Purpose:** process `promote.intent.created`, update frontmatter (`review_state: promoted`), enforce cooldown/idle policy, emit `promote.done`, optionally schedule batch moves
+- **UX impact:** replaces manual “mark as done” in Obsidian; no plugin required
 
----
-
-## 7) Search & Retrieval
-
-- **Lexikal:** BM25-lite (tsvector) på `objects`.  
-- **Semantisk:** pgvector per chunk; cosine-distans.  
-- **Hybrid:** rank-merge före svarssammansättning.  
-- **API:** `/search` (GET) med spårning (`x-trace-id` stöds).
-
----
-
-## 8) Interfaces & Tools
-
-- **/ingest** (POST) – skriver in objekt; outbox triggar Indexer.  
-- **/search** (GET) – snabbsök.  
-- **CLI verktyg:**  
-  - `tools/events_cli.py` – summering/tail av `events.jsonl`.  
-  - `tools/merge_prompt_export.py` – export av `merge.prompt` → Markdown-underlag.  
-- **Git merge driver:** `.gitattributes` + `app/services/merge_driver.py`.
-
----
-
-## 9) Configuration & Policy
-
-- **System-settings:** YAML i vault, schema-validerad lokalt + i CI (mål).  
-- **Merge-policy:** preferera koncis, välformulerad text; HYBRID bär över unika referenser/fakta; ASK när A/B är semantiskt nära.  
-- **Promotion-policy:** cool-down, idle-detektion, idempotens på UUID-nivå; batch-move enligt `move_policy`.
+Additional agents (Reviewer, SetEvaluator, Projector, Classifier, Normalizer, Indexer) continue to run under PER with deterministic safeguards and trace instrumentation.
 
 ---
 
-## 10) Testing, CI & Fitness Functions
-
-- **Unit & E2E:** Agenter, merge-fixturer, hygiene, indexer.  
-- **Golden fixtures:** för HYBRID-sammanfogningar (planerad i v4.5).  
-- **CI guards:**  
-  - Schema-lint för LLM-svar (planerad).  
-  - `make smoke` kör settings-validering + promotion-E2E.  
-  - QAS-003 (search p95) och QAS-010 (outbox→index) aktiveras successivt.
+## Observability & Tooling
+- Centralised traces via `start_span`, audit trails in Postgres, JSONL event log for replay
+- CLI utilities under `tools/` and `app/cli/` provide event tailing, merge prompt exports, and (now) merge driver experiments
+- Metrics (latency targets, merge decision counts) captured via audit + events; Jaeger visualisation available when tracing enabled
 
 ---
 
-## 11) Roadmap Hooks (v4.5 → v4.6)
+## Testing & CI
+- `pytest -q` covers agents (merge, hygiene, promotion), schema validation, indexer invariants
+- `make smoke` exercises settings schema, promotion flows, merge smoke tests, and end-to-end promotion-worker roundtrip
+- Deterministic fallbacks ensure green builds even when LLM runway is constrained
 
-- **v4.5:** Block-aware diff (rubrik/paragraph-ID), ASK-microflow CLI (A/B/HYBRID apply), golden fixtures + CI-vakter, policy-integration Merge→Reviewer→Projector.
-- **v4.6:** Tokenoptimering vid fjärr-LLM, post-merge critique (aktivt lärande), förbättrade heuristiker.
+---
 
+## Roadmap Hooks
+- v4.4 focuses on semantic merge rollout, hygiene integration, observability enhancements
+- v4.5 introduces golden fixtures, block-aware diffing, merge-driver CI
+- v5.0 targets reasoning layer integration while preserving current safeguards
