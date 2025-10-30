@@ -14,6 +14,7 @@ smoke:
 	pytest -q tests/integration/test_batch_move_nightly.py
 	pytest -q tests/e2e/test_promotion_intent_to_index.py
 	pytest -q tests/smoke/test_promotion_smoke.py
+	pytest -q tests/smoke/test_merge_smoke.py
 
 .PHONY: promote-queue
 promote-queue:
