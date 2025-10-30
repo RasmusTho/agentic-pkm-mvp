@@ -1,50 +1,75 @@
 from pathlib import Path
+from app.cli.merge_driver import run_merge
 
-from app.agents.merge_resolver.agent import merge_note_from_blobs
+_counter = 0
+def _tmpfile(tmp_path: Path, body: str) -> Path:
+    global _counter
+    _counter += 1
+    p = tmp_path / f"n{_counter}.md"
+    p.write_text(body, encoding="utf-8")
+    return p
 
-BASE = """---
-uuid: u-merge
+def test_merge_driver_resolved(tmp_path: Path):
+    base = """---
+uuid: u-test
 kind: concept
 review_state: draft
 ---
-# Topic
-Initial state
+# T
+base
 """
-
-A = """---
-uuid: u-merge
+    a = """---
+uuid: u-test
 kind: concept
 review_state: reviewed
 ---
-# Topic
-Crisp cleaned summary with structure.
+# T
+clean summary
 """
+    b = """---
+uuid: u-test
+kind: concept
+review_state: reviewed
+---
+# T
+clean summary
+"""
+    ec = run_merge(
+        _tmpfile(tmp_path, base),
+        _tmpfile(tmp_path, a),
+        _tmpfile(tmp_path, b),
+    )
+    assert ec == 0
 
-B = """---
-uuid: u-merge
+def test_merge_driver_prompted(tmp_path: Path):
+    base = """---
+uuid: u-test
 kind: concept
 review_state: draft
 ---
-# Topic
-Crisp cleaned summary with structure.
-
-## References
-- [link-a](https://example.com/a)
+# T
+base
 """
-
-
-def test_merge_driver_contract(tmp_path: Path) -> None:
-    base_path = tmp_path / "base.md"
-    a_path = tmp_path / "a.md"
-    b_path = tmp_path / "b.md"
-
-    base_path.write_text(BASE, encoding="utf-8")
-    a_path.write_text(A, encoding="utf-8")
-    b_path.write_text(B, encoding="utf-8")
-
-    merged, info = merge_note_from_blobs(BASE, A, B)
-
-    assert info["status"] in {"resolved", "prompted", "conflict"}
-    assert merged.startswith("---")
-    assert "uuid:" in merged
-    assert info["reason"].strip()
+    a = """---
+uuid: u-test
+kind: concept
+review_state: reviewed
+---
+# T
+A body
+"""
+    b = """---
+uuid: u-OTHER
+kind: concept
+review_state: reviewed
+---
+# T
+B body
+"""
+    ec = run_merge(
+        _tmpfile(tmp_path, base),
+        _tmpfile(tmp_path, a),
+        _tmpfile(tmp_path, b),
+    )
+    # Different UUIDs => merge_driver must refuse automatic resolution
+    assert ec != 0
