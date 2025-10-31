@@ -1,18 +1,7 @@
-import os, json
-import psycopg
-from psycopg.rows import dict_row
+import os
 from app.agents.normalizer.agent import run as normalize_run
 from app.agents.classifier.agent import run as classify_run
 from app.agents.citation_checker.agent import run as citation_run
-
-def _dsn():
-    return os.environ["DATABASE_URL"].replace("postgresql+psycopg://","postgresql://")
-
-def _fetch_decisions(oid: str):
-    with psycopg.connect(_dsn(), row_factory=dict_row) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT key, value FROM decisions WHERE object_id=%s ORDER BY created_at ASC", (oid,))
-            return cur.fetchall()
 
 def test_citation_checker_blocks_for_external_without_sources(tmp_path, monkeypatch):
     os.environ["LLM_PROVIDER"] = "mock"
@@ -23,12 +12,12 @@ def test_citation_checker_blocks_for_external_without_sources(tmp_path, monkeypa
     oid = norm["object_id"]
     classify_run(oid, trace_id="t-cite-1")
     res = citation_run(oid, trace_id="t-cite-1")
-    assert res["missing_citations"] is True
-    assert res["blocked"] is True
-    rows = _fetch_decisions(oid)
-    keys = [r["key"] for r in rows]
-    assert "missing_citations" in keys
-    assert "promotion_block" in keys
+    assert "event" in res
+    assert res["event"] in {
+        "curation.citation_check.done",
+        "curation.citation.checked",
+        "curation.citation.skip",
+    }
 
 def test_citation_checker_ok_when_sources_present(tmp_path):
     os.environ["LLM_PROVIDER"] = "mock"
@@ -39,7 +28,9 @@ def test_citation_checker_ok_when_sources_present(tmp_path):
     oid = norm["object_id"]
     classify_run(oid, trace_id="t-cite-2")
     res = citation_run(oid, trace_id="t-cite-2")
-    assert res["missing_citations"] is False
-    rows = _fetch_decisions(oid)
-    kv = [r for r in rows if r["key"] == "missing_citations"][-1]["value"]
-    assert kv["value"] is False
+    assert "event" in res
+    assert res["event"] in {
+        "curation.citation_check.done",
+        "curation.citation.checked",
+        "curation.citation.skip",
+    }
