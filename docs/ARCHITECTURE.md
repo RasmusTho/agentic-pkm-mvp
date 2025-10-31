@@ -22,6 +22,7 @@ This document covers:
 - UUID is now the canonical identity across vault notes, Stores, AMG, and events. The application generates UUIDs up front; the database no longer owns identity.
 - Persistence is organised into domain-specific Stores under `app/store/`. Postgres 16 is still the canonical backing database today, but agents touch it through ObjectStore / VectorIndex / RelationIndex seams instead of ad-hoc SQL.
 - Store seams let us evolve toward polyglot persistence (Postgres + vector index + graph memory, Cosmos DB for compliance) without rewriting every agent. The goal is not to hide backend capabilities but to create stable interfaces that bind agents, Outbox events, and traceability together.
+- Offline test harnesses run the pipeline entirely in-memory: agent runners hydrate `DomainObject`s into simple dicts and keep transient state in Python maps/lists (`objects`, `chunks`, `embeddings`, `PROJECTED_CACHE`). This keeps the SoT reference model intact while letting pytest run without a database.
 
 ---
 
@@ -214,6 +215,7 @@ Capture Agents populate the vault automatically, while lifecycle agents (Normali
   - Emits `promote.done`, plus structured audit with `trace_id`, and can trigger reindex so VectorIndex reflects the promoted state.
 
 Frontmatter remains the product truth for lifecycle state. The Promotion Agent enforces policy on top and preserves the audit trail through the Store layer.
+During offline mode we only exercise Evaluator → Projector interactions: `promotion.evaluate.done` decides promotability and Projector records the intent in memory (`PROJECTED_CACHE`). No database writes are required to demonstrate the promotion contract in tests; the real pipeline still persists state through ObjectStore when available.
 
 ### 7.3 Merge Flow (Semantic merge)
 **Problem:** Same note edited in parallel on two machines/branches → traditional git merge creates garbage.  
@@ -343,6 +345,9 @@ These smoke tests are what we intend to enforce in GitHub Actions for PRs during
 
 - **Broker ADR / scaling path:**  
   We are drafting an ADR for a broker-backed outbox (Debezium/Kafka). Target SLA: ingestion or promotion intent → indexed and searchable in ≤2 seconds across processes. This is exploratory for v4.4+ and must not regress QAS-010 today.
+
+- **Operational note:**  
+  - Production `BackfillJob` still walks Postgres tables to find gaps (missing chunks, reviews, etc.) and invokes chunk/index/review/evaluate/projector via Stores. For offline tests we validate those individual agent contracts without running the job loop itself; the job’s SQL queries remain part of the deployed system.
 
 - **v5.0 direction:**  
   A reasoning / governance layer:  
