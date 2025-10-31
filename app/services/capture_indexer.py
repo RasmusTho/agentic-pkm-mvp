@@ -1,105 +1,94 @@
 from __future__ import annotations
 
-import json
-import uuid
+import uuid as _uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict
 
-from app.db import conn_rw
-from app.services.indexer import _upsert_object, _upsert_embedding
-from app.tracing import start_span
+from app.store.object_store import ObjectStore
+from app.agents.indexer.agent import run as indexer_run
+from app.services.audit import audit_event
 
+AGENT = "capture_indexer"
 
-def _fake_embed(text: str) -> list[float]:
-    # placeholder embedding so we can index without pgvector
-    # deterministic but useless for semantic search
-    h = hash(text)
-    return [
-        ((h >> 0) & 0xFF) / 255.0,
-        ((h >> 8) & 0xFF) / 255.0,
-        ((h >> 16) & 0xFF) / 255.0,
-        ((h >> 24) & 0xFF) / 255.0,
-    ]
-
-
-def index_capture_bundle(bundle: Dict[str, Any]) -> None:
+def _build_domain_object(path: str) -> dict[str, Any]:
     """
-    Take the structured capture bundle (summary/tasks/decisions/entities/raw),
-    write it into Postgres as kind='capture', and generate a dumb embedding.
+    Best-effort mirror of what normalizer does, but inline so we can
+    still handle raw capture notes until everything uses normalizer.agent.
     """
+    p = Path(path)
+    raw = p.read_text(encoding="utf-8")
 
-    # bundle comes from capture_ingest:
-    # {
-    #   "bundle_id": "cap-20251030-205255",
-    #   "summary": "...",
-    #   "tasks": [...],
-    #   "decisions": [...],
-    #   "entities": [...],
-    #   "raw": "original text",
-    # }
+    # title = first non-empty line or file stem
+    title = ""
+    for ln in raw.splitlines():
+        stripped = ln.strip().lstrip("#").strip()
+        if stripped:
+            title = stripped
+            break
+    if not title:
+        title = p.stem
 
-    bundle_id = bundle["bundle_id"]  # human-readable id (cap-...)
-    summary = bundle["summary"]
-    tasks = bundle["tasks"]
-    decisions = bundle["decisions"]
-    entities = bundle["entities"]
-    raw = bundle["raw"]
+    object_uuid = str(_uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
 
-    # We'll store a DB UUID as the canonical object id.
-    db_uuid = uuid.uuid4()
-
-    # Build a text blob to embed for search
-    content_lines: list[str] = []
-
-    if summary.strip():
-        content_lines.append("Summary:")
-        content_lines.append(summary.strip())
-        content_lines.append("")
-
-    if tasks:
-        content_lines.append("Tasks:")
-        for t in tasks:
-            content_lines.append(f"- [ ] {t['text']} @{t['owner']}")
-        content_lines.append("")
-
-    if decisions:
-        content_lines.append("Decisions:")
-        for d in decisions:
-            content_lines.append(f"- {d}")
-        content_lines.append("")
-
-    if entities:
-        content_lines.append("Entities:")
-        for e in entities:
-            content_lines.append(f"- {e['name']} ({e['type']})")
-        content_lines.append("")
-
-    content_lines.append("Raw capture:")
-    content_lines.append(raw.strip())
-
-    content_blob = "\n".join(content_lines)
-
-    embedding = _fake_embed(content_blob)
-
-    # This is what we'll persist as `payload` for kind='capture'
-    payload: Dict[str, Any] = {
-        "title": summary.splitlines()[0][:120] if summary.strip() else "capture",
+    core6 = {
+        "id": object_uuid,
+        "type": "note",
+        "title": title,
+        "created": now,
+        "updated": now,
+        "origin": "capture",
         "review_state": "inbox",
-        "content": content_blob,
-        # keep a link back to the human-facing capture note in the vault
-        "source_uuid": bundle_id,
-        "entities": entities,
-        "tasks": tasks,
-        "decisions": decisions,
     }
 
-    payload_json = json.dumps(payload)
+    payload: Dict[str, Any] = {
+        "core6": core6,
+        "raw_text": raw,
+        "source_path": str(path),
+    }
 
-    # No real trace_id yet; wire later
-    trace_id = None
+    return {
+        "uuid": object_uuid,
+        "kind": "note",
+        "payload": payload,
+        "source_ref": str(path),
+        "created_at": datetime.now(timezone.utc),
+    }
 
-    with conn_rw() as conn:
-        with conn.cursor() as cur:
-            with start_span("indexer.capture", trace_id, {"kind": "capture"}):
-                _upsert_object(cur, db_uuid, payload_json)
-                _upsert_embedding(cur, db_uuid, embedding)
-        conn.commit()
+def capture_and_index(path: str, *, trace_id: str) -> dict[str, Any]:
+    """
+    1. Read captured note from disk
+    2. Save into ObjectStore (so it's queryable)
+    3. Run indexer on it (so it's searchable)
+    4. Emit audit
+    """
+    dom = _build_domain_object(path)
+
+    store = ObjectStore()
+    store.save_object(
+        dom,
+        emit_outbox=False,
+        trace_id=trace_id,
+    )
+
+    idx = indexer_run(dom["uuid"], trace_id=trace_id)
+
+    audit_event(
+        event="capture.indexed",
+        object_id=dom["uuid"],
+        agent=AGENT,
+        trace_id=trace_id,
+        extra={
+            "path": path,
+            "title": dom["payload"]["core6"]["title"],
+            "embeddings": idx.get("embeddings", 0),
+        },
+    )
+
+    return {
+        "event": "capture.indexed",
+        "object_id": dom["uuid"],
+        "embeddings": idx.get("embeddings", 0),
+        "trace_id": trace_id,
+    }
