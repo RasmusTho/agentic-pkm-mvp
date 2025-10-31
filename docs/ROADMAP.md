@@ -48,13 +48,23 @@ This is our new normal.
 
 ---
 
-## v4.4 — Observability & Conflict Resolution (In progress / Next)
+## v4.4 — Observability, Stores & Conflict Resolution (In progress / Next)
 
-**Goal:** Make the system boring-in-production:
+**Goal:** Make the system boring-in-production while laying the Store foundation for SoT v4.4:
 - automatic merge that won't eat data,
 - promotion that is observable,
 - hygiene that keeps the vault tidy without manual babysitting,
-- CI that actually enforces all that.
+- CI that actually enforces all that,
+- agents using Store interfaces so we can step toward polyglot persistence and future graph-RAG.
+
+### SoT v4.4 Milestones
+- **ObjectStore introduced:** The ingestion path (Normalizer / Capture CLI / first agent) stops talking to Postgres directly. All writes go through a Python ObjectStore interface that performs Postgres persistence and Outbox emission atomically.
+- **UUID as canonical identity:** Surrogate ids are being removed from objects. UUID becomes the stable primary key across ObjectStore, VectorIndex, RelationIndex, AMG, and events.
+- **VectorIndex interface:** Define a module-level interface for embedding upsert and similarity search. First implementation stays on pgvector in Postgres, but it must look like a service that can later swap to Qdrant/Milvus/Azure AI Search without touching agent logic.
+- **RelationIndex / KnowledgeGraphStore prototype:** Begin capturing typed relations `(a_uuid, b_uuid, relation_type, provenance)`. Back it with a Postgres table for now, but expose an API with graph-shaped queries. This is groundwork for graph-RAG.
+- **Promotion Agent lifecycle:** Promotion Agent continues to enforce human intent and steady-state lifecycle (`review_state: promoted`, `move_policy`) with auditability. Documentation, tests, and Store interfaces must reflect this contract.
+- **Performance & observability targets:** Maintain QAS-003 (search p95 < 250 ms) and QAS-010 (outbox → index latency ≤ 2 s) as gating metrics. Store instrumentation must not regress them.
+- **Cosmos DB / SetDB evaluation:** Plan and run an evaluation of Cosmos DB and/or a dedicated SetDB backend for ObjectStore. This is an investigation, not a committed migration.
 
 Planned / ongoing work:
 1. **Git merge driver integration**
@@ -88,6 +98,8 @@ Planned / ongoing work:
    - Write ADR describing Debezium/Kafka-style fan-out.
    - Target SLA: ingestion/promotion intent → indexed+searchable in ≤2s across processes.
    - Do NOT blindly implement broker yet; we just commit to the design + contract.
+
+> The Store abstraction is not cleanup work. It is the seam that enables polyglot persistence (Postgres + pgvector today, Cosmos DB or graph memory tomorrow) and unlocks graph-RAG without destabilising existing agents or PER loops.
 
 ---
 
