@@ -7,7 +7,7 @@ def _slugify(text: str) -> str:
     return text or "note"
 
 def archive_path(title: str, base_dir: str = ".") -> str:
-    yyyymm = datetime.datetime.utcnow().strftime("%Y-%m")
+    yyyymm = datetime.datetime.now(datetime.UTC).strftime("%Y-%m")
     slug = _slugify(title)[:80]
     folder = os.path.join(base_dir, "Archive", "Trash", yyyymm)
     pathlib.Path(folder).mkdir(parents=True, exist_ok=True)

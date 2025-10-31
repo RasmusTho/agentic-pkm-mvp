@@ -11,7 +11,7 @@ def emit(topic: str, payload: Dict[str,Any], trace_id: Optional[str] = None) -> 
     rec = {
         "topic": topic,
         "trace_id": tid,
-        "ts": datetime.datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.datetime.now(datetime.UTC).isoformat() + "Z",
         "payload": payload,
     }
     with open(EVENT_LOG, "a", encoding="utf-8") as f:

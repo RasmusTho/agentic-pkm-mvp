@@ -1,0 +1,8 @@
+{
+  "event": "av.asr.completed",
+  "trace_id": "tr-av-0001",
+  "uuid": "00000000-0000-0000-0000-000000000000",
+  "reasons": ["asr-requested", "lang:auto->sv"],
+  "metrics": { "duration_ms": 238742, "segments": 412, "rtf": 0.7 },
+  "provenance": { "model": "whisper", "version": "large-v3" }
+}

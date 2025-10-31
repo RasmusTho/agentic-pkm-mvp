@@ -87,7 +87,24 @@ def upgrade() -> None:
     )
     """)
     op.execute("CREATE INDEX IF NOT EXISTS ix_objects_payload ON objects USING GIN (payload)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_chunks_object_idx ON chunks(object_id, idx)")
+    op.execute("""
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='chunks' AND column_name='idx'
+  ) THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS ix_chunks_object_idx ON public.chunks(object_id, idx)';
+  ELSIF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='chunks' AND column_name='position'
+  ) THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS ix_chunks_object_position ON public.chunks(object_id, position)';
+  ELSE
+    EXECUTE 'CREATE INDEX IF NOT EXISTS ix_chunks_object ON public.chunks(object_id)';
+  END IF;
+END$$;
+""")
     op.execute("CREATE INDEX IF NOT EXISTS ix_embeddings_object ON embeddings(object_id)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_relations_src ON relations(src_id)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_relations_dst ON relations(dst_id)")

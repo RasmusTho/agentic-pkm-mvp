@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 import uuid as uuidlib
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +26,7 @@ def _new_capture_uuid() -> str:
 
 def _new_capture_id() -> str:
     # human-friendly slug we also use for filename
-    return "cap-" + datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    return "cap-" + datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
 
 
 def _write_file(path: Path, frontmatter: dict[str, Any], body: str) -> None:

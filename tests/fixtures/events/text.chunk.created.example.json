@@ -1,0 +1,6 @@
+{
+  "event": "text.chunk.created",
+  "trace_id": "tr-chunk-0001",
+  "uuid": "00000000-0000-0000-0000-000000000000",
+  "metrics": { "chunks": 5, "view": "markdown.semantic" }
+}

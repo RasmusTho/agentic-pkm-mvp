@@ -1,0 +1,9 @@
+{
+  "ingest.object.created": "text.ingest.created",
+  "index.object.embedded": "index.embedding.created",
+  "cleanup.done": "cleanup.done",
+  "capture.object.created": "capture.object.created",
+  "promote.intent.created": "promote.intent.created",
+  "promote.done": "promote.done",
+  "merge.intent.created": "merge.intent.created"
+}

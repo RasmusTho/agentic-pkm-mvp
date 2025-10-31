@@ -1,0 +1,8 @@
+{
+  "event": "ocr.document.completed",
+  "trace_id": "tr-ocr-0001",
+  "uuid": "00000000-0000-0000-0000-000000000000",
+  "reasons": ["ocr-requested"],
+  "metrics": { "duration_ms": 1234, "pages": 2, "confidence": 0.98 },
+  "provenance": { "model": "ocr-adapter", "version": "x.y.z" }
+}

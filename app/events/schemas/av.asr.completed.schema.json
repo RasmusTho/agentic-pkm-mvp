@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/events/av.asr.completed.schema.json",
+  "title": "av.asr.completed",
+  "type": "object",
+  "required": ["event", "trace_id", "uuid", "metrics", "provenance"],
+  "properties": {
+    "event": { "const": "av.asr.completed" },
+    "trace_id": { "type": "string" },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F-]{36}$"
+    },
+    "reasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["duration_ms", "segments", "rtf"],
+      "properties": {
+        "duration_ms": { "type": "number" },
+        "segments": { "type": "integer", "minimum": 0 },
+        "rtf": { "type": "number", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["model", "version"],
+      "properties": {
+        "model": { "type": "string" },
+        "version": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

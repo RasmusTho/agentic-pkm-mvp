@@ -1,161 +1,106 @@
-# Roadmap — SoT v4.3.1 → v4.4 → v5.0
+
+### `docs/ROADMAP.md`
+
+# Roadmap — SoT v4.3.1 → v4.4 → v4.5 → v5.0
 
 _Tracks strategic releases and planned features._
+
+## Pre-flight (carry-over from v4.4)
+
+- Wire the semantic merge driver into git (`.gitattributes`) so `%A` is updated automatically; keep CLI exit!=0 on unresolved.
+- Schedule Hygiene runs and assert `cleanup.done` in CI.
+- Enforce `system-settings.yaml` schema in CI gates.
+- Maintain deterministic-embedding fallback path.
+- Keep Outbox table as the event bus until the broker ADR is accepted (Debezium/Kafka design drafted, not implemented).
 
 ---
 
 ## v4.3.1 — Obsidian-first (Delivered / Active baseline)
 
-**Goal:** The vault (Markdown + YAML frontmatter) is the human source of truth. The system does the boring lifecycle work.
+**Goal:** The vault (Markdown + YAML front matter) is the human source of truth. The system does the boring lifecycle work.
 
-Delivered:
-- `system-settings.yaml` as canonical runtime policy, with JSON Schema + test validation.
-- Promotion Agent:
-  - consumes `promote.intent.created`
-  - enforces cooldown / idempotence
-  - updates frontmatter (`review_state: promoted`)
-  - emits `promote.done` and triggers reindex
-  - can batch-move files per policy; no Obsidian plugin needed
-- Indexer:
-  - deterministic embedding
-  - upserts by UUID instead of making new random IDs
-  - hybrid search boosts good/reviewed/promoted notes
-- Outbox-driven propagation:
-  - content change → event → indexer → searchable
-- Tracing hooks:
-  - `start_span(...)` + `trace_id`
-  - Jaeger path validated locally
-- MergeResolverAgent:
-  - semantic 3-way Markdown merge
-  - protects UUID and prevents review_state regression
-  - keeps references/links
-  - penalises giant code dumps in concept notes
-  - returns `(merged_text, status, reason)`
-- `app/cli/merge_driver.py`:
-  - wraps MergeResolverAgent
-  - prints merged result + `MERGE_STATUS`/`MERGE_REASON`
-  - exit code 0 only if `status=="resolved"`
-- NoteHygieneAgent:
-  - salvages link-only / low-signal notes
-  - archives empty notes via `review_state: archived`
-  - moves huge JSON dumps to attachments
-  - emits `cleanup.done`
-
-Also:
-- Smoke tests (`make smoke`) cover settings schema, promotion roundtrip, merge safety, merge driver CLI, hygiene behaviour.
-
-This is our new normal.
+Delivered (selection)
+- `system-settings.yaml` canonical runtime policy with JSON Schema + test validation.
+- Promotion Agent: consumes `promote.intent.created`, enforces cooldown/idempotence, updates front matter, emits `promote.done`, triggers reindex.
+- Indexer: deterministic embeddings; UUID-stable upsert; hybrid search boosts by `review_state`.
+- Outbox propagation: content change → event → indexer → searchable.
+- Tracing hooks: spans + `trace_id`; Jaeger path validated.
+- MergeResolverAgent: semantic 3-way Markdown merge with UUID guard / non-regression of `review_state`.
+- `app/cli/merge_driver.py`: prints merged result + `MERGE_STATUS`/`MERGE_REASON`; exit 0 only if resolved.
+- NoteHygieneAgent: salvages link-only notes, archives empties, moves oversized dumps; emits `cleanup.done`.
+- Smoke tests (`make smoke`) cover settings schema, promotion roundtrip, merge safety, merge driver CLI, hygiene.
 
 ---
 
-## v4.4 — Observability, Stores & Conflict Resolution (In progress / Next)
+## v4.4 — Observability, Stores & Conflict Resolution (In progress / Running)
 
-**Goal:** Make the system boring-in-production while laying the Store foundation for SoT v4.4:
-- automatic merge that won't eat data,
-- promotion that is observable,
-- hygiene that keeps the vault tidy without manual babysitting,
-- CI that actually enforces all that,
-- agents using Store interfaces so we can step toward polyglot persistence and future graph-RAG.
-
-### SoT v4.4 Milestones
+**Goal:** Make the system boring-in-production while laying the Store foundation.
 
 **Delivered**
-- ObjectStore now fronts the ingestion path (capture_ingest, Normalizer). All writes go through `save_object(emit_outbox=True)` with application-assigned UUIDs.
-- UUID is treated as the canonical identity end-to-end (vault frontmatter, Stores, Outbox, AMG). The database no longer generates surrogate IDs.
-- VectorIndex and RelationIndex are live Store modules; embeddings and provenance links now have stable APIs.
+- ObjectStore fronts ingestion; all writes via `save_object(emit_outbox=True)` with app-assigned UUIDs.
+- UUID is canonical end-to-end. VectorIndex and RelationIndex live as Store modules.
 
-**Near-term hardening (keep v4.4 on rails)**
-- Add contract tests that lock the ObjectStore / VectorIndex / RelationIndex APIs and Outbox payload format; keep them green in CI.
-- Migrate Promotion Agent to use ObjectStore (load → mutate → `save_object(emit_outbox=False)`) and emit RelationIndex provenance edges on promotion.
-- Enforce the code review guardrail: “No direct INSERT into `objects`, `outbox`, or `relations` from agents/CLIs.”
-- Maintain fitness functions (QAS-003, QAS-010) while Stores take over the critical path.
+**Hardening**
+- Contract tests for Store APIs and Outbox payloads in CI.
+- Promotion Agent uses ObjectStore (`emit_outbox=False`) + RelationIndex provenance edges.
+- Enforce guardrail: no direct INSERTs into `objects`/`outbox`/`relations`.
+- Maintain fitness functions **QAS-003**, **QAS-010**.
 
-**Mid-term (identity & flow)**
-- Remove the legacy `id` primary key and promote `uuid` to PRIMARY KEY in `objects`.
-- Introduce Outbox consumer loop(s) that drain events and drive Indexer / Reviewer / VectorIndex updates using UUID + `trace_id`.
-- Persist embeddings exclusively through VectorIndex and expose semantic retrieval as a first-class query surface.
-- Use `RelationIndex.neighborhood()` to power graph-RAG and provenance queries (“where did this insight come from?”).
+**Identity & flow**
+- Remove legacy `id` → promote `uuid` to PRIMARY KEY.
+- Outbox consumer loop drives Indexer/Reviewer by UUID + `trace_id`.
+- RelationIndex powers provenance queries.
 
 **Later (polyglot persistence)**
-- Evaluate moving ObjectStore to Cosmos DB or another compliant document store.
-- Evaluate moving RelationIndex to a graph backend.
-- Evaluate moving VectorIndex to a dedicated vector DB.
-- None of these migrations should require agent rewrites if the Store contract stays intact.
+- Evaluate Cosmos DB for ObjectStore, graph backend for RelationIndex, vector DB for VectorIndex—without agent rewrites.
 
-Planned / ongoing work (still relevant alongside Store adoption):
-1. **Git merge driver integration**
-   - Register `merge_driver.py` as `merge=semantic-md` for `*.md`.
-   - Ensure stdout or direct write updates `%A`.
-   - Non-zero exit (`prompted` / `conflict`) stops the merge and surfaces `MERGE_REASON`.
-   - Add `.gitattributes` and config snippet.
-   - Add a CI smoke that shells the driver with BASE/A/B fixtures and asserts single frontmatter block, UUID stability, and no `review_state` regression.
-
-2. **Hygiene as maintenance**
-   - Run NoteHygieneAgent post-ingest / post-merge / on schedule.
-   - Guarantee every cleanup emits `cleanup.done` with `trace_id` and writes audit.
-   - Add smoke asserting we never silently drop meaningful content.
-
-3. **Promotion observability**
-   - Promotion Agent already emits spans and `promote.*` events.
-   - Add smoke/CI assertions that promotion produces `promote.done`, carries `trace_id`, and triggers reindex.
-
-4. **CI tightening**
-   - Enforce `make smoke` (settings schema, promotion smoke, merge smoke, hygiene smoke, Store contract tests) in GitHub Actions on PR.
-   - Keep heavier perf/QAS tests (p95 search latency, outbox→index SLA) as manual or nightly to avoid slowing dev loops.
-
-5. **Broker-backed outbox ADR**
-   - Write ADR describing Debezium/Kafka-style fan-out.
-   - Target SLA: ingestion/promotion intent → indexed+searchable in ≤2s across processes.
-   - Do NOT blindly implement broker yet; commit to the design + contract first.
-
-> The Store abstraction is not cleanup work. It is the seam that enables polyglot persistence (Postgres + pgvector today, Cosmos DB or graph memory tomorrow) and unlocks graph-RAG without destabilising existing agents or PER loops.
+**Operational items**
+- Git merge driver integration; hygiene scheduling; promotion observability; CI tightening; broker-backed Outbox ADR.
 
 ---
 
-## v4.5 — Governance & Authoring UX (Planned / Future after v4.4 hardening)
+## v4.5 — Unified Ingestion & Rerank (Active)
 
-Focus:
-- More human-friendly merge & review.
-- Tighter CI contracts around content quality.
+**Goals**
+- Make OCR and AV first-class (views + chunk + embeddings).
+- Add lightweight cross-encoder rerank in the retrieval path.
+- Keep Stores + Outbox canonical; preserve UUID invariants.
+- Enforce CI fitness (QAS-003, QAS-010, RAG-accuracy@n).
 
-Themes:
-- Block-aware / locus-aware HYBRID merges (LLM can selectively splice A + B paragraphs, not just “pick A vs pick B”).
-- ASK microflow:
-  - If merge can’t auto-resolve confidently, generate a tiny human-facing prompt (“Do you want A, B, or hybrid here and why?”) instead of a blob conflict.
-- Golden fixtures for merges and hygiene:
-  - Lock in expected behaviour of “good” vs “garbage” notes.
-  - CI blocks regressions if heuristics drift.
-- Expose merge outcome + rationale to Reviewer / Projector so promoted content always has a provenance trail (“why does this text look like this?”).
-- Capture Agents (External → Vault + DB)
-  - Introduce first `FileDropCaptureAgent` that monitors import folders or APIs.
-  - Writes normalized Markdown into `@Inbox` and mirrors into Postgres.
-  - Emits `capture.object.created` events with provenance.
-  - Foundation for Email/Chat/Web importers in v4.6+.
+**Milestones**
+
+### A — Minimum Viable Ingestion
+- OCR adapter → structure-aware Markdown + table JSON
+- AV Step A: detect → normalize (ffmpeg) → ASR (faster-whisper) → `segments.jsonl`
+- Chunk → Embed → Hybrid search
+- Events wired: `ocr.document.completed`, `av.asr.completed`, `text.chunk.created`, `index.embedding.created`
+- **Accept:** mixed-corpus eval queries return correctly cited spans/timestamps
+
+### B — Precision & UX
+- Diarization + alignment (whisperx + pyannote)
+- Chapterizer → `chapters.json`
+- Cross-encoder rerank in query path
+- Citations with text spans and AV timestamps
+- **Accept:** measurable lift in nDCG/MRR vs A; user-visible timestamps
+
+### C — Graph & Fitness
+- RelationIndex v1 (speakers/entities with temporal edges)
+- Eval harness (text + AV) and CI publishing QAS metrics
+- Dashboards: coverage, p95, RTF, WER estimates
+- **Accept:** QAS-003 ≤ 250 ms; QAS-010 ≤ 2 s; eval suite green
+
+**Risks & Mitigations**
+- AV latency → VAD segmentation, batching, optional GPU
+- Model churn → provider interface, versioned provenance
+- Event drift → central alias map; schema lint in CI
 
 ---
 
 ## v5.0 — Reasoning Alpha (Longer-term)
 
-Goal:
-- Add a reasoning / integrity layer on top of SetDB+AMG without letting hallucinations overwrite truth.
+**Goal:** Add a reasoning / integrity layer on top of SetDB+AMG without letting hallucinations overwrite truth.
 
-Direction:
-- Represent certain statements as explicit claims / triples with provenance.
-- Add a Guard / Reasoner agent that:
-  - validates logical constraints (SHACL-style / rules)
-  - detects contradictions
-  - flags missing provenance for “facts”
-- Neurosymbolic loop:
-  - Subsymbolic agents (LLM-based Reviewer, MergeResolverAgent’s arbiter, etc.) propose meaning.
-  - Symbolic layer evaluates consistency and policy conformance.
-  - Output becomes `decisions` / `audit` / `cleanup.intent.created`, not silent mutation of canonical notes.
-
-This pushes us toward governed knowledge rather than “LLM said so, ship it.”
-
----
-
-### TL;DR
-- **4.3.1** gave us promotion, semantic merge, hygiene, tracing hooks, and smoke tests.
-- **4.4** makes that safe and automated in day-to-day dev (git merge driver, hygiene scheduling, CI enforcement, promotion observability).
-- **4.5** introduces richer human-in-the-loop authoring UX (hybrid merges, ASK flow, golden fixtures).
-- **5.0** brings reasoning/consistency checking as a proper governed layer.
+**Direction**
+- Represent claims/relationships as explicit triples with provenance.
+- Guard/Reasoner agent validates constraints (SHACL-style), detects contradictions, flags missing provenance.
+- Neurosymbolic loop: subsymbolic agents propose; symbolic layer evaluates; outputs become `decisions`/`audit`/`cleanup.intent.created`, not silent mutation of canonical notes.
