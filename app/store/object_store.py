@@ -41,11 +41,18 @@ def _pg_available() -> bool:
     Heuristic: try a very fast connect using our dsn helper.
     Return True if connection works, False otherwise.
     """
+    conn = None
     try:
         conn = _db_connect()
         return conn is not None
     except Exception:
         return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 class ObjectStore:
