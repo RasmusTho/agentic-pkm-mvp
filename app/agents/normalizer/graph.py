@@ -1,41 +1,30 @@
 from __future__ import annotations
 from typing import Any
-import os, uuid
-import psycopg
-from psycopg.rows import dict_row
+
 from app.agents.base.graph import PERSpec, build_graph, AgentState
 from app.agents.base.audit import audit_log
 from app.agents.normalizer.agent import run as normalizer_run
 from app.memory.store import recall
+from app.store.object_store import ObjectStore
 
 AGENT = "normalizer"
-
-def _dsn() -> str:
-    return (os.environ.get("DATABASE_URL") or "postgresql+psycopg://app:app@127.0.0.1:15432/app").replace("postgresql+psycopg://","postgresql://")
 
 def _fetch_core6(object_id: str | None) -> dict:
     if not object_id:
         return {}
-    with psycopg.connect(_dsn(), row_factory=dict_row) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, payload FROM objects WHERE id=%s LIMIT 1", (uuid.UUID(object_id),))
-            row = cur.fetchone()
-            if not row:
-                return {}
-            p = row["payload"] or {}
-            c6 = p.get("core6") or {}
-            if c6:
-                return c6
-            keys = ["id","type","title","created","updated","origin"]
-            out = {}
-            for k in keys:
-                if k == "id":
-                    out["id"] = str(row["id"])
-                else:
-                    v = p.get(k)
-                    if v is not None:
-                        out[k] = v
-            return out
+    store = ObjectStore()
+    obj = store.get_object(object_id)
+    if not obj:
+        return {}
+    payload = obj.payload or {}
+    core6 = payload.get("core6") or {}
+    if core6:
+        return core6
+    return {
+        k: payload.get(k)
+        for k in ["id", "type", "title", "created", "updated", "origin"]
+        if payload.get(k) is not None
+    }
 
 def _plan(state: AgentState) -> AgentState:
     inp = state.get("input", {})

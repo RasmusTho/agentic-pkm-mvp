@@ -58,25 +58,37 @@ This is our new normal.
 - agents using Store interfaces so we can step toward polyglot persistence and future graph-RAG.
 
 ### SoT v4.4 Milestones
-- **ObjectStore introduced:** The ingestion path (Normalizer / Capture CLI / first agent) stops talking to Postgres directly. All writes go through a Python ObjectStore interface that performs Postgres persistence and Outbox emission atomically.
-- **UUID as canonical identity:** Surrogate ids are being removed from objects. UUID becomes the stable primary key across ObjectStore, VectorIndex, RelationIndex, AMG, and events.
-- **VectorIndex interface:** Define a module-level interface for embedding upsert and similarity search. First implementation stays on pgvector in Postgres, but it must look like a service that can later swap to Qdrant/Milvus/Azure AI Search without touching agent logic.
-- **RelationIndex / KnowledgeGraphStore prototype:** Begin capturing typed relations `(a_uuid, b_uuid, relation_type, provenance)`. Back it with a Postgres table for now, but expose an API with graph-shaped queries. This is groundwork for graph-RAG.
-- **Promotion Agent lifecycle:** Promotion Agent continues to enforce human intent and steady-state lifecycle (`review_state: promoted`, `move_policy`) with auditability. Documentation, tests, and Store interfaces must reflect this contract.
-- **Performance & observability targets:** Maintain QAS-003 (search p95 < 250 ms) and QAS-010 (outbox → index latency ≤ 2 s) as gating metrics. Store instrumentation must not regress them.
-- **Cosmos DB / SetDB evaluation:** Plan and run an evaluation of Cosmos DB and/or a dedicated SetDB backend for ObjectStore. This is an investigation, not a committed migration.
 
-Planned / ongoing work:
+**Delivered**
+- ObjectStore now fronts the ingestion path (capture_ingest, Normalizer). All writes go through `save_object(emit_outbox=True)` with application-assigned UUIDs.
+- UUID is treated as the canonical identity end-to-end (vault frontmatter, Stores, Outbox, AMG). The database no longer generates surrogate IDs.
+- VectorIndex and RelationIndex are live Store modules; embeddings and provenance links now have stable APIs.
+
+**Near-term hardening (keep v4.4 on rails)**
+- Add contract tests that lock the ObjectStore / VectorIndex / RelationIndex APIs and Outbox payload format; keep them green in CI.
+- Migrate Promotion Agent to use ObjectStore (load → mutate → `save_object(emit_outbox=False)`) and emit RelationIndex provenance edges on promotion.
+- Enforce the code review guardrail: “No direct INSERT into `objects`, `outbox`, or `relations` from agents/CLIs.”
+- Maintain fitness functions (QAS-003, QAS-010) while Stores take over the critical path.
+
+**Mid-term (identity & flow)**
+- Remove the legacy `id` primary key and promote `uuid` to PRIMARY KEY in `objects`.
+- Introduce Outbox consumer loop(s) that drain events and drive Indexer / Reviewer / VectorIndex updates using UUID + `trace_id`.
+- Persist embeddings exclusively through VectorIndex and expose semantic retrieval as a first-class query surface.
+- Use `RelationIndex.neighborhood()` to power graph-RAG and provenance queries (“where did this insight come from?”).
+
+**Later (polyglot persistence)**
+- Evaluate moving ObjectStore to Cosmos DB or another compliant document store.
+- Evaluate moving RelationIndex to a graph backend.
+- Evaluate moving VectorIndex to a dedicated vector DB.
+- None of these migrations should require agent rewrites if the Store contract stays intact.
+
+Planned / ongoing work (still relevant alongside Store adoption):
 1. **Git merge driver integration**
    - Register `merge_driver.py` as `merge=semantic-md` for `*.md`.
    - Ensure stdout or direct write updates `%A`.
    - Non-zero exit (`prompted` / `conflict`) stops the merge and surfaces `MERGE_REASON`.
    - Add `.gitattributes` and config snippet.
-   - Add a CI smoke that shells the driver with BASE/A/B fixtures and asserts:
-     - single frontmatter block
-     - UUID stable
-     - no review_state regression
-     - exit code semantics correct
+   - Add a CI smoke that shells the driver with BASE/A/B fixtures and asserts single frontmatter block, UUID stability, and no `review_state` regression.
 
 2. **Hygiene as maintenance**
    - Run NoteHygieneAgent post-ingest / post-merge / on schedule.
@@ -85,19 +97,16 @@ Planned / ongoing work:
 
 3. **Promotion observability**
    - Promotion Agent already emits spans and `promote.*` events.
-   - We’ll add smoke/CI assertions that:
-     - promotion produces `promote.done`
-     - `trace_id` is present
-     - indexer re-embeds the promoted content
+   - Add smoke/CI assertions that promotion produces `promote.done`, carries `trace_id`, and triggers reindex.
 
 4. **CI tightening**
-   - Enforce `make smoke` (settings schema, promotion smoke, merge smoke, hygiene smoke) in GitHub Actions on PR.
+   - Enforce `make smoke` (settings schema, promotion smoke, merge smoke, hygiene smoke, Store contract tests) in GitHub Actions on PR.
    - Keep heavier perf/QAS tests (p95 search latency, outbox→index SLA) as manual or nightly to avoid slowing dev loops.
 
 5. **Broker-backed outbox ADR**
    - Write ADR describing Debezium/Kafka-style fan-out.
    - Target SLA: ingestion/promotion intent → indexed+searchable in ≤2s across processes.
-   - Do NOT blindly implement broker yet; we just commit to the design + contract.
+   - Do NOT blindly implement broker yet; commit to the design + contract first.
 
 > The Store abstraction is not cleanup work. It is the seam that enables polyglot persistence (Postgres + pgvector today, Cosmos DB or graph memory tomorrow) and unlocks graph-RAG without destabilising existing agents or PER loops.
 

@@ -1,113 +1,98 @@
 from __future__ import annotations
 
 import sys
-import uuid
-from dataclasses import dataclass, asdict
-from datetime import datetime
+import uuid as uuidlib
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Any
-from app.services.capture_indexer import index_capture_bundle
+from typing import Any
+
+import yaml
+
+from app.store.object_store import ObjectStore, DomainObject
+from app.agent.events import new_trace_id
+from app.services.settings import policy
+
+# This CLI reads stdin as a captured note, writes it to vault/@Inbox/,
+# and registers it in the ObjectStore as a new object with provenance.
 
 
-INBOX_DIR = Path("vault/@Inbox")
-INBOX_DIR.mkdir(parents=True, exist_ok=True)
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-@dataclass
-class CaptureBundle:
-    bundle_id: str
-    summary: str
-    tasks: List[Dict[str, str]]
-    decisions: List[str]
-    entities: List[Dict[str, str]]
-    raw: str
+def _new_capture_uuid() -> str:
+    return str(uuidlib.uuid4())
 
 
-def naive_parse(raw: str) -> CaptureBundle:
-    """
-    Rule-based capture triage.
-    """
-    lines = [l.rstrip() for l in raw.strip().splitlines()]
-    summary_lines: list[str] = []
-    tasks: list[dict[str, str]] = []
-    decisions: list[str] = []
+def _new_capture_id() -> str:
+    # human-friendly slug we also use for filename
+    return "cap-" + datetime.utcnow().strftime("%Y%m%d-%H%M%S")
 
-    for line in lines:
-        if line.strip().startswith("- [ ]"):
-            body = line.strip()[5:].strip()
-            owner = "Rasmus"
-            tasks.append({"text": body, "owner": owner})
-        elif line.lower().startswith("beslut:"):
-            decisions.append(line.split(":", 1)[1].strip())
-        else:
-            summary_lines.append(line)
 
-    entities: list[dict[str, str]] = []
-    for word in "Demerzel OPNsense Jaeger Tracing VLAN IoT NVR".split():
-        if word in raw:
-            entities.append({"name": word, "type": "entity"})
+def _write_file(path: Path, frontmatter: dict[str, Any], body: str) -> None:
+    fm_block = yaml.safe_dump(frontmatter, sort_keys=False).strip()
+    text = f"---\n{fm_block}\n---\n{body.strip()}\n"
+    path.write_text(text, encoding="utf-8")
 
-    summary = " ".join(summary_lines).strip()
 
-    cap_id = f"cap-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
-    return CaptureBundle(
-        bundle_id=cap_id,
-        summary=summary,
-        tasks=tasks,
-        decisions=decisions,
-        entities=entities,
-        raw=raw,
+def main() -> None:
+    raw_stdin = sys.stdin.read().strip()
+    if not raw_stdin:
+        print("no input", file=sys.stderr)
+        sys.exit(1)
+
+    ts = _now_utc()
+    note_uuid = _new_capture_uuid()
+    cap_id = _new_capture_id()
+
+    # Build frontmatter (Core-6-ish projection)
+    # We assume early stage 'inbox' / low trust quality.
+    fm: dict[str, Any] = {
+        "uuid": note_uuid,
+        "title": cap_id,
+        "origin": "capture_ingest",
+        "review_state": "inbox",
+        "trust": "ai|rule",
+        "source_ref": cap_id,
+        "created_at": ts.isoformat(),
+    }
+
+    body = raw_stdin
+
+    # Write file into vault @Inbox (Obsidian-facing truth)
+    inbox_dir = Path("vault/@Inbox")
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    file_path = inbox_dir / f"{cap_id}.md"
+    _write_file(file_path, fm, body)
+
+    # Build payload for DB mirror.
+    # We intentionally mirror frontmatter + body so ObjectStore becomes canonical.
+    payload: dict[str, Any] = {
+        "frontmatter": fm,
+        "body": body,
+        "path": str(file_path),
+        "policy": policy(),
+    }
+
+    dom_obj = DomainObject(
+        uuid=note_uuid,
+        kind="capture_note",
+        payload=payload,
+        source_ref=cap_id,
+        created_at=ts,
     )
 
+    trace_id = new_trace_id()
 
-def write_capture_file(bundle: CaptureBundle) -> Path:
-    note_path = INBOX_DIR / f"{bundle.bundle_id}.md"
-    with note_path.open("w", encoding="utf-8") as f:
-        f.write(f"---\n")
-        f.write(f"uuid: {bundle.bundle_id}\n")
-        f.write("kind: capture\n")
-        f.write("review_state: inbox\n")
-        f.write("---\n\n")
+    store = ObjectStore()
+    store.save_object(
+        dom_obj,
+        emit_outbox=True,
+        trace_id=trace_id,
+    )
 
-        f.write("## Summary\n")
-        f.write(bundle.summary.strip() + "\n\n")
-
-        f.write("## Tasks\n")
-        for t in bundle.tasks:
-            f.write(f"- [ ] {t['text']} @{t['owner']}\n")
-        f.write("\n")
-
-        f.write("## Decisions\n")
-        for d in bundle.decisions:
-            f.write(f"- {d}\n")
-        f.write("\n")
-
-        f.write("## Entities\n")
-        for e in bundle.entities:
-            f.write(f"- [[{e['name']}]] ({e['type']})\n")
-        f.write("\n")
-
-        f.write("## Raw capture\n")
-        f.write("```text\n")
-        f.write(bundle.raw.strip() + "\n")
-        f.write("```\n")
-
-    return note_path
-
-
-def main(argv: list[str]) -> int:
-    raw_input = sys.stdin.read()
-    bundle = naive_parse(raw_input)
-
-    # 1. skriv fil till vault
-    note_path = write_capture_file(bundle)
-
-    # 2. indexera i DB
-    index_capture_bundle(asdict(bundle))
-
-    print(note_path)
-    return 0
+    print(str(file_path))
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    main()

@@ -2,19 +2,13 @@ from __future__ import annotations
 import os, json, re, uuid
 from typing import Any
 import psycopg
-from psycopg.rows import dict_row
 from app.llm.adapter import generate
 from app.agents.base.audit import audit_log
 from app.memory.store import remember, recall
+from app.store.object_store import ObjectStore, DomainObject
 
 def _dsn() -> str:
     return (os.environ.get("DATABASE_URL") or "postgresql+psycopg://app:app@127.0.0.1:15432/app").replace("postgresql+psycopg://","postgresql://")
-
-def _fetch_object(oid: str) -> dict[str, Any] | None:
-    with psycopg.connect(_dsn(), row_factory=dict_row) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, payload FROM objects WHERE id=%s", (oid,))
-            return cur.fetchone()
 
 def _heuristic(text: str) -> dict[str, Any]:
     title_first = re.search(r"^#\s+(.+)$", text, re.M)
@@ -59,10 +53,11 @@ def _ensure_labels(value: Any) -> list[str]:
     return [str(value)]
 
 def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
-    row = _fetch_object(object_id)
-    if not row:
+    store = ObjectStore()
+    domain_obj: DomainObject | None = store.get_object(object_id)
+    if domain_obj is None:
         raise ValueError("object not found")
-    payload = row["payload"] or {}
+    payload = domain_obj.payload or {}
     text = payload.get("text") or payload.get("content") or ""
 
     messages = [

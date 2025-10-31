@@ -1,73 +1,122 @@
 from __future__ import annotations
-import os, re, json, hashlib
+
+import uuid as _uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from uuid import UUID, uuid4
-import psycopg
-from psycopg.rows import dict_row
-from app.agents.base.audit import audit_log
-from app.memory.store import remember, recall
+from pathlib import Path
+from typing import Any
 
-CORE6_KEYS = ("id","type","title","created","updated","origin")
+from app.store.object_store import ObjectStore
+from app.services.audit import audit_event
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
-def _title_from_text(text: str, filename: str) -> str:
-    m = re.search(r"^#\s+(.+)$", text, flags=re.MULTILINE)
-    if m:
-        return m.group(1).strip()
-    name = os.path.splitext(os.path.basename(filename))[0]
-    return name.strip() or "untitled"
+AGENT = "normalizer"
 
-def _stable_id_for_source(source_ref: str) -> UUID:
-    h = hashlib.sha256(source_ref.encode("utf-8")).digest()
-    return UUID(bytes=h[:16], version=4)
 
-def normalize_file(path: str, *, trace_id: str) -> UUID:
-    with open(path, "rb") as f:
-        raw = f.read()
-    text = raw.decode("utf-8", errors="replace")
-    source_ref = os.path.abspath(path)
-    object_id = _stable_id_for_source(source_ref)
-    title = _title_from_text(text, path)
+def _read_file(path: str) -> tuple[str, str]:
+    """
+    Return (title, body_text) from a markdown-ish file.
+    """
+    p = Path(path)
+    raw = p.read_text(encoding="utf-8")
+    lines = [ln.strip() for ln in raw.splitlines()]
+    title = ""
+    for ln in lines:
+        if ln.startswith("#"):
+            cand = ln.lstrip("#").strip()
+            if cand:
+                title = cand
+                break
+        elif ln:
+            title = ln
+            break
+    if not title:
+        title = p.stem
+    return title, raw
+
+
+def normalize_file(path: str, *, trace_id: str) -> dict[str, Any]:
+    """
+    Build a 'domain object' from a source file:
+    - uuid
+    - core6 metadata
+    - payload with raw_text + source_path
+    """
+    title, raw_text = _read_file(path)
+
+    object_uuid = str(_uuid.uuid4())
+
     core6 = {
-        "id": str(object_id),
-        "type": "seed",
+        "id": object_uuid,
         "title": title,
-        "created": _now_iso(),
-        "updated": _now_iso(),
-        "origin": source_ref,
+        "review_state": "reviewed",
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    payload = {"core6": core6, "text": text}
-    dsn = os.environ.get("DATABASE_URL","postgresql+psycopg://app:app@127.0.0.1:15432/app").replace("postgresql+psycopg://","postgresql://")
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                """
-                INSERT INTO objects (id, kind, source_ref, payload)
-                VALUES (%s, %s, %s, %s::jsonb)
-                ON CONFLICT (id) DO UPDATE
-                  SET kind = EXCLUDED.kind,
-                      source_ref = EXCLUDED.source_ref,
-                      payload = objects.payload
-                RETURNING id
-                """,
-                (str(object_id), "note", source_ref, json.dumps(payload)),
-            )
-    remember(
-        agent="normalizer",
-        kind="normalized",
-        object_id=str(object_id),
-        trace_id=trace_id,
-        data={
-            "core6": core6,
-            "bytes": len(text or ""),
-        },
-    )
-    audit_log(object_id=str(object_id), agent="normalizer", action="normalize", trace_id=trace_id, details={"source_ref": source_ref, "bytes": len(raw)})
-    return object_id
 
-def run(path: str, *, trace_id: str) -> dict:
-    recall("normalizer", "normalized", object_id=None, limit=3)
-    object_id = normalize_file(path, trace_id=trace_id)
-    return {"object_id": str(object_id), "trace_id": trace_id}
+    payload: dict[str, Any] = {
+        "core6": core6,
+        "raw_text": raw_text,
+        "source_path": path,
+    }
+
+    domain_object = {
+        "uuid": object_uuid,
+        "kind": "note",
+        "payload": payload,
+        # carry source_ref as first-class too for DB upsert
+        "source_ref": path,
+    }
+
+    # best-effort audit
+    audit_event(
+        event="ingest.normalize.done",
+        object_id=object_uuid,
+        agent=AGENT,
+        trace_id=trace_id,
+        extra={"path": path, "title": title},
+    )
+
+    return domain_object
+
+
+@dataclass
+class _DomainObjectShim:
+    uuid: str
+    kind: str
+    payload: dict[str, Any]
+    created_at: datetime
+    source_ref: str | None
+
+
+def run(path: str, *, trace_id: str) -> dict[str, Any]:
+    """
+    End-to-end:
+    - normalize file into domain_object
+    - create shim matching ObjectStore expectations
+    - save via ObjectStore (memory + DB if available)
+    """
+    store = ObjectStore()
+    dom = normalize_file(path, trace_id=trace_id)
+
+    shim = _DomainObjectShim(
+        uuid=dom["uuid"],
+        kind=dom["kind"],
+        payload=dom["payload"],
+        created_at=datetime.now(timezone.utc),
+        source_ref=dom.get("source_ref") or dom["payload"].get("source_path"),
+    )
+
+    store.save_object(
+        shim,
+        emit_outbox=False,
+        trace_id=trace_id,
+    )
+
+    out = {
+        "event": "ingest.normalize.done",
+        "object_id": dom["uuid"],
+        "core6": dom["payload"]["core6"],
+        "trace_id": trace_id,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    return out

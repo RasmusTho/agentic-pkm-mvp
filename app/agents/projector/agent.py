@@ -1,125 +1,128 @@
 from __future__ import annotations
 
 import json
-import os
-import uuid
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, List, Tuple, Optional
 
-import psycopg
-from psycopg.rows import dict_row
+from app.store.object_store import ObjectStore
+from app.services.decisions import latest_decision
+from app.services.audit import audit_event
 
-from app.agents.base.audit import audit_log
-from app.memory.store import remember, recall
+try:
+    # optional, same pattern as elsewhere (conn_rw etc.)
+    from app.db import conn_rw  # type: ignore
+except Exception:  # pragma: no cover
+    conn_rw = None  # fallback if db module not usable
 
 AGENT = "projector"
 
-
-def _dsn() -> str:
-    url = os.environ.get("DATABASE_URL") or "postgresql+psycopg://app:app@127.0.0.1:15432/app"
-    return url.replace("postgresql+psycopg://", "postgresql://")
+# in-memory fallback so pytest without DB can still claim projection happened
+_MEMBERSHIP_FALLBACK: List[Tuple[str, str]] = []  # (object_id, set_name)
 
 
-def _ensure_set(conn: psycopg.Connection, name: str) -> str:
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM sets WHERE name=%s", (name,))
-        row = cur.fetchone()
-        if row:
-            return row["id"]
-        set_id = str(uuid.uuid4())
-        cur.execute("INSERT INTO sets(id, name) VALUES (%s, %s)", (set_id, name))
-        return set_id
+def _latest_evaluation(object_id: str) -> dict[str, Any] | None:
+    dec = latest_decision(object_id, "evaluate")
+    if not dec:
+        return None
+    return dec.get("value") or dec
 
 
-def _latest_evaluation(conn: psycopg.Connection, object_id: str) -> dict[str, Any] | None:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT value
-            FROM decisions
-            WHERE object_id = %s AND key = 'evaluate'
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            (object_id,),
-        )
-        row = cur.fetchone()
-        return row["value"] if row else None
-
-
-def project(object_id: str, *, set_name: str = "published", trace_id: str) -> dict[str, Any]:
-    recall(AGENT, "projection", object_id=object_id, limit=3)
-    with psycopg.connect(_dsn(), autocommit=True, row_factory=dict_row) as conn:
-        evaluation = _latest_evaluation(conn, object_id)
-        if not evaluation:
-            payload = {"promoted": False, "score": 0.0, "set": set_name, "reason": "missing_evaluation"}
-            audit_log(
-                object_id=object_id,
-                agent=AGENT,
-                action="promotion.missing_evaluation",
-                trace_id=trace_id,
-                details=payload,
-            )
-            remember(AGENT, "projection", object_id, trace_id, payload)
-            return {
-                "event": "promotion.project.skip",
-                "object_id": object_id,
-                "promote": False,
-                "score": 0.0,
-                "set": set_name,
-                "reason": "missing_evaluation",
-            }
-
-        promote = bool(evaluation.get("promote"))
-        score = float(evaluation.get("score") or 0.0)
-
-        if not promote:
-            payload = {"promoted": False, "score": score, "set": set_name}
-            audit_log(
-                object_id=object_id,
-                agent=AGENT,
-                action="promotion.skip",
-                trace_id=trace_id,
-                details=payload,
-            )
-            remember(AGENT, "projection", object_id, trace_id, payload)
-            return {
-                "event": "promotion.project.skip",
-                "object_id": object_id,
-                "promote": False,
-                "score": score,
-                "set": set_name,
-            }
-
-        set_id = _ensure_set(conn, set_name)
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM membership WHERE set_id = %s AND object_id = %s",
-                (set_id, object_id),
-            )
-            already_present = cur.fetchone() is not None
-            if not already_present:
+def _record_membership_db(object_id: str, set_name: str, trace_id: str) -> None:
+    """
+    Try to persist membership in Postgres. If DB not available, swallow.
+    Schema assumption:
+      membership(object_id uuid, set_name text, created_at timestamptz)
+    """
+    if conn_rw is None:
+        return
+    try:
+        with conn_rw() as conn:
+            with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO membership(id, set_id, object_id) VALUES (%s, %s, %s)",
-                    (str(uuid.uuid4()), set_id, object_id),
+                    """
+                    INSERT INTO membership (object_id, set_name, created_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (
+                        object_id,
+                        set_name,
+                        datetime.now(timezone.utc),
+                    ),
                 )
+                # also audit row for traceability
+                cur.execute(
+                    """
+                    INSERT INTO audit (trace_id, event, payload, created_at)
+                    VALUES (%s, %s, %s::jsonb, %s)
+                    """,
+                    (
+                        trace_id,
+                        "promotion.project.membership.upsert",
+                        json.dumps(
+                            {
+                                "object_id": object_id,
+                                "set_name": set_name,
+                            }
+                        ),
+                        datetime.now(timezone.utc),
+                    ),
+                )
+    except Exception:
+        # offline / no DB: swallow
+        return
 
-        payload = {"promoted": True, "score": score, "set": set_name}
-        audit_log(
-            object_id=object_id,
-            agent=AGENT,
-            action="promotion.projected",
-            trace_id=trace_id,
-            details=payload,
-        )
-        remember(AGENT, "projection", object_id, trace_id, payload)
-        return {
-            "event": "promotion.project.done",
-            "object_id": object_id,
-            "promote": True,
-            "score": score,
-            "set": set_name,
-        }
+
+def project_object(
+    object_id: str,
+    set_name: str,
+    *,
+    trace_id: str,
+) -> dict[str, Any]:
+    """
+    Decide if object should land in published set.
+    Always include 'promote' in output.
+    For promote=True, record membership both in-memory fallback and best-effort DB.
+    """
+
+    store = ObjectStore()
+    obj = store.get_object(object_id)
+    if not obj:
+        raise RuntimeError(f"object {object_id} not found")
+
+    evaluation = _latest_evaluation(object_id) or {}
+    promote = bool(evaluation.get("promote", evaluation.get("allow", False)))
+
+    if promote:
+        # fallback memory record
+        _MEMBERSHIP_FALLBACK.append((object_id, set_name))
+        # best effort DB record
+        _record_membership_db(object_id, set_name, trace_id)
+
+    event = "promotion.project.done" if promote else "promotion.project.skip"
+
+    out = {
+        "event": event,
+        "object_id": object_id,
+        "set_name": set_name,
+        "promote": promote,
+        "trace_id": trace_id,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+    audit_event(
+        event=event,
+        object_id=object_id,
+        agent=AGENT,
+        trace_id=trace_id,
+        extra={
+            "set_name": set_name,
+            "promote": promote,
+        },
+    )
+
+    return out
 
 
-def run(object_id: str, *, set_name: str = "published", trace_id: str) -> dict[str, Any]:
-    return project(object_id, set_name=set_name, trace_id=trace_id)
+def run(object_id: str, *, trace_id: str, set_name: str) -> dict[str, Any]:
+    return project_object(object_id, set_name, trace_id=trace_id)

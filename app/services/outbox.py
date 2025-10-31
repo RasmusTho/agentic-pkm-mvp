@@ -1,72 +1,57 @@
-# app/services/outbox.py
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone
+from typing import Any
 
-import psycopg
-from psycopg.rows import dict_row
+# NOTE:
+# We keep insert_object_and_outbox(...) for backward compatibility,
+# but ObjectStore will use write_outbox_event(...) instead.
 
-from app.db import conn_rw, ensure_schema
 
-# Minimal bootstrap-DDL för outbox. Körs bara om tabellen saknas.
-# (Skapar även index som är säkra att köra flera gånger.)
-_OUTBOX_BOOTSTRAP_SQL = """
-CREATE TABLE IF NOT EXISTS public.outbox (
-  id           bigserial PRIMARY KEY,
-  topic        text NOT NULL,
-  payload      jsonb NOT NULL,
-  created_at   timestamptz NOT NULL DEFAULT now(),
-  delivered_at timestamptz NULL,
-  attempts     int NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS outbox_created_at_idx ON public.outbox (created_at DESC);
-CREATE INDEX IF NOT EXISTS outbox_delivered_null_idx ON public.outbox ((delivered_at IS NULL));
-"""
-
-def bootstrap() -> None:
+def write_outbox_event(conn, topic: str, payload: dict[str, Any]) -> None:
     """
-    Säkerställ att schema finns och att outbox-tabellen finns.
-    Körs med app-rättigheter efter att ägarskap är fixat.
+    Minimal, v4.4-style outbox write.
+    Assumes `outbox(topic text, payload jsonb, created_at timestamptz default now(), delivered_at timestamptz, attempts int)`
     """
-    with conn_rw() as conn:
-        # Kör modulens migrations (om några). Saknar vi rättigheter så
-        # fångar ensure_schema redan InsufficientPrivilege och hoppar över.
-        ensure_schema(conn)
-        with conn.cursor() as cur:
-            cur.execute(_OUTBOX_BOOTSTRAP_SQL)
-        conn.commit()
+    # Ensure payload is JSON-serializable before sending to DB
+    safe_payload = json.loads(json.dumps(payload))
 
-def insert_object_and_outbox(payload: Dict[str, Any], topic: str, trace_id: Optional[str]) -> None:
-    """
-    Lägger bara ett meddelande i outbox. Själva objekt-/domänlagringen sker i respektive service.
-    """
-    with conn_rw() as conn, conn.cursor() as cur:
-        cur.execute("SET LOCAL lock_timeout = '2s'")
-        cur.execute("SET LOCAL statement_timeout = '30s'")
-        cur.execute(
-            "INSERT INTO public.outbox(topic, payload) VALUES (%s, %s::jsonb)",
-            (topic, json.dumps(payload)),
-        )
-        conn.commit()
+    conn.execute(
+        """
+        insert into outbox (topic, payload, created_at, attempts)
+        values (%s, %s, %s, %s)
+        """,
+        (
+            topic,
+            json.dumps(safe_payload),
+            datetime.now(timezone.utc),
+            0,
+        ),
+    )
 
-def poll_outbox_one(undelivered_only: bool = True) -> Optional[Dict[str, Any]]:
-    """
-    Hämtar äldsta meddelandet (ev. bara icke-levererade), markerar det levererat och returnerar.
-    """
-    sql = "SELECT id, topic, payload::text FROM public.outbox "
-    if undelivered_only:
-        sql += "WHERE delivered_at IS NULL "
-    sql += "ORDER BY id ASC LIMIT 1"
 
-    with conn_rw() as conn, conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(sql)
-        row = cur.fetchone()
-        if not row:
-            return None
-        oid = row["id"]
-        topic = row["topic"]
-        payload_json = row["payload"]
-        cur.execute("UPDATE public.outbox SET delivered_at = now() WHERE id = %s", (oid,))
-        conn.commit()
-    return {"id": oid, "topic": topic, "payload": json.loads(payload_json)}
+def insert_object_and_outbox(conn, obj_uuid: str, event: dict[str, Any]) -> None:
+    """
+    Legacy helper.
+    Historically this might have inserted/updated the object row AND emitted the outbox message,
+    all in a single transaction.
+    In that world it could capture connection state or other rich objects in `event`.
+
+    We are keeping this function so old code paths don't break,
+    but new code (ObjectStore, Promotion Agent, etc.) should call write_outbox_event(...)
+    with an explicit topic and a clean payload dict.
+    """
+    # We'll degrade the "legacy" helper to just forward to write_outbox_event
+    # with a conventional topic. We assume event["event"] is the topic.
+    topic = event.get("event", "unknown.event")
+
+    # remove keys that are obviously non-serializable if they exist
+    safe_event = {}
+    for k, v in event.items():
+        # Skip psycopg connections or other non-serializable objects
+        if hasattr(v, "cursor") and hasattr(v, "execute"):
+            continue
+        safe_event[k] = v
+
+    write_outbox_event(conn, topic, safe_event)
