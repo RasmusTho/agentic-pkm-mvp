@@ -39,4 +39,16 @@ def get_stores() -> Tuple[ObjectsStore, DecisionsStore]:
     backend = _resolved_backend(os.getenv("STORE_BACKEND"), _dsn())
     if backend == "pg":
         return PgObjects(), PgDecisions()
-    return MemoryObjects(), MemoryDecisions()
+    return _memory_stores()
+
+@lru_cache(maxsize=1)
+def _memory_stores():
+    # Återanvänd samma in-memory-instanser i processen
+    return (MemoryObjects(), MemoryDecisions())
+
+def reset_memory_stores() -> None:
+    """Test-hjälpare: nollställ de cacheade in-memory-stores."""
+    try:
+        _memory_stores.cache_clear()
+    except Exception:
+        pass
