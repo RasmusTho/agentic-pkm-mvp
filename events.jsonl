@@ -188,3 +188,75 @@
 {"topic": "cleanup.done", "trace_id": "af06fb7f63254376aeeadd3f4db030eb", "ts": "2025-10-31T20:48:47.831477+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
 {"topic": "cleanup.done", "trace_id": "74ab036abd0945778e71fbdf6972bbf7", "ts": "2025-10-31T20:48:47.831964+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-10/note.md"}}
 {"topic": "cleanup.done", "trace_id": "2a04b8fa2ede4506ad4d8781884f2ae6", "ts": "2025-10-31T20:48:47.832321+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "8659c6dbad7847a289a49fab75f533b0", "ts": "2025-10-31T20:56:18.059803+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "628130e9c69d4a178fb1de9d0d757431", "ts": "2025-10-31T20:56:18.060291+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-10/note.md"}}
+{"topic": "cleanup.done", "trace_id": "0b5c3a8d390143f880ecd0716a0d7c16", "ts": "2025-10-31T20:56:18.060646+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "33d4d3ebcb56433887e5e55d7ca1010b", "ts": "2025-10-31T21:04:05.152115+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "b7d1477085ee49468affde42dd1f8ea3", "ts": "2025-10-31T21:04:05.152605+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-10/note.md"}}
+{"topic": "cleanup.done", "trace_id": "f973eda56a00467c96f5bc9f15ca2f9f", "ts": "2025-10-31T21:04:05.152919+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "8a7cf3e71b9b4a80a67b112a50c3bd2c", "ts": "2025-10-31T21:06:22.477840+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "e9db2de4d94543eaa7eb56e3b802290e", "ts": "2025-10-31T21:06:22.478321+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-10/note.md"}}
+{"topic": "cleanup.done", "trace_id": "b35365f35dfc4ab5bff86c93089a98e6", "ts": "2025-10-31T21:06:22.478643+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "62b3dde0e5b34bc594869bf05c27af1b", "ts": "2025-10-31T21:06:35.324032+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "18d378d05ae34d1783565e2992f9dd9c", "ts": "2025-10-31T21:06:35.324526+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-10/note.md"}}
+{"topic": "cleanup.done", "trace_id": "2efba9dc73184e1b9859fae0f2df93f8", "ts": "2025-10-31T21:06:35.324886+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "da6f74ceeded4fcdadb2179703faab24", "ts": "2025-10-31T21:08:00.251679+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "a323ac69dbf34033ba87d0af6a87a6d1", "ts": "2025-10-31T21:08:00.252164+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-10/note.md"}}
+{"topic": "cleanup.done", "trace_id": "981c42d0dea44d30af90451bc92050ed", "ts": "2025-10-31T21:08:00.252487+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "56a8b85a4eb749f88f742ca3b3259544", "ts": "2025-10-31T21:09:43.116211+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "cce8c8dacea744bf84131690759648b7", "ts": "2025-10-31T21:09:43.116699+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-10/note.md"}}
+{"topic": "cleanup.done", "trace_id": "e71fc708f63c4c6f8ed22afdb0d98698", "ts": "2025-10-31T21:09:43.116990+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "74fac88a52954a479b7703f20d6ebbef", "ts": "2025-10-31T21:11:03.473753+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "1657a1ac8e6f4858ac39846ab715e793", "ts": "2025-10-31T21:11:03.474229+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-10/note.md"}}
+{"topic": "cleanup.done", "trace_id": "cffa37da4e0a46e5aa6076af5531a773", "ts": "2025-10-31T21:11:03.474602+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "055929ddff9f490c9f2925b666478d37", "ts": "2025-10-31T21:12:52.709400+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "9ef733a7f8ec47c2a3d76ee1b5b611b7", "ts": "2025-10-31T21:12:52.709895+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-10/note.md"}}
+{"topic": "cleanup.done", "trace_id": "23f0cf14bf5048a3ac509454ddcc4c26", "ts": "2025-10-31T21:12:52.710251+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "5ce53153304045e3884b9577704a220c", "ts": "2025-11-02T17:28:31.175263+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "c7fd5f329baa4910a80e86f20b71cf40", "ts": "2025-11-02T17:28:31.176034+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "a82afa5e0d5e471896835cd636df3a6d", "ts": "2025-11-02T17:28:31.176521+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "89394ff0d8634e9aad21ee1cdc5486b9", "ts": "2025-11-02T17:33:09.790347+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "6036a3b98cc546c98d038e4f50aa916b", "ts": "2025-11-02T17:33:09.791310+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "0c591e3b26e54a91a3b8df903c1ccc65", "ts": "2025-11-02T17:33:09.791922+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "b69e490121a8462ebd6af2b86014fb2d", "ts": "2025-11-02T17:40:21.012077+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "3d0bec41546e4bedb064f89783d4806a", "ts": "2025-11-02T17:40:21.012712+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "b32c2f615dc544e8beb74a6056a5aa54", "ts": "2025-11-02T17:40:21.013197+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "ef31891ce4a74a069046d6966d6aca7f", "ts": "2025-11-02T18:40:12.070499+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "02ba228b01024ff8a199b49c1c046754", "ts": "2025-11-02T18:40:12.071035+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "6c8875665fba406c9aad949751ab78f6", "ts": "2025-11-02T18:40:12.071398+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "0f34480afaa8485f89951ea1d85f9f2d", "ts": "2025-11-02T18:41:08.272119+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "0152cb3e38264996ac02230f8fe43dcd", "ts": "2025-11-02T18:41:08.273254+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "2ce4d569d6a24191989e2cf167c09905", "ts": "2025-11-02T18:41:08.273857+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "e4b27e42cbf740ad94a2e8090d410edd", "ts": "2025-11-02T18:57:05.816608+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "6d130279a434441d85b5d38bf10403eb", "ts": "2025-11-02T18:57:05.817211+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "2de4ca7c726c44468c120fe27fd15f63", "ts": "2025-11-02T18:57:05.817658+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "884a16232e354a438c78d77fef5b61a1", "ts": "2025-11-02T19:00:14.721159+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "740edf78b05c4af797ca357d5a226af7", "ts": "2025-11-02T19:00:14.722684+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "6468609bc8c740b491f91ef45f1911c1", "ts": "2025-11-02T19:00:14.723610+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "b1ed6c99593c4b4894e3db33ca12034b", "ts": "2025-11-02T19:01:55.421220+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "33369bbb94244c1bb8f98027ad9d3a71", "ts": "2025-11-02T19:01:55.422763+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "3373bec0314e4f47b562320294802cff", "ts": "2025-11-02T19:01:55.424509+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "0c23a98d4dac47f8a52f1ceb999342ea", "ts": "2025-11-02T19:02:55.118991+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "563968f9fa0d4ef096259582847ae54c", "ts": "2025-11-02T19:02:55.120469+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "9262da14e9c54d829c31596101648679", "ts": "2025-11-02T19:02:55.121221+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "decdbc675d2748e9a815b502b03e077c", "ts": "2025-11-02T19:05:42.330621+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "3cc36c69d25342b0b181732799fe8549", "ts": "2025-11-02T19:05:42.331695+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "ee9c4aaef3e4454697506a3a063daa08", "ts": "2025-11-02T19:05:42.332386+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "48aa57ccc13949dea451e8d0b9690828", "ts": "2025-11-02T19:07:11.644388+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "60dbe97de7bd428aac64e6714656e641", "ts": "2025-11-02T19:07:11.646061+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "48d2882fd82b40b8a0b4e3ac6d1da21f", "ts": "2025-11-02T19:07:11.647258+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "67a3bf870bac4808b8ae912ed7c1f4ac", "ts": "2025-11-02T19:16:40.767898+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "9fe3d7e1e80a458b86a522d0f7d06e33", "ts": "2025-11-02T19:16:40.769872+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "488167a30afb438b9e1cfb0dac42885e", "ts": "2025-11-02T19:16:40.771294+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "f65864cbd1d0473182df5917b24427a3", "ts": "2025-11-02T19:18:30.271555+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "a1d0bc43341343c9a481550fc28c04fc", "ts": "2025-11-02T19:18:30.272505+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "610cb14b86ab4c1394565e5cb2a04c1c", "ts": "2025-11-02T19:18:30.273355+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "72d62538917d471e87a07153e0209e3f", "ts": "2025-11-02T19:21:14.236719+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "b3f2606400bc42c2ba9d7d74d7044a23", "ts": "2025-11-02T19:21:14.238173+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "14b91492f468460e8a4c1b35eedd33b1", "ts": "2025-11-02T19:21:14.239153+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "6ab789952952450eb417f82b28ca66c8", "ts": "2025-11-02T19:23:07.544215+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "74e0f4237157459985c052f9915cee66", "ts": "2025-11-02T19:23:07.546078+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "8b6014e0dd484deea37fafbff8d53fd8", "ts": "2025-11-02T19:23:07.547320+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "fca2116a4ff74871bd4ef4ec055aae80", "ts": "2025-11-02T19:26:51.491427+00:00Z", "payload": {"uuid": "u1", "action": "fix_structure"}}
+{"topic": "cleanup.done", "trace_id": "f5ff80d74ee14bb8928c3a3839ac6c3d", "ts": "2025-11-02T19:26:51.492958+00:00Z", "payload": {"uuid": "u2", "action": "archive", "path": "./Archive/Trash/2025-11/note.md"}}
+{"topic": "cleanup.done", "trace_id": "68e8bf26fa1e454ca54fad1ff8f2da30", "ts": "2025-11-02T19:26:51.493760+00:00Z", "payload": {"uuid": "u3", "action": "fix_structure"}}
