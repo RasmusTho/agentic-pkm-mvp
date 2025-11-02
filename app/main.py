@@ -1,121 +1,133 @@
 """
-TEST SHIM for tests/test_agent_smoke.py
+TEST SHIM for tests/test_agent_smoke.py (lifespan version)
 
-- Exposes /agent/health, /interesting, /dashboard as minimal routes.
-- Designed to be monkeypatched with PostgresAgentRepository/AgentService in tests.
-- Not production wiring; replace with real lifespan + routers later.
+- Minimal FastAPI-app med /agent/health, /interesting, /dashboard (HTML).
+- Designad för monkeypatch i test: PostgresAgentRepository och AgentService.
+- Inte produktionskoppling — ersätt med riktig wiring/routers senare.
 """
+from __future__ import annotations
+from contextlib import asynccontextmanager
 from typing import Any, Iterable
+
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
-app = FastAPI(title="Agentic PKM API (shim)")
-
-# Platshållare som testsviten monkeypatchar
+# Monkeypatchbara platshållare (måste finnas som attribut)
 engine = None
 SessionLocal = None
-PostgresAgentRepository = None
-AgentService = None
-InterestingService = None
-ConfigManager = type("ConfigManager", (), {})
+PostgresAgentRepository = None  # type: ignore[assignment]
+AgentService = None  # type: ignore[assignment]
 
-_service_instance: Any = None
 _repo: Any = None
+_service_instance: Any = None
 
-def _collect_interesting(repo: Any) -> list[dict]:
+
+def _latest_heartbeat(repo: Any) -> dict[str, Any] | None:
+    try:
+        for name in ("last_heartbeat", "get_last_heartbeat", "latest_heartbeat"):
+            fn = getattr(repo, name, None)
+            if callable(fn):
+                return fn()
+        hb = getattr(repo, "heartbeats", None)
+        if hb is None:
+            return None
+        data = hb() if callable(hb) else hb
+        items: list[dict[str, Any]] = []
+        if isinstance(data, dict):
+            items = list(data.values())
+        elif isinstance(data, Iterable):
+            items = list(data)  # type: ignore[arg-type]
+        if not items:
+            return None
+        try:
+            items.sort(key=lambda x: x.get("created_at"), reverse=True)
+        except Exception:
+            pass
+        return items[0]
+    except Exception:
+        return None
+
+
+def _interesting_items(repo: Any) -> list[dict[str, Any]]:
     try:
         items = getattr(repo, "interesting_items", None)
+        if items is None:
+            return []
+        items = items() if callable(items) else items
         if isinstance(items, dict):
             return list(items.values())
         if isinstance(items, Iterable):
-            return list(items)
+            return list(items)  # type: ignore[return-value]
+        return []
     except Exception:
-        pass
-    return []
+        return []
+
+
+async def _start() -> None:
+    global _repo, _service_instance
+    try:
+        repo_factory = PostgresAgentRepository
+        svc_factory = AgentService
+        if callable(repo_factory):
+            _repo = repo_factory("dsn://stub")
+        else:
+            _repo = None
+        if callable(svc_factory) and _repo is not None:
+            _service_instance = svc_factory(_repo, None)
+            start = getattr(_service_instance, "start", None)
+            if callable(start):
+                await start()
+    except Exception:
+        _service_instance = None
+
+
+async def _stop() -> None:
+    global _service_instance
+    try:
+        if _service_instance is not None:
+            stop = getattr(_service_instance, "stop", None)
+            if callable(stop):
+                await stop()
+    finally:
+        _service_instance = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await _start()
+    try:
+        yield
+    finally:
+        await _stop()
+
+
+app = FastAPI(title="Agentic PKM API (shim, lifespan)", lifespan=lifespan)
+
 
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
 
+
 @app.get("/agent/health")
 def agent_health():
-    repo = _repo
-    hb = None
-    if repo is not None:
-        for name in ("get_last_heartbeat", "last_heartbeat"):
-            f = getattr(repo, name, None)
-            if callable(f):
-                try:
-                    hb = f()
-                    break
-                except Exception:
-                    pass
-        if hb is None:
-            data = getattr(repo, "heartbeats", None) or getattr(repo, "_heartbeats", None)
-            if isinstance(data, dict) and data:
-                hb = data.get("background-agent") or list(data.values())[-1]
-            elif isinstance(data, list) and data:
-                hb = data[-1]
-    if not isinstance(hb, dict):
-        hb = {"status": "unknown"}
-    return {"ok": True, "heartbeat": hb}
+    hb = _latest_heartbeat(_repo) if _repo is not None else None
+    return {"ok": True, "heartbeat": hb or {"status": "unknown"}}
 
-@app.get("/agent/interesting")
-def agent_interesting():
-    return {"items": _collect_interesting(_repo)}
 
 @app.get("/interesting")
-def interesting_alias():
-    return {"items": _collect_interesting(_repo)}
+def list_interesting():
+    items = _interesting_items(_repo) if _repo is not None else []
+    return {"items": items, "ok": True}
+
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard_alias():
-    items = _collect_interesting(_repo)
-    def item_title(it: dict) -> str:
-        payload = it.get("payload") or {}
-        return str(payload.get("title") or it.get("object_id"))
-    lis = "".join(
-        f"<li><strong>{item_title(it)}</strong>"
-        f" <small>(score={it.get('score','')})</small></li>"
-        for it in items
-    )
-    html = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>Dashboard</title></head>
-<body>
-  <h1>Interesting Items</h1>
-  <ul>{lis or "<li><em>No items</em></li>"}</ul>
-</body></html>"""
-    return html
-
-# Inkludera ev. riktiga routrar om de finns
-try:
-    from app.api.interesting import router as interesting_router
-    app.include_router(interesting_router, prefix="/api")
-except Exception:
-    pass
-
-@app.on_event("startup")
-async def _startup():
-    global _service_instance, _repo
-    try:
-        _repo = PostgresAgentRepository("dsn") if callable(PostgresAgentRepository) else None
-        cfg = ConfigManager() if callable(getattr(ConfigManager, "__call__", None)) else ConfigManager
-        svc_factory = AgentService if callable(AgentService) else (InterestingService if callable(InterestingService) else None)
-        if svc_factory is not None:
-            _service_instance = svc_factory(_repo, cfg)
-            start = getattr(_service_instance, "start", None)
-            if start:
-                await start()
-    except Exception:
-        _service_instance = None
-
-@app.on_event("shutdown")
-async def _shutdown():
-    global _service_instance
-    try:
-        if _service_instance is not None:
-            stop = getattr(_service_instance, "stop", None)
-            if stop:
-                await stop()
-    finally:
-        _service_instance = None
+def dashboard():
+    data = list_interesting()
+    rows = []
+    for item in data["items"]:
+        title = (item.get("payload") or {}).get("title") or str(item.get("object_id", ""))  # type: ignore[index]
+        score = item.get("score")  # type: ignore[index]
+        rows.append(f"<li>{title} — score {score}</li>")
+    body = f"<h1>Interesting Items</h1><ul>{''.join(rows) or '<li>None</li>'}</ul>"
+    return HTMLResponse(f"<!doctype html><html><body>{body}</body></html>")
