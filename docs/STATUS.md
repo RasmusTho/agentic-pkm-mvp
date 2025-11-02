@@ -1,79 +1,70 @@
+Here’s the full docs/STATUS.md in English:
 
-docs/STATUS.md
+# STATUS — Snapshot (2025-11-02)
 
-# STATUS — Snapshot (2025-10-31)
+_Updated status after the lifespan shim + store provider work._
 
-_Snapshot of current system health._
+| Component / Area                          | Status | Note |
+|-------------------------------------------|--------|------|
+| FastAPI lifespan shim                     | 🟢     | `app/main.py` uses a proper lifespan; stub repository/service are monkey-patched in tests and cleaned up on shutdown. |
+| Router extraction                         | 🟡     | API endpoints still live in the shim; `docs/ROADMAP.md` tracks moving them into real routers. |
+| Store backend provider                    | 🟢     | `get_stores()` detects `STORE_BACKEND`/`DATABASE_URL`, does a quick `psycopg` connect probe, and falls back to memory. |
+| In-memory Stores                          | 🟢     | Cached factory (`_memory_stores()`) reuses the same instances; `reset_memory_stores()` exists for test isolation. |
+| Direct DB imports                         | 🟡     | Guards documented, but some legacy code still imports DB directly under `app/store/...`; migration via provider remains. |
+| Promotion worker/agent                    | 🟡     | JSONL queue updates front matter + optional file moves; no triggered reindex/outbox flow yet. |
+| Search / index pipeline                   | 🟡     | Deterministic embeddings + pgvector upsert; hybrid scoring uses fixed weights, not `system-settings.yaml`. |
+| Outbox / event log                        | 🟡     | `ObjectStore.save_object` writes to `outbox` (when PG reachable) and `events.jsonl`; no automatic consumer yet. |
+| Observability / tracing                   | 🟡     | OTLP export via `opentelemetry` only when package + settings present; default spans are no-op. |
+| In-memory test harness                    | 🟢     | Pytest runs entirely without Postgres thanks to memory stores + stub index. |
+| `system-settings.yaml` schema             | 🟢     | Validated against JSON Schema in `tests/system/test_settings_schema.py`; included in `make smoke`. |
+| MergeResolverAgent + CLI                  | 🟢     | Semantic merge + `app/cli/merge_driver.py` provides status/reason with safe exit codes. |
+| Git merge driver integration              | 🟡     | CLI not yet wired via `.gitattributes`; tracked as a next step. |
+| NoteHygieneAgent                          | 🟡     | Emits `cleanup.done` into `events.jsonl`; no scheduler or PG-backed outbox yet. |
+| Classifier v2 guard                       | 🟡     | Tests are guarded via `SKIP_CLASSIFIER_TESTS=1`; rewrite planned in the upcoming sprint. |
 
-| Component                                 | Status   | Notes                                                                                          |
-|-------------------------------------------|----------|------------------------------------------------------------------------------------------------|
-| Promotion chain                           | 🟢 Green | `promote.intent.created` → front matter `review_state: promoted` → reindex → searchable        |
-| Promotion Agent PER wrapper               | 🟢 Green | Cooldown/idempotence; emits `promote.done`; can schedule batch file moves                      |
-| Indexer / Embeddings                      | 🟢 Green | Deterministic embeddings; UUID-stable upsert; hybrid search boosts higher `review_state`       |
-| Hybrid search (`/search`)                 | 🟢 Green | BM25 + vector cosine; weighting rules from `system-settings.yaml`                              |
-| ObjectStore ingestion                     | 🟢 Green | capture_ingest writes Markdown + calls `save_object(emit_outbox=True)` with app UUID           |
-| UUID policy                               | 🟢 Green | UUID is writable, NOT NULL, UNIQUE, and matches Obsidian front matter / Stores                 |
-| RelationIndex / relations table           | 🟢 Green | `RelationIndex.link/neighborhood` usable for provenance                                        |
-| Offline test harness (in-memory Stores)   | 🟢 Green | Pytest runs without Postgres; mirrors SoT reference model                                      |
-| system-settings.yaml schema               | 🟢 Green | Schema-validated in tests; enforced in smoke gates                                             |
-| Outbox / event propagation                | 🟡 Stable| Table emits via ObjectStore; consumer loop still manual; broker-backed ADR pending             |
-| OpenTelemetry / Jaeger tracing            | 🟡 Partial| Spans emitted with `trace_id`; Jaeger path proven manually; not yet asserted in CI             |
-| MergeResolverAgent                        | 🟢 Green | Semantic merge with safety rails; returns `status`/`reason`; prevents UUID drift/regression    |
-| merge_driver CLI                          | 🟡 Yellow| Exists + tested; writes merged text to stdout; exit!=0 on unresolved/conflict                  |
-| Git merge driver integration              | 🟡 Planned| Wire CLI into `.gitattributes`/git config so `%A` is updated automatically                     |
-| NoteHygieneAgent                          | 🟢 Green | Salvages link-only notes, archives empties, moves oversized dumps; emits `cleanup.done`        |
-| Hygiene scheduling                        | 🟡 Planned| Periodic run config (launchd/cron/worker loop) + CI assertions                                 |
+## Focus for the next sprint
+- Extract `/agent`, `/interesting`, `/dashboard` into real routers; keep the shim only importing them.
+- Consolidate store usage via `app/stores/provider.py`; phase out direct `PgObjects`/`MemoryObjects` instantiation.
+- Instrument basic event logging (`trace_id`, topic) around store writes.
+- Clean up `_legacy/` imports after the new wiring lands.
+- Kick off Classifier v2 and reopen the test suite.
 
-## v4.5 Addendum
+## CI / Smoke mode
+- ✅ `make smoke` runs focused contract tests:
+  - `tests/system/test_settings_schema.py`
+  - Index rules + ignores (three curated tests under `tests/index/`)
+  - Promotion chain (queue logic, reconciling, batch move, e2e intent→index)
+  - Merge smoke (`tests/smoke/test_merge_smoke.py`)
+- ⏳ GitHub Actions needs to reflect this bundle; currently the suite runs manually locally.
 
-**Components (delta)**
-- OCR Adapter: **In Progress** — structure-aware Markdown + table JSON
-- AV Pipeline (Step A): **In Progress** — detect/normalize/ASR → `segments.jsonl`
-- Cross-encoder Rerank: **Planned** — query-time rerank for top-N
-- RelationIndex v1 (speakers/entities): **Planned**
+## Open risks
+- Promotion → index is still manual; without auto-reindex, promoted material may miss the search view.
+- Outbox lacks a consumer, so downstream agents don’t trigger without an external process.
+- Tracing is best-effort: without `opentelemetry`, spans are no-op — the observability plan needs follow-through.
 
-**Events now in use (superset)**
-- `ocr.document.completed`, `text.chunk.created`, `index.embedding.created`
-- `av.ingest.detected`, `av.audio.extracted`, `av.asr.completed`, `av.diarization.completed`
-- `promote.done` | `promote.pending_move` | `promote.error`
+---
 
-**Fitness targets**
-- **QAS-003**: `search_p95_ms ≤ 250`
-- **QAS-010**: `outbox→index ≤ 2s`
-- **RAG-accuracy@n**: eval suite (text + AV) tracked in CI
+## Quick ops notes
+- **Backend toggle:** `STORE_BACKEND=pg|memory` (default: auto); set `DATABASE_URL=...` for Postgres.
+- **Reset in-memory stores (tests):**
+  
+  from app.stores.provider import reset_memory_stores
+  reset_memory_stores()
 
-## Current focus
-- Harden Store layer; Outbox consumer drives Indexer/Reviewer by UUID + `trace_id`.
-- Migrate retrieval to include lightweight cross-encoder rerank.
-- Keep legacy event aliases active while migrating agents/logs to canonical `subject.verb.state`.
-- Keep Obsidian + ObjectStore mirrors in sync (UUID + `review_state` invariants).
+	•	Classifier tests: set SKIP_CLASSIFIER_TESTS=0 to re-enable the v2 tests.
 
-## CI / Smoke status
-- ✅ `make smoke` runs:
-  - settings schema validation
-  - index rules / ignore rules
-  - promotion worker roundtrip (intent → promoted → indexed)
-  - promotion smoke
-  - merge smoke (front matter preserved, UUID stable, `status`/`reason` present, no regression)
-  - merge driver CLI roundtrip
-  - hygiene behaviour
-- 🔜 GitHub Actions must enforce at least: settings schema, promotion smoke, merge smoke, merge driver CLI smoke.
+Sprint Definition of Done (v4.5 slice)
+	•	Routers extracted: /agent, /interesting, /dashboard live in
+app/api/routers/{agent.py,interesting.py,dashboard.py} and are included from app/main.py.
+	•	Store provider used everywhere; no direct DB imports outside stores/db/alembic (guard green).
+	•	Store writes emit event-log entries with at least trace_id and topic.
+	•	CI: smoke workflow is green in GitHub Actions.
 
-## Outstanding work (targets for v4.4→v4.5)
-- Wire `app/cli/merge_driver.py` into git so semantic merge becomes default for `.md`.
-- Add Hygiene as scheduled maintenance with audit + `trace_id`; add CI assertions.
-- Extend CI to cover Store contracts and Outbox payload shapes.
-- Finalise event schemas; add schema lint in CI.
-- Broker-backed Outbox ADR; keep SLA ≤2s end-to-end.
-- Build minimal eval suite for OCR/AV so QAS-003/QAS-010 guardrails include mixed media.
+Fitness functions (guardrails)
+	•	QAS-003 Search latency: p95 ≤ 250 ms for top-10 queries on the test corpus.
+	•	QAS-010 Outbox→Index delay: ≤ 2 s from outbox write until the object is searchable in the index.
 
-## Alignment / Constraints
-- Auditability and provenance cannot regress during store/ingestion evolution.
-- Outbox choreography remains the bridge between persistence and async processing.
-- Human-first review and promotion flows remain unchanged.
-- Performance envelopes (QAS-003: p95 < 250 ms) remain hard constraints.
+Docs follow-ups
+	•	Update ARCHITECTURE.md (Store abstraction + Vector/Relation index),
+ROADMAP.md (router extraction), and the Promotion Agent section to reflect the current design.
 
-## Confidence
-- Core ingestion → ObjectStore → Outbox → index → search loop is solid and UUID-stable.
-- Merge safety is trustworthy; hygiene actions consistent with policy.
-- Observability is instrumented; CI enforcement is the next step.
