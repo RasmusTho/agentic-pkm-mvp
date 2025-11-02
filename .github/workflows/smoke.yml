@@ -19,7 +19,8 @@ jobs:
         with:
           python-version: "3.14"
           cache: "pip"
-          cache-dependency-path: requirements-smoke.txt
+          cache-dependency-path: |
+            requirements-smoke.txt
       - name: Install minimal deps
         run: |
           python -m pip install -U pip
