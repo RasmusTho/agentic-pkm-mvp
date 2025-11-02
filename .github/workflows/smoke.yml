@@ -1,33 +1,28 @@
 name: Smoke
+
 on:
-  pull_request:
   push:
-    branches: [ main ]
+    branches: [ main, chore/**, feature/** ]
+  pull_request:
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
     env:
-      SKIP_CLASSIFIER_TESTS: '1'
       STORE_BACKEND: memory
-      PYTHONPATH: ${{ github.workspace }}
+      SKIP_CLASSIFIER_TESTS: "1"
+      PIP_PREFER_BINARY: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
-          restore-keys: ${{ runner.os }}-pip-
-      - name: Install dependencies
+          python-version: "3.14"
+          cache: "pip"
+          cache-dependency-path: requirements-smoke.txt
+      - name: Install minimal deps
         run: |
-          python -m pip install --upgrade pip
-          test -f requirements.txt && pip install -r requirements.txt || true
-          test -f requirements-dev.txt && pip install -r requirements-dev.txt || true
-          test -f dev-requirements.txt && pip install -r dev-requirements.txt || true
-          test -f app/requirements.txt && pip install -r app/requirements.txt || true
-          pip install --quiet requests langgraph
-      - name: Run tests
+          python -m pip install -U pip
+          pip install -r requirements-smoke.txt
+      - name: Pytest (smoke)
         run: pytest -q
