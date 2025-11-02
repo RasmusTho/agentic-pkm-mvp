@@ -111,3 +111,7 @@ def pytest_addoption(parser) -> None:
         )
     except ValueError:
         pass
+import os
+
+def pytest_sessionstart(session):
+    os.environ.setdefault("STORE_BACKEND", "memory")

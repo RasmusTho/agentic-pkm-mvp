@@ -8,6 +8,10 @@ from uuid import UUID
 
 import psycopg
 from psycopg.rows import dict_row
+from datetime import datetime, timezone
+
+from app.store.object_store import DomainObject, ObjectStore
+from app.store.vector_store import VectorIndex as StoreVectorIndex
 
 
 def format_vector(values: Sequence[float]) -> str:
@@ -50,6 +54,8 @@ class VectorIndex(Protocol):
 class PgVectorIndex(VectorIndex):
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
+        self._store = ObjectStore()
+        self._vector_index = StoreVectorIndex()
 
     def upsert(
         self,
@@ -61,39 +67,24 @@ class PgVectorIndex(VectorIndex):
         embedding: Sequence[float],
         model: str,
     ) -> None:
-        vector_literal = format_vector(embedding)
-        dim = len(embedding)
-        with psycopg.connect(self._dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO objects (id, kind, source_ref, payload)
-                    VALUES (%s, %s, %s, %s::jsonb)
-                    ON CONFLICT (id) DO UPDATE
-                      SET kind = EXCLUDED.kind,
-                          source_ref = EXCLUDED.source_ref,
-                          payload = EXCLUDED.payload
-                    """,
-                    (str(object_id), kind, source_ref, json.dumps(payload)),
-                )
-                cur.execute(
-                    """
-                    INSERT INTO embeddings (id, object_id, model, dim, vec)
-                    VALUES (%s, %s, %s, %s, %s::vector)
-                    ON CONFLICT (id) DO UPDATE
-                      SET object_id = EXCLUDED.object_id,
-                          model = EXCLUDED.model,
-                          dim = EXCLUDED.dim,
-                          vec = EXCLUDED.vec
-                    """,
-                    (
-                        str(object_id),
-                        str(object_id),
-                        model,
-                        dim,
-                        vector_literal,
-                    ),
-                )
+        object_uuid = str(object_id)
+        existing = self._store.get_object(object_uuid)
+        created_at = existing.created_at if existing else datetime.now(timezone.utc)
+
+        merged_payload: dict[str, Any] = {}
+        if existing and existing.payload:
+            merged_payload.update(dict(existing.payload))
+        merged_payload.update(payload)
+
+        domain = DomainObject(
+            uuid=object_uuid,
+            kind=kind or (existing.kind if existing else "note"),
+            payload=merged_payload,
+            source_ref=source_ref if source_ref is not None else (existing.source_ref if existing else None),
+            created_at=created_at,
+        )
+        self._store.save_object(domain, emit_outbox=False, trace_id=None)
+        self._vector_index.upsert_embedding(object_uuid, embedding)
 
     def query(
         self,

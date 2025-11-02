@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/events/text.chunk.created.schema.json",
+  "title": "text.chunk.created",
+  "type": "object",
+  "required": ["event", "trace_id", "uuid", "metrics"],
+  "properties": {
+    "event": { "const": "text.chunk.created" },
+    "trace_id": { "type": "string" },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F-]{36}$"
+    },
+    "reasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["chunks", "view"],
+      "properties": {
+        "chunks": { "type": "integer", "minimum": 0 },
+        "view": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

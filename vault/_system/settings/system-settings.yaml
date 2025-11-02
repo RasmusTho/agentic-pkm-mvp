@@ -46,7 +46,7 @@ sync:
 agents:
   reembed_on_body_diff: true
 observability:
-  otlp_endpoint: http://localhost:4317
+  otlp_endpoint: http://localhost:4318
   jaeger_ui: http://localhost:16686
   trace_level: info
 events:

@@ -8,5 +8,5 @@ def test_normalizer_graph_core6(tmp_path):
     assert out.get("event") == "ingest.normalize.done"
     assert out.get("object_id")
     c6 = out.get("core6") or {}
-    for k in ["id","type","title","created","updated","origin"]:
+    for k in ["id", "title", "review_state", "created_at"]:
         assert k in c6

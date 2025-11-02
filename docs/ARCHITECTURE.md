@@ -1,93 +1,327 @@
-# Architecture — SoT v4.2 Baseline
+docs/ARCHITECTURE.md
 
-This document captures the system-wide reference introduced with SoT v4.2. It describes runtimes, data model, LangGraph agents, queues, and invariants that remain the foundation for later extensions (including the v4.3 Obsidian integration addendum below).
+# Architecture — SoT v4.5 (superset of v4.4 baseline)
 
-## 1. Runtime Topology
-- **App (Python 3.14)**: FastAPI API, LangGraph agents, background jobs.
-- **Postgres + pgvector (SetDB/AMG)**: primary persistence for objects, chunks, embeddings, relations, decisions, sets, membership, audit.
-- **Redis (optional)**: lightweight cache and queue bridge.
-- **LLM backends**: local Ollama (llama3.1 8B, deepseek-r1 8B) and remote providers (OpenAI, Azure, Anthropic) selected via env.
+_System of record for how the platform runs today, with v4.5 additions. This document preserves the v4.4 baseline and adds OCR/AV ingestion, retrieval reranking, and event contract updates._
 
-### Deployment surfaces
-- Docker Compose (`docker-compose.yml`) provides db, redis, api.
-- Agents and jobs run inside the Python app container or locally via CLI (`app/agents/runner.py`, `app/jobs/*`).
-
-## 2. Data Model (SetDB / AMG)
-Core tables stored in Postgres:
-- `objects(id UUID, kind, source_ref, payload jsonb, ts, search_vector tsvector)`
-- `chunks(id UUID, object_id UUID, idx int, payload jsonb, offset_start, offset_end, text)`
-- `embeddings(id UUID, object_id UUID, model text, dim int, vec vector)`
-- `decisions(id UUID, object_id UUID, key text, value jsonb, created_at timestamptz)`
-- `audit(id UUID, object_id UUID, agent text, action text, ts timestamptz, trace_id text, details jsonb)`
-- `sets(id UUID, name text)` and `membership(id UUID, set_id UUID, object_id UUID)`
-- `agent_memories(id UUID, run_id UUID, layer text, payload jsonb, provenance jsonb, created_at timestamptz)`
-
-**Core-6** fields (`id`, `type`, `title`, `created`, `updated`, `origin`) are stored under `objects.payload.core6` and are immutable outside the normalizer.
-
-## 3. Event & Graph Flow (LangGraph PER loops)
-Each agent runs as a Plan → Execute → Reflect loop with explicit audit logging.
-
-Order of execution in the ingestion pipeline:
-1. **Normalizer** (`ingest.normalize.*`) — loads file, stabilizes Core-6, writes object & episodic memory.
-2. **Classifier** (`curation.classify.*`) — tags & trust score; writes decisions/audit/memory.
-3. **Chunker** (`ingest.chunk.*`) — splits text into logical spans and stores chunks.
-4. **Deduper** (`curation.dedupe.*`) — identifies near duplicates; writes `duplicate_of` decisions.
-5. **CitationChecker** (`curation.citation.*`) — flags missing citations and emits promotion blockers.
-6. **Indexer** (`ingest.index.*`) — embeds every chunk (pgvector) and records stats memory.
-7. **Reviewer** (`curation.review.*`) — aggregates provenance, writes `review` decisions & episodic memory.
-8. **SetEvaluator** (`promotion.evaluate.*`) — computes promotion score (`evaluate` decisions).
-9. **Projector** (`promotion.project.*`) — ensures membership in target sets when promoted.
-
-Graphs are declared in `app/agents/*/graph.py` using `app/agents/base/graph.PERSpec`. CLI entry point: `python -m app.agents.runner --agent <name>`.
-
-## 4. Retrieval & Search
-- **BM25-lite** (`app/search/bm25_lite.py`) builds tsvector search vectors for objects.
-- **pgvector** embeddings stored per chunk; retrieval uses cosine distance.
-- Hybrid retrieval merges lexical and vector results before response composition.
-
-## 5. LLM Abstractions
-- `app/llm/adapter.generate()` selects providers via `LLM_PROVIDER`, `LLM_MODEL`, `LLM_REASONING_MODEL`.
-- Supports JSON-mode prompts, optional reasoning traces (DeepSeek R1, OpenAI reasoning models).
-
-## 6. Observability & Governance
-- Every agent writes an audit row with `trace_id`, `agent`, `action`, and structured details.
-- Episodic memories persisted through `app/memory/store.py` allow agents to read past context while remaining idempotent.
-- Invariants:
-  - Stable object identity keyed by `core6.origin` hash.
-  - `embeddings` count ≥ chunk count per object after indexer.
-  - Promotion gates enforced via Reviewer/SetEvaluator/Projector decisions and set membership.
-
-## 7. Queues & Jobs
-- Ingestion typically triggered via CLI/tests; WS queue (future) routes ingestion events.
-- `app/jobs/backfill.py` performs hygiene (chunks, embeddings, review, evaluate, projection) on existing objects.
-
-## 8. Deployment Notes
-- Scale horizontally by running multiple agent workers; writes are idempotent and keyed by UUIDs.
-- Remote LLM usage gated behind environment configuration; defaults to local Ollama if available.
-- Alembic migrations tracked in `app/alembic/versions/` (merged heads guaranteed by SoT v4.2).
+This document covers:
+- Runtime & deployment
+- Stores (ObjectStore / VectorIndex / RelationIndex)
+- Eventing, PER loops, observability
+- Pipelines (capture, ingestion/indexing, promotion, merge, hygiene)
+- Agent responsibilities and safety rails
+- Testing/CI gates
+- v4.5 pipeline additions (OCR/AV, rerank) and compatibility with v4.4
+- Roadmap hooks into v4.5+ and v5.x direction
 
 ---
 
-## Addendum: SoT v4.3 — Obsidian Integration & Lifecycle
+## 1. System Overview (SoT v4.4 → v4.5 superset)
 
-SoT v4.3 layers Obsidian vault mirroring, export, and promotion/backfill automation on top of the v4.2 baseline. Highlights:
+- The platform is an agentic PKM pipeline: agents run PER loops (Plan → Execute → Reflect) and exchange domain events rather than direct calls.
+- Knowledge lives in two coordinated views: the human-facing Obsidian vault (Markdown + YAML front matter under Git) and the system-facing memory graph backed by Postgres (SetDB / AMG).
+- **AMG (Agent Memory Graph)** provides the cognitive fabric. Stores are persistence seams; AMG is the agent-facing meaning layer atop those seams.
+- An Outbox pattern choreographs events such as `ingest.object.created`, `index.object.embedded`, `promote.intent.created`, and `promote.done`. v4.5 adds canonical `subject.verb.state` names with legacy aliases retained.
+- Obsidian remains the human surface. Markdown + YAML front matter is the contract and keeps the governance mantra “människa först.”
+- **UUID is the canonical identity** across vault notes, Stores, AMG, and events. The application generates UUIDs up front; the database no longer owns identity.
+- Persistence is organised into domain-specific Stores. Postgres 16 is the canonical backing database today, but agents touch it via Store interfaces rather than ad-hoc SQL.
+- Offline test harnesses run the pipeline entirely in-memory: agent runners hydrate `DomainObject`s into dicts and keep transient state in Python structures. Pytest can run without a database.
 
-- **File-first lifecycle** that keeps Markdown sources in sync with SetDB (create/update/rename/delete semantics, conflict resolution).
-- **Promotion chain** (Reviewer → SetEvaluator → Projector) now feeds Obsidian export and published sets.
-- **Export pipeline** (`scripts/export_objects.py`) writes Core-6 + metadata frontmatter and optional chunk breakdowns into the vault.
-- **Backfill hygiene** (`make backfill`) ensures historical objects receive chunks, embeddings, reviews, evaluations, and projections.
-- **Dedicated deep dive**: see [`docs/architecture/obsidian_integration.md`](architecture/obsidian_integration.md) for detailed lifecycle flows, sequence diagrams, and operational guidance.
+---
 
-Future SoT releases will build on this foundation (e.g., merge/conflict tooling in v4.4).
+## 2. Store-based Persistence
+
+Stores are intentional abstractions over persistence. They map to three memory modes: canonical record (ObjectStore), semantic similarity (VectorIndex), and associative/relational memory (RelationIndex / KnowledgeGraphStore). Every Store uses UUID as the canonical identifier and emits traceable events via the Outbox.
+
+### 2.1 ObjectStore
+
+**Purpose:** canonical source of truth for objects (notes, captures, sets, agent outputs, etc.).
+
+**Responsibilities**
+- Persist object payloads and front matter projections (Core-6 / Core-12; `origin`, `review_state`, `trust`, `source_ref`, timestamps).
+- Maintain file state mirrors (`path`, `mtime`, `fm_hash`, `body_hash`) so Markdown stays explainable.
+- Emit Outbox events atomically with writes (`emit_outbox=True`).
+- Guarantee auditability via `trace_id`, provenance, immutable timestamps.
+
+**Implementation snapshot**
+- Backend: Postgres 16 (JSONB schema via Alembic). Tables `objects`, `chunks`, `embeddings`, `decisions`, `audit`, `agent_memories`, `sets`/`membership` sit behind ObjectStore.
+- Public API: `save_object()`, `get_object()`, `list_objects()`, working with `DomainObject(uuid, kind, payload, source_ref, created_at)`.
+- As of 2025-10-31, the app writes the same UUID into both `id` and `uuid` columns; `uuid` will become the PRIMARY KEY.
+
+### 2.2 VectorIndex
+
+**Purpose:** semantic retrieval / similarity search.
+
+**Responsibilities**
+- Store embeddings for objects and chunks generated by Indexer.
+- Answer `similar(uuid, k)` and `search_by_text(query, k)` for agents and APIs.
+- Support Indexer upserts and retrieval flows without leaking backend details.
+
+**Properties**
+- Backend: pgvector in Postgres 16, wrapped by `app/store/vector_store.py`. Public API: `upsert_embedding()`, `similar()`, `search_by_text()`.
+- Future: external vector DBs (Qdrant/Milvus/etc.) once scale/latency demand it.
+- **v4.5:** multi-view embeddings (e.g. `markdown.semantic`, `table.json`, `av.segment`) with `{uuid, view, page_anchor|t0..t1, span}` metadata. Baseline embedding 384-d.
+
+### 2.3 RelationIndex / KnowledgeGraphStore
+
+**Purpose:** represent relationships and provenance between objects (“summarises”, “derived_from”, speakers/entities with temporal anchors).
+
+**Responsibilities**
+- Persist typed edges `(a_uuid, b_uuid, relation_type, weight, provenance, created_at)`.
+- Support graph queries like `neighborhood(center_uuid, max_hops=2)`.
+
+**Properties**
+- Backend: `relations` table in Postgres. API: `link()`, `neighborhood()`.
+- **v4.5 planning:** nodes `Speaker`, `Entity` and edges `SPOKE_IN`, `MENTIONS` with `[span|t0..t1]`.
+
+---
+
+## 3. Store Contract & Guardrails
+
+- Agents/CLIs MUST NOT write directly to Postgres tables (`objects`, `relations`, `embeddings`, `outbox`). All writes go through Stores.
+- Knowledge objects are written via ObjectStore, embeddings via VectorIndex, provenance links via RelationIndex.
+- Outbox events are written atomically with Store writes. Manual inserts risk breaking atomicity.
+- Every object MUST have an application-assigned UUID that appears in Obsidian front matter, Store payloads, Outbox events, and RelationIndex edges.
+- Agents may advance `review_state`, but only via ObjectStore so changes are auditable.
+
+---
+
+## 4. Identity & Provenance
+
+- UUID is the single canonical identity across Stores, AMG nodes, and events. Surrogate IDs are being removed.
+- Every event includes `uuid` and `trace_id`. Audit rows reference the same identifiers for end-to-end reconstruction.
+- Provenance metadata (`source_ref`, external IDs, citations) is part of the payload contract. Agents add opinions/decisions but do not erase provenance or regress `review_state`.
+
+---
+
+## 5. Runtime & Deployment
+
+- **Language/runtime:** Python 3.14
+- **Surfaces:** FastAPI API (`/search`), background workers, LangGraph agents (PER loops).
+- **Persistence:** Stores on Postgres 16 (ObjectStore/pgvector/relations).
+- **Queues / Outbox:** table-backed Outbox (JSONB + timestamps) plus optional Redis bridge for fan-out.
+- **LLMs:** Local-first via Ollama (`llama3.1:8b` dialog, `deepseek-r1:8b` arbiter), pluggable cloud providers via env (`LLM_PROVIDER`, `LLM_MODEL`).
+- **Packaging / topology:** Docker Compose brings up db, redis, api, Jaeger, workers on the Mac mini host. Dev via VS Code Remote-SSH.
+- **Tracing / observability:** OpenTelemetry spans with `trace_id`; export via OTLP to Jaeger when enabled.
+
+---
+
+## 6. Eventing, PER Loops & Observability
+
+### PER loop
+All agents follow Plan → Execute → Reflect:
+1. **Plan:** Inspect object/event/state via Stores; decide action.
+2. **Execute:** Perform action through Store interfaces.
+3. **Reflect:** Emit event + write audit/episodic memory with `trace_id`.
+
+### Outbox-driven events
+Store writes + Outbox insert are atomic. Consumers (Indexer, Reviewer, Promotion, etc.) process rows ordered by `created_at`, act, and advance `delivered_at`. **QAS-010** remains: outbox → index ≤ 2 seconds.
+
+### Traceability
+- Each run creates spans (`start_span(...)`) with a `trace_id`.
+- `trace_id` propagates through `audit`, `agent_memories`, and events.
+- Jaeger visualises full runs end-to-end.
+
+---
+
+## 7. Pipelines
+
+### 7.0 Capture Pipeline (External → Vault + Store layer)
+1) Capture agents normalise input into Markdown + YAML with UUID, `origin`, `source_ref`, initial `review_state`.  
+2) Markdown is written to the vault and mirrored via ObjectStore (`emit_outbox=True`) which emits `capture.object.created`/`ingest.object.created`.  
+3) Vault and ObjectStore remain mirrors; the vault stays the complete human surface.
+
+Production lifecycle agents: Normalizer, Classifier, Chunker, Deduper, CitationChecker, Indexer, Reviewer, SetEvaluator, Projector, Promotion, MergeResolver, NoteHygiene.
+
+### 7.1 Ingestion & Indexing
+- **Normalizer:** validates front matter & UUID; emits `ingest.object.created`.  
+- **Classifier:** taxonomy/tags/trust decisions.  
+- **Chunker:** splits body into spans; writes `chunks`.  
+- **Deduper:** detects near-duplicates.  
+- **CitationChecker:** flags provenance issues.  
+- **Indexer:** generates embeddings; upserts via VectorIndex; powers hybrid `/search`.  
+- **Reviewer & SetEvaluator:** aggregate quality/provenance, coordinate with Projector.  
+- **Projector:** set membership, exports.
+
+### 7.2 Promotion Flow
+- Human marks intent → `promote.intent.created`.
+- **Promotion Agent:** cooldown/idempotence; `get_object()` → mutate front matter (`review_state: promoted`) → `save_object(emit_outbox=False)`; record RelationIndex edges; emit `promote.done`; trigger re-index if needed.
+
+### 7.3 Merge Flow (Semantic merge)
+- Merge conflict → MergeResolverAgent via CLI driver.
+- Semantic 3-way Markdown merge with UUID guard and non-regression of `review_state`.
+- Output `(merged_text, status, reason)`. Exit non-zero on unresolved.
+
+### 7.4 Lifecycle & Governance
+- Capture through Promotion stays human-first; Stores + Outbox ensure traceability and timely indexing (**QAS-010**).
+
+### 7.5 Hygiene Flow
+- NoteHygieneAgent salvages link-only notes, archives empties, moves oversized dumps; emits `cleanup.done`.
+
+---
+
+## 8. Agent Summary (PER loops)
+
+Production agents:
+- **Normalizer**, **Classifier**, **Chunker**, **Deduper**, **CitationChecker**, **Indexer**, **Reviewer**, **SetEvaluator**, **Projector**, **Promotion Agent**, **MergeResolverAgent**, **NoteHygieneAgent**.
+
+Shared properties:
+- Store interfaces only; `audit` with `trace_id`; episodic memory updates; invariants respected.
+
+---
+
+## 9. Vault Mirror & Human Surface
+
+- Markdown + YAML in the vault is the human contract.
+- `capture_ingest` writes Markdown to `vault/@Inbox/…` and mirrors via ObjectStore + Outbox event.
+- Agents keep UUID stable, never regress `review_state`, preserve references.
+
+---
+
+## 10. Testing & CI
+
+### Smoke / CI gates
+- `pytest -q` runs unit + integration for ingestion, promotion, merge, hygiene, indexer, etc.
+- `make smoke` asserts: settings schema, indexing/ignore rules, promotion roundtrip, merge safety, merge CLI roundtrip, hygiene behaviour, Store contracts.
+
+### Observability checks
+- Spans emitted with `trace_id`; Jaeger path validated. CI span assertions planned.
+
+---
+
+## 11. Compatibility & Runtime (SoT v4.4 carry-over)
+
+**AMG.** AMG remains the cognitive layer. Agents hydrate episodic memory from AMG and write reflections via ObjectStore/Audit while preserving `uuid` and `trace_id`.
+
+**Offline test harness.** In-memory adapters for Stores enable pytest without Postgres.
+
+**Runtime & deployment.** Python 3.14; Docker Compose (Postgres 16 + pgvector, Redis, API, workers, Jaeger). OTLP → Jaeger when enabled. Local-first LLMs via Ollama with pluggable cloud fallbacks.
+
+**Identity & invariants.** UUID is immutable; `review_state` is monotonic; provenance preserved.
+
+**Outbox semantics.** Table-backed bus remains the running system until a broker ADR is accepted.
+
+**Deterministic fallbacks.** When model serving is down, deterministic embeddings + lexical search keep `/search` usable.
+
+---
+
+## 12. v4.5 Pipeline Additions
+
+### 12.1 OCR — Structure-aware Document Ingestion
+**Flow:** `capture → ocr → normalize → classify → chunk → embed → outbox`
+
+**Artifacts (views)**
+- `markdown.semantic` → `ocr/semantic.md`
+- `table.json` → `ocr/tables/{table_id}.json`
+- images/layout artifacts as needed
+
+**Front matter (excerpt)**
+```yaml
+ocr:
+  enabled: true
+  model: "ocr-adapter"
+  version: "x.y.z"
+  confidence: 0.0-1.0
+  warnings: []
+
+Events
+	•	ocr.document.completed
+	•	text.chunk.created
+	•	index.embedding.created
+
+12.2 AV — Audio/Video Transcription
+
+Flow: capture → av.detect → av.normalize → av.vad → av.asr → av.align+diarize → normalize(text) → chunk → embed → outbox
+
+Artifacts (views)
+
+objects/{uuid}/
+  raw/original.{mp4|mov|mkv|mp3|m4a}
+  av/audio.wav
+  av/transcript.raw.vtt
+  av/transcript.norm.vtt
+  av/transcript.segments.jsonl
+  av/chapters.json
+
+Front matter (excerpt)
+
+av:
+  type: "video|audio"
+  language: sv|en|auto
+  duration_s: 0
+  diarization: true
+  speakers: ["SPEAKER_00","SPEAKER_01"]
+  provenance:
+    vad: { model: "silero-vad", version: "…" }
+    asr: { model: "whisper", version: "…" }
+    aligner: { model: "whisperx", version: "…" }
+
+Chunk metadata (example)
+
+{
+  "uuid":"...",
+  "view":"av.segment",
+  "t0":83.2,
+  "t1":96.1,
+  "speaker":"SPEAKER_00",
+  "span":{"start":1024,"end":1388},
+  "page_anchor":"t=00:01:23-00:01:36",
+  "text":"..."
+}
+
+Events
+	•	av.ingest.detected
+	•	av.audio.extracted
+	•	av.asr.completed
+	•	av.diarization.completed
+	•	text.chunk.created
+	•	index.embedding.created
+
+⸻
+
+13. Retrieval & QA (v4.5)
+	•	Hybrid retrieval across views (markdown.semantic, table.json, av.segment): BM25 + 384-d vectors.
+	•	Lightweight cross-encoder rerank at query time (top-N → top-k). High-precision rerank (e.g., MonoT5) only in eval/batch.
+	•	Answerer returns citations with text spans (span±Δ) and AV timestamps (#t=MM:SS–MM:SS), followed by a Verifier (small LLM/rule) that rechecks claims against spans.
+	•	Optional long-context compressed view may be injected when sources are very long.
+
+⸻
+
+14. Event Contract (v4.5 additions) & Legacy Aliases
+
+Canonical naming: subject.verb.state. Additions include:
+	•	ocr.document.completed
+	•	text.chunk.created
+	•	index.embedding.created
+	•	av.ingest.detected
+	•	av.audio.extracted
+	•	av.asr.completed
+	•	av.diarization.completed
+	•	index.rerank.applied
+
+All events carry uuid, trace_id, optional reasons, metrics, provenance.
+
+Legacy Events & Aliases (router accepts both)
+
+Legacy	Canonical (v4.5)
+ingest.object.created	text.ingest.created (or ocr.document.completed)
+index.object.embedded	index.embedding.created
+promote.intent.created	promote.intent.created
+promote.done	promote.done
+merge.intent.created	merge.intent.created
+cleanup.done	cleanup.done
+capture.object.created	capture.object.created
 
 
-## Status & Fitness
-- SoT v4.3: live architecture
-  - PER-loop baslager (plan→act→reflect) med trace_id
-  - Outbox-driven indexering (p95 outbox→index ≤ 2s) — QAS-010 guard i CI
-  - Fake search (deterministisk embedding) — k6 p(95)<250ms — QAS-003 guard i CI
-  - Contracts: OpenAPI/AsyncAPI lintas i CI
-- 4.3.1: Obsidian-first (pågår)
-  - System settings som Markdown + JSON Schema
-  - Git-driven watcher, rename utan re-embed, body-diff→re-embed
-  - FS fallback watcher (`scripts/fs_watcher.py`) för iCloud/standalone drift + Advanced-URI inboxåtgärder
+⸻
+
+15. Security & Integrity
+	•	PII policy: raw transcripts preserved; normalized views may mask emails/phones. Provenance always recorded.
+	•	Git-versioned content and schema-validated events.
+	•	Provider-agnostic model interfaces with CPU fallback.
+
+⸻
+
+16. Evolution
+	•	v4.5: Unified ingestion (OCR/AV), Stores abstraction, Promotion Agent formalized, hybrid retrieval + rerank.
+	•	v5.x (target): reasoning/logic layer (RDF/OWL/agentic inferencing), RelationIndex-powered filters in QA, richer evaluation harness.

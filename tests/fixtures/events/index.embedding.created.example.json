@@ -1,0 +1,7 @@
+{
+  "event": "index.embedding.created",
+  "trace_id": "tr-embed-0001",
+  "uuid": "00000000-0000-0000-0000-000000000000",
+  "metrics": { "vectors": 12, "dim": 384, "view": "markdown.semantic" },
+  "provenance": { "model": "all-MiniLM-L6-v2", "version": "1.0" }
+}

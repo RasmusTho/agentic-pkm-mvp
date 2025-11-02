@@ -1,20 +1,14 @@
 from __future__ import annotations
-import os, json, re, uuid
+
+import json
+import re
 from typing import Any
-import psycopg
-from psycopg.rows import dict_row
+
 from app.llm.adapter import generate
 from app.agents.base.audit import audit_log
 from app.memory.store import remember, recall
-
-def _dsn() -> str:
-    return (os.environ.get("DATABASE_URL") or "postgresql+psycopg://app:app@127.0.0.1:15432/app").replace("postgresql+psycopg://","postgresql://")
-
-def _fetch_object(oid: str) -> dict[str, Any] | None:
-    with psycopg.connect(_dsn(), row_factory=dict_row) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, payload FROM objects WHERE id=%s", (oid,))
-            return cur.fetchone()
+from app.store.object_store import ObjectStore, DomainObject
+from app.stores.decisions import put_decision
 
 def _heuristic(text: str) -> dict[str, Any]:
     title_first = re.search(r"^#\s+(.+)$", text, re.M)
@@ -59,10 +53,11 @@ def _ensure_labels(value: Any) -> list[str]:
     return [str(value)]
 
 def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
-    row = _fetch_object(object_id)
-    if not row:
+    store = ObjectStore()
+    domain_obj: DomainObject | None = store.get_object(object_id)
+    if domain_obj is None:
         raise ValueError("object not found")
-    payload = row["payload"] or {}
+    payload = domain_obj.payload or {}
     text = payload.get("text") or payload.get("content") or ""
 
     messages = [
@@ -89,12 +84,13 @@ def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
         "confidence": confidence,
     }
 
-    with psycopg.connect(_dsn(), autocommit=True) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO decisions (id, object_id, key, value, created_at) VALUES (%s,%s,%s,%s::jsonb, now())",
-                (str(uuid.uuid4()), object_id, "classification", json.dumps(value)),
-            )
+    put_decision(
+        object_id=object_id,
+        key="classification",
+        value=value,
+        agent="classifier",
+        kind="classification",
+    )
     remember(
         agent="classifier",
         kind="classified",

@@ -1,3 +1,4 @@
+import os
 from alembic import op
 import sqlalchemy as sa
 
@@ -7,7 +8,10 @@ branch_labels = None
 depends_on = None
 
 def upgrade() -> None:
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    enable_vec = os.environ.get("ENABLE_VECTOR", "0") == "1"
+    if enable_vec:
+        op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
     op.execute("""
     CREATE TABLE IF NOT EXISTS objects(
       id UUID PRIMARY KEY,
@@ -83,7 +87,24 @@ def upgrade() -> None:
     )
     """)
     op.execute("CREATE INDEX IF NOT EXISTS ix_objects_payload ON objects USING GIN (payload)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_chunks_object_idx ON chunks(object_id, idx)")
+    op.execute("""
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='chunks' AND column_name='idx'
+  ) THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS ix_chunks_object_idx ON public.chunks(object_id, idx)';
+  ELSIF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='chunks' AND column_name='position'
+  ) THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS ix_chunks_object_position ON public.chunks(object_id, position)';
+  ELSE
+    EXECUTE 'CREATE INDEX IF NOT EXISTS ix_chunks_object ON public.chunks(object_id)';
+  END IF;
+END$$;
+""")
     op.execute("CREATE INDEX IF NOT EXISTS ix_embeddings_object ON embeddings(object_id)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_relations_src ON relations(src_id)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_relations_dst ON relations(dst_id)")
@@ -91,7 +112,10 @@ def upgrade() -> None:
     op.execute("CREATE INDEX IF NOT EXISTS ix_membership_object ON membership(object_id)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_decisions_object ON decisions(object_id)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_audit_object ON audit(object_id)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_embeddings_vec ON embeddings USING ivfflat (vec)")
+
+    if enable_vec:
+        op.execute("CREATE INDEX IF NOT EXISTS ix_embeddings_vec ON embeddings USING ivfflat (vec)")
+
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS ix_embeddings_vec")
     op.execute("DROP INDEX IF EXISTS ix_audit_object")

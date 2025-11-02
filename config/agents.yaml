@@ -1,0 +1,22 @@
+merge:
+  policy: sem-merge@1.0
+  epsilon_score_gap: 0.25
+  near_duplicate_similarity: 0.88
+  overlap_similarity: 0.78
+  model: gpt-5-thinking@2025-09
+  temperature: 0
+  invariants:
+    review_state_order: [draft, reviewed, promoted]
+    immutable: [uuid]
+  penalties:
+    long_code_in_non_code: true
+    url_density_threshold: 0.2
+
+hygiene:
+  empty_tokens: 0
+  near_empty_tokens: 80
+  salvage_llm: true
+  model: gpt-5-thinking@2025-09
+  temperature: 0
+  archive_path: Archive/Trash
+  allow_hard_delete: false

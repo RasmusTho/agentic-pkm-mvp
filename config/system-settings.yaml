@@ -1,0 +1,7 @@
+features:
+  ocr:
+    enabled: true
+  av:
+    enabled: true
+  rerank:
+    enabled: false

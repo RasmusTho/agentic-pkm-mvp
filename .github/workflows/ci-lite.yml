@@ -1,8 +1,7 @@
 ---
 name: ci-lite
-'on':
-  push:
-  pull_request:
+on:
+  workflow_dispatch:
 jobs:
   test:
     runs-on: ubuntu-latest

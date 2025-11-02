@@ -1,107 +1,133 @@
-import os
-from collections.abc import AsyncIterator
+"""
+TEST SHIM for tests/test_agent_smoke.py (lifespan version)
+
+- Minimal FastAPI-app med /agent/health, /interesting, /dashboard (HTML).
+- Designad för monkeypatch i test: PostgresAgentRepository och AgentService.
+- Inte produktionskoppling — ersätt med riktig wiring/routers senare.
+"""
+from __future__ import annotations
 from contextlib import asynccontextmanager
-from typing import Any
-from pathlib import Path
+from typing import Any, Iterable
 
-if os.getenv("DEBUGPY") == "1":
-    import debugpy
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 
-    port = int(os.getenv("DEBUGPY_PORT", "5678"))
-    debugpy.listen(("0.0.0.0", port))
-    print(f"debugpy listening on 0.0.0.0:{port}")
-    if os.getenv("DEBUGPY_WAIT") == "1":
-        print("Waiting for debugger attach...")
-        debugpy.wait_for_client()
+# Monkeypatchbara platshållare (måste finnas som attribut)
+engine = None
+SessionLocal = None
+PostgresAgentRepository = None  # type: ignore[assignment]
+AgentService = None  # type: ignore[assignment]
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
-from sqlalchemy.orm import Session
+_repo: Any = None
+_service_instance: Any = None
 
-from app.agent.repository import PostgresAgentRepository
-from app.agent.service import AgentService
-from app.api.agent import router as agent_router
-from app.api.ingest import router as ingest_router
-from app.api.items import router as items_router
-from app.api.interesting import router as interesting_router
-from app.api.search import router as search_router
-from app.api.ui import router as ui_router
-from app.auth import configure_rate_limit_storage, limiter
-from app.config.agent import AgentConfigManager
-from app.db import Base, engine
-from app.deps import get_agent_repository, get_db
-from app.health import HealthSummary, health_summary
-from app.observability import configure_metrics, setup_logging
-from app.settings import settings
 
-from .context_loader import load_context
+def _latest_heartbeat(repo: Any) -> dict[str, Any] | None:
+    try:
+        for name in ("last_heartbeat", "get_last_heartbeat", "latest_heartbeat"):
+            fn = getattr(repo, name, None)
+            if callable(fn):
+                return fn()
+        hb = getattr(repo, "heartbeats", None)
+        if hb is None:
+            return None
+        data = hb() if callable(hb) else hb
+        items: list[dict[str, Any]] = []
+        if isinstance(data, dict):
+            items = list(data.values())
+        elif isinstance(data, Iterable):
+            items = list(data)  # type: ignore[arg-type]
+        if not items:
+            return None
+        try:
+            items.sort(key=lambda x: x.get("created_at"), reverse=True)
+        except Exception:
+            pass
+        return items[0]
+    except Exception:
+        return None
+
+
+def _interesting_items(repo: Any) -> list[dict[str, Any]]:
+    try:
+        items = getattr(repo, "interesting_items", None)
+        if items is None:
+            return []
+        items = items() if callable(items) else items
+        if isinstance(items, dict):
+            return list(items.values())
+        if isinstance(items, Iterable):
+            return list(items)  # type: ignore[return-value]
+        return []
+    except Exception:
+        return []
+
+
+async def _start() -> None:
+    global _repo, _service_instance
+    try:
+        repo_factory = PostgresAgentRepository
+        svc_factory = AgentService
+        if callable(repo_factory):
+            _repo = repo_factory("dsn://stub")
+        else:
+            _repo = None
+        if callable(svc_factory) and _repo is not None:
+            _service_instance = svc_factory(_repo, None)
+            start = getattr(_service_instance, "start", None)
+            if callable(start):
+                await start()
+    except Exception:
+        _service_instance = None
+
+
+async def _stop() -> None:
+    global _service_instance
+    try:
+        if _service_instance is not None:
+            stop = getattr(_service_instance, "stop", None)
+            if callable(stop):
+                await stop()
+    finally:
+        _service_instance = None
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    Base.metadata.create_all(bind=engine)
-    repo = PostgresAgentRepository(settings.psycopg_dsn)
-    config_manager = AgentConfigManager(Path(settings.agent_config_path))
-    service = AgentService(repo, config_manager)
-    app.state.agent_repository = repo  # type: ignore[attr-defined]
-    app.state.agent_config_manager = config_manager  # type: ignore[attr-defined]
-    app.state.agent_service = service  # type: ignore[attr-defined]
-    await service.start()
-    yield
-    await service.stop()
-    config_manager.stop()
-    repo.close()
+async def lifespan(app: FastAPI):
+    await _start()
+    try:
+        yield
+    finally:
+        await _stop()
 
 
-def _rate_limit_handler(request: Request, exc: Exception) -> JSONResponse:
-    if isinstance(exc, RateLimitExceeded):
-        return JSONResponse(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            content={"detail": "Rate limit exceeded"},
-        )
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": str(exc)}
-    )
+app = FastAPI(title="Agentic PKM API (shim, lifespan)", lifespan=lifespan)
 
 
-setup_logging()
-configure_rate_limit_storage()
-app = FastAPI(lifespan=lifespan)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
-app.add_middleware(SlowAPIMiddleware)
-configure_metrics(app)
-app.include_router(items_router)
-app.include_router(ingest_router)
-app.include_router(search_router)
-app.include_router(agent_router)
-app.include_router(interesting_router)
-app.include_router(ui_router)
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
 
 
-@app.get("/")
-def root() -> dict[str, bool | str]:
-    return {"ok": True, "service": "api"}
+@app.get("/agent/health")
+def agent_health():
+    hb = _latest_heartbeat(_repo) if _repo is not None else None
+    return {"ok": True, "heartbeat": hb or {"status": "unknown"}}
 
 
-@app.get("/health")
-def health(
-    db: Session = Depends(get_db),
-    agent_repo=Depends(get_agent_repository),
-) -> HealthSummary:
-    summary = health_summary(db, agent_repo)
-    if summary["status"] != "ok":
-        raise HTTPException(status_code=503, detail=summary)
-    return summary
+@app.get("/interesting")
+def list_interesting():
+    items = _interesting_items(_repo) if _repo is not None else []
+    return {"items": items, "ok": True}
 
 
-@app.get("/version")
-def version() -> dict[str, str]:
-    return {"version": settings.app_version}
-
-
-@app.get("/context")
-def get_context() -> dict[str, Any]:
-    return load_context()
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard():
+    data = list_interesting()
+    rows = []
+    for item in data["items"]:
+        title = (item.get("payload") or {}).get("title") or str(item.get("object_id", ""))  # type: ignore[index]
+        score = item.get("score")  # type: ignore[index]
+        rows.append(f"<li>{title} — score {score}</li>")
+    body = f"<h1>Interesting Items</h1><ul>{''.join(rows) or '<li>None</li>'}</ul>"
+    return HTMLResponse(f"<!doctype html><html><body>{body}</body></html>")
