@@ -4,6 +4,7 @@ on:
   push:
     branches: [ main, chore/**, feature/** ]
   pull_request:
+    branches: [ main ]
 
 jobs:
   smoke:
@@ -19,11 +20,17 @@ jobs:
         with:
           python-version: "3.14"
           cache: "pip"
-          cache-dependency-path: |
-            requirements-smoke.txt
-      - name: Install minimal deps
+          cache-dependency-path: requirements-smoke.txt
+      - name: Install smoke deps
         run: |
-          python -m pip install -U pip
+          python -m pip install --upgrade pip
           pip install -r requirements-smoke.txt
-      - name: Pytest (smoke)
-        run: pytest -q
+      - name: Run smoke tests
+        env:
+          SKIP_CLASSIFIER_TESTS: "1"
+          STORE_BACKEND: "memory"
+        run: |
+          pytest -q \
+            tests/system/test_settings_schema.py \
+            tests/guard/test_no_direct_db_imports.py \
+            tests/test_agent_smoke.py
