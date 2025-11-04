@@ -8,3 +8,5 @@ alembic==1.13.2
 debugpy==1.8.17
 PyYAML==6.0.3
 jsonschema==4.23.0
+requests>=2.32.0
+langgraph>=0.2.39

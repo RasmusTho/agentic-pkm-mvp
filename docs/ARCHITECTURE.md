@@ -27,6 +27,12 @@ This document covers:
 - Persistence is organised into domain-specific Stores. Postgres 16 is the canonical backing database today, but agents touch it via Store interfaces rather than ad-hoc SQL.
 - Offline test harnesses run the pipeline entirely in-memory: agent runners hydrate `DomainObject`s into dicts and keep transient state in Python structures. Pytest can run without a database.
 
+### 1.1 Runtime shim & store selection (v4.5 refresh)
+
+- FastAPI now runs under a proper `lifespan` handler so startup/shutdown are deterministic (no `@on_event` hooks). The shim in `app/main.py` exposes `/agent/health`, `/interesting`, and `/dashboard`, and stays safe to monkeypatch in tests.
+- `app/stores/provider.py` picks a backend by respecting `STORE_BACKEND` (`"pg"` or `"memory"`), otherwise probing `DATABASE_URL` via a quick `psycopg` connect before falling back to in-memory Stores.
+- In-memory mode is process-persistent via a cached `_memory_stores()` factory; call `reset_memory_stores()` for pytest isolation.
+
 ---
 
 ## 2. Store-based Persistence
@@ -83,6 +89,8 @@ Stores are intentional abstractions over persistence. They map to three memory m
 - Outbox events are written atomically with Store writes. Manual inserts risk breaking atomicity.
 - Every object MUST have an application-assigned UUID that appears in Obsidian front matter, Store payloads, Outbox events, and RelationIndex edges.
 - Agents may advance `review_state`, but only via ObjectStore so changes are auditable.
+- CI enforces a `tests/guard/test_no_direct_db_imports.py` check to prevent stray Postgres imports; Store provider wiring must stay the only entry point.
+- Classifier v2 remains guarded in smoke runs (`SKIP_CLASSIFIER_TESTS=1`) until the rewrite lands; toggling the env re-enables the suite.
 
 ---
 

@@ -1,18 +1,25 @@
 name: Smoke
+
 on:
   push:
-    branches: [ main, feature/**, chore/** ]
+    branches: [ main, chore/**, feature/** ]
   pull_request:
     branches: [ main ]
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    env:
+      STORE_BACKEND: memory
+      SKIP_CLASSIFIER_TESTS: "1"
+      PIP_PREFER_BINARY: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
-          cache: 'pip'
+          python-version: "3.14"
+          cache: "pip"
           cache-dependency-path: requirements-smoke.txt
       - name: Install smoke deps
         run: |

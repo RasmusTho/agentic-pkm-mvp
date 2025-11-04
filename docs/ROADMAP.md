@@ -13,6 +13,14 @@ _Tracks strategic releases and planned features._
 - Maintain deterministic-embedding fallback path.
 - Keep Outbox table as the event bus until the broker ADR is accepted (Debezium/Kafka design drafted, not implemented).
 
+## Near-term (next 1–2 sprints)
+
+1. Extract real routers under `app/api/routers/{agent.py, interesting.py, dashboard.py}` and include them from `app/main.py`; keep the shim as a safety net for one sprint.
+2. Harden the Store provider: document `STORE_BACKEND`, keep the fast Postgres probe, and add contract tests for both `"pg"` and `"memory"` paths.
+3. Add baseline observability around Store writes (Outbox + `trace_id` log entries).
+4. Clean up `_legacy` import paths once routers and Stores are the primary wiring surface.
+5. Resume Classifier v2 work: drop `SKIP_CLASSIFIER_TESTS` once the new design lands and run the full suite (`SKIP_CLASSIFIER_TESTS=0` locally first).
+
 ---
 
 ## v4.3.1 — Obsidian-first (Delivered / Active baseline)
