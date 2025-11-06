@@ -1,18 +1,13 @@
 name: Smoke
 on:
   push:
-    branches: ["**"]
+    branches: [ main, chore/**, feature/** ]
   pull_request:
-    branches: ["**"]
-  workflow_dispatch:
-
+    branches: [ main ]
+  workflow_dispatch: {}
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    env:
-      SKIP_CLASSIFIER_TESTS: "1"
-      STORE_BACKEND: "memory"
-      PYTHONUNBUFFERED: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,7 +15,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: '3.14'
 
       - name: Install smoke deps
         run: |
@@ -28,6 +23,9 @@ jobs:
           pip install -r requirements-smoke.txt
 
       - name: Run smoke tests
+        env:
+          SKIP_CLASSIFIER_TESTS: "1"
+          STORE_BACKEND: "memory"
         run: |
           pytest -q \
             tests/system/test_settings_schema.py \
