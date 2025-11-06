@@ -1,32 +1,33 @@
 """
-Search facade for smoke/CI.
-
-- Avoids importing Postgres-specific index on memory backend.
-- Provides a NoopVectorIndex fallback so module import never fails in CI.
+Lightweight search facade safe for CI smoke (no psycopg required).
+Importing this module must not pull in Postgres dependencies.
 """
 from __future__ import annotations
 import os
-from typing import Any, List, Optional
+from typing import Any, List
 
-# Default to None; conditionally set if backend is PG and deps exist.
-PgVectorIndex: Optional[type] = None
-
-if os.environ.get("STORE_BACKEND", "").lower() in ("pg", "postgres", "postgresql"):
-    try:
-        # Heavy import guarded for PG-only paths
-        from .vector_index import PgVectorIndex  # type: ignore
-    except Exception:
-        PgVectorIndex = None  # keep import safe on CI
-
-class NoopVectorIndex:
-    """Minimal stub used by smoke/CI; keeps API surface without PG deps."""
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        return
-
-    def upsert(self, *args: Any, **kwargs: Any) -> int:
-        return 0
-
-    def search(self, *args: Any, **kwargs: Any) -> List[dict]:
+class NullVectorIndex:
+    """No-op index used in memory/smoke runs."""
+    def upsert(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover
+        return None
+    def search(self, *args: Any, **kwargs: Any) -> List[dict]:  # pragma: no cover
         return []
 
-__all__ = ["PgVectorIndex", "NoopVectorIndex"]
+def get_vector_index() -> Any:
+    """
+    Return a vector index implementation without importing Postgres deps
+    unless explicitly running with STORE_BACKEND=pg.
+    """
+    backend = os.getenv("STORE_BACKEND", "auto")
+    if backend == "pg":
+        try:
+            # Import only when backend is pg and deps are available.
+            from .vector_index import PgVectorIndex  # type: ignore
+            return PgVectorIndex()
+        except Exception:
+            # Fallback to no-op in CI smoke if psycopg/pgvector is missing.
+            return NullVectorIndex()
+    # memory / auto default → no-op
+    return NullVectorIndex()
+
+__all__ = ["get_vector_index", "NullVectorIndex"]
