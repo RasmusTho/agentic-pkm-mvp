@@ -1,70 +1,56 @@
-"""FastAPI lifespan shim used by smoke tests."""
-
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Callable, Optional
 
 from fastapi import FastAPI
 
-from app.api.routers import agent_router, dashboard_router, interesting_router
-
-# Monkeypatched in tests to supply real implementations.
+# Monkeypatchable placeholders (CI smoke patches these to fakes)
 engine = None
 SessionLocal = None
-PostgresAgentRepository = None  # type: ignore[assignment]
-AgentService = None  # type: ignore[assignment]
-
-_repo: Any = None
-_service_instance: Any = None
+PostgresAgentRepository: Optional[Callable[..., Any]] = None  # patched in tests
+AgentService: Optional[Callable[..., Any]] = None             # patched in tests
 
 
 async def _start(app: FastAPI) -> None:
-    """Instantiate the repository/service shims and attach them to app state."""
-    global _repo, _service_instance
+    """
+    Lifespan start: instantiate repository via PostgresAgentRepository (if callable),
+    then create AgentService(repo, config_manager=None) and await start().
+    Attach both to app.state so deps/routers can reach them.
+    """
     repo = None
     svc = None
     try:
-        repo_factory = PostgresAgentRepository
-        if callable(repo_factory):
-            repo = repo_factory("dsn://stub")
-    except Exception:
-        repo = None
-    try:
-        svc_factory = AgentService
-        if callable(svc_factory) and repo is not None:
-            svc = svc_factory(repo, None)
+        if callable(PostgresAgentRepository):
+            # DSN is irrelevant under tests; fakes ignore it.
+            repo = PostgresAgentRepository("dsn://stub")  # type: ignore[misc]
+        if callable(AgentService) and repo is not None:
+            svc = AgentService(repo, None)  # type: ignore[misc]
             start = getattr(svc, "start", None)
             if callable(start):
                 await start()
-    except Exception:
-        svc = None
-    _repo = repo
-    _service_instance = svc
-    try:
-        app.state.repo = repo
-    except Exception:
-        pass
+    finally:
+        # Make discoverable to dependencies/routers
+        app.state.agent_repository = repo
+        app.state.agent_service = svc
 
 
 async def _stop(app: FastAPI) -> None:
-    """Stop the service shim and clear app state."""
-    global _repo, _service_instance
+    """
+    Lifespan stop: if a service exists and exposes stop(), await it and clear state.
+    """
     try:
-        if _service_instance is not None:
-            stop = getattr(_service_instance, "stop", None)
+        svc = getattr(app.state, "agent_service", None)
+        if svc is not None:
+            stop = getattr(svc, "stop", None)
             if callable(stop):
                 await stop()
     finally:
-        _service_instance = None
-        _repo = None
-    try:
-        del app.state.repo
-    except Exception:
-        try:
-            app.state.repo = None
-        except Exception:
-            pass
+        # Ensure clean state for subsequent TestClient runs
+        if hasattr(app.state, "agent_repository"):
+            delattr(app.state, "agent_repository")
+        if hasattr(app.state, "agent_service"):
+            delattr(app.state, "agent_service")
 
 
 @asynccontextmanager
@@ -78,11 +64,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Agentic PKM API (lifespan+routers)", lifespan=lifespan)
 
+# Routers expect get_agent_repository() to find app.state.agent_repository
+from app.api.agent import router as agent_router  # noqa: E402
+from app.api.interesting import router as interesting_router  # noqa: E402
+from app.api.dashboard import router as dashboard_router  # noqa: E402
+
 app.include_router(agent_router)
 app.include_router(interesting_router)
 app.include_router(dashboard_router)
-
-
-@app.get("/healthz")
-def healthz() -> dict[str, bool]:
-    return {"ok": True}
