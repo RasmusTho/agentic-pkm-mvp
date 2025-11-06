@@ -1,28 +1,33 @@
 name: Smoke
 on:
   push:
-    branches: [ chore/lifespan-ci, chore/lifespan-shim+memory-stores ]
+    branches: ["**"]
   pull_request:
-    branches: [ main ]
-  workflow_dispatch: {}
+    branches: ["**"]
+  workflow_dispatch:
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    env:
+      SKIP_CLASSIFIER_TESTS: "1"
+      STORE_BACKEND: "memory"
+      PYTHONUNBUFFERED: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-          cache: "pip"
-          cache-dependency-path: requirements-smoke.txt
-      - name: Install
+
+      - name: Install smoke deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-smoke.txt
+
       - name: Run smoke tests
-        env:
-          SKIP_CLASSIFIER_TESTS: "1"
-          STORE_BACKEND: "memory"
         run: |
           pytest -q \
             tests/system/test_settings_schema.py \
