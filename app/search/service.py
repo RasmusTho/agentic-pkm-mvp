@@ -7,6 +7,10 @@ from app.search.vector_index import VectorResult
 from app.ingest import ingest_object as _ingest_object
 
 
+def get_vector_index():
+    return search.get_vector_index()
+
+
 def ingest_object(
     object_id: UUID | None,
     *,
@@ -23,7 +27,7 @@ def search_full_text(query_text: str, *, k: int = 5) -> List[VectorResult]:
 
 
 def search_vector(query_embedding: List[float], *, k: int = 5) -> List[VectorResult]:
-    idx = search.get_vector_index()
+    idx = get_vector_index()
     return idx.query(embedding=query_embedding, k=k)
 
 
