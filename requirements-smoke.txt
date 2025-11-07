@@ -3,4 +3,3 @@ SQLAlchemy>=2,<3
 httpx
 jsonschema
 pytest
-fastapi>=0.115,<1
