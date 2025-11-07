@@ -2,7 +2,6 @@ from __future__ import annotations
 from typing import Any, Dict, List, Tuple
 from uuid import UUID, uuid4
 import json
-
 import app.search as search
 
 _EMBED_DIM = 1536
@@ -110,6 +109,9 @@ def ingest_object(
     payload_out.setdefault("title", text)
     payload_out.setdefault("content", text)
     payload_out.setdefault("text", text)
+    payload_out.setdefault("object_type", kind or "note")
+    payload_out.setdefault("system_intent", "learn")
+    payload_out.setdefault("emergent_tags", [])
     idx = search.get_vector_index()
     idx.upsert(
         object_id=oid,
