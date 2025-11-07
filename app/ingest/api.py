@@ -1,9 +1,9 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Tuple
 from uuid import UUID, uuid4
+import json
 
-# Viktigt: importera via app.search så monkeypatch i tester träffar detta
-from app.search import get_vector_index  # type: ignore[import]
+import app.search as search  # viktigt: modulimport för monkeypatching
 
 _ALLOWED_TAGS = {"serendipity", "collaboration"}
 _EMBED_DIM = 1536
@@ -23,20 +23,17 @@ def normalize_payload(payload: Dict[str, Any], text: str) -> Dict[str, Any]:
     out = dict(payload)
     out.setdefault("object_type", "note")
     out.setdefault("system_intent", "learn")
-    # håll texten med i normaliserad payload (test förväntar detta)
     out["text"] = text
-
+    out["content"] = text
     tags_in = out.get("emergent_tags", [])
     out["emergent_tags"] = [t for t in tags_in if t in _ALLOWED_TAGS]
     return out
 
 
 def handle_post_ingest(object_id: UUID, payload: Dict[str, Any], text: str) -> None:
-    # Lazy import för att undvika cirkulära beroenden
-    from app.ingest import lifecycle  # type: ignore
+    from app.ingest import lifecycle  # lazy import
 
-    intent = payload.get("system_intent")
-    if intent == "reflect":
+    if payload.get("system_intent") == "reflect":
         lifecycle.REFLECT_DIR.mkdir(parents=True, exist_ok=True)
         entry = {
             "source_object_id": str(object_id),
@@ -44,17 +41,37 @@ def handle_post_ingest(object_id: UUID, payload: Dict[str, Any], text: str) -> N
             "text": text,
         }
         (lifecycle.REFLECT_DIR / f"{object_id}.json").write_text(
-            __import__("json").dumps(entry, ensure_ascii=False), encoding="utf-8"
+            json.dumps(entry, ensure_ascii=False), encoding="utf-8"
         )
-    elif payload.get("object_type") == "synthesis_note":
+
+        lifecycle.REFLECTION_LOG.parent.mkdir(parents=True, exist_ok=True)
+        if lifecycle.REFLECTION_LOG.exists():
+            try:
+                data = json.loads(lifecycle.REFLECTION_LOG.read_text(encoding="utf-8"))
+                if not isinstance(data, list):
+                    data = []
+            except Exception:
+                data = []
+        else:
+            data = []
+        data.append(
+            {
+                "source_object_id": str(object_id),
+                "system_intent": payload.get("system_intent"),
+                "clarity_score": payload.get("clarity_score"),
+            }
+        )
+        lifecycle.REFLECTION_LOG.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    if payload.get("object_type") == "synthesis_note":
         lifecycle.RELATIONS_LOG.parent.mkdir(parents=True, exist_ok=True)
         rec = {
+            "type": "synthesizes",
             "object_id": str(object_id),
             "related_claim_ids": payload.get("related_claim_ids", []),
         }
         with lifecycle.RELATIONS_LOG.open("a", encoding="utf-8") as fh:
-            fh.write(__import__("json").dumps(rec, ensure_ascii=False) + "\n")
-    return None
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
 def ingest_object(
@@ -67,7 +84,7 @@ def ingest_object(
 ) -> Tuple[UUID, int]:
     oid = object_id or uuid4()
     emb = _embed_text(text)
-    idx = get_vector_index()
+    idx = search.get_vector_index()
     idx.upsert(
         object_id=oid,
         kind=kind,
