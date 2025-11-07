@@ -19,3 +19,4 @@ scripts/ingest_real.sh
 
 logs/
 events.jsonl
+!requirements-smoke.txt
