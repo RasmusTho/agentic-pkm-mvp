@@ -2,3 +2,4 @@ PyYAML
 SQLAlchemy>=2,<3
 httpx
 jsonschema
+pytest
