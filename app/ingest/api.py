@@ -3,11 +3,16 @@ from typing import Any, Dict, List, Tuple
 from uuid import UUID, uuid4
 import json
 
-import app.search as search  # modulimport så monkeypatch träffar
+import app.search as search
+
+_EMBED_DIM = 1536
+try:
+    from app.config.agent import settings as _agent_settings  # type: ignore
+    _EMBED_MODEL = getattr(_agent_settings, "embed_model", "openai/text-embedding-3-large")
+except Exception:
+    _EMBED_MODEL = "openai/text-embedding-3-large"
 
 _ALLOWED_TAGS = {"serendipity", "collaboration"}
-_EMBED_DIM = 1536
-_EMBED_MODEL = "stub-embed/1536d"
 
 
 def _embed_text(text: str, dim: int = _EMBED_DIM) -> List[float]:
@@ -46,14 +51,11 @@ def handle_post_ingest(object_id: UUID, payload: Dict[str, Any], text: str) -> N
         )
 
         lifecycle.REFLECTION_LOG.parent.mkdir(parents=True, exist_ok=True)
-        if lifecycle.REFLECTION_LOG.exists():
-            try:
-                data = json.loads(lifecycle.REFLECTION_LOG.read_text(encoding="utf-8"))
-                if not isinstance(data, list):
-                    data = []
-            except Exception:
+        try:
+            data = json.loads(lifecycle.REFLECTION_LOG.read_text(encoding="utf-8"))
+            if not isinstance(data, list):
                 data = []
-        else:
+        except Exception:
             data = []
         data.append(
             {
@@ -65,12 +67,30 @@ def handle_post_ingest(object_id: UUID, payload: Dict[str, Any], text: str) -> N
         )
         lifecycle.REFLECTION_LOG.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
+        lifecycle.ANALYTICS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            analytics = json.loads(lifecycle.ANALYTICS_LOG.read_text(encoding="utf-8"))
+            if not isinstance(analytics, dict):
+                analytics = {}
+        except Exception:
+            analytics = {}
+        intent = payload.get("system_intent", "unknown")
+        tags = payload.get("emergent_tags", [])
+        analytics.setdefault("system_intent", {})
+        analytics["system_intent"][intent] = int(analytics["system_intent"].get(intent, 0)) + 1
+        intent_bucket = analytics.setdefault(intent, {})
+        total_bucket = analytics.setdefault("emergent_tags", {})
+        for t in tags:
+            intent_bucket[t] = int(intent_bucket.get(t, 0)) + 1
+            total_bucket[t] = int(total_bucket.get(t, 0)) + 1
+        lifecycle.ANALYTICS_LOG.write_text(json.dumps(analytics, ensure_ascii=False), encoding="utf-8")
+
     if payload.get("object_type") == "synthesis_note":
         lifecycle.RELATIONS_LOG.parent.mkdir(parents=True, exist_ok=True)
         rec = {
             "type": "synthesizes",
             "synthesis_id": str(object_id),
-            "related_claim_ids": payload.get("related_claim_ids", []),
+            "related_claims": payload.get("related_claim_ids", []),
         }
         with lifecycle.RELATIONS_LOG.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -86,14 +106,18 @@ def ingest_object(
 ) -> Tuple[UUID, int]:
     oid = object_id or uuid4()
     emb = _embed_text(text)
+    payload_out = dict(payload)
+    payload_out.setdefault("title", text)
+    payload_out.setdefault("content", text)
+    payload_out.setdefault("text", text)
     idx = search.get_vector_index()
     idx.upsert(
         object_id=oid,
         kind=kind,
         source_ref=source_ref,
-        payload=payload,
+        payload=payload_out,
         embedding=emb,
         model=_EMBED_MODEL,
     )
-    handle_post_ingest(oid, payload, text)
+    handle_post_ingest(oid, payload_out, text)
     return oid, len(emb)
