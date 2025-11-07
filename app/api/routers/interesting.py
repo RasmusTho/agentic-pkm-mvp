@@ -30,6 +30,7 @@ class InterestingSummary(BaseModel):
     total: int
     count: int
     system_intent: Dict[str, int] = Field(default_factory=dict)
+    emergent_tags: Dict[str, int] = Field(default_factory=dict)
 
 # ---------- Hjälpare ----------
 def _filter_and_serialize(
@@ -76,6 +77,13 @@ def _summarize_system_intent(items: List[InterestingItem]) -> Dict[str, int]:
         counts[key] = counts.get(key, 0) + 1
     return counts
 
+def _summarize_emergent_tags(items: List[InterestingItem]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for it in items:
+        for tag in it.payload.get("emergent_tags", []) or []:
+            counts[tag] = counts.get(tag, 0) + 1
+    return counts
+
 # ---------- Endpoints + funktions-API ----------
 @router.get("/interesting", response_model=InterestingList)
 def list_interesting(
@@ -98,4 +106,5 @@ def interesting_summary(
         total=len(items),
         count=len(items),
         system_intent=_summarize_system_intent(items),
+        emergent_tags=_summarize_emergent_tags(items),
     )
