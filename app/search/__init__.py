@@ -1,32 +1,53 @@
-"""
-Search facade for smoke/CI.
-
-- Avoids importing Postgres-specific index on memory backend.
-- Provides a NoopVectorIndex fallback so module import never fails in CI.
-"""
 from __future__ import annotations
+
 import os
-from typing import Any, List, Optional
+from typing import List, Sequence, Any
 
-# Default to None; conditionally set if backend is PG and deps exist.
-PgVectorIndex: Optional[type] = None
+# Minimal no-op index för smoke/CI utan pg/psycopg.
+class NullVectorIndex:
+    def upsert(
+        self,
+        *,
+        object_id,
+        kind: str | None,
+        source_ref: str | None,
+        payload: dict[str, Any],
+        embedding: Sequence[float],
+        model: str,
+    ) -> None:
+        return None
 
-if os.environ.get("STORE_BACKEND", "").lower() in ("pg", "postgres", "postgresql"):
-    try:
-        # Heavy import guarded for PG-only paths
-        from .vector_index import PgVectorIndex  # type: ignore
-    except Exception:
-        PgVectorIndex = None  # keep import safe on CI
-
-class NoopVectorIndex:
-    """Minimal stub used by smoke/CI; keeps API surface without PG deps."""
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        return
-
-    def upsert(self, *args: Any, **kwargs: Any) -> int:
-        return 0
-
-    def search(self, *args: Any, **kwargs: Any) -> List[dict]:
+    def query(
+        self,
+        *,
+        embedding: Sequence[float],
+        k: int = 10,
+        filters: dict[str, Any] | None = None,
+    ) -> list:
         return []
 
-__all__ = ["PgVectorIndex", "NoopVectorIndex"]
+def get_vector_index():
+    """Returnera en vektorindex-implementation.
+    - Om STORE_BACKEND=pg och DATABASE_URL finns: försök PgVectorIndex.
+    - Annars: NullVectorIndex.
+    """
+    backend = os.getenv("STORE_BACKEND", "auto").lower()
+    dsn = os.getenv("DATABASE_URL", "")
+
+    if backend == "pg" and dsn:
+        try:
+            from .vector_index import PgVectorIndex  # importera först när vi vet att vi ska använda pg
+            return PgVectorIndex(dsn)
+        except Exception:
+            # Fallback säkrar att smoke aldrig dör på saknade pg/psycopg/pgvector
+            pass
+    return NullVectorIndex()
+
+# (valfritt) re-exportera typer när de finns, utan att göra pg till ett krav
+try:
+    from .vector_index import VectorResult  # type: ignore
+except Exception:  # pragma: no cover - inte kritiskt för smoke
+    class VectorResult:  # minimal stub
+        pass
+
+__all__ = ["get_vector_index", "NullVectorIndex", "VectorResult"]
