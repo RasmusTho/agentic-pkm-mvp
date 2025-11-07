@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+engine = None
+SessionLocal = None
 
 # Stubs (inga psycopg-importer här)
 from app.api._shim_helpers import PostgresAgentRepository, AgentService
