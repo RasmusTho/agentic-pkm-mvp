@@ -1,5 +1,4 @@
-fastapi
-starlette
+PyYAML
+SQLAlchemy>=2,<3
 httpx
-pytest
-pydantic
+jsonschema

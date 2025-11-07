@@ -1,12 +1,21 @@
 from __future__ import annotations
-from typing import Any
-from fastapi import APIRouter, Request
-from app.api._shim_helpers import latest_heartbeat
 
-router = APIRouter(prefix="/agent", tags=["agent"])
+from fastapi import APIRouter, Depends
+from typing import Any, Dict, List
 
-@router.get("/health")
-def agent_health(request: Request) -> dict[str, Any]:
-    repo = getattr(request.app.state, "repo", None)
-    hb = latest_heartbeat(repo) if repo is not None else None
-    return {"ok": True, "heartbeat": hb or {"status": "unknown"}}
+from app.deps import get_agent_repository
+
+router = APIRouter()
+
+@router.get("/agent/health")
+def agent_health(repo = Depends(get_agent_repository)) -> Dict[str, Any]:
+    get_hb = getattr(repo, "get_last_heartbeat", None)
+    hb = get_hb() if callable(get_hb) else None
+    status = (hb or {}).get("status", "unknown")
+    return {"status": status, "heartbeat": hb or {"status": status}}
+
+@router.get("/agent/interesting")
+def agent_interesting(repo = Depends(get_agent_repository)) -> Dict[str, List[Dict[str, Any]]]:
+    li = getattr(repo, "list_interesting", None)
+    items = li() if callable(li) else []
+    return {"items": items}
