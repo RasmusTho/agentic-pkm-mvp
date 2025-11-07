@@ -1,32 +1,20 @@
-"""
-Search facade for smoke/CI.
+from .vector_index import VectorResult, NullVectorIndex, PgVectorIndex  # noqa: F401
 
-- Avoids importing Postgres-specific index on memory backend.
-- Provides a NoopVectorIndex fallback so module import never fails in CI.
-"""
-from __future__ import annotations
-import os
-from typing import Any, List, Optional
+def get_vector_index():
+    import os
+    dsn = os.getenv("DATABASE_URL") or ""
+    backend = os.getenv("STORE_BACKEND", "auto")
+    if backend == "pg" and dsn:
+        try:
+            return PgVectorIndex(dsn)  # kräver dsn i pg-läget
+        except Exception:
+            return NullVectorIndex()
+    return NullVectorIndex()
 
-# Default to None; conditionally set if backend is PG and deps exist.
-PgVectorIndex: Optional[type] = None
+try:
+    from .service import get_search_service  # noqa: F401
+except Exception:
+    def get_search_service():
+        return None
 
-if os.environ.get("STORE_BACKEND", "").lower() in ("pg", "postgres", "postgresql"):
-    try:
-        # Heavy import guarded for PG-only paths
-        from .vector_index import PgVectorIndex  # type: ignore
-    except Exception:
-        PgVectorIndex = None  # keep import safe on CI
-
-class NoopVectorIndex:
-    """Minimal stub used by smoke/CI; keeps API surface without PG deps."""
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        return
-
-    def upsert(self, *args: Any, **kwargs: Any) -> int:
-        return 0
-
-    def search(self, *args: Any, **kwargs: Any) -> List[dict]:
-        return []
-
-__all__ = ["PgVectorIndex", "NoopVectorIndex"]
+__all__ = ["VectorResult", "NullVectorIndex", "PgVectorIndex", "get_vector_index", "get_search_service"]

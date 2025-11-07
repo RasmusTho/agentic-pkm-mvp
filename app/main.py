@@ -1,71 +1,114 @@
 from __future__ import annotations
-
 from contextlib import asynccontextmanager
-from typing import Any, Callable, Optional
+from typing import Any
 
 from fastapi import FastAPI
 
-# Monkeypatchable placeholders (CI smoke patches these to fakes)
+# Monkeypatchbara symboler under test
 engine = None
 SessionLocal = None
-PostgresAgentRepository: Optional[Callable[..., Any]] = None  # patched in tests
-AgentService: Optional[Callable[..., Any]] = None             # patched in tests
+PostgresAgentRepository = None  # type: ignore[assignment]
+AgentService = None            # type: ignore[assignment]
 
+_repo: Any = None
+_service: Any = None
 
-async def _start(app: FastAPI) -> None:
-    """
-    Lifespan start: instantiate repository via PostgresAgentRepository (if callable),
-    then create AgentService(repo, config_manager=None) and await start().
-    Attach both to app.state so deps/routers can reach them.
-    """
-    repo = None
-    svc = None
+async def _start() -> None:
+    global _repo, _service
     try:
-        if callable(PostgresAgentRepository):
-            # DSN is irrelevant under tests; fakes ignore it.
-            repo = PostgresAgentRepository("dsn://stub")  # type: ignore[misc]
-        if callable(AgentService) and repo is not None:
-            svc = AgentService(repo, None)  # type: ignore[misc]
-            start = getattr(svc, "start", None)
+        repo_factory = PostgresAgentRepository
+        svc_factory = AgentService
+        _repo = repo_factory("dsn://stub") if callable(repo_factory) else None
+        if callable(svc_factory) and _repo is not None:
+            _service = svc_factory(_repo, None)
+            start = getattr(_service, "start", None)
             if callable(start):
                 await start()
-    finally:
-        # Make discoverable to dependencies/routers
-        app.state.agent_repository = repo
-        app.state.agent_service = svc
+    except Exception:
+        _repo = None
+        _service = None
 
-
-async def _stop(app: FastAPI) -> None:
-    """
-    Lifespan stop: if a service exists and exposes stop(), await it and clear state.
-    """
+async def _stop() -> None:
+    global _service
     try:
-        svc = getattr(app.state, "agent_service", None)
-        if svc is not None:
-            stop = getattr(svc, "stop", None)
+        if _service is not None:
+            stop = getattr(_service, "stop", None)
             if callable(stop):
                 await stop()
     finally:
-        # Ensure clean state for subsequent TestClient runs
-        if hasattr(app.state, "agent_repository"):
-            delattr(app.state, "agent_repository")
-        if hasattr(app.state, "agent_service"):
-            delattr(app.state, "agent_service")
-
+        _service = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await _start()
+    try:
+        yield
+    finally:
+        await _stop()
+
+
+# === BEGIN lifespan wiring ===
+from contextlib import asynccontextmanager
+
+try:
+    from app.agent.repository import PostgresAgentRepository  # type: ignore
+except Exception:
+    PostgresAgentRepository = None  # type: ignore
+
+try:
+    from app.services.agent_service import AgentService  # type: ignore
+except Exception:
+    class AgentService:  # type: ignore
+        async def start(self): pass
+        async def stop(self): pass
+
+_repo = None
+_service_instance = None
+
+async def _start(app):
+    global _repo, _service_instance
+    try:
+        repo_factory = PostgresAgentRepository
+        svc_factory = AgentService
+        _repo = repo_factory("dsn://stub") if callable(repo_factory) else None
+        if _repo is not None:
+            try:
+                app.state.agent_repository = _repo  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        if callable(svc_factory) and _repo is not None:
+            _service_instance = svc_factory(_repo, None)
+            start = getattr(_service_instance, "start", None)
+            if callable(start):
+                await start()
+    except Exception:
+        _service_instance = None
+
+async def _stop(app):
+    global _service_instance
+    try:
+        if _service_instance is not None:
+            stop = getattr(_service_instance, "stop", None)
+            if callable(stop):
+                await stop()
+    finally:
+        _service_instance = None
+        try:
+            delattr(app.state, "agent_repository")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+@asynccontextmanager
+async def lifespan(app):
     await _start(app)
     try:
         yield
     finally:
         await _stop(app)
-
-
+# === END lifespan wiring ===
 app = FastAPI(title="Agentic PKM API (lifespan+routers)", lifespan=lifespan)
 
-# Routers expect get_agent_repository() to find app.state.agent_repository
-from app.api.agent import router as agent_router  # noqa: E402
+from app.api.agent import router as agent_router          # noqa: E402
 from app.api.interesting import router as interesting_router  # noqa: E402
 from app.api.dashboard import router as dashboard_router  # noqa: E402
 
