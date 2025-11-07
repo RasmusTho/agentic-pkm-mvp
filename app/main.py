@@ -46,6 +46,66 @@ async def lifespan(app: FastAPI):
     finally:
         await _stop()
 
+
+# === BEGIN lifespan wiring ===
+from contextlib import asynccontextmanager
+
+try:
+    from app.agent.repository import PostgresAgentRepository  # type: ignore
+except Exception:
+    PostgresAgentRepository = None  # type: ignore
+
+try:
+    from app.services.agent_service import AgentService  # type: ignore
+except Exception:
+    class AgentService:  # type: ignore
+        async def start(self): pass
+        async def stop(self): pass
+
+_repo = None
+_service_instance = None
+
+async def _start(app):
+    global _repo, _service_instance
+    try:
+        repo_factory = PostgresAgentRepository
+        svc_factory = AgentService
+        _repo = repo_factory("dsn://stub") if callable(repo_factory) else None
+        if _repo is not None:
+            try:
+                app.state.agent_repository = _repo  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        if callable(svc_factory) and _repo is not None:
+            _service_instance = svc_factory(_repo, None)
+            start = getattr(_service_instance, "start", None)
+            if callable(start):
+                await start()
+    except Exception:
+        _service_instance = None
+
+async def _stop(app):
+    global _service_instance
+    try:
+        if _service_instance is not None:
+            stop = getattr(_service_instance, "stop", None)
+            if callable(stop):
+                await stop()
+    finally:
+        _service_instance = None
+        try:
+            delattr(app.state, "agent_repository")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+@asynccontextmanager
+async def lifespan(app):
+    await _start(app)
+    try:
+        yield
+    finally:
+        await _stop(app)
+# === END lifespan wiring ===
 app = FastAPI(title="Agentic PKM API (lifespan+routers)", lifespan=lifespan)
 
 from app.api.agent import router as agent_router          # noqa: E402
