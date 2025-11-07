@@ -134,3 +134,7 @@ def search_hybrid(query: str, k: int = 10, alpha: float = 0.5) -> List[Any]:
             else:
                 out.append({"object_id": oid, "score": 0.0, "payload": payload})
     return out
+
+
+def search_full_text(query_text: str, *, k: int):
+    return []
