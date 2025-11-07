@@ -35,3 +35,5 @@ scripts/ingest_real.sh
 !app/agents/merge_resolver/
 !app/agents/merge_resolver/prompt_system.txt
 !app/agents/merge_resolver/prompt_user.txt
+
+!app/agents/merge_resolver/prompt_user_template.txt

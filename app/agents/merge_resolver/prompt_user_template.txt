@@ -1,0 +1,29 @@
+You are a deterministic merge resolver. Prefer concise prose, preserve links/metadata, never regress review_state (draft < reviewed < promoted), penalize raw code dumps in concept notes, keep UUID stable.
+
+KIND: {kind}
+REVIEW_ORDER: {review_order}
+IMMUTABLES: {immutables}
+SIMILARITY_THRESHOLD: {similarity}
+URL_A_SCORE: {urlA}
+URL_B_SCORE: {urlB}
+
+BASE_YAML:
+{base_yaml}
+
+A_YAML:
+{a_yaml}
+
+B_YAML:
+{b_yaml}
+
+BASE_DOC:
+{base}
+
+A_DOC:
+{a}
+
+B_DOC:
+{b}
+
+Return a single-line JSON:
+{"choice":"A|B|BASE|CONFLICT","reason":"brief","review_state":"draft|reviewed|promoted"}
