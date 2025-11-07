@@ -1,68 +1,74 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-try:
-    # Riktig dependency (via Request i app.deps)
-    from app.deps import get_agent_repository  # type: ignore
-except Exception:  # pragma: no cover
-    # Minimal fallback för smoke/offline
-    def get_agent_repository():  # type: ignore
-        class _Dummy:
-            interesting_items: Dict[str, Any] = {}
-        return _Dummy()
+from app.deps import get_agent_repository
 
 router = APIRouter()
 
+# ---------- Pydantic-modeller som testerna använder ----------
 class InterestingItem(BaseModel):
-    object_id: Optional[str] = None
-    run_id: Optional[str] = None
-    novelty: Optional[float] = None
-    anomaly: Optional[float] = None
-    uncertainty: Optional[float] = None
-    value: Optional[float] = None
-    score: Optional[float] = None
-    reason: Optional[str] = None
-    payload: Dict[str, Any] = {}
-    created_at: Optional[datetime] = None
+    object_id: UUID
+    run_id: Optional[UUID] = None
+    novelty: float
+    anomaly: float
+    uncertainty: float
+    value: float
+    score: float
+    reason: str
+    payload: Dict[str, Any]
+    created_at: datetime
 
 class InterestingList(BaseModel):
     items: List[InterestingItem]
 
 class InterestingSummary(BaseModel):
+    total: int
     count: int
 
-def _to_item(it: Dict[str, Any]) -> InterestingItem:
-    d = dict(it)
-    oid = d.get("object_id")
-    rid = d.get("run_id")
-    if isinstance(oid, UUID):
-        d["object_id"] = str(oid)
-    if isinstance(rid, UUID):
-        d["run_id"] = str(rid)
-    return InterestingItem(**d)
-
+# ---------- Hjälpare ----------
 def _filter_and_serialize(
     repo: Any,
-    system_intent: Optional[str] = None,
-    tag: Optional[str] = None,
-    limit: int = 50,
+    system_intent: Optional[str],
+    tag: Optional[str],
+    limit: int,
 ) -> List[InterestingItem]:
-    items = getattr(repo, "interesting_items", {})
-    values = items.values() if hasattr(items, "values") else []
+    raw_items = getattr(repo, "interesting_items", {})
+    values = raw_items.values() if hasattr(raw_items, "values") else []
+
     out: List[InterestingItem] = []
     for it in values:
-        payload = it.get("payload", {})
+        payload = it.get("payload", {}) or {}
+        # filter
         if system_intent and payload.get("system_intent") != system_intent:
             continue
-        if tag and tag not in (payload.get("emergent_tags") or []):
+        tags = payload.get("emergent_tags") or []
+        if tag and tag not in tags:
             continue
-        out.append(_to_item(it))
-    return out[: max(0, int(limit))]
 
+        out.append(
+            InterestingItem(
+                object_id=it["object_id"],
+                run_id=it.get("run_id"),
+                novelty=it.get("novelty", 0.0),
+                anomaly=it.get("anomaly", 0.0),
+                uncertainty=it.get("uncertainty", 0.0),
+                value=it.get("value", 0.0),
+                score=it.get("score", 0.0),
+                reason=it.get("reason", ""),
+                payload=payload,
+                created_at=it.get("created_at", datetime.now(timezone.utc)),
+            )
+        )
+    # sortera högst score först och begränsa
+    out.sort(key=lambda x: x.score, reverse=True)
+    return out[:limit]
+
+# ---------- Endpoints + funktions-API ----------
 @router.get("/interesting", response_model=InterestingList)
 def list_interesting(
     limit: int = 50,
@@ -80,4 +86,4 @@ def interesting_summary(
     repo: Any = Depends(get_agent_repository),
 ) -> InterestingSummary:
     items = _filter_and_serialize(repo, system_intent, tag, limit)
-    return InterestingSummary(count=len(items))
+    return InterestingSummary(total=len(items), count=len(items))
