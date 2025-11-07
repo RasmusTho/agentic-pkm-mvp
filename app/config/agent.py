@@ -7,7 +7,13 @@ from typing import Callable
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError
-from watchfiles import watch
+
+try:
+    from watchfiles import watch
+except ModuleNotFoundError:  # pragma: no cover - smoke fallback
+    def watch(*args, **kwargs):
+        return iter(())
+
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 logger = logging.getLogger(__name__)

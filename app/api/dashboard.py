@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse
 
 router = APIRouter()
 
+
 @router.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
     return HTMLResponse(
