@@ -1,10 +1,11 @@
-name: Smoke
+name: smoke
 on:
   push:
-    branches: [ main, chore/**, feature/** ]
+    branches: [ chore/lifespan-ci ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch: {}
+  workflow_dispatch:
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -15,7 +16,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version: "3.14"
 
       - name: Install smoke deps
         run: |
@@ -24,8 +25,8 @@ jobs:
 
       - name: Run smoke tests
         env:
+          STORE_BACKEND: memory
           SKIP_CLASSIFIER_TESTS: "1"
-          STORE_BACKEND: "memory"
         run: |
           pytest -q \
             tests/system/test_settings_schema.py \
