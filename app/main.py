@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Callable, Optional
 
 from fastapi import FastAPI
+from app.api._shim_helpers import PostgresAgentRepository, AgentService
 
 # Monkeypatchable placeholders (CI smoke patches these to fakes)
 engine = None
@@ -65,9 +66,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Agentic PKM API (lifespan+routers)", lifespan=lifespan)
 
 # Routers expect get_agent_repository() to find app.state.agent_repository
-from app.api.agent import router as agent_router  # noqa: E402
-from app.api.interesting import router as interesting_router  # noqa: E402
-from app.api.dashboard import router as dashboard_router  # noqa: E402
+from app.api.routers.agent import router as agent_router  # noqa: E402
+from app.api.routers.interesting import router as interesting_router  # noqa: E402
+from app.api.routers.dashboard import router as dashboard_router  # noqa: E402
 
 app.include_router(agent_router)
 app.include_router(interesting_router)
