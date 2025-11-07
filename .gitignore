@@ -30,3 +30,8 @@ scripts/export_objects.py
 scripts/ingest_real.sh
 !requirements-smoke.txt
 .pytest_cache/
+
+# Keep merge-resolver prompts in repo
+!app/agents/merge_resolver/
+!app/agents/merge_resolver/prompt_system.txt
+!app/agents/merge_resolver/prompt_user.txt
