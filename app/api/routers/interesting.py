@@ -4,13 +4,13 @@ from uuid import UUID
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.deps import get_agent_repository
 
 router = APIRouter()
 
-# ---------- Pydantic-modeller som testerna använder ----------
+# ---------- Pydantic-modeller ----------
 class InterestingItem(BaseModel):
     object_id: UUID
     run_id: Optional[UUID] = None
@@ -29,6 +29,7 @@ class InterestingList(BaseModel):
 class InterestingSummary(BaseModel):
     total: int
     count: int
+    system_intent: Dict[str, int] = Field(default_factory=dict)
 
 # ---------- Hjälpare ----------
 def _filter_and_serialize(
@@ -43,7 +44,6 @@ def _filter_and_serialize(
     out: List[InterestingItem] = []
     for it in values:
         payload = it.get("payload", {}) or {}
-        # filter
         if system_intent and payload.get("system_intent") != system_intent:
             continue
         tags = payload.get("emergent_tags") or []
@@ -64,9 +64,17 @@ def _filter_and_serialize(
                 created_at=it.get("created_at", datetime.now(timezone.utc)),
             )
         )
-    # sortera högst score först och begränsa
     out.sort(key=lambda x: x.score, reverse=True)
     return out[:limit]
+
+def _summarize_system_intent(items: List[InterestingItem]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for it in items:
+        key = it.payload.get("system_intent")
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 # ---------- Endpoints + funktions-API ----------
 @router.get("/interesting", response_model=InterestingList)
@@ -86,4 +94,8 @@ def interesting_summary(
     repo: Any = Depends(get_agent_repository),
 ) -> InterestingSummary:
     items = _filter_and_serialize(repo, system_intent, tag, limit)
-    return InterestingSummary(total=len(items), count=len(items))
+    return InterestingSummary(
+        total=len(items),
+        count=len(items),
+        system_intent=_summarize_system_intent(items),
+    )
