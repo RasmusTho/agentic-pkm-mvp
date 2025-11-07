@@ -1,8 +1,8 @@
 from __future__ import annotations
-from typing import Any, Optional, Iterator
+from typing import Any, Iterator
 from fastapi import Request
 
-# Minimal dummy som uppfyller routrarnas förväntade interface
+# Minimal dummy som uppfyller de metoder som routrarna använder
 class _DummyAgentRepository:
     def get_last_heartbeat(self) -> dict[str, Any] | None:
         return {"status": "unknown"}
@@ -11,31 +11,27 @@ class _DummyAgentRepository:
     def interesting_summary(self) -> dict[str, Any]:
         return {"items": 0}
 
-def _repo_from_request(request: Optional[Request]) -> Any | None:
-    try:
-        return getattr(getattr(request, "app", None).state, "agent_repository", None)
-    except Exception:
-        return None
-
-def _repo_from_main() -> Any | None:
-    try:
-        from app import main as main_module  # late import to avoid cycles
-        return getattr(getattr(main_module, "app", None).state, "agent_repository", None)
-    except Exception:
-        return None
-
-def get_agent_repository(request: Optional[Request] = None) -> Any:
+def get_agent_repository(request: Request) -> Any:
     """
-    FastAPI dependency: returnera agent-repository om det finns i app.state,
-    annars en dummy som inte kraschar i smoke.
+    FastAPI dependency: hämta repository från app.state (primärt),
+    fall tillbaka till app.main.app.state, annars dummy.
     """
-    repo = _repo_from_request(request) or _repo_from_main()
-    return repo or _DummyAgentRepository()
+    repo = getattr(getattr(request, "app", None).state, "agent_repository", None)
+    if repo is not None:
+        return repo
+    try:
+        from app import main as main_module  # late import för att undvika cykler
+        repo = getattr(getattr(main_module, "app", None).state, "agent_repository", None)
+        if repo is not None:
+            return repo
+    except Exception:
+        pass
+    return _DummyAgentRepository()
 
 def get_db() -> Iterator[Any]:
     """
-    FastAPI dependency: yield en DB-session om main.SessionLocal finns.
-    I smoke/CI-läge yield:ar vi None (ingen hård PG-koppling).
+    FastAPI dependency: yield en DB-session om main.SessionLocal finns,
+    annars yield None i smoke/CI utan PG-koppling.
     """
     try:
         from app import main as main_module  # late import
@@ -51,5 +47,4 @@ def get_db() -> Iterator[Any]:
             if callable(close):
                 close()
     except Exception:
-        # Säkert fallback-beteende i smoke
         yield None
