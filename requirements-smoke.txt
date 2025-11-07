@@ -1,12 +1,6 @@
-fastapi>=0.115,<0.116
-starlette>=0.41,<0.42
-pydantic>=2.8,<3
-typing-extensions>=4.12,<5
-
-httpx>=0.27,<0.28
-anyio>=4.4,<5
-pytest>=8.3,<9
-
-SQLAlchemy>=2,<3
+fastapi>=0.115,<1
+starlette>=0.41,<1
+httpx>=0.27,<1
 PyYAML>=6,<7
-jsonschema>=4.22,<5
+SQLAlchemy>=2,<3
+jsonschema>=4,<5
