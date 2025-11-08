@@ -1,60 +1,42 @@
-from __future__ import annotations
-from typing import Any, Dict, List, Tuple
-from uuid import UUID
+"""
+Compatibility shim for legacy import path: `app.search.service`
 
-import app.search as search
-from app.search.vector_index import VectorResult
-from app.ingest import ingest_object as _ingest_object
+This tries a series of likely real module locations and re-raises with a clear error
+showing what files actually exist in the repo. Keep this until all callers migrate.
+"""
+import importlib
+import sys
+from pathlib import Path
 
+_CANDIDATES = [
+    "app.services.search",        # e.g. app/services/search.py
+    "app.service.search",         # alt naming
+    "app.search_service",         # e.g. app/search_service.py
+    "app.search.impl",            # e.g. app/search/impl.py
+]
 
-def get_vector_index():
-    return search.get_vector_index()
-
-
-def ingest_object(
-    object_id: UUID | None,
-    *,
-    kind: str,
-    source_ref: str,
-    payload: Dict[str, Any],
-    text: str,
-) -> Tuple[UUID, int]:
-    return _ingest_object(object_id=object_id, kind=kind, source_ref=source_ref, payload=payload, text=text)
-
-
-def search_full_text(query_text: str, *, k: int = 5) -> List[VectorResult]:
-    return []
-
-
-def search_vector(query_embedding: List[float], *, k: int = 5) -> List[VectorResult]:
-    idx = get_vector_index()
-    return idx.query(embedding=query_embedding, k=k)
-
-
-def search_hybrid(
-    query_text: str,
-    query_embedding: List[float],
-    *,
-    k: int = 5,
-) -> List[VectorResult]:
-    ft = search_full_text(query_text, k=k)
-    vv = search_vector(query_embedding, k=k)
-
-    seen: set[UUID] = set()
-    out: List[VectorResult] = []
-
-    for r in ft:
-        if r.object_id not in seen:
-            out.append(r)
-            seen.add(r.object_id)
-            if len(out) >= k:
-                return out
-
-    for r in vv:
-        if r.object_id not in seen:
-            out.append(r)
-            seen.add(r.object_id)
-            if len(out) >= k:
-                return out
-
-    return out[:k]
+_last_err = None
+for mod in _CANDIDATES:
+    try:
+        _m = importlib.import_module(mod)
+        for name in getattr(_m, "__all__", []):
+            globals()[name] = getattr(_m, name)
+        # Fallback: export public attrs
+        if not getattr(_m, "__all__", None):
+            for k, v in _m.__dict__.items():
+                if not k.startswith("_"):
+                    globals()[k] = v
+        break
+    except Exception as e:
+        _last_err = e
+else:
+    # Build a helpful diagnostic
+    tree = []
+    root = Path(__file__).resolve().parents[2]  # repo root heuristics: .../app/search/service.py -> repo/
+    candidates = list(root.glob("app/**/search*.py"))
+    tree_lines = "\n".join(f"- {p.relative_to(root)}" for p in candidates) or "(no search*.py files found)"
+    raise ImportError(
+        "Could not resolve real search service module for legacy import 'app.search.service'.\n"
+        f"Tried: {', '.join(_CANDIDATES)}\n"
+        f"Discovered candidates:\n{tree_lines}\n"
+    ) from _last_err
