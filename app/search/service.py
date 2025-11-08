@@ -4,6 +4,23 @@ from uuid import uuid4
 
 # ---- Hämta symboler från paketnivån (så monkeypatch i tests/conftest.py påverkar oss) ----
 def _pkg_sym(name: str):
+def _pkg_try_direct_vector_index():
+    try:
+        pkg = importlib.import_module("app.search")
+    except Exception:
+        return None
+    for name in (
+        "TEST_VECTOR_INDEX",
+        "_TEST_VECTOR_INDEX",
+        "stub_index",
+        "VECTOR_INDEX",
+        "current_vector_index",
+    ):  # vanliga fixturnamn
+        inst = getattr(pkg, name, None)
+        if inst is not None:
+            return inst
+    return None
+
     try:
         pkg = importlib.import_module("app.search")
         return getattr(pkg, name)
@@ -13,8 +30,12 @@ def _pkg_sym(name: str):
 _VEC_CACHE = None
 _BM25_CACHE = None
 def _pkg_get_vector_index():
-    """Returnera en delad instans; uppdatera om paketet ger ny icke-Noop."""
+    """Returnera en delad instans; föredra fixturens singleton om den exponeras direkt."""
     global _VEC_CACHE
+    direct = _pkg_try_direct_vector_index()
+    if direct is not None:
+        _VEC_CACHE = direct
+        return _VEC_CACHE
     fn = _pkg_sym("get_vector_index")
     cand = fn() if callable(fn) else _NoopVectorIndex()
     if _VEC_CACHE is None:
