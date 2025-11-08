@@ -1,0 +1,75 @@
+name: ci-smoke
+
+on:
+  pull_request:
+  push:
+    branches: [ main, chore/**, feature/** ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [memory, pg]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports: [ "5432:5432" ]
+        options: >-
+          --health-cmd "pg_isready -U app"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Select backend & env
+        run: |
+          echo "STORE_BACKEND=${{ matrix.backend }}" >> $GITHUB_ENV
+          if [ "${{ matrix.backend }}" = "pg" ]; then
+            echo "DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/app" >> $GITHUB_ENV
+          fi
+
+      - name: Alembic migrate (pg only)
+        if: matrix.backend == 'pg'
+        run: |
+          PYTHONPATH="$(pwd)" alembic upgrade head
+
+      - name: Code fences check
+        run: |
+          python scripts/check_code_fences.py
+
+      - name: Run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          pytest -q
