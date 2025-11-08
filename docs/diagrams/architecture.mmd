@@ -1,0 +1,27 @@
+flowchart TB
+  subgraph Client
+    U[User]
+    OB[Obsidian Vault]
+  end
+
+  subgraph Backend
+    API[FastAPI API]
+    AG[Agents (LangGraph, PER loop)]
+    STO[ObjectStore]
+    VEC[VectorIndex (pgvector)]
+    REL[(RelationIndex - planned)]
+    DB[(Postgres 16)]
+    OUT[(Outbox table)]
+    WRK[Outbox Worker]
+  end
+
+  U --> API
+  OB --> API
+  API --> AG
+  AG --> STO
+  STO --> DB
+  AG --> VEC
+  AG -. planned .-> REL
+  AG --> OUT
+  WRK --> OUT
+  WRK --> AG

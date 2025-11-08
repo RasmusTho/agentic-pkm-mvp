@@ -1,81 +1,73 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
-from typing import Any, Protocol, Sequence
+from typing import Any, Dict, List, Optional
 from uuid import UUID
+import math
 
-
-@dataclass(slots=True)
+@dataclass
 class VectorResult:
     object_id: UUID
     score: float
-    payload: dict[str, Any]
+    payload: Dict[str, Any]
 
+@dataclass
+class _Record:
+    object_id: UUID
+    kind: str
+    source_ref: str
+    payload: Dict[str, Any]
+    embedding: List[float]
+    model: str
 
-class VectorIndex(Protocol):
-    def upsert(
-        self,
-        *,
-        object_id: UUID,
-        kind: str | None,
-        source_ref: str | None,
-        payload: dict[str, Any],
-        embedding: Sequence[float],
-        model: str,
-    ) -> None: ...
+def _norm(v: List[float]) -> float:
+    return math.sqrt(sum(x * x for x in v)) or 1.0
 
-    def query(
-        self,
-        *,
-        embedding: Sequence[float],
-        k: int = 10,
-        filters: dict[str, Any] | None = None,
-    ) -> list[VectorResult]: ...
+def _normalize(v: List[float]) -> List[float]:
+    n = _norm(v)
+    return [x / n for x in v]
 
+def _cosine(a: List[float], b: List[float]) -> float:
+    m = min(len(a), len(b))
+    return sum(a[i] * b[i] for i in range(m))
 
-class NullVectorIndex:
-    def upsert(self, *_, **__) -> None:
-        return None
-
-    def query(self, *_, **__) -> list[VectorResult]:
-        return []
-
-
-class PgVectorIndex:
-    """PgVector-implementation med lazy psycopg-import för smoke."""
-
-    def __init__(self, dsn: str) -> None:
-        if not dsn:
-            raise RuntimeError("PgVectorIndex requires a DSN")
-        try:
-            import psycopg  # type: ignore
-            from psycopg.rows import dict_row  # type: ignore
-        except Exception as exc:  # pragma: no cover - miljö utan psycopg
-            raise RuntimeError("psycopg not installed") from exc
-        self._dsn = dsn
-        self._psycopg = psycopg
-        self._dict_row = dict_row
+class _MemoryVectorIndex:
+    def __init__(self) -> None:
+        self.store: Dict[UUID, _Record] = {}
 
     def upsert(
         self,
         *,
         object_id: UUID,
-        kind: str | None,
-        source_ref: str | None,
-        payload: dict[str, Any],
-        embedding: Sequence[float],
+        kind: str,
+        source_ref: str,
+        payload: Dict[str, Any],
+        embedding: List[float],
         model: str,
     ) -> None:
-        return None  # Placeholder för riktig implementation
+        self.store[object_id] = _Record(
+            object_id=object_id,
+            kind=kind,
+            source_ref=source_ref,
+            payload=payload,
+            embedding=list(embedding),
+            model=model,
+        )
 
-    def query(
-        self,
-        *,
-        embedding: Sequence[float],
-        k: int = 10,
-        filters: dict[str, Any] | None = None,
-    ) -> list[VectorResult]:
-        return []  # Placeholder – smoke kräver bara struktur
+    def query(self, query_embedding: List[float], *, k: int = 5) -> List[VectorResult]:
+        if not self.store:
+            return []
+        q = _normalize(query_embedding)
+        scored: List[VectorResult] = []
+        for rec in self.store.values():
+            s = _cosine(q, _normalize(rec.embedding))
+            scored.append(VectorResult(object_id=rec.object_id, score=float(s), payload=rec.payload))
+        scored.sort(key=lambda r: r.score, reverse=True)
+        return scored[:k]
 
+_MEM_INDEX: Optional[_MemoryVectorIndex] = None
 
-__all__ = ["VectorResult", "VectorIndex", "NullVectorIndex", "PgVectorIndex"]
+def get_vector_index() -> _MemoryVectorIndex:
+    global _MEM_INDEX
+    if _MEM_INDEX is None:
+        _MEM_INDEX = _MemoryVectorIndex()
+    return _MEM_INDEX

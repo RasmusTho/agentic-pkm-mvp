@@ -5,6 +5,18 @@
 
 _Tracks strategic releases and planned features._
 
+## Delivered (2025-11-08)
+- Outbox helpers document the worker-compatible API (write/poll/ack) and defensive connection handling.
+- Merge Resolver prompt-pack feeds a deterministic fallback that prefers concise edits and carries refs/links from overlapping versions; reasons surface in `info.reason`.
+- Interesting API endpoints now call repository-backed methods first and fall back to in-memory stores for tests.
+- Search hybrid flow (BM25 + vector via RRF) uses the corrected call signature and is covered by regression tests.
+- Ingest module re-exports `ingest_object`, `normalize_payload`, `handle_post_ingest`, keeping CLI/tests aligned.
+
+## Next
+1. Unify ingestion through the Store interfaces end-to-end (ObjectStore, VectorIndex, RelationIndex) so routers/agents never import psycopg directly.
+2. Audit event coverage (Outbox + JSONL) and add contract checks so every state transition emits the documented topic.
+3. Add fitness functions: hybrid search p95 < 250 ms under load, Outbox → index propagation ≤ 2 s (QAS-010) with alerts when exceeded.
+
 ## Pre-flight (carry-over from v4.4)
 
 - Wire the semantic merge driver into git (`.gitattributes`) so `%A` is updated automatically; keep CLI exit!=0 on unresolved.

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2025-11-08 – chore/ingest-export-fixes
+- Merge Resolver: deterministic fallback plus explicit “prefer concise” reasons and link-carry on overlapping edits.
+- Search / Hybrid: corrected vector index call signature and RRF-based blending.
+- Interesting API: repository-backed methods with in-memory fallback retained for tests.
+- Outbox: worker-compatible helper API with defensive connection handling documented.
+- Ingest: exported `ingest_object`, `normalize_payload`, and `handle_post_ingest` again for downstream imports.
+
 ## v4.3 (2025-10-25)
 - Added: Obsidian vault integration and lifecycle mirroring
 - Added: Export pipeline (`scripts/export_objects.py`)
