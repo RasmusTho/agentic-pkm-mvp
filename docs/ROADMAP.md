@@ -12,6 +12,19 @@ _Tracks strategic releases and planned features._
 - Search hybrid flow (BM25 + vector via RRF) uses the corrected call signature and is covered by regression tests.
 - Ingest module re-exports `ingest_object`, `normalize_payload`, `handle_post_ingest`, keeping CLI/tests aligned.
 
+## Milestones
+
+✅ v4.5 – Search & Ingest Stabilization  
+ • Restored full ingest lifecycle  
+ • Deterministic FT-first hybrid search  
+ • Stable smoke CI (memory/pg matrix)  
+ • Doc fences validated  
+
+Next: v4.6 – Store Abstraction + Event Indexing  
+ • Finalize ObjectStore / VectorIndex / RelationIndex interfaces  
+ • Connect Indexer agent to Outbox events (`index.object.embedded`)  
+ • Expand PER-loop integration tests  
+
 ## Next
 1. Unify ingestion through the Store interfaces end-to-end (ObjectStore, VectorIndex, RelationIndex) so routers/agents never import psycopg directly.
 2. Audit event coverage (Outbox + JSONL) and add contract checks so every state transition emits the documented topic.

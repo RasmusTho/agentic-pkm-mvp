@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     db_dsn: str = "postgresql+psycopg://app:app@postgres:5432/app"
     vector_backend: str = "pgvector"
     embed_model: str = "openai/text-embedding-3-large"
+    store_backend: str = "memory"
 
     app_version: str = "0.1.0"
     api_key: str | None = None

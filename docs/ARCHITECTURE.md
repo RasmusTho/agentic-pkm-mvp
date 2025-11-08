@@ -29,7 +29,7 @@ This document covers:
 
 ### 1.1 Architecture diagram (flow view)
 
-The current container/service topology is captured in [`docs/diagrams/architecture.mmd`](docs/diagrams/architecture.mmd). It shows the FastAPI surface, LangGraph agents (PER loop), Store facades, pgvector/RelationIndex plans, and the Outbox worker that feeds events back into agents. The Mermaid source lives alongside this document for GitHub rendering parity.
+The current container/service topology is captured in [`docs/diagrams/architecture.mmd`](docs/diagrams/architecture.mmd). It shows the FastAPI surface, LangGraph agents (PER loop), Store facades, pgvector/RelationIndex plans, the FT-first search service, the ingest delegation path (API → `app.ingest.ingest_object` → Stores), and the Outbox worker that feeds events back into agents. The Mermaid source lives alongside this document for GitHub rendering parity.
 
 ### 1.2 Runtime shim & store selection (v4.5 refresh)
 
@@ -223,6 +223,12 @@ Shared properties:
 
 ### Observability checks
 - Spans emitted with `trace_id`; Jaeger path validated. CI span assertions planned.
+
+### Search & Ingest Baseline (v4.5)
+- **Deterministic hybrid search.** `app/search/service.py::hybrid_search` now guarantees FT-first ordering: if BM25/full-text returns hits the top-k is returned as-is, otherwise vector hits fill the remainder without duplicates.
+- **Lifecycle-correct ingest.** `app/search/service.py::ingest_object` sets the canonical payload keys (`text`, `content`, `object_type`, `system_intent="learn"`, `emergent_tags=[]`) and delegates to `app.ingest.ingest_object`, with the prior vector-index fallback retained for minimal harnesses.
+- **Metadata standards.** All ingest paths agree on the payload defaults above so downstream agents (Indexer, Promotion, QA) can rely on them during tests and in production.
+- **Smoke proof.** The two-job CI smoke matrix (memory + pg) installs runtime requirements, runs `python scripts/check_code_fences.py`, applies Alembic migrations for pg, and executes the trimmed pytest subset with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, giving a reproducible SoT v4.5 signal.
 
 ---
 

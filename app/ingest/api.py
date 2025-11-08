@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Tuple
 from uuid import UUID, uuid4
 import json
 import app.search as search
+from app.outbox.events import emit_index_object_embedded
 
 _EMBED_DIM = 1536
 try:
@@ -122,4 +123,14 @@ def ingest_object(
         model=_EMBED_MODEL,
     )
     handle_post_ingest(oid, payload_out, text)
+    emit_index_object_embedded(
+        {
+            "object_id": oid,
+            "kind": kind,
+            "source_ref": source_ref,
+            "payload": payload_out,
+            "embedding": emb,
+            "model": _EMBED_MODEL,
+        }
+    )
     return oid, len(emb)
