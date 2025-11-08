@@ -1,16 +1,21 @@
-from .service import (
-    HYBRID_ENABLED, INDEX_READY,
-    ensure_index_ready, build_index,
-    hybrid_search, bm25_search, vector_search, search,
-    get_vector_index, get_bm25_index,
-    search_hybrid, search_vector, search_full_text, ingest_object,
-)
-__all__ = [
-    "HYBRID_ENABLED","INDEX_READY",
-    "ensure_index_ready","build_index",
-    "hybrid_search","bm25_search","vector_search","search",
-    "get_vector_index","get_bm25_index",
-    "search_hybrid","search_vector","search_full_text","ingest_object",
-]
+from __future__ import annotations
 
-from .rerank import HeuristicReranker, ScoredHit
+# Publik yta (håll den smal & stabil)
+from .service import (
+    hybrid_search,
+    bm25_search,
+    vector_search,
+    search,
+    get_vector_index,
+    get_bm25_index,
+    ingest_object,
+    # Legacy alias
+    search_hybrid,
+    search_vector,
+)
+
+__all__ = [
+    "hybrid_search","bm25_search","vector_search","search",
+    "get_vector_index","get_bm25_index","ingest_object",
+    "search_hybrid","search_vector",
+]
