@@ -195,30 +195,45 @@ else:
             self.payload = payload or {}
 
     def hybrid_search(query_text: str, query_vector, *, k: int) -> list:
-        ft = search_full_text(query_text, k=k) or []
-        vec = vector_search(query_vector, k=k) or []
+    ft = search_full_text(query_text, k=k) or []
+    vec = vector_search(query_vector, k=k) or []
 
-        def _norm(items):
-            out = []
-            for i, it in enumerate(items, start=1):
-                oid = getattr(it, "object_id", None) or getattr(it, "id", None)
-                payload = getattr(it, "payload", None) or {}
-                out.append({"object_id": oid, "payload": payload, "rank": i})
-            return out
+    def _norm(items):
+        out = []
+        for i, it in enumerate(items, start=1):
+            oid = getattr(it, 'object_id', None) or getattr(it, 'id', None)
+            payload = getattr(it, 'payload', None) or {}
+            out.append({'object_id': oid, 'payload': payload, 'rank': i})
+        return out
 
-        ft_n = _norm(ft); vec_n = _norm(vec)
-        K = 60
-        score = {}; meta = {}
-        for it in ft_n:
-            if it["object_id"] is None: continue
-            score[it["object_id"]] = score.get(it["object_id"], 0.0) + 1.0/(K+it["rank"])
-            meta[it["object_id"]] = it["payload"]
-        for it in vec_n:
-            if it["object_id"] is None: continue
-            score[it["object_id"]] = score.get(it["object_id"], 0.0) + 1.0/(K+it["rank"])
-            meta.setdefault(it["object_id"], it["payload"])
-        ordered = sorted(score.items(), key=lambda kv: kv[1], reverse=True)[:k]
-        return [_Result(oid, sc, meta.get(oid, {})) for oid, sc in ordered]
+    ft_n = _norm(ft); vec_n = _norm(vec)
+    K = 60
+    score = {}; meta = {}; src = {}; r_ft = {}; r_vec = {}
+    for it in ft_n:
+        oid = it['object_id']; r = it['rank']
+        if oid is None: continue
+        score[oid] = score.get(oid, 0.0) + 1.0/(K+r) + 1e-6  # liten FT-bonus
+        meta[oid] = it['payload']
+        src.setdefault(oid, 'ft'); r_ft[oid] = r
+    for it in vec_n:
+        oid = it['object_id']; r = it['rank']
+        if oid is None: continue
+        score[oid] = score.get(oid, 0.0) + 1.0/(K+r)
+        meta.setdefault(oid, it['payload'])
+        r_vec[oid] = r
+    ordered = sorted(
+        score.items(),
+        key=lambda kv: (
+            -kv[1],
+            0 if src.get(kv[0]) == 'ft' else 1,
+            (r_ft.get(kv[0], 9999) + r_vec.get(kv[0], 9999))
+        )
+    )[:k]
+    class _Result:
+        __slots__=('object_id','score','payload')
+        def __init__(self, object_id, score, payload):
+            self.object_id=object_id; self.score=score; self.payload=payload
+    return [_Result(oid, sc, meta.get(oid, {})) for oid, sc in ordered]
 
     def search(query_text: str, k: int = 5, *_a, **_k) -> list:
         return bm25_search(query_text, k=k)
@@ -245,6 +260,7 @@ else:
         payload_with_text = dict(payload or {})
         payload_with_text.setdefault("text", text)
         payload_with_text.setdefault("content", text)
+        payload_with_text.setdefault("object_type", kind)
 
         # keyword först; annars olika positional-varianter
         try:
@@ -268,11 +284,13 @@ else:
                     item.setdefault("payload", {})
                     item["payload"].setdefault("text", text)
                     item["payload"].setdefault("content", text)
+                    item["payload"].setdefault("object_type", kind)
                 else:
                     pl = getattr(item, "payload", None)
                     if isinstance(pl, dict):
                         pl.setdefault("text", text)
                         pl.setdefault("content", text)
+                        pl.setdefault("object_type", kind)
         except Exception:
             pass
 
