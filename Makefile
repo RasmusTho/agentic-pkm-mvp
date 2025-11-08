@@ -1,8 +1,10 @@
 .PHONY: smoke ci-smoke setup-merge-driver hygiene-logs indexer-run
 
 smoke:
-	PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-	pytest -q -c /dev/null tests -k "not slow and not e2e and not integration"
+	PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
+	python -m pytest -q -c /dev/null -k "not slow"
+
+ci-smoke: smoke
 
 indexer-run:
 	PYTHONPATH="$(PWD)" python -m app.indexer.runner
