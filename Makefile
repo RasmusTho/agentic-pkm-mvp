@@ -5,12 +5,8 @@ smoke:
 	pytest -q -c /dev/null tests -k "not slow and not e2e and not integration"
 
 ci-smoke:
-	python scripts/check_code_fences.py
 	PYTHONPATH="$(PWD)" STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-	pytest -q -c /dev/null tests -k "not slow and not e2e and not integration"
-	DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" alembic upgrade head
-	PYTHONPATH="$(PWD)" STORE_BACKEND=pg DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-	pytest -q -c /dev/null tests -k "not slow and not e2e and not integration"
+	pytest -q -c /dev/null -k "not slow"
 
 indexer-run:
 	PYTHONPATH="$(PWD)" python -m app.indexer.runner

@@ -257,6 +257,11 @@ else:
         return [0.0] * dim
 
     def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, text: str, **__):
+        from uuid import uuid4
+
+        oid = object_id or uuid4()
+
+        # Defaults expected by tests & downstream
         payload_with_text = dict(payload or {})
         payload_with_text.setdefault("text", text)
         payload_with_text.setdefault("content", text)
@@ -264,72 +269,59 @@ else:
         payload_with_text.setdefault("system_intent", "learn")
         payload_with_text.setdefault("emergent_tags", [])
 
+        # Try full lifecycle via app.ingest
         try:
-            from app.ingest import ingest_object as core_ingest  # type: ignore
+            from app.ingest import ingest_object as core_ingest
+            return core_ingest(
+                object_id=oid,
+                kind=kind,
+                source_ref=source_ref,
+                payload=payload_with_text,
+                text=text,
+                **__,
+            )
         except Exception:
-            core_ingest = None
-
-        if core_ingest is not None:
-            try:
-                return core_ingest(
-                    object_id=object_id,
-                    kind=kind,
-                    source_ref=source_ref,
-                    payload=payload_with_text,
-                    text=text,
-                    **__,
-                )
-            except Exception:
-                # Fallback till lokalt index när kärn-ingest inte är tillgänglig
-                pass
-
-        oid = object_id or uuid4()
-        embedding = _fake_embed(text, 1536)
-        try:
+            # Fallback: local embed + tolerant upsert
+            embedding = _fake_embed(text, 1536)
             from app.settings import settings
-        except Exception as exc:
-            raise RuntimeError("app.settings.settings krävs för ingest_object") from exc
-        model_name = settings.embed_model
-
-        idx = _pkg_get_vector_index()
-
-        # keyword först; annars olika positional-varianter
-        try:
-            idx.upsert(object_id=oid, kind=kind, source_ref=source_ref,
-                       payload=payload_with_text, embedding=embedding, model=model_name)
-        except TypeError:
+            model_name = settings.embed_model
+            idx = _pkg_get_vector_index()
             try:
-                idx.upsert(oid, kind, source_ref, payload_with_text, embedding, model_name)
+                idx.upsert(object_id=oid, kind=kind, source_ref=source_ref,
+                           payload=payload_with_text, embedding=embedding, model=model_name)
             except TypeError:
                 try:
-                    idx.upsert(oid, payload_with_text, embedding, model_name)
+                    idx.upsert(oid, kind, source_ref, payload_with_text, embedding, model_name)
                 except TypeError:
-                    idx.upsert(oid, payload_with_text)
+                    try:
+                        idx.upsert(oid, payload_with_text, embedding, model_name)
+                    except TypeError:
+                        idx.upsert(oid, payload_with_text)
 
-        # Säkerställ att store-posten innehåller text
-        try:
-            st = getattr(idx, "store", None)
-            if st is not None and oid in st:
-                item = st[oid]
-                if isinstance(item, dict):
-                    item.setdefault("payload", {})
-                    item["payload"].setdefault("text", text)
-                    item["payload"].setdefault("content", text)
-                    item["payload"].setdefault("object_type", kind)
-                    item["payload"].setdefault("system_intent", "learn")
-                    item["payload"].setdefault("emergent_tags", [])
-                else:
-                    pl = getattr(item, "payload", None)
-                    if isinstance(pl, dict):
-                        pl.setdefault("text", text)
-                        pl.setdefault("content", text)
-                        pl.setdefault("object_type", kind)
-                        pl.setdefault("system_intent", "learn")
-                        pl.setdefault("emergent_tags", [])
-        except Exception:
-            pass
+            # Ensure store payload contains defaults when a stub stores bare entries
+            try:
+                st = getattr(idx, "store", None)
+                if st is not None and oid in st:
+                    item = st[oid]
+                    if isinstance(item, dict):
+                        item.setdefault("payload", {})
+                        item["payload"].setdefault("text", text)
+                        item["payload"].setdefault("content", text)
+                        item["payload"].setdefault("object_type", kind)
+                        item["payload"].setdefault("system_intent", "learn")
+                        item["payload"].setdefault("emergent_tags", [])
+                    else:
+                        pl = getattr(item, "payload", None)
+                        if isinstance(pl, dict):
+                            pl.setdefault("text", text)
+                            pl.setdefault("content", text)
+                            pl.setdefault("object_type", kind)
+                            pl.setdefault("system_intent", "learn")
+                            pl.setdefault("emergent_tags", [])
+            except Exception:
+                pass
 
-        return (oid, len(embedding))
+            return (oid, len(embedding))
 
     # Legacy-namn
     search_hybrid = hybrid_search
