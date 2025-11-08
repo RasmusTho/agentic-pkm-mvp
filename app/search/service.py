@@ -2,8 +2,25 @@ from __future__ import annotations
 import importlib
 from uuid import uuid4
 
+# ---- Hämta symboler från paketnivån (så monkeypatch i tests/conftest.py påverkar oss) ----
+def _pkg_sym(name: str):
+    try:
+        pkg = importlib.import_module("app.search")
+        return getattr(pkg, name)
+    except Exception:
+        return None
+
+def _pkg_get_vector_index():
+    fn = _pkg_sym("get_vector_index")
+    return fn() if callable(fn) else _NoopVectorIndex()
+
+def _pkg_get_bm25_index():
+    fn = _pkg_sym("get_bm25_index")
+    return fn() if callable(fn) else _NoopBm25Index()
+
+# ---- Om det finns en “riktig” sökmodul, re-exportera den ----
 _CANDIDATES = [
-    "app.services.search",   # byt hit när riktig impl finns
+    "app.services.search",
     "app.search_service",
     "app.search.impl",
 ]
@@ -17,7 +34,6 @@ for mod in _CANDIDATES:
         _impl = None
 
 if _impl is not None:
-    # Re-exportera allt publikt
     for name in getattr(_impl, "__all__", []):
         globals()[name] = getattr(_impl, name)
     if not getattr(_impl, "__all__", None):
@@ -30,20 +46,20 @@ if _impl is not None:
     if "search_vector" not in globals() and "vector_search" in globals():
         search_vector = globals()["vector_search"]  # type: ignore
     if "search_full_text" not in globals():
-        def search_full_text(*_a, **_k):  # blir ändå monkeypatchad i tester
-            return []
+        def search_full_text(*_a, **_k): return []
     if "ingest_object" not in globals():
-        def ingest_object(object_id=None, *_, text: str = "", **__):
-            return (object_id or uuid4(), 1536)
+        def ingest_object(object_id=None, *_, **__): return (object_id or uuid4(), 1536)
 
 else:
-    # --------- Minimal fallback-API (testvänlig) ----------
+    # -------------------- Testvänlig fallback --------------------
     HYBRID_ENABLED = False
     INDEX_READY = True
 
     class _NoopVectorIndex:
         def search(self, *args, **kwargs): return []
         def query(self, *args, **kwargs):  return []
+        def topk(self, *args, **kwargs):   return []
+        def knn(self, *args, **kwargs):    return []
         def upsert(self, *args, **kwargs): return None
 
     class _NoopBm25Index:
@@ -53,48 +69,50 @@ else:
     def ensure_index_ready(*_a, **_k) -> bool: return True
     def build_index(*_a, **_k) -> dict: return {"status": "ok", "indexed": 0}
 
-    # ------- Hjälpare som klarar både keyword & positional -------
-    def _call_idx(idx, meth_name: str, *, kw_first: tuple[str, object], k: int):
-        """Prova idx.<meth>(<kw>=..., k=k) -> positional fallback."""
-        m = getattr(idx, meth_name, None)
-        if m is None:
-            return []
+    # ---- Hjälpare: prova flera metodnamn + keyword/positional ----
+    def _call_methods(idx, method_names: list[str], *, kw_first: tuple[str, object], k: int):
         key, val = kw_first
-        # keyword-variant
-        try:
-            return m(**{key: val, "k": k})
-        except TypeError:
-            pass
-        # positional-variant
-        try:
-            return m(val, k)
-        except TypeError:
-            return []
+        for meth in method_names:
+            m = getattr(idx, meth, None)
+            if m is None:
+                continue
+            # keyword-variant
+            try:
+                out = m(**{key: val, "k": k})
+                if out: return out
+            except TypeError:
+                pass
+            # positional-variant
+            try:
+                out = m(val, k)
+                if out: return out
+            except TypeError:
+                pass
+        return []
 
-    # Bas: vektor- och FT-sida
+    # ---- Bas-API ----
     def vector_search(vector, k: int = 5, *_a, **_k) -> list:
-        idx = get_vector_index()
-        out = _call_idx(idx, "search", kw_first=("vector", vector), k=k)
-        if out:
-            return out
-        return _call_idx(idx, "query", kw_first=("vector", vector), k=k)
+        idx = _pkg_get_vector_index()
+        return _call_methods(idx, ["search", "query", "topk", "knn"], kw_first=("vector", vector), k=k)
 
     def bm25_search(query_text: str, k: int = 5, *_a, **_k) -> list:
-        idx = get_bm25_index()
-        out = _call_idx(idx, "search", kw_first=("query_text", query_text), k=k)
-        if out:
-            return out
-        return _call_idx(idx, "query", kw_first=("query_text", query_text), k=k)
+        idx = _pkg_get_bm25_index()
+        return _call_methods(idx, ["search", "query"], kw_first=("query_text", query_text), k=k)
 
-    # Den funktion testen monkeypatchar:
     def search_full_text(query_text: str, *, k: int) -> list:
         return bm25_search(query_text, k=k)
 
-    # API som testen använder direkt:
     def search_vector(vector, k: int = 5) -> list:
         return vector_search(vector, k=k)
 
-    # Enkel Reciprocal-Rank-Fusion. Signatur: (text, vector, *, k)
+    # Result-objekt (så testen kan göra .object_id)
+    class _Result:
+        __slots__ = ("object_id", "score", "payload")
+        def __init__(self, object_id, score=0.0, payload=None):
+            self.object_id = object_id
+            self.score = score
+            self.payload = payload or {}
+
     def hybrid_search(query_text: str, query_vector, *, k: int) -> list:
         ft = search_full_text(query_text, k=k) or []
         vec = vector_search(query_vector, k=k) or []
@@ -119,34 +137,36 @@ else:
             score[it["object_id"]] = score.get(it["object_id"], 0.0) + 1.0/(K+it["rank"])
             meta.setdefault(it["object_id"], it["payload"])
         ordered = sorted(score.items(), key=lambda kv: kv[1], reverse=True)[:k]
-        return [{"object_id": oid, "score": sc, "payload": meta.get(oid, {})} for oid, sc in ordered]
+        return [_Result(oid, sc, meta.get(oid, {})) for oid, sc in ordered]
 
     def search(query_text: str, k: int = 5, *_a, **_k) -> list:
         return bm25_search(query_text, k=k)
 
+    # Behåll “get_*_index” för bakåtkomp, men produktionsvägen går via paketets symboler
     def get_vector_index(*_a, **_k):
         return _NoopVectorIndex()
 
     def get_bm25_index(*_a, **_k):
         return _NoopBm25Index()
 
+    # Embedding-stub
     def _fake_embed(text: str, dim: int = 1536):
-        # deterministisk “embedding”: nollor i rätt dimension
         return [0.0] * dim
 
+    # Ingest: skriv till paketets index och använd settings.embed_model
     def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, text: str, **__):
-        """
-        Lagra objektet via get_vector_index().upsert(...).
-        Returnera (object_id, 1536) så testen kan hitta det i stub_index.store.
-        """
         oid = object_id or uuid4()
         embedding = _fake_embed(text, 1536)
-        idx = get_vector_index()
-        # Försök keyword först, annars positional enligt fixturens signatur
         try:
-            idx.upsert(object_id=oid, kind=kind, source_ref=source_ref, payload=payload, embedding=embedding, model="test")
+            from app.settings import settings
+            model_name = settings.embed_model
+        except Exception:
+            model_name = "openai/text-embedding-3-large"
+        idx = _pkg_get_vector_index()
+        try:
+            idx.upsert(object_id=oid, kind=kind, source_ref=source_ref, payload=payload, embedding=embedding, model=model_name)
         except TypeError:
-            idx.upsert(oid, kind, source_ref, payload, embedding, "test")
+            idx.upsert(oid, kind, source_ref, payload, embedding, model_name)
         return (oid, len(embedding))
 
     # Legacy-namn
