@@ -13,19 +13,28 @@ def _pkg_sym(name: str):
 _VEC_CACHE = None
 _BM25_CACHE = None
 def _pkg_get_vector_index():
+    """Returnera en delad instans; uppdatera om paketet ger ny icke-Noop."""
     global _VEC_CACHE
     fn = _pkg_sym("get_vector_index")
     cand = fn() if callable(fn) else _NoopVectorIndex()
-    # Håll fast vid första icke-noop-instansen (så upsert och search delar samma store)
-    if _VEC_CACHE is None or isinstance(_VEC_CACHE, _NoopVectorIndex):
+    if _VEC_CACHE is None:
+        _VEC_CACHE = cand
+    elif isinstance(_VEC_CACHE, _NoopVectorIndex) and not isinstance(cand, _NoopVectorIndex):
+        _VEC_CACHE = cand
+    elif not isinstance(cand, _NoopVectorIndex) and (cand is not _VEC_CACHE):
         _VEC_CACHE = cand
     return _VEC_CACHE
 
 def _pkg_get_bm25_index():
+    """Samma logik för BM25."""
     global _BM25_CACHE
     fn = _pkg_sym("get_bm25_index")
     cand = fn() if callable(fn) else _NoopBm25Index()
-    if _BM25_CACHE is None or isinstance(_BM25_CACHE, _NoopBm25Index):
+    if _BM25_CACHE is None:
+        _BM25_CACHE = cand
+    elif isinstance(_BM25_CACHE, _NoopBm25Index) and not isinstance(cand, _NoopBm25Index):
+        _BM25_CACHE = cand
+    elif not isinstance(cand, _NoopBm25Index) and (cand is not _BM25_CACHE):
         _BM25_CACHE = cand
     return _BM25_CACHE
 
