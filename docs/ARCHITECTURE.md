@@ -29,7 +29,7 @@ This document covers:
 
 ### 1.1 Architecture diagram (flow view)
 
-The current container/service topology is captured in [`docs/diagrams/architecture.mmd`](docs/diagrams/architecture.mmd). It shows the FastAPI surface, LangGraph agents (PER loop), Store facades, pgvector/RelationIndex plans, and the Outbox worker that feeds events back into agents.
+The current container/service topology is captured in [`docs/diagrams/architecture.mmd`](docs/diagrams/architecture.mmd). It shows the FastAPI surface, LangGraph agents (PER loop), Store facades, pgvector/RelationIndex plans, and the Outbox worker that feeds events back into agents. The Mermaid source lives alongside this document for GitHub rendering parity.
 
 ### 1.2 Runtime shim & store selection (v4.5 refresh)
 
