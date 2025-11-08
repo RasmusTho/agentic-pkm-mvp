@@ -112,3 +112,50 @@ def poll_outbox_one(conn: Any, handler: Callable[[str, dict[str, Any]], None]) -
         _exec(conn, "update outbox set attempts=attempts+1 where id=%s", (eid,))
         raise
     return True
+
+# __OUTBOX_COMPAT_WRAPPERS__
+# Tillåt både nya (bootstrap(conn), poll_outbox_one(conn, handler)->bool)
+# och gamla (bootstrap(), poll_outbox_one()->dict|None) anropsmönster.
+try:
+    _bootstrap_impl = bootstrap  # type: ignore[name-defined]
+except Exception:
+    _bootstrap_impl = None
+
+def _outbox_conn():
+    try:
+        from app.db import conn_rw
+        return conn_rw()
+    except Exception:
+        return None
+
+if _bootstrap_impl is not None:
+    def bootstrap(*args, **kwargs):  # type: ignore[override]
+        if args or kwargs:
+            return _bootstrap_impl(*args, **kwargs)
+        conn = _outbox_conn()
+        if conn is None:
+            return None
+        return _bootstrap_impl(conn)
+
+try:
+    _poll_impl = poll_outbox_one  # type: ignore[name-defined]
+except Exception:
+    _poll_impl = None
+
+if _poll_impl is not None:
+    def poll_outbox_one(*args, **kwargs):  # type: ignore[override]
+        # Ny signatur? Delegera som vanligt.
+        if args or kwargs:
+            return _poll_impl(*args, **kwargs)
+        # Gammal signatur: hämta ett meddelande och returnera dict.
+        conn = _outbox_conn()
+        if conn is None:
+            return None
+        captured = {}
+        def _cap(topic, payload):
+            captured["topic"] = topic
+            captured["payload"] = payload
+        processed = _poll_impl(conn, _cap)
+        if not processed:
+            return None
+        return captured
