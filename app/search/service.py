@@ -244,7 +244,11 @@ else:
         return bm25_search(query_text, k=k)
 
     def get_vector_index(*_a, **_k):
-        return _NoopVectorIndex()
+        try:
+            from app.stores import get_vector_index as _stores_get_vector_index
+            return _stores_get_vector_index()
+        except Exception:
+            return _NoopVectorIndex()
 
     def get_bm25_index(*_a, **_k):
         return _NoopBm25Index()
@@ -253,6 +257,32 @@ else:
         return [0.0] * dim
 
     def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, text: str, **__):
+        payload_with_text = dict(payload or {})
+        payload_with_text.setdefault("text", text)
+        payload_with_text.setdefault("content", text)
+        payload_with_text.setdefault("object_type", kind)
+        payload_with_text.setdefault("system_intent", "learn")
+        payload_with_text.setdefault("emergent_tags", [])
+
+        try:
+            from app.ingest import ingest_object as core_ingest  # type: ignore
+        except Exception:
+            core_ingest = None
+
+        if core_ingest is not None:
+            try:
+                return core_ingest(
+                    object_id=object_id,
+                    kind=kind,
+                    source_ref=source_ref,
+                    payload=payload_with_text,
+                    text=text,
+                    **__,
+                )
+            except Exception:
+                # Fallback till lokalt index när kärn-ingest inte är tillgänglig
+                pass
+
         oid = object_id or uuid4()
         embedding = _fake_embed(text, 1536)
         try:
@@ -262,12 +292,6 @@ else:
         model_name = settings.embed_model
 
         idx = _pkg_get_vector_index()
-        payload_with_text = dict(payload or {})
-        payload_with_text.setdefault("text", text)
-        payload_with_text.setdefault("content", text)
-        payload_with_text.setdefault("object_type", kind)
-        payload_with_text.setdefault("system_intent", "learn")
-        payload_with_text.setdefault("emergent_tags", [])
 
         # keyword först; annars olika positional-varianter
         try:

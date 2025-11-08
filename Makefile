@@ -1,4 +1,4 @@
-.PHONY: smoke ci-smoke setup-merge-driver hygiene-logs
+.PHONY: smoke ci-smoke setup-merge-driver hygiene-logs indexer-run
 
 smoke:
 	PYTHONPATH="$(PWD)" STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
@@ -11,6 +11,9 @@ ci-smoke:
 	DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" alembic upgrade head
 	PYTHONPATH="$(PWD)" STORE_BACKEND=pg DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 	pytest -q -c /dev/null tests -k "not slow and not e2e and not integration"
+
+indexer-run:
+	PYTHONPATH="$(PWD)" python -m app.indexer.runner
 
 setup-merge-driver:
 	git config merge.semanticmd.name "Semantic Markdown merge"

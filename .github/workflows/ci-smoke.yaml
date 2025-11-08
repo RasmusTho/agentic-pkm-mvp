@@ -47,6 +47,7 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f dev-requirements.txt ]; then pip install -r dev-requirements.txt; fi
           if [ -f app/requirements.txt ]; then pip install -r app/requirements.txt; fi
 
@@ -57,6 +58,7 @@ jobs:
         if: matrix.backend == 'pg'
         env:
           DATABASE_URL: postgresql+psycopg://app:app@127.0.0.1:15432/app
+          PYTHONPATH: ${{ github.workspace }}
         run: alembic upgrade head
 
       - name: Pytest (memory)
