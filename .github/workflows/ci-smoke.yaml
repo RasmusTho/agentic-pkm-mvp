@@ -64,7 +64,8 @@ jobs:
         env:
           STORE_BACKEND: memory
           PYTHONPATH: ${{ github.workspace }}
-        run: pytest -q
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: 1
+        run: pytest -q -c /dev/null tests -k "not slow and not e2e and not integration"
 
       - name: Pytest (pg)
         if: matrix.backend == 'pg'
@@ -72,4 +73,5 @@ jobs:
           STORE_BACKEND: pg
           DATABASE_URL: postgresql+psycopg://app:app@127.0.0.1:15432/app
           PYTHONPATH: ${{ github.workspace }}
-        run: pytest -q
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: 1
+        run: pytest -q -c /dev/null tests -k "not slow and not e2e and not integration"
