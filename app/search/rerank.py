@@ -1,30 +1,46 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import List, Any
 
-@dataclass
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, List
+
+
+@dataclass(frozen=True)
 class ScoredHit:
     object_id: Any
     text: str
     score: float
-    payload: dict
+    payload: Dict[str, Any]
 
-class Reranker:
-    """Base reranker interface."""
-    def rerank(self, query: str, hits: List[ScoredHit], k: int = 5) -> List[ScoredHit]:
-        raise NotImplementedError
 
-class HeuristicReranker(Reranker):
-    """Toy model: prefer docs whose text shares more tokens with query."""
-    def rerank(self, query: str, hits: List[ScoredHit], k: int = 5) -> List[ScoredHit]:
-        q_tokens = set((query or "").lower().split())
-        scored = []
-        for h in hits:
-            text = (h.text or "")
-            doc_tokens = set(text.lower().split())
-            overlap = len(q_tokens & doc_tokens)
-            # bump score slightly per token overlap
-            h.score = float(h.score) + 0.01 * overlap
-            scored.append(h)
-        scored.sort(key=lambda h: h.score, reverse=True)
-        return scored[:k]
+class HeuristicReranker:
+    """
+    Infra-friendly placeholder reranker.
+
+    Deterministic ordering rule:
+    1) Token-overlap count with the query (desc)
+    2) Original score (desc)
+    3) Original input order (asc)
+
+    This keeps behavior stable for tests while being easy to replace
+    with an AI reranker behind the same interface later.
+    """
+
+    def rerank(self, query: str, hits: Iterable[ScoredHit], k: int = 5) -> List[ScoredHit]:
+        q_tokens = _tokens(query)
+        indexed = list(enumerate(hits))  # (idx, ScoredHit)
+
+        def key(item):
+            i, h = item
+            overlap = len(q_tokens & _tokens(h.text))
+            # Sort by: overlap desc, score desc, original index asc
+            return (-overlap, -float(h.score or 0.0), i)
+
+        ranked = [h for _, h in sorted(indexed, key=key)]
+        return ranked[: (k if k is not None else 5)]
+
+
+def _tokens(text: str) -> set[str]:
+    if not text:
+        return set()
+    # Super simple tokenization for infra tests
+    return {t for t in text.lower().split() if t}

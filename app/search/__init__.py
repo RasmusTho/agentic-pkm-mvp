@@ -12,3 +12,5 @@ __all__ = [
     "get_vector_index","get_bm25_index",
     "search_hybrid","search_vector","ingest_object",
 ]
+
+from .rerank import HeuristicReranker, ScoredHit
