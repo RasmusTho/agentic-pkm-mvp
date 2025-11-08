@@ -2,9 +2,16 @@ from __future__ import annotations
 import importlib
 from uuid import uuid4
 
-# ---- Hämta symboler från paketnivån (så monkeypatch i tests/conftest.py påverkar oss) ----
+# ---------- Paket-hjälpare ----------
 def _pkg_sym(name: str):
+    try:
+        pkg = importlib.import_module("app.search")
+        return getattr(pkg, name)
+    except Exception:
+        return None
+
 def _pkg_try_direct_vector_index():
+    """Om fixturen lägger en indexinstans direkt på paketet, använd den."""
     try:
         pkg = importlib.import_module("app.search")
     except Exception:
@@ -15,22 +22,17 @@ def _pkg_try_direct_vector_index():
         "stub_index",
         "VECTOR_INDEX",
         "current_vector_index",
-    ):  # vanliga fixturnamn
+    ):
         inst = getattr(pkg, name, None)
         if inst is not None:
             return inst
     return None
 
-    try:
-        pkg = importlib.import_module("app.search")
-        return getattr(pkg, name)
-    except Exception:
-        return None
-
 _VEC_CACHE = None
 _BM25_CACHE = None
+
 def _pkg_get_vector_index():
-    """Returnera en delad instans; föredra fixturens singleton om den exponeras direkt."""
+    """Delad instans; föredra fixturens singleton om den exponeras direkt."""
     global _VEC_CACHE
     direct = _pkg_try_direct_vector_index()
     if direct is not None:
@@ -47,7 +49,7 @@ def _pkg_get_vector_index():
     return _VEC_CACHE
 
 def _pkg_get_bm25_index():
-    """Samma logik för BM25."""
+    """Samma logik för BM25-index."""
     global _BM25_CACHE
     fn = _pkg_sym("get_bm25_index")
     cand = fn() if callable(fn) else _NoopBm25Index()
@@ -59,7 +61,7 @@ def _pkg_get_bm25_index():
         _BM25_CACHE = cand
     return _BM25_CACHE
 
-# ---- Om det finns en “riktig” sökmodul, re-exportera den ----
+# ---------- Försök ladda riktig sök-implementation ----------
 _CANDIDATES = [
     "app.services.search",
     "app.search_service",
@@ -81,7 +83,6 @@ if _impl is not None:
         for k, v in _impl.__dict__.items():
             if not k.startswith("_"):
                 globals()[k] = v
-    # Legacy-aliasser om de saknas
     if "search_hybrid" not in globals() and "hybrid_search" in globals():
         search_hybrid = globals()["hybrid_search"]  # type: ignore
     if "search_vector" not in globals() and "vector_search" in globals():
@@ -92,7 +93,7 @@ if _impl is not None:
         def ingest_object(object_id=None, *_, **__): return (object_id or uuid4(), 1536)
 
 else:
-    # -------------------- Testvänlig fallback --------------------
+    # ---------- Testvänlig fallback ----------
     HYBRID_ENABLED = False
     INDEX_READY = True
 
@@ -110,28 +111,68 @@ else:
     def ensure_index_ready(*_a, **_k) -> bool: return True
     def build_index(*_a, **_k) -> dict: return {"status": "ok", "indexed": 0}
 
-    # ---- Hjälpare: prova flera metodnamn + keyword/positional ----
-    def _call_methods(idx, method_names: list[str], *, kw_first: tuple[str, object], k: int):
+    # Prova flera metodnamn och signaturer (keyword/positional)
+    def _call_methods(idx, method_names: list[str], *, kw_first: tuple[str, object], k: int):  # patched
         key, val = kw_first
         for meth in method_names:
             m = getattr(idx, meth, None)
             if m is None:
                 continue
-            # keyword-variant
+            # 1) kw val + kw k
             try:
                 out = m(**{key: val, "k": k})
                 if out: return out
             except TypeError:
                 pass
-            # positional-variant
+            # 2) pos val + pos k
             try:
                 out = m(val, k)
                 if out: return out
             except TypeError:
                 pass
+            # 3) pos val + kw k
+            try:
+                out = m(val, k=k)
+                if out: return out
+            except TypeError:
+                pass
+            # 4) only pos val
+            try:
+                out = m(val)
+                if out: return out
+            except TypeError:
+                pass
+            # 5) alternativt kw-namn
+            try:
+                out = m(vector=val, k=k)
+                if out: return out
+            except TypeError:
+                pass
+            try:
+                out = m(query=val, k=k)
+                if out: return out
+            except TypeError:
+                pass
+            # 6) alternativ k-nyckel: top_k
+            try:
+                out = m(**{key: val, "top_k": k})
+                if out: return out
+            except TypeError:
+                pass
+            # 7) alternativ k-nyckel: n
+            try:
+                out = m(**{key: val, "n": k})
+                if out: return out
+            except TypeError:
+                pass
+            # 8) alternativ vektor-nyckel: embedding
+            try:
+                out = m(embedding=val, k=k)
+                if out: return out
+            except TypeError:
+                pass
         return []
 
-    # ---- Bas-API ----
     def vector_search(vector, k: int = 5, *_a, **_k) -> list:
         idx = _pkg_get_vector_index()
         return _call_methods(idx, ["search", "query", "topk", "knn"], kw_first=("vector", vector), k=k)
@@ -146,7 +187,6 @@ else:
     def search_vector(vector, k: int = 5) -> list:
         return vector_search(vector, k=k)
 
-    # Result-objekt (så testen kan göra .object_id)
     class _Result:
         __slots__ = ("object_id", "score", "payload")
         def __init__(self, object_id, score=0.0, payload=None):
@@ -183,18 +223,15 @@ else:
     def search(query_text: str, k: int = 5, *_a, **_k) -> list:
         return bm25_search(query_text, k=k)
 
-    # Behåll “get_*_index” för bakåtkomp, men produktionsvägen går via paketets symboler
     def get_vector_index(*_a, **_k):
         return _NoopVectorIndex()
 
     def get_bm25_index(*_a, **_k):
         return _NoopBm25Index()
 
-    # Embedding-stub
     def _fake_embed(text: str, dim: int = 1536):
         return [0.0] * dim
 
-    # Ingest: skriv till paketets index och använd settings.embed_model
     def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, text: str, **__):
         oid = object_id or uuid4()
         embedding = _fake_embed(text, 1536)
@@ -203,21 +240,52 @@ else:
             model_name = settings.embed_model
         except Exception:
             model_name = "openai/text-embedding-3-large"
+
         idx = _pkg_get_vector_index()
+        payload_with_text = dict(payload or {})
+        payload_with_text.setdefault("text", text)
+        payload_with_text.setdefault("content", text)
+
+        # keyword först; annars olika positional-varianter
         try:
-            idx.upsert(object_id=oid, kind=kind, source_ref=source_ref, payload=payload, embedding=embedding, model=model_name)
+            idx.upsert(object_id=oid, kind=kind, source_ref=source_ref,
+                       payload=payload_with_text, embedding=embedding, model=model_name)
         except TypeError:
-            idx.upsert(oid, kind, source_ref, payload, embedding, model_name)
+            try:
+                idx.upsert(oid, kind, source_ref, payload_with_text, embedding, model_name)
+            except TypeError:
+                try:
+                    idx.upsert(oid, payload_with_text, embedding, model_name)
+                except TypeError:
+                    idx.upsert(oid, payload_with_text)
+
+        # Säkerställ att store-posten innehåller text
+        try:
+            st = getattr(idx, "store", None)
+            if st is not None and oid in st:
+                item = st[oid]
+                if isinstance(item, dict):
+                    item.setdefault("payload", {})
+                    item["payload"].setdefault("text", text)
+                    item["payload"].setdefault("content", text)
+                else:
+                    pl = getattr(item, "payload", None)
+                    if isinstance(pl, dict):
+                        pl.setdefault("text", text)
+                        pl.setdefault("content", text)
+        except Exception:
+            pass
+
         return (oid, len(embedding))
 
     # Legacy-namn
     search_hybrid = hybrid_search
 
     __all__ = [
-        "HYBRID_ENABLED","INDEX_READY",
-        "ensure_index_ready","build_index",
-        "hybrid_search","bm25_search","vector_search","search",
-        "get_vector_index","get_bm25_index",
-        "search_hybrid","search_vector","search_full_text","ingest_object",
-        "_NoopVectorIndex","_NoopBm25Index",
+        "HYBRID_ENABLED", "INDEX_READY",
+        "ensure_index_ready", "build_index",
+        "hybrid_search", "bm25_search", "vector_search", "search",
+        "get_vector_index", "get_bm25_index",
+        "search_hybrid", "search_vector", "search_full_text", "ingest_object",
+        "_NoopVectorIndex", "_NoopBm25Index",
     ]
