@@ -1,7 +1,23 @@
 export PYTHONPATH := $(PWD)
+PYTHON ?= python
 
-.PHONY: smoke
+.PHONY: smoke ci-smoke setup-merge-driver merge-dryrun
+
 smoke:
+	PYTHONPATH="$(PWD)" STORE_BACKEND=memory pytest -q tests/smoke
+
+ci-smoke:
+	PYTHONPATH="$(PWD)" pytest -q
+
+setup-merge-driver:
+	git config merge.semanticmd.name "Semantic Markdown merge"
+	git config merge.semanticmd.driver "python -m app.cli.merge_driver %O %A %B"
+
+merge-dryrun:
+	python -m app.cli.merge_driver "$$BASE" "$$A" "$$B"
+
+.PHONY: smoke-full
+smoke-full:
 	pytest -q tests/system/test_settings_schema.py
 	pytest -q tests/index/test_rules.py
 	pytest -q tests/index/test_ignore_and_defaults.py
@@ -27,7 +43,6 @@ promote-run:
 .PHONY: agent-run
 agent-run:
 	python3 -m app.agents.promotion.agent run
-PYTHON ?= python
 
 .PHONY: worker
 worker:
