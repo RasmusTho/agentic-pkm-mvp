@@ -260,6 +260,7 @@ ocr:
   version: "x.y.z"
   confidence: 0.0-1.0
   warnings: []
+```
 
 Events
 	•	ocr.document.completed
