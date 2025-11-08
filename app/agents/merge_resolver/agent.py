@@ -86,6 +86,17 @@ def _postprocess_merge(merged, info, a, b):
         info = dict(info or {})
         info["reason"] = (r + ("; " if r else "")) + "prefer concise (near-duplicate)"
 
+
+    # 1b) Om merged == A (eller B) och den valda varianten är kortare -> uttryckligen motivera 'prefer concise'
+    r = (info or {}).get("reason","")
+    if "concise" not in r.lower():
+        if merged_body == a_body and len(a_body) < len(b_body):
+            info = dict(info or {})
+            info["reason"] = (r + ("; " if r else "")) + "prefer concise"
+        elif merged_body == b_body and len(b_body) < len(a_body):
+            info = dict(info or {})
+            info["reason"] = (r + ("; " if r else "")) + "prefer concise"
+
     # 2) Bär över länkar från B om merged saknar några länkar helt
     if "[" not in merged_body:
         links_b = re.findall(r"\[[^\]]+\]\([^)]+\)", b_body)
