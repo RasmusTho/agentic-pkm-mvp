@@ -18,10 +18,23 @@ def _resolve_backend() -> str:
 
 
 @lru_cache(maxsize=1)
+def _memory_instances() -> Tuple[ObjectStore, VectorIndex, RelationIndex]:
+    return (MemoryObjectStore(), MemoryVectorIndex(), MemoryRelationIndex())
+
+
+@lru_cache(maxsize=1)
+def _pg_instances() -> Tuple[ObjectStore, VectorIndex, RelationIndex]:
+    from .pg import PgObjectStore, PgVectorIndex, PgRelationIndex
+
+    return (PgObjectStore(), PgVectorIndex(), PgRelationIndex())
+
+
 def _store_instances() -> Tuple[ObjectStore, VectorIndex, RelationIndex]:
     backend = _resolve_backend()
     if backend == "memory":
-        return (MemoryObjectStore(), MemoryVectorIndex(), MemoryRelationIndex())
+        return _memory_instances()
+    if backend == "pg":
+        return _pg_instances()
     raise RuntimeError(f"Store backend '{backend}' is not supported yet")
 
 
@@ -38,7 +51,14 @@ def get_relation_index() -> RelationIndex:
 
 
 def reset_store_backends() -> None:
+    for cache in (_memory_instances, _pg_instances):
+        try:
+            cache.cache_clear()
+        except Exception:
+            pass
     try:
-        _store_instances.cache_clear()
+        from .pg import truncate_pg_tables
+
+        truncate_pg_tables()
     except Exception:
         pass
