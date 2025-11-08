@@ -55,6 +55,8 @@ flowchart TB
   WRK --> AG
 ```
 
+Diagram source: [docs/diagrams/architecture.mmd](docs/diagrams/architecture.mmd).
+
 ## Status
 
 **Status (2025-11-08):** Test suite green on `chore/ingest-export-fixes`. See [STATUS](docs/STATUS.md).
