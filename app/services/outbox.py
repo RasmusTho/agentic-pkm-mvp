@@ -32,7 +32,13 @@ def _file_fallback(topic: str, payload: dict[str, Any]) -> None:
         f.write(line + "\n")
 
 # --------- public API ---------
-def bootstrap(conn: Any) -> None:
+def bootstrap(conn: Any | None = None) -> None:
+    if conn is None:
+        try:
+            from app.db import conn_rw as _conn_rw
+            conn = _conn_rw()
+        except Exception:
+            pass
     _exec(conn, """
         create table if not exists outbox(
           id bigserial primary key,
@@ -90,14 +96,16 @@ def insert_object_and_outbox(*args, **kwargs) -> None:
 
     write_outbox_event(conn, topic, payload)
 
-def poll_outbox_one(conn: Any, handler: Callable[[str, dict[str, Any]], None]) -> bool:
-    row = _exec(
-        conn,
-        "select id, topic, payload from outbox where delivered_at is null order by created_at asc limit 1"
-    ).fetchone()
-    if not row:
-        return False
-
+def poll_outbox_one(conn: Any | None = None, handler: callable | None = None):
+    if conn is None:
+        try:
+            from app.db import conn_rw as _conn_rw
+            conn = _conn_rw()
+        except Exception:
+            pass
+    row = _exec(conn, "select id, topic, payload from outbox where delivered_at is null order by created_at asc limit 1").fetchone()
+if not row:
+    return False if handler else None if handler else None if handler else None
     eid, topic, payload = row
     if isinstance(payload, str):
         try:
