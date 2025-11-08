@@ -195,45 +195,50 @@ else:
             self.payload = payload or {}
 
     def hybrid_search(query_text: str, query_vector, *, k: int) -> list:
-    ft = search_full_text(query_text, k=k) or []
-    vec = vector_search(query_vector, k=k) or []
+        """Deterministisk hybrid: FT prioriteras. Om FT har träffar -> returnera FT[:k], annars fyll med vektor."""
+        ft = search_full_text(query_text, k=k) or []
+        vec = vector_search(query_vector, k=k) or []
 
-    def _norm(items):
-        out = []
-        for i, it in enumerate(items, start=1):
-            oid = getattr(it, 'object_id', None) or getattr(it, 'id', None)
-            payload = getattr(it, 'payload', None) or {}
-            out.append({'object_id': oid, 'payload': payload, 'rank': i})
-        return out
+        def _oid(it):
+            return getattr(it, "object_id", None) or getattr(it, "id", None)
 
-    ft_n = _norm(ft); vec_n = _norm(vec)
-    K = 60
-    score = {}; meta = {}; src = {}; r_ft = {}; r_vec = {}
-    for it in ft_n:
-        oid = it['object_id']; r = it['rank']
-        if oid is None: continue
-        score[oid] = score.get(oid, 0.0) + 1.0/(K+r) + 1e-6  # liten FT-bonus
-        meta[oid] = it['payload']
-        src.setdefault(oid, 'ft'); r_ft[oid] = r
-    for it in vec_n:
-        oid = it['object_id']; r = it['rank']
-        if oid is None: continue
-        score[oid] = score.get(oid, 0.0) + 1.0/(K+r)
-        meta.setdefault(oid, it['payload'])
-        r_vec[oid] = r
-    ordered = sorted(
-        score.items(),
-        key=lambda kv: (
-            -kv[1],
-            0 if src.get(kv[0]) == 'ft' else 1,
-            (r_ft.get(kv[0], 9999) + r_vec.get(kv[0], 9999))
-        )
-    )[:k]
-    class _Result:
-        __slots__=('object_id','score','payload')
-        def __init__(self, object_id, score, payload):
-            self.object_id=object_id; self.score=score; self.payload=payload
-    return [_Result(oid, sc, meta.get(oid, {})) for oid, sc in ordered]
+        def _pl(it):
+            return getattr(it, "payload", None) or {}
+
+        # 1) FT-toppen vinner deterministiskt (upp till k)
+        if ft:
+            class _Result:
+                __slots__ = ("object_id", "score", "payload")
+
+                def __init__(self, object_id, score, payload):
+                    self.object_id = object_id
+                    self.score = score
+                    self.payload = payload
+
+            top = ft[:k]
+            return [_Result(_oid(it), float(k - i), _pl(it)) for i, it in enumerate(top)]
+
+        # 2) Annars vektorresultat, unika tills k
+        seen = set()
+        ordered = []
+        for it in vec:
+            oid = _oid(it)
+            if oid is None or oid in seen:
+                continue
+            ordered.append((oid, _pl(it)))
+            seen.add(oid)
+            if len(ordered) >= k:
+                break
+
+        class _Result:
+            __slots__ = ("object_id", "score", "payload")
+
+            def __init__(self, object_id, score, payload):
+                self.object_id = object_id
+                self.score = score
+                self.payload = payload
+
+        return [_Result(oid, float(k - i), pl) for i, (oid, pl) in enumerate(ordered)]
 
     def search(query_text: str, k: int = 5, *_a, **_k) -> list:
         return bm25_search(query_text, k=k)
@@ -252,15 +257,17 @@ else:
         embedding = _fake_embed(text, 1536)
         try:
             from app.settings import settings
-            model_name = settings.embed_model
-        except Exception:
-            model_name = "openai/text-embedding-3-large"
+        except Exception as exc:
+            raise RuntimeError("app.settings.settings krävs för ingest_object") from exc
+        model_name = settings.embed_model
 
         idx = _pkg_get_vector_index()
         payload_with_text = dict(payload or {})
         payload_with_text.setdefault("text", text)
         payload_with_text.setdefault("content", text)
         payload_with_text.setdefault("object_type", kind)
+        payload_with_text.setdefault("system_intent", "learn")
+        payload_with_text.setdefault("emergent_tags", [])
 
         # keyword först; annars olika positional-varianter
         try:
@@ -285,12 +292,16 @@ else:
                     item["payload"].setdefault("text", text)
                     item["payload"].setdefault("content", text)
                     item["payload"].setdefault("object_type", kind)
+                    item["payload"].setdefault("system_intent", "learn")
+                    item["payload"].setdefault("emergent_tags", [])
                 else:
                     pl = getattr(item, "payload", None)
                     if isinstance(pl, dict):
                         pl.setdefault("text", text)
                         pl.setdefault("content", text)
                         pl.setdefault("object_type", kind)
+                        pl.setdefault("system_intent", "learn")
+                        pl.setdefault("emergent_tags", [])
         except Exception:
             pass
 
