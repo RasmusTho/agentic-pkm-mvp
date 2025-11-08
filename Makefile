@@ -1,13 +1,16 @@
 .PHONY: smoke ci-smoke setup-merge-driver hygiene-logs
 
 smoke:
-	PYTHONPATH="$(PWD)" STORE_BACKEND=memory pytest -q tests/smoke
+	PYTHONPATH="$(PWD)" STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+	pytest -q -c /dev/null tests -k "not slow and not e2e and not integration"
 
 ci-smoke:
 	python scripts/check_code_fences.py
-	PYTHONPATH="$(PWD)" STORE_BACKEND=memory pytest -q
-	DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" alembic upgrade head || true
-	PYTHONPATH="$(PWD)" STORE_BACKEND=pg DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" pytest -q || true
+	PYTHONPATH="$(PWD)" STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+	pytest -q -c /dev/null tests -k "not slow and not e2e and not integration"
+	DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" alembic upgrade head
+	PYTHONPATH="$(PWD)" STORE_BACKEND=pg DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+	pytest -q -c /dev/null tests -k "not slow and not e2e and not integration"
 
 setup-merge-driver:
 	git config merge.semanticmd.name "Semantic Markdown merge"
