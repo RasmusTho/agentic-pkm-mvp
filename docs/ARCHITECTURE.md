@@ -27,7 +27,11 @@ This document covers:
 - Persistence is organised into domain-specific Stores. Postgres 16 is the canonical backing database today, but agents touch it via Store interfaces rather than ad-hoc SQL.
 - Offline test harnesses run the pipeline entirely in-memory: agent runners hydrate `DomainObject`s into dicts and keep transient state in Python structures. Pytest can run without a database.
 
-### 1.1 Runtime shim & store selection (v4.5 refresh)
+### 1.1 Architecture diagram (flow view)
+
+The current container/service topology is captured in [`docs/diagrams/architecture.mmd`](docs/diagrams/architecture.mmd). It shows the FastAPI surface, LangGraph agents (PER loop), Store facades, pgvector/RelationIndex plans, and the Outbox worker that feeds events back into agents.
+
+### 1.2 Runtime shim & store selection (v4.5 refresh)
 
 - FastAPI now runs under a proper `lifespan` handler so startup/shutdown are deterministic (no `@on_event` hooks). The shim in `app/main.py` exposes `/agent/health`, `/interesting`, and `/dashboard`, and stays safe to monkeypatch in tests.
 - `app/stores/provider.py` picks a backend by respecting `STORE_BACKEND` (`"pg"` or `"memory"`), otherwise probing `DATABASE_URL` via a quick `psycopg` connect before falling back to in-memory Stores.
@@ -122,8 +126,32 @@ All agents follow Plan → Execute → Reflect:
 2. **Execute:** Perform action through Store interfaces.
 3. **Reflect:** Emit event + write audit/episodic memory with `trace_id`.
 
-### Outbox-driven events
-Store writes + Outbox insert are atomic. Consumers (Indexer, Reviewer, Promotion, etc.) process rows ordered by `created_at`, act, and advance `delivered_at`. **QAS-010** remains: outbox → index ≤ 2 seconds.
+### Eventing / Outbox worker
+The Outbox table is the worker-compatible event bus.
+
+- `write_outbox_event(conn, topic, payload)` inserts `(id, topic, payload, created_at)` and accepts a caller-provided connection or opens/closes its own when `conn` is `None`.
+- `poll_outbox_one(conn, handler) -> bool` orders by `created_at`, invokes `handler(topic, payload)` when a row exists, and returns `True` only when a handler was invoked.
+- `ack_outbox(msg_id, [conn]) -> bool` sets `delivered_at` for the given `id`, is idempotent, and also opens/closes its own connection when needed.
+- Table columns today: `id uuid`, `topic text`, `payload jsonb`, `created_at timestamptz`, `delivered_at timestamptz NULL`, `attempts int` (optional retry counter).
+
+```mermaid
+sequenceDiagram
+  participant WRK as Outbox Worker
+  participant OUT as Outbox (table)
+  participant AG as Agents
+
+  WRK->>OUT: poll_outbox_one(conn, handler)
+  alt message available
+    OUT-->>WRK: id, topic, payload
+    WRK->>WRK: handler(topic, payload)
+    WRK->>OUT: ack_outbox(id)
+    OUT-->>WRK: delivered_at set (true)
+  else empty
+    OUT-->>WRK: none (false)
+  end
+```
+
+Store writes + Outbox insert are atomic. Consumers (Indexer, Reviewer, Promotion, MergeResolver, etc.) process rows ordered by `created_at`, run their handlers, and advance `delivered_at`. **QAS-010** remains: outbox → index ≤ 2 seconds.
 
 ### Traceability
 - Each run creates spans (`start_span(...)`) with a `trace_id`.
@@ -136,7 +164,7 @@ Store writes + Outbox insert are atomic. Consumers (Indexer, Reviewer, Promotion
 
 ### 7.0 Capture Pipeline (External → Vault + Store layer)
 1) Capture agents normalise input into Markdown + YAML with UUID, `origin`, `source_ref`, initial `review_state`.  
-2) Markdown is written to the vault and mirrored via ObjectStore (`emit_outbox=True`) which emits `capture.object.created`/`ingest.object.created`.  
+2) Markdown is written to the vault and mirrored via ObjectStore (`emit_outbox=True`) which emits `ingest.object.created`.  
 3) Vault and ObjectStore remain mirrors; the vault stays the complete human surface.
 
 Production lifecycle agents: Normalizer, Classifier, Chunker, Deduper, CitationChecker, Indexer, Reviewer, SetEvaluator, Projector, Promotion, MergeResolver, NoteHygiene.
@@ -157,8 +185,9 @@ Production lifecycle agents: Normalizer, Classifier, Chunker, Deduper, CitationC
 
 ### 7.3 Merge Flow (Semantic merge)
 - Merge conflict → MergeResolverAgent via CLI driver.
-- Semantic 3-way Markdown merge with UUID guard and non-regression of `review_state`.
-- Output `(merged_text, status, reason)`. Exit non-zero on unresolved.
+- LLM prompt-pack (system + user frames) handles the happy-path semantic 3-way Markdown merge with UUID guard and non-regression of `review_state`.
+- Deterministic fallback rules keep merges testable: **prefer concise** text when A/B are near-duplicates, and **carry refs/links from B** on overlapping edits so citations are not lost. These choices surface in `info.reason`.
+- Output `(merged_text, status, reason)`; CLI exits non-zero on unresolved merges.
 
 ### 7.4 Lifecycle & Governance
 - Capture through Promotion stays human-first; Stores + Outbox ensure traceability and timely indexing (**QAS-010**).
@@ -288,7 +317,7 @@ Events
 ⸻
 
 13. Retrieval & QA (v4.5)
-	•	Hybrid retrieval across views (markdown.semantic, table.json, av.segment): BM25 + 384-d vectors.
+	•	Hybrid retrieval across views (markdown.semantic, table.json, av.segment): BM25 + pgvector embeddings fused via RRF (fixed call signature shared by API + workers).
 	•	Lightweight cross-encoder rerank at query time (top-N → top-k). High-precision rerank (e.g., MonoT5) only in eval/batch.
 	•	Answerer returns citations with text spans (span±Δ) and AV timestamps (#t=MM:SS–MM:SS), followed by a Verifier (small LLM/rule) that rechecks claims against spans.
 	•	Optional long-context compressed view may be injected when sources are very long.
@@ -318,7 +347,7 @@ promote.intent.created	promote.intent.created
 promote.done	promote.done
 merge.intent.created	merge.intent.created
 cleanup.done	cleanup.done
-capture.object.created	capture.object.created
+capture.object.created	ingest.object.created
 
 
 ⸻

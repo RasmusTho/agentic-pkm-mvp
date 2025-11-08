@@ -49,3 +49,12 @@
 - Input: `object_id`
 - Output: `{"event":"projector.sync.done","files":[...]}`
 - Rule: write-only mirror of whitelisted fields (never mutates DB truth)
+
+## Merge Resolver
+- **Inputs:** `base.md`, `a.md`, `b.md` (three-way merge artifacts from git or the CLI driver).
+- **Decision path:**
+  1. Build a prompt-pack (system + user instructions) and call the LLM to propose the merged Markdown body plus updated front matter.
+  2. Apply deterministic fallbacks when the LLM abstains or near-duplicates appear:
+     - *Prefer concise* when A and B differ only by verbosity; `info.reason` cites `"prefer concise"`.
+     - *Carry refs/links from B* on overlapping edits so citations and backlinks survive merges.
+- **Outputs:** merged Markdown + `info` dict that includes `reason`, chosen `review_state`, and whether the fallback rules fired. Exit code is non-zero when unresolved so git callers can stop.
