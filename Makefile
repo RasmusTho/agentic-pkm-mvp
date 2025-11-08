@@ -9,6 +9,9 @@ ci-smoke: smoke
 indexer-run:
 	PYTHONPATH="$(PWD)" python -m app.indexer.runner
 
+indexer-run:
+	PYTHONPATH="$(PWD)" python -m app.indexer.runner
+
 setup-merge-driver:
 	git config merge.semanticmd.name "Semantic Markdown merge"
 	git config merge.semanticmd.driver "python -m app.cli.merge_driver %O %A %B"
