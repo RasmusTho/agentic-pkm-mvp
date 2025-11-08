@@ -10,13 +10,24 @@ def _pkg_sym(name: str):
     except Exception:
         return None
 
+_VEC_CACHE = None
+_BM25_CACHE = None
 def _pkg_get_vector_index():
+    global _VEC_CACHE
     fn = _pkg_sym("get_vector_index")
-    return fn() if callable(fn) else _NoopVectorIndex()
+    cand = fn() if callable(fn) else _NoopVectorIndex()
+    # Håll fast vid första icke-noop-instansen (så upsert och search delar samma store)
+    if _VEC_CACHE is None or isinstance(_VEC_CACHE, _NoopVectorIndex):
+        _VEC_CACHE = cand
+    return _VEC_CACHE
 
 def _pkg_get_bm25_index():
+    global _BM25_CACHE
     fn = _pkg_sym("get_bm25_index")
-    return fn() if callable(fn) else _NoopBm25Index()
+    cand = fn() if callable(fn) else _NoopBm25Index()
+    if _BM25_CACHE is None or isinstance(_BM25_CACHE, _NoopBm25Index):
+        _BM25_CACHE = cand
+    return _BM25_CACHE
 
 # ---- Om det finns en “riktig” sökmodul, re-exportera den ----
 _CANDIDATES = [
