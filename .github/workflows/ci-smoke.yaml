@@ -57,9 +57,7 @@ jobs:
         if: matrix.backend == 'pg'
         env:
           DATABASE_URL: postgresql+psycopg://app:app@127.0.0.1:15432/app
-        run: |
-          python -c "import time; time.sleep(2)"
-          alembic upgrade head
+        run: alembic upgrade head
 
       - name: Pytest (memory)
         if: matrix.backend == 'memory'

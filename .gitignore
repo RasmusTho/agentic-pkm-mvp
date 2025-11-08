@@ -1,3 +1,8 @@
+logs/**
+!logs/.gitkeep
+*.log
+*.tmp
+.DS_Store
 __pycache__/
 *.py[cod]
 *.pyc
@@ -12,13 +17,6 @@ dist/
 build/
 .eggs/
 *.egg-info/
-
-# Logs & runtime
-logs/**
-!logs/.gitkeep
-*.log
-*.tmp
-.DS_Store
 events.jsonl
 storage/
 checkpoints.sqlite
@@ -33,10 +31,3 @@ scripts/export_objects.py
 scripts/ingest_real.sh
 !requirements-smoke.txt
 .pytest_cache/
-
-# Keep merge-resolver prompts in repo
-!app/agents/merge_resolver/
-!app/agents/merge_resolver/prompt_system.txt
-!app/agents/merge_resolver/prompt_user.txt
-
-!app/agents/merge_resolver/prompt_user_template.txt

@@ -1,3 +1,2 @@
-# Semantic merge driver for Markdown (and MDX for completeness)
-*.md merge=semanticmd
-*.mdx merge=semanticmd
+*.md   merge=semanticmd
+*.mdx  merge=semanticmd
