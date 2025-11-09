@@ -1,4 +1,22 @@
-.PHONY: smoke ci-smoke setup-merge-driver hygiene-logs indexer-run
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run
+
+fmt:
+\trufflehog --version >/dev/null 2>&1 || true
+\tpython -m ruff check . --fix
+\tpython -m black .
+
+lint:
+\tpython -m ruff check .
+\tpython -m mypy app || true
+
+test:
+\texport PYTEST_DISABLE_PLUGIN_AUTOLOAD=1; python -m pytest -q -c /dev/null
+
+eval:
+\tpython -m app.eval.run
+
+docs:
+\t@echo "Docs i ./docs – se README.md"
 
 smoke:
 	PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
