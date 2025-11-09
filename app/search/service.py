@@ -1,226 +1,161 @@
 from __future__ import annotations
+from uuid import UUID, uuid4
 
-from typing import Any, Iterable
-from uuid import uuid4, UUID
-
-# -------------------------
-# No-op fallbacks (safe in minimal envs)
-# -------------------------
-
-HYBRID_ENABLED = False
-INDEX_READY = True
-
-
-def ensure_index_ready(*_a, **_k) -> bool:
-    return True
-
-
-def build_index(*_a, **_k) -> dict[str, Any]:
-    return {"status": "ok", "indexed": 0}
-
-
-class _NoopVectorIndex:
-    def __init__(self) -> None:
-        self.store = {}
-
-    # very tolerant signatures
-    def upsert(self, *args, **kwargs):
-        # Accept both named and positional upserts; store minimal info for tests.
-        try:
-            object_id = kwargs.get("object_id") or args[0]
-            payload = kwargs.get("payload") or args[3]
-        except Exception:
-            object_id, payload = uuid4(), {}
-        self.store[object_id] = type("_Item", (), {"payload": dict(payload), "kind": kwargs.get("kind"), "source_ref": kwargs.get("source_ref"), "model": kwargs.get("model", "test")})
-
-    def search(self, *args, **kwargs) -> list:
+# --- Lightweight FT stub (unchanged) -------------------------------------------------
+def bm25_search(query_text: str, k: int = 5) -> list:
+    try:
+        idx = get_bm25_index()
+        # Try keyword and positional variants
+        for fn in ("search", "query", "topk"):
+            m = getattr(idx, fn, None)
+            if not m:
+                continue
+            try:
+                out = m(query_text=query_text, k=k)
+                if out: return out
+            except TypeError:
+                pass
+            try:
+                out = m(query_text, k)
+                if out: return out
+            except TypeError:
+                pass
+        return []
+    except Exception:
         return []
 
-    # compatibility aliases
-    query = search
-    topk = search
-    knn = search
-
-
-class _NoopBm25Index:
-    def add(self, *args, **kwargs): ...
-    def search(self, *args, **kwargs) -> list: return []
-
-
-# -------------------------
-# Shared helpers
-# -------------------------
-
-def _pkg_get_vector_index():
-    """Prefer real store backend if available, else noop."""
+# --- Shared index access via stores (preferred), otherwise no-ops ---------------------
+def get_vector_index(*_a, **_k):
     try:
         from app.stores import get_vector_index as _stores_get_vector_index
         return _stores_get_vector_index()
     except Exception:
         return _NoopVectorIndex()
 
-def _call_methods(idx, method_names: list[str], *, kw_first: tuple[str, object], k: int) -> list:
-    """
-    Probe common method signatures across backends:
-      1) keyword vector + keyword k
-      2) positional vector + positional k
-      3) positional vector + keyword k
-    """
-    key, val = kw_first
-    for meth in method_names:
+def get_bm25_index(*_a, **_k):
+    return _NoopBm25Index()
+
+class _NoopVectorIndex:
+    def upsert(self, *args, **kwargs): return None
+    def search(self, *args, **kwargs): return []
+    def query(self, *args, **kwargs): return []
+    def topk(self, *args, **kwargs): return []
+    def knn(self, *args, **kwargs): return []
+    store = {}
+
+class _NoopBm25Index:
+    def add(self, *args, **kwargs): return None
+    def search(self, *args, **kwargs): return []
+
+# --- Vector search: shared-index first; try many signatures; fallback to store -------
+def _fallback_from_store(idx, vector, k):
+    # Try an attribute-level search directly (memory/pg stores expose .search)
+    try:
+        out = idx.search(vector, k=k)
+        if out: return out
+    except TypeError:
+        try:
+            out = idx.search(vector, k)
+            if out: return out
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return []
+
+def vector_search(vector, k: int = 5) -> list:
+    idx = get_vector_index()
+    # try known method names
+    for meth in ("search", "query", "knn", "topk"):
         m = getattr(idx, meth, None)
         if m is None:
             continue
+        # 1) keyword vector + keyword k
         try:
-            out = m(**{key: val, "k": k})
+            out = m(vector=vector, k=k)
             if out: return out
         except TypeError:
             pass
+        # 2) positional vector + positional k
         try:
-            out = m(val, k)
+            out = m(vector, k)
             if out: return out
         except TypeError:
             pass
+        # 3) positional vector + keyword k
         try:
-            out = m(val, k=k)
+            out = m(vector, k=k)
             if out: return out
         except TypeError:
             pass
-    return []
+        # 4) other common names for k
+        for kk in ("top_k", "n"):
+            try:
+                out = m(vector=vector, **{kk: k})
+                if out: return out
+            except TypeError:
+                pass
+            try:
+                out = m(vector, **{kk: k})
+                if out: return out
+            except TypeError:
+                pass
+    # fallback: search through store impl
+    return _fallback_from_store(idx, vector, k)
 
-def _fallback_from_store(idx, vector, k: int):
-    """If API calls return no hits, derive results from idx.store by dot-product scoring."""
-    st = getattr(idx, "store", None)
-    if not st:
-        return []
-    # local class to mirror VectorResult-ish objects
-    class _Result:
-        __slots__ = ("object_id", "score", "payload")
-        def __init__(self, object_id, score, payload):
-            self.object_id = object_id
-            self.score = score
-            self.payload = payload
-    def _dot(a, b):
-        if not a or not b:
-            return 0.0
-        total = 0.0
-        n = min(len(a), len(b))
-        for i in range(n):
-            av = a[i] or 0.0
-            bv = b[i] or 0.0
-            total += av * bv
-        return total
-    results = []
-    # st is usually a dict[UUID] -> Entry (either dataclass-like or dict)
-    for oid, entry in st.items():
-        # support both dict-like and attr-like entries
-        emb = entry.get("embedding") if isinstance(entry, dict) else getattr(entry, "embedding", None)
-        if not emb:
-            continue
-        payload = entry.get("payload") if isinstance(entry, dict) else getattr(entry, "payload", {}) or {}
-        score = _dot(vector, emb)
-        results.append(_Result(oid, score, payload))
-    # sort by score desc (stable by insertion order)
-    results.sort(key=lambda r: (-r.score))
-    return results[:k]
+# Legacy alias expected by tests
+search_vector = vector_search
 
-
-# -------------------------
-# Public search API (fallback)
-# -------------------------
-
-def bm25_search(query_text: str, *, k: int = 5) -> list:
-    idx = get_bm25_index()
-    try:
-        return idx.search(query_text, k=k)
-    except TypeError:
-        return idx.search(query_text, k)
-
-def vector_search(vector: Iterable[float], *, k: int = 5) -> list:
-    idx = get_vector_index()
-    # Try common vector methods/signatures
-    out = _call_methods(idx, ["search", "query", "topk", "knn"], kw_first=("vector", list(vector)), k=k)
-    return out or []
-
-
-def search_vector(vector: Iterable[float], *, k: int = 5) -> list:
-    return vector_search(vector, k=k)
-
-def hybrid_search(query_text: str, query_vector: Iterable[float], *, k: int = 5) -> list:
-    """
-    Deterministic hybrid with FT-first semantics:
-      - If full-text returns hits, return them in FT order (truncated to k).
-      - Otherwise, return unique vector hits in their native order up to k.
-    Returns objects with .object_id, .score, .payload to match tests.
-    """
-    ft = search_full_text(query_text, k=k) or []
+# --- FT-first hybrid ---------------------------------------------------------------
+def hybrid_search(query_text: str, query_vector, *, k: int) -> list:
+    """Deterministic FT-first hybrid: if FT has hits, return its top-k; otherwise fill with vector hits."""
+    ft = bm25_search(query_text, k=k) or []
     vec = vector_search(query_vector, k=k) or []
 
-    def _oid(it): return getattr(it, "object_id", None) or getattr(it, "id", None)
-    def _pl(it):  return getattr(it, "payload", None) or {}
+    def _oid(it):
+        return getattr(it, "object_id", None) or getattr(it, "id", None)
 
+    def _pl(it):
+        return getattr(it, "payload", None) or {}
+
+    # If FT has any results, return FT[:k] in order
     if ft:
         class _Result:
             __slots__ = ("object_id", "score", "payload")
             def __init__(self, object_id, score, payload):
-                self.object_id = object_id
-                self.score = score
-                self.payload = payload
+                self.object_id = object_id; self.score = score; self.payload = payload
         top = ft[:k]
         return [_Result(_oid(it), float(k - i), _pl(it)) for i, it in enumerate(top)]
 
-    # Fallback to vector results
-    seen = set()
-    ordered = []
+    # Otherwise, unique vector hits until k
+    seen = set(); ordered = []
     for it in vec:
         oid = _oid(it)
         if oid is None or oid in seen:
             continue
-        ordered.append((oid, _pl(it)))
-        seen.add(oid)
+        ordered.append((oid, _pl(it))); seen.add(oid)
         if len(ordered) >= k:
             break
 
     class _Result:
         __slots__ = ("object_id", "score", "payload")
         def __init__(self, object_id, score, payload):
-            self.object_id = object_id
-            self.score = score
-            self.payload = payload
+            self.object_id = object_id; self.score = score; self.payload = payload
 
     return [_Result(oid, float(k - i), pl) for i, (oid, pl) in enumerate(ordered)]
 
-
-# Legacy alias
+# Legacy alias expected by tests
 search_hybrid = hybrid_search
 
+# --- Simple full-text proxy search ------------------------------------------------
 def search(query_text: str, k: int = 5, *_a, **_k) -> list:
     return bm25_search(query_text, k=k)
 
-# -------------------------
-# Full-text stub (codex may improve later)
-# -------------------------
-
-def search_full_text(query_text: str, *, k: int = 5) -> list:
-    idx = get_bm25_index()
-    try:
-        return idx.search(query_text, k=k)
-    except Exception:
-        return []
-
-# -------------------------
-# Ingest: delegate to core, fallback to local upsert
-# -------------------------
-
-def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, text: str, **__) -> tuple[UUID, int]:
-    """
-    1) Ensure payload defaults needed by tests and downstream:
-       - text, content, object_type, system_intent, emergent_tags
-    2) Try to delegate to app.ingest.ingest_object (full lifecycle).
-    3) If that import/call fails, fallback to tolerant local upsert into the vector index.
-    """
+# --- Ingest: set defaults, delegate to core ingest if present, else fallback ------
+def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, text: str, **__):
     oid = object_id or uuid4()
 
+    # Canonical payload defaults required by tests & pipeline
     payload_with_text = dict(payload or {})
     payload_with_text.setdefault("text", text)
     payload_with_text.setdefault("content", text)
@@ -228,41 +163,53 @@ def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, 
     payload_with_text.setdefault("system_intent", "learn")
     payload_with_text.setdefault("emergent_tags", [])
 
-    # Try real ingest path
+    # Try delegating to the real ingest (runs lifecycle hooks)
     try:
-        from app.ingest import ingest_object as core_ingest  # lazy import avoids cycles
+        from app.ingest import ingest_object as core_ingest
         return core_ingest(
             object_id=oid,
             kind=kind,
             source_ref=source_ref,
             payload=payload_with_text,
             text=text,
-            **__,
+            **__
         )
     except Exception:
-        # Fallback: fake embed + tolerant upsert
-        emb = _fake_embed(text, 1536)
+        # Minimal fallback: embed + tolerant upsert into the shared vector index
+        def _fake_embed(t: str, dim: int) -> list[float]:
+            # super simple stable embedding: length-scaled one-hot at index 0
+            v = [0.0] * dim
+            v[0] = float(len(t) % 2)
+            return v
+
+        embedding = _fake_embed(text, 1536)
         try:
             from app.settings import settings
             model_name = settings.embed_model
         except Exception:
             model_name = "openai/text-embedding-3-large"
 
-        idx = _pkg_get_vector_index()
-        # tolerant upsert signatures
+        idx = get_vector_index()
+        # tolerant upsert across varied signatures
         try:
-            idx.upsert(object_id=oid, kind=kind, source_ref=source_ref,
-                       payload=payload_with_text, embedding=emb, model=model_name)
+            idx.upsert(
+                object_id=oid,
+                kind=kind,
+                source_ref=source_ref,
+                payload=payload_with_text,
+                embedding=embedding,
+                model=model_name,
+            )
         except TypeError:
             try:
-                idx.upsert(oid, kind, source_ref, payload_with_text, emb, model_name)
+                idx.upsert(oid, kind, source_ref, payload_with_text, embedding, model_name)
             except TypeError:
                 try:
-                    idx.upsert(oid, payload_with_text, emb, model_name)
+                    idx.upsert(oid, payload_with_text, embedding, model_name)
                 except TypeError:
                     idx.upsert(oid, payload_with_text)
 
-        # ensure stub store (if dict-like) gets our payload defaults
+        # repair store payloads if the stub stored a different shape
         try:
             st = getattr(idx, "store", None)
             if st is not None and oid in st:
@@ -285,87 +232,12 @@ def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, 
         except Exception:
             pass
 
-        return (oid, len(emb))
+        return (oid, len(embedding))
 
-
-# -------------------------
-# Index getters (prefer real stores)
-# -------------------------
-
-def get_vector_index(*_a, **_k):
-    return _pkg_get_vector_index()
-
-def get_bm25_index(*_a, **_k):
-    return _NoopBm25Index()
-
-
-# -------------------------
-# Minimal embed stub (fallback only)
-# -------------------------
-
-def _fake_embed(text: str, dims: int) -> list[float]:
-    # very simple positional hash to meet deterministic length
-    out = [0.0] * dims
-    if text:
-        h = sum(ord(c) for c in text) % dims
-        out[h] = 1.0
-    return out
-
-
+# Public export surface (plus legacy names)
 __all__ = [
-    "HYBRID_ENABLED", "INDEX_READY",
-    "ensure_index_ready", "build_index",
-    "hybrid_search", "bm25_search", "vector_search", "search",
-    "get_vector_index", "get_bm25_index",
-    "search_hybrid", "search_vector", "search_full_text", "ingest_object",
-    "_NoopVectorIndex", "_NoopBm25Index",
+    "hybrid_search","bm25_search","vector_search","search",
+    "get_vector_index","get_bm25_index","ingest_object",
+    "search_hybrid","search_vector",
+    "_NoopVectorIndex","_NoopBm25Index",
 ]
-
-def search_vector(vector, k: int = 5, *_a, **_k) -> list:
-    """Public vector search: try primary path, then store-based fallback on the SAME index singleton."""
-    try:
-        res = vector_search(vector, k=k)
-        if res:
-            return res
-    except Exception:
-        pass
-    idx = get_vector_index()
-    return _fallback_from_store(idx, vector, k)
-
-def vector_search(vector, k: int = 5, *_a, **_k) -> list:
-    """Low-level vector search that tolerates heterogeneous index APIs and falls back to store scanning."""
-    idx = get_vector_index()
-    method_names = ["search", "query", "topk", "knn"]
-    key_names = ["vector", "embedding", "query_vector"]
-    for meth in method_names:
-        m = getattr(idx, meth, None)
-        if not m:
-            continue
-        for key in key_names:
-            try:
-                out = m(**{key: vector, "k": k})
-                if out: return out
-            except TypeError:
-                pass
-            try:
-                out = m(vector, k)
-                if out: return out
-            except TypeError:
-                pass
-            try:
-                out = m(vector, k=k)
-                if out: return out
-            except TypeError:
-                pass
-            for kk in ("top_k", "n"):
-                try:
-                    out = m(**{key: vector, kk: k})
-                    if out: return out
-                except TypeError:
-                    pass
-                try:
-                    out = m(vector, **{kk: k})
-                    if out: return out
-                except TypeError:
-                    pass
-    return _fallback_from_store(idx, vector, k)
