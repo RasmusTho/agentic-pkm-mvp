@@ -115,3 +115,6 @@ import os
 
 def pytest_sessionstart(session):
     os.environ.setdefault("STORE_BACKEND", "memory")
+def pytest_configure(config):
+    # Ensure the 'pg' marker exists even when pytest.ini is ignored (e.g. -c /dev/null)
+    config.addinivalue_line("markers", "pg: marks tests requiring Postgres")

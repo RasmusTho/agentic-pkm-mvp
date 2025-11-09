@@ -2,14 +2,21 @@ name: ci-smoke
 
 on:
   push:
-    branches: ["**"]
+    branches:
+      - main
+      - chore/**
+      - feature/**
   pull_request:
+    types: [opened, synchronize, reopened]
 
 jobs:
   test:
     name: test (${{ matrix.backend }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [memory, pg]
     services:
       postgres:
         image: postgres:16
@@ -19,20 +26,12 @@ jobs:
           POSTGRES_DB: app
         ports: ["5432:5432"]
         options: >-
-          --health-cmd="pg_isready -U app -d app"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=20
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [memory, pg]
-
+          --health-cmd="pg_isready -U app -d app" --health-interval=5s
+          --health-timeout=5s --health-retries=20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python 3.12
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -44,35 +43,23 @@ jobs:
           if [ -f dev-requirements.txt ]; then pip install -r dev-requirements.txt; fi
           if [ -f app/requirements.txt ]; then pip install -r app/requirements.txt; fi
 
-      - name: DB migrate (pg only)
+      - name: Alembic migrations (pg only)
         if: matrix.backend == 'pg'
         env:
           PYTHONPATH: ${{ github.workspace }}
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-          STORE_BACKEND: pg
-          DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/app
         run: |
-          python - <<'PY'
-          import subprocess, sys
-          # Run Alembic if available; ignore if not present
-          try:
-              subprocess.check_call([sys.executable, "-m", "alembic", "upgrade", "head"])
-          except Exception:
-              pass
-          PY
+          if command -v alembic >/dev/null 2>&1; then
+            alembic upgrade head
+          else
+            echo "alembic not installed; skipping migrations"
+          fi
 
-      - name: Check docs code fences
+      - name: Smoke tests
         env:
           PYTHONPATH: ${{ github.workspace }}
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: 1
+          STORE_BACKEND: ${{ matrix.backend }}
+          DATABASE_URL: ${{ matrix.backend == 'pg' && 'postgresql+psycopg://app:app@localhost:5432/app' || '' }}
         run: |
           python scripts/check_code_fences.py
-
-      - name: Run smoke tests
-        env:
-          PYTHONPATH: ${{ github.workspace }}
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-          STORE_BACKEND: ${{ matrix.backend }}
-          DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/app
-        run: |
-          python -m pytest -q -c /dev/null tests -k "not slow"
+          python -m pytest -q -c /dev/null -k "not slow"
