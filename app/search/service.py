@@ -5,6 +5,92 @@ from typing import Any, Iterable
 # --- Noops om stores/bm25 saknas i minimal miljö -----------------------------
 
 class _NoopVectorIndex:
+    """
+    Minimal in-memory vector index used in tests/dev.
+    - Tolerant `upsert` (positional or keyword args)
+    - Dot-product `search` with deterministic tiebreak by insert order
+    - Exposes `store` so the fallback path can read payloads
+    """
+    def __init__(self) -> None:
+        self._entries = {}      # object_id -> entry dict
+        self._order = []        # insertion order
+        self.store = {}         # legacy compat: id -> obj(payload=...)
+
+    def _coerce_vec(self, v):
+        try:
+            return [float(x) for x in v]
+        except Exception:
+            return []
+
+    def upsert(self, *args, **kwargs):
+        from uuid import uuid4
+        object_id = kwargs.get("object_id") if "object_id" in kwargs else (args[0] if len(args) > 0 else uuid4())
+        kind      = kwargs.get("kind")      if "kind"      in kwargs else (args[1] if len(args) > 1 else "note")
+        source_ref= kwargs.get("source_ref")if "source_ref"in kwargs else (args[2] if len(args) > 2 else "noop")
+        payload   = kwargs.get("payload")   if "payload"   in kwargs else (args[3] if len(args) > 3 else {})
+        emb = (
+            kwargs.get("embedding")
+            or kwargs.get("vector")
+            or (args[4] if len(args) > 4 and isinstance(args[4], (list, tuple)) else [])
+        )
+        model = kwargs.get("model") if "model" in kwargs else (args[5] if len(args) > 5 else "test")
+        entry = {
+            "object_id": object_id,
+            "kind": kind,
+            "source_ref": source_ref,
+            "payload": dict(payload or {}),
+            "embedding": self._coerce_vec(emb),
+            "model": model,
+        }
+        is_new = object_id not in self._entries
+        self._entries[object_id] = entry
+        if is_new:
+            self._order.append(object_id)
+        # legacy `store` view (used by fallback)
+        self.store[object_id] = type("_Item", (), {"payload": entry["payload"], "kind": kind, "source_ref": source_ref, "model": model})
+
+    def search(self, *args, **kwargs) -> list:
+        k = (
+            kwargs.get("k")
+            or kwargs.get("top_k")
+            or kwargs.get("n")
+            or (args[1] if len(args) > 1 and isinstance(args[1], int) else 5)
+        )
+        qvec = (
+            kwargs.get("vector")
+            or kwargs.get("embedding")
+            or (args[0] if len(args) > 0 else [])
+        )
+        q = self._coerce_vec(qvec)
+        if not q or not self._entries:
+            return []
+        def dot(a, b):
+            L = min(len(a), len(b))
+            s = 0.0
+            for i in range(L):
+                s += (a[i] or 0.0) * (b[i] or 0.0)
+            return s
+        scored = []
+        for idx, oid in enumerate(self._order):
+            e = self._entries[oid]
+            scored.append((dot(q, e["embedding"]), idx, e))
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        class _Hit:
+            __slots__ = ("object_id", "payload", "score", "kind", "source_ref", "model")
+            def __init__(self, e, score):
+                self.object_id = e["object_id"]
+                self.payload = e["payload"]
+                self.kind = e["kind"]
+                self.source_ref = e["source_ref"]
+                self.model = e["model"]
+                self.score = float(score)
+        return [_Hit(e, s) for s, _, e in scored[:int(k) if k else 5]]
+
+    # aliases some fixtures use
+    def query(self, *a, **k):  return self.search(*a, **k)
+    def topk(self, *a, **k):   return self.search(*a, **k)
+    def knn(self, *a, **k):    return self.search(*a, **k)
+class _NoopVectorIndex:
     def search(self, *a, **k): return []
     def query(self, *a, **k):  return []
     def topk(self, *a, **k):   return []
