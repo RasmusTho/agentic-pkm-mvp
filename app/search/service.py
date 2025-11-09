@@ -88,6 +88,43 @@ def _call_methods(idx, method_names: list[str], *, kw_first: tuple[str, object],
             pass
     return []
 
+def _fallback_from_store(idx, vector, k: int):
+    """If API calls return no hits, derive results from idx.store by dot-product scoring."""
+    st = getattr(idx, "store", None)
+    if not st:
+        return []
+    # local class to mirror VectorResult-ish objects
+    class _Result:
+        __slots__ = ("object_id", "score", "payload")
+        def __init__(self, object_id, score, payload):
+            self.object_id = object_id
+            self.score = score
+            self.payload = payload
+    def _dot(a, b):
+        if not a or not b:
+            return 0.0
+        total = 0.0
+        n = min(len(a), len(b))
+        for i in range(n):
+            av = a[i] or 0.0
+            bv = b[i] or 0.0
+            total += av * bv
+        return total
+    results = []
+    # st is usually a dict[UUID] -> Entry (either dataclass-like or dict)
+    for oid, entry in st.items():
+        # support both dict-like and attr-like entries
+        emb = entry.get("embedding") if isinstance(entry, dict) else getattr(entry, "embedding", None)
+        if not emb:
+            continue
+        payload = entry.get("payload") if isinstance(entry, dict) else getattr(entry, "payload", {}) or {}
+        score = _dot(vector, emb)
+        results.append(_Result(oid, score, payload))
+    # sort by score desc (stable by insertion order)
+    results.sort(key=lambda r: (-r.score))
+    return results[:k]
+
+
 # -------------------------
 # Public search API (fallback)
 # -------------------------
@@ -283,3 +320,52 @@ __all__ = [
     "search_hybrid", "search_vector", "search_full_text", "ingest_object",
     "_NoopVectorIndex", "_NoopBm25Index",
 ]
+
+def search_vector(vector, k: int = 5, *_a, **_k) -> list:
+    """Public vector search: try primary path, then store-based fallback on the SAME index singleton."""
+    try:
+        res = vector_search(vector, k=k)
+        if res:
+            return res
+    except Exception:
+        pass
+    idx = get_vector_index()
+    return _fallback_from_store(idx, vector, k)
+
+def vector_search(vector, k: int = 5, *_a, **_k) -> list:
+    """Low-level vector search that tolerates heterogeneous index APIs and falls back to store scanning."""
+    idx = get_vector_index()
+    method_names = ["search", "query", "topk", "knn"]
+    key_names = ["vector", "embedding", "query_vector"]
+    for meth in method_names:
+        m = getattr(idx, meth, None)
+        if not m:
+            continue
+        for key in key_names:
+            try:
+                out = m(**{key: vector, "k": k})
+                if out: return out
+            except TypeError:
+                pass
+            try:
+                out = m(vector, k)
+                if out: return out
+            except TypeError:
+                pass
+            try:
+                out = m(vector, k=k)
+                if out: return out
+            except TypeError:
+                pass
+            for kk in ("top_k", "n"):
+                try:
+                    out = m(**{key: vector, kk: k})
+                    if out: return out
+                except TypeError:
+                    pass
+                try:
+                    out = m(vector, **{kk: k})
+                    if out: return out
+                except TypeError:
+                    pass
+    return _fallback_from_store(idx, vector, k)

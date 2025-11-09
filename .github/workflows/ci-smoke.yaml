@@ -47,6 +47,16 @@ jobs:
       - name: DB migrate (pg only)
         if: matrix.backend == 'pg'
         env:
+<<<<<<< HEAD
+=======
+          DATABASE_URL: postgresql+psycopg://app:app@127.0.0.1:15432/app
+        run: alembic upgrade head
+
+      - name: Pytest (memory)
+        if: matrix.backend == 'memory'
+        env:
+          STORE_BACKEND: memory
+>>>>>>> 40e55c3 (fix(ci): Python 3.12, matrix & concurrency; repo hygiene and semantic merge)
           PYTHONPATH: ${{ github.workspace }}
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
           STORE_BACKEND: pg
