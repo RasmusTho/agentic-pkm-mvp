@@ -1,26 +1,26 @@
 # Privacy & PII
 
-Pipeline hanterar personligt material (anteckningar, ljud) och måste därför vara återhållsam med loggar och lagring.
+The pipeline processes personal material (notes, audio), so logs and storage must remain conservative.
 
 <!-- SECTION:PRIVACY:BEGIN -->
-## Vad körs lokalt
-- Ingestion, transcribe och QA körs helt lokalt i default-läge (`LLM_PROVIDER=mock` eller Ollama på samma maskin).
-- Enda nätanropen går till Ollama/OpenAI/DeepSeek om du själv väljer det. Ingen molnlagring sker implicit.
+## Local execution
+- Ingestion, transcription, and QA run entirely locally by default (`LLM_PROVIDER=mock` or Ollama on the same machine).
+- The only outbound calls are to Ollama/OpenAI/DeepSeek when explicitly enabled. No implicit cloud storage.
 
-## Loggpolicy
-- `json_log` skriver endast metadata (trace_id, node, latency, status). Lägg aldrig full text eller ljudtranskript i `extra`.
-- Health CLI loggar endast status + eventuella felmeddelanden (t.ex. `yt-dlp import misslyckades`), aldrig hemliga strängar.
-- Om du behöver felsöka innehållet, håll filerna lokalt och radera dem efteråt.
+## Logging policy
+- `json_log` records metadata only (trace_id, node, latency, status). Never place raw text/audio inside `extra`.
+- Health CLI logs status + concise failure reasons (e.g., `yt-dlp import failed`), never secrets.
+- For deeper debugging, keep files local and delete them once inspected.
 
-## PII-redaktion
-- Före delning av loggar: kör `jq 'del(.extra)'` eller anonymisera `trace_id`.
-- När agenten producerar svar, se till att `sources` bara innehåller referenser (`doc_id`, `source_ref`), inte hela texten.
-- Transcribe-resultat (`payload.segments`) ligger i `INDEX_OUTBOX_PATH`. Flytta filen till krypterad disk om innehållet är känsligt.
+## PII redaction
+- Before sharing logs: run `jq 'del(.extra)'` or anonymize `trace_id`.
+- Agent answers should keep `sources` limited to references (`doc_id`, `source_ref`), not verbatim text.
+- Transcribe output (`payload.segments`) resides in `INDEX_OUTBOX_PATH`. Move the file to encrypted storage if it contains sensitive material.
 
 ## Retention
-- `tmp/index-outbox.jsonl` betraktas som temporär arbetsfil. Rotera enligt `docs/OPERATIONS.md` och radera äldre kopior >30 dagar om inte annat avtalats.
-- `tmp/audio/*.wav` tas bort automatiskt efter transcribe så länge filerna ligger i systemets temp-katalog (se `_is_temporary` i `app/media/transcribe.py:113-135`).
+- `tmp/index-outbox.jsonl` is a working file. Rotate per `docs/OPERATIONS.md` and delete copies older than 30 days unless policy states otherwise.
+- `tmp/audio/*.wav` is removed automatically when the file sits inside the OS temp dir (see `_is_temporary` in `app/media/transcribe.py:113-135`).
 
-## GDPR/Compliance anteckning
-- Eftersom allt kör lokalt finns ingen registerföring i moln. Vid eventuell molndrift måste ett personuppgiftsbiträdesavtal upprättas och loggar rensas på PII innan uppladdning.
+## GDPR / compliance note
+- Everything runs locally, so no cloud record exists. If a cloud deployment is ever introduced, execute a data processing agreement and scrub logs of PII before upload.
 <!-- SECTION:PRIVACY:END -->

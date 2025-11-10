@@ -20,21 +20,21 @@
 - Alembic upgrade before tests
 
 <!-- SECTION:TESTING-MATRIX:BEGIN -->
-## Testmatris
-| Typ | Fokus | Kommando |
+## Test matrix
+| Type | Focus | Command |
 | --- | --- | --- |
-| Unit | Pure funktioner (retrieval, guardrails) | `PYTHONPATH="$(pwd)" pytest tests/retrieval -q` |
-| Smoke (lokal/CI) | CLI + pipelines utan Postgres | `LLM_PROVIDER=mock PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"` |
-| Transcribe smoke | yt-dlp + ffmpeg + faster-whisper stubbar | `pytest -q tests/test_transcribe_smoke.py -m "not pg"` |
+| Unit | Pure functions (retrieval, guardrails) | `PYTHONPATH="$(pwd)" pytest tests/retrieval -q` |
+| Smoke (local/CI) | CLI + pipelines without Postgres | `LLM_PROVIDER=mock PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"` |
+| Transcribe smoke | yt-dlp + ffmpeg + faster-whisper stubs | `pytest -q tests/test_transcribe_smoke.py -m "not pg"` |
 | Hybrid search | End-to-end recall | `pytest -q tests/test_hybrid_search.py` |
 
-## Selektiv körning & mocking
-- Sätt `LLM_PROVIDER=mock` samt `LLM_MOCK_RESPONSE='{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}'` för deterministiska svar (se `.github/workflows/smoke.yml`).
-- För att hoppa över långsamma classifier-tester, ändra `SKIP_CLASSIFIER_TESTS=0` lokalt via env (default `1` i `tests/agents/test_classifier.py:3`).
-- ASR kan mockas genom att patcha `app.media.transcribe.WhisperModel` i tester; se `tests/test_transcribe_smoke.py`.
+## Selective runs & mocking
+- Set `LLM_PROVIDER=mock` and `LLM_MOCK_RESPONSE='{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}'` for deterministic answers (mirrors `.github/workflows/smoke.yml`).
+- To skip slower classifier tests, set `SKIP_CLASSIFIER_TESTS=0` locally (default `1` in `tests/agents/test_classifier.py:3`).
+- Mock ASR by patching `app.media.transcribe.WhisperModel`; see `tests/test_transcribe_smoke.py`.
 
-## Artefakter
-- `tmp/index-outbox.jsonl` – skrivs av CLI/ASR-tester. Rensa mellan körningar om determinism krävs.
-- `logs/*.jsonl` – JSON-spanloggar som används av `jq`-recept i `docs/OBSERVABILITY.md`.
-- `tmp/audio/` – yt-dlp cache. Testerna använder unika filnamn så parallella körningar fungerar; rensa via `rm -rf tmp/audio/*`.
+## Artifacts
+- `tmp/index-outbox.jsonl` – written by CLI/ASR tests; clean between runs if determinism is required.
+- `logs/*.jsonl` – JSON spans used by `jq` recipes in `docs/OBSERVABILITY.md`.
+- `tmp/audio/` – yt-dlp cache (unique filenames per test). Clean via `rm -rf tmp/audio/*`.
 <!-- SECTION:TESTING-MATRIX:END -->

@@ -120,11 +120,11 @@ Delivered (selection)
 - RelationIndex v1 (speakers/entities with temporal edges)
 
 <!-- SECTION:NEXT-INCREMENT:BEGIN -->
-## Nästa inkrement (target 2025-11)
-1. **Cross-encoder rerank** – plugga in liten cross-encoder efter `hybrid_search`. Krav: latency-budget < 150 ms, fallback till nuvarande scoring.
-2. **Retry-policy för LLM** – koppla `DEFAULT_BREAKER` och kort exponential backoff runt `_call_llm` + embeddings. Dokumentera i `docs/LLM_BACKENDS.md`.
-3. **Batch-embedding** – utöka `app/llm/embeddings.embed_texts` så att Ollama POST får listor och skriver tillbaka cache. Mål: 5× throughput på reindex.
-4. **Index-persistens** – synka `MemoryHybridStore` mot Postgres (ny tabell `hybrid_documents`). CLI ska kunna återläsa JSONL → DB utan dataförlust.
+## Next increment (target 2025-11)
+1. **Cross-encoder rerank** – insert a lightweight cross-encoder after `hybrid_search`. Requirement: latency budget < 150 ms with fallback to the current scoring.
+2. **LLM retry policy** – wrap `_call_llm` + embeddings with `DEFAULT_BREAKER` and short exponential backoff. Document gaps in `docs/LLM_BACKENDS.md`.
+3. **Batch embedding** – extend `app.llm.embeddings.embed_texts` so Ollama POST accepts lists and writes back to the cache. Goal: 5× throughput during reindex.
+4. **Index persistence** – sync `MemoryHybridStore` to Postgres (new `hybrid_documents` table). CLI should replay JSONL → DB without data loss.
 <!-- SECTION:NEXT-INCREMENT:END -->
 - Eval harness (text + AV) and CI publishing QAS metrics
 - Dashboards: coverage, p95, RTF, WER estimates

@@ -33,3 +33,5 @@ scripts/ingest_real.sh
 .pytest_cache/
 tmp/index-outbox.jsonl
 tmp/*.jsonl
+tmp/
+!tmp/.gitkeep
