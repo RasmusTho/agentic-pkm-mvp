@@ -35,3 +35,4 @@ tmp/index-outbox.jsonl
 tmp/*.jsonl
 tmp/
 !tmp/.gitkeep
+tmp/index-outbox.jsonl

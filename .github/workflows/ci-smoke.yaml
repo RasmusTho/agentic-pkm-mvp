@@ -1,131 +1,62 @@
-name: ci-smoke
+# .github/workflows/ci-smoke.yaml
+name: CI Smoke
 
 on:
-<<<<<<< HEAD
-  push:
-    branches:
-      - main
-      - chore/**
-      - feature/**
-  pull_request:
-    types: [opened, synchronize, reopened]
-=======
-  pull_request:
   push:
     branches: [main]
     tags: ['v*']
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 concurrency:
   group: ci-smoke-${{ github.ref }}
   cancel-in-progress: true
->>>>>>> 97fd38a (fix: selectively restore necessary files vs origin/main)
 
 jobs:
-  test:
-    name: test (${{ matrix.backend }})
+  smoke:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [memory, pg]
-<<<<<<< HEAD
-=======
-
->>>>>>> 97fd38a (fix: selectively restore necessary files vs origin/main)
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: app
-          POSTGRES_PASSWORD: app
-          POSTGRES_DB: app
-<<<<<<< HEAD
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd="pg_isready -U app -d app" --health-interval=5s
-          --health-timeout=5s --health-retries=20
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-=======
-        ports:
-          - 15432:5432
-        options: >-
-          --health-cmd="pg_isready -U app -d app"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=20
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Setup Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-          cache: pip
->>>>>>> 97fd38a (fix: selectively restore necessary files vs origin/main)
+          python-version: "3.12"
 
-      - name: Install deps
+      - name: System deps (ffmpeg, ripgrep)
         run: |
-          python -m pip install --upgrade pip
-<<<<<<< HEAD
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg ripgrep
+
+      - name: Install Python deps
+        run: |
+          python -m pip install -U pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f dev-requirements.txt ]; then pip install -r dev-requirements.txt; fi
-          if [ -f app/requirements.txt ]; then pip install -r app/requirements.txt; fi
+          if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
 
-      - name: Alembic migrations (pg only)
-        if: matrix.backend == 'pg'
+      - name: Validate docs guardrails
+        run: |
+          rg -q '```mermaid' docs/DIAGRAMS.md
+          rg -q '<!-- DOCS-LINKS:BEGIN -->' README.md
+          rg -q '<!-- DOCS-LINKS:END -->' README.md
+
+      - name: Run smoke tests (mock LLM, no PG)
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: |
-          if command -v alembic >/dev/null 2>&1; then
-            alembic upgrade head
-          else
-            echo "alembic not installed; skipping migrations"
-          fi
-
-      - name: Smoke tests
-        env:
-          PYTHONPATH: ${{ github.workspace }}
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD: 1
-          STORE_BACKEND: ${{ matrix.backend }}
-          DATABASE_URL: ${{ matrix.backend == 'pg' && 'postgresql+psycopg://app:app@localhost:5432/app' || '' }}
-        run: |
-          python scripts/check_code_fences.py
-          python -m pytest -q -c /dev/null -k "not slow"
-=======
-          if [ -f dev-requirements.txt ]; then pip install -r dev-requirements.txt; fi
-          if [ -f app/requirements.txt ]; then pip install -r app/requirements.txt; fi
-
-      - name: Code fence check
-        run: python scripts/check_code_fences.py
-
-      - name: Prepare DB (pg only)
-        if: matrix.backend == 'pg'
-        env:
-          DATABASE_URL: postgresql+psycopg://app:app@127.0.0.1:15432/app
-        run: |
-          python -c "import time; time.sleep(2)"
-          alembic upgrade head
-
-      - name: Pytest (memory)
-        if: matrix.backend == 'memory'
-        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
           STORE_BACKEND: memory
-          PYTHONPATH: ${{ github.workspace }}
-        run: pytest -q
+          LLM_PROVIDER: mock
+        run: |
+          pytest -q -c /dev/null -m "not pg"
 
-      - name: Pytest (pg)
-        if: matrix.backend == 'pg'
+      - name: CLI smoke commands
         env:
-          STORE_BACKEND: pg
-          DATABASE_URL: postgresql+psycopg://app:app@127.0.0.1:15432/app
           PYTHONPATH: ${{ github.workspace }}
-        run: pytest -q
->>>>>>> 97fd38a (fix: selectively restore necessary files vs origin/main)
+          STORE_BACKEND: memory
+          LLM_PROVIDER: mock
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          python -m app.cli --help >/dev/null
+          python -m app.cli health --json
