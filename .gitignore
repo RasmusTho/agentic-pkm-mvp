@@ -40,3 +40,7 @@ tmp/index-outbox.jsonl
 # runtime artifacts
 /tmp/
 *.jsonl
+
+# runtime artifacts
+/tmp/
+*.jsonl
