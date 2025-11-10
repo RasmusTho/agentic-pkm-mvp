@@ -118,6 +118,14 @@ Delivered (selection)
 
 ### C — Graph & Fitness
 - RelationIndex v1 (speakers/entities with temporal edges)
+
+<!-- SECTION:NEXT-INCREMENT:BEGIN -->
+## Nästa inkrement (target 2025-11)
+1. **Cross-encoder rerank** – plugga in liten cross-encoder efter `hybrid_search`. Krav: latency-budget < 150 ms, fallback till nuvarande scoring.
+2. **Retry-policy för LLM** – koppla `DEFAULT_BREAKER` och kort exponential backoff runt `_call_llm` + embeddings. Dokumentera i `docs/LLM_BACKENDS.md`.
+3. **Batch-embedding** – utöka `app/llm/embeddings.embed_texts` så att Ollama POST får listor och skriver tillbaka cache. Mål: 5× throughput på reindex.
+4. **Index-persistens** – synka `MemoryHybridStore` mot Postgres (ny tabell `hybrid_documents`). CLI ska kunna återläsa JSONL → DB utan dataförlust.
+<!-- SECTION:NEXT-INCREMENT:END -->
 - Eval harness (text + AV) and CI publishing QAS metrics
 - Dashboards: coverage, p95, RTF, WER estimates
 - **Accept:** QAS-003 ≤ 250 ms; QAS-010 ≤ 2 s; eval suite green

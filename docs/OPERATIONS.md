@@ -48,3 +48,36 @@
 - Logs: JSON-formatted via `app/observability.setup_logging()`. Hook into your logging stack (CloudWatch, ELK, etc.).
 - Metrics: enable `METRICS_ENABLED=1` to expose Prometheus metrics under `/metrics` using `prometheus-fastapi-instrumentator` (secure access appropriately).
 - Local Prometheus+Grafana recipe lives in `docs/OBSERVABILITY_STACK.md` (Docker Compose).
+
+<!-- SECTION:OPS-RUNBOOKS:BEGIN -->
+## Runbooks (snabbguide)
+| Fel | Symptom | Åtgärd |
+| --- | --- | --- |
+| yt-dlp 403/429 | Health OK men transcribe CLI dör med `DownloadError` | Kör `yt-dlp -v URL` manuellt, lägg ev. cookies (`--cookies-from-browser`), eller ladda ned via piped host enligt `docs/DEPENDENCIES.md`. |
+| ffmpeg saknas | Health-check `ffmpeg`=`false`, transcribe CLI kastar `CalledProcessError` | Installera paket, verifiera med `which ffmpeg`. |
+| Ollama nere | Health `ollama`=`false`, agent svarar “Otillräcklig evidens” | Starta `ollama serve`, kör `ollama pull <modell>`, bekräfta via `curl $OLLAMA_URL/api/tags`. |
+| INDEX_OUTBOX_PATH skrivfel | Health-check `index_outbox`=`false`, CLI säger “ValueError: index-outbox entry missing ...” | Kontrollera rättigheter (chmod), eller sätt env till skrivbar katalog. |
+
+## SLO/SLA
+| Nivå | Mål | Mätning |
+| --- | --- | --- |
+| Ingestion latency | < 5 s från CLI start till JSONL-post | Mät skillnaden mellan CLI-start och span `transcribe`/`agent.answer`. |
+| Retrieval p95 | < 250 ms | `jq 'select(.node=="agent.answer") | .latency_ms'`. |
+| ASR väggtid | < 30 s för 5 min klipp | `transcribe`-span. |
+| Health CLI | 100 % täckning före varje release | CI smoke steget misslyckas annars. |
+
+## Incidenthantering (manuell)
+1. **Identifiera** – använd `health` + `jq` för att isolera noden.
+2. **Stabilisera** – sätt `LLM_PROVIDER=mock` eller `STORE_BACKEND=memory` för att fortsätta arbetet medan felet felsöks.
+3. **Kommunicera** – skriv kort log i `docs/CHANGELOG.md` under “Unreleased incidents”.
+4. **Återställ** – starta om Ollama/ffmpeg/CLI beroende på fel. Rulla tillbaka `tmp/index-outbox.jsonl` från backup om filen korrupt.
+
+## Backup/restore för index-outbox
+- Outbox ligger default i `tmp/index-outbox.jsonl`. Lägg till enkel rotation:
+  ```bash
+  cp tmp/index-outbox.jsonl "tmp/index-outbox.$(date +%Y%m%d%H%M%S).jsonl"
+  truncate -s 0 tmp/index-outbox.jsonl
+  ```
+- För CI: arkivera filen som artefakt om du behöver felsöka.
+- Restore: kopiera tillbaka filen och kör en reindexer (framtida CLI) eller läs filen via `python -m json.tool`.
+<!-- SECTION:OPS-RUNBOOKS:END -->

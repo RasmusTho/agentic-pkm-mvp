@@ -31,3 +31,5 @@ scripts/export_objects.py
 scripts/ingest_real.sh
 !requirements-smoke.txt
 .pytest_cache/
+tmp/index-outbox.jsonl
+tmp/*.jsonl
