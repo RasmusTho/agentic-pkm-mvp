@@ -35,10 +35,12 @@ jobs:
           if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
 
       - name: Validate docs guardrails
+        shell: bash
         run: |
-          rg -q '```mermaid' docs/DIAGRAMS.md
-          rg -q '<!-- DOCS-LINKS:BEGIN -->' README.md
-          rg -q '<!-- DOCS-LINKS:END -->' README.md
+          set -euo pipefail
+          grep -q '```mermaid' docs/DIAGRAMS.md
+          grep -q '<!-- DOCS-LINKS:BEGIN -->' README.md
+          grep -q '<!-- DOCS-LINKS:END -->' README.md
 
       - name: Pytest smoke (mock)
         env:
