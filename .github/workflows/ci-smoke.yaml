@@ -1,4 +1,3 @@
-# .github/workflows/ci-smoke.yaml
 name: CI Smoke
 
 on:
@@ -19,12 +18,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python 3.12
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: System deps (ffmpeg, ripgrep)
+      - name: Install system deps
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg ripgrep
@@ -41,12 +40,12 @@ jobs:
           rg -q '<!-- DOCS-LINKS:BEGIN -->' README.md
           rg -q '<!-- DOCS-LINKS:END -->' README.md
 
-      - name: Run smoke tests (mock LLM, no PG)
+      - name: Pytest smoke (mock)
         env:
           PYTHONPATH: ${{ github.workspace }}
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
           STORE_BACKEND: memory
           LLM_PROVIDER: mock
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
           pytest -q -c /dev/null -m "not pg"
 

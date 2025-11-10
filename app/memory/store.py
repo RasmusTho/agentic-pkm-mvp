@@ -10,6 +10,9 @@ from psycopg.rows import dict_row
 
 from app.db import conn_rw
 
+_IN_MEMORY_STORE: dict[str, list[dict]] = {}
+MEMORY_ENABLED = os.getenv("MEMORY_ENABLED", "true").lower() not in ("0", "false", "no", "off")
+
 
 def _dsn() -> str:
     # Fallback till din lokala dev-URL om DATABASE_URL inte är satt
@@ -19,9 +22,7 @@ def _dsn() -> str:
 
 
 def _enabled() -> bool:
-    # MEMORY_ENABLED=false => helt av
-    v = os.environ.get("MEMORY_ENABLED", "true").lower()
-    return v not in ("0", "false", "no", "off")
+    return MEMORY_ENABLED
 
 
 def _safe_connect(rowed: bool = False):
@@ -55,7 +56,9 @@ def remember(agent: str, kind: str, object_id: Optional[str], trace_id: str, dat
 
     conn = _safe_connect(rowed=False)
     if conn is None:
-        # No DB -> skip silently
+        key = f"{agent}:{kind}:{object_id or ''}"
+        _IN_MEMORY_STORE.setdefault(key, []).insert(0, payload)
+        _IN_MEMORY_STORE[key] = _IN_MEMORY_STORE[key][:200]
         return
 
     try:
@@ -107,8 +110,8 @@ def recall(agent: str, kind: str, *, object_id: Optional[str] = None, limit: int
 
     conn = _safe_connect(rowed=True)
     if conn is None:
-        # No DB in pytest -> just act like empty memory
-        return []
+        key = f"{agent}:{kind}:{object_id or ''}"
+        return list(_IN_MEMORY_STORE.get(key, []))[: limit]
 
     try:
         with conn:
