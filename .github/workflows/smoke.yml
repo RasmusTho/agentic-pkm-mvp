@@ -29,6 +29,8 @@ jobs:
           rg -q '```mermaid' docs/DIAGRAMS.md
           rg -q '<!-- DOCS-LINKS:BEGIN -->' README.md
           rg -q '<!-- DOCS-LINKS:END -->' README.md
+          ! rg -n '\\n' docs/DIAGRAMS.md
+          ! rg -n '->\|[^|]*\$begin:math:text$[^|]*\$end:math:text$\|' docs/DIAGRAMS.md || true
 
       - name: Run smoke tests (mock LLM, no PG)
         env:

@@ -6,25 +6,25 @@ Visual referenser för ingestion- och transcribe-flöden. Renderas som Mermaid o
 ## Ingestion → Index → QA
 ```mermaid
 flowchart TD
-    A[CLI Source\n(file/url/audio)] -->|normalize| B[Normalizer Agent\napp/agents/normalizer]
-    B -->|classify| C[Classifier Agent\napp/agents/classifier]
-    C -->|append_jsonl| D[Index Outbox\nINDEX_OUTBOX_PATH]
-    D -->|fan-in| E[Hybrid Store\napp/retrieval/hybrid]
-    E -->|hybrid_search| F[QA Agent\napp/agents/qa]
-    F -->|enforce_quality| G[Guardrails\napp/quality/guardrails]
-    G --> H[Answer + Sources]
-    F -->|json_log/span| I[(Observability\napp/obs/log.py)]
+    A["CLI Source<br/>(file/url/audio)"] -->|normalize| B["Normalizer Agent<br/>app/agents/normalizer"]
+    B -->|classify| C["Classifier Agent<br/>app/agents/classifier"]
+    C -->|append_jsonl| D["Index Outbox<br/>INDEX_OUTBOX_PATH"]
+    D -->|fan-in| E["Hybrid Store<br/>app/retrieval/hybrid"]
+    E -->|hybrid_search| F["QA Agent<br/>app/agents/qa"]
+    F -->|enforce_quality| G["Guardrails<br/>app/quality/guardrails"]
+    G --> H["Answer + Sources"]
+    F -->|json_log / span| I[("Observability<br/>app/obs/log.py")]
 ```
 
 ## Transcribe pipeline
 ```mermaid
 flowchart LR
-    Y[URL/Fil] -->|yt-dlp| DL[Download Audio]
-    DL -->|ffmpeg| WAV[16kHz wav]
-    WAV -->|ASR (faster-whisper)| ASR[Segments + text]
-    ASR -->|append_jsonl| OUT[Index Outbox\nkind=transcript]
-    OUT --> STORE[Hybrid Store]
-    ASR -->|return| CLI[CLI Response\n--json]
+    Y["URL or File"] -->|yt-dlp| DL["Download Audio"]
+    DL -->|ffmpeg| WAV["16kHz wav"]
+    WAV -->|ASR| ASR["Segments + text<br/>(faster-whisper)"]
+    ASR -->|append_jsonl| OUT["Index Outbox<br/>kind=transcript"]
+    OUT --> STORE["Hybrid Store"]
+    ASR -->|return| CLI["CLI Response<br/>--json"]
 ```
 
 ### Export till PNG/SVG
