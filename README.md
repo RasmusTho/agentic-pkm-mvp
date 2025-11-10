@@ -32,4 +32,23 @@ Status
 - 7.5 Eval-harness (klar)
 - 8.0 Fallback/Policy (pågående)
 
+<!-- DOCS-LINKS:BEGIN -->
+- [ARCHITECTURE](docs/ARCHITECTURE.md)
+- [DIAGRAMS](docs/DIAGRAMS.md)
+- [OBSERVABILITY](docs/OBSERVABILITY.md)
+- [HEALTH](docs/HEALTH.md)
+- [LLM_BACKENDS](docs/LLM_BACKENDS.md)
+- [DEPENDENCIES](docs/DEPENDENCIES.md)
+- [QUALITY](docs/QUALITY.md)
+- [TESTING](docs/TESTING.md)
+- [OPERATIONS](docs/OPERATIONS.md)
+- [SECURITY](docs/SECURITY.md)
+- [PRIVACY](docs/PRIVACY.md)
+- [INVENTORY](docs/INVENTORY.md)
+- [ROADMAP](docs/ROADMAP.md)
+- [CHANGELOG](docs/CHANGELOG.md)
+- [GLOSSARY](docs/GLOSSARY.md)
+- [CLI](docs/CLI.md)
+<!-- DOCS-LINKS:END -->
+
 Se detaljer i docs/.

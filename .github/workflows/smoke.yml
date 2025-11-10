@@ -24,6 +24,11 @@ jobs:
           python -m pip install -U pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
+      - name: Validate docs guardrails
+        run: |
+          rg -q '```mermaid' docs/DIAGRAMS.md
+          rg -q '<!-- DOCS-LINKS:BEGIN -->' README.md
+          rg -q '<!-- DOCS-LINKS:END -->' README.md
 
       - name: Run smoke tests (mock LLM, no PG)
         env:
@@ -34,3 +39,12 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           pytest -q -c /dev/null -m "not pg"
+      - name: CLI smoke commands
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          STORE_BACKEND: memory
+          LLM_PROVIDER: mock
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          python -m app.cli --help >/dev/null
+          python -m app.cli health --json
