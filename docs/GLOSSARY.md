@@ -1,16 +1,16 @@
 # Glossary
 
-Kortfattade definitioner för återkommande begrepp.
+Brief definitions for recurring concepts.
 
 <!-- SECTION:GLOSSARY:BEGIN -->
-- **Outbox** – JSONL-fil (`INDEX_OUTBOX_PATH`) där ingestion och transcribe skriver händelser innan indexering. Se `app/index/outbox.py`.
-- **Embedding** – Flyttalssvector från `app/llm/embeddings.py` (Ollama `/api/embeddings` eller mock). Lagrade in-memory i `MemoryHybridStore`.
-- **BM25** – Lexikal scorer från `rank_bm25.BM25Okapi`, används i hybrid retrieval.
-- **Rerank** – Ytterligare modell (planerad) som sorterar retrieval-resultat. Se docs/ROADMAP.md för nästa steg med cross-encoder.
-- **Span** – `@span("node")` från `app/obs/log.py` som loggar latency/trace-id per funktion.
-- **Guardrails** – Regler i `app/quality/guardrails.py` som förhindrar förbjudet innehåll, säkrar källor och håller tokenbudget.
-- **Circuit breaker** – `CircuitBreaker`-klassen i `app/quality/guardrails.py` som begränsar antalet fel inom ett tidsfönster.
-- **Index outbox JSONL** – Rader med `{object_id, kind, source_ref, payload}`. Se `docs/INVENTORY.md`.
-- **Hybrid store** – In-memory kombination av BM25 + embedding + fuzzy overlap (`app/retrieval/hybrid.py`).
-- **Health CLI** – `python -m app.cli health --json`, kontrollerar ffmpeg, yt-dlp, outbox-path och Ollama reachability.
+- **Outbox** – JSONL file (`INDEX_OUTBOX_PATH`) where ingestion/transcribe events land before indexing (`app/index/outbox.py`).
+- **Embedding** – Floating-point vector from `app/llm/embeddings.py` (Ollama `/api/embeddings` or mock) stored in-memory by `MemoryHybridStore`.
+- **BM25** – Lexical scorer (`rank_bm25.BM25Okapi`) used in hybrid retrieval.
+- **Rerank** – Planned cross-encoder stage that refines retrieval ordering (see `docs/ROADMAP.md`).
+- **Span** – `@span("node")` decorator in `app/obs/log.py` logging latency + `trace_id`.
+- **Guardrails** – Rules in `app/quality/guardrails.py` preventing forbidden content, enforcing sources, and capping tokens.
+- **Circuit breaker** – `CircuitBreaker` in `app/quality/guardrails.py` limiting failures per time window.
+- **Index outbox JSONL** – `{object_id, kind, source_ref, payload}` lines (see `docs/INVENTORY.md`).
+- **Hybrid store** – In-memory combination of BM25 + embeddings + fuzzy overlap (`app/retrieval/hybrid.py`).
+- **Health CLI** – `python -m app.cli health --json`, validates ffmpeg, yt-dlp, outbox path, and Ollama reachability.
 <!-- SECTION:GLOSSARY:END -->

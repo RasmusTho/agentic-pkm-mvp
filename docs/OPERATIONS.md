@@ -6,12 +6,12 @@
 - Share noteworthy changes after tagging; the bump script already appends to the decision log.
 
 ## Runtime Compose Stack
-- `docker-compose.yaml` spins up FastAPI (`api`), bakgrundsagenten (`agent`), Postgres och Redis för lokal utveckling.
+- `docker-compose.yaml` starts FastAPI (`api`), the background agent (`agent`), Postgres, and Redis for local development.
 - Ensure `.env` contains the desired secrets before running `docker compose up --build`.
-- Postgres data persists in the `postgres-data` volume; run `docker compose down -v` to wipe.
-- API-containern kör `scripts/start_api.sh` som först kör `alembic -c app/alembic.ini upgrade head` innan `uvicorn`.
-- Agent-containern kör `python scripts/start_agent_service.py`; scriptet laddar `.env`, skippar Alembic när `alembic current` redan visar `(head)`, och startar `python -u run_agent.py` i en 30s restart-loop.
-- Supervisorloggar skrivs till `/tmp/agent.log` (stdout/stderr) och agentens output appendas till `/tmp/agent_app.log`; säkra volymer eller log shipping om containern återskapas.
+- Postgres data lives in the `postgres-data` volume; `docker compose down -v` wipes it.
+- The API container runs `scripts/start_api.sh`, which performs `alembic -c app/alembic.ini upgrade head` before launching `uvicorn`.
+- The agent container runs `python scripts/start_agent_service.py`; the script loads `.env`, skips Alembic when `alembic current` already reports `(head)`, and executes `python -u run_agent.py` in a 30 s restart loop.
+- Supervisor logs land in `/tmp/agent.log` (stdout/stderr) and agent output appends to `/tmp/agent_app.log`; secure volumes or log shipping if the container is recreated.
 
 ## Storage Maintenance
 - The FastAPI service writes DuckDB artifacts to `storage/agent.duckdb` and provenance trails to `provenance.jsonl`.
@@ -21,23 +21,23 @@
 - Monitor free disk space and set alerts when the combined storage exceeds the agreed threshold.
 - Use `--max-age-days` alongside `--max-backups` to purge old archives (set policy, e.g. 30 days).
 - Run `pre-commit install` locally so lint/type/test hooks run automatically before each commit.
-- Vektordata lagras nu i Postgres (`objects` + `embeddings`); säkerställ att `pgvector`-extensionen finns och kör `VACUUM ANALYZE embeddings` periodiskt om klustret växer snabbt.
+- Vector data now lives in Postgres (`objects` + `embeddings`); ensure the `pgvector` extension is installed and run `VACUUM ANALYZE embeddings` periodically as the cluster grows.
 
 ## Agent Supervisor Runbook
-1. **Starta lokalt** – `python scripts/start_agent_service.py` (lägg till `--dry-run` för att verifiera migrationskommandon utan att exekvera). Scriptet laddar `.env` om `python-dotenv` finns installerat; annars används befintligt env.
-2. **Migrationer** – scriptet kör `alembic -c app/alembic.ini current`. Om output redan innehåller `(head)` loggas `Detected Alembic at HEAD — skipping migrations`. Annars körs `upgrade head` med 180s timeout; fel avslutar processen (`exit code 1`).
-3. **Agent-loop** – supervisor kör `python -u run_agent.py` och väntar tills processen avslutas. Exit-kod !=0 loggas och triggar omstart efter 30s (konfigurerat i koden).
-4. **Loggar** – följ `/tmp/agent.log` för supervisorstatus och `/tmp/agent_app.log` för agentens stdout/stderr. Implementera rotation via logrotate eller cron för att undvika växande filer.
-5. **Stoppsignal** – SIGINT/SIGTERM sätter en intern flagga, väntar på att aktiva `run_agent.py` ska avslutas, och stoppar loopens fortsatta restarts. Vid seg nedstängning skickas SIGKILL efter 10s.
-6. **Alerting** – sätt upp larm när samma host loggar `"Agent exited with code"` >3 gånger på 10 minuter; indikerar att `run_agent.py` behöver felsökas eller att det saknas input-data.
+1. **Start locally** – `python scripts/start_agent_service.py` (add `--dry-run` to validate migrations without executing). The script loads `.env` if `python-dotenv` exists; otherwise it uses the current environment.
+2. **Migrations** – runs `alembic -c app/alembic.ini current`. If `(head)` is already present it logs `Detected Alembic at HEAD — skipping migrations`; otherwise executes `upgrade head` with a 180 s timeout (failures exit 1).
+3. **Agent loop** – supervisor runs `python -u run_agent.py` and restarts it after 30 s whenever the exit code is non-zero.
+4. **Logs** – tail `/tmp/agent.log` for supervisor events and `/tmp/agent_app.log` for agent stdout/stderr. Rotate via logrotate or cron to prevent unbounded growth.
+5. **Stop signal** – SIGINT/SIGTERM sets an internal flag, waits for the active `run_agent.py` to finish, and stops further restarts. Sends SIGKILL after 10 s if shutdown stalls.
+6. **Alerting** – page when the same host logs `"Agent exited with code"` more than three times within ten minutes; indicates `run_agent.py` needs investigation or lacks input data.
 
 ## Ingestion Review Runbook
-1. **Förbered payload** – samla metadata i ett JSONB-kompatibelt dict och råtext i `text`-fältet.
-2. **Ingesta** – `POST /ingest` med `{id?, kind?, source_ref?, payload, text}`. Svarar med `object_id` + modell/dimensioner.
-3. **Validera** – kör `POST /search`:
-   - Endast `query_text` för Lexikal träffbild.
-   - Kombinera `query_text` + `query_embedding` (om extern embedding-generator används) för hybrid RRF.
-4. **Underhåll** – använd `scripts/bench.py` efter större datavolymer för att övervaka latens (p50/p95) och justera `ivfflat`-parametrar vid behov.
+1. **Prepare payload** – gather metadata in a JSON-compatible dict plus raw text under `text`.
+2. **Ingest** – `POST /ingest` with `{id?, kind?, source_ref?, payload, text}`. Response returns `object_id` + model/dimensions.
+3. **Validate** – call `POST /search`:
+   - `query_text` only for lexical shape.
+   - Combine `query_text` + `query_embedding` (if an external embedding generator is used) for hybrid RRF.
+4. **Maintain** – run `scripts/bench.py` after major data imports to watch latency (p50/p95) and adjust `ivfflat` parameters.
 
 ## Auth & Rate Limiting
 - Refer to `docs/AUTH_RATE_LIMITING.md` for implementation guidance (API key dependency + `slowapi` limiter).
@@ -50,34 +50,34 @@
 - Local Prometheus+Grafana recipe lives in `docs/OBSERVABILITY_STACK.md` (Docker Compose).
 
 <!-- SECTION:OPS-RUNBOOKS:BEGIN -->
-## Runbooks (snabbguide)
-| Fel | Symptom | Åtgärd |
+## Runbooks (quick reference)
+| Issue | Symptom | Action |
 | --- | --- | --- |
-| yt-dlp 403/429 | Health OK men transcribe CLI dör med `DownloadError` | Kör `yt-dlp -v URL` manuellt, lägg ev. cookies (`--cookies-from-browser`), eller ladda ned via piped host enligt `docs/DEPENDENCIES.md`. |
-| ffmpeg saknas | Health-check `ffmpeg`=`false`, transcribe CLI kastar `CalledProcessError` | Installera paket, verifiera med `which ffmpeg`. |
-| Ollama nere | Health `ollama`=`false`, agent svarar “Otillräcklig evidens” | Starta `ollama serve`, kör `ollama pull <modell>`, bekräfta via `curl $OLLAMA_URL/api/tags`. |
-| INDEX_OUTBOX_PATH skrivfel | Health-check `index_outbox`=`false`, CLI säger “ValueError: index-outbox entry missing ...” | Kontrollera rättigheter (chmod), eller sätt env till skrivbar katalog. |
+| yt-dlp 403/429 | Health passes but `transcribe` fails with `DownloadError` | Run `yt-dlp -v URL`, add cookies (`--cookies-from-browser`), or download via a piped host (see `docs/DEPENDENCIES.md`). |
+| Missing ffmpeg | Health `ffmpeg=false`, CLI raises `CalledProcessError` | Install the package, verify with `which ffmpeg`. |
+| Ollama offline | Health `ollama=false`, agent replies “Insufficient evidence” | Start `ollama serve`, `ollama pull <model>`, confirm via `curl $OLLAMA_URL/api/tags`. |
+| `INDEX_OUTBOX_PATH` write failure | Health `index_outbox=false`, CLI raises `ValueError: index-outbox entry missing ...` | Fix filesystem permissions or point env to a writable directory. |
 
-## SLO/SLA
-| Nivå | Mål | Mätning |
+## SLO / SLA
+| Level | Target | Measurement |
 | --- | --- | --- |
-| Ingestion latency | < 5 s från CLI start till JSONL-post | Mät skillnaden mellan CLI-start och span `transcribe`/`agent.answer`. |
+| Ingestion latency | < 5 s from CLI start to JSONL entry | Compare CLI start with `transcribe` / `agent.answer` spans. |
 | Retrieval p95 | < 250 ms | `jq 'select(.node=="agent.answer") | .latency_ms'`. |
-| ASR väggtid | < 30 s för 5 min klipp | `transcribe`-span. |
-| Health CLI | 100 % täckning före varje release | CI smoke steget misslyckas annars. |
+| ASR wall time | < 30 s for a 5-minute clip | `transcribe` span. |
+| Health CLI | 100 % coverage before every release | Smoke step fails otherwise. |
 
-## Incidenthantering (manuell)
-1. **Identifiera** – använd `health` + `jq` för att isolera noden.
-2. **Stabilisera** – sätt `LLM_PROVIDER=mock` eller `STORE_BACKEND=memory` för att fortsätta arbetet medan felet felsöks.
-3. **Kommunicera** – skriv kort log i `docs/CHANGELOG.md` under “Unreleased incidents”.
-4. **Återställ** – starta om Ollama/ffmpeg/CLI beroende på fel. Rulla tillbaka `tmp/index-outbox.jsonl` från backup om filen korrupt.
+## Incident handling (manual)
+1. **Identify** – use `health` + `jq` to find the failing node.
+2. **Stabilize** – set `LLM_PROVIDER=mock` or `STORE_BACKEND=memory` to keep working while debugging.
+3. **Communicate** – add a short note to `docs/CHANGELOG.md` under “Unreleased incidents”.
+4. **Restore** – restart Ollama/ffmpeg/CLI depending on the root cause. Restore `tmp/index-outbox.jsonl` from backup if corrupt.
 
-## Backup/restore för index-outbox
-- Outbox ligger default i `tmp/index-outbox.jsonl`. Lägg till enkel rotation:
+## Backup / restore for index-outbox
+- Default path is `tmp/index-outbox.jsonl`. Simple rotation:
   ```bash
   cp tmp/index-outbox.jsonl "tmp/index-outbox.$(date +%Y%m%d%H%M%S).jsonl"
   truncate -s 0 tmp/index-outbox.jsonl
   ```
-- För CI: arkivera filen som artefakt om du behöver felsöka.
-- Restore: kopiera tillbaka filen och kör en reindexer (framtida CLI) eller läs filen via `python -m json.tool`.
+- In CI, archive the file as an artifact when needed.
+- Restore: copy the file back and rerun the indexer (future CLI) or inspect via `python -m json.tool`.
 <!-- SECTION:OPS-RUNBOOKS:END -->

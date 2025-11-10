@@ -1,40 +1,40 @@
 # CLI Reference
 
-Click-baserad CLI levererar ingestion, transcribe och hälso-checker via `python -m app.cli`.
+Click-based CLI surfaces ingestion, transcription, and health checks via `python -m app.cli`.
 
 <!-- SECTION:CLI:BEGIN -->
-## Kommandon
-| Command | Beskrivning | Viktiga flaggor |
+## Commands
+| Command | Description | Key flags |
 | --- | --- | --- |
-| `normalize SOURCE` | Materialiserar fil/URL och kör normalizer-agenten. | `--json`, `--trace-id`. |
-| `classify OBJECT_ID` | Klassificerar tidigare normaliserat objekt. | `--json`, `--trace-id`. |
-| `transcribe SOURCE` | Hämtar ljud (URL/fil) och kör yt-dlp → ffmpeg → faster-whisper. | `--json`, `--trace-id`. |
-| `pipe SOURCE` | Kör normalize → classify (och transcribe om ljudkandidat). | `--json`, `--trace-id`. |
-| `health` | Kör lokala beroende-checks. | `--json`, `--trace-id`. |
+| `normalize SOURCE` | Materialize file/URL and run the normalizer agent. | `--json`, `--trace-id`. |
+| `classify OBJECT_ID` | Classify a previously normalized object. | `--json`, `--trace-id`. |
+| `transcribe SOURCE` | yt-dlp → ffmpeg → faster-whisper (URL or file). | `--json`, `--trace-id`. |
+| `pipe SOURCE` | normalize → classify (auto-transcribe for audio candidates). | `--json`, `--trace-id`. |
+| `health` | Local dependency checks. | `--json`, `--trace-id`. |
 
-## Exempel
+## Examples
 ```bash
-# Normalisera fil och få object_id
+# Normalize a file and return the object_id
 python -m app.cli normalize notes/idea.md --json
 
-# Transkribera YouTube-klipp med explicit trace-id
+# Transcribe a YouTube clip with an explicit trace id
 python -m app.cli transcribe https://youtu.be/ID --json --trace-id yt123
 
-# Pipeline inklusive auto-transcribe
+# Run the full pipeline with optional auto-transcribe
 python -m app.cli pipe notes/meeting.md
 
-# Health-check innan release
+# Health check before a release
 LLM_PROVIDER=mock python -m app.cli health --json
 ```
 
 ## Exit codes
 - `0` – all good.
-- `1` – valideringsfel/exception (t.ex. yt-dlp/ffmpeg fel, Ollama otillgänglig).
-- `2` – explicita CLI-fel (saknad fil i `app/cli.py` fallback eller `click.BadParameter`).
-- `130` – Ctrl+C (propageras från `click`). 
+- `1` – validation/exception (yt-dlp / ffmpeg failure, Ollama unavailable, etc.).
+- `2` – explicit CLI errors (missing file in `app/cli.py`, `click.BadParameter`, etc.).
+- `130` – Ctrl+C propagated by Click. 
 
 ## Tips
-- Sätt `PYTHONPATH="$(pwd)"` för att säkerställa att lokala moduler hittas.
-- `--trace-id` hjälper när du vill matcha CLI-output med loggar (`docs/OBSERVABILITY.md`).
-- När du kör `pipe` på ljud-URLer sker transcribe både för CLI-responsen och outbox-skrivning – inga extra kommandon behövs.
+- Set `PYTHONPATH="$(pwd)"` to ensure local modules resolve.
+- `--trace-id` makes it easy to correlate CLI output with logs (`docs/OBSERVABILITY.md`).
+- When `pipe` runs on audio URLs the transcribe step covers both CLI output and outbox write—no extra commands required.
 <!-- SECTION:CLI:END -->

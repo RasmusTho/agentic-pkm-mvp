@@ -2,11 +2,11 @@
 
 <!-- SECTION:RECENT-CHANGES:BEGIN -->
 ## 2025-11-15 – docs+ops: inventory, health CLI, diagrams, links, privacy & ops pack
-- Ny `docs/INVENTORY.md` med env-var-tabell, spanlista, CLI-matrix och felkatalog.
-- Health CLI (`python -m app.cli health --json`) + dokumentation (docs/HEALTH.md) samt CI-guard att köra kommandot.
-- Uppdaterade referensdokument: ARCHITECTURE, DIAGRAMS (Mermaid), LLM_BACKENDS, DEPENDENCIES, QUALITY, TESTING, OPERATIONS, OBSERVABILITY, SECURITY, PRIVACY, CLI, GLOSSARY.
-- README fick DOCS-länkar; smoke-workflow verifierar mermaid-block + CLI.
-- ROADMAP/CHANGELOG posterar nästa inkrement (rerank, retries, batch-embedding, index-persistens).
+- Added `docs/INVENTORY.md` with the env-var table, span list, CLI matrix, and known issues.
+- Health CLI (`python -m app.cli health --json`) documented in `docs/HEALTH.md` plus CI guards to run it.
+- Updated references: ARCHITECTURE, DIAGRAMS (Mermaid), LLM_BACKENDS, DEPENDENCIES, QUALITY, TESTING, OPERATIONS, OBSERVABILITY, SECURITY, PRIVACY, CLI, GLOSSARY.
+- README now links the documentation pack; smoke workflow asserts both Mermaid blocks and CLI commands.
+- ROADMAP / CHANGELOG note the upcoming increment (rerank, retry policy, batch embedding, index persistence).
 <!-- SECTION:RECENT-CHANGES:END -->
 
 ## 2025-11-08 – chore/ingest-export-fixes
@@ -26,13 +26,13 @@
 - Changed: Documentation unified to SoT v4.3 baseline
 
 ## v4.2 (2025-10-18)
-- LangGraph PER-arkitektur för ingestion
-- Enhetlig AMG/SetDB-schema
-- E2E-tester för ingestion/curation
-- Reasoning-modellstöd (DeepSeek R1 8B)
-- Lokal Ollama (llama3.1 8B)
+- LangGraph PER architecture driving ingestion
+- Unified AMG/SetDB schema
+- E2E tests for ingestion/curation
+- Reasoning model support (DeepSeek R1 8B)
+- Local Ollama (llama3.1 8B)
 
 ## v4.1 (2025-10-15)
-- Första ingestion-skelettet
+- Initial ingestion skeleton
 - Core-6 schema
-- Alembic-bas och pgvector
+- Alembic base + pgvector

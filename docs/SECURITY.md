@@ -1,27 +1,27 @@
 # Security
 
-Lättviktspolicy för lokala/CI-körningar.
+Lightweight policy for local and CI runs.
 
 <!-- SECTION:SECURITY:BEGIN -->
-## API-nycklar & endpoints
-- Lagra nycklar (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`) endast i lokala `.env`-filer eller secrets store. Lägg aldrig in dem i Git, CI loggar eller docs.
-- `LLM_PROVIDER=mock` är default i CI, så inga externa nycklar behövs för tester.
-- När `OLLAMA_URL` exponeras över nätverk, skydda porten med ssh-tunnel/VPN. Standardantagande är lokalt interface.
+## API keys & endpoints
+- Store keys (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`) only in local `.env` files or a secrets manager. Never commit them to Git, CI logs, or docs.
+- `LLM_PROVIDER=mock` is the CI default, so no external keys are needed for tests.
+- If `OLLAMA_URL` is exposed on a network interface, secure the port via SSH tunnel or VPN; default assumption is localhost.
 
-## Minsta behörighet
-- Postgres-kontot (`DATABASE_URL`) använder `app:app` med begränsade rättigheter. För produktion: skapa dedikerad roll med endast `INSERT/SELECT` för nödvändiga tabeller.
-- CLI-kommandon skriver bara till `INDEX_OUTBOX_PATH`; kör dem under användare med begränsad access för att minska påverkan vid RCE.
+## Least privilege
+- The Postgres account (`DATABASE_URL`) uses `app:app` with minimal privileges. In production create a dedicated role with only the required `INSERT/SELECT`.
+- CLI commands only write to `INDEX_OUTBOX_PATH`; run them under a user with limited rights to minimize blast radius.
 
-## Secrets i CI
-- GitHub Actions workflow använder inga hemligheter. Om framtida jobb kräver dem, lägg in via `secrets.*` och källkoda aldrig fallback-värden.
-- `requirements.txt` innehåller endast publika paket; inga privata index används.
+## Secrets in CI
+- GitHub Actions workflow does not require secrets today. If future jobs do, add them through `secrets.*` and never hardcode fallbacks.
+- `requirements.txt` lists public packages; no private indexes are used.
 
-## Loggar och PII
-- Se `docs/PRIVACY.md` för maskningspolicy. Grundregel: inga råa kund-/note-texter i `extra`.
-- Vid fel i health/agent loggas endast stack/exception-namn; undvik att lägga in hela HTTP-svar.
+## Logs & PII
+- See `docs/PRIVACY.md` for masking policy. Default rule: no raw customer/note text in `extra`.
+- Health/agent errors should log stack/exception names only; avoid dumping HTTP payloads.
 
-## Nästa steg
-1. Lägga på TLS/Basic Auth runt framtida FastAPI endpoints.
-2. Hooka `CircuitBreaker` + `timeout_wrapper` runt externa anrop för att undvika DoS via hängande requests.
-3. Lägg in `pre-commit` kontroll som söker efter `OLLAMA_URL`-URL:er som pekar utanför `localhost`.
+## Next steps
+1. Add TLS / Basic Auth around future FastAPI endpoints.
+2. Wrap external calls with `CircuitBreaker` + `timeout_wrapper` to avoid DoS via hanging requests.
+3. Add a `pre-commit` check ensuring `OLLAMA_URL` remains localhost-bound.
 <!-- SECTION:SECURITY:END -->

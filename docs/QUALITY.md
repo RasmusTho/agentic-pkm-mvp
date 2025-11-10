@@ -1,29 +1,29 @@
 # Quality & Guardrails
 
-Agentloopen bygger på deterministiska reglers, inte heuristisk "best effort".
+The agent loop prioritizes deterministic policies over heuristic “best effort”.
 
 <!-- SECTION:QUALITY:BEGIN -->
 ## Guardrails (app/quality/guardrails.py:11-69)
-- **Förbjudet innehåll** – `_FORBIDDEN_RE` blockerar strängar som matchar `api key|password|secret` (case-insensitive). Åtgärd: sanitera svaret innan return.
-- **Tokenbudget** – `max_tokens` default 800 ord i `enforce_quality`. Överskridande flaggas som `too_long`.
-- **Källkrav** – `min_sources=1`. Om `sources`-listan är tom → `insufficient_sources`.
-- **Circuit breaker** – `CircuitBreaker` + `DEFAULT_BREAKER` håller koll på misslyckade anrop (3 fel / 60 s). Inte ansluten till QA ännu, men redo för LLM/backends.
+- **Forbidden content** – `_FORBIDDEN_RE` blocks strings matching `api key|password|secret` (case-insensitive). Sanitize responses before returning.
+- **Token budget** – `enforce_quality` default `max_tokens=800`. Exceeding it emits `too_long`.
+- **Source requirement** – `min_sources=1`. Empty `sources` → `insufficient_sources`.
+- **Circuit breaker** – `CircuitBreaker` + `DEFAULT_BREAKER` track failed calls (3 failures within 60 s). Not wired into QA yet.
 
-## Agentloopens kontroller
-| Steg | Fil | Kontroll | Felmönster |
+## Agent loop controls
+| Step | Location | Check | Failure pattern |
 | --- | --- | --- | --- |
-| `draft_answer` | app/agents/qa/agent.py:59-79 | Prompt instruerar att citera `[#{i}]`. | Brist på kontext → self-check triggar. |
-| `self_check` | app/agents/qa/agent.py:82-107 | Kollar referenser + ordantal ≥ 30. | Issues `missing_references`, `too_short`. |
-| `finalize` | app/agents/qa/agent.py:109-115 | Lägg till notis vid låg evidens. | `_Notis: begränsad evidens._` biläggs. |
-| `enforce_quality` | app/quality/guardrails.py:14-29 | Sista filter innan svar returneras. | `issues` lista skickas tillbaka till klient/logg. |
+| `draft_answer` | app/agents/qa/agent.py:59-79 | Prompt enforces `[#{i}]` citations. | Missing context → self-check flags issues. |
+| `self_check` | app/agents/qa/agent.py:82-107 | Verifies references + word count ≥ 30. | `missing_references`, `too_short`. |
+| `finalize` | app/agents/qa/agent.py:109-115 | Appends a notice when evidence is weak. | `_Note: limited evidence._` appended. |
+| `enforce_quality` | app/quality/guardrails.py:14-29 | Final filter before returning. | `issues` array feeds the client/log. |
 
-## Prestandabudget (övervakas via spans)
-- **ASR/transcribe** (`transcribe`) – mål < 30 s för 5 min klipp. Mät via `jq 'select(.node=="transcribe")'`.
-- **Retrieval** (`agent.answer` inledningen) – p95 < 250 ms. Länka `trace_id` från CLI.
-- **QA-svar** (`agent.answer`) – p95 < 1.2 s när Ollama 8B körs lokalt. Om `status=error` → aktivera circuit breaker.
+## Performance budgets (tracked via spans)
+- **ASR / transcribe** (`transcribe`) – target < 30 s for a 5-minute clip (`jq 'select(.node=="transcribe")'`).
+- **Retrieval** (`agent.answer` early stage) – p95 < 250 ms (link CLI `trace_id`).
+- **QA answer** (`agent.answer`) – p95 < 1.2 s with Ollama 8B locally. If `status=error`, consider opening the breaker.
 
-## Planerade förbättringar
-1. Koppla `DEFAULT_BREAKER` runt `_call_llm` och logga `extra={"breaker": "open"}` vid blockering.
-2. Införa `timeout_wrapper` i transcribe/ASR för att stoppa hängande ffmpeg.
-3. Rerank (cross-encoder) enligt docs/ROADMAP.md för bättre precision innan agentprompten.
+## Planned improvements
+1. Wrap `_call_llm` with `DEFAULT_BREAKER` and log `extra={"breaker": "open"}` when tripped.
+2. Apply `timeout_wrapper` to transcribe/ASR to stop hanging ffmpeg processes.
+3. Add cross-encoder rerank per `docs/ROADMAP.md` to improve precision before prompting the agent.
 <!-- SECTION:QUALITY:END -->

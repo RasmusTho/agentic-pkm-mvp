@@ -1,6 +1,6 @@
-# Diagram
+# Diagrams
 
-Visual referenser för ingestion- och transcribe-flöden. Renderas som Mermaid och kan exporteras via `mmdc`.
+Visual references for the ingestion and transcription flows. Rendered via Mermaid and exportable with `mmdc`.
 
 <!-- SECTION:DIAGRAMS:BEGIN -->
 ## Ingestion → Index → QA
@@ -27,9 +27,9 @@ flowchart LR
     ASR -->|return| CLI["CLI Response<br/>--json"]
 ```
 
-### Export till PNG/SVG
-1. Installera Mermaid CLI lokalt: `npm install -g @mermaid-js/mermaid-cli`.
-2. Kopiera blocket till en `.mmd`-fil eller använd `mmdc -i docs/diagrams/pipeline.mmd -o artifacts/pipeline.svg`.
-3. `mmdc` läser även ur Markdown: `mmdc -i docs/DIAGRAMS.md -o artifacts/docs-diagrams.svg --page --scale 1`.
-4. Lägg exporterade bilder i `docs/diagrams/` om de ska versionshanteras; CI behöver enbart källan.
+### Export to PNG/SVG
+1. Install Mermaid CLI locally: `npm install -g @mermaid-js/mermaid-cli`.
+2. Copy the block into an `.mmd` file or run `mmdc -i docs/diagrams/pipeline.mmd -o artifacts/pipeline.svg`.
+3. `mmdc` can also read Markdown directly: `mmdc -i docs/DIAGRAMS.md -o artifacts/docs-diagrams.svg --page --scale 1`.
+4. Store exported images under `docs/diagrams/` if they should be versioned; CI only requires the source Markdown.
 <!-- SECTION:DIAGRAMS:END -->
