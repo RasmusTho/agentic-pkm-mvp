@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa
 
 fmt:
 \trufflehog --version >/dev/null 2>&1 || true
@@ -17,6 +17,19 @@ eval:
 
 docs:
 \t@echo "Docs i ./docs – se README.md"
+
+transcribe:
+\t@if [ -z "$(SOURCE)" ]; then echo "Usage: make transcribe SOURCE=<URL_OR_FILE>"; exit 1; fi
+\tpython -m app.cli transcribe "$(SOURCE)"
+
+qa:
+\t@if [ -z "$(QUERY)" ]; then echo "Usage: make qa QUERY='Din fråga'"; exit 1; fi
+\tpython - <<'PY'
+from app.agents.qa.agent import answer
+import json
+res = answer("${QUERY}")
+print(json.dumps(res, ensure_ascii=False, indent=2))
+PY
 
 smoke:
 	PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
