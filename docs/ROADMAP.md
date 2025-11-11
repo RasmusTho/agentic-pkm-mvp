@@ -19,18 +19,25 @@ v4.5A is the deployable baseline: Normalizer→PromotionAgent path is verified e
 - CI fitness guards: `app.fitness.metrics.qas003_hybrid_latency()` and `qas010_outbox_to_index_latency()` enforce QAS-003 and QAS-010 thresholds; GitHub smoke workflow prints their JSON reports.
 - Documentation aligned (Architecture/Roadmap/Status) and status board lists P1 (rerank) + P2 (chunk/dedup) as delivered.
 
+### Fitness Functions Enforced in CI
+| Fitness ID | Target | Enforcement |
+| --- | --- | --- |
+| QAS-003 Hybrid Search Latency | p95 < 250 ms (memory mode) | `python -m app.fitness.report` — fails CI if threshold exceeded. |
+| QAS-010 Outbox → Index Latency | ≤ 2 s from event emission to indexing | Same report; synthetic ingest events pumped into `MemoryVectorIndex`. |
+Both checks run with `STORE_BACKEND=memory` and `LLM_PROVIDER=mock` so CI stays deterministic.
+
 ## Active Work (v4.6)
-### Objective A — Cross-Encoder Rerank Provider
-Add `ce_local` (deterministic overlap scoring) and `ce_http` (flagged HTTP adapter) behind the existing rerank hook. Providers are invoked only when `RERANK_ENABLE=1` and fall back to `mock_ce`/`none` when unavailable. Acceptance: provider selection tests, HTTP client mocked in CI, golden metrics stay ≥ baseline.
+### Objective A — Cross-Encoder Rerank Provider *(active)*
+Add `ce_local` (deterministic overlap scoring) and `ce_http` (flagged HTTP adapter) behind the existing rerank hook. Providers are invoked only when `RERANK_ENABLE=1` and fall back to `mock_ce`/`none` when unavailable. Acceptance: provider selection tests, HTTP client mocked in CI, golden metrics stay ≥ baseline, and CI summary prints P@10/nDCG@10 lines.
 
-### Objective B — Relation Index v1 + Orphan Gate
-Implement in-memory RelationIndex CRUD + `has_any()`, propagate provenance links, and gate promotions with the orphan guard (`PROMOTION_ALLOW_ORPHANS` override). Acceptance: relation coverage metrics and tagging readiness require ≥95% promoted objects linked.
+### Objective B — Relation Index v1 + Orphan Gate *(delivered)*
+Implement in-memory RelationIndex CRUD + `has_any()`, propagate provenance links, and gate promotions with the orphan guard (`PROMOTION_ALLOW_ORPHANS` + `PROMOTION_ORPHAN_OVERRIDE_REASON`). Status: gate enforced by default, overrides audited, and CI reports relation coverage from the golden sample. Acceptance: relation coverage metrics and tagging readiness require ≥95% promoted objects linked.
 
-### Objective C — Diarization Hook
-`DIARIZE_ENABLE` toggles segmentation; providers include `none`, `mock`, and `external` (HTTP). Metadata preserves `{speaker, text}` entries so ingestion/promotion retain conversation context. Acceptance: mock provider yields ≥2 segments, disabled path is unchanged, no CI dependency on external ASR.
+### Objective C — Diarization Hook *(active)*
+`DIARIZE_ENABLE` toggles segmentation; providers include `none`, `mock`, and `external` (HTTP). Metadata preserves `{speaker, text}` entries so ingestion/promotion retain conversation context. Acceptance: mock provider yields ≥2 segments, disabled path is unchanged, no CI dependency on external ASR, and chunk policy respects speaker segments.
 
-### Objective D — Golden Set + Evaluation Metrics
-Ship synthetic corpus (`data/golden/*`), compute Precision@k and nDCG@k, and assert rerank quality never drops below baseline. Evaluation runs inside the not-pg suite and feeds governance dashboards.
+### Objective D — Golden Set + Evaluation Metrics *(active)*
+Ship synthetic corpus (`data/golden/*`), compute Precision@k and nDCG@k, and assert rerank quality never drops below baseline. Evaluation runs inside the not-pg suite, CI summary prints `EVAL P@10` and `nDCG@10`, and failures block merges.
 
 ### Operational Acceptance
 - Latency guard: ingest→index p95 remains ≤ 2 s while hooks and dedup are enabled.

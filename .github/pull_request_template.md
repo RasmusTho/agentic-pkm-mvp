@@ -1,17 +1,29 @@
-## Title
-chore: repo hygiene, CI smoke guard, semantic merge driver mapping
-
 ## Summary
-- Ignore `logs/**`; keep `logs/.gitkeep`.
-- Map `*.md`/`*.mdx` to `merge=semanticmd`; add `make setup-merge-driver`.
-- CI: Python 3.12, matrix {memory, pg}, Postgres 16, Alembic on pg, `scripts/check_code_fences.py`, `pytest -q`.
-- Fix doc links to `docs/diagrams/architecture.mmd`.
+- 
 
-## How to Verify
-- PR Actions: two green jobs: `ci-smoke / test (memory)` and `ci-smoke / test (pg)`.
-- `git ls-files logs` shows only `logs/.gitkeep`.
-- README and `docs/ARCHITECTURE.md` link works.
+## Acceptance Criteria
+- [ ] Objective A (cross-encoder rerank provider)
+- [ ] Objective B (RelationIndex gate + override audit)
+- [ ] Objective C (diarization hook + chunk integration)
+- [ ] Objective D (golden-set evaluation + CI summary)
 
-## Post-merge (manual)
-- Default branch = `main`.
-- Branch protection on `main`: require both ci-smoke jobs + PR review.
+## Flags Used
+- `RERANK_ENABLE=`
+- `RERANK_PROVIDER=`
+- `DIARIZE_ENABLE=`
+- Others:
+
+## CI Metrics
+- QAS-003 p95: 
+- QAS-010 p95: 
+- Golden P@10 / nDCG@10: 
+- Relation coverage %:
+
+## Risks & Rollback
+-
+
+## Docs Updated
+- [ ] docs/ARCHITECTURE.md
+- [ ] docs/ROADMAP.md
+- [ ] docs/STATUS.md
+- [ ] CHANGELOG.md

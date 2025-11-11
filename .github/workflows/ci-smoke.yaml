@@ -43,6 +43,14 @@ jobs:
           grep -q '<!-- DOCS-LINKS:BEGIN -->' README.md
           grep -q '<!-- DOCS-LINKS:END -->' README.md
 
+      - name: Doc integrity
+        run: |
+          set -euo pipefail
+          ! rg -n "TODO|FIXME" README.md CHANGELOG.md docs/
+          rg -q "## Fitness Functions" docs/ARCHITECTURE.md
+          rg -q "Fitness Functions Enforced in CI" docs/ROADMAP.md
+          rg -q "CI & Test Markers" docs/STATUS.md
+
       - name: Prepare tmp dir
         run: mkdir -p tmp
 

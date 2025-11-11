@@ -7,8 +7,8 @@ def test_smoke(tmp_path: Path, monkeypatch):
     note = vault / "@Desk" / "draft.md"
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text(dedent("""\
-    ---
-    uuid: U7
+        ---
+        uuid: 00000000-0000-0000-0000-000000000007
     review_state: inbox
     ---
     - [x] Promote
@@ -20,7 +20,9 @@ def test_smoke(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(q, "SETTINGS", tmp_path / "settings.yaml")
     monkeypatch.setattr(q, "VAULT", vault)
     (tmp_path / "settings.yaml").write_text("promotion:\n  cooldown_seconds: 0\n  require_idle_seconds: 0\n  max_retries: 1\n  move_policy:\n    enabled: false\n    default_target: 2_Cards/Concepts\n", encoding="utf-8")
+    monkeypatch.setenv("PROMOTION_ALLOW_ORPHANS", "1")
+    monkeypatch.setenv("PROMOTION_ORPHAN_OVERRIDE_REASON", "tests")
 
-    enqueue(note, uuid="U7", desired_state="promoted")
+    enqueue(note, uuid="00000000-0000-0000-0000-000000000007", desired_state="promoted")
     assert run_once() == 1
     assert "review_state: promoted" in note.read_text(encoding="utf-8")

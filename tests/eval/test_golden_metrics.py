@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.eval.golden import evaluate_golden_set, ndcg_at_k, precision_at_k
+from app.eval.golden import evaluate_golden_set, evaluate_vs_baseline, ndcg_at_k, precision_at_k
 
 pytestmark = pytest.mark.not_pg
 
@@ -24,3 +24,11 @@ def test_golden_eval_pipeline() -> None:
     assert 0 <= agg["precision@k"] <= 1
     assert 0 <= agg["ndcg@k"] <= 1
     assert len(result["queries"]) >= 1
+
+
+def test_ce_local_beats_or_matches_baseline() -> None:
+    metrics = evaluate_vs_baseline("ce_local", k=5)
+    base = metrics["baseline"]
+    cand = metrics["candidate"]
+    assert cand["precision@k"] >= base["precision@k"]
+    assert cand["ndcg@k"] >= base["ndcg@k"]

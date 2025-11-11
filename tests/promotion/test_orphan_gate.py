@@ -31,9 +31,27 @@ def test_orphan_gate_blocks_without_relations() -> None:
         )
 
 
-def test_orphan_gate_respects_override() -> None:
+def test_orphan_gate_requires_reason_for_override() -> None:
+    with pytest.raises(OrphanPromotionError):
+        ensure_object_has_relations(
+            UUID(int=1),
+            relation_index=_FakeRelationIndex(False),
+            allow_orphans=True,
+            override_reason=None,
+        )
+
+
+def test_orphan_gate_logs_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    def fake_audit(**kwargs):  # pragma: no cover - shim
+        calls.append(kwargs)
+
+    monkeypatch.setattr("app.promotion.gates.audit_log", fake_audit)
     ensure_object_has_relations(
         UUID(int=1),
         relation_index=_FakeRelationIndex(False),
         allow_orphans=True,
+        override_reason="human reviewed",
     )
+    assert calls and calls[0]["details"]["reason"] == "human reviewed"

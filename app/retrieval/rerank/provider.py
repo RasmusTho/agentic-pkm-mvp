@@ -80,7 +80,8 @@ class HttpCrossEncoderReranker:
     """
 
     def __init__(self, *, endpoint: str | None = None, timeout: float | None = None) -> None:
-        self.endpoint = endpoint or os.getenv("RERANK_HTTP_ENDPOINT", "").strip()
+        alt = os.getenv("CE_HTTP_URL", "").strip()
+        self.endpoint = endpoint or os.getenv("RERANK_HTTP_ENDPOINT", "").strip() or alt
         if not self.endpoint:
             raise RuntimeError("RERANK_HTTP_ENDPOINT is required for ce_http provider")
         self.timeout = timeout or float(os.getenv("RERANK_HTTP_TIMEOUT", "2.5"))

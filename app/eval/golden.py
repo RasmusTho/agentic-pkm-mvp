@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from contextlib import contextmanager
 from pathlib import Path
 from statistics import fmean
 from typing import Dict, List
@@ -12,6 +14,24 @@ from app.retrieval.hybrid import get_store, hybrid_search
 DATA_ROOT = Path("data") / "golden"
 CORPUS_PATH = DATA_ROOT / "corpus.jsonl"
 JUDGMENTS_PATH = DATA_ROOT / "judgments.json"
+
+
+@contextmanager
+def _temporary_env(values: Dict[str, str | None]):
+    old = {k: os.environ.get(k) for k in values}
+    try:
+        for key, value in values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        yield
+    finally:
+        for key, value in old.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _snapshot_store(store) -> List[dict]:
@@ -68,34 +88,46 @@ def load_judgments() -> Dict[str, List[dict]]:
     return json.loads(JUDGMENTS_PATH.read_text(encoding="utf-8"))
 
 
-def evaluate_golden_set(k: int = 5) -> Dict[str, dict]:
+def evaluate_golden_set(k: int = 5, *, rerank_provider: str | None = None) -> Dict[str, dict]:
     store = get_store()
     backup = _snapshot_store(store)
     corpus = load_corpus()
     judgments = load_judgments()
+    env_updates = {"RERANK_ENABLE": None, "RERANK_PROVIDER": None}
+    if rerank_provider:
+        env_updates["RERANK_ENABLE"] = "1"
+        env_updates["RERANK_PROVIDER"] = rerank_provider
     try:
-        store.set_documents(corpus)
-        per_query = []
-        for case in judgments.get("queries", []):
-            relevant_map = {entry["doc_id"]: entry.get("relevance", 0) for entry in case.get("relevance", [])}
-            hits = hybrid_search(case["query"], k=k)
-            scores = [float(relevant_map.get(hit["doc_id"], 0)) for hit in hits]
-            metrics = {
-                "precision@k": precision_at_k(scores, k),
-                "ndcg@k": ndcg_at_k(scores, k),
+        with _temporary_env(env_updates):
+            store.set_documents(corpus)
+            per_query = []
+            for case in judgments.get("queries", []):
+                relevant_map = {entry["doc_id"]: entry.get("relevance", 0) for entry in case.get("relevance", [])}
+                hits = hybrid_search(case["query"], k=k)
+                scores = [float(relevant_map.get(hit["doc_id"], 0)) for hit in hits]
+                metrics = {
+                    "precision@k": precision_at_k(scores, k),
+                    "ndcg@k": ndcg_at_k(scores, k),
+                }
+                per_query.append({"query": case["query"], **metrics})
+            aggregate = {
+                "precision@k": fmean(entry["precision@k"] for entry in per_query),
+                "ndcg@k": fmean(entry["ndcg@k"] for entry in per_query),
             }
-            per_query.append({"query": case["query"], **metrics})
-        aggregate = {
-            "precision@k": fmean(entry["precision@k"] for entry in per_query),
-            "ndcg@k": fmean(entry["ndcg@k"] for entry in per_query),
-        }
-        return {"aggregate": aggregate, "queries": per_query}
+            return {"aggregate": aggregate, "queries": per_query}
     finally:
         _restore_store(store, backup)
+
+
+def evaluate_vs_baseline(provider: str, *, k: int = 10) -> Dict[str, Dict[str, float]]:
+    baseline = evaluate_golden_set(k=k, rerank_provider=None)["aggregate"]
+    candidate = evaluate_golden_set(k=k, rerank_provider=provider)["aggregate"]
+    return {"baseline": baseline, "candidate": candidate}
 
 
 __all__ = [
     "precision_at_k",
     "ndcg_at_k",
     "evaluate_golden_set",
+    "evaluate_vs_baseline",
 ]
