@@ -55,3 +55,13 @@ def test_memory_relation_index_neighbors_unique_order() -> None:
     rel.link(src, dst_a, rel="related_to")  # duplicate ignored
 
     assert rel.neighbors(src, rel="related_to") == [dst_a, dst_b]
+
+
+def test_memory_relation_index_has_any() -> None:
+    rel = MemoryRelationIndex()
+    src = uuid4()
+    dst = uuid4()
+    rel.link(src, dst, rel="supports")
+    assert rel.has_any(src) is True
+    assert rel.has_any(dst) is True
+    assert rel.has_any(uuid4()) is False

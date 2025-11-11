@@ -5,6 +5,7 @@ from typing import Dict, Any
 import yaml
 from .policy import pick_target as _pick_target
 from app.observability.tracing import current_trace_id, span
+from app.promotion.gates import OrphanPromotionError, ensure_object_has_relations
 
 ROOT = Path().resolve()
 VAULT = ROOT / "vault"
@@ -102,6 +103,22 @@ def run_once() -> int:
                 if age < cooldown or age < idle_req:
                     _append_jsonl(QUEUE, ev)
                     continue
+
+                uuid = ev.get("uuid")
+                if uuid:
+                    try:
+                        ensure_object_has_relations(uuid)
+                    except OrphanPromotionError as oom:
+                        _append_jsonl(LOG, {
+                            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "level": "warn",
+                            "event": "promote.skip.orphan",
+                            "uuid": uuid,
+                            "path": str(p),
+                            "reason": str(oom),
+                            "trace_id": current_trace_id()
+                        })
+                        continue
 
                 with span("worker.read_frontmatter"):
                     meta, body = _read_frontmatter(p)

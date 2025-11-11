@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.6 — Retrieval Quality & Reasoning Prep (in progress)
+- Cross-encoder providers (`ce_local`, `ce_http`) behind `RERANK_ENABLE`, with graceful fallback to `mock_ce`.
+- RelationIndex v1 gains `has_any()` plus the Promotion orphan gate (`PROMOTION_ALLOW_ORPHANS` override).
+- Diarization hook wired into transcription with providers (`none|mock|external`) behind `DIARIZE_ENABLE`.
+- Golden set evaluation pipeline (`data/golden/*`) produces Precision@k and nDCG@k metrics in CI.
+
+## v4.5B — Fitness & Hook Readiness
+- QAS-003/QAS-010 latency checks implemented in `app.fitness.metrics` and executed via GitHub smoke workflow.
+- Hybrid rerank hook integration completed with adapter and provider matrix.
+- Chunking + dedup pipeline codified with deterministic chunk policy and shared deduper helpers.
+- Docs/STATUS updated with CI measurement notes; ROADMAP reflects delivered P1 (rerank) + P2 (chunk/dedup).
+
 ## v4.5A — Stable baseline
 Date: 2025-11-11
 

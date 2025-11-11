@@ -100,3 +100,16 @@ class RelationIndex:
         ]
 
         return GraphSlice(center=center_uuid, edges=edges)
+
+    def has_any(self, center_uuid: str) -> bool:
+        with conn_rw() as conn:
+            row = conn.execute(
+                """
+                select 1
+                from relations
+                where src_uuid = %s or dst_uuid = %s
+                limit 1
+                """,
+                (center_uuid, center_uuid),
+            ).fetchone()
+        return bool(row)

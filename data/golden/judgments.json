@@ -1,0 +1,25 @@
+{
+  "queries": [
+    {
+      "query": "alpha energy storage grid",
+      "relevance": [
+        {"doc_id": "g-doc-1", "relevance": 3},
+        {"doc_id": "g-doc-2", "relevance": 1}
+      ]
+    },
+    {
+      "query": "codex rerank diarization",
+      "relevance": [
+        {"doc_id": "g-doc-2", "relevance": 3},
+        {"doc_id": "g-doc-3", "relevance": 2}
+      ]
+    },
+    {
+      "query": "promotion relation governance",
+      "relevance": [
+        {"doc_id": "g-doc-3", "relevance": 3},
+        {"doc_id": "g-doc-2", "relevance": 1}
+      ]
+    }
+  ]
+}
