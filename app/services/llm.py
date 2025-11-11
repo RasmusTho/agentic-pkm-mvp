@@ -1,5 +1,19 @@
-import os, json, http.client, socket
-from typing import Dict, Any
+from __future__ import annotations
+
+import http.client
+import json
+import os
+import socket
+import time
+from typing import Any, Callable, Dict
+
+_DEFAULT_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
+_DEFAULT_BASE_DELAY = float(os.getenv("LLM_BASE_DELAY", "0.1"))
+
+
+class LLMError(Exception):
+    pass
+
 
 def _minimal_validate(payload: dict, schema: dict) -> None:
     req = schema.get("required", [])
@@ -11,6 +25,7 @@ def _minimal_validate(payload: dict, schema: dict) -> None:
         if dec_enum and payload["decision"] not in dec_enum:
             raise ValueError("schema enum violation: decision")
 
+
 def validate_json(raw: str, schema_path: str) -> Dict[str, Any]:
     data = json.loads(raw)
     try:
@@ -20,6 +35,7 @@ def validate_json(raw: str, schema_path: str) -> Dict[str, Any]:
     except Exception:
         pass
     return data
+
 
 def _ollama_chat(system: str, user: str, model: str, temperature: float = 0.0, timeout: float = 12.0) -> str:
     body = {
@@ -36,7 +52,6 @@ def _ollama_chat(system: str, user: str, model: str, temperature: float = 0.0, t
         resp = conn.getresponse()
         if resp.status != 200:
             raise RuntimeError(f"ollama http {resp.status}")
-        # Streaming JSONL; collect 'message' chunks
         buf = []
         while True:
             chunk = resp.read(65536)
@@ -44,7 +59,6 @@ def _ollama_chat(system: str, user: str, model: str, temperature: float = 0.0, t
                 break
             buf.append(chunk)
         raw = b"".join(buf).decode("utf-8", errors="replace")
-        # Response may be concatenated JSON objects per line. Keep last "message"
         text = ""
         for line in raw.splitlines():
             line = line.strip()
@@ -63,25 +77,55 @@ def _ollama_chat(system: str, user: str, model: str, temperature: float = 0.0, t
         except Exception:
             pass
 
+
+def _deterministic_llm_response() -> str:
+    return json.dumps(
+        {
+            "decision": "A",
+            "similarity": 0.92,
+            "confidence": 0.8,
+            "scores": {"A": {"total": 8.0}, "B": {"total": 7.7}},
+            "reason": "concise wins",
+            "hybrid": {"take_from": "A", "carry_over_items": []},
+            "ask_prompt": "",
+            "policy_flags": ["provenance_preserved"],
+        }
+    )
+
+
+def with_llm_retries(
+    fn: Callable[[], Any], *, max_retries: int | None = None, base_delay: float | None = None
+) -> Any:
+    mr = _DEFAULT_MAX_RETRIES if max_retries is None else max_retries
+    bd = _DEFAULT_BASE_DELAY if base_delay is None else base_delay
+    attempt = 0
+    while True:
+        try:
+            return fn()
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            attempt += 1
+            if attempt > mr:
+                raise LLMError(f"LLM call failed after {mr} retries") from exc
+            time.sleep(max(bd, 0.0) * attempt)
+
+
 def call_llm(name: str, pack: Dict[str, Any]) -> str:
     provider = os.getenv("LLM_PROVIDER", "fake").lower()
     model = os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", "llama3.1:8b"))
     temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
     system = pack.get("system", "")
     user = pack.get("user", "")
-    if provider == "ollama":
-        try:
-            return _ollama_chat(system, user, model, temperature)
-        except (socket.timeout, ConnectionRefusedError, RuntimeError):
-            pass
-    # Fallback: deterministic JSON for tests
-    return json.dumps({
-        "decision":"A",
-        "similarity":0.92,
-        "confidence":0.8,
-        "scores":{"A":{"total":8.0},"B":{"total":7.7}},
-        "reason":"concise wins",
-        "hybrid":{"take_from":"A","carry_over_items":[]},
-        "ask_prompt":"",
-        "policy_flags":["provenance_preserved"]
-    })
+
+    if provider != "ollama":
+        return _deterministic_llm_response()
+
+    try:
+        return with_llm_retries(
+            lambda: _ollama_chat(system, user, model, temperature),
+        )
+    except LLMError:
+        return _deterministic_llm_response()
+    except (socket.timeout, ConnectionRefusedError, RuntimeError):
+        return _deterministic_llm_response()

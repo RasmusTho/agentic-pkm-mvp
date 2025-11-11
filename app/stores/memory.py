@@ -1,16 +1,26 @@
 from __future__ import annotations
-import time, uuid
+
+import json
+import os
+import time
+import uuid
 from dataclasses import dataclass
-from typing import Optional, Iterable
+from pathlib import Path
+from typing import Iterable, Optional
 from uuid import UUID
+
 from .base import (
-    DecisionsStore,
-    ObjectsStore,
     Decision,
+    DecisionsStore,
     ObjectStore,
-    VectorIndex,
+    ObjectsStore,
     RelationIndex,
+    VectorIndex,
 )
+
+
+def _truthy_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class MemoryObjects(ObjectsStore):
@@ -113,9 +123,16 @@ class _VectorHit:
 
 
 class MemoryVectorIndex(VectorIndex):
-    def __init__(self) -> None:
+    def __init__(self, *, persist_path: str | None = None, load_existing: bool | None = None) -> None:
         self._entries: dict[UUID, _VectorEntry] = {}
         self._seq = 0
+        raw_path = (persist_path or os.getenv("INDEX_PERSIST_PATH", "")).strip()
+        self._persist_path = Path(raw_path).expanduser() if raw_path else None
+        should_load = bool(self._persist_path) and (
+            load_existing if load_existing is not None else _truthy_env("INDEX_PERSIST_LOAD")
+        )
+        if should_load:
+            self._load_from_disk()
 
     def upsert(
         self,
@@ -128,7 +145,7 @@ class MemoryVectorIndex(VectorIndex):
         model: str,
     ) -> None:
         self._seq += 1
-        self._entries[object_id] = _VectorEntry(
+        entry = _VectorEntry(
             object_id=object_id,
             kind=kind,
             source_ref=source_ref,
@@ -137,6 +154,8 @@ class MemoryVectorIndex(VectorIndex):
             model=model,
             seq=self._seq,
         )
+        self._entries[object_id] = entry
+        self._persist_entry(entry)
 
     def search(self, vector: list[float], *, k: int = 5) -> list:
         if not self._entries:
@@ -147,6 +166,51 @@ class MemoryVectorIndex(VectorIndex):
             results.append((score, entry.seq, _VectorHit(entry, score)))
         results.sort(key=lambda item: (-item[0], item[1]))
         return [hit for _, _, hit in results[:k]]
+
+    def _persist_entry(self, entry: _VectorEntry) -> None:
+        if not self._persist_path:
+            return
+        self._persist_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "object_id": str(entry.object_id),
+            "kind": entry.kind,
+            "source_ref": entry.source_ref,
+            "payload": entry.payload,
+            "embedding": entry.embedding,
+            "model": entry.model,
+            "seq": entry.seq,
+        }
+        with self._persist_path.open("a", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, default=str)
+            fh.write("\n")
+
+    def _load_from_disk(self) -> None:
+        if not self._persist_path or not self._persist_path.exists():
+            return
+        try:
+            with self._persist_path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        obj_id = UUID(str(data["object_id"]))
+                    except Exception:
+                        continue
+                    entry = _VectorEntry(
+                        object_id=obj_id,
+                        kind=str(data.get("kind", "")),
+                        source_ref=str(data.get("source_ref", "")),
+                        payload=data.get("payload") or {},
+                        embedding=list(data.get("embedding") or []),
+                        model=str(data.get("model", "")),
+                        seq=int(data.get("seq", 0)),
+                    )
+                    self._entries[obj_id] = entry
+                    self._seq = max(self._seq, entry.seq)
+        except FileNotFoundError:
+            return
 
     @staticmethod
     def _dot(a: list[float], b: list[float]) -> float:

@@ -4,8 +4,13 @@ import json
 import os
 import threading
 import uuid
+from pathlib import Path
+from typing import Any
 
-import psycopg
+try:
+    import psycopg  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - memory mode has no psycopg
+    psycopg = None  # type: ignore
 
 _AUDIT_CACHE: list[str] = []
 _AUDIT_CACHE_LIMIT = 1024
@@ -18,7 +23,7 @@ def _dsn() -> str:
     )
 
 
-def _serialize_payload(payload: dict) -> str:
+def _serialize_payload(payload: dict[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"))
 
 
@@ -28,6 +33,25 @@ def _append_cache(json_line: str) -> None:
         overflow = len(_AUDIT_CACHE) - _AUDIT_CACHE_LIMIT
         if overflow > 0:
             del _AUDIT_CACHE[:overflow]
+
+
+def _cache_and_maybe_persist(json_line: str) -> None:
+    _append_cache(json_line)
+    path = _audit_log_path()
+    if not path:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json_line)
+        if not json_line.endswith("\n"):
+            fh.write("\n")
+
+
+def _audit_log_path() -> Path | None:
+    raw = os.environ.get("AUDIT_LOG_PATH", "").strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser()
 
 
 def audit_log(
@@ -49,13 +73,14 @@ def audit_log(
     }
     json_line = _serialize_payload(payload)
 
-    store_backend = os.getenv("STORE_BACKEND", "memory").lower()
-    if store_backend != "pg":
-        _append_cache(json_line)
+    backend = os.getenv("STORE_BACKEND", "memory").lower()
+    use_pg = backend == "pg" and psycopg is not None
+    if not use_pg:
+        _cache_and_maybe_persist(json_line)
         return
 
     try:
-        with psycopg.connect(_dsn(), autocommit=True) as conn:
+        with psycopg.connect(_dsn(), autocommit=True) as conn:  # type: ignore[arg-type]
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -64,11 +89,11 @@ def audit_log(
                     """,
                     (entry_id, object_id, agent, action, trace_id, json.dumps(details or {})),
                 )
-    except psycopg.Error:
-        _append_cache(json_line)
+    except Exception:
+        _cache_and_maybe_persist(json_line)
 
 
-def _audit_ring_snapshot() -> list[dict]:
+def _audit_ring_snapshot() -> list[dict[str, Any]]:
     with _AUDIT_LOCK:
         return [json.loads(line) for line in _AUDIT_CACHE]
 
