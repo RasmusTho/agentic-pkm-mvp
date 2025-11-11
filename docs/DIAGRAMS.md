@@ -27,7 +27,7 @@ flowchart TD
     VAULT -->|emit_outbox=False| QUIET[(No loop)]
     PROMO -->|promote.done| OUTBOX2[Index Outbox]
     OUTBOX2 --> INDEXER[Index / Rerank Workers]
-    REL2 --> REASON["Reasoning Layer (RDF/OWL draft)"]
+    REL2 --> REASON[Reasoning Layer (RDF/OWL draft)]
 ```
 
 ### Export to PNG/SVG
