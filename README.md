@@ -1,53 +1,43 @@
-# Workspace – Agentic AI (MVP)
+# Agentic PKM — SoT v4.5A Baseline
 
-## Quick start (local)
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-export STORE_BACKEND=memory
-export PYTHONPATH="$(pwd)"
-export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-export LLM_PROVIDER=ollama
-export OLLAMA_MODEL=llama3.1:8b-instruct
-```
-### Run the CLI (file / URL / audio)
+This repository implements the SoT v4.5A baseline:
+- Store abstraction (ObjectStore, VectorIndex, RelationIndex)
+- Outbox + events
+- Promotion Agent (idempotent state transitions; frontmatter Core-6)
+- Deterministic CI in memory mode
+- Optional rerank hook (inert by default)
 
-python -m app.cli normalize <PATH|URL>
-python -m app.cli transcribe <YOUTUBE|AUDIOFILE>
-python -m app.cli pipe <PATH|URL|AUDIO>
+## Quickstart (CI-like)
 
-### Index outbox
-Writes to `tmp/index-outbox.jsonl` with entries such as:
-- kind: doc | transcript | note
-- payload: { title, content, language, source_ref, segments? }
+python -m pip install --upgrade pip
+pip install -e .
+pip install pytest
+INDEX_PERSIST_PATH=tmp/index.jsonl STORE_BACKEND=memory LLM_PROVIDER=mock PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"
 
-### Status
-- 4.5 Ingest (done)
-- 5.0 Transcription (done)
-- 5.5 Retrieval (BM25 + embeddings) (done)
-- 6.0 Agent loop (deterministic) (done)
-- 6.5 Guardrails (asserts/timeout/cache) (done)
-- 7.0 Observability (logs + lightweight view) (done)
-- 7.5 Evaluation harness (done)
-- 8.0 Fallback / policy (in progress)
+## Environment Flags
+| Variable               | Default  | Effect |
+|------------------------|----------|--------|
+| STORE_BACKEND          | memory   | Memory-first execution for CI and local runs. |
+| LLM_PROVIDER           | mock     | Deterministic LLM for tests; use Ollama locally if desired. |
+| PYTEST_DISABLE_PLUGIN_AUTOLOAD | 1 | Keeps pytest deterministic on CI. |
+| INDEX_PERSIST_PATH     |          | When set, persists memory VectorIndex as JSONL. |
+| INDEX_PERSIST_LOAD     | 0        | When 1, loads persisted JSONL at start. |
+| AUDIT_LOG_PATH         |          | When set, writes JSONL audit lines to disk. |
+| LLM_MAX_RETRIES        | 3        | Max retries for LLM calls. |
+| LLM_BASE_DELAY         | 0.1      | Base delay for bounded backoff. |
+| RERANK_ENABLE          |          | Enable optional rerank when set to 1/true/on. |
+| RERANK_PROVIDER        | none     | Selects reranker: none|mock_ce. |
+| RERANK_TOP_K           |          | Limit rerank to top K items. |
 
-<!-- DOCS-LINKS:BEGIN -->
-- [ARCHITECTURE](docs/ARCHITECTURE.md)
-- [DIAGRAMS](docs/DIAGRAMS.md)
-- [OBSERVABILITY](docs/OBSERVABILITY.md)
-- [HEALTH](docs/HEALTH.md)
-- [LLM_BACKENDS](docs/LLM_BACKENDS.md)
-- [DEPENDENCIES](docs/DEPENDENCIES.md)
-- [QUALITY](docs/QUALITY.md)
-- [TESTING](docs/TESTING.md)
-- [OPERATIONS](docs/OPERATIONS.md)
-- [SECURITY](docs/SECURITY.md)
-- [PRIVACY](docs/PRIVACY.md)
-- [INVENTORY](docs/INVENTORY.md)
-- [ROADMAP](docs/ROADMAP.md)
-- [CHANGELOG](docs/CHANGELOG.md)
-- [GLOSSARY](docs/GLOSSARY.md)
-- [CLI](docs/CLI.md)
-<!-- DOCS-LINKS:END -->
+## Rerank (opt-in)
 
-See the docs/ directory for full reference material.
+export RERANK_ENABLE=1
+export RERANK_PROVIDER=mock_ce
+
+The rerank hook is applied at the final candidate merge step, preserving default behavior when disabled.
+
+## Status
+- v4.4: Delivered
+- v4.5A: Delivered (this baseline)
+- v4.5B: Open — retrieval polish (rerank integration, diarization hooks, RelationIndex fitness)
+- v4.6: Planned — retrieval quality and reasoning prep

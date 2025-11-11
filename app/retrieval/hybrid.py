@@ -8,7 +8,7 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 from rapidfuzz import process
 
-from app.llm.embeddings import embed_text, embed_texts
+from app.index.embeddings import embed_batches, embed_text
 
 
 @dataclass
@@ -70,11 +70,17 @@ class MemoryHybridStore:
         if self._bm25 is None and self._tokenized:
             self._bm25 = BM25Okapi(self._tokenized)
         if self._embeddings is None:
-            vectors = embed_texts([doc.text for doc in self._docs])
-            self._embeddings = np.array(vectors, dtype=np.float32)
-            norms = np.linalg.norm(self._embeddings, axis=1)
-            norms[norms == 0] = 1e-9
-            self._emb_norms = norms
+            vectors: List[List[float]] = []
+            for chunk in embed_batches((doc.text for doc in self._docs)):
+                vectors.extend(chunk)
+            if not vectors:
+                self._embeddings = np.zeros((0, 0), dtype=np.float32)
+                self._emb_norms = np.zeros(0, dtype=np.float32)
+            else:
+                self._embeddings = np.array(vectors, dtype=np.float32)
+                norms = np.linalg.norm(self._embeddings, axis=1)
+                norms[norms == 0] = 1e-9
+                self._emb_norms = norms
 
     def bm25_scores(self, tokens: List[str]) -> np.ndarray:
         self._ensure_indexes()
@@ -92,7 +98,7 @@ class MemoryHybridStore:
         q = query_vector / q_norm
         sims = (self._embeddings @ q) / self._emb_norms
         sims = np.clip(sims, -1, 1)
-        return (sims + 1) / 2  # map to [0,1]
+        return (sims + 1) / 2
 
 
 _STORE = MemoryHybridStore()
