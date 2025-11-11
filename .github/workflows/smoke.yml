@@ -16,8 +16,10 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
-      - name: Install system deps (ffmpeg)
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install system deps (ffmpeg, ripgrep)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg ripgrep
 
       - name: Install Python deps
         run: |
@@ -29,7 +31,7 @@ jobs:
           rg -q '```mermaid' docs/DIAGRAMS.md
           rg -q '<!-- DOCS-LINKS:BEGIN -->' README.md
           rg -q '<!-- DOCS-LINKS:END -->' README.md
-          ! rg -n '\\n' docs/DIAGRAMS.md
+          ! rg -n '\n' docs/DIAGRAMS.md
           ! rg -n '^\s+```mermaid' docs/DIAGRAMS.md
           ! rg -n '->\|[^|]*\$begin:math:text$[^|]*\$end:math:text$\|' docs/DIAGRAMS.md || true
 
