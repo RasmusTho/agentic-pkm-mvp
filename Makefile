@@ -23,13 +23,8 @@ transcribe:
 	python -m app.cli transcribe "$(SOURCE)"
 
 qa:
-	@if [ -z "$(QUERY)" ]; then echo "Usage: make qa QUERY='Din fråga'"; exit 1; fi
-	python - <<'PY'
-from app.agents.qa.agent import answer
-import json
-res = answer("${QUERY}")
-print(json.dumps(res, ensure_ascii=False, indent=2))
-PY
+	@if [ -z "$(QUERY)" ]; then echo "Usage: make qa QUERY='Your question'"; exit 1; fi
+	QUERY="$(QUERY)" python -c 'import json, os; from app.agents.qa.agent import answer; res = answer(os.environ["QUERY"]); print(json.dumps(res, ensure_ascii=False, indent=2))'
 
 smoke:
 	PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
