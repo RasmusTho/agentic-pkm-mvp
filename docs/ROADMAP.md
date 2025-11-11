@@ -1,39 +1,44 @@
 # Roadmap — Strategic Control
 
 ## Version Ladder Overview
-| Version | Intent |
-| --- | --- |
-| v4.3 | Establish the PER ingest loop, Outbox wiring, and CI contracts. |
-| v4.4 | Harden observability, Store abstraction, and identity plus conflict handling. |
-| v4.5A | Stabilize unified ingestion, enforce deterministic memory-first CI, and document promotion rules. |
-| v4.5B | Polish ingestion edges, integrate optional hooks, and hold quality at v4.5A while enabling experiments. |
-| v4.6 | Deliver retrieval quality upgrades (cross-encoder, diarization adapter, RelationIndex fitness) with measurable gains. |
-| v5 | Introduce symbolic reasoning, logic gates, and reflexive agents over the Agent Memory Graph. |
+| Version | Intent | State |
+| --- | --- | --- |
+| v4.3 | Establish the PER ingest loop, Outbox wiring, and CI contracts. | Delivered |
+| v4.4 | Harden observability, Store abstraction, and identity plus conflict handling. | Delivered |
+| v4.5A | Stabilize unified ingestion, enforce deterministic memory-first CI, and document promotion rules. | Delivered |
+| v4.5B | Fitness guards + ingestion polish, rerank + chunk dedup readiness. | Delivered |
+| v4.6 | Retrieval quality upgrades (cross-encoder, diarization adapter, RelationIndex fitness, golden eval). | Active |
+| v4.7 | Reasoning layer & reflexive agents over the knowledge graph. | Planned |
 
 ## Current Stable Baseline (v4.5A)
 v4.5A is the deployable baseline: Normalizer→PromotionAgent path is verified end-to-end, promotion cooldowns are enforced, and CI is green when `pytest -q -m "not pg"` passes using `STORE_BACKEND=memory` and mock LLMs. Architectural invariants to preserve: Core-6 frontmatter is immutable once normalized, Outbox events remain append-only, PromotionAgent decisions are idempotent, and audit logs stay deterministic JSONL. Any change that violates these invariants or introduces non-deterministic mocks must be postponed to v4.5B+.
 
-## Active Work (v4.5B)
-### Unified Ingestion Polish
-Scope: tighten Normalizer ↔ Deduper interfaces, ensure every agent emits structured diffs, and confirm retries replay without double writes.
-**Done when** all `ingest.object.*` events include `trace_id`, `object_id`, diff payloads, and unit tests cover failure injection for each agent.
+## Delivered: v4.5B Fitness & Hook Readiness
+- Unified chunking + dedup pipeline via `app.ingest.chunk_policy` and `app.ingest.deduper`, surfaced through `app.agents.pipeline.ingest_and_chunk()`.
+- Rerank hook integrated after hybrid search with provider matrix and `hook_adapter`.
+- CI fitness guards: `app.fitness.metrics.qas003_hybrid_latency()` and `qas010_outbox_to_index_latency()` enforce QAS-003 and QAS-010 thresholds; GitHub smoke workflow prints their JSON reports.
+- Documentation aligned (Architecture/Roadmap/Status) and status board lists P1 (rerank) + P2 (chunk/dedup) as delivered.
 
-### Hook Integration Points
-- Rerank hook: wire `apply_optional_rerank()` after hybrid retrieval, gated by `RERANK_ENABLE` with fallback to identity ordering.
-- Diarization hook: land adapters so audio/text captures can attach speaker turns before normalization.
-- RelationIndex fitness: verify similarity edges are created for dedupe + citation flows.
-**Done when** toggling each hook on/off changes only the targeted subsystem, RelationIndex fitness tests assert ≥95% coverage of duplicate paths, and diarization adapters surface in audit logs.
+## Active Work (v4.6)
+### Objective A — Cross-Encoder Rerank Provider
+Add `ce_local` (deterministic overlap scoring) and `ce_http` (flagged HTTP adapter) behind the existing rerank hook. Providers are invoked only when `RERANK_ENABLE=1` and fall back to `mock_ce`/`none` when unavailable. Acceptance: provider selection tests, HTTP client mocked in CI, golden metrics stay ≥ baseline.
 
-### Chunking & Dedup (P2)
-Chunking policy now lives in `app/ingest/chunk_policy.py` with deterministic ~3k character windows, and ingestion routes through `app/agents/pipeline.ingest_and_chunk()` plus a shared `Deduper`. Duplicates emit `{kind: "duplicate"}` markers that Reviewer and Promotion agents turn into consolidation prompts. **Done when** chunk boundaries remain stable in memory mode, dedup hits repeat content across objects, tests cover chunk sizing + dedup, and ingest latency stays within baseline budgets.
+### Objective B — Relation Index v1 + Orphan Gate
+Implement in-memory RelationIndex CRUD + `has_any()`, propagate provenance links, and gate promotions with the orphan guard (`PROMOTION_ALLOW_ORPHANS` override). Acceptance: relation coverage metrics and tagging readiness require ≥95% promoted objects linked.
+
+### Objective C — Diarization Hook
+`DIARIZE_ENABLE` toggles segmentation; providers include `none`, `mock`, and `external` (HTTP). Metadata preserves `{speaker, text}` entries so ingestion/promotion retain conversation context. Acceptance: mock provider yields ≥2 segments, disabled path is unchanged, no CI dependency on external ASR.
+
+### Objective D — Golden Set + Evaluation Metrics
+Ship synthetic corpus (`data/golden/*`), compute Precision@k and nDCG@k, and assert rerank quality never drops below baseline. Evaluation runs inside the not-pg suite and feeds governance dashboards.
 
 ### Operational Acceptance
 - Latency guard: ingest→index p95 remains ≤ 2 s while hooks and dedup are enabled.
-- Promotion safety: PromotionAgent cooldown metrics show <2% replays per day.
-- Documentation: ARCHITECTURE, ROADMAP, STATUS updated with newly stabilized behaviors.
+- Promotion safety: PromotionAgent cooldown metrics show <2% replays per day and orphan gate coverage ≥95%.
+- Documentation + CHANGELOG updated whenever code changes land.
 
-## Next Increment (v4.6)
-Objectives: ship a real cross-encoder reranker, productionize the diarization adapter, and close the loop on RelationIndex-based trust scoring. Dependencies: selection of hosted cross-encoder (OpenAI or internal), diarization provider access tokens, and storage sizing for RelationIndex snapshots. Open design questions: batching strategy for the cross-encoder, how diarization metadata influences Core-6, and whether RelationIndex needs TTL for stale relations. Test coverage targets: add golden tests for rerank ordering, diarization PER loop fixtures, and regression tests for relation traversal. Performance fitness: rerank-enabled hybrid search must keep QAS-003 p95 < 300 ms, diarization adapter must process 1-hour audio under 4 minutes offline, and RelationIndex rebuild must finish within 10 minutes for 10k objects.
+## Forward Outlook (v4.7)
+v4.7 establishes the reasoning layer: symbolic policies (RDF/OWL/SHACL), reflexive agents that learn from promotion outcomes, and logic-gate governance for cross-object decisions. Work begins once v4.6 objectives A–D reach green status.
 
 ## Forward Outlook (v5.x)
 Symbolic reasoning layer adds RDF/OWL/SHACL validation before promotion. Knowledge graph services expose RelationIndex externally for governance queries. Logic gates allow Reviewer/PromotionAgent to assert multi-object policies. Reflexive agents learn from audit feedback to auto-tune PER plans without skipping human checkpoints.

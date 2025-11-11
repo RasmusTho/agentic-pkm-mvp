@@ -13,6 +13,7 @@ except Exception:  # pragma: no cover
     WhisperModel = None  # type: ignore
 from yt_dlp import YoutubeDL
 
+from app.diarization.hook import apply_diarization
 from app.index.outbox import append_jsonl
 from app.obs.log import span, with_trace_id
 
@@ -125,6 +126,7 @@ def transcribe_source(source: str, *, trace_id: str | None = None) -> Dict[str, 
     audio_path = download_audio(source)
     wav_path = ffmpeg_to_wav(audio_path)
     asr_output = run_asr(wav_path)
+    asr_output = apply_diarization(asr_output)
     record = _record_outbox(source, asr_output)
     record["trace_id"] = trace_id
     # Clean up temporary wav to save disk

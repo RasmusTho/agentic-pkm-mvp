@@ -12,6 +12,8 @@
 - Last CI run: PASS — `pytest -q -m "not pg"` (STORE_BACKEND=memory, LLM_PROVIDER=mock, audit JSONL enabled).
 - Mermaid export: PASS — `docker run --rm -v $(pwd)/tmp:/data minlag/mermaid-cli -i /data/diagram.mmd -o /data/diagram.svg` using the `docs/DIAGRAMS.md` code block.
 - Chunk/dedup coverage: PASS — `pytest -q -m "not pg" -k "chunk_dedup"`.
+- Fitness: PASS — `python -m app.fitness.report` (QAS-003 p95 < 250 ms, QAS-010 ≤ 2 s).
+- Golden evaluation: PASS — `pytest -q -m "not pg" -k "golden_metrics"` (precision@k + nDCG@k within [0,1]).
 
 ## Outstanding Blockers
 - Cross-encoder provider contract for v4.6 reranker (decision pending between OpenAI and local model).

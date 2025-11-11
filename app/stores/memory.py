@@ -237,3 +237,12 @@ class MemoryRelationIndex(RelationIndex):
         rel_map = self._links.get(rel, {})
         neighbors = rel_map.get(src, [])
         return neighbors[:k]
+
+    def has_any(self, src: UUID) -> bool:
+        for rel_map in self._links.values():
+            if src in rel_map and rel_map[src]:
+                return True
+            for neighbors in rel_map.values():
+                if src in neighbors:
+                    return True
+        return False

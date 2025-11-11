@@ -255,6 +255,22 @@ class PgRelationIndex(RelationIndex):
                 rows = cur.fetchall()
         return [row["dst_id"] for row in rows]
 
+    def has_any(self, src: UUID) -> bool:
+        _ensure_tables()
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM store_relations
+                    WHERE src_id = %s OR dst_id = %s
+                    LIMIT 1
+                    """,
+                    (src, src),
+                )
+                row = cur.fetchone()
+        return bool(row)
+
 
 __all__ = [
     "PgObjectStore",
