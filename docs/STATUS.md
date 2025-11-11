@@ -1,17 +1,18 @@
 # STATUS — Snapshot (2025-11-08)
 
-## Active Version: v4.5
+**Status:** v4.5 stable — CI green (memory-mode)
 
-✅ Completed components:
-- Search service locked to FT-first hybrid ordering for deterministic retrieval.
-- Ingest delegation restored (`app/search/service.py::ingest_object` → `app.ingest.ingest_object`) with fallback for minimal harnesses.
-- CI smoke validation (memory + pg matrix) installs runtime requirements, migrates Postgres, and runs code-fence/pytest gates.
+## Highlights
+- Search flow locked to FT-first hybrid ordering with rerank + guardrails; outputs cite sources + trace IDs.
+- Ingest delegation restored end-to-end: CLI → Normalizer → ObjectStore (`emit_outbox=True`) → Index Outbox.
+- Smoke CI matches local expectations (`STORE_BACKEND=memory`, `LLM_PROVIDER=mock`, `SKIP_CLASSIFIER_TESTS=1`) and requires no Postgres services.
+- Audit logging now buffers JSONL events in memory when Postgres is disabled, keeping traces visible during tests.
 
-🧩 Next focus (v4.6):
-- Formalize Store interfaces (ObjectStore / VectorIndex / RelationIndex) and document contracts.
-- Wire Indexer agent to Outbox-driven indexing (`index.object.embedded`) end-to-end.
-- Promotion v2: move policy refinements + `pending_move` events feeding PER loops.
+## Next focus (Reasoning prep)
+- Finish Store contract docs/tests (ObjectStore, VectorIndex, RelationIndex) so Promotion Agent + QA share the same abstractions.
+- Wire Indexer agent to consume Outbox events deterministically in memory mode before enabling RDF/OWL reasoning.
+- Promotion v2: capture provenance edges + publish intent/done events that the upcoming reasoning layer can validate.
 
 ## Known limitations
-- None beyond roadmap items; see [`docs/ROADMAP.md`](docs/ROADMAP.md).
-   
+- Event schemas rely on convention; schema lint is tracked in `docs/ROADMAP.md`.
+- Reasoning/RDF exports are drafted but not yet runnable in CI.
