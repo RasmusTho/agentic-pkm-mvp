@@ -1,8 +1,9 @@
 from __future__ import annotations
-import os
+
 import json
+import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import psycopg
@@ -10,14 +11,15 @@ from psycopg.rows import dict_row
 
 from app.db import conn_rw
 
-_IN_MEMORY_STORE: dict[str, list[dict]] = {}
+MemoryKey = tuple[str, str, str | None]
+MemoryEntry = tuple[datetime, dict[str, Any]]
+
+_IN_MEMORY_STORE: dict[MemoryKey, list[MemoryEntry]] = {}
 MEMORY_ENABLED = os.getenv("MEMORY_ENABLED", "true").lower() not in ("0", "false", "no", "off")
 
 
 def _dsn() -> str:
-    # Fallback till din lokala dev-URL om DATABASE_URL inte är satt
     v = os.environ.get("DATABASE_URL") or "postgresql+psycopg://app:app@127.0.0.1:15432/app"
-    # psycopg2-style
     return v.replace("postgresql+psycopg://", "postgresql://")
 
 
@@ -26,24 +28,23 @@ def _enabled() -> bool:
 
 
 def _safe_connect(rowed: bool = False):
-    """
-    Försök skapa en psycopg-connection direkt mot _dsn().
-    Om det failar (t.ex. ingen DB i pytest) -> returnera None istället för att kasta.
-    """
     try:
         if rowed:
             return psycopg.connect(_dsn(), row_factory=dict_row)
-        else:
-            return psycopg.connect(_dsn())
+        return psycopg.connect(_dsn())
     except Exception:
         return None
 
 
+def _memory_key(agent: str, kind: str, object_id: Optional[str]) -> MemoryKey:
+    return (agent, kind, object_id)
+
+
+def _memory_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def remember(agent: str, kind: str, object_id: Optional[str], trace_id: str, data: dict) -> None:
-    """
-    Spara korttidsminne för agenten.
-    I testmiljön ska detta aldrig få krascha om DB saknas.
-    """
     if not _enabled():
         return
 
@@ -56,9 +57,10 @@ def remember(agent: str, kind: str, object_id: Optional[str], trace_id: str, dat
 
     conn = _safe_connect(rowed=False)
     if conn is None:
-        key = f"{agent}:{kind}:{object_id or ''}"
-        _IN_MEMORY_STORE.setdefault(key, []).insert(0, payload)
-        _IN_MEMORY_STORE[key] = _IN_MEMORY_STORE[key][:200]
+        key = _memory_key(agent, kind, object_id)
+        bucket = _IN_MEMORY_STORE.setdefault(key, [])
+        bucket.insert(0, (_memory_now(), payload))
+        _IN_MEMORY_STORE[key] = bucket[:200]
         return
 
     try:
@@ -82,10 +84,6 @@ def remember(agent: str, kind: str, object_id: Optional[str], trace_id: str, dat
 
 
 def recall(agent: str, kind: str, *, object_id: Optional[str] = None, limit: int = 20) -> list[dict]:
-    """
-    Hämta senaste minnen för agenten.
-    I testmiljön ska detta bara returnera [] om DB inte är uppe.
-    """
     if not _enabled():
         return []
 
@@ -110,8 +108,9 @@ def recall(agent: str, kind: str, *, object_id: Optional[str] = None, limit: int
 
     conn = _safe_connect(rowed=True)
     if conn is None:
-        key = f"{agent}:{kind}:{object_id or ''}"
-        return list(_IN_MEMORY_STORE.get(key, []))[: limit]
+        key = _memory_key(agent, kind, object_id)
+        entries = _IN_MEMORY_STORE.get(key, [])
+        return [dict(entry[1]) for entry in entries[: limit]]
 
     try:
         with conn:
@@ -124,10 +123,6 @@ def recall(agent: str, kind: str, *, object_id: Optional[str] = None, limit: int
 
 
 def decay(agent: str, kind: str, *, before_ts: Optional[datetime] = None) -> int:
-    """
-    Glöm gamla minnen före en viss timestamp.
-    Testmiljön: ska inte kasta om DB saknas.
-    """
     if not _enabled():
         return 0
     if before_ts is None:
@@ -135,7 +130,18 @@ def decay(agent: str, kind: str, *, before_ts: Optional[datetime] = None) -> int
 
     conn = _safe_connect(rowed=False)
     if conn is None:
-        return 0
+        total_deleted = 0
+        for key, entries in list(_IN_MEMORY_STORE.items()):
+            key_agent, key_kind, _ = key
+            if key_agent != agent or key_kind != kind:
+                continue
+            kept = [entry for entry in entries if entry[0] >= before_ts]
+            total_deleted += len(entries) - len(kept)
+            if kept:
+                _IN_MEMORY_STORE[key] = kept
+            else:
+                _IN_MEMORY_STORE.pop(key, None)
+        return total_deleted
 
     try:
         with conn:
