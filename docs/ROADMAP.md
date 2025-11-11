@@ -1,7 +1,7 @@
 
 ### `docs/ROADMAP.md`
 
-# Roadmap — SoT v4.3.1 → v4.4 → v4.5 → v5.0
+# Roadmap — SoT v4.5 stable baseline
 
 _Tracks strategic releases and planned features._
 
@@ -12,18 +12,17 @@ _Tracks strategic releases and planned features._
 - Search hybrid flow (BM25 + vector via RRF) uses the corrected call signature and is covered by regression tests.
 - Ingest module re-exports `ingest_object`, `normalize_payload`, `handle_post_ingest`, keeping CLI/tests aligned.
 
-## Milestones
+## Stable baseline — ✅ v4.5 (Search & Ingest Stabilization)
+- Unified ingestion lifecycle, including OCR + AV, routes through ObjectStore with UUID guarantees.
+- Deterministic FT-first hybrid search with rerank and guardrails produces traceable answers.
+- Memory-mode CI is authoritative: smoke workflow runs `STORE_BACKEND=memory`, `LLM_PROVIDER=mock`, `SKIP_CLASSIFIER_TESTS=1` without Postgres services.
+- Documentation (Architecture, Status, Diagrams) reflects the Store abstraction and Promotion Agent contracts.
 
-✅ v4.5 – Search & Ingest Stabilization  
- • Restored full ingest lifecycle  
- • Deterministic FT-first hybrid search  
- • Stable smoke CI (memory/pg matrix)  
- • Doc fences validated  
-
-Next: v4.6 – Store Abstraction + Event Indexing  
- • Finalize ObjectStore / VectorIndex / RelationIndex interfaces  
- • Connect Indexer agent to Outbox events (`index.object.embedded`)  
- • Expand PER-loop integration tests  
+## Next milestone — ▶️ v5 — Reasoning Layer (Logic & RDF/OWL integration)
+- Introduce a reasoning tier that projects promotion/ingest facts into RDF/OWL so symbolic checks can co-exist with subsymbolic agents.
+- Extend RelationIndex to emit triples + SHACL-like constraints and teach Promotion Agent to assert provenance edges.
+- Add a lightweight logic engine (prolog-esque or `pyshacl`) to validate claims before publishing; surface violations via Outbox topics.
+- Expose reasoning summaries in the CLI/API so humans can trace why an object moved between states.
 
 ## Next
 1. Unify ingestion through the Store interfaces end-to-end (ObjectStore, VectorIndex, RelationIndex) so routers/agents never import psycopg directly.
@@ -65,7 +64,7 @@ Delivered (selection)
 
 ---
 
-## v4.4 — Observability, Stores & Conflict Resolution (In progress / Running)
+## v4.4 — Observability, Stores & Conflict Resolution (Delivered)
 
 **Goal:** Make the system boring-in-production while laying the Store foundation.
 
@@ -137,11 +136,12 @@ Delivered (selection)
 
 ---
 
-## v5.0 — Reasoning Alpha (Longer-term)
+## v5 — Reasoning Layer (Logic & RDF/OWL integration) — Longer-term
 
-**Goal:** Add a reasoning / integrity layer on top of SetDB+AMG without letting hallucinations overwrite truth.
+**Goal:** Add a reasoning / integrity layer on top of SetDB+AMG without letting hallucinations overwrite truth, using RDF/OWL vocab + logic constraints.
 
 **Direction**
-- Represent claims/relationships as explicit triples with provenance.
-- Guard/Reasoner agent validates constraints (SHACL-style), detects contradictions, flags missing provenance.
+- Represent claims/relationships as explicit triples with provenance surfaced through RelationIndex APIs.
+- Guard/Reasoner agent validates SHACL-style constraints, detects contradictions, and flags missing provenance before Promotion Agent can publish.
 - Neurosymbolic loop: subsymbolic agents propose; symbolic layer evaluates; outputs become `decisions`/`audit`/`cleanup.intent.created`, not silent mutation of canonical notes.
+- RDF/OWL export + SPARQL diagnostics keep reasoning explainable and replayable in CI.
