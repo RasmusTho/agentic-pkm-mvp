@@ -9,6 +9,7 @@ from rank_bm25 import BM25Okapi
 from rapidfuzz import process
 
 from app.index.embeddings import embed_batches, embed_text
+from app.retrieval.hook_adapter import maybe_rerank
 
 
 @dataclass
@@ -173,13 +174,15 @@ def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None) -> 
         snippet = _snippet(doc.text, query)
         results.append(
             {
+                "id": doc.doc_id,
                 "doc_id": doc.doc_id,
+                "text": doc.text,
                 "score": score,
                 "snippet": snippet,
                 "source_ref": doc.source_ref,
             }
         )
-    return results
+    return maybe_rerank(query, results)
 
 
 __all__ = ["hybrid_search", "get_store", "MemoryHybridStore", "Document"]

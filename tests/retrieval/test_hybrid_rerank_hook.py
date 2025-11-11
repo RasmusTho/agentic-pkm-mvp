@@ -1,22 +1,19 @@
 from __future__ import annotations
 
-import contextlib
 import importlib
-import os
 
 import pytest
 
 pytestmark = pytest.mark.not_pg
 
 
-def _reset_env() -> None:
+@pytest.fixture(autouse=True)
+def clear_rerank_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in ("RERANK_ENABLE", "RERANK_TOP_K", "RERANK_PROVIDER"):
-        with contextlib.suppress(KeyError):
-            del os.environ[key]
+        monkeypatch.delenv(key, raising=False)
 
 
 def test_hook_is_inert_by_default() -> None:
-    _reset_env()
     mod = importlib.import_module("app.retrieval.hybrid_rerank_hook")
     importlib.reload(mod)
     items = [
@@ -28,10 +25,9 @@ def test_hook_is_inert_by_default() -> None:
     assert [o["id"] for o in out] == ["a", "b", "c"]
 
 
-def test_hook_reorders_when_enabled_with_mock_ce() -> None:
-    _reset_env()
-    os.environ["RERANK_ENABLE"] = "1"
-    os.environ["RERANK_PROVIDER"] = "mock_ce"
+def test_hook_reorders_when_enabled_with_mock_ce(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RERANK_ENABLE", "1")
+    monkeypatch.setenv("RERANK_PROVIDER", "mock_ce")
     mod = importlib.import_module("app.retrieval.hybrid_rerank_hook")
     importlib.reload(mod)
     items = [
@@ -43,11 +39,10 @@ def test_hook_reorders_when_enabled_with_mock_ce() -> None:
     assert [o["id"] for o in out][:3] == ["b", "a", "c"]
 
 
-def test_hook_respects_top_k() -> None:
-    _reset_env()
-    os.environ["RERANK_ENABLE"] = "true"
-    os.environ["RERANK_PROVIDER"] = "mock_ce"
-    os.environ["RERANK_TOP_K"] = "2"
+def test_hook_respects_top_k(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RERANK_ENABLE", "true")
+    monkeypatch.setenv("RERANK_PROVIDER", "mock_ce")
+    monkeypatch.setenv("RERANK_TOP_K", "2")
     mod = importlib.import_module("app.retrieval.hybrid_rerank_hook")
     importlib.reload(mod)
     items = [
