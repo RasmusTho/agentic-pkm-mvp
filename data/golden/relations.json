@@ -1,0 +1,8 @@
+{
+  "promoted": [
+    {"doc_id": "g-doc-1", "relations": ["g-doc-2", "g-doc-3"]},
+    {"doc_id": "g-doc-2", "relations": ["g-doc-1"]},
+    {"doc_id": "g-doc-3", "relations": []},
+    {"doc_id": "g-doc-4", "relations": []}
+  ]
+}

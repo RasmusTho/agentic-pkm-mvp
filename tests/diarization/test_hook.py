@@ -50,3 +50,22 @@ def test_external_diarizer_uses_http(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = {"text": "Hello world."}
     out = apply_diarization(payload)
     assert [seg["speaker"] for seg in out["segments"]] == ["external-a", "external-b"]
+
+
+def test_pipeline_uses_segments(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.agents.pipeline import ingest_and_chunk
+    from app.ingest.deduper import Deduper
+
+    monkeypatch.setenv("DIARIZE_ENABLE", "1")
+    monkeypatch.setattr("app.agents.pipeline._deduper", Deduper())
+    obj = {
+        "uuid": "p1",
+        "text": "",
+        "segments": [
+            {"speaker": "spk_0", "text": "alpha start"},
+            {"speaker": "spk_1", "text": "beta follow up"},
+        ],
+    }
+    chunks = ingest_and_chunk(obj)
+    assert chunks[0]["speaker"] == "spk_0"
+    assert chunks[1]["speaker"] == "spk_1"

@@ -14,7 +14,7 @@ def test_intent_leads_to_index_visibility(tmp_path: Path, monkeypatch):
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text(dedent("""\
     ---
-    uuid: U6
+    uuid: 00000000-0000-0000-0000-000000000006
     review_state: inbox
     ---
     - [x] Promote
@@ -27,8 +27,10 @@ def test_intent_leads_to_index_visibility(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(q, "SETTINGS", tmp_path / "settings.yaml")
     monkeypatch.setattr(q, "VAULT", vault)
     (tmp_path / "settings.yaml").write_text("promotion:\n  cooldown_seconds: 0\n  require_idle_seconds: 0\n  max_retries: 1\n  move_policy:\n    enabled: false\n    default_target: 2_Cards/Concepts\n", encoding="utf-8")
+    monkeypatch.setenv("PROMOTION_ALLOW_ORPHANS", "1")
+    monkeypatch.setenv("PROMOTION_ORPHAN_OVERRIDE_REASON", "tests")
 
-    enqueue(note, uuid="U6", desired_state="promoted")
+    enqueue(note, uuid="00000000-0000-0000-0000-000000000006", desired_state="promoted")
     assert run_once() == 1
 
     idx = build_index(vault, RULES, ignore_glob=["_system/**"])

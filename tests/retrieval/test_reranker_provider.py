@@ -79,7 +79,7 @@ def test_ce_local_provider(monkeypatch: pytest.MonkeyPatch):
 def test_ce_http_provider(monkeypatch: pytest.MonkeyPatch):
     provider = _reload()
     monkeypatch.setenv("RERANK_PROVIDER", "ce_http")
-    monkeypatch.setenv("RERANK_HTTP_ENDPOINT", "https://rerank.local")
+    monkeypatch.setenv("CE_HTTP_URL", "https://rerank.local")
 
     class DummyResponse:
         def __init__(self, payload):
@@ -111,7 +111,7 @@ def test_ce_http_provider(monkeypatch: pytest.MonkeyPatch):
 def test_ce_http_fallback_to_mock(monkeypatch: pytest.MonkeyPatch):
     provider = _reload()
     monkeypatch.setenv("RERANK_PROVIDER", "ce_http")
-    monkeypatch.setenv("RERANK_HTTP_ENDPOINT", "https://rerank.local")
+    monkeypatch.setenv("CE_HTTP_URL", "https://rerank.local")
 
     def fake_post(url, json, timeout):
         raise RuntimeError("network down")

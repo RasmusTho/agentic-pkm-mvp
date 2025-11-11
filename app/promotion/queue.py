@@ -1,8 +1,15 @@
 from __future__ import annotations
-import json, time, shutil, hashlib
+
+import hashlib
+import json
+import os
+import shutil
+import time
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
+
 import yaml
+
 from .policy import pick_target as _pick_target
 from app.observability.tracing import current_trace_id, span
 from app.promotion.gates import OrphanPromotionError, ensure_object_has_relations
@@ -106,19 +113,43 @@ def run_once() -> int:
 
                 uuid = ev.get("uuid")
                 if uuid:
+                    allow_override = os.getenv("PROMOTION_ALLOW_ORPHANS", "").strip()
+                    override_reason = (os.getenv("PROMOTION_ORPHAN_OVERRIDE_REASON") or "").strip()
                     try:
                         ensure_object_has_relations(uuid)
                     except OrphanPromotionError as oom:
-                        _append_jsonl(LOG, {
-                            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                            "level": "warn",
-                            "event": "promote.skip.orphan",
-                            "uuid": uuid,
-                            "path": str(p),
-                            "reason": str(oom),
-                            "trace_id": current_trace_id()
-                        })
-                        continue
+                        if allow_override and override_reason:
+                            ensure_object_has_relations(
+                                uuid,
+                                allow_orphans=True,
+                                override_reason=override_reason,
+                            )
+                            _append_jsonl(
+                                LOG,
+                                {
+                                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                    "level": "info",
+                                    "event": "promote.orphan.override",
+                                    "uuid": uuid,
+                                    "path": str(p),
+                                    "reason": override_reason,
+                                    "trace_id": current_trace_id(),
+                                },
+                            )
+                        else:
+                            _append_jsonl(
+                                LOG,
+                                {
+                                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                    "level": "warn",
+                                    "event": "promote.skip.orphan",
+                                    "uuid": uuid,
+                                    "path": str(p),
+                                    "reason": str(oom),
+                                    "trace_id": current_trace_id(),
+                                },
+                            )
+                            continue
 
                 with span("worker.read_frontmatter"):
                     meta, body = _read_frontmatter(p)

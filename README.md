@@ -41,3 +41,18 @@ The rerank hook is applied at the final candidate merge step, preserving default
 - v4.5A: Delivered (this baseline)
 - v4.5B: Open — retrieval polish (rerank integration, diarization hooks, RelationIndex fitness)
 - v4.6: Planned — retrieval quality and reasoning prep
+
+## Environment Flags
+| Flag | Default | Description |
+| --- | --- | --- |
+| `STORE_BACKEND` | `memory` | Selects memory vs pg stores (CI uses memory). |
+| `LLM_PROVIDER` | `mock` | Deterministic LLM adapter for tests; set to `ollama` locally. |
+| `RERANK_ENABLE` | unset | Enables rerank hook when truthy. |
+| `RERANK_PROVIDER` | `none` | `none|mock_ce|ce_local|ce_http` provider matrix. |
+| `RERANK_TOP_K` | unset | Maximum candidates to rerank (optional). |
+| `DIARIZE_ENABLE` | unset | Enables diarization-aware ingestion pipeline. |
+| `DIARIZE_PROVIDER` | `mock` | `none|mock|external` diarization providers. |
+| `RERANK_HTTP_ENDPOINT` | unset | Required for `ce_http`; not contacted in CI. |
+| `DIARIZE_HTTP_ENDPOINT` | unset | Required for `DIARIZE_PROVIDER=external`; stubbed in CI. |
+| `PROMOTION_ALLOW_ORPHANS` | unset | When truthy, bypasses orphan gate (requires override reason). |
+| `PROMOTION_ORPHAN_OVERRIDE_REASON` | unset | Message logged/audited when overriding orphan gate. |

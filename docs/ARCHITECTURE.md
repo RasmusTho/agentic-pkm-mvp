@@ -62,21 +62,33 @@ Both probes run in memory mode with `LLM_PROVIDER=mock` so they remain determini
 `app.retrieval.rerank.provider` exposes a plug-in matrix:
 - `none` — bypass reranking, preserve original ordering.
 - `mock_ce` — deterministic overlap scoring for tests.
-- `ce_local` — token overlap + positional scoring that runs entirely in Python; controlled via `RERANK_CE_LOCAL_MODEL`.
-- `ce_http` — posts `{query, items}` JSON to `RERANK_HTTP_ENDPOINT` and falls back to `mock_ce` when the service is unavailable.
+- `ce_local` — token overlap + positional scoring that runs entirely in Python; controlled via `RERANK_CE_LOCAL_MODEL` and deterministic in CI.
+- `ce_http` — posts `{query, items}` JSON to `RERANK_HTTP_ENDPOINT` with graceful fallback to the mock provider when the service is unavailable.
 `RERANK_ENABLE` gates all providers, and `RERANK_TOP_K` constrains how many candidates the cross-encoder can reorder.
 
+| Provider | Flag | Env knobs | Notes |
+| --- | --- | --- | --- |
+| `none` | default | — | Identity ordering. |
+| `mock_ce` | `RERANK_PROVIDER=mock_ce` | `RERANK_TOP_K` | Deterministic overlap for tests. |
+| `ce_local` | `RERANK_PROVIDER=ce_local` | `RERANK_CE_LOCAL_MODEL` | Pure-Python overlap + positional bonus. |
+| `ce_http` | `RERANK_PROVIDER=ce_http` | `RERANK_HTTP_ENDPOINT`, `RERANK_HTTP_TIMEOUT` | External cross-encoder client with fallback to mock. |
+
 ## Relation Index v1 & Orphan Gate
-`MemoryRelationIndex` and `PgRelationIndex` now implement `link()`, `neighbors()`, and `has_any()` so agents can assert provenance before publishing. PromotionAgent wires in `app.promotion.gates.ensure_object_has_relations()` — if no relation exists for a queued UUID, the agent logs `promote.skip.orphan` unless `PROMOTION_ALLOW_ORPHANS=1`. This keeps the promoted surface free from orphaned knowledge while still allowing manual overrides during migrations.
+`MemoryRelationIndex` and `PgRelationIndex` now implement `link()`, `neighbors()`, and `has_any()` so agents can assert provenance before publishing. PromotionAgent wires in `app.promotion.gates.ensure_object_has_relations()` — if no relation exists for a queued UUID the agent blocks promotion by default. Overrides require `PROMOTION_ALLOW_ORPHANS=1` plus `PROMOTION_ORPHAN_OVERRIDE_REASON`, which emits an `audit_log(action="promotion.orphan.override")` entry and a `promote.orphan.override` log line. This keeps the promoted surface free from orphaned knowledge while still allowing audited manual exceptions. CI also reports the ratio of promoted items with relations using the golden sample in `data/golden/relations.json`.
 
 ## Diarization Hook
 `app.diarization.hook.apply_diarization()` post-processes ASR output inside `app/media/transcribe.py`. Flags:
 - `DIARIZE_ENABLE` — master switch (defaults to off).
 - `DIARIZE_PROVIDER` — `none|mock|external`; the mock provider yields alternating `spk_0`/`spk_1` segments without external dependencies, while the external provider calls `DIARIZE_HTTP_ENDPOINT` and falls back to mock on errors.
+| Provider | Env | Behaviour |
+| --- | --- | --- |
+| `none` | `DIARIZE_ENABLE=0` or provider unset | Pass-through single segment. |
+| `mock` | `DIARIZE_ENABLE=1`, `DIARIZE_PROVIDER=mock` | Splits text into alternating speakers deterministically. |
+| `external` | `DIARIZE_PROVIDER=external`, `DIARIZE_HTTP_ENDPOINT=<url>` | Calls HTTP diarization API with fallback to mock. |
 Segments preserve `{speaker, text}` metadata so downstream ingestion can attach speaker context without reprocessing audio.
 
 ## Golden Set Evaluation
-`app.eval.golden.evaluate_golden_set()` loads `data/golden/corpus.jsonl` plus `data/golden/judgments.json`, stamps them into the hybrid store, and runs `precision@k` / `nDCG@k` over the synthetic queries. The evaluation runs as part of the not-pg test suite to guarantee that rerank and retrieval improvements never regress the baseline metrics; docs and CI reference the golden corpus as the agreed benchmark.
+`app.eval.golden.evaluate_golden_set()` loads `data/golden/corpus.jsonl` plus `data/golden/judgments.json`, stamps them into the hybrid store, and runs `precision@k` / `nDCG@k` over the synthetic queries. The evaluation runs as part of the not-pg test suite to guarantee that rerank and retrieval improvements never regress the baseline metrics; docs and CI reference the golden corpus as the agreed benchmark. `python -m app.fitness.report` compares ce_local against the baseline provider and emits `CI SUMMARY EVAL P@10=<val> nDCG@10=<val>` so regressions block merges automatically.
 
 ## Extensibility & v5 Direction
 The v5 roadmap layers declarative reasoning (RDF/OWL/SHACL constraints) on top of the existing stores, enabling Reviewer and PromotionAgent to validate logic gates instead of bespoke Python checks. The Agent Memory Graph will evolve to persist reflective notes per object, informing future PER plans. Provenance and promotion governance will add policy bundles (who can promote, when to reset cooldowns) so humans stay accountable even as automation deepens.

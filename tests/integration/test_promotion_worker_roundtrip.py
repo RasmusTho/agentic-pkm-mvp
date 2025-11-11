@@ -11,8 +11,8 @@ def test_roundtrip_promotes_and_cleans_intent(tmp_path: Path, monkeypatch):
     vault.mkdir(parents=True, exist_ok=True)
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text(dedent("""\
-    ---
-    uuid: U4
+        ---
+        uuid: 00000000-0000-0000-0000-000000000004
     review_state: inbox
     ---
     - [x] Promote
@@ -34,8 +34,10 @@ def test_roundtrip_promotes_and_cleans_intent(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(q, "LOG", log)
     monkeypatch.setattr(q, "SETTINGS", settings)
     monkeypatch.setattr(q, "VAULT", vault)
+    monkeypatch.setenv("PROMOTION_ALLOW_ORPHANS", "1")
+    monkeypatch.setenv("PROMOTION_ORPHAN_OVERRIDE_REASON", "tests")
 
-    enqueue(note, uuid="U4", desired_state="promoted")
+    enqueue(note, uuid="00000000-0000-0000-0000-000000000004", desired_state="promoted")
     processed = run_once()
     assert processed == 1
 

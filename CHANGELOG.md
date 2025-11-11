@@ -1,10 +1,10 @@
 # Changelog
 
 ## v4.6 — Retrieval Quality & Reasoning Prep (in progress)
-- Cross-encoder providers (`ce_local`, `ce_http`) behind `RERANK_ENABLE`, with graceful fallback to `mock_ce`.
-- RelationIndex v1 gains `has_any()` plus the Promotion orphan gate (`PROMOTION_ALLOW_ORPHANS` override).
-- Diarization hook wired into transcription with providers (`none|mock|external`) behind `DIARIZE_ENABLE`.
-- Golden set evaluation pipeline (`data/golden/*`) produces Precision@k and nDCG@k metrics in CI.
+- Cross-encoder providers (`ce_local`, `ce_http`) behind `RERANK_ENABLE`, with graceful fallback to `mock_ce`; golden-set evaluation compares ce_local vs baseline and CI prints `EVAL P@10` / `nDCG@10`.
+- RelationIndex v1 gains `has_any()` plus the Promotion orphan gate (default block) with audited overrides via `PROMOTION_ALLOW_ORPHANS` + `PROMOTION_ORPHAN_OVERRIDE_REASON`; CI reports relation coverage.
+- Diarization hook wired into transcription with providers (`none|mock|external`) behind `DIARIZE_ENABLE`, feeding speaker-aware chunking.
+- Golden set evaluation pipeline (`data/golden/*`) produces Precision@k and nDCG@k metrics in CI; doc integrity + PR/issue templates keep contracts enforced.
 
 ## v4.5B — Fitness & Hook Readiness
 - QAS-003/QAS-010 latency checks implemented in `app.fitness.metrics` and executed via GitHub smoke workflow.
