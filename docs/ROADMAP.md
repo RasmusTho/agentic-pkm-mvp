@@ -24,8 +24,11 @@ Scope: tighten Normalizer ↔ Deduper interfaces, ensure every agent emits struc
 - RelationIndex fitness: verify similarity edges are created for dedupe + citation flows.
 **Done when** toggling each hook on/off changes only the targeted subsystem, RelationIndex fitness tests assert ≥95% coverage of duplicate paths, and diarization adapters surface in audit logs.
 
+### Chunking & Dedup (P2)
+Chunking policy now lives in `app/ingest/chunk_policy.py` with deterministic ~3k character windows, and ingestion routes through `app/agents/pipeline.ingest_and_chunk()` plus a shared `Deduper`. Duplicates emit `{kind: "duplicate"}` markers that Reviewer and Promotion agents turn into consolidation prompts. **Done when** chunk boundaries remain stable in memory mode, dedup hits repeat content across objects, tests cover chunk sizing + dedup, and ingest latency stays within baseline budgets.
+
 ### Operational Acceptance
-- Latency guard: ingest→index p95 remains ≤ 2 s while hooks are enabled.
+- Latency guard: ingest→index p95 remains ≤ 2 s while hooks and dedup are enabled.
 - Promotion safety: PromotionAgent cooldown metrics show <2% replays per day.
 - Documentation: ARCHITECTURE, ROADMAP, STATUS updated with newly stabilized behaviors.
 
