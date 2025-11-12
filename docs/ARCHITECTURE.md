@@ -41,6 +41,9 @@ Every agent follows Plan → Execute → Reflect. Plan inspects the latest event
 When `DIARIZE_ENABLE=1`, the ingestion pipeline now feeds diarization metadata (speaker, start, end) into `speaker_aware_chunks()` so spans are cut on speaker changes or size boundaries (O(n) over segment length). Each emitted chunk carries `{speaker,start,end,speaker_segments}` metadata that flows through `ingest_and_chunk()` to indexing, and the audit stream (`text.chunk.created`) records `speaker_count` so reviewers can trace diarization coverage. With the flag disabled, `build_chunks()` preserves the legacy token/character splitter to keep defaults inert and deterministic.
 Oversized per-speaker segments are deterministically pre-split to respect `max_chars`; proportional start/end timestamps keep timelines monotonic without re-reading audio.
 
+### Reasoning Layer v1 (SoT v4.7-A)
+`app/reasoning/provider.get_reasoner()` selects a backend (`mock` for CI, `ollama` locally) that consumes `ReasoningInput` (note text + relation snapshots) and emits structured JSON (`claims`, `evidence`, `inferences`) validated via `app/reasoning/schema`. The pipeline runs this step only when `REASONING_ENABLE=1`, stores results in the in-memory ReasoningStore, and audits `reasoning.claim.added` / `reasoning.inference.added` counts. Mock outputs are fixture-backed (`data/golden/reasoning_samples.jsonl`) so CI remains deterministic, while live runs go through the standard Ollama client with strict JSON prompts and retry bounds.
+
 ## Persistence & Execution Modes
 - `STORE_BACKEND=memory` is the default for CI and unit tests; it instantiates in-memory implementations of ObjectStore, VectorIndex, and RelationIndex with deterministic UUID seeds.
 - `STORE_BACKEND=pg` connects to Postgres/pgvector for full-fidelity runs; migrations guarantee schema parity with the memory structs.

@@ -29,6 +29,13 @@
 - `app.fitness.report` now parses its own summary lines, enforces the baselines (latency ≤ baseline × tolerance, rerank deltas ≥ configured mins, relation coverage/validity ≥95 %, diarization p95 ratio ≤0.95), emits `CI SUMMARY GATES ok=<bool> reasons=<codes>`, and exits non-zero on regression.
 - `.github/workflows/ci-smoke.yaml` tees the report into `tmp/ci_summary.log`, runs a verification step that requires all seven lines and `ok=true`, and the PR template calls out the requirement to paste the summary/gates lines plus declare flags used.
 
+## v4.7 — Reasoning Layer & Reflexive Agents (in progress)
+
+### v4.7-A — LLM Reasoning Layer v1
+- Introduced `app/reasoning` (schema, provider, store, prompts) plus `data/golden/reasoning_samples.jsonl`; `REASONING_ENABLE=1` triggers the pipeline hook to call a reasoner (mock in CI, Ollama locally), validate JSON, store claims/evidence/inferences, and audit reasoning events.
+- `app/fitness/reasoning.py` feeds the golden samples through the mock reasoner, emits `CI SUMMARY REASONING claims_avg=<v> inferences_avg=<v> conflicts=<n> flag=<on|off>`, and new gates (driven by `ops/quality/baselines.yaml`) require non-zero inferences with conflicts capped at baseline.
+- New tests cover the mock provider, pipeline hook, fitness metrics, and CI verifier; docs/README detail baselines + overrides (`THRESHOLDS_PATH`, `GATE_STRICT=1`), and the CI workflow now enforces the eight-line summary contract.
+
 ## v4.5B — Fitness & Hook Readiness
 - QAS-003/QAS-010 latency checks implemented in `app.fitness.metrics` and executed via GitHub smoke workflow.
 - Hybrid rerank hook integration completed with adapter and provider matrix.

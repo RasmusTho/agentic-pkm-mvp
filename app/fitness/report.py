@@ -12,6 +12,7 @@ from app.eval.golden import evaluate_vs_baseline
 from .metrics import qas003_hybrid_latency, qas010_outbox_to_index_latency
 from .relations import relation_metrics
 from .chunks import diarization_metrics
+from .reasoning import reasoning_metrics
 
 SUMMARY_LABELS = [
     "LATENCY",
@@ -20,6 +21,7 @@ SUMMARY_LABELS = [
     "RELATION COVERAGE",
     "RELATIONS",
     "DIARIZATION",
+    "REASONING",
     "GATES",
 ]
 
@@ -111,6 +113,7 @@ def evaluate_gates(
     provider: str,
     diarization_off: Dict[str, Any],
     strict: bool,
+    reasoning_enabled: bool,
 ) -> tuple[bool, List[str]]:
     reasons: List[str] = []
 
@@ -177,6 +180,19 @@ def evaluate_gates(
         if ratio > ratio_limit:
             reasons.append("DIA_P95")
 
+    reasoning_summary = summary.get("REASONING", {})
+    if reasoning_enabled:
+        reason_cfg = thresholds.get("reasoning", {})
+        claims_avg = reasoning_summary.get("claims_avg")
+        inf_avg = reasoning_summary.get("inferences_avg")
+        conflicts = reasoning_summary.get("conflicts")
+        if claims_avg is None or claims_avg < reason_cfg.get("claims_avg_min", 0.0):
+            reasons.append("REASONING")
+        elif inf_avg is None or inf_avg < reason_cfg.get("inferences_avg_min", 0.0):
+            reasons.append("REASONING")
+        elif conflicts is not None and conflicts > reason_cfg.get("conflicts_max", float("inf")):
+            reasons.append("REASONING")
+
     return (not reasons), reasons
 
 
@@ -189,6 +205,8 @@ def main() -> None:
     relation_stats = relation_metrics()
     diarization_off = diarization_metrics(flag_enabled=False)
     diarization_on = diarization_metrics(flag_enabled=True)
+    reasoning_enabled = _truthy(os.getenv("REASONING_ENABLE"))
+    reasoning_stats = reasoning_metrics(flag_enabled=reasoning_enabled)
     coverage = relation_stats["coverage"]
     validity = relation_stats["validity"]
     payload = {
@@ -242,6 +260,13 @@ def main() -> None:
         speaker_avg=f"{diarization_on['speaker_avg']:.2f}",
         flag="on",
     )
+    _emit(
+        "REASONING",
+        claims_avg=f"{reasoning_stats['claims_avg']:.2f}",
+        inferences_avg=f"{reasoning_stats['inferences_avg']:.2f}",
+        conflicts=f"{reasoning_stats['conflicts']:.2f}",
+        flag="on" if reasoning_enabled else "off",
+    )
 
     fail = False
     thresholds = load_thresholds()
@@ -259,6 +284,7 @@ def main() -> None:
         provider=provider,
         diarization_off=diarization_off,
         strict=strict,
+        reasoning_enabled=reasoning_enabled,
     )
     gates_line = _summary_line(
         "GATES",
