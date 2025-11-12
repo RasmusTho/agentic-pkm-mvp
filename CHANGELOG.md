@@ -19,6 +19,11 @@
 - The golden relations corpus (`data/golden/relations.json`) tracks typed targets for every promoted doc, yielding 100 % coverage + validity, and `app.fitness.report` prints a fifth summary line `CI SUMMARY RELATIONS coverage=<%> validity=<%> target=95%` while failing CI if coverage < 95 %.
 - Added regression tests for relation extraction, promotion integration, and fitness metrics so coverage and audits stay deterministic in memory-mode CI.
 
+### v4.6-C — Diarization-aware Chunking
+- `speaker_aware_chunks()` aligns spans with diarization metadata (`speaker,start,end`) so transcripts split on speaker changes or character budgets, while `ingest_and_chunk()` preserves the legacy behavior when `DIARIZE_ENABLE=0`.
+- Chunk payloads now carry speaker + timing metadata end-to-end (pipeline → indexing helpers) and `text.chunk.created` audit events record `speaker_count` whenever diarization is enabled.
+- `data/golden/diarization_sample.jsonl`, `app/fitness/chunks.py`, and new pytest coverage keep chunk p95 metrics deterministic; `python -m app.fitness.report` prints the sixth summary line `CI SUMMARY DIARIZATION chunk_p95=<val> speaker_avg=<val> flag=on` and fails if diarized p95 regresses by >5 %.
+
 ## v4.5B — Fitness & Hook Readiness
 - QAS-003/QAS-010 latency checks implemented in `app.fitness.metrics` and executed via GitHub smoke workflow.
 - Hybrid rerank hook integration completed with adapter and provider matrix.
