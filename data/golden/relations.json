@@ -1,15 +1,76 @@
 {
   "promoted": [
-    {"doc_id": "g-doc-1", "relations": ["g-doc-9", "g-doc-18"]},
-    {"doc_id": "g-doc-2", "relations": ["g-doc-5", "g-doc-11"]},
-    {"doc_id": "g-doc-3", "relations": ["g-doc-7", "g-doc-19"]},
-    {"doc_id": "g-doc-5", "relations": ["g-doc-11", "g-doc-17"]},
-    {"doc_id": "g-doc-6", "relations": ["g-doc-12"]},
-    {"doc_id": "g-doc-7", "relations": ["g-doc-14", "g-doc-19"]},
-    {"doc_id": "g-doc-8", "relations": ["g-doc-13"]},
-    {"doc_id": "g-doc-9", "relations": ["g-doc-18"]},
-    {"doc_id": "g-doc-10", "relations": ["g-doc-19", "g-doc-7"]},
-    {"doc_id": "g-doc-12", "relations": []},
-    {"doc_id": "g-doc-14", "relations": []}
+    {
+      "doc_id": "g-doc-1",
+      "relations": [
+        {"target": "g-doc-9", "type": "supports"},
+        {"target": "g-doc-18", "type": "derived_from"}
+      ]
+    },
+    {
+      "doc_id": "g-doc-2",
+      "relations": [
+        {"target": "g-doc-5", "type": "extends"},
+        {"target": "g-doc-11", "type": "supports"}
+      ]
+    },
+    {
+      "doc_id": "g-doc-3",
+      "relations": [
+        {"target": "g-doc-7", "type": "supports"},
+        {"target": "g-doc-19", "type": "extends"}
+      ]
+    },
+    {
+      "doc_id": "g-doc-5",
+      "relations": [
+        {"target": "g-doc-11", "type": "supports"},
+        {"target": "g-doc-17", "type": "extends"}
+      ]
+    },
+    {
+      "doc_id": "g-doc-6",
+      "relations": [
+        {"target": "g-doc-12", "type": "derived_from"}
+      ]
+    },
+    {
+      "doc_id": "g-doc-7",
+      "relations": [
+        {"target": "g-doc-14", "type": "supports"},
+        {"target": "g-doc-19", "type": "derived_from"}
+      ]
+    },
+    {
+      "doc_id": "g-doc-8",
+      "relations": [
+        {"target": "g-doc-13", "type": "extends"}
+      ]
+    },
+    {
+      "doc_id": "g-doc-9",
+      "relations": [
+        {"target": "g-doc-18", "type": "supports"}
+      ]
+    },
+    {
+      "doc_id": "g-doc-10",
+      "relations": [
+        {"target": "g-doc-19", "type": "supports"},
+        {"target": "g-doc-7", "type": "extends"}
+      ]
+    },
+    {
+      "doc_id": "g-doc-12",
+      "relations": [
+        {"target": "g-doc-6", "type": "supports"}
+      ]
+    },
+    {
+      "doc_id": "g-doc-14",
+      "relations": [
+        {"target": "g-doc-7", "type": "supports"}
+      ]
+    }
   ]
 }

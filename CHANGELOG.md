@@ -13,6 +13,12 @@
 - Added provider-selection + deterministic-order tests, ensuring flags-off paths equal baseline ordering and ce_http never runs during CI.
 - Updated ARCHITECTURE/ROADMAP/STATUS to capture the ce_local heuristic matrix, SoT v4.6-A acceptance criteria, and the latest CI snapshot (ΔnDCG@10=+0.070, relation coverage 81.82%).
 
+### v4.6-B — Relation Coverage Lift
+- Introduced deterministic relation extraction (`app.stores.relation_index.extract_semantic_relations`) that scans frontmatter keys, tag prefixes, and markdown headings (“See also”, “Derived from”, etc.) for the supported relation types `{supports, extends, contradicts, derived_from}`.
+- `prepare_relations_for_promotion()` now runs during promotion, registers links via the RelationIndex, emits `relation.added` / `relation.missing` audit entries, and honors `PROMOTION_REQUIRE_RELATIONS=1` for blocking missing relations before promotion.
+- The golden relations corpus (`data/golden/relations.json`) tracks typed targets for every promoted doc, yielding 100 % coverage + validity, and `app.fitness.report` prints a fifth summary line `CI SUMMARY RELATIONS coverage=<%> validity=<%> target=95%` while failing CI if coverage < 95 %.
+- Added regression tests for relation extraction, promotion integration, and fitness metrics so coverage and audits stay deterministic in memory-mode CI.
+
 ## v4.5B — Fitness & Hook Readiness
 - QAS-003/QAS-010 latency checks implemented in `app.fitness.metrics` and executed via GitHub smoke workflow.
 - Hybrid rerank hook integration completed with adapter and provider matrix.

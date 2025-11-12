@@ -6,7 +6,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Any
 from uuid import UUID
 
 from .base import (
@@ -225,24 +225,28 @@ class MemoryVectorIndex(VectorIndex):
 
 class MemoryRelationIndex(RelationIndex):
     def __init__(self) -> None:
-        self._links: dict[str, dict[UUID, list[UUID]]] = {}
+        self._links: dict[str, dict[UUID, list[dict[str, Any]]]] = {}
 
     def link(self, src: UUID, dst: UUID, *, rel: str, payload: dict | None = None) -> None:
         rel_map = self._links.setdefault(rel, {})
         neighbors = rel_map.setdefault(src, [])
-        if dst not in neighbors:
-            neighbors.append(dst)
+        for entry in neighbors:
+            if entry["dst"] == dst:
+                entry["payload"] = dict(payload or {})
+                return
+        neighbors.append({"dst": dst, "payload": dict(payload or {})})
 
     def neighbors(self, src: UUID, *, rel: str, k: int = 20) -> list[UUID]:
         rel_map = self._links.get(rel, {})
         neighbors = rel_map.get(src, [])
-        return neighbors[:k]
+        return [entry["dst"] for entry in neighbors[:k]]
 
     def has_any(self, src: UUID) -> bool:
         for rel_map in self._links.values():
             if src in rel_map and rel_map[src]:
                 return True
             for neighbors in rel_map.values():
-                if src in neighbors:
-                    return True
+                for entry in neighbors:
+                    if entry["dst"] == src:
+                        return True
         return False

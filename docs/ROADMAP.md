@@ -8,6 +8,7 @@
 | v4.5A | Stabilize unified ingestion, enforce deterministic memory-first CI, and document promotion rules. | Delivered |
 | v4.5B | Fitness guards + ingestion polish, rerank + chunk dedup readiness. | Delivered |
 | v4.6 | Retrieval quality upgrades (cross-encoder, diarization adapter, RelationIndex fitness, golden eval). | Active (Objectives A–D) |
+| v4.6-B | Relation coverage lift (deterministic extraction + audit trail). | Active |
 | v4.7 | Reasoning layer & reflexive agents over the knowledge graph. | Planned |
 
 ## Current Stable Baseline (v4.5A)
@@ -38,6 +39,12 @@ Status: ce_local heuristics and tie-breakers ship as part of SoT v4.6-A, the gol
 
 ### Objective B — Relation Index v1 + Orphan Gate *(delivered)*
 Implement in-memory RelationIndex CRUD + `has_any()`, propagate provenance links, and gate promotions with the orphan guard (`PROMOTION_ALLOW_ORPHANS` + `PROMOTION_ORPHAN_OVERRIDE_REASON`). Status: gate enforced by default, overrides audited, and CI reports relation coverage from the golden sample. Acceptance: relation coverage metrics and tagging readiness require ≥95% promoted objects linked.
+
+### Objective B2 — Relation Coverage Lift *(active — SoT v4.6-B)*
+- Deterministic extraction (frontmatter keys, tag prefixes, “See also” headings) populates `supports|extends|contradicts|derived_from` links via `prepare_relations_for_promotion()`.
+- Audit trail: every relation write emits `relation.added`, missing or invalid targets emit `relation.missing`, and `PROMOTION_REQUIRE_RELATIONS=1` blocks promotions without inferred links.
+- Golden relations corpus reflects ≥95 % coverage (currently 100 %) and CI enforces a new summary line `CI SUMMARY RELATIONS coverage=<%> validity=<%> target=95%` with coverage ≥95 %.
+- Fitness gating stays offline (`STORE_BACKEND=memory`, `LLM_PROVIDER=mock`) and relation validity (valid pairs / total) stays ≥95 %.
 
 ### Objective C — Diarization Hook *(active)*
 `DIARIZE_ENABLE` toggles segmentation; providers include `none`, `mock`, and `external` (HTTP). Metadata preserves `{speaker, text}` entries so ingestion/promotion retain conversation context. Acceptance: mock provider yields ≥2 segments, disabled path is unchanged, no CI dependency on external ASR, and chunk policy respects speaker segments.
