@@ -24,3 +24,10 @@ rules:
   must_block_without_sources: true
 labels: ["agent:classifier","stage:ingest"]
 ```
+
+## Förklaringar & möjliga värden
+<!-- BEGIN:settings:reference -->
+| key | type | default | allowed | description |
+|-----|------|---------|---------|-------------|
+| _pending | _ | _ | _ | Run `python -m app.cli settings compile --auto-heal` to update this table. |
+<!-- END:settings:reference -->

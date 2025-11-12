@@ -21,11 +21,16 @@ def test_compile_roundtrip_writes_artifacts(tmp_path, monkeypatch):
 
     assert bundle.global_.enable is True
     assert bundle.providers.llm["default_chat"].model == "llama3.1:8b"
-    assert "classifier" in bundle.agents
+    assert {"classifier", "promotion", "reviewer", "qa"}.issubset(bundle.agents.keys())
+    promo = bundle.agents["promotion"]
+    assert promo.move_policy.enabled is True
+    assert bundle.agents["reviewer"].rules.min_score >= 0.75
 
     global_yaml = yaml.safe_load((runtime_dir / "global.yaml").read_text())
     assert global_yaml["timeout_ms"] == 8000
     assert global_yaml["secrets"]["telemetry_token"] == "test-token"
+    assert (runtime_dir / "agents" / "qa.yaml").exists()
+    assert (runtime_dir / "agents" / "reviewer.yaml").exists()
 
     assert captured and "sha" in captured[0]
     bus.clear("settings.changed")

@@ -21,3 +21,10 @@ profile: default
 secrets:
   telemetry_token: ${SECRET:OTEL_TOKEN}
 ```
+
+## Förklaringar & möjliga värden
+<!-- BEGIN:settings:reference -->
+| key | type | default | allowed | description |
+|-----|------|---------|---------|-------------|
+| _pending | _ | _ | _ | Run `python -m app.cli settings compile --auto-heal` to update this table. |
+<!-- END:settings:reference -->

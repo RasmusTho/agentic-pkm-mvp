@@ -8,17 +8,41 @@ import httpx
 from app.obs.log import span, with_trace_id
 from app.quality.guardrails import enforce_quality
 from app.retrieval.hybrid import hybrid_search
+from app.settings.models import QaSettings, SettingsBundle
+from app.settings.runtime import subscribe_settings
+
+
+_QA_SETTINGS = QaSettings()
+
+
+def _apply_qa_settings(bundle: SettingsBundle) -> None:
+    global _QA_SETTINGS
+    candidate = bundle.agents.get("qa") if bundle else None
+    if isinstance(candidate, QaSettings):
+        _QA_SETTINGS = candidate
+    else:
+        _QA_SETTINGS = QaSettings()
+
+
+subscribe_settings(_apply_qa_settings)
 
 
 def _max_tokens() -> int:
-    try:
-        return int(os.getenv("LLM_MAX_TOKENS", "512"))
-    except ValueError:
-        return 512
+    override = os.getenv("LLM_MAX_TOKENS")
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            pass
+    return _QA_SETTINGS.llm.max_tokens
 
 
 def _provider() -> str:
-    return os.getenv("LLM_PROVIDER", "ollama").lower()
+    return (os.getenv("LLM_PROVIDER") or _QA_SETTINGS.llm.provider).lower()
+
+
+def _llm_host() -> str:
+    return os.getenv("OLLAMA_HOST", _QA_SETTINGS.llm.host).rstrip("/")
 
 
 def _call_llm(messages: List[Dict[str, str]], *, trace_id: str, max_tokens: int) -> str:
@@ -28,8 +52,8 @@ def _call_llm(messages: List[Dict[str, str]], *, trace_id: str, max_tokens: int)
     if provider != "ollama":
         raise ValueError(f"Unsupported provider for QA agent: {provider}")
 
-    host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
-    model = os.getenv("OLLAMA_MODEL", "llama3.1:8b-instruct")
+    host = _llm_host()
+    model = os.getenv("OLLAMA_MODEL", _QA_SETTINGS.llm.model)
     resp = httpx.post(
         f"{host}/api/chat",
         json={
@@ -38,7 +62,7 @@ def _call_llm(messages: List[Dict[str, str]], *, trace_id: str, max_tokens: int)
             "stream": False,
             "options": {"num_predict": max_tokens},
         },
-        timeout=float(os.getenv("LLM_TIMEOUT", "120")),
+        timeout=float(os.getenv("LLM_TIMEOUT", str(_QA_SETTINGS.llm.timeout_s))),
         headers={"x-trace-id": trace_id},
     )
     resp.raise_for_status()
@@ -117,14 +141,20 @@ def finalize(draft: str, checks: Dict[str, object], *, trace_id: Optional[str] =
 @span("agent.answer")
 def answer(query: str, *, trace_id: Optional[str] = None) -> Dict[str, object]:
     trace_id = with_trace_id(trace_id)
-    docs = hybrid_search(query, k=8)
+    if not _QA_SETTINGS.enable:
+        return {
+            "answer": "QA-agenten är inaktiverad via inställningar.",
+            "sources": [],
+            "trace_id": trace_id,
+        }
+    docs = hybrid_search(query, k=max(1, _QA_SETTINGS.search_k))
     if not docs or docs[0]["score"] < 0.15:
         return {
             "answer": "Otillräcklig evidens för att svara på frågan.",
             "sources": [],
             "trace_id": trace_id,
         }
-    ctx_docs = docs[:5]
+    ctx_docs = docs[: max(1, _QA_SETTINGS.context_docs)]
     draft = draft_answer(query, ctx_docs, trace_id=trace_id)
     checks = self_check(query, ctx_docs, draft, trace_id=trace_id)
     final_text = finalize(draft, checks, trace_id=trace_id)

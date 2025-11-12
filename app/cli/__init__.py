@@ -146,14 +146,16 @@ def settings() -> None:
 
 
 @settings.command("compile", help="Compile vault/@Settings into runtime/settings.")
-def settings_compile() -> None:
-    bundle = compile_all()
+@click.option("--auto-heal/--no-auto-heal", default=False, help="Rewrite YAML blocks when invalid values are healed.")
+def settings_compile(auto_heal: bool) -> None:
+    bundle = compile_all(auto_heal=auto_heal)
     click.echo(f"compiled {len(bundle.agents)} agents")
 
 
 @settings.command("validate", help="Compile and print a short summary.")
-def settings_validate() -> None:
-    bundle = compile_all()
+@click.option("--auto-heal/--no-auto-heal", default=False, help="Rewrite YAML blocks when invalid values are healed.")
+def settings_validate(auto_heal: bool) -> None:
+    bundle = compile_all(auto_heal=auto_heal)
     click.echo(
         f"global enable={bundle.global_.enable} providers={len(bundle.providers.llm)} agents={len(bundle.agents)}"
     )
@@ -161,8 +163,9 @@ def settings_validate() -> None:
 
 @settings.command("watch", help="Watch vault settings markdown and recompile deterministically.")
 @click.option("--path", "watch_path", default="vault/@Settings", type=click.Path(path_type=Path))
-def settings_watch(watch_path: Path) -> None:
-    compile_all()
+@click.option("--auto-heal/--no-auto-heal", default=False, help="Rewrite YAML blocks when invalid values are healed.")
+def settings_watch(watch_path: Path, auto_heal: bool) -> None:
+    compile_all(auto_heal=auto_heal)
     click.echo(f"watching {watch_path}")
     last = 0.0
     try:
@@ -170,7 +173,7 @@ def settings_watch(watch_path: Path) -> None:
             now = time.time()
             if now - last < 0.5:
                 continue
-            compile_all()
+            compile_all(auto_heal=auto_heal)
             changed = ", ".join(str(Path(path).name) for _, path in changes)
             click.echo(f"settings updated: {changed}")
             last = now

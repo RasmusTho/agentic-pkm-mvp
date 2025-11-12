@@ -13,6 +13,8 @@ import yaml
 from .policy import pick_target as _pick_target
 from app.observability.tracing import current_trace_id, span
 from app.promotion.gates import OrphanPromotionError, ensure_object_has_relations, prepare_relations_for_promotion
+from app.settings.models import PromotionSettings, SettingsBundle
+from app.settings.runtime import subscribe_settings
 
 ROOT = Path().resolve()
 VAULT = ROOT / "vault"
@@ -20,6 +22,19 @@ EVENTS = VAULT / "_system" / "events"
 QUEUE = EVENTS / "promote.queue.jsonl"
 LOG   = EVENTS / "promote.log.jsonl"
 SETTINGS = ROOT / "vault" / "_system" / "settings" / "system-settings.yaml"
+_PROMOTION_SETTINGS = PromotionSettings()
+
+
+def _apply_promotion_settings(bundle: SettingsBundle) -> None:
+    global _PROMOTION_SETTINGS
+    candidate = bundle.agents.get("promotion") if bundle else None
+    if isinstance(candidate, PromotionSettings):
+        _PROMOTION_SETTINGS = candidate
+    else:
+        _PROMOTION_SETTINGS = PromotionSettings()
+
+
+subscribe_settings(_apply_promotion_settings)
 
 def _append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,15 +94,22 @@ def _safe_move(src: Path, dst_dir: Path) -> Path:
     shutil.move(str(src), str(dst))
     return dst
 
+def _move_policy_dict(promo: PromotionSettings, legacy: Dict[str, Any]) -> Dict[str, Any]:
+    policy = legacy.get("move_policy")
+    if isinstance(policy, dict) and policy:
+        return policy
+    return promo.move_policy.model_dump()
+
+
 def run_once() -> int:
     if not QUEUE.exists():
         return 0
-    settings = _load_settings()
-    promo = (settings.get("promotion") or {})
-    cooldown = int(promo.get("cooldown_seconds", 90))
-    idle_req = int(promo.get("require_idle_seconds", 30))
-    max_retries = int(promo.get("max_retries", 3))
-    move_policy = promo.get("move_policy") or {"enabled": False, "default_target": "2_Cards/Concepts"}
+    legacy = (_load_settings().get("promotion") or {})
+    promo_cfg = _PROMOTION_SETTINGS
+    cooldown = int(legacy.get("cooldown_seconds", promo_cfg.cooldown_seconds))
+    idle_req = int(legacy.get("require_idle_seconds", promo_cfg.require_idle_seconds))
+    max_retries = int(legacy.get("max_retries", promo_cfg.max_retries))
+    move_policy = _move_policy_dict(promo_cfg, legacy)
 
     lines = QUEUE.read_text(encoding="utf-8").splitlines()
     QUEUE.unlink(missing_ok=True)

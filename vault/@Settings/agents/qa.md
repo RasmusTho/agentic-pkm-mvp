@@ -1,26 +1,27 @@
-
 ---
-uuid: 00000000-0000-0000-0000-000000000002
-title: Providers
+uuid: 00000000-0000-0000-0000-000000000104
+title: QA Agent Settings
 origin: user
 review_state: evergreen
 trust: internal
 ---
-## Provider defaults
+## Toggles
+- [x] enable
+
+## Retrieval
+| key | value |
+| --- | --- |
+| search_k | 8 |
+| context_docs | 5 |
+
 ```yaml settings
 llm:
-  default_chat:
-    kind: openai_compat
-    base_url: "http://127.0.0.1:11434/v1"
-    model: "llama3.1:8b"
-embedding:
-  default:
-    kind: openai_compat
-    model: "nomic-embed-text"
-reranker:
-  ce_local:
-    kind: colbert
-    device: cpu
+  provider: mock
+  model: "llama3.1:8b-instruct"
+  host: "http://127.0.0.1:11434"
+  timeout_s: 60
+  max_tokens: 400
+labels: ["agent:qa","stage:answer"]
 ```
 
 ## Förklaringar & möjliga värden
