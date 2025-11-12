@@ -39,3 +39,4 @@ tmp/index-outbox.jsonl
 /tmp/
 *.jsonl
 tmp/index.jsonl
+runtime/settings/

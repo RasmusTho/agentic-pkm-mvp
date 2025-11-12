@@ -4,9 +4,11 @@ import json
 import uuid
 from pathlib import Path
 from typing import Optional
+import time
 
 import click
 import httpx
+from watchfiles import watch
 
 from app.agents.classifier.agent import run as classify_run
 from app.agents.normalizer.agent import run as normalize_run
@@ -14,6 +16,7 @@ from app.index.outbox import append_jsonl
 from app.media.transcribe import transcribe_source
 from app.obs.log import with_trace_id
 from app.cli.health import run_health
+from app.settings.compiler import compile_all
 
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 _DOWNLOAD_DIR = Path("tmp/normalize")
@@ -135,6 +138,44 @@ def health(as_json: bool, trace_id: Optional[str]) -> None:
     _dump(result, as_json)
     if not result.get("ok"):
         raise SystemExit(1)
+
+
+@cli.group(help="Settings commands (Vault-as-GUI).")
+def settings() -> None:
+    ...
+
+
+@settings.command("compile", help="Compile vault/@Settings into runtime/settings.")
+def settings_compile() -> None:
+    bundle = compile_all()
+    click.echo(f"compiled {len(bundle.agents)} agents")
+
+
+@settings.command("validate", help="Compile and print a short summary.")
+def settings_validate() -> None:
+    bundle = compile_all()
+    click.echo(
+        f"global enable={bundle.global_.enable} providers={len(bundle.providers.llm)} agents={len(bundle.agents)}"
+    )
+
+
+@settings.command("watch", help="Watch vault settings markdown and recompile deterministically.")
+@click.option("--path", "watch_path", default="vault/@Settings", type=click.Path(path_type=Path))
+def settings_watch(watch_path: Path) -> None:
+    compile_all()
+    click.echo(f"watching {watch_path}")
+    last = 0.0
+    try:
+        for changes in watch(str(watch_path), recursive=True):
+            now = time.time()
+            if now - last < 0.5:
+                continue
+            compile_all()
+            changed = ", ".join(str(Path(path).name) for _, path in changes)
+            click.echo(f"settings updated: {changed}")
+            last = now
+    except KeyboardInterrupt:
+        click.echo("stopped watching settings")
 
 
 if __name__ == "__main__":
