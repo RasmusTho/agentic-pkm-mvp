@@ -39,6 +39,7 @@ Every agent follows Plan → Execute → Reflect. Plan inspects the latest event
 
 ### Diarization-aware Chunking (v4.6-C)
 When `DIARIZE_ENABLE=1`, the ingestion pipeline now feeds diarization metadata (speaker, start, end) into `speaker_aware_chunks()` so spans are cut on speaker changes or size boundaries (O(n) over segment length). Each emitted chunk carries `{speaker,start,end,speaker_segments}` metadata that flows through `ingest_and_chunk()` to indexing, and the audit stream (`text.chunk.created`) records `speaker_count` so reviewers can trace diarization coverage. With the flag disabled, `build_chunks()` preserves the legacy token/character splitter to keep defaults inert and deterministic.
+Oversized per-speaker segments are deterministically pre-split to respect `max_chars`; proportional start/end timestamps keep timelines monotonic without re-reading audio.
 
 ## Persistence & Execution Modes
 - `STORE_BACKEND=memory` is the default for CI and unit tests; it instantiates in-memory implementations of ObjectStore, VectorIndex, and RelationIndex with deterministic UUID seeds.
@@ -60,6 +61,9 @@ JSONL audit logs capture `trace_id`, agent name, inputs, and outputs for each PE
 - **QAS-003 Hybrid Search Latency** — `app.fitness.metrics.qas003_hybrid_latency()` warms the in-memory hybrid store with a deterministic corpus and times `hybrid_search()` invocations. CI fails if the measured p95 exceeds 250 ms, and the GitHub workflow prints the JSON report via `python -m app.fitness.report`.
 - **QAS-010 Outbox→Index Propagation** — `app.fitness.metrics.qas010_outbox_to_index_latency()` simulates ingest events flowing from an in-memory outbox into `MemoryVectorIndex`. Each event measures emission-to-index duration; CI enforces a 2 s ceiling.
 Both probes run in memory mode with `LLM_PROVIDER=mock` so they remain deterministic and guard regressions without external services.
+
+### CI Gates (v4.6-D)
+`python -m app.fitness.report` now emits seven CI summary lines (LATENCY, EVAL, EVAL DELTA, RELATION COVERAGE, RELATIONS, DIARIZATION, GATES). The first six capture raw metrics, while the GATES line reports whether thresholds were met plus any failure codes. Baselines live in `ops/quality/baselines.yaml` and are overridable via `THRESHOLDS_PATH`; tolerances are additive (e.g., latency ≤ baseline × 1.10, diarization chunk_p95_on ≤ chunk_p95_off × 0.95). The GitHub workflow tees the report into `tmp/ci_summary.log`, parses it via `parse_summary_lines()`, and fails fast if any line is missing or `ok=false`, ensuring every PR presents the same contract without network access.
 
 ## Cross-Encoder Providers
 `app.retrieval.rerank.provider` exposes a plug-in matrix:

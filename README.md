@@ -66,3 +66,8 @@ The rerank hook is applied at the final candidate merge step, preserving default
 | `PROMOTION_REQUIRE_RELATIONS` | `0` | When `1`, promotion blocks unless RelationIndex records ≥1 relation or an audited override is supplied. |
 | `PROMOTION_ALLOW_ORPHANS` | unset | When truthy, bypasses orphan gate (requires override reason). |
 | `PROMOTION_ORPHAN_OVERRIDE_REASON` | unset | Free-text reason logged/audited when overriding promotion relation gate. |
+
+### Quality baselines & CI gates
+- The regression thresholds for QAS003/QAS010, eval deltas, relation coverage/validity, and diarization chunk lengths live in `ops/quality/baselines.yaml`. CI reads this file (or `THRESHOLDS_PATH` if overridden) and enforces the seven-line summary contract (`LATENCY`, `EVAL`, `EVAL DELTA`, `RELATION COVERAGE`, `RELATIONS`, `DIARIZATION`, `GATES`).
+- Set `THRESHOLDS_PATH=/path/to/custom.yaml` to experiment with tighter baselines locally, and use `GATE_STRICT=1` to require positive rerank deltas even for small differences.
+- Typical refresh flow after improving metrics: run `STORE_BACKEND=memory LLM_PROVIDER=mock PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m app.fitness.report > tmp/ci_summary.txt`, update the values in `ops/quality/baselines.yaml`, re-run the report to confirm `ok=true`, and include both the YAML change and the pasted summary lines in your PR.

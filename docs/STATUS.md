@@ -25,19 +25,20 @@
 - Relation coverage sample: 81.82% of promoted items (golden relations corpus).
 
 ## Metrics Snapshot
-- QAS-003 p95: 0.000129 s
+- QAS-003 p95: 0.000127 s
 - QAS-010 p95: 0.000006 s
 - Golden P@10 / nDCG@10: 0.188 / 0.924 (ce_local), baseline 0.188 / 0.855 (ΔnDCG@10 = +0.070, DP10 = +0.000)
 - Relation coverage: 100% (golden sample), relation validity: 100% (all recorded links use supported types)
-- Diarization chunk p95 (flag on/off): 78 / 117 chars, speaker_avg (flag on) = 2.33
+- Diarization chunk p95 (flag on/off): 78 / 117 chars, speaker_avg (flag on) = 2.33, CI gates report `ok=true` (v4.6-D baselines.yaml)
 
 ### Latest CI Snapshot (Delivered 2025-02-16 — SoT v4.6-B)
-CI SUMMARY LATENCY QAS003=0.000272s QAS010=0.000011s  
+CI SUMMARY LATENCY QAS003=0.000127s QAS010=0.000006s  
 CI SUMMARY EVAL P10=0.188 NDCG10=0.924 BASE_P10=0.188 BASE_NDCG10=0.855  
 CI SUMMARY EVAL DELTA DP10=+0.000 DnDCG10=+0.070 RELATION_TARGET=60%  
 CI SUMMARY RELATION COVERAGE=100.00%  
 CI SUMMARY RELATIONS coverage=100.00% validity=100.00% target=95%  
 CI SUMMARY DIARIZATION chunk_p95=78.00 speaker_avg=2.33 flag=on  
+CI SUMMARY GATES ok=true reasons=  
 Relation coverage + validity now exceed the ≥95 % SoT v4.6-B guardrail while ce_local remains default-off unless flags are set; staging now runs with `PROMOTION_REQUIRE_RELATIONS=1` so promotion gating is enforced ahead of production.
 
 ## Outstanding Blockers

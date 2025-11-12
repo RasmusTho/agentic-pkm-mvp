@@ -18,6 +18,12 @@
 - QAS-010 p95: 
 - Golden P@10 / nDCG@10: 
 - Relation coverage %:
+- Diarization chunk p95 / speaker avg:
+
+## CI Checklist
+- [ ] Pasted the six CI summary lines plus the `CI SUMMARY GATES` line in this PR description.
+- [ ] Confirmed no TODO/FIXME remain in any touched docs.
+- [ ] Listed all flags used (if any) and documented whether positive/zero deltas are expected.
 
 ## Risks & Rollback
 -

@@ -24,6 +24,11 @@
 - Chunk payloads now carry speaker + timing metadata end-to-end (pipeline → indexing helpers) and `text.chunk.created` audit events record `speaker_count` whenever diarization is enabled.
 - `data/golden/diarization_sample.jsonl`, `app/fitness/chunks.py`, and new pytest coverage keep chunk p95 metrics deterministic; `python -m app.fitness.report` prints the sixth summary line `CI SUMMARY DIARIZATION chunk_p95=<val> speaker_avg=<val> flag=on` and fails if diarized p95 regresses by >5 %.
 
+### v4.6-D — CI Gates & Summary Hardening
+- Baselines for latency, eval, relations, and diarization live in `ops/quality/baselines.yaml`; `THRESHOLDS_PATH` and `GATE_STRICT=1` allow overrides while keeping CI offline.
+- `app.fitness.report` now parses its own summary lines, enforces the baselines (latency ≤ baseline × tolerance, rerank deltas ≥ configured mins, relation coverage/validity ≥95 %, diarization p95 ratio ≤0.95), emits `CI SUMMARY GATES ok=<bool> reasons=<codes>`, and exits non-zero on regression.
+- `.github/workflows/ci-smoke.yaml` tees the report into `tmp/ci_summary.log`, runs a verification step that requires all seven lines and `ok=true`, and the PR template calls out the requirement to paste the summary/gates lines plus declare flags used.
+
 ## v4.5B — Fitness & Hook Readiness
 - QAS-003/QAS-010 latency checks implemented in `app.fitness.metrics` and executed via GitHub smoke workflow.
 - Hybrid rerank hook integration completed with adapter and provider matrix.
