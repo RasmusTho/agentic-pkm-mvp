@@ -53,3 +53,17 @@ def test_hook_respects_top_k(monkeypatch: pytest.MonkeyPatch) -> None:
     out = mod.apply_optional_rerank("beta gamma", items)
     assert [o["id"] for o in out][:2] == ["b", "a"]
     assert {o["id"] for o in out} == {"a", "b", "c"}
+
+
+def test_ce_local_provider_selected_under_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RERANK_ENABLE", "1")
+    monkeypatch.setenv("RERANK_PROVIDER", "ce_local")
+    mod = importlib.import_module("app.retrieval.hybrid_rerank_hook")
+    importlib.reload(mod)
+    items = [
+        {"id": "baseline", "text": "garden entry about tomatoes", "score": 0.95},
+        {"id": "ce-local-hit", "text": "token normalization phrase bonus explainer", "score": 0.25},
+        {"id": "filler", "text": "misc log entry", "score": 0.2},
+    ]
+    out = mod.apply_optional_rerank("token normalization phrase", items)
+    assert [o["id"] for o in out][:2] == ["ce-local-hit", "baseline"]

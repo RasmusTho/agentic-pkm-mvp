@@ -1,8 +1,15 @@
 {
   "promoted": [
-    {"doc_id": "g-doc-1", "relations": ["g-doc-2", "g-doc-3"]},
-    {"doc_id": "g-doc-2", "relations": ["g-doc-1"]},
-    {"doc_id": "g-doc-3", "relations": []},
-    {"doc_id": "g-doc-4", "relations": []}
+    {"doc_id": "g-doc-1", "relations": ["g-doc-9", "g-doc-18"]},
+    {"doc_id": "g-doc-2", "relations": ["g-doc-5", "g-doc-11"]},
+    {"doc_id": "g-doc-3", "relations": ["g-doc-7", "g-doc-19"]},
+    {"doc_id": "g-doc-5", "relations": ["g-doc-11", "g-doc-17"]},
+    {"doc_id": "g-doc-6", "relations": ["g-doc-12"]},
+    {"doc_id": "g-doc-7", "relations": ["g-doc-14", "g-doc-19"]},
+    {"doc_id": "g-doc-8", "relations": ["g-doc-13"]},
+    {"doc_id": "g-doc-9", "relations": ["g-doc-18"]},
+    {"doc_id": "g-doc-10", "relations": ["g-doc-19", "g-doc-7"]},
+    {"doc_id": "g-doc-12", "relations": []},
+    {"doc_id": "g-doc-14", "relations": []}
   ]
 }

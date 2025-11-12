@@ -6,6 +6,13 @@
 - Diarization hook wired into transcription with providers (`none|mock|external`) behind `DIARIZE_ENABLE`, feeding speaker-aware chunking.
 - Golden set evaluation pipeline (`data/golden/*`) produces Precision@k and nDCG@k metrics in CI; doc integrity + PR/issue templates keep contracts enforced.
 
+### v4.6-A — Cross-Encoder Quality Lift
+- Expanded `data/golden/corpus.jsonl`, `judgments.json`, and `relations.json` to 16 deterministic queries (10 candidates each, 2–3 graded relevances) so ce_local can be validated offline.
+- Rebuilt `ce_local` with normalized tokens, capped term-frequency + IDF-like weighting, exact n-gram bonuses, and original-score tie-breakers; scoring stays deterministic and O(n·|query|).
+- Hardened `python -m app.fitness.report` to require ΔnDCG@10 ≥ +0.01 **or** ΔP@10 ≥ +0.005 whenever `RERANK_PROVIDER=ce_local`, while still printing the four CI summary lines.
+- Added provider-selection + deterministic-order tests, ensuring flags-off paths equal baseline ordering and ce_http never runs during CI.
+- Updated ARCHITECTURE/ROADMAP/STATUS to capture the ce_local heuristic matrix, SoT v4.6-A acceptance criteria, and the latest CI snapshot (ΔnDCG@10=+0.070, relation coverage 81.82%).
+
 ## v4.5B — Fitness & Hook Readiness
 - QAS-003/QAS-010 latency checks implemented in `app.fitness.metrics` and executed via GitHub smoke workflow.
 - Hybrid rerank hook integration completed with adapter and provider matrix.

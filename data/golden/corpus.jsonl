@@ -1,4 +1,20 @@
-{"doc_id": "g-doc-1", "title": "Alpha Energy Storage", "text": "Alpha storage project captures surplus solar energy and stores it with lithium cells to stabilize community grids."}
-{"doc_id": "g-doc-2", "title": "Beta Research Notes", "text": "Beta research describes retrieval pipelines, rerank hooks, and diarization adapters used in Codex."}
-{"doc_id": "g-doc-3", "title": "Gamma Audit Findings", "text": "Gamma audit covers promotion gates, relation graphs, and governance metrics for PKM trust."}
-{"doc_id": "g-doc-4", "title": "Delta Diary", "text": "Delta diary is a personal entry about garden experiments, unrelated to Codex topics."}
+{"doc_id": "g-doc-1", "title": "Alpha Energy Storage", "text": "Alpha storage program captures surplus solar output, buffers it in lithium cells, and stabilizes Codex community microgrids during evening demand spikes."}
+{"doc_id": "g-doc-2", "title": "Beta Retrieval Notes", "text": "Beta research describes the rerank provider matrix, ce_local safeguards, diarization adapters, and fallback hooks used in the Codex retrieval stack."}
+{"doc_id": "g-doc-3", "title": "Gamma Governance Memo", "text": "Gamma audit traces promotion relations, approvals, and governance metrics that enforce trust before any knowledge base change ships."}
+{"doc_id": "g-doc-4", "title": "Delta Diary", "text": "Delta diary records a gardener's experiments with tomatoes, soil moisture, and compost; it never references Codex systems."}
+{"doc_id": "g-doc-5", "title": "Epsilon Heuristic Charter", "text": "Epsilon charter proposes token normalization, capped term frequency boosts, n-gram phrase bonuses, and deterministic tie-break rules for the ce_local reranker."}
+{"doc_id": "g-doc-6", "title": "Zeta Mock Encoder", "text": "Zeta memo documents the mock cross-encoder baseline, default-off behavior, and CI parity expectations when rerank flags remain disabled."}
+{"doc_id": "g-doc-7", "title": "Eta Relation Coverage", "text": "Eta brief lists promotion relation coverage goals, mapping each promoted artifact to supporting notes and risk treatments."}
+{"doc_id": "g-doc-8", "title": "Theta Hybrid Search", "text": "Theta explainer reviews BM25 token mixing, embedding similarities, overlap bonuses, and hand-off to rerank adapters inside the hybrid search."}
+{"doc_id": "g-doc-9", "title": "Iota Latency Budget", "text": "Iota timeline tracks QAS-003 and QAS-010 latency budgets, emphasizing deterministic CI summaries per build."}
+{"doc_id": "g-doc-10", "title": "Kappa Golden Data", "text": "Kappa playbook walks through golden set expansion, deterministic corpora generation, and reproducible query judgments for evaluating rerank gains."}
+{"doc_id": "g-doc-11", "title": "Lambda Tie Break", "text": "Lambda design sketch specifies that ce_local should use the original candidate score as a stable tie-breaker after computing heuristic scores."}
+{"doc_id": "g-doc-12", "title": "Mu HTTP Client", "text": "Mu runbook covers the ce_http JSON API client, retry handling, and offline fallbacks whenever network access is denied."}
+{"doc_id": "g-doc-13", "title": "Nu Memory Store", "text": "Nu document details the in-memory hybrid store, reset semantics, and how deterministic embeddings allow repeatable tests."}
+{"doc_id": "g-doc-14", "title": "Xi Ingestion", "text": "Xi ingestion guide outlines provenance capture, source references, and cleaning routines before docs enter the hybrid store."}
+{"doc_id": "g-doc-15", "title": "Omicron Fairness Note", "text": "Omicron fairness note recommends IDF-like term weighting, frequency caps, and lenient penalties that keep scoring transparent."}
+{"doc_id": "g-doc-16", "title": "Pi Mock Provider", "text": "Pi summary explains that LLM_PROVIDER=mock produces deterministic embeddings, prevents network egress, and speeds up CI."}
+{"doc_id": "g-doc-17", "title": "Rho Phrase Map", "text": "Rho cheat sheet enumerates reusable bigrams and trigrams, showing how exact phrase matches boost relevance for compliance queries."}
+{"doc_id": "g-doc-18", "title": "Sigma Fitness Eval", "text": "Sigma report captures CI SUMMARY lines, rerank delta thresholds, and the requirement to fail builds when ce_local regresses."}
+{"doc_id": "g-doc-19", "title": "Tau Data Stewardship", "text": "Tau note highlights deterministic data curation, relation tracking, and snapshotting for every golden query set iteration."}
+{"doc_id": "g-doc-20", "title": "Upsilon Release Note", "text": "Upsilon release note for SoT v4.6-A summarizes ce_local quality lift goals and safeguards that keep defaults inert."}
