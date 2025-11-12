@@ -42,6 +42,15 @@ The rerank hook is applied at the final candidate merge step, preserving default
 - v4.5B: Open — retrieval polish (rerank integration, diarization hooks, RelationIndex fitness)
 - v4.6: Planned — retrieval quality and reasoning prep
 
+<!-- DOCS-LINKS:BEGIN -->
+- [ARCHITECTURE](docs/ARCHITECTURE.md)
+- [ROADMAP](docs/ROADMAP.md)
+- [STATUS](docs/STATUS.md)
+- [CHANGELOG](CHANGELOG.md)
+- [CI](docs/CI.md)
+- [TESTING](docs/TESTING.md)
+<!-- DOCS-LINKS:END -->
+
 ## Environment Flags
 | Flag | Default | Description |
 | --- | --- | --- |
