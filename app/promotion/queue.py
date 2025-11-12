@@ -12,7 +12,7 @@ import yaml
 
 from .policy import pick_target as _pick_target
 from app.observability.tracing import current_trace_id, span
-from app.promotion.gates import OrphanPromotionError, ensure_object_has_relations
+from app.promotion.gates import OrphanPromotionError, ensure_object_has_relations, prepare_relations_for_promotion
 
 ROOT = Path().resolve()
 VAULT = ROOT / "vault"
@@ -112,7 +112,28 @@ def run_once() -> int:
                     continue
 
                 uuid = ev.get("uuid")
+                with span("worker.read_frontmatter"):
+                    meta, body = _read_frontmatter(p)
+                meta = dict(meta)
+
                 if uuid:
+                    try:
+                        prepare_relations_for_promotion(uuid, metadata=meta, body=body)
+                    except OrphanPromotionError as rel_err:
+                        _append_jsonl(
+                            LOG,
+                            {
+                                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                "level": "warn",
+                                "event": "promote.skip.relations",
+                                "uuid": uuid,
+                                "path": str(p),
+                                "reason": str(rel_err),
+                                "trace_id": current_trace_id(),
+                            },
+                        )
+                        continue
+
                     allow_override = os.getenv("PROMOTION_ALLOW_ORPHANS", "").strip()
                     override_reason = (os.getenv("PROMOTION_ORPHAN_OVERRIDE_REASON") or "").strip()
                     try:
@@ -150,10 +171,6 @@ def run_once() -> int:
                                 },
                             )
                             continue
-
-                with span("worker.read_frontmatter"):
-                    meta, body = _read_frontmatter(p)
-                meta = dict(meta)
                 meta["review_state"] = ev.get("desired_state", "promoted")
 
                 with span("worker.update_frontmatter"):

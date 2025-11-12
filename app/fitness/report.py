@@ -6,7 +6,7 @@ import sys
 
 from app.eval.golden import evaluate_vs_baseline
 from .metrics import qas003_hybrid_latency, qas010_outbox_to_index_latency
-from .relations import promotion_relation_coverage
+from .relations import relation_metrics
 
 
 def _summary_line(label: str, **metrics: float) -> str:
@@ -22,7 +22,9 @@ def main() -> None:
     provider = os.getenv("CI_EVAL_RERANK_PROVIDER", "ce_local")
     eval_k = int(os.getenv("CI_EVAL_K", "10"))
     golden = evaluate_vs_baseline(provider, k=eval_k)
-    coverage = promotion_relation_coverage()
+    relation_stats = relation_metrics()
+    coverage = relation_stats["coverage"]
+    validity = relation_stats["validity"]
     payload = {
         "QAS-003": qas003,
         "QAS-010": qas010,
@@ -58,6 +60,14 @@ def main() -> None:
         )
     )
     print(_summary_line("RELATION", COVERAGE=f"{coverage:.2f}%"))
+    print(
+        _summary_line(
+            "RELATIONS",
+            coverage=f"{coverage:.2f}%",
+            validity=f"{validity:.2f}%",
+            target="95%",
+        )
+    )
 
     fail = False
     provider_spec = (provider or "").strip().lower()
@@ -68,7 +78,7 @@ def main() -> None:
         meets_delta = (delta_p >= 0.005) or (delta_ndcg >= 0.01)
         if not meets_delta:
             fail = True
-    min_coverage = float(os.getenv("RELATION_COVERAGE_MIN", "50"))
+    min_coverage = float(os.getenv("RELATION_COVERAGE_MIN", "95"))
     if coverage < min_coverage:
         fail = True
     if fail:
