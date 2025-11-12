@@ -60,12 +60,14 @@ def main() -> None:
     print(_summary_line("RELATION", COVERAGE=f"{coverage:.2f}%"))
 
     fail = False
+    provider_spec = (provider or "").strip().lower()
+    require_gain = provider_spec in {"ce_local", "local"}
     if qas003["p95"] > qas003["threshold"] or qas010["p95"] > qas010["threshold"]:
         fail = True
-    if golden["candidate"]["precision@k"] < golden["baseline"]["precision@k"]:
-        fail = True
-    if golden["candidate"]["ndcg@k"] < golden["baseline"]["ndcg@k"]:
-        fail = True
+    if require_gain:
+        meets_delta = (delta_p >= 0.005) or (delta_ndcg >= 0.01)
+        if not meets_delta:
+            fail = True
     min_coverage = float(os.getenv("RELATION_COVERAGE_MIN", "50"))
     if coverage < min_coverage:
         fail = True

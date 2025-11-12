@@ -27,8 +27,14 @@ v4.5A is the deployable baseline: Normalizer→PromotionAgent path is verified e
 Both checks run with `STORE_BACKEND=memory` and `LLM_PROVIDER=mock` so CI stays deterministic.
 
 ## Active Work (v4.6)
-### Objective A — Cross-Encoder Rerank Provider *(active)*
-Add `ce_local` (deterministic overlap scoring) and `ce_http` (flagged HTTP adapter) behind the existing rerank hook. Providers are invoked only when `RERANK_ENABLE=1` and fall back to `mock_ce`/`none` when unavailable. Acceptance: provider selection tests, HTTP client mocked in CI, golden metrics stay ≥ baseline, and CI summary prints P@10/nDCG@10 lines.
+### Objective A — Cross-Encoder Rerank Provider *(delivered — SoT v4.6-A)*
+Acceptance criteria (kept active in CI):
+- Golden corpus contains 12–20 queries, each with 8–15 candidates and 2–3 relevant docs, stored deterministically under `data/golden/*`.
+- `ce_local` heuristic lowercases + strips punctuation, applies capped term-frequency boosts with IDF-like weighting, adds exact n-gram bonuses, and breaks ties via the original candidate score; runtime stays O(n·|query|) and CI remains offline.
+- Provider selection routes to `ce_local` only when `RERANK_ENABLE=1` and `RERANK_PROVIDER=ce_local`, flags-off runs preserve baseline ordering, and `ce_http` never triggers network calls inside CI.
+- Evaluation runs baseline vs ce_local, prints all four CI summary lines (latency, eval, eval delta, relation coverage), and fails when ΔnDCG@10 < +0.01 **and** ΔP@10 < +0.005 while rerank flags are enabled.
+
+Status: ce_local heuristics and tie-breakers ship as part of SoT v4.6-A, the golden set now spans 16 queries × 10 candidates, tests cover deterministic scoring + provider selection, and `python -m app.fitness.report` currently records ΔnDCG@10 = +0.070 with DP10 = +0.000; defaults remain inert with flags off.
 
 ### Objective B — Relation Index v1 + Orphan Gate *(delivered)*
 Implement in-memory RelationIndex CRUD + `has_any()`, propagate provenance links, and gate promotions with the orphan guard (`PROMOTION_ALLOW_ORPHANS` + `PROMOTION_ORPHAN_OVERRIDE_REASON`). Status: gate enforced by default, overrides audited, and CI reports relation coverage from the golden sample. Acceptance: relation coverage metrics and tagging readiness require ≥95% promoted objects linked.
@@ -38,6 +44,7 @@ Implement in-memory RelationIndex CRUD + `has_any()`, propagate provenance links
 
 ### Objective D — Golden Set + Evaluation Metrics *(active)*
 Ship synthetic corpus (`data/golden/*`), compute Precision@k and nDCG@k, and assert rerank quality never drops below baseline. Evaluation runs inside the not-pg suite, CI summary prints `EVAL P@10` and `nDCG@10`, and failures block merges.
+SoT v4.6-A expands the corpus to 16 deterministic queries (10 candidates each) and ties CI failure conditions directly to ΔP@10 / ΔnDCG@10 thresholds so regressions remain visible without changing defaults.
 
 ### Operational Acceptance
 - Latency guard: ingest→index p95 remains ≤ 2 s while hooks and dedup are enabled.

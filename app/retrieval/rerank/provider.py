@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 import os
+from collections import Counter
 from dataclasses import dataclass
 from typing import Iterable, List, Protocol
 
@@ -49,24 +51,61 @@ class MockCrossEncoderReranker:
 
 class LocalCrossEncoderReranker:
     """
-    Deterministic token overlap + positional bonus used in CI.
+    Deterministic token + phrase heuristic used in CI.
     """
 
     def __init__(self, *, model: str | None = None) -> None:
         self.model = model or os.getenv("RERANK_CE_LOCAL_MODEL", "ce-local-mini")
 
     def rerank(self, query: str, items: Iterable[RerankItem], top_k: int | None = None) -> List[RerankResult]:
-        q_tokens = _norm_tokens(query)
-        ranked: list[tuple[float, str]] = []
+        q_tokens = _tokenize(query)
+        query_counts = Counter(q_tokens)
+        unique_terms = set(query_counts)
+        query_phrases = _ngram_phrases(q_tokens)
+        idf_weights = {term: 1.0 + math.log1p(len(q_tokens) / query_counts[term]) for term in unique_terms} if q_tokens else {}
+
+        ranked: list[tuple[float, float, int, str]] = []
         for idx, item in enumerate(items):
-            tokens = _norm_tokens(item.text)
-            overlap = len(tokens.intersection(q_tokens))
-            prefix_bonus = 0.1 * max(0, len(item.text.split()) - 40)
-            recency_penalty = 0.01 * idx
-            score = overlap - prefix_bonus - recency_penalty
-            ranked.append((score, item.id))
-        ranked.sort(key=lambda tup: tup[0], reverse=True)
-        res = [RerankResult(id=id_, score=score) for score, id_ in ranked]
+            doc_tokens = _tokenize(item.text)
+            doc_counts = Counter(doc_tokens)
+            term_score = 0.0
+            matched_terms = 0
+            for term, q_freq in query_counts.items():
+                doc_freq = doc_counts.get(term, 0)
+                if not doc_freq:
+                    continue
+                matched_terms += 1
+                capped = min(doc_freq, 3)
+                freq_bonus = 1.0 + min(q_freq, 3) * 0.1
+                weight = idf_weights.get(term, 1.0)
+                term_score += weight * capped * freq_bonus
+
+            phrase_bonus = 0.0
+            if doc_tokens and query_phrases:
+                doc_phrase_set = _ngram_phrases(doc_tokens)
+                overlap_phrases = doc_phrase_set.intersection(query_phrases)
+                for phrase in overlap_phrases:
+                    length = phrase.count(" ") + 1
+                    phrase_bonus += 0.25 * length
+
+            overlap_ratio = matched_terms / max(1, len(unique_terms))
+            length_norm = 1.0
+            if len(doc_tokens) > 80:
+                length_norm = 1.0 / (1.0 + math.log(len(doc_tokens) / 80))
+
+            base_score = (term_score * length_norm) + phrase_bonus + 0.4 * overlap_ratio
+            orig_score = 0.0
+            if isinstance(item.meta, dict):
+                orig = item.meta.get("score")
+                if orig is not None:
+                    try:
+                        orig_score = float(orig)
+                    except (TypeError, ValueError):
+                        orig_score = 0.0
+            ranked.append((base_score, orig_score, idx, item.id))
+
+        ranked.sort(key=lambda row: (-row[0], -row[1], row[2]))
+        res = [RerankResult(id=entry[3], score=entry[0]) for entry in ranked]
         return res[: top_k or len(res)]
 
 
@@ -125,6 +164,24 @@ class HttpCrossEncoderReranker:
 
 def _norm_tokens(s: str) -> set[str]:
     return set("".join(ch.lower() if ch.isalnum() else " " for ch in s).split())
+
+
+def _tokenize(text: str) -> list[str]:
+    if not text:
+        return []
+    normalized = "".join(ch.lower() if ch.isalnum() else " " for ch in text)
+    return [tok for tok in normalized.split() if tok]
+
+
+def _ngram_phrases(tokens: list[str], max_n: int = 3) -> set[str]:
+    phrases: set[str] = set()
+    length = len(tokens)
+    for n in range(2, max_n + 1):
+        if length < n:
+            break
+        for idx in range(length - n + 1):
+            phrases.add(" ".join(tokens[idx : idx + n]))
+    return phrases
 
 
 def select_provider(name: str | None = None) -> BaseReranker:

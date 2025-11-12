@@ -1,24 +1,243 @@
 {
   "queries": [
     {
-      "query": "alpha energy storage grid",
+      "query": "grid battery reserve smoothing",
       "relevance": [
         {"doc_id": "g-doc-1", "relevance": 3},
-        {"doc_id": "g-doc-2", "relevance": 1}
+        {"doc_id": "g-doc-9", "relevance": 2},
+        {"doc_id": "g-doc-18", "relevance": 2},
+        {"doc_id": "g-doc-5", "relevance": 0},
+        {"doc_id": "g-doc-2", "relevance": 0},
+        {"doc_id": "g-doc-7", "relevance": 0},
+        {"doc_id": "g-doc-4", "relevance": 0},
+        {"doc_id": "g-doc-13", "relevance": 0},
+        {"doc_id": "g-doc-15", "relevance": 0},
+        {"doc_id": "g-doc-20", "relevance": 0}
       ]
     },
     {
-      "query": "codex rerank diarization",
+      "query": "rerank provider matrix ce_local heuristics",
       "relevance": [
         {"doc_id": "g-doc-2", "relevance": 3},
-        {"doc_id": "g-doc-3", "relevance": 2}
+        {"doc_id": "g-doc-5", "relevance": 2},
+        {"doc_id": "g-doc-11", "relevance": 2},
+        {"doc_id": "g-doc-10", "relevance": 0},
+        {"doc_id": "g-doc-3", "relevance": 0},
+        {"doc_id": "g-doc-6", "relevance": 0},
+        {"doc_id": "g-doc-8", "relevance": 0},
+        {"doc_id": "g-doc-15", "relevance": 0},
+        {"doc_id": "g-doc-18", "relevance": 0},
+        {"doc_id": "g-doc-20", "relevance": 0}
       ]
     },
     {
-      "query": "promotion relation governance",
+      "query": "promotion relation coverage percent",
       "relevance": [
         {"doc_id": "g-doc-3", "relevance": 3},
-        {"doc_id": "g-doc-2", "relevance": 1}
+        {"doc_id": "g-doc-7", "relevance": 2},
+        {"doc_id": "g-doc-19", "relevance": 2},
+        {"doc_id": "g-doc-2", "relevance": 0},
+        {"doc_id": "g-doc-1", "relevance": 0},
+        {"doc_id": "g-doc-11", "relevance": 0},
+        {"doc_id": "g-doc-4", "relevance": 0},
+        {"doc_id": "g-doc-14", "relevance": 0},
+        {"doc_id": "g-doc-18", "relevance": 0},
+        {"doc_id": "g-doc-5", "relevance": 0}
+      ]
+    },
+    {
+      "query": "token normalization phrase bonus",
+      "relevance": [
+        {"doc_id": "g-doc-5", "relevance": 3},
+        {"doc_id": "g-doc-17", "relevance": 2},
+        {"doc_id": "g-doc-15", "relevance": 0},
+        {"doc_id": "g-doc-2", "relevance": 0},
+        {"doc_id": "g-doc-11", "relevance": 0},
+        {"doc_id": "g-doc-8", "relevance": 0},
+        {"doc_id": "g-doc-16", "relevance": 0},
+        {"doc_id": "g-doc-9", "relevance": 0},
+        {"doc_id": "g-doc-13", "relevance": 0},
+        {"doc_id": "g-doc-6", "relevance": 0}
+      ]
+    },
+    {
+      "query": "mock cross encoder baseline guardrails",
+      "relevance": [
+        {"doc_id": "g-doc-6", "relevance": 3},
+        {"doc_id": "g-doc-5", "relevance": 2},
+        {"doc_id": "g-doc-2", "relevance": 0},
+        {"doc_id": "g-doc-1", "relevance": 0},
+        {"doc_id": "g-doc-11", "relevance": 0},
+        {"doc_id": "g-doc-9", "relevance": 0},
+        {"doc_id": "g-doc-8", "relevance": 0},
+        {"doc_id": "g-doc-12", "relevance": 0},
+        {"doc_id": "g-doc-4", "relevance": 0},
+        {"doc_id": "g-doc-18", "relevance": 0}
+      ]
+    },
+    {
+      "query": "hybrid search bm25 embedding mix",
+      "relevance": [
+        {"doc_id": "g-doc-8", "relevance": 3},
+        {"doc_id": "g-doc-13", "relevance": 2},
+        {"doc_id": "g-doc-2", "relevance": 2},
+        {"doc_id": "g-doc-5", "relevance": 0},
+        {"doc_id": "g-doc-16", "relevance": 0},
+        {"doc_id": "g-doc-15", "relevance": 0},
+        {"doc_id": "g-doc-1", "relevance": 0},
+        {"doc_id": "g-doc-7", "relevance": 0},
+        {"doc_id": "g-doc-10", "relevance": 0},
+        {"doc_id": "g-doc-11", "relevance": 0}
+      ]
+    },
+    {
+      "query": "qas003 qas010 latency budgets",
+      "relevance": [
+        {"doc_id": "g-doc-9", "relevance": 3},
+        {"doc_id": "g-doc-18", "relevance": 2},
+        {"doc_id": "g-doc-10", "relevance": 2},
+        {"doc_id": "g-doc-5", "relevance": 0},
+        {"doc_id": "g-doc-2", "relevance": 0},
+        {"doc_id": "g-doc-1", "relevance": 0},
+        {"doc_id": "g-doc-7", "relevance": 0},
+        {"doc_id": "g-doc-8", "relevance": 0},
+        {"doc_id": "g-doc-6", "relevance": 0},
+        {"doc_id": "g-doc-20", "relevance": 0}
+      ]
+    },
+    {
+      "query": "golden set expansion deterministic data",
+      "relevance": [
+        {"doc_id": "g-doc-10", "relevance": 3},
+        {"doc_id": "g-doc-19", "relevance": 2},
+        {"doc_id": "g-doc-7", "relevance": 2},
+        {"doc_id": "g-doc-2", "relevance": 0},
+        {"doc_id": "g-doc-5", "relevance": 0},
+        {"doc_id": "g-doc-1", "relevance": 0},
+        {"doc_id": "g-doc-8", "relevance": 0},
+        {"doc_id": "g-doc-17", "relevance": 0},
+        {"doc_id": "g-doc-9", "relevance": 0},
+        {"doc_id": "g-doc-4", "relevance": 0}
+      ]
+    },
+    {
+      "query": "original score tie breaker enforcement",
+      "relevance": [
+        {"doc_id": "g-doc-11", "relevance": 3},
+        {"doc_id": "g-doc-5", "relevance": 2},
+        {"doc_id": "g-doc-2", "relevance": 2},
+        {"doc_id": "g-doc-8", "relevance": 0},
+        {"doc_id": "g-doc-6", "relevance": 0},
+        {"doc_id": "g-doc-9", "relevance": 0},
+        {"doc_id": "g-doc-13", "relevance": 0},
+        {"doc_id": "g-doc-10", "relevance": 0},
+        {"doc_id": "g-doc-15", "relevance": 0},
+        {"doc_id": "g-doc-18", "relevance": 0}
+      ]
+    },
+    {
+      "query": "ce_http offline safety fallback",
+      "relevance": [
+        {"doc_id": "g-doc-12", "relevance": 3},
+        {"doc_id": "g-doc-6", "relevance": 2},
+        {"doc_id": "g-doc-5", "relevance": 0},
+        {"doc_id": "g-doc-2", "relevance": 0},
+        {"doc_id": "g-doc-11", "relevance": 0},
+        {"doc_id": "g-doc-8", "relevance": 0},
+        {"doc_id": "g-doc-3", "relevance": 0},
+        {"doc_id": "g-doc-18", "relevance": 0},
+        {"doc_id": "g-doc-1", "relevance": 0},
+        {"doc_id": "g-doc-4", "relevance": 0}
+      ]
+    },
+    {
+      "query": "memory store reset deterministic tests",
+      "relevance": [
+        {"doc_id": "g-doc-13", "relevance": 3},
+        {"doc_id": "g-doc-16", "relevance": 2},
+        {"doc_id": "g-doc-5", "relevance": 0},
+        {"doc_id": "g-doc-2", "relevance": 0},
+        {"doc_id": "g-doc-8", "relevance": 0},
+        {"doc_id": "g-doc-7", "relevance": 0},
+        {"doc_id": "g-doc-10", "relevance": 0},
+        {"doc_id": "g-doc-9", "relevance": 0},
+        {"doc_id": "g-doc-1", "relevance": 0},
+        {"doc_id": "g-doc-14", "relevance": 0}
+      ]
+    },
+    {
+      "query": "ingestion provenance source cleanup",
+      "relevance": [
+        {"doc_id": "g-doc-14", "relevance": 3},
+        {"doc_id": "g-doc-7", "relevance": 2},
+        {"doc_id": "g-doc-10", "relevance": 2},
+        {"doc_id": "g-doc-2", "relevance": 0},
+        {"doc_id": "g-doc-5", "relevance": 0},
+        {"doc_id": "g-doc-13", "relevance": 0},
+        {"doc_id": "g-doc-1", "relevance": 0},
+        {"doc_id": "g-doc-8", "relevance": 0},
+        {"doc_id": "g-doc-19", "relevance": 0},
+        {"doc_id": "g-doc-4", "relevance": 0}
+      ]
+    },
+    {
+      "query": "frequency cap fairness scoring",
+      "relevance": [
+        {"doc_id": "g-doc-15", "relevance": 3},
+        {"doc_id": "g-doc-5", "relevance": 2},
+        {"doc_id": "g-doc-2", "relevance": 2},
+        {"doc_id": "g-doc-11", "relevance": 0},
+        {"doc_id": "g-doc-8", "relevance": 0},
+        {"doc_id": "g-doc-6", "relevance": 0},
+        {"doc_id": "g-doc-13", "relevance": 0},
+        {"doc_id": "g-doc-9", "relevance": 0},
+        {"doc_id": "g-doc-17", "relevance": 0},
+        {"doc_id": "g-doc-20", "relevance": 0}
+      ]
+    },
+    {
+      "query": "mock llm provider deterministic embeddings",
+      "relevance": [
+        {"doc_id": "g-doc-16", "relevance": 3},
+        {"doc_id": "g-doc-18", "relevance": 2},
+        {"doc_id": "g-doc-13", "relevance": 0},
+        {"doc_id": "g-doc-9", "relevance": 0},
+        {"doc_id": "g-doc-5", "relevance": 0},
+        {"doc_id": "g-doc-2", "relevance": 0},
+        {"doc_id": "g-doc-8", "relevance": 0},
+        {"doc_id": "g-doc-6", "relevance": 0},
+        {"doc_id": "g-doc-1", "relevance": 0},
+        {"doc_id": "g-doc-10", "relevance": 0}
+      ]
+    },
+    {
+      "query": "ngram exact phrase detection playbook",
+      "relevance": [
+        {"doc_id": "g-doc-17", "relevance": 3},
+        {"doc_id": "g-doc-5", "relevance": 2},
+        {"doc_id": "g-doc-11", "relevance": 0},
+        {"doc_id": "g-doc-15", "relevance": 0},
+        {"doc_id": "g-doc-8", "relevance": 0},
+        {"doc_id": "g-doc-9", "relevance": 0},
+        {"doc_id": "g-doc-6", "relevance": 0},
+        {"doc_id": "g-doc-13", "relevance": 0},
+        {"doc_id": "g-doc-10", "relevance": 0},
+        {"doc_id": "g-doc-2", "relevance": 0}
+      ]
+    },
+    {
+      "query": "ci eval rerank delta summary",
+      "relevance": [
+        {"doc_id": "g-doc-18", "relevance": 3},
+        {"doc_id": "g-doc-9", "relevance": 2},
+        {"doc_id": "g-doc-10", "relevance": 2},
+        {"doc_id": "g-doc-5", "relevance": 0},
+        {"doc_id": "g-doc-2", "relevance": 0},
+        {"doc_id": "g-doc-7", "relevance": 0},
+        {"doc_id": "g-doc-1", "relevance": 0},
+        {"doc_id": "g-doc-8", "relevance": 0},
+        {"doc_id": "g-doc-6", "relevance": 0},
+        {"doc_id": "g-doc-20", "relevance": 0}
       ]
     }
   ]

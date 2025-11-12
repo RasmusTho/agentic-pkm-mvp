@@ -108,6 +108,36 @@ def test_ce_http_provider(monkeypatch: pytest.MonkeyPatch):
     assert [r.id for r in res][:2] == ["b", "a"]
 
 
+def test_ce_local_scoring_is_deterministic(monkeypatch: pytest.MonkeyPatch):
+    provider = _reload()
+    monkeypatch.setenv("RERANK_PROVIDER", "ce_local")
+    importlib.reload(provider)
+    reranker = provider.get_reranker()
+    items = [
+        provider.RerankItem(id="a", text="token normalization phrase bonus", meta={"score": 0.4}),
+        provider.RerankItem(id="b", text="phrase bonus token normalization", meta={"score": 0.3}),
+        provider.RerankItem(id="c", text="unrelated garden entry", meta={"score": 0.9}),
+    ]
+    res1 = reranker.rerank("token normalization phrase", items)
+    res2 = reranker.rerank("token normalization phrase", items)
+    assert res1 == res2
+    assert [r.id for r in res1][:2] == ["a", "b"]
+
+
+def test_ce_local_uses_original_score_as_tie_breaker(monkeypatch: pytest.MonkeyPatch):
+    provider = _reload()
+    monkeypatch.setenv("RERANK_PROVIDER", "ce_local")
+    importlib.reload(provider)
+    reranker = provider.get_reranker()
+    items = [
+        provider.RerankItem(id="a", text="alpha beta gamma", meta={"score": 0.2}),
+        provider.RerankItem(id="b", text="alpha beta gamma", meta={"score": 0.8}),
+        provider.RerankItem(id="c", text="alpha beta gamma", meta={"score": 0.5}),
+    ]
+    out = reranker.rerank("alpha beta", items)
+    assert [r.id for r in out] == ["b", "c", "a"]
+
+
 def test_ce_http_fallback_to_mock(monkeypatch: pytest.MonkeyPatch):
     provider = _reload()
     monkeypatch.setenv("RERANK_PROVIDER", "ce_http")
