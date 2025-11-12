@@ -7,7 +7,7 @@
 | v4.4 | Harden observability, Store abstraction, and identity plus conflict handling. | Delivered |
 | v4.5A | Stabilize unified ingestion, enforce deterministic memory-first CI, and document promotion rules. | Delivered |
 | v4.5B | Fitness guards + ingestion polish, rerank + chunk dedup readiness. | Delivered |
-| v4.6 | Retrieval quality upgrades (cross-encoder, diarization adapter, RelationIndex fitness, golden eval). | Active |
+| v4.6 | Retrieval quality upgrades (cross-encoder, diarization adapter, RelationIndex fitness, golden eval). | Active (Objectives A–D) |
 | v4.7 | Reasoning layer & reflexive agents over the knowledge graph. | Planned |
 
 ## Current Stable Baseline (v4.5A)
