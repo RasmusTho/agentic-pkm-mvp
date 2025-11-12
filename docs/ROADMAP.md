@@ -10,6 +10,7 @@
 | v4.6 | Retrieval quality upgrades (cross-encoder, diarization adapter, RelationIndex fitness, golden eval). | Active (Objectives A–D) |
 | v4.6-B | Relation coverage lift (deterministic extraction + audit trail). | Delivered |
 | v4.6-C | Diarization-aware chunking & metrics. | Active |
+| v4.6-D | CI gates + summary hardening. | Delivered (2025-02-18) |
 | v4.7 | Reasoning layer & reflexive agents over the knowledge graph. | Planned |
 
 ## Current Stable Baseline (v4.5A)
@@ -50,6 +51,11 @@ Implement in-memory RelationIndex CRUD + `has_any()`, propagate provenance links
 - `speaker_aware_chunks()` aligns spans with diarization segments (`speaker,start,end`) so transcripts remain coherent per speaker without exceeding the character budget.
 - Pipeline + indexing propagate `speaker` metadata (and `speaker_count` in `text.chunk.created` audits) whenever `DIARIZE_ENABLE=1`; flag-off path is byte-for-byte identical to the legacy chunker.
 - Fitness adds chunk-length p95 and speaker-count metrics with a sixth CI summary line `CI SUMMARY DIARIZATION chunk_p95=<val> speaker_avg=<val> flag=on`, failing if the diarized p95 exceeds the baseline by >5 %.
+
+### Objective D1 — CI Gates & Baselines *(delivered — SoT v4.6-D)*
+- Baselines for QAS003/QAS010, eval, relation coverage/validity, and diarization chunk lengths are versioned in `ops/quality/baselines.yaml` with optional overrides via `THRESHOLDS_PATH`; `GATE_STRICT=1` tightens delta expectations (+0.01 nDCG or +0.005 precision).
+- `app.fitness.report` parses the six CI summary lines it emits, enforces thresholds (latency ≤ baseline × tolerance, rerank deltas ≥ configured mins, relation coverage/validity ≥95 %, diarization p95 ratio ≤0.95), prints `CI SUMMARY GATES ok=<bool> reasons=<codes>`, and exits non-zero on regression.
+- `.github/workflows/ci-smoke.yaml` tees the report into `tmp/ci_summary.log` and fails immediately if any of the seven lines are missing or if `ok=false`, ensuring every PR presents the hardened CI contract without leaving offline mode.
 
 ### Objective C — Diarization Hook *(active)*
 `DIARIZE_ENABLE` toggles segmentation; providers include `none`, `mock`, and `external` (HTTP). Metadata preserves `{speaker, text}` entries so ingestion/promotion retain conversation context. Acceptance: mock provider yields ≥2 segments, disabled path is unchanged, no CI dependency on external ASR, and chunk policy respects speaker segments.

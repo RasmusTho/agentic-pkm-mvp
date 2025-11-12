@@ -56,3 +56,25 @@ def test_pipeline_flag_on_emits_speaker_metadata(monkeypatch: pytest.MonkeyPatch
 
     # reset env for other tests
     os.environ.pop("DIARIZE_ENABLE", None)
+
+
+def test_long_segment_is_split(monkeypatch: pytest.MonkeyPatch) -> None:
+    long_text = "alpha segment " * 120
+    segments = [
+        {"speaker": "alpha", "text": long_text, "start": 0.0, "end": 12.0},
+    ]
+    chunks = speaker_aware_chunks(segments, max_chars=80)
+    assert len(chunks) >= 2
+    assert all(len(chunk["text"]) <= 80 for chunk in chunks)
+    starts = [chunk["start"] for chunk in chunks]
+    assert starts == sorted(starts)
+
+
+def test_boundary_split_for_same_speaker(monkeypatch: pytest.MonkeyPatch) -> None:
+    segments = [
+        {"speaker": "alpha", "text": "short intro", "start": 0.0, "end": 1.0},
+        {"speaker": "alpha", "text": "alpha " * 120, "start": 1.0, "end": 5.0},
+    ]
+    chunks = speaker_aware_chunks(segments, max_chars=50)
+    assert all(len(chunk["text"]) <= 50 for chunk in chunks)
+    assert len(chunks) >= 3

@@ -71,7 +71,25 @@ jobs:
         run: test -s "$INDEX_PERSIST_PATH"
 
       - name: Fitness report (QAS-003/QAS-010)
-        run: python -m app.fitness.report
+        run: |
+          python -m app.fitness.report | tee tmp/ci_summary.log
+
+      - name: Verify CI summary lines
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from app.fitness.report import parse_summary_lines, SUMMARY_LABELS
+          
+          lines = Path("tmp/ci_summary.log").read_text(encoding="utf-8").splitlines()
+          parsed = parse_summary_lines(lines, required=SUMMARY_LABELS)
+          if set(parsed.keys()) != set(SUMMARY_LABELS):
+              missing = set(SUMMARY_LABELS) - set(parsed.keys())
+              extra = set(parsed.keys()) - set(SUMMARY_LABELS)
+              raise SystemExit(f"Unexpected CI summary labels. Missing: {missing}, extra: {extra}")
+          gates = parsed.get("GATES", {})
+          if str(gates.get("ok")).lower() != "true":
+              raise SystemExit(f"CI gates failed: {gates}")
+          PY
 
       - name: CLI smoke commands
         run: |

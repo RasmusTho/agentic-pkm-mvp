@@ -1,0 +1,26 @@
+latency:
+  tolerance: 0.10
+  QAS003:
+    value: 0.000272
+  QAS010:
+    value: 0.000011
+
+eval:
+  candidate_precision: 0.188
+  candidate_ndcg: 0.924
+  baseline_precision: 0.188
+  baseline_ndcg: 0.855
+  delta_precision_min: 0.005
+  delta_ndcg_min: 0.010
+  delta_abs_tolerance: 0.005
+
+relations:
+  coverage_min: 0.95
+  validity_min: 0.95
+  coverage: 1.0
+  validity: 1.0
+
+diarization:
+  chunk_p95_off: 117.0
+  chunk_p95_on: 78.0
+  p95_ratio_max: 0.95

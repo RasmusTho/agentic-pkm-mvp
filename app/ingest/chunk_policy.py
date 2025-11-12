@@ -41,7 +41,6 @@ def speaker_aware_chunks(
     normalized = _normalize_segments(segments)
     if not normalized:
         return []
-    # Stable ordering by (start, original index)
     normalized.sort(key=lambda item: (item["start"], item["segment_index"]))
     chunks: List[Dict[str, Any]] = []
     current: Dict[str, Any] | None = None
@@ -50,30 +49,68 @@ def speaker_aware_chunks(
         text = seg["text"]
         if not text:
             continue
-        if (
-            current is None
-            or seg["speaker"] != current["speaker"]
-            or len(current["text"]) + 1 + len(text) > max_chars
-        ):
-            if current:
-                chunks.append(current)
-            current = {
-                "text": text,
-                "speaker": seg["speaker"],
-                "start": seg["start"],
-                "end": seg["end"],
-                "segment_start": seg["segment_index"],
-                "segment_end": seg["segment_index"],
-                "speaker_segments": 1,
-            }
-        else:
-            current["text"] = f"{current['text'].rstrip()} {text}".strip()
-            current["end"] = max(current["end"], seg["end"])
-            current["segment_end"] = seg["segment_index"]
-            current["speaker_segments"] += 1
+        sub_segments = split_segment_by_chars(seg, max_chars=max_chars)
+        for sub in sub_segments:
+            text = sub["text"]
+            if (
+                current is None
+                or sub["speaker"] != current["speaker"]
+                or len(current["text"]) + 1 + len(text) > max_chars
+            ):
+                if current:
+                    chunks.append(current)
+                current = {
+                    "text": text,
+                    "speaker": sub["speaker"],
+                    "start": sub["start"],
+                    "end": sub["end"],
+                    "segment_start": sub["segment_index"],
+                    "segment_end": sub["segment_index"],
+                    "speaker_segments": 1,
+                }
+            else:
+                current["text"] = f"{current['text'].rstrip()} {text}".strip()
+                current["end"] = max(current["end"], sub["end"])
+                current["segment_end"] = sub["segment_index"]
+                current["speaker_segments"] += 1
     if current:
         chunks.append(current)
     return chunks
+
+
+def split_segment_by_chars(seg: Dict[str, Any], *, max_chars: int) -> List[Dict[str, Any]]:
+    text = seg.get("text", "")
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [seg]
+    speaker = seg.get("speaker")
+    start = seg.get("start", 0.0)
+    end = seg.get("end", start)
+    total = len(text)
+    pieces: List[Dict[str, Any]] = []
+    base_index = seg.get("segment_index", 0)
+    offset = 0
+    piece_idx = 0
+    while offset < total:
+        next_offset = min(offset + max_chars, total)
+        chunk_text = text[offset:next_offset]
+        chunk_start_ratio = offset / total
+        chunk_end_ratio = next_offset / total
+        sub_start = start + (end - start) * chunk_start_ratio
+        sub_end = start + (end - start) * chunk_end_ratio
+        pieces.append(
+            {
+                "speaker": speaker,
+                "text": chunk_text,
+                "start": sub_start,
+                "end": sub_end,
+                "segment_index": base_index + piece_idx,
+            }
+        )
+        offset = next_offset
+        piece_idx += 1
+    return pieces
 
 
 def _normalize_segments(segments: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
