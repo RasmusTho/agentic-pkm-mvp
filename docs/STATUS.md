@@ -6,6 +6,7 @@
 | v4.5A | Deterministic ingestion baseline | Full PER loop, promotion cooldowns, memory CI | Route ingestion polish to v4.5B | Monitor metrics + guard rails | Current green baseline |
 | v4.5B | Fitness guards + ingestion polish | Delivered 2025-02-14 — rerank hooks, chunk/dedup, CI gates | — | Prep v4.6 rollout, keep fitness monitors green | Ready for tagging |
 | v4.6 | Retrieval quality uplift (Objectives A–D active) | Objectives A (ce_local heuristic + golden eval) and B delivered; **v4.6-B Delivered 2025-02-16** with 100 % coverage/validity; v4.6-C diarization-aware chunking in progress | Objective C/D hardening, relation coverage ≥95%; issues #55–#58 track work | Prototype cross-encoder + diarization PER loops | Guard rails enforce ΔnDCG@10 ≥ +0.01 or ΔP@10 ≥ +0.005 |
+| v4.6-D | CI gates + summary contract | Delivered 2025-02-18 — baselines.yaml drives seven-line CI output with GATES ok=true | — | Refresh baselines when metrics improve; keep PRs pasting summary lines | ops/quality/baselines.yaml + GATE_STRICT=1 documented |
 | v5.x | Symbolic reasoning + reflexive agents | Governance concepts, Agent Memory Graph sketches | RDF/OWL/SHACL enforcement, logic gates | Define policy bundles + knowledge graph API | Dependent on v4.6 telemetry |
 
 ## v4.5B Delivery Summary (2025-02-14)
