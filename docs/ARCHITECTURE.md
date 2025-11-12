@@ -45,7 +45,7 @@ Every agent follows Plan → Execute → Reflect. Plan inspects the latest event
 - The LLM layer defaults to `LLM_PROVIDER=mock` with fixture responses for deterministic CI; production enabling switches providers via env, while `llm_retry()` applies exponential backoff and caps at three attempts per request.
 
 ## Retrieval Layer (Rerank & Hybrid Search)
-Hybrid search merges BM25 (FTS) plus vector similarity, returning distinct object IDs with score provenance. `RerankerProvider` currently supports `none` and `mock_ce`, both injected via dependency wiring; v4.5A leaves reranking inert by default. Operators enable reranking with `RERANK_ENABLE=1`, choose providers via `RERANK_PROVIDER`, and bound cost using `RERANK_TOP_K`. `apply_optional_rerank()` (located in `app/retrieval/hybrid_rerank_hook.py`) is called at the end of `hybrid_search` after unioning lexical + vector matches; invariants: never drop items, only reorder the first `TOP_K`, and maintain stable IDs for downstream caching. The forward plan for v4.6 is a plug-in model that loads a real cross-encoder while respecting the hook interface so tests can keep swapping mocks without touching query code.
+Hybrid search merges BM25 (FTS) plus vector similarity, returning distinct object IDs with score provenance. `RerankerProvider` now ships a matrix of deterministic adapters (`none`, `mock_ce`, `ce_local`, `ce_http`) that are injected via dependency wiring; reranking remains inert until `RERANK_ENABLE=1`. Operators select providers with `RERANK_PROVIDER`, keep cost bounded using `RERANK_TOP_K`, and rely on `ce_local` when they need a deterministic cross-encoder heuristic during CI. `apply_optional_rerank()` (located in `app/retrieval/hybrid_rerank_hook.py`) is called at the end of `hybrid_search` after unioning lexical + vector matches; invariants: never drop items, only reorder the first `TOP_K`, and maintain stable IDs for downstream caching. The v4.6 track keeps the same plug-in model so tests can swap mocks without touching query code, while production can point to an HTTP cross-encoder when approvals land.
 
 ### Rerank Hook Placement
 The adapter `app/retrieval/hook_adapter.py::maybe_rerank(query, items)` sits on the final step of `hybrid_search` after BM25/vector scores are normalized and merged. By default it returns items untouched; when `RERANK_ENABLE` is set it delegates to `apply_optional_rerank()` so PromotionAgent and downstream caches always observe deterministic payloads (id, text, score, snippet, metadata). Memory-mode CI keeps determinism because the mock cross-encoder is pure Python and respects the provided ordering contracts.
@@ -62,7 +62,7 @@ Both probes run in memory mode with `LLM_PROVIDER=mock` so they remain determini
 `app.retrieval.rerank.provider` exposes a plug-in matrix:
 - `none` — bypass reranking, preserve original ordering.
 - `mock_ce` — deterministic overlap scoring for tests.
-- `ce_local` — token overlap + positional scoring that runs entirely in Python; controlled via `RERANK_CE_LOCAL_MODEL` and deterministic in CI.
+- `ce_local` — deterministic token/phrase heuristic that runs entirely in Python; it lowercases + strips punctuation, applies capped term-frequency + IDF-like weights, adds exact n-gram bonuses, and breaks ties using the original candidate score so ordering stays stable.
 - `ce_http` — posts `{query, items}` JSON to `RERANK_HTTP_ENDPOINT` with graceful fallback to the mock provider when the service is unavailable.
 `RERANK_ENABLE` gates all providers, and `RERANK_TOP_K` constrains how many candidates the cross-encoder can reorder.
 
@@ -70,8 +70,10 @@ Both probes run in memory mode with `LLM_PROVIDER=mock` so they remain determini
 | --- | --- | --- | --- |
 | `none` | default | — | Identity ordering. |
 | `mock_ce` | `RERANK_PROVIDER=mock_ce` | `RERANK_TOP_K` | Deterministic overlap for tests. |
-| `ce_local` | `RERANK_PROVIDER=ce_local` | `RERANK_CE_LOCAL_MODEL` | Pure-Python overlap + positional bonus. |
+| `ce_local` | `RERANK_PROVIDER=ce_local` | `RERANK_CE_LOCAL_MODEL` | Pure-Python heuristic: normalized tokens, capped term boosts, n-gram bonus, tie-breaker = original score. |
 | `ce_http` | `RERANK_PROVIDER=ce_http` | `RERANK_HTTP_ENDPOINT`, `RERANK_HTTP_TIMEOUT` | External cross-encoder client with fallback to mock. |
+
+`ce_local` reads every item's `meta.score` to provide a deterministic tie-breaker, so hybrid scores remain a stable fallback. The heuristic complexity is O(n·|query|) and never issues network calls, which keeps CI offline. Golden-set evaluation (`python -m app.fitness.report`) enforces ΔnDCG@10 ≥ 0.01 or ΔP@10 ≥ 0.005 whenever `RERANK_PROVIDER=ce_local` is under test, and defaults remain inert unless the rerank flag is flipped.
 
 ## Relation Index v1 & Orphan Gate
 `MemoryRelationIndex` and `PgRelationIndex` now implement `link()`, `neighbors()`, and `has_any()` so agents can assert provenance before publishing. PromotionAgent wires in `app.promotion.gates.ensure_object_has_relations()` — if no relation exists for a queued UUID the agent blocks promotion by default. Overrides require `PROMOTION_ALLOW_ORPHANS=1` plus `PROMOTION_ORPHAN_OVERRIDE_REASON`, which emits an `audit_log(action="promotion.orphan.override")` entry and a `promote.orphan.override` log line. This keeps the promoted surface free from orphaned knowledge while still allowing audited manual exceptions. CI also reports the ratio of promoted items with relations using the golden sample in `data/golden/relations.json`.
