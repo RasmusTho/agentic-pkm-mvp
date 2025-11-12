@@ -7,6 +7,7 @@ import sys
 from app.eval.golden import evaluate_vs_baseline
 from .metrics import qas003_hybrid_latency, qas010_outbox_to_index_latency
 from .relations import relation_metrics
+from .chunks import diarization_metrics
 
 
 def _summary_line(label: str, **metrics: float) -> str:
@@ -23,6 +24,8 @@ def main() -> None:
     eval_k = int(os.getenv("CI_EVAL_K", "10"))
     golden = evaluate_vs_baseline(provider, k=eval_k)
     relation_stats = relation_metrics()
+    diarization_off = diarization_metrics(flag_enabled=False)
+    diarization_on = diarization_metrics(flag_enabled=True)
     coverage = relation_stats["coverage"]
     validity = relation_stats["validity"]
     payload = {
@@ -30,6 +33,7 @@ def main() -> None:
         "QAS-010": qas010,
         "golden": golden,
         "relation_coverage_percent": coverage,
+        "diarization": {"off": diarization_off, "on": diarization_on},
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
 
@@ -68,6 +72,14 @@ def main() -> None:
             target="95%",
         )
     )
+    print(
+        _summary_line(
+            "DIARIZATION",
+            chunk_p95=f"{diarization_on['chunk_p95']:.2f}",
+            speaker_avg=f"{diarization_on['speaker_avg']:.2f}",
+            flag="on",
+        )
+    )
 
     fail = False
     provider_spec = (provider or "").strip().lower()
@@ -81,6 +93,10 @@ def main() -> None:
     min_coverage = float(os.getenv("RELATION_COVERAGE_MIN", "95"))
     if coverage < min_coverage:
         fail = True
+    if diarization_off["chunk_p95"]:
+        allowed = diarization_off["chunk_p95"] * 0.95
+        if diarization_on["chunk_p95"] > allowed:
+            fail = True
     if fail:
         sys.exit(1)
 

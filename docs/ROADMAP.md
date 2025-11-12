@@ -9,6 +9,7 @@
 | v4.5B | Fitness guards + ingestion polish, rerank + chunk dedup readiness. | Delivered |
 | v4.6 | Retrieval quality upgrades (cross-encoder, diarization adapter, RelationIndex fitness, golden eval). | Active (Objectives A–D) |
 | v4.6-B | Relation coverage lift (deterministic extraction + audit trail). | Delivered |
+| v4.6-C | Diarization-aware chunking & metrics. | Active |
 | v4.7 | Reasoning layer & reflexive agents over the knowledge graph. | Planned |
 
 ## Current Stable Baseline (v4.5A)
@@ -44,6 +45,11 @@ Implement in-memory RelationIndex CRUD + `has_any()`, propagate provenance links
 - Deterministic extraction (frontmatter keys, tag prefixes, “See also” headings) populates `supports|extends|contradicts|derived_from` links via `prepare_relations_for_promotion()`; coverage + validity both sit at 100 % on the golden sample.
 - Audit trail: every relation write emits `relation.added`, missing or invalid targets emit `relation.missing`, and `PROMOTION_REQUIRE_RELATIONS=1` (staging) blocks promotions without inferred links; overrides remain audited via `PROMOTION_ORPHAN_OVERRIDE_REASON`.
 - CI now prints the fifth summary line `CI SUMMARY RELATIONS coverage=100.00% validity=100.00% target=95%` and fails if coverage drops below 95 %; execution stays offline (`STORE_BACKEND=memory`, `LLM_PROVIDER=mock`).
+
+### Objective C1 — Diarization-aware Chunking *(active — SoT v4.6-C)*
+- `speaker_aware_chunks()` aligns spans with diarization segments (`speaker,start,end`) so transcripts remain coherent per speaker without exceeding the character budget.
+- Pipeline + indexing propagate `speaker` metadata (and `speaker_count` in `text.chunk.created` audits) whenever `DIARIZE_ENABLE=1`; flag-off path is byte-for-byte identical to the legacy chunker.
+- Fitness adds chunk-length p95 and speaker-count metrics with a sixth CI summary line `CI SUMMARY DIARIZATION chunk_p95=<val> speaker_avg=<val> flag=on`, failing if the diarized p95 exceeds the baseline by >5 %.
 
 ### Objective C — Diarization Hook *(active)*
 `DIARIZE_ENABLE` toggles segmentation; providers include `none`, `mock`, and `external` (HTTP). Metadata preserves `{speaker, text}` entries so ingestion/promotion retain conversation context. Acceptance: mock provider yields ≥2 segments, disabled path is unchanged, no CI dependency on external ASR, and chunk policy respects speaker segments.
