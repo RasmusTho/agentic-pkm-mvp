@@ -46,7 +46,8 @@ jobs:
       - name: Doc integrity
         run: |
           set -euo pipefail
-          ! rg -n "TODO|FIXME" README.md CHANGELOG.md docs --glob '!docs/legacy/**' --glob '!docs/uml/**'
+          if rg -n "TODO|FIXME" README.md CHANGELOG.md docs --glob '!docs/legacy/**' --glob '!docs/uml/**'; then
+            echo "Disallowed TODO/FIXME found in docs"; exit 1; fi
           rg -q "## Fitness Functions" docs/ARCHITECTURE.md
           rg -q "Fitness Functions Enforced in CI" docs/ROADMAP.md
           rg -q "CI & Test Markers" docs/STATUS.md
