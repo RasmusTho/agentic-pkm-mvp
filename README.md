@@ -63,5 +63,6 @@ The rerank hook is applied at the final candidate merge step, preserving default
 | `DIARIZE_PROVIDER` | `mock` | `none|mock|external` diarization providers. |
 | `RERANK_HTTP_ENDPOINT` | unset | Required for `ce_http`; not contacted in CI. |
 | `DIARIZE_HTTP_ENDPOINT` | unset | Required for `DIARIZE_PROVIDER=external`; stubbed in CI. |
+| `PROMOTION_REQUIRE_RELATIONS` | `0` | When `1`, promotion blocks unless RelationIndex records ≥1 relation or an audited override is supplied. |
 | `PROMOTION_ALLOW_ORPHANS` | unset | When truthy, bypasses orphan gate (requires override reason). |
-| `PROMOTION_ORPHAN_OVERRIDE_REASON` | unset | Message logged/audited when overriding orphan gate. |
+| `PROMOTION_ORPHAN_OVERRIDE_REASON` | unset | Free-text reason logged/audited when overriding promotion relation gate. |
