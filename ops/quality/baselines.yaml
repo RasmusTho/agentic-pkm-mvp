@@ -24,3 +24,8 @@ diarization:
   chunk_p95_off: 117.0
   chunk_p95_on: 78.0
   p95_ratio_max: 0.95
+
+reasoning:
+  claims_avg_min: 1.0
+  inferences_avg_min: 0.5
+  conflicts_max: 1.0

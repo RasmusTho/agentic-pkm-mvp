@@ -15,6 +15,7 @@ def test_parse_and_gate_failure_codes() -> None:
         "CI SUMMARY RELATION COVERAGE=80.00%",
         "CI SUMMARY RELATIONS coverage=80.00% validity=80.00% target=95%",
         "CI SUMMARY DIARIZATION chunk_p95=140.00 speaker_avg=1.50 flag=on",
+        "CI SUMMARY REASONING claims_avg=0.00 inferences_avg=0.00 conflicts=2.00 flag=on",
     ]
     parsed = parse_summary_lines(
         lines,
@@ -32,6 +33,7 @@ def test_parse_and_gate_failure_codes() -> None:
         "eval": {"delta_precision_min": 0.005, "delta_ndcg_min": 0.01, "delta_abs_tolerance": 0.001},
         "relations": {"coverage_min": 0.95, "validity_min": 0.95},
         "diarization": {"p95_ratio_max": 0.95},
+        "reasoning": {"claims_avg_min": 1.0, "inferences_avg_min": 0.5, "conflicts_max": 1.0},
     }
     ok, reasons = evaluate_gates(
         parsed,
@@ -39,6 +41,7 @@ def test_parse_and_gate_failure_codes() -> None:
         provider="ce_local",
         diarization_off={"chunk_p95": 100.0},
         strict=True,
+        reasoning_enabled=True,
     )
     assert not ok
-    assert set(reasons) == {"LAT", "EVAL_DELTA", "REL_COV", "REL_VAL", "DIA_P95"}
+    assert set(reasons) == {"LAT", "EVAL_DELTA", "REL_COV", "REL_VAL", "DIA_P95", "REASONING"}

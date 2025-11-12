@@ -1,6 +1,7 @@
 from .metrics import qas003_hybrid_latency, qas010_outbox_to_index_latency
 from .relations import promotion_relation_coverage, relation_metrics
 from .chunks import diarization_metrics
+from .reasoning import reasoning_metrics
 
 __all__ = [
     "qas003_hybrid_latency",
@@ -8,4 +9,5 @@ __all__ = [
     "promotion_relation_coverage",
     "relation_metrics",
     "diarization_metrics",
+    "reasoning_metrics",
 ]

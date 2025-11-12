@@ -39,6 +39,7 @@ CI SUMMARY EVAL DELTA DP10=+0.000 DnDCG10=+0.070 RELATION_TARGET=60%
 CI SUMMARY RELATION COVERAGE=100.00%  
 CI SUMMARY RELATIONS coverage=100.00% validity=100.00% target=95%  
 CI SUMMARY DIARIZATION chunk_p95=78.00 speaker_avg=2.33 flag=on  
+CI SUMMARY REASONING claims_avg=1.33 inferences_avg=1.00 conflicts=1.00 flag=on  
 CI SUMMARY GATES ok=true reasons=  
 Relation coverage + validity now exceed the ≥95 % SoT v4.6-B guardrail while ce_local remains default-off unless flags are set; staging now runs with `PROMOTION_REQUIRE_RELATIONS=1` so promotion gating is enforced ahead of production.
 

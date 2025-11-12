@@ -11,7 +11,7 @@
 | v4.6-B | Relation coverage lift (deterministic extraction + audit trail). | Delivered |
 | v4.6-C | Diarization-aware chunking & metrics. | Active |
 | v4.6-D | CI gates + summary hardening. | Delivered (2025-02-18) |
-| v4.7 | Reasoning layer & reflexive agents over the knowledge graph. | Planned |
+| v4.7 | Reasoning layer & reflexive agents over the knowledge graph. | Active (Objective A) |
 
 ## Current Stable Baseline (v4.5A)
 v4.5A is the deployable baseline: Normalizer→PromotionAgent path is verified end-to-end, promotion cooldowns are enforced, and CI is green when `pytest -q -m "not pg"` passes using `STORE_BACKEND=memory` and mock LLMs. Architectural invariants to preserve: Core-6 frontmatter is immutable once normalized, Outbox events remain append-only, PromotionAgent decisions are idempotent, and audit logs stay deterministic JSONL. Any change that violates these invariants or introduces non-deterministic mocks must be postponed to v4.5B+.
@@ -70,7 +70,10 @@ SoT v4.6-A expands the corpus to 16 deterministic queries (10 candidates each) a
 - Documentation + CHANGELOG updated whenever code changes land.
 
 ## Forward Outlook (v4.7)
-v4.7 establishes the reasoning layer: symbolic policies (RDF/OWL/SHACL), reflexive agents that learn from promotion outcomes, and logic-gate governance for cross-object decisions. Work begins once v4.6 objectives A–D reach green status.
+### Objective A — LLM Reasoning Layer v1 *(active — SoT v4.7-A)*
+- `REASONING_ENABLE=1` routes notes + relation snapshots through `get_reasoner()` (mock in CI, Ollama locally) using strict prompts; outputs must pass schema validation (`claims`, `evidence`, `inferences`) before being stored/audited.
+- Fitness adds an eighth summary line `CI SUMMARY REASONING claims_avg=<v> inferences_avg=<v> conflicts=<n> flag=on` with baselines defined in `ops/quality/baselines.yaml`; gates require non-zero inferences_avg and conflicts ≤ baseline when the flag is on.
+- Docs + README describe baselines and overrides (`THRESHOLDS_PATH`, `GATE_STRICT=1`), ensuring PRs paste the seven existing lines plus the new REASONING line.
 
 ## Forward Outlook (v5.x)
 Symbolic reasoning layer adds RDF/OWL/SHACL validation before promotion. Knowledge graph services expose RelationIndex externally for governance queries. Logic gates allow Reviewer/PromotionAgent to assert multi-object policies. Reflexive agents learn from audit feedback to auto-tune PER plans without skipping human checkpoints.
