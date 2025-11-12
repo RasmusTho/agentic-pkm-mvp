@@ -47,6 +47,16 @@ def main() -> None:
             BASE_NDCG10=f"{golden['baseline']['ndcg@k']:.3f}",
         )
     )
+    delta_p = golden["candidate"]["precision@k"] - golden["baseline"]["precision@k"]
+    delta_ndcg = golden["candidate"]["ndcg@k"] - golden["baseline"]["ndcg@k"]
+    print(
+        _summary_line(
+            "EVAL DELTA",
+            DP10=f"{delta_p:+.3f}",
+            DnDCG10=f"{delta_ndcg:+.3f}",
+            RELATION_TARGET="60%",
+        )
+    )
     print(_summary_line("RELATION", COVERAGE=f"{coverage:.2f}%"))
 
     fail = False
