@@ -48,18 +48,18 @@ jobs:
           set -euo pipefail
           echo "Doc TODO scan"
           set +e
-          rg -n "TODO|FIXME" README.md CHANGELOG.md docs --glob '!docs/legacy/**' --glob '!docs/uml/**' > /tmp/doc_todos.txt
-          rg_status=$?
+          grep -R -n -E "TODO|FIXME" README.md CHANGELOG.md docs --exclude-dir=docs/legacy --exclude-dir=docs/uml > /tmp/doc_todos.txt
+          scan_status=$?
           set -e
-          if [ "$rg_status" -eq 0 ]; then
+          if [ "$scan_status" -eq 0 ]; then
             echo "Disallowed TODO/FIXME found in docs"
             cat /tmp/doc_todos.txt
             exit 1
           fi
           echo "Doc TODO scan clean"
-          rg -q "## Fitness Functions" docs/ARCHITECTURE.md
-          rg -q "Fitness Functions Enforced in CI" docs/ROADMAP.md
-          rg -q "CI & Test Markers" docs/STATUS.md
+          grep -q "## Fitness Functions" docs/ARCHITECTURE.md
+          grep -q "Fitness Functions Enforced in CI" docs/ROADMAP.md
+          grep -q "CI & Test Markers" docs/STATUS.md
 
       - name: Prepare tmp dir
         run: mkdir -p tmp
