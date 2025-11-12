@@ -34,3 +34,16 @@ def test_compile_roundtrip_writes_artifacts(tmp_path, monkeypatch):
 
     assert captured and "sha" in captured[0]
     bus.clear("settings.changed")
+
+
+def test_compile_removes_stale_agent_yaml(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime/settings"
+    stale_file = runtime_dir / "agents/ghost.yaml"
+    stale_file.parent.mkdir(parents=True, exist_ok=True)
+    stale_file.write_text("ghost: true\n", encoding="utf-8")
+
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+
+    compiler.compile_all()
+
+    assert not stale_file.exists()

@@ -213,6 +213,20 @@ def compile_all(*, auto_heal: bool | None = None) -> SettingsBundle:
 
     dump("global.yaml", bundle.global_.model_dump())
     dump("providers.yaml", bundle.providers.model_dump())
+
+    agents_output_dir = RUNTIME / "agents"
+    existing_agent_files = {
+        path.stem: path for path in agents_output_dir.glob("*.yaml")
+    } if agents_output_dir.exists() else {}
+    stale_files = [
+        path for stem, path in existing_agent_files.items() if stem not in bundle.agents
+    ]
+    for stale in stale_files:
+        try:
+            stale.unlink()
+        except FileNotFoundError:
+            pass
+
     for name, settings in bundle.agents.items():
         payload = settings.model_dump() if hasattr(settings, "model_dump") else settings
         dump(f"agents/{name}.yaml", payload)
