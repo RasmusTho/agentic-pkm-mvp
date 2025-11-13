@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
+
+
+class GlobalSettings(BaseModel):
+    enable: bool = Field(default=True, description="Enable this component for runtime pipelines.")
+    dry_run: bool = Field(default=False, description="Skip persistence and side-effects when true.")
+    timeout_ms: int = Field(
+        default=8000,
+        description="Per-operation timeout in milliseconds.",
+        json_schema_extra={"allowed": ["100-60000"]},
+    )
+    log_level: str = Field(
+        default="INFO",
+        description="Log level for agents (DEBUG|INFO|WARNING|ERROR).",
+        json_schema_extra={"allowed": ["DEBUG", "INFO", "WARNING", "ERROR"]},
+    )
+    profile: str = Field(default="default", description="Active configuration profile name.")
+    secrets: Dict[str, str] = Field(default_factory=dict, description="Secret references resolved at compile time.")
+
+
+class ProviderRef(BaseModel):
+    kind: str
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    device: Optional[str] = None
+
+
+class Providers(BaseModel):
+    llm: Dict[str, ProviderRef] = Field(default_factory=dict, description="Named chat/LLM providers.")
+    embedding: Dict[str, ProviderRef] = Field(default_factory=dict, description="Embedding model providers.")
+    reranker: Dict[str, ProviderRef] = Field(default_factory=dict, description="Cross-encoder/rerank providers.")
+
+
+class RetryPolicy(BaseModel):
+    max_tries: int = Field(default=2, description="Retry attempts before surfacing errors.")
+
+
+class AgentBase(BaseModel):
+    enable: bool = Field(default=True, description="Enable this agent.")
+    dry_run: bool = Field(default=False, description="Disable writes for this agent.")
+    timeout_ms: int = Field(
+        default=8000,
+        description="Agent-specific timeout in milliseconds.",
+        json_schema_extra={"allowed": ["100-120000"]},
+    )
+    labels: List[str] = Field(default_factory=list, description="Tag this agent with capability labels.")
+
+
+class ClassifierSettings(AgentBase):
+    min_confidence: float = Field(default=0.5, description="Minimum confidence for positive classifications.")
+    retry_policy: RetryPolicy = Field(default_factory=RetryPolicy)
+    model: Optional[str] = Field(default=None, description="Preferred LLM model for classifier prompts.")
+    embedding: Optional[str] = Field(default=None, description="Embedding provider override.")
+    reranker: Optional[str] = Field(default=None, description="Reranker provider override.")
+    rules: Dict[str, Any] = Field(default_factory=dict, description="Additional policy flags for classifier runs.")
+
+
+class MovePolicy(BaseModel):
+    enabled: bool = Field(default=False, description="Enable promotion move window enforcement.")
+    window: str = Field(default="02:00-03:00", description="HH:MM-HH:MM window where moves are allowed.")
+    batch_size: int = Field(default=100, description="Files moved per batch.")
+    default_target: str = Field(default="2_Cards/Concepts", description="Fallback folder for promoted files.")
+    targets: List[Dict[str, Any]] = Field(default_factory=list, description="Conditional move targets.")
+
+
+class PromotionSettings(AgentBase):
+    cooldown_seconds: int = Field(default=90, description="Minimum seconds since last edit before promotion.")
+    require_idle_seconds: int = Field(default=30, description="Minimum idle seconds to avoid churn.")
+    max_retries: int = Field(default=3, description="Queue retries before giving up on a promotion item.")
+    move_policy: MovePolicy = Field(default_factory=MovePolicy)
+
+
+class ReviewerRules(BaseModel):
+    required_labels: List[str] = Field(default_factory=list, description="Objects must have these labels before review.")
+    min_score: float = Field(default=0.75, description="Minimum acceptable reviewer score.")
+
+
+class ReviewerSettings(AgentBase):
+    threshold: float = Field(default=0.75, description="Score threshold to auto-approve.")
+    escalation_channel: str = Field(default="audit", description="Audit or notification channel for escalations.")
+    rules: ReviewerRules = Field(default_factory=ReviewerRules)
+
+
+class QaLLMSettings(BaseModel):
+    provider: str = Field(
+        default="mock",
+        description="qa.agent LLM provider (mock|ollama|http).",
+        json_schema_extra={"allowed": ["mock", "ollama", "http"]},
+    )
+    model: str = Field(default="llama3.1:8b-instruct", description="Model identifier for QA prompts.")
+    host: str = Field(default="http://127.0.0.1:11434", description="Base URL for local providers.")
+    timeout_s: float = Field(default=120.0, description="HTTP timeout in seconds.")
+    max_tokens: int = Field(default=512, description="Maximum tokens per response.")
+
+
+class QaSettings(AgentBase):
+    search_k: int = Field(default=8, description="Documents retrieved before filtering.")
+    context_docs: int = Field(default=5, description="Documents kept in the final answer context.")
+    llm: QaLLMSettings = Field(default_factory=QaLLMSettings)
+
+
+class SettingsBundle(BaseModel):
+    global_: GlobalSettings = Field(default_factory=GlobalSettings)
+    providers: Providers = Field(default_factory=Providers)
+    agents: Dict[str, Any] = Field(default_factory=dict)

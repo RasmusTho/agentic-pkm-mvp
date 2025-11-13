@@ -107,3 +107,27 @@ Segments preserve `{speaker, text}` metadata so downstream ingestion can attach 
 
 ## Extensibility & v5 Direction
 The v5 roadmap layers declarative reasoning (RDF/OWL/SHACL constraints) on top of the existing stores, enabling Reviewer and PromotionAgent to validate logic gates instead of bespoke Python checks. The Agent Memory Graph will evolve to persist reflective notes per object, informing future PER plans. Provenance and promotion governance will add policy bundles (who can promote, when to reset cooldowns) so humans stay accountable even as automation deepens.
+## Settings Architecture — Vault-as-GUI, Code-as-Source
+
+Control surface: `vault/@Settings/**`  
+Runtime source of truth: `runtime/settings/**/*.yaml`
+
+### Human → Machine pipeline
+1) Markdown → Loader → Sektioner  
+2) Sektioner → Parsers → Semantiska dicts  
+3) Merge + Precedens → Compiler → Typning (Pydantic) + Secrets-resolve  
+4) Artefakter skrivs till `runtime/settings/**` + `settings.changed` event
+
+### Precedens
+Process overrides > ENV/.env > Vault Markdown > Defaults
+
+### Sekret
+Vault refererar endast `${SECRET:NAME}`. Upplösning från `.env` eller SOPS-krypterade filer. Råvärden skrivs aldrig till Markdown eller `runtime/`.
+
+### Hot-reload
+Komponenter prenumererar på `settings.changed` och läser om idempotent.
+
+### Markup-regler
+- Checkrutor → bool
+- Tvåkolumnstabell → nyckel: värde med dot-path
+- ```yaml settings → auktoritativ sektion

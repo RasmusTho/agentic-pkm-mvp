@@ -82,3 +82,41 @@ Symbolic reasoning layer adds RDF/OWL/SHACL validation before promotion. Knowled
 - Green means: `pytest -q -m "not pg"` passes, docs lint (markdownlint + vale) is clean, `docs/DIAGRAMS.md` exports without mermaid errors, and audit replay tests remain deterministic.
 - Maturity states: inbox → processed → promoted → evergreen. Inbox objects may be dropped, processed objects must retain Core-6, promoted objects require Reviewer approval, and evergreen objects are eligible for publication + search.
 - Update ritual: after each increment, Codex opens a PR that regenerates STATUS (CI snapshot + blockers), refreshes ROADMAP acceptance criteria, and cross-links ARCHITECTURE when new agents or stores appear. No increment closes until these docs reflect reality.
+## Vault-as-GUI Settings Architecture
+
+### Goal
+Göra hela systemets konfiguration mänskligt redigerbar i vaulten (Markdown) och maskinellt säker via en typad kompilator som genererar kanoniska runtime-artefakter (YAML/JSON). Vaulten är kontrollpanelen; koden läser endast kompilerade artefakter.
+
+### Scope (MVP)
+- @Settings/ i vaulten med globala filer + agentfiler.
+- Parser för Markdown-sektioner: checkrutor, key/value-tabeller, samt auktoritativa ```yaml settings-block.
+- Pydantic-validering mot modellschema.
+- Sekretshantering via `${SECRET:NAME}` med upplösning från `.env` eller SOPS.
+- Kompilering till `runtime/settings/**` och event `settings.changed`.
+- CLI: `python -m app.cli settings compile` och `settings watch`.
+- Hot-reload-hake i appen.
+
+### Out of scope (v4.7+)
+- Full UI-reflektion av “compiled values” i Obsidian.
+- Profilbyten per miljö via feature flags.
+- Avancerad policy för farliga ändringar.
+
+### Deliverables
+- `vault/@Settings/*` med exempel och README.
+- `app/settings/{loader,parsers,models,compiler,hotreload}.py`
+- `app/cli.py` kommandon `settings compile|watch|validate`.
+- CI-steg: schema-check + determinism på kompilering.
+- Dokumentation i `docs/ARCHITECTURE.md` och uppdaterad `docs/STATUS.md`.
+
+### Fitness & Acceptance
+- F1: Kompilering av hela @Settings ≤ 500 ms i dev.
+- F2: 100% schema-valideringscoverage för Global + minst 4 agenters settings.
+- F3: Determinism i artefakter.
+- F4: Hot-reload inom ≤ 2 s.
+- F5: Sekretläckage = 0 i `runtime/`.
+
+### Milstolpar
+- M1: Struktur & modeller.
+- M2: CLI compile + watch + events.
+- M3: CI-gate.
+- M4: Utökning till alla agenter + sekretpolicy.

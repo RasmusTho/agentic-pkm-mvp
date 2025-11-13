@@ -1,0 +1,34 @@
+name: settings-ci
+
+on:
+  push:
+    paths:
+      - "vault/@Settings/**"
+      - "app/settings/**"
+      - "app/events/bus.py"
+      - ".github/workflows/settings-ci.yaml"
+  pull_request:
+    paths:
+      - "vault/@Settings/**"
+      - "app/settings/**"
+      - "app/events/bus.py"
+      - ".github/workflows/settings-ci.yaml"
+
+jobs:
+  settings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements-smoke.txt
+      - name: Compile vault settings
+        run: python -m app.cli settings compile
+      - name: Run settings test
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          STORE_BACKEND: memory
+          LLM_PROVIDER: mock
+        run: pytest -q tests/settings/test_compile.py
