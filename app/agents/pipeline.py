@@ -7,13 +7,18 @@ from uuid import UUID
 from app.agents.base.audit import audit_log
 from app.ingest.chunk_policy import build_chunks
 from app.ingest.deduper import Deduper
+from app.orchestrator.runtime import Orchestrator, OrchestratorError, PlanValidationError
 from app.reasoning.provider import get_reasoner
 from app.reasoning.schema import ReasoningInput, RelationSnapshot, ReasoningValidationError
 from app.reasoning.store import get_reasoning_store
 from app.stores import get_relation_index
+from app.planner.provider import PlannerInput, get_planner
+from app.planner.schema import Plan
 
 _deduper = Deduper()
 _AGENT = "ingest-pipeline"
+_PLANNER_AGENT = "planner-agent"
+_ORCHESTRATOR: Orchestrator | None = None
 
 
 def ingest_and_chunk(obj: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -45,6 +50,7 @@ def ingest_and_chunk(obj: Dict[str, Any]) -> List[Dict[str, Any]]:
         speaker_count=len(speakers) if _diarization_enabled() and speakers else None,
     )
     _run_reasoning_if_enabled(obj, text)
+    maybe_plan_for_object(str(obj.get("uuid") or ""), text, obj.get("trace_id"))
     return out
 
 
@@ -54,6 +60,14 @@ def _diarization_enabled() -> bool:
 
 def _reasoning_enabled() -> bool:
     return os.getenv("REASONING_ENABLE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _planner_enabled() -> bool:
+    return os.getenv("PLANNER_ENABLE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _orchestrator_enabled() -> bool:
+    return os.getenv("ORCHESTRATOR_ENABLE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _audit_chunk_creation(
@@ -142,3 +156,73 @@ def _collect_relation_snapshots(object_id: str) -> List[RelationSnapshot]:
                 )
             )
     return relations
+
+
+def maybe_plan_for_object(object_id: str, text: str, trace_id: str | None) -> Plan | None:
+    if not _planner_enabled():
+        return None
+    object_id = object_id.strip()
+    text = text.strip()
+    if not object_id or not text:
+        return None
+    metadata = {"trace_id": trace_id} if trace_id else {}
+    planner_input = PlannerInput(
+        object_uuid=object_id,
+        goal="Analyze and structure follow-up actions for this note",
+        text=text,
+        relations=[],
+        metadata=metadata,
+    )
+    planner = get_planner()
+    try:
+        plan = planner.plan(planner_input)
+    except Exception as exc:
+        audit_log(
+            object_id=object_id,
+            agent=_PLANNER_AGENT,
+            action="planner.plan.error",
+            trace_id=trace_id,
+            details={"error": str(exc)},
+        )
+        return None
+    audit_log(
+        object_id=object_id,
+        agent=_PLANNER_AGENT,
+        action="planner.plan.created",
+        trace_id=trace_id,
+        details={"plan_id": plan.id, "steps": len(plan.steps)},
+    )
+    maybe_execute_plan(plan)
+    return plan
+
+
+def _get_orchestrator() -> Orchestrator:
+    global _ORCHESTRATOR
+    if _ORCHESTRATOR is None:
+        _ORCHESTRATOR = Orchestrator()
+    return _ORCHESTRATOR
+
+
+def maybe_execute_plan(plan: Plan | None) -> List[Dict[str, Any]] | None:
+    if plan is None or not _orchestrator_enabled():
+        return None
+    orchestrator = _get_orchestrator()
+    try:
+        return orchestrator.run_plan(plan)
+    except PlanValidationError as exc:
+        audit_log(
+            object_id=plan.meta.source_object_uuid,
+            agent=_PLANNER_AGENT,
+            action="orchestrator.plan.invalid",
+            trace_id=plan.meta.trace_id,
+            details={"plan_id": plan.id, "error": str(exc)},
+        )
+    except OrchestratorError as exc:
+        audit_log(
+            object_id=plan.meta.source_object_uuid,
+            agent=_PLANNER_AGENT,
+            action="orchestrator.plan.error",
+            trace_id=plan.meta.trace_id,
+            details={"plan_id": plan.id, "error": str(exc)},
+        )
+    return None

@@ -1,75 +1,241 @@
-# Agentic PKM — SoT v4.5A Baseline
+Agentic PKM — Second-Brain Engine
 
-This repository implements the SoT v4.5A baseline:
-- Store abstraction (ObjectStore, VectorIndex, RelationIndex)
-- Outbox + events
-- Promotion Agent (idempotent state transitions; frontmatter Core-6)
-- Deterministic CI in memory mode
-- Optional rerank hook (inert by default)
+System-of-Truth v4.10 (Active Baseline)
 
-The roadmap now teams the Planner Agent (LLM-driven planner) with the Orchestrator (graph/runtime executor): the Planner produces multi-step plans grounded in reasoning outputs and Core-6 metadata, and the Orchestrator executes those plans via A2A messages plus optional MCP tool invocations so external capabilities stay audited. Legacy CLI pipelines remain supported while these components are gated behind their respective feature flags.
+Agentic PKM är ett agentdrivet, eventstyrt och CI-säkrat system för personlig kunskapshantering.
+Det använder ett mänskligt gränssnitt (Markdown-vault) och ett maskinellt ”System-of-Truth” bestående av Stores, Outbox-händelser och en flerstegs agent-pipeline.
 
-## Quickstart (CI-like)
+I v4.10 är kärnan komplett:
+	•	Store-abstraktion (ObjectStore, VectorIndex, RelationIndex, ReasoningStore)
+	•	Outbox + Eventdriven pipeline
+	•	Typed Relations + Promotion Gates
+	•	Reasoning Layer v1 (Claim/Evidence/Inference)
+	•	LLM-planering via Planner Agent
+	•	A2A-protokoll för agent-till-agent kommunikation
+	•	Orchestrator runtime som exekverar planer och använder MCP-verktyg säkert
+	•	Fullt deterministisk CI via 8-line contract
+
+Orchestrator-skelettet (SoT v4.10A) kör varje plan deterministiskt när `ORCHESTRATOR_ENABLE=1`: varje steg loggar `orchestrator.step.started|finished|error`, agent-steg skickar riktiga A2A-requests (default-agent svarar med `not_implemented`) och MCP-steg kör mot stubbade `mock_result` utan side effects. CI får därmed full plan → exekvering-länk utan att röra disk eller externa verktyg.
+
+Det mänskliga lagret (vaulten) är frivilligt, men stöds alltid. Obsidian är endast en visuell client — systemets källa är Stores + Events.
+
+⸻
+
+🚀 Quickstart
+
+Installera:
 
 python -m pip install --upgrade pip
 pip install -e .
 pip install pytest
-INDEX_PERSIST_PATH=tmp/index.jsonl STORE_BACKEND=memory LLM_PROVIDER=mock PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"
 
-## Environment Flags
-| Variable               | Default  | Effect |
-|------------------------|----------|--------|
-| STORE_BACKEND          | memory   | Memory-first execution for CI and local runs. |
-| LLM_PROVIDER           | mock     | Deterministic LLM for tests; use Ollama locally if desired. |
-| PYTEST_DISABLE_PLUGIN_AUTOLOAD | 1 | Keeps pytest deterministic on CI. |
-| INDEX_PERSIST_PATH     |          | When set, persists memory VectorIndex as JSONL. |
-| INDEX_PERSIST_LOAD     | 0        | When 1, loads persisted JSONL at start. |
-| AUDIT_LOG_PATH         |          | When set, writes JSONL audit lines to disk. |
-| LLM_MAX_RETRIES        | 3        | Max retries for LLM calls. |
-| LLM_BASE_DELAY         | 0.1      | Base delay for bounded backoff. |
-| RERANK_ENABLE          |          | Enable optional rerank when set to 1/true/on. |
-| RERANK_PROVIDER        | none     | Selects reranker: none|mock_ce. |
-| RERANK_TOP_K           |          | Limit rerank to top K items. |
+Kör pipeline med mock-LLM och memory backend:
 
-## Rerank (opt-in)
+export STORE_BACKEND=memory
+export LLM_PROVIDER=mock
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 
-export RERANK_ENABLE=1
-export RERANK_PROVIDER=mock_ce
+python -m app.cli pipe /tmp/demo.md
+python -m app.fitness.report
 
-The rerank hook is applied at the final candidate merge step, preserving default behavior when disabled.
+Du ska se 8-radig CI-sammanfattning:
+LATENCY / EVAL / DELTA / RELATION COVERAGE / RELATIONS / DIARIZATION / REASONING / GATES
 
-## Status
-- v4.4: Delivered
-- v4.5A: Delivered (this baseline)
-- v4.5B: Open — retrieval polish (rerank integration, diarization hooks, RelationIndex fitness)
-- v4.6: Planned — retrieval quality and reasoning prep
+⸻
 
-<!-- DOCS-LINKS:BEGIN -->
-- [ARCHITECTURE](docs/ARCHITECTURE.md)
-- [ROADMAP](docs/ROADMAP.md)
-- [STATUS](docs/STATUS.md)
-- [CHANGELOG](CHANGELOG.md)
-- [CI](docs/CI.md)
-- [TESTING](docs/TESTING.md)
-<!-- DOCS-LINKS:END -->
+🧠 Arkitektur — v4.10
 
-## Environment Flags
-| Flag | Default | Description |
-| --- | --- | --- |
-| `STORE_BACKEND` | `memory` | Selects memory vs pg stores (CI uses memory). |
-| `LLM_PROVIDER` | `mock` | Deterministic LLM adapter for tests; set to `ollama` locally. |
-| `RERANK_ENABLE` | unset | Enables rerank hook when truthy. |
-| `RERANK_PROVIDER` | `none` | `none|mock_ce|ce_local|ce_http` provider matrix. |
-| `RERANK_TOP_K` | unset | Maximum candidates to rerank (optional). |
-| `DIARIZE_ENABLE` | unset | Enables diarization-aware ingestion pipeline. |
-| `DIARIZE_PROVIDER` | `mock` | `none|mock|external` diarization providers. |
-| `RERANK_HTTP_ENDPOINT` | unset | Required for `ce_http`; not contacted in CI. |
-| `DIARIZE_HTTP_ENDPOINT` | unset | Required for `DIARIZE_PROVIDER=external`; stubbed in CI. |
-| `PROMOTION_REQUIRE_RELATIONS` | `0` | When `1`, promotion blocks unless RelationIndex records ≥1 relation or an audited override is supplied. |
-| `PROMOTION_ALLOW_ORPHANS` | unset | When truthy, bypasses orphan gate (requires override reason). |
-| `PROMOTION_ORPHAN_OVERRIDE_REASON` | unset | Free-text reason logged/audited when overriding promotion relation gate. |
+Agent-pipeline
 
-### Quality baselines & CI gates
-- The regression thresholds for QAS003/QAS010, eval deltas, relation coverage/validity, and diarization chunk lengths live in `ops/quality/baselines.yaml`. CI reads this file (or `THRESHOLDS_PATH` if overridden) and enforces the seven-line summary contract (`LATENCY`, `EVAL`, `EVAL DELTA`, `RELATION COVERAGE`, `RELATIONS`, `DIARIZATION`, `GATES`).
-- Set `THRESHOLDS_PATH=/path/to/custom.yaml` to experiment with tighter baselines locally, and use `GATE_STRICT=1` to require positive rerank deltas even for small differences.
-- Typical refresh flow after improving metrics: run `STORE_BACKEND=memory LLM_PROVIDER=mock PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m app.fitness.report > tmp/ci_summary.txt`, update the values in `ops/quality/baselines.yaml`, re-run the report to confirm `ok=true`, and include both the YAML change and the pasted summary lines in your PR.
+vault/markdown
+    ↓ normalize        (Core-6 frontmatter)
+    ↓ classify         (LLM or mock)
+    ↓ chunk            (diarization-aware)
+    ↓ embed            (VectorIndex + hybrid retrieval + optional rerank)
+    ↓ relate           (typed relations)
+    ↓ reason           (claims, evidence, inferences)
+    ↓ plan             (Planner Agent — LLM or mock)
+    ↓ orchestrate      (Orchestrator — executes plan via A2A + MCP)
+    ↓ promote          (promotion gates + audit)
+
+Stores (canonical persistence layer)
+
+Store	Funktion
+ObjectStore	Markdown-objekt + Outbox-event
+VectorIndex	embeddings + hybrid retrieval + rerank
+RelationIndex	typed relations + coverage/validity-guards
+ReasoningStore	claim/evidence/inference-grafer
+PlanStore (v4.10)	loggar planer + steps + execution graphs
+
+All persistens går via Stores – aldrig direkt till DB.
+
+⸻
+
+🔁 Eventdriven modell
+
+Alla agenter skriver Outbox-händelser:
+
+object.created
+index.object.embedded
+relation.added
+reasoning.claim.added
+plan.created
+a2a.request.created
+a2a.response.created
+promote.done
+
+Outbox-formatet är identiskt mellan memory- och postgres-backends.
+
+⸻
+
+📡 A2A-protokoll (Agent-to-Agent)
+
+Infört i v4.8 och nu fullt implementerat i v4.10.
+	•	JSON-schema valideras vid varje sändning.
+	•	Request/Response/Error med spårbar trace_id.
+	•	Alla agenter implementerar:
+
+async def handle_agent_request(self, request: A2ARequest) -> A2AResponse:
+
+A2A används av Orchestrator för att köra planer steg-för-steg.
+
+⸻
+
+🗺️ Planner Agent (LLM-driven planering)
+
+Planner genererar strukturerade planer:
+
+Plan:
+  id: UUID
+  steps: List[PlanStep]
+  metadata: PlanMetadata
+
+Planer genereras under ingest om:
+
+export PLANNER_ENABLE=1
+
+Provider:
+	•	mock (deterministisk, CI-säker)
+	•	llm (Ollama via OpenAI-kompatibel endpoint)
+
+Alla planer loggas i PlanStore och Outbox.
+
+⸻
+
+🧭 Orchestrator Runtime (v4.10)
+
+Orchestrator läser planer och exekverar dem via:
+	1.	A2A-meddelanden mellan agenter (`send_agent_request` → `agent.error.created` när default-agent svarar `not_implemented`).
+	2.	MCP-verktyg (validator + mock-resultat; `mcp.tool.call.started|finished` loggas, inga verktyg körs på riktigt).
+	3.	Strict audit log (`orchestrator.step.*` för varje steg).
+
+Stegvalidering (unik ID, uppfyllda dependencies) sker före körning. Exekveringen är sekventiell i v4.10A men flaggbar med `ORCHESTRATOR_ENABLE`. Fel går alltid via `orchestrator.step.error` så planstatus kan replikeras deterministiskt.
+
+⸻
+
+🧪 Reasoning Layer v1
+	•	Claims
+	•	Evidence
+	•	Inferences
+
+Allt valideras av schema.
+Reasoning-resultat kopplas till relationsgrafen och påverkar promotion gates.
+
+I CI används en 100% deterministisk MockReasoner.
+
+⸻
+
+🧵 Promotion Gates
+
+Promotion kräver:
+	•	Relation coverage ≥ 95%
+	•	Minst 1 typed relation (om inte override är satt)
+	•	Valid reasoning block
+	•	Giltig diarization-chunking
+	•	Outbox events skapade i rätt ordning
+
+Overrides måste innehålla textreason.
+
+⸻
+
+⚙️ Miljövariabler (SoT v4.10)
+
+Allmän drift
+
+Flag	Default	Beskrivning
+STORE_BACKEND	memory	memory / postgres
+LLM_PROVIDER	mock	mock / ollama
+AUDIT_LOG_PATH	unset	skriv JSONL-audit
+LLM_MAX_RETRIES	3	bounded backoff
+LLM_BASE_DELAY	0.1	retry-delay
+
+Planner / Orchestrator
+
+Flag	Default	Beskrivning
+PLANNER_ENABLE	unset	aktiverar planer
+PLANNER_PROVIDER	mock	mock / llm
+ORCHESTRATOR_ENABLE	unset	aktiverar deterministiskt Orchestrator-skelett (A2A + MCP-mock)
+MCP_REGISTRY_PATH	mcp.json	verktygsregister för Orchestrator
+
+Relations & Promotion
+
+Flag	Default	Beskrivning
+PROMOTION_REQUIRE_RELATIONS	0	blockera orphans
+PROMOTION_ALLOW_ORPHANS	unset	bypass
+PROMOTION_ORPHAN_OVERRIDE_REASON	unset	krävs vid bypass
+
+Rerank & Diarization
+
+Flag	Default	Funktion
+RERANK_ENABLE	unset	rerank hook
+DIARIZE_ENABLE	unset	diarization
+RERANK_PROVIDER	none	none/mock_ce/ce_local/ce_http
+
+
+⸻
+
+🧬 CI — 8-Line Contract
+
+Alla körningar måste producera exakt:
+	1.	LATENCY
+	2.	EVAL
+	3.	EVAL DELTA
+	4.	RELATION COVERAGE
+	5.	RELATIONS
+	6.	DIARIZATION
+	7.	REASONING
+	8.	GATES
+
+Referensvärden ligger i ops/quality/baselines.yaml.
+
+⸻
+
+🧭 Roadmap
+
+v4.10 — Delivered
+	•	Full Orchestrator runtime
+	•	Planner Agent exekverad via A2A
+	•	MCP-tool integration
+	•	PlanStore och execution graph
+	•	Stabil ingestion → plan → orchestrate → promote
+
+v4.11 — In progress
+	•	Persistence för execution graphs
+	•	Self-healing planner hints
+	•	Time-travel debugging (event replay)
+
+v5.x — Research
+	•	Multi-agent reasoning (graph-level)
+	•	Symbolic constraints (OWL/RDF)
+	•	SetDB som fristående backend
+	•	Hypergraph-query engine
+
+⸻
+
+📚 Dokumentation
+	•	ARCHITECTURE￼
+	•	ROADMAP￼
+	•	STATUS￼
+	•	TESTING￼
+	•	CI￼
+	•	CHANGELOG￼
