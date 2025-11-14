@@ -91,6 +91,9 @@ SoT v4.6-A expands the corpus to 16 deterministic queries (10 candidates each) a
 - ≥1 multi-agent interaction scenario scripted end-to-end (Classifier requests Reasoner, Reasoner responds, Projector critiques) with deterministic fixtures.
 - CI ships mock-backed A2A fixtures; default flags keep the feature inert (no new smoke gates) until `A2A_ENABLE=1`.
 
+### Delivered so far
+- Canonical A2A message schema + audit events (`agent.request/response/error`) implemented with deterministic mocks; routing/orchestrator playback remains on the roadmap.
+
 ## v4.9 — MCP Integration + LLM Planning
 ### Goals
 - Ship an MCP server that exposes ingest, retrieval, relation, and promotion tooling directly from PKM, including mocks for CI.

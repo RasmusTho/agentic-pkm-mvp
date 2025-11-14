@@ -17,6 +17,7 @@
 - Summary: Defines the canonical A2A schema (`agent.request.created`, `agent.response.created`, `agent.error`) and wires it through the Orchestrator so multi-agent coordination stays deterministic and audited.
 - Flags: `A2A_ENABLE` (default off) keeps choreography inert until explicitly toggled by operators or the Planner Agent.
 - CI: Deterministic mocks replay A2A envelopes and keep memory-mode smoke at eight lines; Planner Agent + Orchestrator remain disabled in CI by default.
+- Protocol hooks implemented (schema + logging); orchestration/routing logic queued for later v4.8+/v4.10 milestones.
 
 ## v4.9 — MCP + LLM Planning
 - Status: Planned.

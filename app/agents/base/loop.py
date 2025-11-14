@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Tuple
 
+from app.a2a.events import emit_agent_error_event
+from app.a2a.schema import AgentRequest, AgentResponse, new_error
 from app.agent.events import Event, make_event, new_trace_id
 from app.observability.tracer import start_span
 
@@ -14,6 +16,19 @@ class Agent:
 
     def reflect(self, outcome: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         return {"reflection": "done"}
+
+    def handle_agent_request(self, message: AgentRequest) -> AgentResponse | None:
+        """Default hook for upcoming A2A orchestration: log not_implemented and return None."""
+        error = new_error(
+            sender=self.__class__.__name__,
+            recipient=message.sender,
+            error_type="not_implemented",
+            error_message=f"{self.__class__.__name__} cannot handle A2A messages.",
+            correlation_id=message.correlation_id or str(message.id),
+            trace_id=message.trace_id,
+        )
+        emit_agent_error_event(error)
+        return None
 
     def run(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         trace_id = inputs.get("trace_id") or new_trace_id()
