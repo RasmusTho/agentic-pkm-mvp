@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.reasoning.provider import MockReasoner
+from app.reasoning.provider import MockReasoner, OllamaReasoner, get_reasoner
 from app.reasoning.schema import ReasoningInput, RelationSnapshot
 
 pytestmark = pytest.mark.not_pg
@@ -24,3 +24,17 @@ def test_mock_reasoner_returns_fixture() -> None:
     )
     assert len(result.claims) == len(fixture["claims"])
     assert result.claims[0].text.startswith("Solar storage")
+
+
+def test_get_reasoner_falls_back_to_mock_when_ollama_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("REASONING_PROVIDER", "ollama")
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    assert isinstance(get_reasoner(), MockReasoner)
+
+
+def test_get_reasoner_uses_ollama_when_llm_provider_matches(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("REASONING_PROVIDER", "ollama")
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    assert isinstance(get_reasoner(), OllamaReasoner)
