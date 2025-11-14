@@ -1,4 +1,4 @@
-# Local Ports & Services
+ # Local Ports & Services
 
 The workspace binds a few predictable ports whenever you run the local Docker stack, observability helpers, or the Ollama LLM runtime. Use the table below to see which script or container owns each port and where it is configured.
 
