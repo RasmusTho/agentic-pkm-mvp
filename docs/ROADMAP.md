@@ -12,6 +12,8 @@
 | v4.6-C | Diarization-aware chunking & metrics. | Active |
 | v4.6-D | CI gates + summary hardening. | Delivered (2025-02-18) |
 | v4.7 | Reasoning layer & reflexive agents over the knowledge graph. | Active (Objective A) |
+| v4.8 | Agent coordination layer (A2A envelopes + choreography). | Planned |
+| v4.9 | MCP integration + LLM-driven planning. | Planned |
 
 ## Current Stable Baseline (v4.5A)
 v4.5A is the deployable baseline: Normalizer→PromotionAgent path is verified end-to-end, promotion cooldowns are enforced, and CI is green when `pytest -q -m "not pg"` passes using `STORE_BACKEND=memory` and mock LLMs. Architectural invariants to preserve: Core-6 frontmatter is immutable once normalized, Outbox events remain append-only, PromotionAgent decisions are idempotent, and audit logs stay deterministic JSONL. Any change that violates these invariants or introduces non-deterministic mocks must be postponed to v4.5B+.
@@ -74,6 +76,36 @@ SoT v4.6-A expands the corpus to 16 deterministic queries (10 candidates each) a
 - `REASONING_ENABLE=1` routes notes + relation snapshots through `get_reasoner()` (mock in CI, Ollama locally) using strict prompts; outputs must pass schema validation (`claims`, `evidence`, `inferences`) before being stored/audited.
 - Fitness adds an eighth summary line `CI SUMMARY REASONING claims_avg=<v> inferences_avg=<v> conflicts=<n> flag=on` with baselines defined in `ops/quality/baselines.yaml`; gates require non-zero inferences_avg and conflicts ≤ baseline when the flag is on.
 - Docs + README describe baselines and overrides (`THRESHOLDS_PATH`, `GATE_STRICT=1`), ensuring PRs paste the seven existing lines plus the new REASONING line.
+
+## v4.8 — Agent Coordination (A2A)
+### Goals
+- Introduce A2A envelopes and message choreography so agents communicate via audited events.
+- Allow agents to request, respond, and critique peer work without bypassing Stores/Outbox.
+- Enable deterministic multi-agent task sequences (e.g., Classifier → Reasoner → Projector) with replayable traces.
+- Provide orchestration hooks plus a sample chain template that operators can rehearse locally.
+
+### Acceptance Criteria
+- `agent.request.created`, `agent.response.created`, and `agent.critique.created` documented under Event Choreography.
+- Base agent exposes `handle_agent_message()` and routes envelopes via A2A middleware.
+- ≥1 multi-agent interaction scenario scripted end-to-end (Classifier requests Reasoner, Reasoner responds, Projector critiques).
+- CI ships deterministic A2A fixtures; default flags keep the feature inert (no new smoke gates) until `A2A_ENABLE=1`.
+
+## v4.9 — MCP Integration + LLM Planning
+### Goals
+- Ship an MCP server that exposes ingest, retrieval, relation, and promotion tooling directly from PKM.
+- Embed an MCP-aware client into the agent Act phase so planners/agents can call tools during execution.
+- Introduce an LLM Planner that outputs structured agent plans based on Reasoning Layer inputs.
+- Planner leverages Reasoning Layer v1 plus A2A envelopes, and can either call MCP tools or emit additional A2A requests.
+
+### Acceptance Criteria
+- MCP server exposes ≥5 stable tools (`pipe_note`, `search_notes`, `get_claims`, etc.) with documentation.
+- MCP client sits behind a `ToolProvider` abstraction used inside agents and planners.
+- Planner v1 covered by deterministic mock tests; CI stays green using the mock planner backend.
+- Reasoning + planning flows remain deterministic in CI (mock planner) while docs + event schema outline MCP + planner wiring.
+
+## Cross-Cutting Initiative — v4.9.x
+### Goal
+- Align A2A, MCP, and Planner so they form a unified multi-agent execution model while preserving backward compatibility with CLI-only workflows; older scripts continue to function with all new flags disabled.
 
 ## Forward Outlook (v5.x)
 Symbolic reasoning layer adds RDF/OWL/SHACL validation before promotion. Knowledge graph services expose RelationIndex externally for governance queries. Logic gates allow Reviewer/PromotionAgent to assert multi-object policies. Reflexive agents learn from audit feedback to auto-tune PER plans without skipping human checkpoints.
