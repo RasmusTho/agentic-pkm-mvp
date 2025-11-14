@@ -7,21 +7,28 @@
 | v4.5B | Fitness guards + ingestion polish | Delivered 2025-02-14 — rerank hooks, chunk/dedup, CI gates | — | Prep v4.6 rollout, keep fitness monitors green | Ready for tagging |
 | v4.6 | Retrieval quality uplift (Objectives A–D active) | Objectives A (ce_local heuristic + golden eval) and B delivered; **v4.6-B Delivered 2025-02-16** with 100 % coverage/validity; v4.6-C diarization-aware chunking in progress | Objective C/D hardening, relation coverage ≥95%; issues #55–#58 track work | Prototype cross-encoder + diarization PER loops | Guard rails enforce ΔnDCG@10 ≥ +0.01 or ΔP@10 ≥ +0.005 |
 | v4.6-D | CI gates + summary contract | Delivered 2025-02-18 — baselines.yaml drives seven-line CI output with GATES ok=true | — | Refresh baselines when metrics improve; keep PRs pasting summary lines | ops/quality/baselines.yaml + GATE_STRICT=1 documented |
-| v4.8 | Agent coordination (A2A envelopes + choreography) | — | Define envelopes, hooks, sample chain | Implement deterministic fixtures + status docs | Gated by `A2A_ENABLE` |
-| v4.9 | MCP integration + planner | — | Build MCP server/client and planner V1 | Align ToolProvider + Reasoning inputs | Flags: `MCP_ENABLE`, `PLANNER_ENABLE` |
+| v4.8 | A2A Protocol V1 + Orchestrator messaging | — | Define envelopes, hooks, sample chain | Implement deterministic fixtures + status docs | Gated by `A2A_ENABLE` |
+| v4.9 | MCP Integration + Planner Agent (LLM) | — | Build MCP server/client and Planner V1 schema | Align ToolProvider + Reasoning inputs | Flags: `MCP_ENABLE`, `PLANNER_ENABLE` |
+| v4.10 | Orchestrator Runtime (LangGraph execution engine) | — | Prototype deterministic executor | Validate planner playback + CLI parity | Planned flag: `ORCHESTRATOR_ENABLE` |
 | v5.x | Symbolic reasoning + reflexive agents | Governance concepts, Agent Memory Graph sketches | RDF/OWL/SHACL enforcement, logic gates | Define policy bundles + knowledge graph API | Dependent on v4.6 telemetry |
 
 ## v4.8 — Agent Coordination (A2A)
 - Status: Planned.
-- Summary: Adds the A2A envelope protocol so agents can request, respond, and critique peers while staying inside the audited PER loop.
-- Flags: `A2A_ENABLE` (default off) keeps choreography inert until explicitly toggled.
-- CI: Deterministic mocks replay `agent.request/response/critique` events with no new gates; memory-mode smoke stays eight lines.
+- Summary: Defines the canonical A2A schema (`agent.request.created`, `agent.response.created`, `agent.error`) and wires it through the Orchestrator so multi-agent coordination stays deterministic and audited.
+- Flags: `A2A_ENABLE` (default off) keeps choreography inert until explicitly toggled by operators or the Planner Agent.
+- CI: Deterministic mocks replay A2A envelopes and keep memory-mode smoke at eight lines; Planner Agent + Orchestrator remain disabled in CI by default.
 
 ## v4.9 — MCP + LLM Planning
 - Status: Planned.
-- Summary: Introduces the MCP server/client pairing plus Planner V1 so Reasoning-aware plans and tool calls run inside PER.
+- Summary: Introduces MCP server/client plus the LLM-driven Planner Agent that emits schema-validated plans referencing agents, A2A envelopes, and MCP tools for the Orchestrator to execute.
 - Flags: `MCP_ENABLE`, `PLANNER_ENABLE` (both default off) scope MCP exposure and planner invocation.
-- CI: Mock planner + fake MCP server uphold deterministic tests; still validated via extended fixtures without touching CI gates.
+- CI: Mock Planner Agent + fake MCP provider keep tests deterministic; `python -m app.fitness.report` remains independent of network access and MCP stays fully stubbed.
+
+## v4.10 — Orchestrator Runtime
+- Status: Planned.
+- Summary: Brings in the deterministic Orchestrator runtime (LangGraph or equivalent) that consumes Planner Agent output, schedules agents, delivers A2A envelopes, and invokes MCP tools while keeping CLI workflows available.
+- Flags: `ORCHESTRATOR_ENABLE` (planned) will gate the runtime so teams can dual-run CLI and Orchestrator paths.
+- CI: LangGraph-backed executor will ship with replay fixtures proving deterministic execution of at least one multi-agent chain; CI independence from MCP remains intact via mocks.
 
 ## v4.5B Delivery Summary (2025-02-14)
 - Fitness gates enforced with deterministic QAS-003 hybrid-search and QAS-010 outbox→index probes.

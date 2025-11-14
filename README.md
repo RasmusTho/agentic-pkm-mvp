@@ -7,6 +7,8 @@ This repository implements the SoT v4.5A baseline:
 - Deterministic CI in memory mode
 - Optional rerank hook (inert by default)
 
+The roadmap now teams the Planner Agent (LLM-driven planner) with the Orchestrator (graph/runtime executor): the Planner produces multi-step plans grounded in reasoning outputs and Core-6 metadata, and the Orchestrator executes those plans via A2A messages plus optional MCP tool invocations so external capabilities stay audited. Legacy CLI pipelines remain supported while these components are gated behind their respective feature flags.
+
 ## Quickstart (CI-like)
 
 python -m pip install --upgrade pip
