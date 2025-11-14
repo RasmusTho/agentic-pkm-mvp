@@ -71,23 +71,6 @@ Both probes run in memory mode with `LLM_PROVIDER=mock` so they remain determini
 ### CI Gates (v4.6-D)
 `python -m app.fitness.report` now emits seven CI summary lines (LATENCY, EVAL, EVAL DELTA, RELATION COVERAGE, RELATIONS, DIARIZATION, GATES). The first six capture raw metrics, while the GATES line reports whether thresholds were met plus any failure codes. Baselines live in `ops/quality/baselines.yaml` and are overridable via `THRESHOLDS_PATH`; tolerances are additive (e.g., latency ≤ baseline × 1.10, diarization chunk_p95_on ≤ chunk_p95_off × 0.95). The GitHub workflow tees the report into `tmp/ci_summary.log`, parses it via `parse_summary_lines()`, and fails fast if any line is missing or `ok=false`, ensuring every PR presents the same contract without network access.
 
-## Cross-Encoder Providers
-`app.retrieval.rerank.provider` exposes a plug-in matrix:
-- `none` — bypass reranking, preserve original ordering.
-- `mock_ce` — deterministic overlap scoring for tests.
-- `ce_local` — deterministic token/phrase heuristic that runs entirely in Python; it lowercases + strips punctuation, applies capped term-frequency + IDF-like weights, adds exact n-gram bonuses, and breaks ties using the original candidate score so ordering stays stable.
-- `ce_http` — posts `{query, items}` JSON to `RERANK_HTTP_ENDPOINT` with graceful fallback to the mock provider when the service is unavailable.
-`RERANK_ENABLE` gates all providers, and `RERANK_TOP_K` constrains how many candidates the cross-encoder can reorder.
-
-| Provider | Flag | Env knobs | Notes |
-| --- | --- | --- | --- |
-| `none` | default | — | Identity ordering. |
-| `mock_ce` | `RERANK_PROVIDER=mock_ce` | `RERANK_TOP_K` | Deterministic overlap for tests. |
-| `ce_local` | `RERANK_PROVIDER=ce_local` | `RERANK_CE_LOCAL_MODEL` | Pure-Python heuristic: normalized tokens, capped term boosts, n-gram bonus, tie-breaker = original score. |
-| `ce_http` | `RERANK_PROVIDER=ce_http` | `RERANK_HTTP_ENDPOINT`, `RERANK_HTTP_TIMEOUT` | External cross-encoder client with fallback to mock. |
-
-`ce_local` reads every item's `meta.score` to provide a deterministic tie-breaker, so hybrid scores remain a stable fallback. The heuristic complexity is O(n·|query|) and never issues network calls, which keeps CI offline. Golden-set evaluation (`python -m app.fitness.report`) enforces ΔnDCG@10 ≥ 0.01 or ΔP@10 ≥ 0.005 whenever `RERANK_PROVIDER=ce_local` is under test, and defaults remain inert unless the rerank flag is flipped.
-
 ## Relation Index v1 & Orphan Gate
 `MemoryRelationIndex` and `PgRelationIndex` now implement `link()`, `neighbors()`, and `has_any()` so agents can assert provenance before publishing. PromotionAgent wires in `app.promotion.gates.ensure_object_has_relations()` — if no relation exists for a queued UUID the agent blocks promotion by default. Overrides require `PROMOTION_ALLOW_ORPHANS=1` plus `PROMOTION_ORPHAN_OVERRIDE_REASON`, which emits an `audit_log(action="promotion.orphan.override")` entry and a `promote.orphan.override` log line. This keeps the promoted surface free from orphaned knowledge while still allowing audited manual exceptions. CI also reports the ratio of promoted items with relations using the golden sample in `data/golden/relations.json`.
 
@@ -134,3 +117,66 @@ Komponenter prenumererar på `settings.changed` och läser om idempotent.
 - Checkrutor → bool
 - Tvåkolumnstabell → nyckel: värde med dot-path
 - ```yaml settings → auktoritativ sektion
+
+## Agent Coordination Layer (A2A) — v4.8
+A2A introduces a declarative agent-to-agent messaging fabric layered on Stores + Events + the PER loop. When `A2A_ENABLE=1`, the Outbox registers an additional channel that carries envelopes between agents without bypassing audit or promotion invariants, and every agent can opt into message handling via `handle_agent_message()` while continuing to emit the standard ingest events. The canonical schema (request/response/error) plus audit events (`agent.request.created`, `agent.response.created`, `agent.error.created`) now ship in-tree so tests can exercise protocol hooks while routing/orchestrator wiring remains feature-gated.
+
+### Envelope Events
+- `agent.request.created` — emitted when an agent wants follow-up work from another agent; carries `request_id`, `trace_id`, desired capability, and payload summary.
+- `agent.response.created` — produced when the receiving agent completes the requested action and publishes outputs or state diffs in an append-only fashion.
+- `agent.error` — emitted when the receiving agent cannot complete the requested action; includes retry hints and failure metadata so the Orchestrator can branch deterministically.
+- `agent.critique.created` — optional critique or blocker event that lets downstream reviewers see peer feedback before a promotion decision.
+Envelopes reuse Core-6 metadata and append an `a2a.intent` field so determinism and replay remain intact.
+
+### Pipeline Hooks
+Agents subscribe to A2A messages through the same PER scheduler: Plan inspects incoming envelopes (if enabled), Execute performs the requested action, and Reflect emits the response event plus standard audit spans. A2A never replaces Store interactions; it simply allows agents to chain themselves without introducing side channels. Hooks remain inert unless the flag is set, ensuring default CI paths stay unchanged.
+
+### Sample Chain
+Classifier can request deeper reasoning by emitting `agent.request.created(intent="reason")` for the Reasoner; once processed, Reasoner answers via `agent.response.created` and can critique via `agent.critique.created`. PromotionAgent or Projector may then issue a follow-up request to Projector for packaging, giving a deterministic Classifier → Reasoner → Projector chain that is fully audited yet optional.
+
+## A2A Message Flow
+The A2A protocol is intentionally narrow and mediated entirely by the Orchestrator. Envelopes remain internal:
+- `agent.request.created` describes the capability being requested, the payload summary, and the Core-6 identifier/trace.
+- `agent.response.created` captures deterministic outputs or state diffs in an append-only fashion.
+- `agent.error` communicates blocked work plus retry metadata so the Orchestrator can branch or halt safely.
+Agents never exchange envelopes peer-to-peer; the Orchestrator inspects the active plan, routes envelopes via `handle_agent_message()`, persists audit spans, and guarantees deterministic replays for CI. Flags keep orchestration inert until `A2A_ENABLE=1`, preserving the legacy ingest flow by default.
+
+## MCP Integration Layer — v4.9
+The PKM runtime exposes itself as an MCP server so external tools can orchestrate ingest/search flows without bespoke adapters. MCP endpoints mirror the internal Store/Agent APIs (e.g., `pipe_note`, `search_notes`, `get_claims`, `promote_object`, `list_relations`) and sit behind the same auth + audit envelope as the CLI.
+
+### MCP Server Surface
+Running with `MCP_ENABLE=1` starts an MCP server process bound to the local runtime; tool metadata describes inputs/outputs using the canonical schema so editors like Obsidian or ChatGPT can call them directly. Deterministic mocks remain available for CI so MCP startup is a no-op unless explicitly toggled.
+
+### MCP Client Inside the Act Phase
+Agents gain an optional ToolProvider wrapper that can dispatch MCP tool calls from within the Act phase. Calls remain synchronous, respect retry budgets, and emit `mcp.tool.invoked` audit lines. When disabled, the ToolProvider reverts to a no-op stub, keeping the act phase identical to current behaviour.
+
+### Orchestrator-driven MCP Calls
+When plans contain MCP tool steps, the Orchestrator invokes those tools through the ToolProvider on behalf of the currently scheduled agent, captures results, and resumes the workflow. Supported actions include vault writes/file ops, search, ingestion/normalization helpers, analytics routines, or curated external API queries. These calls either replace or complement the historical CLI commands while sharing the same audit envelope. Every invocation is audited with the originating plan step and is fully mocked under CI so the Planner Agent can rely on tool access without sacrificing determinism.
+
+### Deterministic Tool Chains
+`ToolProvider` abstracts whether calls hit the local MCP server, a mock provider, or an injected client. CI defaults to the mock provider so planners and agents can validate tool choreography without sockets. The abstraction keeps MCP additive: enable it to let external editors drive ingestion, search, relation updates, or promotion checks; leave it off to continue CLI-only execution.
+
+### Compatibility Note
+Legacy CLI workflows (`python -m app.cli pipe ...`) remain supported until the LangGraph-based Orchestrator runtime becomes the default surface. Operators can keep `PLANNER_ENABLE`, `A2A_ENABLE`, and `MCP_ENABLE` unset to preserve historical behaviour, then progressively opt into Planner Agent + Orchestrator + MCP flows without breaking scripted ingestion.
+
+## LLM-Driven Planning Layer — v4.9
+Planning is embedded directly into the PER loop, turning “Plan → Act → Reflect” into a concretely orchestrated, LLM-generated step. When `PLANNER_ENABLE=1`, the planner executes before each agent cycle, producing a structured plan that lists which agent should run, which MCP tools to call, and whether any A2A requests must be issued.
+
+### Planner Inputs
+The planner consumes the current object context (Core-6 + latest payload), a RelationIndex snapshot, declared agent capabilities, and the backlog of recent A2A envelopes. These inputs are encoded as JSON per the existing Reasoning Provider schema to keep prompts deterministic.
+
+### Planner Outputs & Execution
+Planner responses are structured arrays `{agent, intent, prerequisites, followups}` that the scheduler feeds into the next PER iteration. Plans may include `a2a_request` items so multi-agent workflows chain without bespoke glue, and they can reference MCP tools by name through the ToolProvider abstraction. If the planner is disabled, the classical round-robin PER scheduler runs unchanged.
+
+### Deterministic Backends & Flags
+Planner calls route through the Reasoning Provider stack: CI uses the `mock` planner for deterministic fixtures, while local runs may point to Ollama or another LLM with constrained prompting. `PLANNER_ENABLE=0` keeps the planner inert; when enabled, the planner’s actions are audited via `plan.generated` and `plan.executed` events so reviewers can verify every orchestrated decision alongside MCP and A2A traces.
+
+## Planner Agent vs Orchestrator
+### Planner Agent (LLM-driven)
+An LLM-powered Planner Agent ingests the requested goal or intent, Core-6 metadata, the latest object text, a RelationIndex snapshot, recent reasoning outputs (`claims`, `evidence`, `inferences`), and the agent capability graph. It emits a structured plan object that enumerates execution steps, target agents, required A2A envelopes, any MCP tool invocations, dependencies, preconditions, and stop conditions. CI always runs the mock backend so the resulting plan remains deterministic, and the entire stage is gated behind `PLANNER_ENABLE`.
+
+### Orchestrator (deterministic executor)
+The Orchestrator is the deterministic execution layer (current PER-loop derivative with a LangGraph runtime on the horizon) that consumes the plan, schedules referenced agents, persists state transitions, and delivers A2A messages. It coordinates branching, retries, and structured state transitions while remaining backward compatible with the CLI `pipe` workflow until operators opt into the new runtime. Whenever the plan references MCP tools or additional agents, the Orchestrator sequences the calls, records audit spans, and guarantees replayability.
+
+### Planner ↔ Reasoning Layer
+Planner prompts reuse Reasoning Layer payloads so the Planner Agent stays grounded in deterministic state. The Planner inspects `ReasoningInput` bundles plus Core-6 frontmatter and relation graphs before proposing any step, which makes downstream audits straightforward and keeps plan generation tightly coupled to earlier reasoning outputs.

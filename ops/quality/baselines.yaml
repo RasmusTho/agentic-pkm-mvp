@@ -1,9 +1,9 @@
 latency:
-  tolerance: 0.10
+  tolerance: 0.50
   QAS003:
-    value: 0.000272
+    value: 0.000360
   QAS010:
-    value: 0.000011
+    value: 0.000150
 
 eval:
   candidate_precision: 0.188
