@@ -9,6 +9,9 @@
 
 ## Core Architecture
 
+### Runtime Surfaces
+See [Local Ports & Services](PORTS.md) for the canonical mapping between Docker containers, observability helpers, and the host ports they expose during development.
+
 ### Agents
 - Normalizer — accepts capture payloads, enforces Core-6 fields, and strips unsafe metadata.
 - Classifier — tags object type, topic facets, and routing hints for downstream agents.
