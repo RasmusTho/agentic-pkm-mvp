@@ -6,3 +6,4 @@ pytest
 click>=8,<9
 watchfiles>=1.0,<2
 requests>=2.0,<3
+pydantic>=2.0,<3
