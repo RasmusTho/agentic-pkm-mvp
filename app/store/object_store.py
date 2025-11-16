@@ -12,7 +12,8 @@ from psycopg.rows import dict_row
 
 from app.db.db import conn_rw as _conn_rw
 from app.db.dsn import connect as _db_connect  # resolve_dsn etc
-from app.agent.events import INGEST_OBJECT_CREATED, new_trace_id
+from app.events.models import new_trace_id
+from app.events.types import INGEST_OBJECT_CREATED
 
 
 @dataclass

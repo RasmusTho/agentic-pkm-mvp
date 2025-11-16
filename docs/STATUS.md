@@ -8,8 +8,8 @@
 | v4.6 | Retrieval quality uplift (Objectives A–D active) | Objectives A (ce_local heuristic + golden eval) and B delivered; **v4.6-B Delivered 2025-02-16** with 100 % coverage/validity; v4.6-C diarization-aware chunking in progress | Objective C/D hardening, relation coverage ≥95%; issues #55–#58 track work | Prototype cross-encoder + diarization PER loops | Guard rails enforce ΔnDCG@10 ≥ +0.01 or ΔP@10 ≥ +0.005 |
 | v4.6-D | CI gates + summary contract | Delivered 2025-02-18 — baselines.yaml drives seven-line CI output with GATES ok=true | — | Refresh baselines when metrics improve; keep PRs pasting summary lines | ops/quality/baselines.yaml + GATE_STRICT=1 documented |
 | v4.8 | A2A Protocol V1 + Orchestrator messaging | — | Define envelopes, hooks, sample chain | Implement deterministic fixtures + status docs | Gated by `A2A_ENABLE` |
-| v4.9 | MCP Integration + Planner Agent (LLM) | — | Build MCP server/client and Planner V1 schema | Align ToolProvider + Reasoning inputs | Flags: `MCP_ENABLE`, `PLANNER_ENABLE` |
-| v4.10 | Orchestrator Runtime (LangGraph execution engine) | — | Prototype deterministic executor | Validate planner playback + CLI parity | Planned flag: `ORCHESTRATOR_ENABLE` |
+| v4.9 | MCP Integration + Planner Agent (LLM) | Delivered — Planner schema, MCP descriptor registry (`allowed_args` + `mock_result`), Mock/LLM planners, pipeline hook | Harden MCP transport + ToolProvider runtime | Align ToolProvider + Reasoning inputs | Flags: `MCP_ENABLE`, `PLANNER_ENABLE` |
+| v4.10 | Orchestrator Runtime (LangGraph execution engine) | Skeleton delivered — plan validation + audit + mocked MCP/A2A execution | Integrate LangGraph + real MCP/agent loops | Validate planner playback + CLI parity | Flag: `ORCHESTRATOR_ENABLE` |
 | v5.x | Symbolic reasoning + reflexive agents | Governance concepts, Agent Memory Graph sketches | RDF/OWL/SHACL enforcement, logic gates | Define policy bundles + knowledge graph API | Dependent on v4.6 telemetry |
 
 ## v4.8 — Agent Coordination (A2A)
@@ -20,16 +20,16 @@
 - Protocol hooks implemented (schema + logging); orchestration/routing logic queued for later v4.8+/v4.10 milestones.
 
 ## v4.9 — MCP + LLM Planning
-- Status: Planned.
-- Summary: Introduces MCP server/client plus the LLM-driven Planner Agent that emits schema-validated plans referencing agents, A2A envelopes, and MCP tools for the Orchestrator to execute.
+- Status: Delivered (SoT v4.9).
+- Summary: Plan/PlanStep schema finalized, MCP descriptor registry now encodes `allowed_args` + `mock_result`, deterministic `MockPlanner` + Ollama-backed `LLMPlanner` providers ship, and the ingest pipeline emits `planner.plan.created` (with fallback logging) whenever `PLANNER_ENABLE=1`. MCP transport/client wiring continues under v4.10 but all descriptors and mocks are stable.
 - Flags: `MCP_ENABLE`, `PLANNER_ENABLE` (both default off) scope MCP exposure and planner invocation.
-- CI: Mock Planner Agent + fake MCP provider keep tests deterministic; `python -m app.fitness.report` remains independent of network access and MCP stays fully stubbed.
+- CI: Mock Planner Agent keeps tests deterministic; `PLANNER_PROVIDER=mock` is enforced automatically when `LLM_PROVIDER=mock`, and descriptor validation is covered by new planner/orchestrator tests.
 
 ## v4.10 — Orchestrator Runtime
-- Status: Planned.
-- Summary: Brings in the deterministic Orchestrator runtime (LangGraph or equivalent) that consumes Planner Agent output, schedules agents, delivers A2A envelopes, and invokes MCP tools while keeping CLI workflows available.
-- Flags: `ORCHESTRATOR_ENABLE` (planned) will gate the runtime so teams can dual-run CLI and Orchestrator paths.
-- CI: LangGraph-backed executor will ship with replay fixtures proving deterministic execution of at least one multi-agent chain; CI independence from MCP remains intact via mocks.
+- Status: Active — Skeleton executor delivered.
+- Summary: `app/orchestrator.runtime` validates plans, runs steps sequentially, emits `orchestrator.step.*`, and integrates with `send_agent_request` plus MCP mock descriptors so plan execution stays fully audited without touching the filesystem/network. `app.agents.pipeline.maybe_execute_plan()` (gated by `ORCHESTRATOR_ENABLE`) now replays plans immediately after planning.
+- Flags: `ORCHESTRATOR_ENABLE` gates the runtime so teams can dual-run CLI and Orchestrator paths; planner flag must also be enabled.
+- CI: New tests under `tests/orchestrator/` assert plan playback, MCP validation, A2A error emission, and pipeline wiring. Execution remains mock-only, preserving the eight-line CI contract while groundwork for LangGraph + real MCP integrations proceeds.
 
 ## v4.5B Delivery Summary (2025-02-14)
 - Fitness gates enforced with deterministic QAS-003 hybrid-search and QAS-010 outbox→index probes.

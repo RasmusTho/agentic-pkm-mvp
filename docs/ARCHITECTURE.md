@@ -163,13 +163,16 @@ Legacy CLI workflows (`python -m app.cli pipe ...`) remain supported until the L
 Planning is embedded directly into the PER loop, turning “Plan → Act → Reflect” into a concretely orchestrated, LLM-generated step. When `PLANNER_ENABLE=1`, the planner executes before each agent cycle, producing a structured plan that lists which agent should run, which MCP tools to call, and whether any A2A requests must be issued.
 
 ### Planner Inputs
-The planner consumes the current object context (Core-6 + latest payload), a RelationIndex snapshot, declared agent capabilities, and the backlog of recent A2A envelopes. These inputs are encoded as JSON per the existing Reasoning Provider schema to keep prompts deterministic.
+The planner consumes the current object context (Core-6 + latest payload), a RelationIndex snapshot, declared agent capabilities, and the backlog of recent A2A envelopes. These inputs are encoded as JSON per the existing Reasoning Provider schema to keep prompts deterministic. `PlannerInput` (defined in `app/planner/provider.py`) mirrors this bundle and is the canonical payload handed to any planner backend.
+
+### Plan Schema & Tool Descriptors
+`app/planner/schema.py` defines the persisted plan contract: `Plan` (with `PlanMetadata`), `PlanStep`, and `ToolDescriptor`. Steps carry `kind=agent_call|tool_call|decision|note`, optional `agent/intent`, MCP tool names (e.g., `mcp.vault.append_note`) plus structured `tool_args`, dependencies, and metadata so plans replay deterministically. MCP tool descriptors live under `app/planner/tools.py` as a static registry (`MCP_TOOL_DESCRIPTORS`) the Planner Agent references when suggesting tool steps; each descriptor ships with a JSON-schema-like shape, explicit `allowed_args`, and a deterministic `mock_result` so the executor can validate payloads without touching real MCP tools. Tests assert that plan steps referencing those names remain valid even before we wire actual MCP execution.
 
 ### Planner Outputs & Execution
-Planner responses are structured arrays `{agent, intent, prerequisites, followups}` that the scheduler feeds into the next PER iteration. Plans may include `a2a_request` items so multi-agent workflows chain without bespoke glue, and they can reference MCP tools by name through the ToolProvider abstraction. If the planner is disabled, the classical round-robin PER scheduler runs unchanged.
+Planner responses must validate against the Plan schema, so downstream executors see a uniform structure regardless of backend. Plans may include `tool_call` and `agent_call` steps so multi-agent workflows chain without bespoke glue, and they can reference MCP tools by name through the ToolProvider abstraction. If the planner is disabled, the classical round-robin PER scheduler runs unchanged. When `PLANNER_ENABLE=1`, `app.agents.pipeline.maybe_plan_for_object()` emits a plan plus `planner.plan.created`, and when `ORCHESTRATOR_ENABLE=1` the same pipeline calls `maybe_execute_plan()` so the Orchestrator replays the plan immediately after ingest (deterministically mocked in CI).
 
 ### Deterministic Backends & Flags
-Planner calls route through the Reasoning Provider stack: CI uses the `mock` planner for deterministic fixtures, while local runs may point to Ollama or another LLM with constrained prompting. `PLANNER_ENABLE=0` keeps the planner inert; when enabled, the planner’s actions are audited via `plan.generated` and `plan.executed` events so reviewers can verify every orchestrated decision alongside MCP and A2A traces.
+`app/planner/provider.py` exposes `MockPlanner` (deterministic fixtures for CI) and `LLMPlanner` (Ollama-backed when `PLANNER_PROVIDER=llm` and `LLM_PROVIDER!=mock`). The provider falls back to the mock backend and emits `planner.plan.fallback` when misconfigured or when LLM output fails validation. `PLANNER_ENABLE=0` keeps the planner inert; when enabled, planner calls are audited via `planner.plan.created` (intake) plus `planner.plan.error`/`planner.plan.fallback` when issues occur so reviewers can trace every orchestrated decision alongside MCP and A2A traces.
 
 ## Planner Agent vs Orchestrator
 ### Planner Agent (LLM-driven)
@@ -177,6 +180,24 @@ An LLM-powered Planner Agent ingests the requested goal or intent, Core-6 metada
 
 ### Orchestrator (deterministic executor)
 The Orchestrator is the deterministic execution layer (current PER-loop derivative with a LangGraph runtime on the horizon) that consumes the plan, schedules referenced agents, persists state transitions, and delivers A2A messages. It coordinates branching, retries, and structured state transitions while remaining backward compatible with the CLI `pipe` workflow until operators opt into the new runtime. Whenever the plan references MCP tools or additional agents, the Orchestrator sequences the calls, records audit spans, and guarantees replayability.
+
+### Orchestrator Runtime — Execution Model (v4.10A)
+`app/orchestrator/runtime.py` hosts the Orchestrator class plus a `MockPlanExecutor`. Plans are validated up front (unique IDs, dependency order, required agent/tool metadata). Each step emits `orchestrator.step.started|finished|error` with the plan/step identifiers so auditing can reconstruct the control flow. Execution stays deterministic because `MockPlanExecutor`:
+- dispatches `agent_call` steps via `send_agent_request` (emitting `agent.request.created`) and immediately routes them through the default Agent handler, which responds with `agent.error.created` / `error_type=not_implemented`.
+- enforces MCP tool contracts by loading descriptors, checking `allowed_args`, and returning the descriptor’s `mock_result`; every call emits `mcp.tool.call.started|finished`, and no sockets/filesystem work occurs in CI.
+- records decision/note steps as structured audit payloads without mutating stores.
+
+The current choreography is serialized and flag-gated (`PLANNER_ENABLE` + `ORCHESTRATOR_ENABLE`). Future LangGraph/parallel scheduling layers can reuse the same executor contract while preserving determinism.
+
+```
+Planner Agent
+      │
+      │ plan (Plan/PlanStep schema)
+      ▼
+Orchestrator.run_plan()
+      ├─ agent_call → send_agent_request() → Agent.handle_agent_request() → agent.error.created (default stub)
+      └─ tool_call  → MCP descriptor validation → mcp.tool.call.started/finished (mock_result, no side effects)
+```
 
 ### Planner ↔ Reasoning Layer
 Planner prompts reuse Reasoning Layer payloads so the Planner Agent stays grounded in deterministic state. The Planner inspects `ReasoningInput` bundles plus Core-6 frontmatter and relation graphs before proposing any step, which makes downstream audits straightforward and keeps plan generation tightly coupled to earlier reasoning outputs.

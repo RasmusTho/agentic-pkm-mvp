@@ -5,6 +5,7 @@ from typing import Any
 
 from app.store.object_store import ObjectStore
 from app.services.decisions import insert_decision
+from app.events.types import CURATION_REVIEW_DONE
 from app.services.audit import audit_event
 from app.settings.models import ReviewerSettings, SettingsBundle
 from app.settings.runtime import subscribe_settings
@@ -67,7 +68,7 @@ def review(object_id: str, *, trace_id: str, threshold: float | None = None) -> 
     allow, score, reasons = _next_allow(effective_threshold)
 
     out = {
-        "event": "curation.review.done",
+        "event": CURATION_REVIEW_DONE,
         "object_id": object_id,
         "allow": allow,
         "score": score,
@@ -79,7 +80,7 @@ def review(object_id: str, *, trace_id: str, threshold: float | None = None) -> 
 
     # audit best-effort
     audit_event(
-        event="curation.review.done",
+        event=CURATION_REVIEW_DONE,
         object_id=object_id,
         agent=AGENT,
         trace_id=trace_id,

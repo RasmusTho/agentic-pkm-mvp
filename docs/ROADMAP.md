@@ -13,8 +13,8 @@
 | v4.6-D | CI gates + summary hardening. | Delivered (2025-02-18) |
 | v4.7 | Reasoning layer & reflexive agents over the knowledge graph. | Active (Objective A) |
 | v4.8 | Agent Coordination (A2A Protocol V1 + Orchestrator messaging hooks). | Planned |
-| v4.9 | MCP Integration V1 + Planner Agent (LLM) plan schema. | Planned |
-| v4.10 | Orchestrator Runtime V1 (LangGraph execution of Planner Agent output). | Planned |
+| v4.9 | MCP Integration V1 + Planner Agent (LLM) plan schema. | Delivered |
+| v4.10 | Orchestrator Runtime V1 (LangGraph execution of Planner Agent output). | Active (Skeleton) |
 
 ## Current Stable Baseline (v4.5A)
 v4.5A is the deployable baseline: Normalizer→PromotionAgent path is verified end-to-end, promotion cooldowns are enforced, and CI is green when `pytest -q -m "not pg"` passes using `STORE_BACKEND=memory` and mock LLMs. Architectural invariants to preserve: Core-6 frontmatter is immutable once normalized, Outbox events remain append-only, PromotionAgent decisions are idempotent, and audit logs stay deterministic JSONL. Any change that violates these invariants or introduces non-deterministic mocks must be postponed to v4.5B+.
@@ -94,33 +94,31 @@ SoT v4.6-A expands the corpus to 16 deterministic queries (10 candidates each) a
 ### Delivered so far
 - Canonical A2A message schema + audit events (`agent.request/response/error`) implemented with deterministic mocks; routing/orchestrator playback remains on the roadmap.
 
-## v4.9 — MCP Integration + LLM Planning
-### Goals
-- Ship an MCP server that exposes ingest, retrieval, relation, and promotion tooling directly from PKM, including mocks for CI.
-- Embed an MCP-aware client into the agent Act phase so the Orchestrator can call tools during execution.
-- Introduce the LLM-driven Planner Agent that produces schema-validated plan objects referencing agents, A2A envelopes, and MCP tools.
-- Planner Agent leverages Reasoning Layer v1 plus Core-6 relations, and can either call MCP tools or emit additional A2A requests that the Orchestrator executes deterministically.
+## v4.9 — MCP Integration + LLM Planning *(Delivered — SoT v4.9)*
+### Delivered Scope
+- Structured `Plan`/`PlanStep` schema finalized with dependency validation and JSON-serializable metadata shared by all planner backends.
+- Deterministic `MockPlanner` + Ollama-backed `LLMPlanner` providers, with automatic fallback/audit logging when `PLANNER_PROVIDER=llm` is misconfigured under mock LLMs.
+- Static MCP descriptor registry augmented with `allowed_args` + `mock_result`, keeping MCP references deterministic in CI and giving the Orchestrator enough metadata to validate tool calls safely.
+- Pipeline hook (`app.agents.pipeline.maybe_plan_for_object`) emits `planner.plan.created` and feeds plans to the Orchestrator when both planner/orchestrator flags are toggled.
 
-### Acceptance Criteria
-- MCP server exposes ≥5 stable tools (`pipe_note`, `search_notes`, `get_claims`, etc.) with documentation and CI mocks.
-- MCP client sits behind a `ToolProvider` abstraction the Orchestrator uses when executing plan steps, including audit lines per call.
-- Planner Agent V1 produces structured plans validated against a schema (steps, dependencies, `a2a_request`, `tool_invocation`, stop conditions).
-- CI keeps the Planner Agent deterministic via the mock backend and fake MCP server; docs outline how MCP, Planner Agent, and A2A wiring fit together.
+### Remaining MCP Work
+The in-process MCP server/client and LangGraph-native orchestration continue under v4.10. Mocks cover all descriptors already, so once the transport is ready the executor can swap from stubbed to real calls without altering Planner outputs.
 
 ## Cross-Cutting Initiative — v4.9.x
 ### Goal
 - Align A2A, MCP, and Planner so they form a unified multi-agent execution model while preserving backward compatibility with CLI-only workflows; older scripts continue to function with all new flags disabled.
 
-## v4.10 — Orchestrator Runtime
-### Goals
-- Land the deterministic Orchestrator runtime (LangGraph or equivalent) that consumes Planner Agent output and executes plans end-to-end.
-- Ensure the runtime schedules agents, processes A2A envelopes, and calls MCP tools while remaining feature-flagged for gradual rollout.
-- Provide migration guidance from the CLI `pipe` loop to the Orchestrator so teams can dual-run both paths.
+## v4.10 — Orchestrator Runtime *(Active — Skeleton delivered)*
+### Delivered so far
+- `app/orchestrator/` runtime + executor that validate plan structure, emit `orchestrator.step.*`, replay agent/tool steps deterministically, and keep MCP/A2A calls mocked in CI.
+- MCP stub execution now enforces descriptor `allowed_args`, returns descriptor `mock_result`, and logs `mcp.tool.call.started|finished`.
+- Agent calls route through `send_agent_request` + the default Agent handler, producing `agent.request.created` and default `agent.error.created` (`error_type=not_implemented`) so the control plane stays audited end-to-end.
+- Pipeline hook `maybe_execute_plan()` gated on `ORCHESTRATOR_ENABLE` runs immediately after planning, keeping CLI ingest backward compatible when the flag is off.
 
-### Acceptance Criteria
-- Orchestrator executes multi-step plans deterministically, emitting audit traces for every state transition, A2A envelope, and MCP tool invocation.
-- Retries/branching semantics documented plus CI fixtures that replay at least one Classifier → Reasoner → Projector → Projector (packaging) chain via LangGraph.
-- CLI workflows remain supported; docs outline how to toggle `PLANNER_ENABLE`, `A2A_ENABLE`, `MCP_ENABLE`, and `ORCHESTRATOR_ENABLE` (or equivalent) independently.
+### Next Milestones
+- Replace the mock executor with an MCP-connected ToolProvider plus LangGraph scheduling primitives for branching + retries.
+- Add richer status reporting (plan aggregates, step retries) and CLI toggles that let operators dual-run CLI + Orchestrator before promoting the new runtime to default.
+- Continue keeping CI deterministic: new integration tests must rely on mocks and the eight-line summary contract.
 
 ## Forward Outlook (v5.x)
 Symbolic reasoning layer adds RDF/OWL/SHACL validation before promotion. Knowledge graph services expose RelationIndex externally for governance queries. Logic gates allow Reviewer/PromotionAgent to assert multi-object policies. Reflexive agents learn from audit feedback to auto-tune PER plans without skipping human checkpoints.

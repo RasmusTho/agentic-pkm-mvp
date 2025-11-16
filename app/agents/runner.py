@@ -47,7 +47,7 @@ def main():
             dry_run=args.dry_run,
         )
         out = {
-            "event": "jobs.backfill.done",
+            "event": JOBS_BACKFILL_DONE,
             "summary": {
                 "chunked": summary.chunked,
                 "indexed": summary.indexed,

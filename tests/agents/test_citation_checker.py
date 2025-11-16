@@ -1,3 +1,9 @@
+from app.events.types import (
+    CURATION_CITATION_CHECK_DONE,
+    CURATION_CITATION_CHECKED,
+    CURATION_CITATION_SKIP,
+)
+
 import os
 from app.agents.normalizer.agent import run as normalize_run
 from app.agents.classifier.agent import run as classify_run
@@ -14,9 +20,9 @@ def test_citation_checker_blocks_for_external_without_sources(tmp_path, monkeypa
     res = citation_run(oid, trace_id="t-cite-1")
     assert "event" in res
     assert res["event"] in {
-        "curation.citation_check.done",
-        "curation.citation.checked",
-        "curation.citation.skip",
+        CURATION_CITATION_CHECK_DONE,
+        CURATION_CITATION_CHECKED,
+        CURATION_CITATION_SKIP,
     }
 
 def test_citation_checker_ok_when_sources_present(tmp_path):
@@ -30,7 +36,7 @@ def test_citation_checker_ok_when_sources_present(tmp_path):
     res = citation_run(oid, trace_id="t-cite-2")
     assert "event" in res
     assert res["event"] in {
-        "curation.citation_check.done",
-        "curation.citation.checked",
-        "curation.citation.skip",
+        CURATION_CITATION_CHECK_DONE,
+        CURATION_CITATION_CHECKED,
+        CURATION_CITATION_SKIP,
     }

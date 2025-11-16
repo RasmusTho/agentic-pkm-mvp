@@ -3,6 +3,7 @@ from typing import Any
 import os
 from app.agents.base.graph import PERSpec, build_graph, AgentState
 from app.agents.base.audit import audit_log
+from app.events.types import CURATION_CLASSIFY_DONE
 from app.agents.classifier.agent import run as classifier_run
 from app.memory.store import recall
 
@@ -29,7 +30,7 @@ def _reflect(state: AgentState) -> AgentState:
 def _emit(state: AgentState) -> AgentState:
     res = state.get("act_result") or {}
     oid = (state.get("input") or {}).get("object_id")
-    out = {"event": "curation.classify.done", "object_id": oid, "decisions": int(res.get("decisions", 0))}
+    out = {"event": CURATION_CLASSIFY_DONE, "object_id": oid, "decisions": int(res.get("decisions", 0))}
     state["output"] = out
     audit_log(object_id=oid, agent=AGENT, action="emit", trace_id=state.get("trace_id"), details=out)
     return state

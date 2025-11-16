@@ -3,6 +3,7 @@ from typing import Any
 
 from app.agents.base.graph import PERSpec, build_graph, AgentState
 from app.agents.base.audit import audit_log
+from app.events.types import INGEST_NORMALIZE_DONE
 from app.agents.normalizer.agent import run as normalizer_run
 from app.memory.store import recall
 from app.store.object_store import ObjectStore
@@ -49,7 +50,7 @@ def _emit(state: AgentState) -> AgentState:
     res = state.get("act_result", {})
     oid = res.get("object_id")
     core6 = res.get("core6") or _fetch_core6(oid)
-    out = {"event": "ingest.normalize.done", "object_id": oid, "core6": core6}
+    out = {"event": INGEST_NORMALIZE_DONE, "object_id": oid, "core6": core6}
     state["output"] = out
     audit_log(object_id=oid, agent=AGENT, action="emit", trace_id=state.get("trace_id"), details=out)
     return state

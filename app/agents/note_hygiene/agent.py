@@ -1,6 +1,7 @@
 from typing import Dict, Any, List
 import re, os
 from .fs import archive_path
+from app.events.types import CLEANUP_DONE
 from app.services.events import emit
 
 _link_re = re.compile(r"\[[^\]]+\]\([^)]+\)")
@@ -14,13 +15,13 @@ def classify_and_act(note:Dict[str,Any])->Dict[str,Any]:
     if tokens == 0:
         path = archive_path(title)
         _write(path, body, fm)
-        emit("cleanup.done", {"uuid": uuid, "action":"archive", "path": path})
+        emit(CLEANUP_DONE, {"uuid": uuid, "action":"archive", "path": path})
         return {"action":"archive","body":body,"path":path}
     if tokens <= 80:
         fixed = salvage_summary(body)
-        emit("cleanup.done", {"uuid": uuid, "action":"fix_structure"})
+        emit(CLEANUP_DONE, {"uuid": uuid, "action":"fix_structure"})
         return {"action":"fix_structure","body":fixed}
-    emit("cleanup.done", {"uuid": uuid, "action":"keep"})
+    emit(CLEANUP_DONE, {"uuid": uuid, "action":"keep"})
     return {"action":"keep","body":body}
 
 def _title_from_body(body:str)->str:

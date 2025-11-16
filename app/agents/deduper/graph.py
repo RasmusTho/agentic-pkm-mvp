@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any
 from app.agents.base.graph import PERSpec, build_graph, AgentState
 from app.agents.base.audit import audit_log
+from app.events.types import CURATION_DEDUPE_DONE
 from app.agents.deduper.agent import run as deduper_run
 
 AGENT = "deduper"
@@ -25,7 +26,7 @@ def _reflect(state: AgentState) -> AgentState:
 
 def _emit(state: AgentState) -> AgentState:
     res = state.get("act_result") or {}
-    out = {"event": "curation.dedupe.done", "pairs": res.get("pairs", []), "decisions": int(res.get("decisions", 0))}
+    out = {"event": CURATION_DEDUPE_DONE, "pairs": res.get("pairs", []), "decisions": int(res.get("decisions", 0))}
     state["output"] = out
     audit_log(object_id=None, agent=AGENT, action="emit", trace_id=state.get("trace_id"), details={"decisions": out["decisions"]})
     return state

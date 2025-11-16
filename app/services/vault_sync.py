@@ -12,7 +12,8 @@ import yaml
 
 from app.db import conn_rw, ensure_schema
 
-from app.agent.events import INGEST_OBJECT_CREATED, new_trace_id
+from app.events.models import new_trace_id
+from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_METADATA, INGEST_OBJECT_UPDATED
 from app.services.inbox import append_change, append_conflict
 from app.services.outbox import insert_object_and_outbox
 from app.services.settings import policy
@@ -245,9 +246,9 @@ def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, f
     if state is None:
         topic = INGEST_OBJECT_CREATED
     elif body_changed:
-        topic = "ingest.object.updated"
+        topic = INGEST_OBJECT_UPDATED
     elif fm_changed:
-        topic = "ingest.object.metadata"
+        topic = INGEST_OBJECT_METADATA
     if topic:
         payload = {
             "uuid": uuid_value,
@@ -360,9 +361,9 @@ def sync_markdown(path: str) -> dict[str, Any]:
             "path": str(note_path),
         }
 
-        topic = INGEST_OBJECT_CREATED if state is None else "ingest.object.updated"
+        topic = INGEST_OBJECT_CREATED if state is None else INGEST_OBJECT_UPDATED
         if state is not None and state.get("body_hash") == body_hash:
-            topic = "ingest.object.metadata"
+            topic = INGEST_OBJECT_METADATA
 
         # Mark for re-embed if body changed
         if body_changed and policy().get("reembed_on_body_diff", True):

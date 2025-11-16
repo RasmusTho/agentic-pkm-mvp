@@ -5,6 +5,7 @@ import json
 import time
 from pathlib import Path
 
+from app.events.types import PROMOTE_AGENT_PLAN, PROMOTE_AGENT_RUN
 from app.observability.tracing import current_trace_id, span, start_tracer
 from app.promotion.queue import LOG as _LOG
 from app.promotion.queue import run_once as _worker_run_once
@@ -26,7 +27,7 @@ class PromotionAgent:
                 {
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "level": "debug",
-                    "event": "promote.agent.plan",
+                    "event": PROMOTE_AGENT_PLAN,
                     "agent": self.name,
                     "trace_id": current_trace_id(),
                 },
@@ -43,7 +44,7 @@ class PromotionAgent:
                 {
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "level": "info",
-                    "event": "promote.agent.run",
+                    "event": PROMOTE_AGENT_RUN,
                     "agent": self.name,
                     "processed": processed,
                     "trace_id": current_trace_id(),
