@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, List
 
+from app.events.types import INGEST_INDEX_DONE
 from app.store.object_store import ObjectStore
 from app.search.embeddings import embed_text
 
@@ -53,7 +54,7 @@ def index_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
     if not obj:
         # objektet borde finnas, men om inte -> returnera 0 embeddings
         return {
-            "event": "ingest.index.done",
+            "event": INGEST_INDEX_DONE,
             "object_id": object_id,
             "embeddings": 0,
             "trace_id": trace_id,
@@ -69,7 +70,7 @@ def index_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
     _MEMORY_VECTOR_INDEX[object_id] = existing
 
     out = {
-        "event": "ingest.index.done",
+        "event": INGEST_INDEX_DONE,
         "object_id": object_id,
         "embeddings": len(existing),
         "trace_id": trace_id,

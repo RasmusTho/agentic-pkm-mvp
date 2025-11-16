@@ -1,3 +1,5 @@
+from app.events.types import CURATION_REVIEW_DONE
+
 import os
 from pathlib import Path
 
@@ -37,7 +39,7 @@ def test_reviewer_returns_structure(tmp_path: Path) -> None:
         )
         citation_run(oid, trace_id=trace_id)
         review = review_run(oid, trace_id=trace_id, threshold=0.75)
-        assert review["event"] == "curation.review.done"
+        assert review["event"] == CURATION_REVIEW_DONE
         assert "allow" in review and isinstance(review["allow"], bool)
         assert "reasons" in review and isinstance(review["reasons"], list)
         assert "agent" in review and review["agent"] == "reviewer"

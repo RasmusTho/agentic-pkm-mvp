@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from app.events.types import CURATION_DEDUPE_DONE
 from app.store.object_store import ObjectStore
 from app.search.embeddings import embed_text
 
@@ -92,7 +93,7 @@ def dedupe(object_ids: Iterable[str], *, threshold: float, trace_id: str) -> dic
                 )
 
     out = {
-        "event": "curation.dedupe.done",
+        "event": CURATION_DEDUPE_DONE,
         "trace_id": trace_id,
         "threshold": threshold,
         "pairs": pairs,

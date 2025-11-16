@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from app.events.types import PROMOTION_EVALUATE_DONE
 from app.store.object_store import ObjectStore
 from app.services.decisions import insert_decision, latest_decision
 from app.services.audit import audit_event
@@ -59,7 +60,7 @@ def evaluate_object(object_id: str, *, trace_id: str, threshold: float = 0.8) ->
     promote = allow
 
     out = {
-        "event": "promotion.evaluate.done",
+        "event": PROMOTION_EVALUATE_DONE,
         "object_id": object_id,
         "allow": allow,
         "promote": promote,
@@ -71,7 +72,7 @@ def evaluate_object(object_id: str, *, trace_id: str, threshold: float = 0.8) ->
 
     # audit best-effort
     audit_event(
-        event="promotion.evaluate.done",
+        event=PROMOTION_EVALUATE_DONE,
         object_id=object_id,
         agent=AGENT,
         trace_id=trace_id,

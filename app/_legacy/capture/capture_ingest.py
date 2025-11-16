@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-from app.agent.events import new_trace_id
+from app.events.models import new_trace_id
 from app.services.settings import policy
 from app.store.object_store import DomainObject, ObjectStore
 

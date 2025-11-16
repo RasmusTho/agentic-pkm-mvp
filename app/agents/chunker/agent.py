@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.events.types import INGEST_CHUNK_DONE
 from app.store.object_store import ObjectStore
 from app.services.audit import audit_event
 
@@ -49,7 +50,7 @@ def chunk_object(object_id: str,
 
     # audit best-effort
     audit_event(
-        event="ingest.chunk.done",
+        event=INGEST_CHUNK_DONE,
         object_id=object_id,
         agent=AGENT,
         trace_id=trace_id,
@@ -62,7 +63,7 @@ def chunk_object(object_id: str,
     )
 
     out = {
-        "event": "ingest.chunk.done",
+        "event": INGEST_CHUNK_DONE,
         "object_id": object_id,
         "chunks": len(chunks),
         "trace_id": trace_id,

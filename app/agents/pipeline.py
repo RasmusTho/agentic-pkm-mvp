@@ -7,6 +7,16 @@ from uuid import UUID
 from app.agents.base.audit import audit_log
 from app.ingest.chunk_policy import build_chunks
 from app.ingest.deduper import Deduper
+from app.events.types import (
+    ORCHESTRATOR_PLAN_ERROR,
+    ORCHESTRATOR_PLAN_INVALID,
+    PLANNER_PLAN_CREATED,
+    PLANNER_PLAN_ERROR,
+    REASONING_CLAIM_ADDED,
+    REASONING_INFERENCE_ADDED,
+    REASONING_VALIDATION_ERROR,
+    TEXT_CHUNK_CREATED,
+)
 from app.orchestrator.runtime import Orchestrator, OrchestratorError, PlanValidationError
 from app.reasoning.provider import get_reasoner
 from app.reasoning.schema import ReasoningInput, RelationSnapshot, ReasoningValidationError
@@ -85,7 +95,7 @@ def _audit_chunk_creation(
     audit_log(
         object_id=object_id,
         agent=_AGENT,
-        action="text.chunk.created",
+        action=TEXT_CHUNK_CREATED,
         trace_id=trace_id,
         details=details,
     )
@@ -111,7 +121,7 @@ def _run_reasoning_if_enabled(obj: Dict[str, Any], text: str) -> None:
         audit_log(
             object_id=object_id,
             agent=_AGENT,
-            action="reasoning.validation.error",
+            action=REASONING_VALIDATION_ERROR,
             trace_id=obj.get("trace_id"),
             details={"error": str(exc)},
         )
@@ -121,7 +131,7 @@ def _run_reasoning_if_enabled(obj: Dict[str, Any], text: str) -> None:
         audit_log(
             object_id=object_id,
             agent=_AGENT,
-            action="reasoning.claim.added",
+            action=REASONING_CLAIM_ADDED,
             trace_id=obj.get("trace_id"),
             details={"claims": stats["claims"], "evidence": stats["evidence"]},
         )
@@ -129,7 +139,7 @@ def _run_reasoning_if_enabled(obj: Dict[str, Any], text: str) -> None:
         audit_log(
             object_id=object_id,
             agent=_AGENT,
-            action="reasoning.inference.added",
+            action=REASONING_INFERENCE_ADDED,
             trace_id=obj.get("trace_id"),
             details={"inferences": stats["inferences"]},
         )
@@ -180,7 +190,7 @@ def maybe_plan_for_object(object_id: str, text: str, trace_id: str | None) -> Pl
         audit_log(
             object_id=object_id,
             agent=_PLANNER_AGENT,
-            action="planner.plan.error",
+            action=PLANNER_PLAN_ERROR,
             trace_id=trace_id,
             details={"error": str(exc)},
         )
@@ -188,7 +198,7 @@ def maybe_plan_for_object(object_id: str, text: str, trace_id: str | None) -> Pl
     audit_log(
         object_id=object_id,
         agent=_PLANNER_AGENT,
-        action="planner.plan.created",
+        action=PLANNER_PLAN_CREATED,
         trace_id=trace_id,
         details={"plan_id": plan.id, "steps": len(plan.steps)},
     )
@@ -213,7 +223,7 @@ def maybe_execute_plan(plan: Plan | None) -> List[Dict[str, Any]] | None:
         audit_log(
             object_id=plan.meta.source_object_uuid,
             agent=_PLANNER_AGENT,
-            action="orchestrator.plan.invalid",
+            action=ORCHESTRATOR_PLAN_INVALID,
             trace_id=plan.meta.trace_id,
             details={"plan_id": plan.id, "error": str(exc)},
         )
@@ -221,7 +231,7 @@ def maybe_execute_plan(plan: Plan | None) -> List[Dict[str, Any]] | None:
         audit_log(
             object_id=plan.meta.source_object_uuid,
             agent=_PLANNER_AGENT,
-            action="orchestrator.plan.error",
+            action=ORCHESTRATOR_PLAN_ERROR,
             trace_id=plan.meta.trace_id,
             details={"plan_id": plan.id, "error": str(exc)},
         )

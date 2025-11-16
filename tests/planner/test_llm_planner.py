@@ -5,6 +5,7 @@ import json
 import pytest
 
 from app.agents.base.audit import _audit_ring_snapshot
+from app.events.types import PLANNER_PLAN_FALLBACK
 from app.planner.provider import LLMPlanner, PlannerInput
 
 pytestmark = pytest.mark.not_pg
@@ -48,4 +49,4 @@ def test_llm_planner_falls_back_on_invalid_output(monkeypatch: pytest.MonkeyPatc
     after = _audit_ring_snapshot()
     assert plan.meta.created_by == "planner.mock"
     new_events = [evt for evt in after if evt not in before]
-    assert any(evt["action"] == "planner.plan.fallback" for evt in new_events)
+    assert any(evt["event_type"] == PLANNER_PLAN_FALLBACK for evt in new_events)

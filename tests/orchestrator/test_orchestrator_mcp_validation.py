@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents.base.audit import _audit_ring_snapshot
+from app.events.types import ORCHESTRATOR_STEP_ERROR
 from app.orchestrator.runtime import Orchestrator
 from app.planner.schema import Plan, PlanMetadata, PlanStep
 
@@ -30,4 +31,4 @@ def test_orchestrator_validates_mcp_arguments() -> None:
     assert results and results[0]["status"] == "error"
     assert "missing required argument" in results[0]["error"]
     new_events = [evt for evt in after if evt not in before]
-    assert any(evt["action"] == "orchestrator.step.error" for evt in new_events)
+    assert any(evt["event_type"] == ORCHESTRATOR_STEP_ERROR for evt in new_events)

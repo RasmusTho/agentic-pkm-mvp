@@ -1,3 +1,9 @@
+from app.events.types import (
+    CURATION_REVIEW_DONE,
+    INGEST_INDEX_DONE,
+    PROMOTION_EVALUATE_DONE,
+)
+
 import os
 from pathlib import Path
 
@@ -48,15 +54,15 @@ def test_backfill_pipeline_structure(tmp_path: Path) -> None:
     assert chunk_res3["chunks"] >= 1
 
     index_res = index_run(note3, trace_id="t-backfill-seed-3")
-    assert index_res["event"] == "ingest.index.done"
+    assert index_res["event"] == INGEST_INDEX_DONE
     assert index_res["embeddings"] >= 1
 
     review_res = review_run(note3, trace_id="t-backfill-seed-3")
-    assert review_res["event"] == "curation.review.done"
+    assert review_res["event"] == CURATION_REVIEW_DONE
     assert "allow" in review_res
 
     evaluate_res = evaluate_run(note3, trace_id="t-backfill-seed-3")
-    assert evaluate_res["event"] == "promotion.evaluate.done"
+    assert evaluate_res["event"] == PROMOTION_EVALUATE_DONE
     assert "promote" in evaluate_res
     assert "score" in evaluate_res
     assert "allow" in evaluate_res

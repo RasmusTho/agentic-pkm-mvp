@@ -5,6 +5,7 @@ from typing import Any
 
 from app.a2a.schema import AgentError, AgentMessageBase, AgentRequest, AgentResponse, new_request
 from app.agents.base.audit import audit_log
+from app.events.types import AGENT_ERROR_CREATED, AGENT_REQUEST_CREATED, AGENT_RESPONSE_CREATED
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +42,12 @@ def _emit(action: str, message: AgentMessageBase, *, object_id: str | None, extr
 
 def emit_agent_request_event(message: AgentRequest, *, object_id: str | None = None) -> None:
     extra = {"intent": message.intent, "payload_size": len(message.payload or {})}
-    _emit("agent.request.created", message, object_id=object_id, extra=extra)
+    _emit(AGENT_REQUEST_CREATED, message, object_id=object_id, extra=extra)
 
 
 def emit_agent_response_event(message: AgentResponse, *, object_id: str | None = None) -> None:
     extra = {"status": message.status, "payload_size": len(message.payload or {})}
-    _emit("agent.response.created", message, object_id=object_id, extra=extra)
+    _emit(AGENT_RESPONSE_CREATED, message, object_id=object_id, extra=extra)
 
 
 def emit_agent_error_event(message: AgentError, *, object_id: str | None = None) -> None:
@@ -55,7 +56,7 @@ def emit_agent_error_event(message: AgentError, *, object_id: str | None = None)
         "error_message": message.error_message,
         "payload_size": len(message.payload or {}),
     }
-    _emit("agent.error.created", message, object_id=object_id, extra=extra)
+    _emit(AGENT_ERROR_CREATED, message, object_id=object_id, extra=extra)
 
 
 def send_agent_request(

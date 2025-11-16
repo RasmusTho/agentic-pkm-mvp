@@ -3,6 +3,13 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from app.agents.base.audit import audit_log
+from app.events.types import (
+    MCP_TOOL_CALL_FINISHED,
+    MCP_TOOL_CALL_STARTED,
+    ORCHESTRATOR_STEP_ERROR,
+    ORCHESTRATOR_STEP_FINISHED,
+    ORCHESTRATOR_STEP_STARTED,
+)
 from app.planner.schema import PlanStep
 
 ORCHESTRATOR_AGENT = "orchestrator.runtime"
@@ -24,7 +31,7 @@ def _base_step_details(plan_id: str, step: PlanStep) -> Dict[str, Any]:
 
 def emit_step_started(*, plan_id: str, step: PlanStep, object_id: str | None, trace_id: str | None) -> None:
     details = _base_step_details(plan_id, step)
-    _emit("orchestrator.step.started", object_id=object_id, trace_id=trace_id, details=details)
+    _emit(ORCHESTRATOR_STEP_STARTED, object_id=object_id, trace_id=trace_id, details=details)
 
 
 def emit_step_finished(
@@ -32,7 +39,7 @@ def emit_step_finished(
 ) -> None:
     details = _base_step_details(plan_id, step)
     details["result"] = result
-    _emit("orchestrator.step.finished", object_id=object_id, trace_id=trace_id, details=details)
+    _emit(ORCHESTRATOR_STEP_FINISHED, object_id=object_id, trace_id=trace_id, details=details)
 
 
 def emit_step_error(
@@ -40,21 +47,21 @@ def emit_step_error(
 ) -> None:
     details = _base_step_details(plan_id, step)
     details["error"] = error
-    _emit("orchestrator.step.error", object_id=object_id, trace_id=trace_id, details=details)
+    _emit(ORCHESTRATOR_STEP_ERROR, object_id=object_id, trace_id=trace_id, details=details)
 
 
 def emit_mcp_tool_call_started(
     *, plan_id: str, step_id: str, tool_name: str, object_id: str | None, trace_id: str | None
 ) -> None:
     details = {"plan_id": plan_id, "step_id": step_id, "tool": tool_name}
-    _emit("mcp.tool.call.started", object_id=object_id, trace_id=trace_id, details=details)
+    _emit(MCP_TOOL_CALL_STARTED, object_id=object_id, trace_id=trace_id, details=details)
 
 
 def emit_mcp_tool_call_finished(
     *, plan_id: str, step_id: str, tool_name: str, result: Dict[str, Any], object_id: str | None, trace_id: str | None
 ) -> None:
     details = {"plan_id": plan_id, "step_id": step_id, "tool": tool_name, "result": result}
-    _emit("mcp.tool.call.finished", object_id=object_id, trace_id=trace_id, details=details)
+    _emit(MCP_TOOL_CALL_FINISHED, object_id=object_id, trace_id=trace_id, details=details)
 
 
 __all__ = [

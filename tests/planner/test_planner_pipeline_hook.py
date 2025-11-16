@@ -4,6 +4,7 @@ import pytest
 
 from app.agents.base.audit import _audit_ring_snapshot
 from app.agents.pipeline import maybe_plan_for_object
+from app.events.types import PLANNER_PLAN_CREATED
 
 pytestmark = pytest.mark.not_pg
 
@@ -16,7 +17,7 @@ def test_maybe_plan_emits_audit_event(monkeypatch: pytest.MonkeyPatch) -> None:
     assert plan is not None
     after = _audit_ring_snapshot()
     new_events = [evt for evt in after if evt not in before]
-    assert any(evt["action"] == "planner.plan.created" and evt["details"].get("plan_id") == plan.id for evt in new_events)
+    assert any(evt["event_type"] == PLANNER_PLAN_CREATED and evt["payload"].get("details", {}).get("plan_id") == plan.id for evt in new_events)
 
 
 def test_maybe_plan_disabled(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -6,6 +6,11 @@ from typing import Any, List, Tuple, Optional
 
 from app.store.object_store import ObjectStore
 from app.services.decisions import latest_decision
+from app.events.types import (
+    PROMOTION_PROJECT_DONE,
+    PROMOTION_PROJECT_MEMBERSHIP_UPSERT,
+    PROMOTION_PROJECT_SKIP,
+)
 from app.services.audit import audit_event
 
 try:
@@ -58,7 +63,7 @@ def _record_membership_db(object_id: str, set_name: str, trace_id: str) -> None:
                     """,
                     (
                         trace_id,
-                        "promotion.project.membership.upsert",
+                        PROMOTION_PROJECT_MEMBERSHIP_UPSERT,
                         json.dumps(
                             {
                                 "object_id": object_id,
@@ -99,7 +104,7 @@ def project_object(
         # best effort DB record
         _record_membership_db(object_id, set_name, trace_id)
 
-    event = "promotion.project.done" if promote else "promotion.project.skip"
+    event = PROMOTION_PROJECT_DONE if promote else PROMOTION_PROJECT_SKIP
 
     out = {
         "event": event,

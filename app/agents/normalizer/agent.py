@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.events.types import INGEST_NORMALIZE_DONE
 from app.store.object_store import ObjectStore
 from app.services.audit import audit_event
 
@@ -69,7 +70,7 @@ def normalize_file(path: str, *, trace_id: str) -> dict[str, Any]:
 
     # best-effort audit
     audit_event(
-        event="ingest.normalize.done",
+        event=INGEST_NORMALIZE_DONE,
         object_id=object_uuid,
         agent=AGENT,
         trace_id=trace_id,
@@ -113,7 +114,7 @@ def run(path: str, *, trace_id: str) -> dict[str, Any]:
     )
 
     out = {
-        "event": "ingest.normalize.done",
+        "event": INGEST_NORMALIZE_DONE,
         "object_id": dom["uuid"],
         "core6": dom["payload"]["core6"],
         "trace_id": trace_id,

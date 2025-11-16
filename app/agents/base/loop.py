@@ -4,8 +4,9 @@ from typing import Any, Dict, Tuple
 
 from app.a2a.events import emit_agent_error_event
 from app.a2a.schema import AgentRequest, AgentResponse, new_error
-from app.agent.events import Event, make_event, new_trace_id
+from app.events.models import Event, new_event, new_trace_id
 from app.observability.tracer import start_span
+
 
 class Agent:
     def plan(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
@@ -43,4 +44,4 @@ class Agent:
         return {"trace_id": trace_id, "plan": plan, "outcome": outcome, "reflection": reflection}
 
 def reflection_event(agent_name: str, output: Dict[str, Any]) -> Event:
-    return make_event(name=f"agent.{agent_name}.reflected", payload=output, trace_id=output["trace_id"])
+    return new_event(event_type=f"agent.{agent_name}.reflected", payload=output, trace_id=output["trace_id"])

@@ -1,4 +1,5 @@
 from .executor import MockPlanExecutor, PlanExecutor, StepContext, StepExecutionError
+from .handler import OrchestratorContext, handle_event
 from .runtime import Orchestrator, OrchestratorError, PlanValidationError
 
 __all__ = [
@@ -9,4 +10,6 @@ __all__ = [
     "Orchestrator",
     "OrchestratorError",
     "PlanValidationError",
+    "OrchestratorContext",
+    "handle_event",
 ]

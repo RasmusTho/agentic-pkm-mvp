@@ -9,6 +9,11 @@ from app.a2a.events import (
     send_agent_request,
 )
 from app.a2a.schema import new_error, new_request, new_response
+from app.events.types import (
+    AGENT_ERROR_CREATED,
+    AGENT_REQUEST_CREATED,
+    AGENT_RESPONSE_CREATED,
+)
 
 
 class AuditRecorder:
@@ -27,7 +32,7 @@ def test_emit_agent_request_event(monkeypatch) -> None:
     emit_agent_request_event(message, object_id="obj-1")
 
     record = recorder.records.pop()
-    assert record["action"] == "agent.request.created"
+    assert record["action"] == AGENT_REQUEST_CREATED
     assert record["details"]["sender"] == "Classifier"
     assert record["details"]["intent"] == "reason"
 
@@ -49,9 +54,9 @@ def test_emit_agent_response_and_error_events(monkeypatch) -> None:
     response_record = recorder.records.popleft()
     error_record = recorder.records.popleft()
 
-    assert response_record["action"] == "agent.response.created"
+    assert response_record["action"] == AGENT_RESPONSE_CREATED
     assert response_record["details"]["status"] == "ok"
-    assert error_record["action"] == "agent.error.created"
+    assert error_record["action"] == AGENT_ERROR_CREATED
     assert error_record["details"]["error_type"] == "failed"
 
 

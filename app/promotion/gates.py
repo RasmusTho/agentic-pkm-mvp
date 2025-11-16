@@ -5,6 +5,7 @@ from typing import Any, Mapping
 from uuid import UUID
 
 from app.agents.base.audit import audit_log
+from app.events.types import PROMOTION_ORPHAN_OVERRIDE, RELATION_MISSING
 from app.stores import get_relation_index
 from app.stores.relation_index import extract_semantic_relations, register_relation_candidates
 
@@ -49,7 +50,7 @@ def ensure_object_has_relations(
         audit_log(
             object_id=str(oid),
             agent="promotion-gate",
-            action="promotion.orphan.override",
+            action=PROMOTION_ORPHAN_OVERRIDE,
             trace_id=None,
             details={"reason": override_reason},
         )
@@ -80,7 +81,7 @@ def prepare_relations_for_promotion(
         audit_log(
             object_id=str(oid),
             agent="promotion-gate",
-            action="relation.missing",
+            action=RELATION_MISSING,
             trace_id=None,
             details={"reason": "extraction_failed"},
         )

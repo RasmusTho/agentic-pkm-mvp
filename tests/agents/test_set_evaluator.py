@@ -1,3 +1,5 @@
+from app.events.types import PROMOTION_EVALUATE_DONE
+
 import os
 from pathlib import Path
 
@@ -52,12 +54,12 @@ def test_set_evaluator_scores_and_gates(tmp_path: Path) -> None:
     flagged_eval = evaluate_run(flagged_oid, trace_id="t-eval-flagged", threshold=0.7)
     clean_eval = evaluate_run(clean_oid, trace_id="t-eval-clean", threshold=0.7)
 
-    assert flagged_eval["event"] == "promotion.evaluate.done"
+    assert flagged_eval["event"] == PROMOTION_EVALUATE_DONE
     assert "promote" in flagged_eval
     assert "score" in flagged_eval
     assert "allow" in flagged_eval
 
-    assert clean_eval["event"] == "promotion.evaluate.done"
+    assert clean_eval["event"] == PROMOTION_EVALUATE_DONE
     assert "promote" in clean_eval
     assert "score" in clean_eval
     assert "allow" in clean_eval

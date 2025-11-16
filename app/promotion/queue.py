@@ -11,6 +11,15 @@ from typing import Any, Dict
 import yaml
 
 from .policy import pick_target as _pick_target
+from app.events.types import (
+    PROMOTE_DONE,
+    PROMOTE_ERROR,
+    PROMOTE_ORPHAN_OVERRIDE,
+    PROMOTE_SKIP_DECODE,
+    PROMOTE_SKIP_MISSING,
+    PROMOTE_SKIP_ORPHAN,
+    PROMOTE_SKIP_RELATIONS,
+)
 from app.observability.tracing import current_trace_id, span
 from app.promotion.gates import OrphanPromotionError, ensure_object_has_relations, prepare_relations_for_promotion
 from app.settings.models import PromotionSettings, SettingsBundle
@@ -123,7 +132,7 @@ def run_once() -> int:
                 p = Path(ev["path"])
                 if not p.exists():
                     _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                        "level": "warn", "event": "promote.skip.missing", "path": str(p),
+                                        "level": "warn", "event": PROMOTE_SKIP_MISSING, "path": str(p),
                                         "uuid": ev.get("uuid"), "trace_id": current_trace_id()})
                     continue
 
@@ -147,7 +156,7 @@ def run_once() -> int:
                             {
                                 "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                                 "level": "warn",
-                                "event": "promote.skip.relations",
+                                "event": PROMOTE_SKIP_RELATIONS,
                                 "uuid": uuid,
                                 "path": str(p),
                                 "reason": str(rel_err),
@@ -172,7 +181,7 @@ def run_once() -> int:
                                 {
                                     "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                                     "level": "info",
-                                    "event": "promote.orphan.override",
+                                    "event": PROMOTE_ORPHAN_OVERRIDE,
                                     "uuid": uuid,
                                     "path": str(p),
                                     "reason": override_reason,
@@ -185,7 +194,7 @@ def run_once() -> int:
                                 {
                                     "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                                     "level": "warn",
-                                    "event": "promote.skip.orphan",
+                                    "event": PROMOTE_SKIP_ORPHAN,
                                     "uuid": uuid,
                                     "path": str(p),
                                     "reason": str(oom),
@@ -209,14 +218,14 @@ def run_once() -> int:
 
                 with span("worker.log_done"):
                     _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                        "level": "info", "event": "promote.done",
+                                        "level": "info", "event": PROMOTE_DONE,
                                         "uuid": ev.get("uuid"), "from": str(p), "to": str(new_p),
                                         "trace_id": current_trace_id()})
                 processed += 1
 
         except json.JSONDecodeError as e:
             _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                "level": "error", "event": "promote.skip.decode",
+                                "level": "error", "event": PROMOTE_SKIP_DECODE,
                                 "raw": ln, "err": repr(e), "trace_id": current_trace_id()})
             continue
         except Exception as e:
@@ -225,7 +234,7 @@ def run_once() -> int:
             if payload["retries"] <= max_retries:
                 _append_jsonl(QUEUE, payload)
             _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                "level": "error", "event": "promote.error",
+                                "level": "error", "event": PROMOTE_ERROR,
                                 "path": payload.get("path"), "uuid": payload.get("uuid"),
                                 "err": repr(e), "retries": payload["retries"],
                                 "trace_id": current_trace_id()})

@@ -1,3 +1,8 @@
+from app.events.types import (
+    PROMOTION_PROJECT_DONE,
+    PROMOTION_PROJECT_SKIP,
+)
+
 import os
 import uuid
 from datetime import datetime, timezone
@@ -30,7 +35,7 @@ def test_projector_returns_structure() -> None:
     skipped = project_run(oid_b, trace_id="t-projector-2", set_name="published")
 
     for result in (promoted, skipped):
-        assert result["event"] in {"promotion.project.done", "promotion.project.skip"}
+        assert result["event"] in {PROMOTION_PROJECT_DONE, PROMOTION_PROJECT_SKIP}
         assert result.get("object_id")
         assert "set_name" in result
         assert "promote" in result

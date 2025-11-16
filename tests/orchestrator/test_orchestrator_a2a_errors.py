@@ -3,6 +3,10 @@ from __future__ import annotations
 import pytest
 
 from app.agents.base.audit import _audit_ring_snapshot
+from app.events.types import (
+    AGENT_ERROR_CREATED,
+    AGENT_REQUEST_CREATED,
+)
 from app.orchestrator.runtime import Orchestrator
 from app.planner.schema import Plan, PlanMetadata, PlanStep
 
@@ -28,5 +32,5 @@ def test_agent_calls_emit_a2a_request_and_error() -> None:
     orchestrator.run_plan(plan)
     after = _audit_ring_snapshot()
     new_events = [evt for evt in after if evt not in before]
-    assert any(evt["action"] == "agent.request.created" for evt in new_events)
-    assert any(evt["action"] == "agent.error.created" and evt["details"].get("error_type") == "not_implemented" for evt in new_events)
+    assert any(evt["event_type"] == AGENT_REQUEST_CREATED for evt in new_events)
+    assert any(evt["event_type"] == AGENT_ERROR_CREATED and evt["payload"].get("details", {}).get("error_type") == "not_implemented" for evt in new_events)

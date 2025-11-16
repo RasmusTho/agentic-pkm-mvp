@@ -1,0 +1,15 @@
+flows:
+  ingest:
+    enabled: true
+    triggers:
+      - ingest.object.created
+
+  qa:
+    enabled: true
+    triggers:
+      - ask.query.received
+
+  promotion:
+    enabled: true
+    triggers:
+      - promote.intent.created

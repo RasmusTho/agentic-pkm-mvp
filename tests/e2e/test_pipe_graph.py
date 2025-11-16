@@ -11,6 +11,16 @@ from app.agents.indexer.graph import invoke as index_invoke
 from app.agents.reviewer.graph import invoke as review_invoke
 from app.agents.set_evaluator.graph import invoke as evaluate_invoke
 from app.agents.projector.graph import invoke as project_invoke
+from app.events.types import (
+    CURATION_CLASSIFY_DONE,
+    CURATION_DEDUPE_DONE,
+    CURATION_REVIEW_DONE,
+    INGEST_CHUNK_DONE,
+    INGEST_INDEX_DONE,
+    PROMOTION_EVALUATE_DONE,
+    PROMOTION_PROJECT_DONE,
+    PROMOTION_PROJECT_SKIP,
+)
 
 # offline cache of "published membership"
 PROJECTED_CACHE: set[tuple[str, str]] = set()
@@ -54,7 +64,7 @@ def test_e2e_pipe(tmp_path: Path):
     # --- classifier ----------------------------------------------------------
     for oid in oids:
         cr = classify_invoke(oid, trace_id=trace_id)
-        assert cr["output"]["event"] == "curation.classify.done"
+        assert cr["output"]["event"] == CURATION_CLASSIFY_DONE
 
     # --- chunker -------------------------------------------------------------
     total_chunks = 0
@@ -66,13 +76,13 @@ def test_e2e_pipe(tmp_path: Path):
             overlap=120,
             strategy="heading_first",
         )
-        assert ch["output"]["event"] == "ingest.chunk.done"
+        assert ch["output"]["event"] == INGEST_CHUNK_DONE
         assert ch["output"]["chunks"] >= 1
         total_chunks += ch["output"]["chunks"]
 
     # --- deduper -------------------------------------------------------------
     dres = dedupe_invoke(oids[:2], trace_id=trace_id, threshold=0.85)
-    assert dres["output"]["event"] == "curation.dedupe.done"
+    assert dres["output"]["event"] == CURATION_DEDUPE_DONE
     assert isinstance(dres["output"]["pairs"], list)
 
     # --- downstream: index / review / evaluate / project --------------------
@@ -83,24 +93,24 @@ def test_e2e_pipe(tmp_path: Path):
     for oid in oids:
         # index (embeddings etc.)
         ix = index_invoke(oid, trace_id=trace_id)
-        assert ix["output"]["event"] == "ingest.index.done"
+        assert ix["output"]["event"] == INGEST_INDEX_DONE
         assert ix["output"]["embeddings"] >= 1
 
         # reviewer (quality gate)
         rv = review_invoke(oid, trace_id=trace_id, threshold=0.75)
-        assert rv["output"]["event"] == "curation.review.done"
+        assert rv["output"]["event"] == CURATION_REVIEW_DONE
         reviews.append(rv["output"])
 
         # set_evaluator (decides if it's promotable)
         ev = evaluate_invoke(oid, trace_id=trace_id, threshold=0.7)
-        assert ev["output"]["event"] == "promotion.evaluate.done"
+        assert ev["output"]["event"] == PROMOTION_EVALUATE_DONE
         evaluations.append(ev["output"])
 
         # projector (adds to published set if promotable)
         pj = project_invoke(oid, trace_id=trace_id, set_name="published")
         assert pj["output"]["event"] in {
-            "promotion.project.done",
-            "promotion.project.skip",
+            PROMOTION_PROJECT_DONE,
+            PROMOTION_PROJECT_SKIP,
         }
         projections.append(pj["output"])
 
@@ -113,17 +123,17 @@ def test_e2e_pipe(tmp_path: Path):
     assert total_chunks >= 3
 
     for review in reviews:
-        assert review["event"] == "curation.review.done"
+        assert review["event"] == CURATION_REVIEW_DONE
         assert isinstance(review.get("allow"), bool)
         assert "reasons" in review
         assert "agent" in review
 
     for evaluation in evaluations:
-        assert evaluation["event"] == "promotion.evaluate.done"
+        assert evaluation["event"] == PROMOTION_EVALUATE_DONE
         assert isinstance(evaluation.get("promote"), bool)
         assert isinstance(evaluation.get("score"), float)
         assert "allow" in evaluation
 
     for proj in projections:
-        assert proj["event"] in {"promotion.project.done", "promotion.project.skip"}
+        assert proj["event"] in {PROMOTION_PROJECT_DONE, PROMOTION_PROJECT_SKIP}
         assert "promote" in proj

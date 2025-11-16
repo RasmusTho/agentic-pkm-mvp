@@ -3,6 +3,10 @@ from __future__ import annotations
 import pytest
 
 from app.agents.base.audit import _audit_ring_snapshot
+from app.events.types import (
+    ORCHESTRATOR_STEP_FINISHED,
+    ORCHESTRATOR_STEP_STARTED,
+)
 from app.orchestrator.runtime import Orchestrator
 from app.planner.provider import MockPlanner, PlannerInput
 from app.planner.schema import Plan
@@ -30,5 +34,5 @@ def test_orchestrator_runs_mock_plan() -> None:
     assert len(results) == len(plan.steps)
     assert all(entry["status"] == "ok" for entry in results)
     new_events = [evt for evt in after if evt not in before]
-    assert any(evt["action"] == "orchestrator.step.started" for evt in new_events)
-    assert any(evt["action"] == "orchestrator.step.finished" for evt in new_events)
+    assert any(evt["event_type"] == ORCHESTRATOR_STEP_STARTED for evt in new_events)
+    assert any(evt["event_type"] == ORCHESTRATOR_STEP_FINISHED for evt in new_events)

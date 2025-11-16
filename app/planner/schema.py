@@ -38,10 +38,20 @@ class PlanMetadata(BaseModel):
     trace_id: Optional[str] = None
 
 
+class PlanTrigger(BaseModel):
+    event_type: str
+    event_id: str
+    trace_id: Optional[str] = None
+
+
 class Plan(BaseModel):
     id: str
     meta: PlanMetadata
     steps: List[PlanStep] = Field(default_factory=list)
+    trigger: Optional[PlanTrigger] = None
+    goal: Optional[str] = None
+    context: Dict[str, Any] = Field(default_factory=dict)
+    tags: List[str] = Field(default_factory=list)
 
 
 def new_plan_id() -> str:
@@ -67,12 +77,14 @@ def make_simple_plan(*, goal: str, source_object_uuid: str, created_by: str = "p
                 depends_on=["step-1"],
             ),
         ],
+        goal=goal,
     )
 
 
 __all__ = [
     "Plan",
     "PlanMetadata",
+    "PlanTrigger",
     "PlanStep",
     "ToolDescriptor",
     "new_plan_id",

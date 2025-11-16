@@ -9,6 +9,7 @@ from psycopg.rows import dict_row
 from psycopg import errors as pg_errors
 
 from app.memory.store import remember
+from app.events.types import CURATION_CITATION_CHECK_DONE
 from app.store.object_store import ObjectStore
 
 AGENT = "citation_checker"
@@ -105,7 +106,7 @@ def check_citations(object_id: str, *, trace_id: str) -> dict[str, Any]:
         reason = "ok_or_internal"
 
     out = {
-        "event": "curation.citation_check.done",
+        "event": CURATION_CITATION_CHECK_DONE,
         "object_id": object_id,
         "status": status,
         "reason": reason,
