@@ -4,3 +4,4 @@ httpx
 jsonschema
 pytest
 click>=8,<9
+watchfiles>=1.0,<2
