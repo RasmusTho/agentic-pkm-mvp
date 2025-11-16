@@ -3,3 +3,4 @@ SQLAlchemy>=2,<3
 httpx
 jsonschema
 pytest
+click>=8,<9
