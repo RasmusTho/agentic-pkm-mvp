@@ -5,6 +5,14 @@ System-of-Truth v4.10 (Active Baseline)
 Agentic PKM är ett agentdrivet, eventstyrt och CI-säkrat system för personlig kunskapshantering.
 Det använder ett mänskligt gränssnitt (Markdown-vault) och ett maskinellt ”System-of-Truth” bestående av Stores, Outbox-händelser och en flerstegs agent-pipeline.
 
+<!-- DOCS-LINKS:BEGIN -->
+- [Architecture](docs/ARCHITECTURE.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Status](docs/STATUS.md)
+- [Diagrams](docs/DIAGRAMS.md)
+<!-- DOCS-LINKS:END -->
+
+
 I v4.10 är kärnan komplett:
 	•	Store-abstraktion (ObjectStore, VectorIndex, RelationIndex, ReasoningStore)
 	•	Outbox + Eventdriven pipeline

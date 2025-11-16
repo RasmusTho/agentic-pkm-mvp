@@ -28,12 +28,24 @@ jobs:
           if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
       - name: Validate docs guardrails
         run: |
-          rg -q '```mermaid' docs/DIAGRAMS.md
-          rg -q '<!-- DOCS-LINKS:BEGIN -->' README.md
-          rg -q '<!-- DOCS-LINKS:END -->' README.md
-          ! rg -n '\n' docs/DIAGRAMS.md
-          ! rg -n '^\s+```mermaid' docs/DIAGRAMS.md
-          ! rg -n '->\|[^|]*\$begin:math:text$[^|]*\$end:math:text$\|' docs/DIAGRAMS.md || true
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          diagrams = Path('docs/DIAGRAMS.md').read_text(encoding='utf-8')
+          readme = Path('README.md').read_text(encoding='utf-8')
+
+          if '```mermaid' not in diagrams:
+              raise SystemExit('docs/DIAGRAMS.md must contain at least one ```mermaid block')
+          if '<!-- DOCS-LINKS:BEGIN -->' not in readme or '<!-- DOCS-LINKS:END -->' not in readme:
+              raise SystemExit('README.md missing DOCS-LINKS markers')
+          if re.search(r"\\n", diagrams):
+              raise SystemExit('docs/DIAGRAMS.md must not contain literal \n sequences')
+          if re.search(r"^\s+```mermaid", diagrams, re.MULTILINE):
+              raise SystemExit('Mermaid fences must not be indented')
+          if re.search(r"->\|[^|]*\$begin:math:text\$[^|]*\$end:math:text\$\|", diagrams, re.MULTILINE):
+              raise SystemExit('Forbidden math fence syntax inside table detected')
+          PY
 
       - name: Run smoke tests (mock LLM, no PG)
         env:
