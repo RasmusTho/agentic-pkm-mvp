@@ -1,12 +1,40 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import os
+from typing import Any, Dict, List, Mapping
 
 from app.events.models import Event
 from app.planner.provider import PlannerInput, get_planner
 from app.planner.schema import Plan, PlanTrigger
-from app.settings.flows import get_flows_for_event
+from app.settings.flow_profiles import (
+    FlowProfile,
+    get_flows_for_event as get_flow_profiles_for_event,
+    load_flow_profiles,
+)
+from app.settings.flows import get_flows_for_event as get_legacy_flows_for_event
 from app.stores.plan_store import get_plan_store
+
+TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in TRUE_VALUES
+    return False
+
+
+def planner_profiles_enabled(ctx: Mapping[str, Any] | None = None) -> bool:
+    ctx_value = ctx.get("planner_profiles_enable") if ctx else None
+    if ctx_value is not None:
+        return _coerce_bool(ctx_value)
+    env_value = os.getenv("PLANNER_PROFILES_ENABLE")
+    if env_value is not None:
+        return env_value.strip().lower() in TRUE_VALUES
+    return False
 
 
 def _object_uuid_from_event(event: Event) -> str:
@@ -72,12 +100,50 @@ def _build_metadata(event: Event, flows: List[str], trace_id: str | None) -> Dic
     return metadata
 
 
+def _flow_profile_payload(profile: FlowProfile) -> Dict[str, Any]:
+    return {
+        "flow_id": profile.flow_id,
+        "name": profile.name,
+        "intent": profile.intent,
+        "suggested_patterns": [pattern.model_dump() for pattern in profile.suggested_patterns],
+        "planner_mode": profile.planner_mode.model_dump(),
+        "prompt_profiles": [prompt.model_dump() for prompt in profile.prompt_profiles],
+    }
+
+
 def plan_for_event(event: Event, ctx: Dict[str, Any] | None = None) -> Plan:
-    flows = get_flows_for_event(event.event_type)
+    ctx = ctx or {}
+    use_profiles = planner_profiles_enabled(ctx)
+    flow_profiles_payload: List[Dict[str, Any]] = []
+    flows: List[str] = []
+    planning_mode: str | None = None
+
+    if use_profiles:
+        profile_map = load_flow_profiles()
+        matched_profiles = get_flow_profiles_for_event(event.event_type, profile_map)
+        if matched_profiles:
+            flows = [profile.flow_id for profile in matched_profiles]
+            flow_profiles_payload = [_flow_profile_payload(profile) for profile in matched_profiles]
+            planning_mode = "profiles"
+        else:
+            flows = get_legacy_flows_for_event(event.event_type)
+    else:
+        flows = get_legacy_flows_for_event(event.event_type)
+
     tags = _build_tags(flows)
-    trace_id = event.trace_id or event.payload.get("trace_id")
+    payload = event.payload or {}
+    trace_id = event.trace_id or payload.get("trace_id")
     trigger = PlanTrigger(event_type=event.event_type, event_id=event.event_id, trace_id=trace_id)
     goal = _goal_for_event(event.event_type, flows)
+    context = _build_context(event, flows, ctx or None)
+    if flows:
+        context["flow_ids"] = flows
+        context["flow_tags"] = [tag for tag in tags if tag.startswith("flow:")]
+    if flow_profiles_payload:
+        context["flow_profiles"] = flow_profiles_payload
+    if planning_mode:
+        context["planning_mode"] = planning_mode
+
     planner_input = PlannerInput(
         object_uuid=_object_uuid_from_event(event),
         goal=goal,
@@ -85,7 +151,7 @@ def plan_for_event(event: Event, ctx: Dict[str, Any] | None = None) -> Plan:
         relations=[],
         metadata=_build_metadata(event, flows, trace_id),
         trigger=trigger,
-        context=_build_context(event, flows, ctx),
+        context=context,
         tags=tags,
     )
     plan = get_planner().plan(planner_input)
@@ -96,7 +162,7 @@ def plan_for_event(event: Event, ctx: Dict[str, Any] | None = None) -> Plan:
     if not plan.tags:
         plan.tags = tags
     if not plan.context:
-        plan.context = _build_context(event, flows, ctx)
+        plan.context = context
     plan.meta.goal = plan.meta.goal or goal
     if trace_id and not plan.meta.trace_id:
         plan.meta.trace_id = trace_id
@@ -104,4 +170,4 @@ def plan_for_event(event: Event, ctx: Dict[str, Any] | None = None) -> Plan:
     return plan
 
 
-__all__ = ["plan_for_event"]
+__all__ = ["plan_for_event", "planner_profiles_enabled"]
