@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import pytest
 from typing import Dict
+
+import pytest
 
 from app.events.models import new_event
 from app.events.types import ASK_QUERY_RECEIVED, INGEST_OBJECT_CREATED

@@ -68,16 +68,16 @@ def select_flow_pattern_prompt(flow_profiles: Sequence[Mapping[str, Any]] | None
 
 def _step_from_target(step_data: Any, index: int, inp: "PlannerInput") -> PlanStep:
     if isinstance(step_data, BaseModel):
-        raw = step_data.model_dump()
+        raw_entry = step_data.model_dump()
     elif isinstance(step_data, dict):
-        raw = dict(step_data)
+        raw_entry = dict(step_data)
     else:
-        raw = {"target": step_data}
-    target_value = str(raw.get("target", "")).strip()
-    description = raw.get("description")
-    intent = raw.get("intent")
-    metadata = dict(raw.get("metadata") or {})
-    args = dict(raw.get("args") or {})
+        raw_entry = {"target": step_data}
+    target_value = str(raw_entry.get("target", "")).strip()
+    description = raw_entry.get("description")
+    intent = raw_entry.get("intent")
+    metadata = dict(raw_entry.get("metadata") or {})
+    args = dict(raw_entry.get("args") or {})
     prefix = ""
     remainder = target_value
     if ":" in target_value:
