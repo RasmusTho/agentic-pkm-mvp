@@ -52,6 +52,68 @@ def _enrich_plan(plan: Plan, inp: "PlannerInput") -> Plan:
     return plan
 
 
+def _select_profile_from_context(ctx: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any] | None, Dict[str, Any] | None] | None:
+    flow_profiles = ctx.get("flow_profiles")
+    if not isinstance(flow_profiles, list) or not flow_profiles:
+        return None
+    selected_flow = flow_profiles[0]
+    patterns = selected_flow.get("suggested_patterns") or []
+    prompts = selected_flow.get("prompt_profiles") or []
+    selected_pattern = patterns[0] if patterns else None
+    selected_prompt = prompts[0] if prompts else None
+    return selected_flow, selected_pattern, selected_prompt
+
+
+def _step_from_target(target: str, index: int) -> PlanStep:
+    raw = (target or "").strip()
+    prefix = ""
+    remainder = raw
+    if ":" in raw:
+        prefix, remainder = raw.split(":", 1)
+        prefix = prefix.strip().lower()
+        remainder = remainder.strip()
+    description_target = remainder or raw or f"step-{index}"
+    step_id = f"step-{index}"
+    if prefix == "agent":
+        return PlanStep(
+            id=step_id,
+            kind="agent_call",
+            description=f"Execute agent '{description_target}'",
+            agent=description_target or None,
+        )
+    if prefix in {"tool", "mcp"}:
+        tool_name = description_target
+        if prefix == "mcp" and description_target and not description_target.startswith("mcp"):
+            tool_name = f"mcp.{description_target}"
+        return PlanStep(
+            id=step_id,
+            kind="tool_call",
+            description=f"Invoke tool '{tool_name}'",
+            tool=tool_name,
+        )
+    if prefix == "decision":
+        return PlanStep(
+            id=step_id,
+            kind="decision",
+            description=f"Decision: {description_target}",
+        )
+    return PlanStep(
+        id=step_id,
+        kind="note",
+        description=f"Note: {description_target}",
+        metadata={"target": raw},
+    )
+
+
+def _steps_from_pattern(pattern: Dict[str, Any] | None) -> List[PlanStep]:
+    if not pattern:
+        return []
+    raw_steps = pattern.get("steps") if isinstance(pattern, dict) else None
+    if not isinstance(raw_steps, list) or not raw_steps:
+        return []
+    return [_step_from_target(step, idx + 1) for idx, step in enumerate(raw_steps)]
+
+
 class PlannerRelation(BaseModel):
     source: str
     target: str
@@ -83,30 +145,53 @@ class MockPlanner(BasePlanner):
             created_by="planner.mock",
             trace_id=inp.metadata.get("trace_id"),
         )
-        steps = [
-            PlanStep(
-                id="step-1",
-                kind="agent_call",
-                description="Summarize the object and identify follow-ups",
-                agent="ingest-agent",
-                intent="summarize",
-            ),
-            PlanStep(
-                id="step-2",
-                kind="tool_call",
-                description="Append insights to the vault note",
-                tool="mcp.vault.append_note",
-                tool_args={"note_id": inp.object_uuid, "content": "Summaries from ingest-agent"},
-                depends_on=["step-1"],
-            ),
-            PlanStep(
-                id="step-3",
-                kind="decision",
-                description="Decide whether to route to relations agent",
-                depends_on=["step-1"],
-            ),
-        ]
-        plan = Plan(id=plan_id, meta=meta, steps=steps, trigger=inp.trigger, context=dict(inp.context), goal=inp.goal, tags=list(inp.tags))
+        selection = _select_profile_from_context(inp.context)
+        pattern_steps: List[PlanStep] = []
+        plan_context = dict(inp.context)
+        if selection:
+            selected_flow, selected_pattern, selected_prompt = selection
+            pattern_steps = _steps_from_pattern(selected_pattern)
+            plan_context.setdefault(
+                "profile_selection",
+                {
+                    "flow_id": selected_flow.get("flow_id"),
+                    "pattern": selected_pattern,
+                    "prompt_profile": selected_prompt,
+                },
+            )
+        if not pattern_steps:
+            pattern_steps = [
+                PlanStep(
+                    id="step-1",
+                    kind="agent_call",
+                    description="Summarize the object and identify follow-ups",
+                    agent="ingest-agent",
+                    intent="summarize",
+                ),
+                PlanStep(
+                    id="step-2",
+                    kind="tool_call",
+                    description="Append insights to the vault note",
+                    tool="mcp.vault.append_note",
+                    tool_args={"note_id": inp.object_uuid, "content": "Summaries from ingest-agent"},
+                    depends_on=["step-1"],
+                ),
+                PlanStep(
+                    id="step-3",
+                    kind="decision",
+                    description="Decide whether to route to relations agent",
+                    depends_on=["step-1"],
+                ),
+            ]
+        plan = Plan(
+            id=plan_id,
+            meta=meta,
+            steps=pattern_steps,
+            trigger=inp.trigger,
+            context=plan_context,
+            goal=inp.goal,
+            tags=list(inp.tags),
+        )
         return _enrich_plan(plan, inp)
 
 

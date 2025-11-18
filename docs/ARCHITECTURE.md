@@ -201,3 +201,50 @@ Orchestrator.run_plan()
 
 ### Planner ↔ Reasoning Layer
 Planner prompts reuse Reasoning Layer payloads so the Planner Agent stays grounded in deterministic state. The Planner inspects `ReasoningInput` bundles plus Core-6 frontmatter and relation graphs before proposing any step, which makes downstream audits straightforward and keeps plan generation tightly coupled to earlier reasoning outputs.
+
+### Vault-first Flow & Agent Settings
+
+Flow profiles now live in the vault under `vault/_system/flows/*.md`. Each Markdown file exposes YAML frontmatter parsed by `app.settings.flow_profiles` into a `FlowProfile` that focuses on intent, suggested agent/tool patterns, planner mode hints, and available prompt templates:
+
+```yaml
+---
+flow_id: ingest
+name: Ingest pipeline
+event_triggers:
+  - ingest.object.created
+intent: Turn new raw text into structured, searchable knowledge.
+suggested_patterns:
+  - name: standard_ingest
+    steps:
+      - agent:normalizer
+      - agent:classifier
+planner_mode:
+  strictness: advisory
+  max_steps: 8
+prompt_profiles:
+  - id: ingest-default
+    prompt_template_ref: prompts/planner/ingest-default.md
+---
+```
+
+FlowProfiles express a human-defined strategy rather than a rigid plan: intent documents the goal, `suggested_patterns` lists example sequences the planner may follow, `planner_mode` sets advisory limits/strictness, and `prompt_profiles` enumerates the planner prompts available for that flow. Planner/Orchestrator remain unchanged in this PR; these profiles are read-only guidance until wired in.
+
+Agent definitions follow the same docs-as-code contract in `vault/_system/agents/*.md`, loaded via
+`app.settings.agents` into `AgentConfig` instances:
+
+```yaml
+---
+agent_id: planner
+agent_type: planner
+flows:
+  - ingest
+  - promotion
+tools:
+  - summarize
+  - planner.scratchpad
+prompt_template_ref: planner.prompts.default
+---
+```
+
+For this slice the Planner and Orchestrator keep their previous behaviour; the new loaders simply make
+the vault-backed configuration available for upcoming integrations.
