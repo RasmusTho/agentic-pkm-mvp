@@ -11,13 +11,19 @@ MCP_TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
         schema={
             "type": "object",
             "properties": {
-                "note_id": {"type": "string", "description": "Vault note identifier"},
-                "content": {"type": "string", "description": "Markdown content to append"},
+                "title": {"type": "string", "description": "Note title"},
+                "body": {"type": "string", "description": "Markdown body"},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional tags",
+                },
+                "metadata": {"type": "object", "description": "Optional metadata"},
             },
-            "required": ["note_id", "content"],
+            "required": ["title", "body"],
         },
-        allowed_args={"note_id": "string", "content": "string"},
-        mock_result={"status": "ok", "appended_characters": 0},
+        allowed_args={"title": "string", "body": "string", "tags": "array", "metadata": "object"},
+        mock_result={"status": "ok", "note_path": "vault/_mcp/mock-note.md"},
     ),
     "mcp.search.objects": ToolDescriptor(
         name="mcp.search.objects",

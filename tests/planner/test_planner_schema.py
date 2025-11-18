@@ -28,7 +28,7 @@ def test_plan_schema_accepts_tool_steps() -> None:
                 kind="tool_call",
                 description="Append note",
                 tool=descriptor.name,
-                tool_args={"note_id": "obj-1", "content": "summary"},
+                tool_args={"title": "Summary", "body": "summary"},
                 depends_on=["step-1"],
             ),
         ],

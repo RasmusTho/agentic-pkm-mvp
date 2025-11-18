@@ -20,7 +20,11 @@ suggested_patterns:
       - target: mcp:vault.append_note
         description: "Persist summary back to the vault note."
         args:
-          content: "{{ summary }}"
+          title: "Ingest summary"
+          body: "{{ summary }}"
+          tags:
+            - ingest
+            - summary
   - name: light_ingest
     description: "Only normalize and classify for quick triage."
     steps:

@@ -64,7 +64,10 @@ def test_plan_for_event_uses_flow_profiles_when_enabled(monkeypatch: pytest.Monk
                 description="Standard",
                 steps=[
                     PatternStep(target="agent:normalizer"),
-                    PatternStep(target="mcp:vault.append_note", args={"content": "{{ summary }}"}),
+                    PatternStep(
+                        target="mcp:vault.append_note",
+                        args={"title": "Flow summary", "body": "{{ summary }}"},
+                    ),
                 ],
             )
         ],
@@ -84,8 +87,8 @@ def test_plan_for_event_uses_flow_profiles_when_enabled(monkeypatch: pytest.Monk
     assert plan.steps[0].agent == "normalizer"
     assert plan.steps[1].kind == "tool_call"
     assert plan.steps[1].tool == "mcp.vault.append_note"
-    assert plan.steps[1].tool_args["note_id"] == "obj-501"
-    assert "content" in plan.steps[1].tool_args
+    assert "title" in plan.steps[1].tool_args
+    assert "body" in plan.steps[1].tool_args
     selection = plan.context.get("profile_selection")
     assert selection and selection["flow_id"] == "ingest"
     assert selection["pattern"]["name"] == "standard"

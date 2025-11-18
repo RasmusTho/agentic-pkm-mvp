@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Protocol
+from typing import Any, Dict, List, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -52,16 +52,18 @@ def _enrich_plan(plan: Plan, inp: "PlannerInput") -> Plan:
     return plan
 
 
-def _select_profile_from_context(ctx: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any] | None, Dict[str, Any] | None] | None:
-    flow_profiles = ctx.get("flow_profiles")
-    if not isinstance(flow_profiles, list) or not flow_profiles:
+def select_flow_pattern_prompt(flow_profiles: Sequence[Mapping[str, Any]] | None) -> Dict[str, Any] | None:
+    if not flow_profiles:
         return None
-    selected_flow = flow_profiles[0]
-    patterns = selected_flow.get("suggested_patterns") or []
-    prompts = selected_flow.get("prompt_profiles") or []
-    selected_pattern = patterns[0] if patterns else None
-    selected_prompt = prompts[0] if prompts else None
-    return selected_flow, selected_pattern, selected_prompt
+    first = flow_profiles[0]
+    patterns = first.get("suggested_patterns") or []
+    prompts = first.get("prompt_profiles") or []
+    return {
+        "flow_id": first.get("flow_id"),
+        "flow": first,
+        "pattern": patterns[0] if patterns else None,
+        "prompt_profile": prompts[0] if prompts else None,
+    }
 
 
 def _step_from_target(step_data: Any, index: int, inp: "PlannerInput") -> PlanStep:
@@ -98,8 +100,9 @@ def _step_from_target(step_data: Any, index: int, inp: "PlannerInput") -> PlanSt
             tool_name = f"mcp.{remainder}"
         tool_args = dict(args)
         if tool_name == "mcp.vault.append_note":
-            tool_args.setdefault("note_id", inp.object_uuid)
-            tool_args.setdefault("content", f"Planner output for {inp.object_uuid}")
+            tool_args.setdefault("title", f"Planner note for {inp.object_uuid}")
+            tool_args.setdefault("body", f"Planner output for {inp.object_uuid}")
+            tool_args.setdefault("tags", ["planner-auto"])
         return PlanStep(
             id=step_id,
             kind="tool_call",
@@ -162,18 +165,17 @@ class MockPlanner(BasePlanner):
             created_by="planner.mock",
             trace_id=inp.metadata.get("trace_id"),
         )
-        selection = _select_profile_from_context(inp.context)
+        selection = select_flow_pattern_prompt(inp.context.get("flow_profiles"))
         pattern_steps: List[PlanStep] = []
         plan_context = dict(inp.context)
         if selection:
-            selected_flow, selected_pattern, selected_prompt = selection
-            pattern_steps = _steps_from_pattern(selected_pattern, inp)
+            pattern_steps = _steps_from_pattern(selection.get("pattern"), inp)
             plan_context.setdefault(
                 "profile_selection",
                 {
-                    "flow_id": selected_flow.get("flow_id"),
-                    "pattern": selected_pattern,
-                    "prompt_profile": selected_prompt,
+                    "flow_id": selection.get("flow_id"),
+                    "pattern": selection.get("pattern"),
+                    "prompt_profile": selection.get("prompt_profile"),
                 },
             )
         if not pattern_steps:
@@ -190,7 +192,11 @@ class MockPlanner(BasePlanner):
                     kind="tool_call",
                     description="Append insights to the vault note",
                     tool="mcp.vault.append_note",
-                    tool_args={"note_id": inp.object_uuid, "content": "Summaries from ingest-agent"},
+                    tool_args={
+                        "title": f"Summary for {inp.object_uuid}",
+                        "body": "Summaries from ingest-agent",
+                        "tags": ["ingest-summary"],
+                    },
                     depends_on=["step-1"],
                 ),
                 PlanStep(
@@ -217,11 +223,26 @@ class LLMPlanner(BasePlanner):
         self._fallback = MockPlanner()
 
     def plan(self, inp: PlannerInput) -> Plan:
+        flow_profiles_ctx = inp.context.get("flow_profiles")
+        if not isinstance(flow_profiles_ctx, list):
+            flow_profiles_ctx = None
+        selection = select_flow_pattern_prompt(flow_profiles_ctx)
+        planning_guidance = None
+        if selection:
+            flow_data = selection.get("flow") or {}
+            planning_guidance = {
+                "flow_id": selection.get("flow_id"),
+                "intent": flow_data.get("intent"),
+                "planner_mode": flow_data.get("planner_mode"),
+                "selected_pattern": selection.get("pattern"),
+                "selected_prompt_profile": selection.get("prompt_profile"),
+            }
         prompt = build_planner_user_prompt(
             goal=inp.goal,
             object_text=inp.text,
             relations=[rel.model_dump() for rel in inp.relations],
             metadata=inp.metadata,
+            planning_guidance=planning_guidance,
         )
         raw = call_llm(
             "planner",
@@ -243,6 +264,16 @@ class LLMPlanner(BasePlanner):
         plan.meta.created_by = "planner.llm"
         if not plan.id:
             plan.id = new_plan_id()
+        if selection:
+            plan.context = plan.context or {}
+            plan.context.setdefault(
+                "profile_selection",
+                {
+                    "flow_id": selection.get("flow_id"),
+                    "pattern": selection.get("pattern"),
+                    "prompt_profile": selection.get("prompt_profile"),
+                },
+            )
         return _enrich_plan(plan, inp)
 
     def _fallback_plan(self, inp: PlannerInput, reason: str) -> Plan:
@@ -279,5 +310,6 @@ __all__ = [
     "BasePlanner",
     "MockPlanner",
     "LLMPlanner",
+    "select_flow_pattern_prompt",
     "get_planner",
 ]
