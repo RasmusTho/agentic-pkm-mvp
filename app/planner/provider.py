@@ -64,54 +64,71 @@ def _select_profile_from_context(ctx: Dict[str, Any]) -> tuple[Dict[str, Any], D
     return selected_flow, selected_pattern, selected_prompt
 
 
-def _step_from_target(target: str, index: int) -> PlanStep:
-    raw = (target or "").strip()
+def _step_from_target(step_data: Any, index: int, inp: "PlannerInput") -> PlanStep:
+    if isinstance(step_data, BaseModel):
+        raw = step_data.model_dump()
+    elif isinstance(step_data, dict):
+        raw = dict(step_data)
+    else:
+        raw = {"target": step_data}
+    target_value = str(raw.get("target", "")).strip()
+    description = raw.get("description")
+    intent = raw.get("intent")
+    metadata = dict(raw.get("metadata") or {})
+    args = dict(raw.get("args") or {})
     prefix = ""
-    remainder = raw
-    if ":" in raw:
-        prefix, remainder = raw.split(":", 1)
+    remainder = target_value
+    if ":" in target_value:
+        prefix, remainder = target_value.split(":", 1)
         prefix = prefix.strip().lower()
         remainder = remainder.strip()
-    description_target = remainder or raw or f"step-{index}"
+    description_fallback = remainder or target_value or f"step-{index}"
     step_id = f"step-{index}"
     if prefix == "agent":
         return PlanStep(
             id=step_id,
             kind="agent_call",
-            description=f"Execute agent '{description_target}'",
-            agent=description_target or None,
+            description=description or f"Execute agent '{description_fallback}'",
+            agent=remainder or None,
+            intent=intent,
         )
     if prefix in {"tool", "mcp"}:
-        tool_name = description_target
-        if prefix == "mcp" and description_target and not description_target.startswith("mcp"):
-            tool_name = f"mcp.{description_target}"
+        tool_name = remainder
+        if prefix == "mcp" and remainder and not remainder.startswith("mcp"):
+            tool_name = f"mcp.{remainder}"
+        tool_args = dict(args)
+        if tool_name == "mcp.vault.append_note":
+            tool_args.setdefault("note_id", inp.object_uuid)
+            tool_args.setdefault("content", f"Planner output for {inp.object_uuid}")
         return PlanStep(
             id=step_id,
             kind="tool_call",
-            description=f"Invoke tool '{tool_name}'",
+            description=description or f"Invoke tool '{tool_name}'",
             tool=tool_name,
+            tool_args=tool_args,
         )
     if prefix == "decision":
         return PlanStep(
             id=step_id,
             kind="decision",
-            description=f"Decision: {description_target}",
+            description=description or f"Decision: {description_fallback}",
+            metadata=metadata,
         )
     return PlanStep(
         id=step_id,
         kind="note",
-        description=f"Note: {description_target}",
-        metadata={"target": raw},
+        description=description or f"Note: {description_fallback}",
+        metadata={"target": target_value, **metadata},
     )
 
 
-def _steps_from_pattern(pattern: Dict[str, Any] | None) -> List[PlanStep]:
+def _steps_from_pattern(pattern: Dict[str, Any] | None, inp: "PlannerInput") -> List[PlanStep]:
     if not pattern:
         return []
     raw_steps = pattern.get("steps") if isinstance(pattern, dict) else None
     if not isinstance(raw_steps, list) or not raw_steps:
         return []
-    return [_step_from_target(step, idx + 1) for idx, step in enumerate(raw_steps)]
+    return [_step_from_target(step, idx + 1, inp) for idx, step in enumerate(raw_steps)]
 
 
 class PlannerRelation(BaseModel):
@@ -150,7 +167,7 @@ class MockPlanner(BasePlanner):
         plan_context = dict(inp.context)
         if selection:
             selected_flow, selected_pattern, selected_prompt = selection
-            pattern_steps = _steps_from_pattern(selected_pattern)
+            pattern_steps = _steps_from_pattern(selected_pattern, inp)
             plan_context.setdefault(
                 "profile_selection",
                 {

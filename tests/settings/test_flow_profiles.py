@@ -31,12 +31,14 @@ def test_load_flow_profiles_parses_markdown_files(tmp_path: Path) -> None:
           - name: standard_ingest
             description: Normalize through indexing
             steps:
-              - agent:normalizer
-              - agent:classifier
-              - agent:indexer
+              - target: agent:normalizer
+              - target: mcp:vault.append_note
+                description: Capture normalized summary
+                args:
+                  content: "{{ summary }}"
           - name: light_ingest
             steps:
-              - agent:normalizer
+              - target: agent:normalizer
         planner_mode:
           strictness: advisory
           max_steps: 6
@@ -75,10 +77,15 @@ def test_load_flow_profiles_parses_markdown_files(tmp_path: Path) -> None:
     assert ingest.event_triggers == ["ingest.object.created", "ask.query.received"]
     assert ingest.intent and ingest.intent.strip() == "Turn new raw text into structured, searchable knowledge."
     assert len(ingest.suggested_patterns) == 2
-    assert ingest.suggested_patterns[0].name == "standard_ingest"
-    assert ingest.suggested_patterns[0].description == "Normalize through indexing"
-    assert ingest.suggested_patterns[0].steps == ["agent:normalizer", "agent:classifier", "agent:indexer"]
-    assert ingest.suggested_patterns[1].steps == ["agent:normalizer"]
+    primary_pattern = ingest.suggested_patterns[0]
+    assert primary_pattern.name == "standard_ingest"
+    assert primary_pattern.description == "Normalize through indexing"
+    assert len(primary_pattern.steps) == 2
+    assert primary_pattern.steps[0].target == "agent:normalizer"
+    assert primary_pattern.steps[1].target == "mcp:vault.append_note"
+    assert primary_pattern.steps[1].args["content"] == "{{ summary }}"
+    light_pattern = ingest.suggested_patterns[1]
+    assert [step.target for step in light_pattern.steps] == ["agent:normalizer"]
     assert ingest.planner_mode.strictness == "advisory"
     assert ingest.planner_mode.max_steps == 6
     assert len(ingest.prompt_profiles) == 2

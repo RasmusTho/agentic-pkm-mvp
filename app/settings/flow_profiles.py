@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -12,10 +12,18 @@ DEFAULT_FLOWS_ROOT = Path("vault/_system/flows")
 FALLBACK_FLOWS_ROOT = Path("docs/settings/sample-flows")
 
 
+class PatternStep(BaseModel):
+    target: str
+    description: Optional[str] = None
+    intent: Optional[str] = None
+    args: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 class SuggestedPattern(BaseModel):
     name: str
     description: Optional[str] = None
-    steps: List[str] = Field(default_factory=list)
+    steps: List[PatternStep] = Field(default_factory=list)
 
 
 class PromptProfile(BaseModel):
@@ -53,10 +61,37 @@ def _resolve_root(root: Optional[Path] = None) -> Optional[Path]:
     return None
 
 
+def _normalize_step_entry(step: Any) -> Dict[str, Any]:
+    if isinstance(step, PatternStep):
+        return step.model_dump()
+    if isinstance(step, dict):
+        normalized = dict(step)
+        normalized["target"] = str(normalized.get("target", "")).strip()
+        return normalized
+    return {"target": str(step).strip()}
+
+
+def _normalize_patterns(data: Dict[str, Any]) -> None:
+    patterns = data.get("suggested_patterns")
+    if not isinstance(patterns, list):
+        return
+    normalized_patterns: List[Dict[str, Any]] = []
+    for pattern in patterns:
+        if not isinstance(pattern, dict):
+            continue
+        pattern_copy = dict(pattern)
+        steps = pattern_copy.get("steps")
+        if isinstance(steps, list):
+            pattern_copy["steps"] = [_normalize_step_entry(step) for step in steps]
+        normalized_patterns.append(pattern_copy)
+    data["suggested_patterns"] = normalized_patterns
+
+
 def _load_profile(path: Path) -> FlowProfile:
     frontmatter, _ = parse_markdown(path)
     data = dict(frontmatter or {})
     data.setdefault("flow_id", path.stem)
+    _normalize_patterns(data)
     return FlowProfile(**data)
 
 
@@ -90,6 +125,7 @@ def get_flow(flow_id: str, profiles: Optional[Dict[str, FlowProfile]] = None) ->
 
 
 __all__ = [
+    "PatternStep",
     "SuggestedPattern",
     "PromptProfile",
     "PlannerMode",
