@@ -66,3 +66,12 @@ def test_agent_without_config_runs_as_before(monkeypatch: pytest.MonkeyPatch) ->
     plan = _plan(agent="unknown-agent")
     results = Orchestrator().run_plan(plan)
     assert results[0]["status"] == "ok"
+
+
+def test_agent_flow_legacy_flows_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _config(flows=["ingest"])
+    monkeypatch.setattr("app.orchestrator.agents.load_agent_configs", lambda: {cfg.agent_id: cfg})
+    plan = _plan(flow_id=None)
+    plan.context = {"flows": ["ingest"]}
+    results = Orchestrator().run_plan(plan)
+    assert results[0]["status"] == "ok"

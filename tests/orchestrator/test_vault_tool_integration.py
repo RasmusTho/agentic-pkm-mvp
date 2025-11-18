@@ -58,3 +58,11 @@ def test_tool_call_missing_body_surfaces_error(tmp_path: Path) -> None:
     assert results[0]["error_type"] == "invalid_tool_args"
     assert "missing required argument" in results[0]["error"]
     assert not any(tmp_path.rglob("*.md"))
+
+
+def test_tool_call_disabled_flag_string(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(tool_settings={"mcp_vault_enable": "0", "vault_root": tmp_path})
+    plan = _simple_plan(step_args={"title": "Ask Summary", "body": "Hello world"})
+    results = orchestrator.run_plan(plan)
+    assert results[0]["status"] == "ok"
+    assert not any(tmp_path.rglob("*.md"))

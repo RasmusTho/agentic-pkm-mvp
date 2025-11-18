@@ -7,11 +7,26 @@ from typing import Any, Dict, Mapping, MutableMapping, Protocol
 from app.a2a.events import send_agent_request
 from app.agents.base.loop import Agent
 from app.mcp.vault_tools import VaultToolError, append_note
+
+
 from app.planner.schema import PlanMetadata, PlanStep
 from app.planner.tools import get_tool_descriptor
 from app.orchestrator.agents import AgentPermissionError, resolve_agent_config, validate_agent_permissions
 
 from .events import emit_mcp_tool_call_finished, emit_mcp_tool_call_started
+
+
+def _flag_enabled(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return False
+        return normalized in {"1", "true", "yes", "on"}
+    if isinstance(value, (int, float)):
+        return value != 0
+    return bool(value)
 
 
 class StepExecutionError(Exception):
@@ -127,9 +142,11 @@ class MockPlanExecutor(PlanExecutor):
             return False
         settings = context.tool_settings or {}
         if "mcp_vault_enable" in settings:
-            return bool(settings["mcp_vault_enable"])
-        env_value = os.getenv("MCP_VAULT_ENABLE", "").strip().lower()
-        return env_value in {"1", "true", "yes", "on"}
+            return _flag_enabled(settings["mcp_vault_enable"])
+        env_value = os.getenv("MCP_VAULT_ENABLE")
+        if env_value is not None:
+            return _flag_enabled(env_value)
+        return False
 
     def _run_vault_append(self, args: Mapping[str, Any], context: StepContext) -> Dict[str, Any]:
         settings = context.tool_settings or {}

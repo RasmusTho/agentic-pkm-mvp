@@ -37,6 +37,10 @@ class Orchestrator:
                 flow_ids = plan.context.get("flow_ids") or []
                 if isinstance(flow_ids, list) and flow_ids:
                     plan_flow_id = flow_ids[0]
+            elif plan.context and plan.context.get("flows"):
+                legacy_flows = plan.context.get("flows") or []
+                if isinstance(legacy_flows, list) and legacy_flows:
+                    plan_flow_id = legacy_flows[0]
             plan_tool_settings = None
             if plan.context and isinstance(plan.context.get('tool_settings'), Mapping):
                 plan_tool_settings = dict(plan.context.get('tool_settings') or {})
