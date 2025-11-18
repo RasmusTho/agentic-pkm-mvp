@@ -43,10 +43,18 @@ def emit_step_finished(
 
 
 def emit_step_error(
-    *, plan_id: str, step: PlanStep, error: str, object_id: str | None, trace_id: str | None
+    *,
+    plan_id: str,
+    step: PlanStep,
+    error: str,
+    error_type: str | None,
+    object_id: str | None,
+    trace_id: str | None,
 ) -> None:
     details = _base_step_details(plan_id, step)
     details["error"] = error
+    if error_type:
+        details["error_type"] = error_type
     _emit(ORCHESTRATOR_STEP_ERROR, object_id=object_id, trace_id=trace_id, details=details)
 
 

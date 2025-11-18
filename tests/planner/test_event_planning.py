@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from typing import Dict
+
 import pytest
 
 from app.events.models import new_event
 from app.events.types import ASK_QUERY_RECEIVED, INGEST_OBJECT_CREATED
 from app.planner.events import plan_for_event, planner_profiles_enabled
-from app.settings.flow_profiles import FlowProfile, PromptProfile, SuggestedPattern
+from app.planner.schema import Plan, PlanMetadata
+from app.settings.flow_profiles import FlowProfile, PatternStep, PromptProfile, SuggestedPattern
 from app.stores.plan_store import get_plan_store, reset_plan_store
 
 
@@ -57,7 +60,17 @@ def test_plan_for_event_uses_flow_profiles_when_enabled(monkeypatch: pytest.Monk
         event_triggers=[INGEST_OBJECT_CREATED],
         intent="Turn new text into knowledge.",
         suggested_patterns=[
-            SuggestedPattern(name="standard", description="Standard", steps=["agent:normalizer", "mcp:vault.append_note"])
+            SuggestedPattern(
+                name="standard",
+                description="Standard",
+                steps=[
+                    PatternStep(target="agent:normalizer"),
+                    PatternStep(
+                        target="mcp:vault.append_note",
+                        args={"title": "Flow summary", "body": "{{ summary }}"},
+                    ),
+                ],
+            )
         ],
         prompt_profiles=[
             PromptProfile(id="ingest-default", prompt_template_ref="prompts/planner/ingest-default.md")
@@ -75,6 +88,8 @@ def test_plan_for_event_uses_flow_profiles_when_enabled(monkeypatch: pytest.Monk
     assert plan.steps[0].agent == "normalizer"
     assert plan.steps[1].kind == "tool_call"
     assert plan.steps[1].tool == "mcp.vault.append_note"
+    assert "title" in plan.steps[1].tool_args
+    assert "body" in plan.steps[1].tool_args
     selection = plan.context.get("profile_selection")
     assert selection and selection["flow_id"] == "ingest"
     assert selection["pattern"]["name"] == "standard"
@@ -90,3 +105,23 @@ def test_plan_for_event_profiles_enabled_without_matches_falls_back(monkeypatch:
     assert plan.context.get("planning_mode") != "profiles"
     assert "flow:ingest" in plan.tags
     assert not plan.context.get("flow_profiles")
+
+
+def test_question_payload_included_in_planner_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, str] = {}
+
+    class StubPlanner:
+        def plan(self, inp):
+            captured["text"] = inp.text
+            return Plan(
+                id="plan-stub",
+                meta=PlanMetadata(goal=inp.goal, source_object_uuid=inp.object_uuid, created_by="stub"),
+                steps=[],
+                context={},
+                tags=[],
+            )
+
+    monkeypatch.setattr("app.planner.events.get_planner", lambda: StubPlanner())
+    event = new_event(event_type=ASK_QUERY_RECEIVED, payload={"question": "What is PKM?"})
+    plan_for_event(event)
+    assert captured["text"] == "What is PKM?"

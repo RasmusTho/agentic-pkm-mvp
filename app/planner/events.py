@@ -48,7 +48,7 @@ def _object_uuid_from_event(event: Event) -> str:
 
 def _extract_text(event: Event) -> str:
     payload = event.payload or {}
-    for key in ("text", "content", "summary", "body"):
+    for key in ("text", "content", "summary", "body", "question", "prompt"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value

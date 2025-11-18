@@ -36,18 +36,24 @@ def build_planner_user_prompt(
     object_text: str,
     relations: Sequence[Dict[str, Any]] | None = None,
     metadata: Dict[str, Any] | None = None,
+    planning_guidance: Dict[str, Any] | None = None,
 ) -> str:
     rel_section = "\n".join(
         f"- {rel.get('type')}: {rel.get('source')} -> {rel.get('target')}" for rel in (relations or [])
     )
     meta_lines = "\n".join(f"- {k}: {v}" for k, v in (metadata or {}).items())
-    return (
+    prompt = (
         f"Goal:\n{goal}\n\n"
         f"Object text:\n{object_text.strip() or '(empty)'}\n\n"
         f"Relations:\n{rel_section or '(none)'}\n\n"
         f"Metadata:\n{meta_lines or '(none)'}\n\n"
         "Respond with JSON that matches the schema."
     )
+    if planning_guidance:
+        import json as _json
+
+        prompt += "\n\nFlow guidance:\n" + _json.dumps(planning_guidance, sort_keys=True)
+    return prompt
 
 
 __all__ = ["PLANNER_SYSTEM_PROMPT", "build_planner_user_prompt"]

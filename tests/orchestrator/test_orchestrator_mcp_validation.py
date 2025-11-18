@@ -20,7 +20,7 @@ def test_orchestrator_validates_mcp_arguments() -> None:
                 kind="tool_call",
                 description="Attempt to append without full args",
                 tool="mcp.vault.append_note",
-                tool_args={"note_id": "bad-only"},
+                tool_args={"title": "Missing body"},
             )
         ],
     )
@@ -30,5 +30,6 @@ def test_orchestrator_validates_mcp_arguments() -> None:
     after = _audit_ring_snapshot()
     assert results and results[0]["status"] == "error"
     assert "missing required argument" in results[0]["error"]
+    assert results[0]["error_type"] == "invalid_tool_args"
     new_events = [evt for evt in after if evt not in before]
     assert any(evt["event_type"] == ORCHESTRATOR_STEP_ERROR for evt in new_events)

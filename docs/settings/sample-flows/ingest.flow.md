@@ -14,16 +14,22 @@ suggested_patterns:
   - name: standard_ingest
     description: "Normalize, classify, chunk, reason, index."
     steps:
-      - agent:normalizer
-      - agent:classifier
-      - agent:chunker
-      - agent:reasoner
-      - agent:indexer
+      - target: agent:normalizer
+      - target: agent:classifier
+      - target: agent:chunker
+      - target: mcp:vault.append_note
+        description: "Persist summary back to the vault note."
+        args:
+          title: "Ingest summary"
+          body: "{{ summary }}"
+          tags:
+            - ingest
+            - summary
   - name: light_ingest
     description: "Only normalize and classify for quick triage."
     steps:
-      - agent:normalizer
-      - agent:classifier
+      - target: agent:normalizer
+      - target: agent:classifier
 
 planner_mode:
   strictness: advisory
@@ -46,3 +52,4 @@ vault. This file documents the YAML frontmatter accepted by `app.settings.flow_p
 - `event_triggers` declares which events enable the profile.
 - `intent` and `suggested_patterns` capture the human strategy for the flow.
 - `planner_mode` and `prompt_profiles` advise the planner but do not force execution paths.
+- Pattern steps accept structured entries with `target`, optional `description`, and `args` for tool calls.
