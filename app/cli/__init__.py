@@ -12,6 +12,7 @@ import httpx
 from watchfiles import watch
 
 from app.agents.classifier.agent import run as classify_run
+from app.agents.panel.integration import handle_panel_update
 from app.events.models import new_event
 from app.events.types import ASK_QUERY_RECEIVED
 from app.agents.normalizer.agent import run as normalize_run
@@ -254,6 +255,37 @@ def ask(question: str, vault_root: Path | None, enable_mcp_vault: bool) -> None:
         raise SystemExit(exit_code)
 
 
+
+
+@cli.command(help="Run the AI panel pipeline on a note and optionally dispatch events.")
+@click.argument("note_path", type=click.Path(path_type=Path))
+@click.option("--old-path", type=click.Path(path_type=Path), default=None, help="Path to old note content for diffing.")
+def panel_update(note_path: Path, old_path: Path | None) -> None:
+    note_path = note_path.resolve()
+    old_path = old_path.resolve() if old_path else None
+    new_markdown = note_path.read_text(encoding="utf-8") if note_path.exists() else ""
+    old_markdown = new_markdown
+    if old_path is not None and old_path.exists():
+        old_markdown = old_path.read_text(encoding="utf-8")
+
+    ctx = OrchestratorContext(settings={"origin": "cli.panel"})
+    result = handle_panel_update(
+        note_id=str(note_path),
+        old_markdown=old_markdown,
+        new_markdown=new_markdown,
+        ctx=ctx,
+    )
+
+    if result.panel.updated_markdown != new_markdown:
+        note_path.write_text(result.panel.updated_markdown, encoding="utf-8")
+
+    click.echo(f"Note: {note_path}")
+    click.echo(f"Panel intents: {len(result.panel.intents)}")
+    click.echo(f"Panel events: {len(result.events)} created, {result.dispatch_count} dispatched")
+    if result.plans:
+        click.echo(f"Plans executed: {len(result.plans)}")
+    else:
+        click.echo("Plans executed: 0")
 
 
 @cli.command(
