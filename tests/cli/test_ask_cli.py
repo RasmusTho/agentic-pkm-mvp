@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from app.cli import cli
@@ -14,7 +15,12 @@ def _run_cli(args: list[str], env: dict[str, str] | None = None):
     return runner.invoke(cli, args, env=env)
 
 
-def test_ask_cli_dry_run(tmp_path):
+@pytest.fixture(autouse=True)
+def clear_mcp_vault_env(monkeypatch):
+    monkeypatch.delenv("MCP_VAULT_ENABLE", raising=False)
+
+
+def test_ask_cli_dry_run(tmp_path: Path):
     reset_plan_store()
     result = _run_cli(["ask", "Why is the sky blue?", "--vault-root", str(tmp_path)])
     assert result.exit_code == 0
@@ -24,7 +30,7 @@ def test_ask_cli_dry_run(tmp_path):
     assert not any(tmp_path.rglob("*.md"))
 
 
-def test_ask_cli_real_vault_write(tmp_path):
+def test_ask_cli_real_vault_write(tmp_path: Path):
     reset_plan_store()
     result = _run_cli(["ask", "What is PKM?", "--vault-root", str(tmp_path), "--enable-mcp-vault"])
     assert result.exit_code == 0
