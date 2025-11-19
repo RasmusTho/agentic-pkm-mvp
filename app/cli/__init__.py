@@ -14,6 +14,7 @@ from watchfiles import watch
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
 from app.services.note_update import process_note_update
+from app.services.note_watcher import NoteWatcherService
 from app.events.models import new_event
 from app.events.types import ASK_QUERY_RECEIVED
 from app.agents.normalizer.agent import run as normalize_run
@@ -327,6 +328,39 @@ def note_update(target: Path, pattern: str) -> None:
     click.echo(f"Processed {processed} notes (changed: {changed}, dispatched: {dispatched})")
     if errors:
         raise SystemExit(1)
+
+
+@cli.command(help="Scan vault for changed notes and run NoteUpdateService on detected edits.")
+@click.argument("target", type=click.Path(path_type=Path))
+@click.option("--glob", "pattern", default="*.md", help="Glob pattern when target is a directory.")
+def note_scan(target: Path, pattern: str) -> None:
+    resolved_target = target.resolve()
+    if not resolved_target.exists():
+        raise click.BadParameter(f"Path not found: {target}")
+
+    service = NoteWatcherService(vault_root=resolved_target, glob_pattern=pattern)
+    ctx = OrchestratorContext(settings={"origin": "cli.note_scan"})
+    results = service.scan_vault_once(ctx)
+
+    dispatched = sum(result.dispatch_count for result in results)
+    changed = sum(1 for result in results if result.changed)
+    processed = service.last_scan.get("processed", len(results))
+    skipped = service.last_scan.get("skipped", 0)
+    total = service.last_scan.get("checked", processed + skipped)
+    errors = service.last_scan.get("errors", 0)
+
+    for result in results:
+        click.echo(f"{result.current_path}: updated (events={result.events_count}, dispatched={result.dispatch_count})")
+    for path in service.last_skipped:
+        click.echo(f"{path}: skipped")
+
+    click.echo(
+        f"Scanned {total} notes (processed: {processed}, changed: {changed}, skipped: {skipped}, dispatched: {dispatched})"
+    )
+
+    if errors:
+        raise SystemExit(1)
+
 @cli.command(
     help="Kör funktionskontroller för lokala beroenden (ffmpeg, yt-dlp, index-outbox, Ollama)."
 )
