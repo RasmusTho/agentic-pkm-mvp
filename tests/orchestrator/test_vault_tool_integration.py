@@ -66,3 +66,15 @@ def test_tool_call_disabled_flag_string(tmp_path: Path) -> None:
     results = orchestrator.run_plan(plan)
     assert results[0]["status"] == "ok"
     assert not any(tmp_path.rglob("*.md"))
+
+def test_tool_call_accepts_content_alias(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(tool_settings={"mcp_vault_enable": True, "vault_root": tmp_path})
+    plan = _simple_plan(step_args={"title": "Ask Summary", "content": "Hello world"})
+    results = orchestrator.run_plan(plan)
+    assert len(results) == 1
+    assert results[0]["status"] == "ok"
+    note_path = Path(results[0]["result"]["result"]["note_path"])
+    assert note_path.is_file()
+    text = note_path.read_text(encoding="utf-8")
+    assert "Hello world" in text
+
