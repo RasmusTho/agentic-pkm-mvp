@@ -22,7 +22,7 @@ MCP_TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
             },
             "required": ["title", "body"],
         },
-        allowed_args={"title": "string", "body": "string", "tags": "array", "metadata": "object"},
+        allowed_args={"title": "string", "body": "string", "content": "string", "tags": "array", "metadata": "object"},
         mock_result={"status": "ok", "note_path": "vault/_mcp/mock-note.md"},
     ),
     "mcp.search.objects": ToolDescriptor(

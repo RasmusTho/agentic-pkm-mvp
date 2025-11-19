@@ -113,7 +113,9 @@ class MockPlanExecutor(PlanExecutor):
         descriptor = get_tool_descriptor(step.tool)
         if descriptor is None:
             raise StepExecutionError(f"unknown MCP tool '{step.tool}'", error_type="invalid_tool")
-        args = step.tool_args or {}
+        args = dict(step.tool_args or {})
+        if "content" in args and "body" not in args:
+            args["body"] = args["content"]
         self._validate_tool_args(args, descriptor.allowed_args)
         self._validate_required_args(args, descriptor.schema.get("required", []))
         emit_mcp_tool_call_started(
