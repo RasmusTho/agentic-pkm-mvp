@@ -159,6 +159,9 @@ When plans contain MCP tool steps, the Orchestrator invokes those tools through 
 ### Compatibility Note
 Legacy CLI workflows (`python -m app.cli pipe ...`) remain supported until the LangGraph-based Orchestrator runtime becomes the default surface. Operators can keep `PLANNER_ENABLE`, `A2A_ENABLE`, and `MCP_ENABLE` unset to preserve historical behaviour, then progressively opt into Planner Agent + Orchestrator + MCP flows without breaking scripted ingestion.
 
+### ASK CLI flow
+The `python -m app.cli ask "..."` command emits an `ask.query.received` event, optionally lets FlowProfiles pick a pattern, and routes the resulting plan through the Orchestrator. The CLI injects tool settings so MCP vault writes stay mocked by default, but operators can opt in via `--enable-mcp-vault`/`MCP_VAULT_ENABLE` plus a `VAULT_ROOT`. After execution it prints the selected flow/pattern, the plan summary, and any resulting `mcp.vault.append_note` paths so teams can demo the full question -> plan -> agent/tool -> vault pipeline without bespoke glue.
+
 ## LLM-Driven Planning Layer — v4.9
 Planning is embedded directly into the PER loop, turning “Plan → Act → Reflect” into a concretely orchestrated, LLM-generated step. When `PLANNER_ENABLE=1`, the planner executes before each agent cycle, producing a structured plan that lists which agent should run, which MCP tools to call, and whether any A2A requests must be issued.
 
@@ -250,3 +253,13 @@ prompt_template_ref: planner.prompts.default
 
 For this slice the Planner and Orchestrator keep their previous behaviour; the new loaders simply make
 the vault-backed configuration available for upcoming integrations.
+
+## AI panel: human-first note interaction
+Notes may optionally expose a lightweight AI panel so humans drive intent directly in Markdown without custom syntax. The panel recognises three sections:
+- **AI-instruktion** — free-text instructions that describe what the human wants from the system for this note.
+- **AI-åtgärder** — markdown checkbox actions (`- [ ] ...` / `- [x] ...`) that the human can tick to request a discrete move.
+- **AI-logg** — chronological bullet log of what the system already executed for the note.
+
+`PanelState` (pydantic) normalises these sections so agents can diff old vs. new states deterministically. The `PanelAgent` parses prior/current note bodies, emits `PanelIntent` records for newly-checked actions or instruction edits, and proposes updated Markdown by removing one-shot actions and appending a simple log entry (e.g., `- Action: "..."`). The agent remains local/in-memory for now: it is not wired to Planner/Orchestrator yet, but its output objects are ready for the future event pipeline.
+
+Vault-first mappings under `vault/_system/panel-actions/*.md` (with docs fallback `docs/settings/panel-actions.md`) translate checkbox text into canonical event types. When PanelAgent detects a newly checked action it enriches the `PanelIntent` with that mapping and synthesizes structured `Event` objects (still kept in-memory for now) so upcoming wiring can hand intents to Planner/Orchestrator deterministically.

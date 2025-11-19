@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 import time
 
 import click
@@ -11,8 +12,12 @@ import httpx
 from watchfiles import watch
 
 from app.agents.classifier.agent import run as classify_run
+from app.events.models import new_event
+from app.events.types import ASK_QUERY_RECEIVED
 from app.agents.normalizer.agent import run as normalize_run
 from app.index.outbox import append_jsonl
+from app.orchestrator.handler import OrchestratorContext, handle_event
+from app.orchestrator.runtime import Orchestrator
 from app.media.transcribe import transcribe_source
 from app.obs.log import with_trace_id
 from app.cli.health import run_health
@@ -52,6 +57,55 @@ def _should_transcribe(source: str) -> bool:
     if path.exists() and path.suffix.lower() in _AUDIO_EXTS:
         return True
     return _looks_like_url(source)
+
+
+TRUE_STRINGS = {"1", "true", "yes", "on"}
+
+
+def _truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in TRUE_STRINGS
+    return bool(value)
+
+
+def _resolve_vault_root_path(value: Path | None) -> Path | None:
+    if value is not None:
+        return value
+    env_root = os.getenv("VAULT_ROOT")
+    if env_root:
+        return Path(env_root)
+    return None
+
+
+class _RecordingOrchestrator(Orchestrator):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.last_results: list[dict[str, Any]] | None = None
+
+    def run_plan(self, plan):
+        results = super().run_plan(plan)
+        self.last_results = results
+        return results
+
+
+def _extract_note_path(results: list[dict[str, Any]]) -> str | None:
+    for entry in results:
+        result_payload = entry.get("result")
+        if not isinstance(result_payload, dict):
+            continue
+        tool_name = result_payload.get("tool")
+        if tool_name != "mcp.vault.append_note":
+            continue
+        inner = result_payload.get("result")
+        if isinstance(inner, dict) and inner.get("note_path"):
+            return inner.get("note_path")
+    return None
 
 
 @click.group(help="Agentic PKM CLI")
@@ -125,6 +179,81 @@ def pipe(source: str, as_json: bool, trace_id: Optional[str]) -> None:
         }
     )
     _dump(output, as_json)
+
+
+@cli.command(help="Ask a question through the planner/orchestrator pipeline.")
+@click.argument("question")
+@click.option("--vault-root", type=click.Path(path_type=Path), default=None, help="Path to vault root for MCP writes.")
+@click.option("--enable-mcp-vault", is_flag=True, default=False, help="Enable real MCP vault writes.")
+def ask(question: str, vault_root: Path | None, enable_mcp_vault: bool) -> None:
+    question_text = question.strip()
+    if not question_text:
+        raise click.BadParameter("Question must not be empty.")
+
+    event = new_event(event_type=ASK_QUERY_RECEIVED, payload={"question": question_text}, source="cli")
+    resolved_root = _resolve_vault_root_path(vault_root)
+    env_flag = os.getenv("MCP_VAULT_ENABLE")
+    writes_enabled = enable_mcp_vault or _truthy_flag(env_flag)
+    tool_settings: Dict[str, Any] = {}
+    if resolved_root is not None:
+        tool_settings["vault_root"] = str(resolved_root)
+    elif writes_enabled:
+        tool_settings["vault_root"] = str(Path("vault"))
+    if writes_enabled:
+        tool_settings["mcp_vault_enable"] = True
+    else:
+        tool_settings["mcp_vault_enable"] = False
+
+    orchestrator = _RecordingOrchestrator(tool_settings=tool_settings)
+    settings: Dict[str, Any] = {"event_orchestrator_enable": True, "origin": "cli.ask"}
+    planner_profiles_env = os.getenv("PLANNER_PROFILES_ENABLE")
+    if planner_profiles_env is not None:
+        settings["planner_profiles_enable"] = planner_profiles_env
+    plan = handle_event(event, OrchestratorContext(settings=settings, orchestrator=orchestrator))
+    results = orchestrator.last_results or []
+
+    click.echo(f"Question: {question_text}")
+    selection = None
+    if plan.context:
+        selection = plan.context.get("profile_selection")
+    if selection:
+        flow_id = selection.get("flow_id") or "-"
+        pattern = (selection.get("pattern") or {}).get("name") or "-"
+        prompt = (selection.get("prompt_profile") or {}).get("id") or "-"
+        click.echo(f"Flow: {flow_id} pattern: {pattern} prompt: {prompt}")
+    else:
+        flow_ids = (plan.context or {}).get("flow_ids") or []
+        if flow_ids:
+            click.echo(f"Flow: {flow_ids[0]}")
+    click.echo(f"Plan steps: {len(plan.steps)}")
+    if writes_enabled:
+        click.echo("Vault writes enabled.")
+    else:
+        click.echo("Vault writes disabled (mock mode).")
+
+    step_lookup = {step.id: step for step in plan.steps}
+    exit_code = 0
+    for entry in results:
+        step = step_lookup.get(entry.get("step_id"))
+        label = step.description if step else entry.get("step_id")
+        click.echo(f"- {label}: {entry.get('status')}")
+        if entry.get("status") == "error":
+            exit_code = 1
+            if entry.get("error_type"):
+                click.echo(f"  error_type: {entry['error_type']}")
+            if entry.get("error"):
+                click.echo(f"  error: {entry['error']}")
+
+    note_path = _extract_note_path(results)
+    if note_path:
+        click.echo(f"note_path: {note_path}")
+    elif not writes_enabled:
+        click.echo("No files were written.")
+
+    if exit_code != 0:
+        raise SystemExit(exit_code)
+
+
 
 
 @cli.command(
