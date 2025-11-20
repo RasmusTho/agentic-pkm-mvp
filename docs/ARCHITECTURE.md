@@ -269,3 +269,19 @@ Vault-first mappings under `vault/_system/panel-actions/*.md` (with docs fallbac
 `python -m app.cli panel-update path/to/note.md --old-path path/to/old.md` exposes this in the CLI for manual runs: it reads the note, executes `handle_panel_update()`, writes back the AI-åtgärder/log updates, and reports how many panel events were created/dispatched (respecting `PANEL_EVENTS_ENABLE` and `EVENT_ORCHESTRATOR_ENABLE`).
 
 `NoteUpdateService` builds on that by treating the note UUID as the durable identity: `process_note_update()` loads the note, checks an optional expected path (stale detection), hydrates prior snapshots from `tmp/note_update_snapshots`, and runs `handle_panel_update()` before writing the updated markdown + snapshot. The `note-update` CLI batches this over one or more files (`python -m app.cli note-update vault/@Inbox --glob '*.md'`), emits per-note status, and summarizes processed/changed/dispatch counts. This is the same entrypoint future filesystem watchers will call when they notice edited notes, so behaviour stays deterministic whether triggered manually or automatically.
+
+### Panel update vs Note update — when to use which
+Two commands exist on purpose: `panel-update` runs the AI panel in isolation for a single note (instruction/actions/logg) without snapshots, stale detection, or watcher orchestration, while `note-update` runs the canonical UUID-first pipeline with snapshots, stale detection, and panel + event dispatch that note-scan and future watchers rely on. Use this quick guide to pick the right tool.
+
+**Use `panel-update` when…**
+- you want to test the AI panel behaviour directly,
+- you are debugging checkbox mapping, instruction parsing, or log formatting,
+- you only want to operate on a single file without invoking snapshots, stale detection, watcher logic, or UUID holistic update logic,
+- you want fast iteration on panel designs.
+
+**Use `note-update` when…**
+- you want the system to update the note "for real",
+- you want snapshot-aware, UUID-first safe writes with stale detection,
+- you want panel output + event dispatch + orchestrator plans,
+- you want behaviour consistent with note-scan and future watchers.
+
