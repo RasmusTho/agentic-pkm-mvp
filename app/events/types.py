@@ -5,6 +5,7 @@ INGEST_OBJECT_UPDATED = "ingest.object.updated"
 INGEST_OBJECT_METADATA = "ingest.object.metadata"
 INGEST_NORMALIZE_DONE = "ingest.normalize.done"
 INGEST_CHUNK_DONE = "ingest.chunk.done"
+INGEST_INDEX_DONE = "ingest.index.done"
 INDEX_OBJECT_EMBEDDED = "index.object.embedded"
 TEXT_CHUNK_CREATED = "text.chunk.created"
 CLEANUP_DONE = "cleanup.done"
@@ -65,6 +66,7 @@ __all__ = [
     "INGEST_OBJECT_METADATA",
     "INGEST_NORMALIZE_DONE",
     "INGEST_CHUNK_DONE",
+    "INGEST_INDEX_DONE",
     "INDEX_OBJECT_EMBEDDED",
     "TEXT_CHUNK_CREATED",
     "CLEANUP_DONE",
