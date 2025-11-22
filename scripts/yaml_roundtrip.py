@@ -11,7 +11,10 @@ def load_frontmatter(text: str) -> Tuple[dict[str, Any], str]:
         if len(parts) >= 3:
             fm_block = parts[1]
             body = parts[2]
-            data = yaml.safe_load(fm_block) or {}
+            try:
+                data = yaml.safe_load(fm_block) or {}
+            except yaml.YAMLError:
+                return {}, body.lstrip("\n")
             if not isinstance(data, dict):
                 data = {}
             return data, body.lstrip("\n")

@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from app.orchestrator.handler import OrchestratorContext
-from app.services import note_update
 from app.services.note_update import DEFAULT_SNAPSHOT_DIR, NoteUpdateResult, process_note_update
+from app.services.note_uuid import ensure_note_uuid
+from scripts.yaml_roundtrip import load_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,10 @@ class NoteWatcherService:
 
         for note_path in self._iter_note_paths():
             try:
+                raw_text = note_path.read_text(encoding="utf-8")
+                frontmatter, _ = load_frontmatter(raw_text)
+                had_uuid = bool(str(frontmatter.get("uuid") or "").strip())
+                note_uuid = ensure_note_uuid(note_path)
                 content = note_path.read_text(encoding="utf-8")
             except Exception as exc:  # pragma: no cover - defensive
                 errors += 1
@@ -46,13 +51,6 @@ class NoteWatcherService:
                 logger.warning("failed to read note %s: %s", note_path, exc)
                 continue
 
-            frontmatter = note_update._extract_frontmatter(content)  # type: ignore[attr-defined]
-            note_uuid = str(frontmatter.get("uuid") or "").strip()
-            if not note_uuid:
-                skipped += 1
-                self.last_skipped.append(note_path)
-                logger.debug("skip note without uuid: %s", note_path)
-                continue
             checked += 1
             if not self._note_changed(note_path, note_uuid, content):
                 skipped += 1
@@ -62,6 +60,7 @@ class NoteWatcherService:
 
             try:
                 result = process_note_update(note_path, ctx, snapshot_dir=self.snapshot_dir)
+                result.uuid_added = result.uuid_added or not had_uuid
             except Exception as exc:  # pragma: no cover - defensive
                 errors += 1
                 self.last_errors.append((note_path, exc))

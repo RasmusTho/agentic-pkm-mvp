@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field
 class GlobalSettings(BaseModel):
     enable: bool = Field(default=True, description="Enable this component for runtime pipelines.")
     dry_run: bool = Field(default=False, description="Skip persistence and side-effects when true.")
+    note_moves_enable: bool = Field(
+        default=False,
+        description="Allow agents to move or rename notes as part of ingestion and promotion.",
+    )
     timeout_ms: int = Field(
         default=8000,
         description="Per-operation timeout in milliseconds.",

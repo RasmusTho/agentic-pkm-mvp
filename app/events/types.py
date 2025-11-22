@@ -54,6 +54,7 @@ PROMOTE_ERROR = "promote.error"
 PROMOTE_DONE = "promote.done"
 PROMOTE_ORPHAN_OVERRIDE = "promote.orphan.override"
 PROMOTION_DECISION_PENDING = "promotion.pending_move"
+PROMOTE_SKIP_MOVE = "promote.skip.move"
 
 ASK_QUERY_RECEIVED = "ask.query.received"
 JOBS_BACKFILL_DONE = "jobs.backfill.done"
@@ -107,6 +108,7 @@ __all__ = [
     "PROMOTE_DONE",
     "PROMOTE_ORPHAN_OVERRIDE",
     "PROMOTION_DECISION_PENDING",
+    "PROMOTE_SKIP_MOVE",
     "ASK_QUERY_RECEIVED",
     "JOBS_BACKFILL_DONE",
     "RELATION_MISSING",

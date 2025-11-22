@@ -2,18 +2,29 @@
 
 | Version | Goal | Delivered | Open | Next | Notes |
 | --- | --- | --- | --- | --- | --- |
+| Reality-MVP (SoT v4.10) | Reliable vault ingestion + minimal external plane + ASK API + observability + interim GUI | PER-loop agents stable; ASK CLI/API baseline over vault objects; zones/planes defined; external object schema (`external_raw`) ready | Harden real-vault ingest runs, wire minimal external drop ingest, build observability backend + interim GUI | Stabilize FastAPI ASK endpoint with sources/latency; ship status CLI/dashboard; run ingest on real vault snapshots | Single-user focus; collaboration deferred; zones are derived overlays |
 | v4.4 | Observability + Store abstraction | JSONL audit, Outbox, Core-6 identity | None | Keep doc set frozen | Stable legacy cut |
 | v4.5A | Deterministic ingestion baseline | Full PER loop, promotion cooldowns, memory CI | Route ingestion polish to v4.5B | Monitor metrics + guard rails | Current green baseline |
 | v4.5B | Fitness guards + ingestion polish | Delivered 2025-02-14 — rerank hooks, chunk/dedup, CI gates | — | Prep v4.6 rollout, keep fitness monitors green | Ready for tagging |
-| v4.6 | Retrieval quality uplift (Objectives A–D active) | Objectives A (ce_local heuristic + golden eval) and B delivered; **v4.6-B Delivered 2025-02-16** with 100 % coverage/validity; v4.6-C diarization-aware chunking in progress | Objective C/D hardening, relation coverage ≥95%; issues #55–#58 track work | Prototype cross-encoder + diarization PER loops | Guard rails enforce ΔnDCG@10 ≥ +0.01 or ΔP@10 ≥ +0.005 |
+| v4.6 | Retrieval quality uplift (Objectives A–D) | Objectives A/B delivered; relation coverage at 100 % (v4.6-B); diarization-aware chunking delivered behind flag | Maintenance only: keep fitness baselines green; refresh rerank/diarization baselines as needed | Keep rerank/diarization optional and deterministic; no new scope until after Reality-MVP | Historical foundation for hybrid retrieval |
 | v4.6-D | CI gates + summary contract | Delivered 2025-02-18 — baselines.yaml drives seven-line CI output with GATES ok=true | — | Refresh baselines when metrics improve; keep PRs pasting summary lines | ops/quality/baselines.yaml + GATE_STRICT=1 documented |
-| v4.8 | A2A Protocol V1 + Orchestrator messaging | — | Define envelopes, hooks, sample chain | Implement deterministic fixtures + status docs | Gated by `A2A_ENABLE` |
+| v4.8 | A2A Protocol V1 + Orchestrator messaging | Canonical schema defined; mocks available | Wiring deferred until after Reality-MVP | Implement deterministic fixtures + status docs | Gated by `A2A_ENABLE`; post-MVP |
 | v4.9 | MCP Integration + Planner Agent (LLM) | Delivered — Planner schema, MCP descriptor registry (`allowed_args` + `mock_result`), Mock/LLM planners, pipeline hook | Harden MCP transport + ToolProvider runtime | Align ToolProvider + Reasoning inputs | Flags: `MCP_ENABLE`, `PLANNER_ENABLE` |
-| v4.10 | Orchestrator Runtime (LangGraph execution engine) | Skeleton delivered — plan validation + audit + mocked MCP/A2A execution | Integrate LangGraph + real MCP/agent loops | Validate planner playback + CLI parity | Flag: `ORCHESTRATOR_ENABLE` |
+| v4.10 | Orchestrator Runtime (LangGraph execution engine) | Skeleton delivered — plan validation + audit + mocked MCP/A2A execution | Integrate LangGraph + real MCP/agent loops (post-MVP) | Validate planner playback + CLI parity; fold into Reality-MVP interim GUI/ASK path | Flag: `ORCHESTRATOR_ENABLE`; Reality-MVP consumes skeleton |
 | v5.x | Symbolic reasoning + reflexive agents | Governance concepts, Agent Memory Graph sketches | RDF/OWL/SHACL enforcement, logic gates | Define policy bundles + knowledge graph API | Dependent on v4.6 telemetry |
 
+## Reality-MVP Snapshot
+- Implemented: PER-loop ingestion against vault objects with Core-6 projection + Stores/Outbox; ASK CLI/API baseline over the vault plane; zones/planes defined with `external_raw` schema for non-vault objects; Planner/Reasoning layers remain optional overlays.
+- In progress: Running ingest on real vault snapshots and hardening resume/error handling; minimal external drop ingest for newsletters/PDFs into `external_raw`; FastAPI ASK endpoint with answers + sources + latency; zone/plane tags exposed in ASK responses.
+- Planned/queued: Observability backend + CLI (object counts per plane, ingest timestamps/errors, ASK counts/latency); interim GUI dashboard showing status + ASK; external ingest sample set; collaboration/multi-user explicitly deferred.
+
+## Note Ingestion Defaults
+- Notes always get a UUID via `ensure_note_uuid` before watcher/update runs; the YAML round-trip helper is the only parser/writer for frontmatter.
+- Missing UUIDs never suppress ingestion; CLI/status output notes when a UUID was added during processing.
+- Default mode is ingestion-only: `note_moves_enable` defaults to false, Planner demotes move/rename steps, and Promotion logs `promote.skip.move` instead of moving files. Flip the flag in `vault/@Settings/global` to enable moves later.
+
 ## v4.8 — Agent Coordination (A2A)
-- Status: Planned.
+- Status: Planned (post-MVP).
 - Summary: Defines the canonical A2A schema (`agent.request.created`, `agent.response.created`, `agent.error`) and wires it through the Orchestrator so multi-agent coordination stays deterministic and audited.
 - Flags: `A2A_ENABLE` (default off) keeps choreography inert until explicitly toggled by operators or the Planner Agent.
 - CI: Deterministic mocks replay A2A envelopes and keep memory-mode smoke at eight lines; Planner Agent + Orchestrator remain disabled in CI by default.
@@ -26,7 +37,7 @@
 - CI: Mock Planner Agent keeps tests deterministic; `PLANNER_PROVIDER=mock` is enforced automatically when `LLM_PROVIDER=mock`, and descriptor validation is covered by new planner/orchestrator tests.
 
 ## v4.10 — Orchestrator Runtime
-- Status: Active — Skeleton executor delivered.
+- Status: Skeleton delivered; maintained as part of Reality-MVP while LangGraph/real MCP execution is deferred.
 - Summary: `app/orchestrator.runtime` validates plans, runs steps sequentially, emits `orchestrator.step.*`, and integrates with `send_agent_request` plus MCP mock descriptors so plan execution stays fully audited without touching the filesystem/network. `app.agents.pipeline.maybe_execute_plan()` (gated by `ORCHESTRATOR_ENABLE`) now replays plans immediately after planning.
 - Flags: `ORCHESTRATOR_ENABLE` gates the runtime so teams can dual-run CLI and Orchestrator paths; planner flag must also be enabled.
 - CI: New tests under `tests/orchestrator/` assert plan playback, MCP validation, A2A error emission, and pipeline wiring. Execution remains mock-only, preserving the eight-line CI contract while groundwork for LangGraph + real MCP integrations proceeds.
@@ -68,11 +79,12 @@ CI SUMMARY GATES ok=true reasons=
 Relation coverage + validity now exceed the ≥95 % SoT v4.6-B guardrail while ce_local remains default-off unless flags are set; staging now runs with `PROMOTION_REQUIRE_RELATIONS=1` so promotion gating is enforced ahead of production.
 
 ## Outstanding Blockers
-- Cross-encoder provider contract for v4.6 reranker (decision pending between OpenAI and local model).
-- Production diarization sample set requires legal approval for sharing audio traces.
-- RelationIndex fitness benchmark tooling lacks test data beyond 10k objects.
+- Long-run ingest reliability on real vaults (resume logic, malformed frontmatter handling) needs soak testing before calling vault ingestion “stable”.
+- Minimal external ingest sample (newsletters/PDFs) and drop-folder wiring need to be finalized so external plane coverage can be demonstrated.
+- Observability aggregator + interim GUI endpoints are unimplemented; status CLI/dashboard requires object counts per plane and ASK latency/error metrics.
 
 ## Ready for Tagging
+- [ ] Reality-MVP (vault ingestion + minimal external ingest + ASK API + observability backend + interim GUI)
 - [x] v4.5A baseline
-- [ ] v4.5B polish release (P1 rerank + P2 chunk/dedup complete)
-- [ ] v4.6 feature release
+- [ ] v4.5B polish release (P1 rerank + P2 chunk/dedup complete) — archival
+- [ ] v4.6 feature release — archival

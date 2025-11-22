@@ -12,6 +12,18 @@ Det använder ett mänskligt gränssnitt (Markdown-vault) och ett maskinellt ”
 - [Diagrams](docs/DIAGRAMS.md)
 <!-- DOCS-LINKS:END -->
 
+What works today
+- PER-loop ingestion for Obsidian notes with Core-6 projection into Stores + Outbox (Normalizer→PromotionAgent).
+- Hybrid retrieval + ASK CLI over the vault plane; rerank/reasoning are flag-gated.
+- Zones and planes defined: vault as human surface with minimal frontmatter; `external_raw` objects stay out of Obsidian but are indexed for answers.
+- Deterministic CI via the eight-line contract (latency, eval, relations, diarization, reasoning, gates).
+
+Current focus — Reality-MVP
+- Harden real-vault ingestion (selected folders) and provenance into ObjectStore + VectorIndex.
+- Minimal external ingest (newsletters/PDFs) into `external_raw` objects indexed but not rendered as notes.
+- Ship ASK FastAPI endpoint with answers + sources + latency plus status CLI/backend (object counts, ingest runs, ASK usage).
+- Provide an interim FastAPI-served GUI for status + ASK; collaboration/multi-user and advanced serendipity/reflection features are explicitly deferred.
+
 
 I v4.10 är kärnan komplett:
 	•	Store-abstraktion (ObjectStore, VectorIndex, RelationIndex, ReasoningStore)

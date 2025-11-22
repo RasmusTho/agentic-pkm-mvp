@@ -1,23 +1,45 @@
 # Roadmap — Strategic Control
 
+## Reality-MVP (Current focus — SoT v4.10)
+- Deliver a reliable single-user Reality-MVP: stable ingestion of the real Obsidian vault, minimal external ingest, ASK API, observability backend, and an interim GUI for status + ASK.
+- Zones overlay (Active/Warm/Cold) runs as a derived projection across Stores; orthogonal to lifecycle (inbox → processed → evergreen → archived) and temporal value (ephemeral/normal/evergreen).
+- Two planes: vault (human graph with minimal frontmatter) and external corpus (newsletters/emails/PDFs) that are indexed and retrievable but not shown as Obsidian notes.
+- Human frontmatter stays lightweight; system metadata (signals, usage, relations, promotions, zone inference) lives in SetDB/AMG + Stores. Core-6 remains a projection.
+- Collaboration and multi-user flows are explicitly deferred until after the Reality-MVP is solid.
+
+### Reality-MVP scope
+1) **Vault ingestion** — CLI/agent command to ingest selected vault folders into ObjectStore with Core-6 fields and provenance; emit Outbox events and index into VectorIndex.
+2) **External corpus (minimal)** — ingest a small, real set of external documents (e.g., exported newsletters/PDFs) into `external_raw` objects; store + index them without exposing them as vault notes.
+3) **ASK API** — FastAPI endpoint that answers questions with sources `{uuid, title, origin (vault/external), zone if known, path/source_ref}` and latency.
+4) **Observability backend** — status service + CLI that surfaces per-store object counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency.
+5) **Interim GUI** — simple FastAPI-served page showing system status and an ASK box with visible sources; explicitly a temporary observability/interaction surface.
+
 ## Version Ladder Overview
 | Version | Intent | State |
 | --- | --- | --- |
+| Reality-MVP (SoT v4.10) | Vault ingestion + external corpus plane + ASK API + observability + interim GUI | Active (current focus) |
 | v4.3 | Establish the PER ingest loop, Outbox wiring, and CI contracts. | Delivered |
 | v4.4 | Harden observability, Store abstraction, and identity plus conflict handling. | Delivered |
 | v4.5A | Stabilize unified ingestion, enforce deterministic memory-first CI, and document promotion rules. | Delivered |
 | v4.5B | Fitness guards + ingestion polish, rerank + chunk dedup readiness. | Delivered |
-| v4.6 | Retrieval quality upgrades (cross-encoder, diarization adapter, RelationIndex fitness, golden eval). | Active (Objectives A–D) |
+| v4.6 | Retrieval quality upgrades (cross-encoder, diarization adapter, RelationIndex fitness, golden eval). | Historical foundation (Objectives A–D maintained) |
 | v4.6-B | Relation coverage lift (deterministic extraction + audit trail). | Delivered |
-| v4.6-C | Diarization-aware chunking & metrics. | Active |
+| v4.6-C | Diarization-aware chunking & metrics. | Delivered (flagged feature) |
 | v4.6-D | CI gates + summary hardening. | Delivered (2025-02-18) |
-| v4.7 | Reasoning layer & reflexive agents over the knowledge graph. | Active (Objective A) |
-| v4.8 | Agent Coordination (A2A Protocol V1 + Orchestrator messaging hooks). | Planned |
+| v4.7 | Reasoning layer & reflexive agents over the knowledge graph. | Deferred until after Reality-MVP |
+| v4.8 | Agent Coordination (A2A Protocol V1 + Orchestrator messaging hooks). | Planned (post-MVP) |
 | v4.9 | MCP Integration V1 + Planner Agent (LLM) plan schema. | Delivered |
-| v4.10 | Orchestrator Runtime V1 (LangGraph execution of Planner Agent output). | Active (Skeleton) |
+| v4.10 | Orchestrator Runtime V1 (LangGraph execution of Planner Agent output). | Delivered skeleton; folded into Reality-MVP |
+
+Current Reality-MVP work supersedes the statuses of the older tracks above; rows remain for SoT history.
+
+## Priority Bands
+- **Short-term (Reality-MVP)** — finish vault ingestion (real vault folders), minimal external ingest (`external_raw` pipeline), ASK API with sources + latency, observability backend (object counts, ingest runs, ASK usage), and interim GUI surface. Zones and planes are enforced as overlays without requiring folder moves; collaboration deferred.
+- **Medium-term** — Reflection layer (weekly review support with zone coverage and idea-level histories/diffs); Serendipity (exploration modes that surface Cold/older but relevant items using zone + temporal signals); Synthesis/communication pipeline (turn fragments into slides/reports/posts with traceable provenance and citations); Lifelong learning layer (goals, progression, spaced recall tied to learning objectives and note relations).
+- **Long-term** — Collaboration and collective intelligence (multi-user vaults/sets/spaces, shared promotion flows, team-level knowledge graphs) after single-user Reality-MVP and reflective layers are stable.
 
 ## Current Stable Baseline (v4.5A)
-v4.5A is the deployable baseline: Normalizer→PromotionAgent path is verified end-to-end, promotion cooldowns are enforced, and CI is green when `pytest -q -m "not pg"` passes using `STORE_BACKEND=memory` and mock LLMs. Architectural invariants to preserve: Core-6 frontmatter is immutable once normalized, Outbox events remain append-only, PromotionAgent decisions are idempotent, and audit logs stay deterministic JSONL. Any change that violates these invariants or introduces non-deterministic mocks must be postponed to v4.5B+.
+v4.5A is the deployable baseline: Normalizer→PromotionAgent path is verified end-to-end, promotion cooldowns are enforced, and CI is green when `pytest -q -m "not pg"` passes using `STORE_BACKEND=memory` and mock LLMs. Architectural invariants to preserve: Core-6 frontmatter is immutable once normalized, Outbox events remain append-only, PromotionAgent decisions are idempotent, and audit logs stay deterministic JSONL. Any change that violates these invariants or introduces non-deterministic mocks must be postponed to v4.5B+. The historical sections below (v4.5B–v4.10) remain for context while Reality-MVP sequencing above defines the active work.
 
 ## Delivered: v4.5B Fitness & Hook Readiness
 - Unified chunking + dedup pipeline via `app.ingest.chunk_policy` and `app.ingest.deduper`, surfaced through `app.agents.pipeline.ingest_and_chunk()`.
