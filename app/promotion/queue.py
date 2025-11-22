@@ -19,11 +19,13 @@ from app.events.types import (
     PROMOTE_SKIP_MISSING,
     PROMOTE_SKIP_ORPHAN,
     PROMOTE_SKIP_RELATIONS,
+    PROMOTE_SKIP_MOVE,
 )
 from app.observability.tracing import current_trace_id, span
 from app.promotion.gates import OrphanPromotionError, ensure_object_has_relations, prepare_relations_for_promotion
 from app.settings.models import PromotionSettings, SettingsBundle
 from app.settings.runtime import subscribe_settings
+from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 ROOT = Path().resolve()
 VAULT = ROOT / "vault"
@@ -32,6 +34,7 @@ QUEUE = EVENTS / "promote.queue.jsonl"
 LOG   = EVENTS / "promote.log.jsonl"
 SETTINGS = ROOT / "vault" / "_system" / "settings" / "system-settings.yaml"
 _PROMOTION_SETTINGS = PromotionSettings()
+_NOTE_MOVES_ENABLED = False
 
 
 def _apply_promotion_settings(bundle: SettingsBundle) -> None:
@@ -43,12 +46,19 @@ def _apply_promotion_settings(bundle: SettingsBundle) -> None:
         _PROMOTION_SETTINGS = PromotionSettings()
 
 
-subscribe_settings(_apply_promotion_settings)
+def _apply_global_settings(bundle: SettingsBundle) -> None:
+    global _NOTE_MOVES_ENABLED
+    try:
+        _NOTE_MOVES_ENABLED = bool(bundle.global_.note_moves_enable)
+    except Exception:
+        _NOTE_MOVES_ENABLED = False
+
 
 def _append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
 
 def enqueue(path: Path, uuid: str, desired_state: str = "promoted") -> None:
     _append_jsonl(QUEUE, {
@@ -60,36 +70,12 @@ def enqueue(path: Path, uuid: str, desired_state: str = "promoted") -> None:
         "retries": 0
     })
 
+
 def _load_settings() -> Dict[str, Any]:
     if not SETTINGS.exists():
         return {}
     return yaml.safe_load(SETTINGS.read_text(encoding="utf-8")) or {}
 
-def _read_frontmatter(p: Path) -> tuple[Dict[str, Any], str]:
-    text = p.read_text(encoding="utf-8")
-    if not text.startswith("---"):
-        return {}, text
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}, text
-    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
-    if end is None:
-        return {}, text
-    fm = "\n".join(lines[1:end])
-    body = "\n".join(lines[end+1:])
-    try:
-        meta = yaml.safe_load(fm) or {}
-        if not isinstance(meta, dict):
-            meta = {}
-    except Exception:
-        meta = {}
-    return meta, body
-
-def _write_frontmatter(p: Path, meta: Dict[str, Any], body: str) -> None:
-    fm = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(f"---\n{fm}\n---\n{body.strip()}\n", encoding="utf-8")
-    tmp.replace(p)
 
 def _safe_move(src: Path, dst_dir: Path) -> Path:
     dst_dir.mkdir(parents=True, exist_ok=True)
@@ -103,11 +89,16 @@ def _safe_move(src: Path, dst_dir: Path) -> Path:
     shutil.move(str(src), str(dst))
     return dst
 
+
 def _move_policy_dict(promo: PromotionSettings, legacy: Dict[str, Any]) -> Dict[str, Any]:
     policy = legacy.get("move_policy")
     if isinstance(policy, dict) and policy:
         return policy
     return promo.move_policy.model_dump()
+
+
+subscribe_settings(_apply_promotion_settings)
+subscribe_settings(_apply_global_settings)
 
 
 def run_once() -> int:
@@ -119,6 +110,7 @@ def run_once() -> int:
     idle_req = int(legacy.get("require_idle_seconds", promo_cfg.require_idle_seconds))
     max_retries = int(legacy.get("max_retries", promo_cfg.max_retries))
     move_policy = _move_policy_dict(promo_cfg, legacy)
+    note_moves_allowed = _NOTE_MOVES_ENABLED
 
     lines = QUEUE.read_text(encoding="utf-8").splitlines()
     QUEUE.unlink(missing_ok=True)
@@ -144,8 +136,8 @@ def run_once() -> int:
 
                 uuid = ev.get("uuid")
                 with span("worker.read_frontmatter"):
-                    meta, body = _read_frontmatter(p)
-                meta = dict(meta)
+                    frontmatter, body = load_frontmatter(p.read_text(encoding="utf-8"))
+                meta = dict(frontmatter)
 
                 if uuid:
                     try:
@@ -206,15 +198,33 @@ def run_once() -> int:
 
                 with span("worker.update_frontmatter"):
                     cleaned_lines = [ln for ln in body.splitlines() if "Promote" not in ln]
-                    new_body = "\n".join(cleaned_lines).strip() + ("\n" if cleaned_lines else "")
-                    _write_frontmatter(p, meta, new_body)
+                    cleaned_body = "\n".join(cleaned_lines).rstrip("\n")
+                    updated = dump_frontmatter(meta, cleaned_body)
+                    p.write_text(updated, encoding="utf-8")
 
                 new_p = p
-                if move_policy.get("enabled", False):
+                move_enabled = move_policy.get("enabled", False)
+                target_dir: Path | None = None
+                if move_enabled:
+                    target_rel = _pick_target(meta, move_policy)
+                    target_dir = VAULT / target_rel
+                if move_enabled and note_moves_allowed:
                     with span("worker.move_file"):
-                        target_rel = _pick_target(meta, move_policy)
-                        target_dir = VAULT / target_rel
-                        new_p = _safe_move(p, target_dir)
+                        new_p = _safe_move(p, target_dir) if target_dir else p
+                elif move_enabled and not note_moves_allowed:
+                    _append_jsonl(
+                        LOG,
+                        {
+                            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "level": "info",
+                            "event": PROMOTE_SKIP_MOVE,
+                            "uuid": uuid,
+                            "path": str(p),
+                            "target": str(target_dir) if target_dir else None,
+                            "reason": "note_moves_enable=false",
+                            "trace_id": current_trace_id(),
+                        },
+                    )
 
                 with span("worker.log_done"):
                     _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

@@ -20,6 +20,7 @@ def test_compile_roundtrip_writes_artifacts(tmp_path, monkeypatch):
     bundle = compiler.compile_all()
 
     assert bundle.global_.enable is True
+    assert bundle.global_.note_moves_enable is False
     assert bundle.providers.llm["default_chat"].model == "llama3.1:8b"
     assert {"classifier", "promotion", "reviewer", "qa"}.issubset(bundle.agents.keys())
     promo = bundle.agents["promotion"]
@@ -28,6 +29,7 @@ def test_compile_roundtrip_writes_artifacts(tmp_path, monkeypatch):
 
     global_yaml = yaml.safe_load((runtime_dir / "global.yaml").read_text())
     assert global_yaml["timeout_ms"] == 8000
+    assert global_yaml["note_moves_enable"] is False
     assert global_yaml["secrets"]["telemetry_token"] == "test-token"
     assert (runtime_dir / "agents" / "qa.yaml").exists()
     assert (runtime_dir / "agents" / "reviewer.yaml").exists()

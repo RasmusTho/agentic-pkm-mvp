@@ -13,7 +13,7 @@ from watchfiles import watch
 
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
-from app.services.note_update import process_note_update
+from app.services.note_update import NoteUpdateResult, process_note_update
 from app.services.note_watcher import NoteWatcherService
 from app.events.models import new_event
 from app.events.types import ASK_QUERY_RECEIVED
@@ -290,6 +290,16 @@ def panel_update(note_path: Path, old_path: Path | None) -> None:
         click.echo("Plans executed: 0")
 
 
+def _format_note_update_status(result: NoteUpdateResult) -> str:
+    if result.stale:
+        status = "stale (skipped)"
+    elif result.changed:
+        status = f"updated (events={result.events_count}, dispatched={result.dispatch_count})"
+    else:
+        status = "no changes"
+    if getattr(result, "uuid_added", False):
+        status = f"{status} (added uuid={result.uuid})"
+    return status
 
 
 @cli.command(help="Run NoteUpdateService on one or more notes.")
@@ -317,14 +327,12 @@ def note_update(target: Path, pattern: str) -> None:
             continue
         processed += 1
         if result.stale:
-            click.echo(f"{file_path}: stale (skipped)")
+            click.echo(f"{file_path}: {_format_note_update_status(result)}")
             continue
         dispatched += result.dispatch_count
         if result.changed:
             changed += 1
-            click.echo(f"{file_path}: updated (events={result.events_count}, dispatched={result.dispatch_count})")
-        else:
-            click.echo(f"{file_path}: no changes")
+        click.echo(f"{file_path}: {_format_note_update_status(result)}")
     click.echo(f"Processed {processed} notes (changed: {changed}, dispatched: {dispatched})")
     if errors:
         raise SystemExit(1)
@@ -350,7 +358,7 @@ def note_scan(target: Path, pattern: str) -> None:
     errors = service.last_scan.get("errors", 0)
 
     for result in results:
-        click.echo(f"{result.current_path}: updated (events={result.events_count}, dispatched={result.dispatch_count})")
+        click.echo(f"{result.current_path}: {_format_note_update_status(result)}")
     for path in service.last_skipped:
         click.echo(f"{path}: skipped")
 

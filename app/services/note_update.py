@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Mapping
 
-import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from app.agents.panel.integration import PanelPipelineResult, handle_panel_update
+from app.agents.panel.integration import handle_panel_update
 from app.orchestrator.handler import OrchestratorContext
+from app.services.note_uuid import ensure_note_uuid
+from scripts.yaml_roundtrip import load_frontmatter
 
 DEFAULT_SNAPSHOT_DIR = Path("tmp/note_update_snapshots")
 
@@ -17,9 +18,9 @@ class NoteUpdateResult(BaseModel):
     current_path: Path
     changed: bool
     stale: bool = False
+    uuid_added: bool = False
     events_count: int = 0
     dispatch_count: int = 0
-    panel_result: PanelPipelineResult | None = Field(default=None, exclude=True)
 
 
 def process_note_update(
@@ -30,9 +31,13 @@ def process_note_update(
     snapshot_dir: Path | None = None,
 ) -> NoteUpdateResult:
     resolved_path = Path(note_path).resolve()
+    original_markdown = resolved_path.read_text(encoding="utf-8")
+    original_frontmatter, _ = load_frontmatter(original_markdown)
+    had_uuid = bool(str(original_frontmatter.get("uuid") or "").strip())
+    note_uuid = ensure_note_uuid(resolved_path)
+    uuid_added = not had_uuid
+
     raw_markdown = resolved_path.read_text(encoding="utf-8")
-    frontmatter = _extract_frontmatter(raw_markdown)
-    note_uuid = str(frontmatter.get("uuid") or "").strip()
     if not note_uuid:
         raise ValueError(f"Note {resolved_path} is missing 'uuid' in frontmatter")
 
@@ -70,33 +75,10 @@ def process_note_update(
         current_path=resolved_path,
         changed=changed,
         stale=False,
+        uuid_added=uuid_added,
         events_count=len(panel_result.events),
         dispatch_count=panel_result.dispatch_count,
-        panel_result=panel_result,
     )
-
-
-def _extract_frontmatter(text: str) -> dict:
-    if not text.startswith("---"):
-        return {}
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}
-    end_idx: Optional[int] = None
-    for idx in range(1, len(lines)):
-        if lines[idx].strip() == "---":
-            end_idx = idx
-            break
-    if end_idx is None:
-        return {}
-    fm_text = "\n".join(lines[1:end_idx])
-    try:
-        data = yaml.safe_load(fm_text) or {}
-        if not isinstance(data, dict):
-            return {}
-        return data
-    except Exception:
-        return {}
 
 
 def _snapshot_path(snapshot_dir: Path | None, note_uuid: str, *, ensure_parent: bool) -> Path | None:

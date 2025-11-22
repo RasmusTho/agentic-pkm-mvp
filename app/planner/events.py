@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Dict, List, Mapping
 
 from app.events.models import Event
 from app.planner.provider import PlannerInput, get_planner
-from app.planner.schema import Plan, PlanTrigger
+from app.planner.schema import Plan, PlanStep, PlanTrigger
 from app.settings.flow_profiles import (
     FlowProfile,
     get_flows_for_event as get_flow_profiles_for_event,
     load_flow_profiles,
 )
 from app.settings.flows import get_flows_for_event as get_legacy_flows_for_event
+from app.settings.runtime import get_settings_bundle
 from app.stores.plan_store import get_plan_store
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
+_MOVE_PATTERN = re.compile(r"\b(move|rename|re-file|refile)\b", re.IGNORECASE)
 
 
 def _coerce_bool(value: Any) -> bool:
@@ -111,6 +114,64 @@ def _flow_profile_payload(profile: FlowProfile) -> Dict[str, Any]:
     }
 
 
+def _note_moves_enabled(ctx: Mapping[str, Any] | None = None) -> bool:
+    ctx_value = ctx.get("note_moves_enable") if ctx else None
+    if ctx_value is not None:
+        return _coerce_bool(ctx_value)
+    try:
+        return bool(get_settings_bundle().global_.note_moves_enable)
+    except Exception:
+        return False
+
+
+def _is_move_step(step: PlanStep) -> bool:
+    parts = [step.description or "", step.tool or "", step.intent or ""]
+    metadata = step.metadata or {}
+    for key, value in metadata.items():
+        parts.append(str(key))
+        try:
+            parts.append(str(value))
+        except Exception:
+            continue
+    combined = " ".join(parts)
+    return bool(_MOVE_PATTERN.search(combined))
+
+
+def _demote_move_step(step: PlanStep, allow_moves: bool) -> PlanStep:
+    metadata = dict(step.metadata or {})
+    metadata.setdefault("skipped_move", True)
+    metadata.setdefault("original_kind", step.kind)
+    metadata.setdefault("note_moves_enable", allow_moves)
+    if step.tool and "original_tool" not in metadata:
+        metadata["original_tool"] = step.tool
+    if step.intent and "original_intent" not in metadata:
+        metadata["original_intent"] = step.intent
+    return PlanStep(
+        id=step.id,
+        kind="note",
+        description=f"Skip move: {step.description}",
+        depends_on=list(step.depends_on or []),
+        metadata=metadata,
+    )
+
+
+def _filter_move_steps(plan: Plan, *, ctx: Mapping[str, Any] | None) -> Plan:
+    allow_moves = _note_moves_enabled(ctx)
+    if plan.context is None:
+        plan.context = {}
+    plan.context.setdefault("note_moves_enable", allow_moves)
+    if allow_moves:
+        return plan
+    new_steps: List[PlanStep] = []
+    for step in plan.steps:
+        if _is_move_step(step):
+            new_steps.append(_demote_move_step(step, allow_moves))
+        else:
+            new_steps.append(step)
+    plan.steps = new_steps
+    return plan
+
+
 def plan_for_event(event: Event, ctx: Dict[str, Any] | None = None) -> Plan:
     ctx = ctx or {}
     use_profiles = planner_profiles_enabled(ctx)
@@ -166,6 +227,7 @@ def plan_for_event(event: Event, ctx: Dict[str, Any] | None = None) -> Plan:
     plan.meta.goal = plan.meta.goal or goal
     if trace_id and not plan.meta.trace_id:
         plan.meta.trace_id = trace_id
+    plan = _filter_move_steps(plan, ctx=ctx)
     get_plan_store().save(plan)
     return plan
 
