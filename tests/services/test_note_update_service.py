@@ -225,3 +225,37 @@ def test_process_note_update_preserves_existing_uuid(tmp_path: Path, monkeypatch
     assert first_result.changed is False
     assert second_result.changed is False
     assert note_path.read_text(encoding="utf-8") == after_first
+
+
+def test_process_note_update_handles_malformed_frontmatter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    generated = uuid.UUID("00000000-0000-0000-0000-00000000C003")
+    monkeypatch.setattr("app.services.note_uuid.uuid.uuid4", lambda: generated)
+    monkeypatch.setattr("app.settings.panel_actions.load_panel_action_mappings", lambda: _mapping())
+    note_path = tmp_path / "note.md"
+    note_path.write_text(
+        textwrap.dedent(
+            """
+            ---
+            title: "Unclosed
+            tags: [alpha
+            ---
+
+            Body text
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    snapshot_dir = tmp_path / "snapshots"
+    ctx = OrchestratorContext(settings={"panel_events_enable": False})
+
+    result = process_note_update(note_path, ctx, snapshot_dir=snapshot_dir)
+
+    assert result.uuid == str(generated)
+    assert result.uuid_added is True
+    assert result.changed is False
+    frontmatter, body = load_frontmatter(note_path.read_text(encoding="utf-8"))
+    assert frontmatter == {"uuid": str(generated)}
+    assert body.strip() == "Body text"
