@@ -11,6 +11,7 @@ import click
 import httpx
 from watchfiles import watch
 
+from app.observability.status_service import get_system_status
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
 from app.services.note_update import NoteUpdateResult, process_note_update
@@ -380,6 +381,33 @@ def health(as_json: bool, trace_id: Optional[str]) -> None:
     _dump(result, as_json)
     if not result.get("ok"):
         raise SystemExit(1)
+
+
+@cli.command(help="Print a system status snapshot (Reality-MVP observability).")
+def status() -> None:
+    status = get_system_status()
+    click.echo(f"SoT version: {status.sot_version}")
+    click.echo(f"Timestamp: {status.timestamp.isoformat()}Z")
+    click.echo("Stores:")
+    for store in status.stores:
+        last_ingest = store.last_ingest_at.isoformat() if store.last_ingest_at else "-"
+        last_error = store.last_error_at.isoformat() if store.last_error_at else "-"
+        click.echo(
+            f"  - {store.name}: {store.object_count} objects (last_ingest: {last_ingest}, last_error: {last_error})"
+        )
+    click.echo("Ingestion:")
+    click.echo(f"  last_run: {status.ingestion.last_run_at.isoformat() if status.ingestion.last_run_at else '-'}")
+    if status.ingestion.last_run_ok is None:
+        click.echo("  status: unknown")
+    else:
+        click.echo(f"  status: {'OK' if status.ingestion.last_run_ok else 'FAILED'}")
+    click.echo(f"  last_error: {status.ingestion.last_error_message or '-'}")
+    click.echo("ASK:")
+    avg_latency = (
+        f"{status.ask.avg_latency_ms_24h:.0f} ms" if status.ask.avg_latency_ms_24h is not None else "-"
+    )
+    click.echo(f"  queries (24h): {status.ask.total_queries_24h}")
+    click.echo(f"  avg latency: {avg_latency}")
 
 
 @cli.group(help="Settings commands (Vault-as-GUI).")
