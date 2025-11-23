@@ -8,6 +8,62 @@ from pydantic import BaseModel
 
 from app.observability.status_service import record_ask_query
 from app.retrieval.hybrid import hybrid_search
+from app.retrieval.hybrid import get_store as get_hybrid_store
+from app.stores import get_object_store
+
+_HYBRID_WARMED = False
+
+
+def _ensure_hybrid_store_loaded() -> None:
+    global _HYBRID_WARMED
+    hybrid = get_hybrid_store()
+    if hybrid.all():
+        _HYBRID_WARMED = True
+        return
+
+    store = get_object_store()
+
+    # Memory store path
+    try:
+        objs = getattr(store, "_objects", {})
+        if isinstance(objs, dict) and objs:
+            for oid, rec in objs.items():
+                payload = rec.get("payload") or {}
+                text = payload.get("text") or payload.get("content")
+                if not text:
+                    continue
+                hybrid.add_document(doc_id=str(oid), text=str(text), source_ref=rec.get("source_ref"))
+    except Exception:
+        pass
+
+    # PG store path
+    try:
+        from app.stores.pg import PgObjectStore, _connect  # type: ignore
+    except Exception:
+        PgObjectStore = None  # type: ignore
+        _connect = None  # type: ignore
+
+    if PgObjectStore is not None and isinstance(store, PgObjectStore) and _connect is not None:
+        try:
+            with _connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT object_id, payload, source_ref FROM store_objects")
+                    rows = cur.fetchall()
+            for row in rows:
+                payload = row.get("payload") or {}
+                text = payload.get("text") or payload.get("content")
+                if not text:
+                    continue
+                hybrid.add_document(
+                    doc_id=str(row.get("object_id")),
+                    text=str(text),
+                    source_ref=row.get("source_ref"),
+                )
+        except Exception:
+            pass
+
+    if hybrid.all():
+        _HYBRID_WARMED = True
 
 router = APIRouter()
 
@@ -47,6 +103,8 @@ def _to_source(hit: dict[str, Any]) -> AskSource:
 
 @router.post("/ask", response_model=AskResponse)
 async def ask(req: AskRequest) -> AskResponse:
+    if not _HYBRID_WARMED:
+        _ensure_hybrid_store_loaded()
     start = time.perf_counter()
     hits = hybrid_search(req.question, k=4)
     if hits:
