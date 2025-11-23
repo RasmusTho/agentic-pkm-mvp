@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.middleware.trace import TraceIdMiddleware
+from app.observability import configure_metrics
 
 try:
     from app.api.routes.ingest import router as ingest_router
@@ -31,6 +32,7 @@ static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
 app = FastAPI(title="Agentic PKM API")
 app.add_middleware(TraceIdMiddleware)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
+configure_metrics(app)
 
 if ingest_router is not None:
     app.include_router(ingest_router)
