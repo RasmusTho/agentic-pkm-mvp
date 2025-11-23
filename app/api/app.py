@@ -1,4 +1,9 @@
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+
 from app.middleware.trace import TraceIdMiddleware
 
 try:
@@ -21,8 +26,11 @@ try:
 except ImportError:
     ask_router = None
 
+static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
+
 app = FastAPI(title="Agentic PKM API")
 app.add_middleware(TraceIdMiddleware)
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 if ingest_router is not None:
     app.include_router(ingest_router)
@@ -32,3 +40,10 @@ if status_router is not None:
     app.include_router(status_router, prefix="/api")
 if ask_router is not None:
     app.include_router(ask_router, prefix="/api")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index() -> HTMLResponse:
+    """Interim dashboard for status visibility and manual ASK checks."""
+    index_path = static_dir / "index.html"
+    return HTMLResponse(index_path.read_text(encoding="utf-8"))

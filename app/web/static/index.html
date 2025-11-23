@@ -1,0 +1,334 @@
+<!--
+  Interim Reality-MVP dashboard: minimal status + ASK UI.
+  This is intentionally simple; a richer UI can replace it later without changing the APIs.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agentic PKM – Reality-MVP Dashboard</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --accent: #22d3ee;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --border: #1f2937;
+      --danger: #f87171;
+      --success: #34d399;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: "Helvetica Neue", Arial, sans-serif;
+      background: radial-gradient(circle at 20% 20%, #0b1224, #0c142a 45%, #0b1326 80%);
+      color: var(--text);
+    }
+    .page { max-width: 1100px; margin: 0 auto; padding: 32px 20px 48px; }
+    header h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: 0.4px; }
+    header p { margin: 0 0 20px; color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+    section { margin-top: 20px; }
+    h2 { margin: 0 0 12px; font-size: 18px; letter-spacing: 0.3px; }
+    .panel {
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+    .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--muted); font-size: 13px; }
+    .stat-row { display: flex; justify-content: space-between; gap: 10px; margin: 6px 0; font-size: 14px; }
+    .stat-row span:first-child { color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 14px; }
+    th { color: var(--muted); font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    .pill { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; font-size: 12px; color: #0b1224; background: var(--muted); }
+    .pill.ok { background: var(--success); }
+    .pill.warn { background: var(--danger); }
+    .muted { color: var(--muted); }
+    .banner { margin: 10px 0; padding: 10px 12px; border-radius: 8px; font-size: 14px; }
+    .banner.error { background: rgba(248, 113, 113, 0.12); border: 1px solid rgba(248, 113, 113, 0.4); color: #fecaca; }
+    .banner.info { background: rgba(34, 211, 238, 0.12); border: 1px solid rgba(34, 211, 238, 0.4); color: #a5f3fc; }
+    .hidden { display: none; }
+    textarea, input[type="text"] {
+      width: 100%;
+      background: #0b1224;
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 14px;
+      resize: vertical;
+      min-height: 90px;
+    }
+    button {
+      background: var(--accent);
+      color: #0b1224;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.05s ease, box-shadow 0.1s ease;
+    }
+    button:disabled { cursor: not-allowed; opacity: 0.7; }
+    button:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(34, 211, 238, 0.28); }
+    .ask-actions { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
+    .answer-box { background: #0b1224; border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-height: 60px; white-space: pre-wrap; font-size: 14px; }
+    .label { color: var(--muted); font-size: 13px; }
+    @media (max-width: 640px) { .ask-actions { flex-direction: column; align-items: flex-start; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <h1>Agentic PKM – Reality-MVP Dashboard</h1>
+      <p>Practical snapshot for observability and manual ASK testing.</p>
+    </header>
+
+    <section id="status-panel" class="panel">
+      <div class="panel-header">
+        <h2>Status</h2>
+        <span class="muted" id="status-updated">Loading...</span>
+      </div>
+      <div id="status-error" class="banner error hidden"></div>
+      <div class="grid">
+        <div class="panel">
+          <div class="panel-header"><span>Snapshot</span></div>
+          <div class="stat-row"><span>SoT version</span><span id="sot-version">N/A</span></div>
+          <div class="stat-row"><span>Timestamp</span><span id="status-timestamp">N/A</span></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><span>Ingestion</span></div>
+          <div id="ingestion-summary">
+            <div class="stat-row"><span>Last run</span><span class="muted">N/A</span></div>
+            <div class="stat-row"><span>Result</span><span class="muted">N/A</span></div>
+            <div class="stat-row"><span>Last error</span><span class="muted">N/A</span></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><span>ASK (24h)</span></div>
+          <div id="ask-summary">
+            <div class="stat-row"><span>Total queries</span><span class="muted">N/A</span></div>
+            <div class="stat-row"><span>Avg latency</span><span class="muted">N/A</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel" style="margin-top: 14px;">
+        <div class="panel-header"><span>Stores</span><span class="label">name, objects, ingest, last error</span></div>
+        <table>
+          <thead>
+            <tr><th>Name</th><th>Objects</th><th>Last ingest</th><th>Last error</th></tr>
+          </thead>
+          <tbody id="stores-list">
+            <tr><td colspan="4" class="muted">Waiting for status...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="ask-panel" class="panel">
+      <div class="panel-header">
+        <h2>Ask</h2>
+        <span class="label">Interactive check against /api/ask</span>
+      </div>
+      <div id="ask-error" class="banner error hidden"></div>
+      <label class="label" for="ask-question">Question</label>
+      <textarea id="ask-question" placeholder="Ask the agent something..."></textarea>
+      <div class="ask-actions">
+        <button id="ask-button" type="button">Ask</button>
+        <span class="muted" id="ask-hint">Zone strategy: default</span>
+      </div>
+      <div class="stat-row" style="margin-top:12px;">
+        <span class="label">Latency</span>
+        <span id="ask-latency" class="muted">N/A</span>
+      </div>
+      <div class="label" style="margin-top:10px;">Answer</div>
+      <div id="ask-answer" class="answer-box">N/A</div>
+      <div class="panel" style="margin-top:14px;">
+        <div class="panel-header"><span>Sources</span></div>
+        <table>
+          <thead>
+            <tr><th>Title</th><th>Origin</th><th>Zone</th><th>Path</th></tr>
+          </thead>
+          <tbody id="ask-sources">
+            <tr><td colspan="4" class="muted">No results yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const statusEls = {
+      version: document.getElementById("sot-version"),
+      timestamp: document.getElementById("status-timestamp"),
+      updated: document.getElementById("status-updated"),
+      stores: document.getElementById("stores-list"),
+      ingestion: document.getElementById("ingestion-summary"),
+      ask: document.getElementById("ask-summary"),
+      error: document.getElementById("status-error"),
+    };
+
+    const askEls = {
+      question: document.getElementById("ask-question"),
+      button: document.getElementById("ask-button"),
+      answer: document.getElementById("ask-answer"),
+      sources: document.getElementById("ask-sources"),
+      error: document.getElementById("ask-error"),
+      latency: document.getElementById("ask-latency"),
+    };
+
+    function showBanner(el, msg) {
+      el.textContent = msg;
+      el.classList.remove("hidden");
+    }
+
+    function clearBanner(el) {
+      el.textContent = "";
+      el.classList.add("hidden");
+    }
+
+    function formatDate(value) {
+      if (!value) return "N/A";
+      const date = new Date(value);
+      return isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+    }
+
+    function renderStores(stores) {
+      statusEls.stores.innerHTML = "";
+      if (!stores || stores.length === 0) {
+        statusEls.stores.innerHTML = '<tr><td colspan="4" class="muted">No stores reported.</td></tr>';
+        return;
+      }
+      stores.forEach((store) => {
+        const tr = document.createElement("tr");
+        const ingest = formatDate(store.last_ingest_at);
+        const error = formatDate(store.last_error_at);
+        tr.innerHTML = `
+          <td>${store.name || ""}</td>
+          <td>${store.object_count ?? "0"}</td>
+          <td>${ingest}</td>
+          <td>${error}</td>
+        `;
+        statusEls.stores.appendChild(tr);
+      });
+    }
+
+    function renderIngestion(ingestion) {
+      const statusPill = ingestion?.last_run_ok === true
+        ? '<span class="pill ok">ok</span>'
+        : ingestion?.last_run_ok === false
+          ? '<span class="pill warn">failed</span>'
+          : '<span class="pill">unknown</span>';
+      statusEls.ingestion.innerHTML = `
+        <div class="stat-row"><span>Last run</span><span>${formatDate(ingestion?.last_run_at)}</span></div>
+        <div class="stat-row"><span>Result</span><span>${statusPill}</span></div>
+        <div class="stat-row"><span>Last error</span><span>${ingestion?.last_error_message || "N/A"}</span></div>
+      `;
+    }
+
+    function renderAskSummary(ask) {
+      const total = ask?.total_queries_24h ?? 0;
+      const avg = ask?.avg_latency_ms_24h;
+      const latency = avg === null || avg === undefined ? "N/A" : `${avg.toFixed(1)} ms`;
+      statusEls.ask.innerHTML = `
+        <div class="stat-row"><span>Total queries</span><span>${total}</span></div>
+        <div class="stat-row"><span>Avg latency</span><span>${latency}</span></div>
+      `;
+    }
+
+    async function fetchStatus() {
+      statusEls.updated.textContent = "Refreshing...";
+      try {
+        const res = await fetch("/api/status");
+        if (!res.ok) throw new Error(`Status request failed (${res.status})`);
+        const data = await res.json();
+        clearBanner(statusEls.error);
+        statusEls.version.textContent = data.sot_version ?? "N/A";
+        statusEls.timestamp.textContent = formatDate(data.timestamp);
+        statusEls.updated.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        renderStores(data.stores || []);
+        renderIngestion(data.ingestion || {});
+        renderAskSummary(data.ask || {});
+      } catch (err) {
+        console.error(err);
+        statusEls.updated.textContent = "Error";
+        showBanner(statusEls.error, err?.message || "Failed to load status");
+      }
+    }
+
+    function renderSources(sources) {
+      askEls.sources.innerHTML = "";
+      if (!sources || sources.length === 0) {
+        askEls.sources.innerHTML = '<tr><td colspan="4" class="muted">No sources returned.</td></tr>';
+        return;
+      }
+      sources.forEach((src) => {
+        const tr = document.createElement("tr");
+        const zone = src.zone || "N/A";
+        const path = src.path || "N/A";
+        tr.innerHTML = `
+          <td>${src.title || "(untitled)"}</td>
+          <td>${src.origin || "N/A"}</td>
+          <td>${zone}</td>
+          <td>${path}</td>
+        `;
+        askEls.sources.appendChild(tr);
+      });
+    }
+
+    async function ask() {
+      clearBanner(askEls.error);
+      const question = askEls.question.value.trim();
+      if (!question) {
+        showBanner(askEls.error, "Please enter a question.");
+        return;
+      }
+      askEls.button.disabled = true;
+      askEls.button.textContent = "Asking...";
+      askEls.answer.textContent = "Waiting for response...";
+      try {
+        const res = await fetch("/api/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question, zone_strategy: "default" }),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || `Ask failed (${res.status})`);
+        }
+        const data = await res.json();
+        askEls.answer.textContent = data.answer || "(no answer returned)";
+        askEls.latency.textContent = data.latency_ms != null ? `${data.latency_ms} ms` : "N/A";
+        renderSources(data.sources || []);
+      } catch (err) {
+        console.error(err);
+        showBanner(askEls.error, err?.message || "Failed to submit question");
+        askEls.answer.textContent = "N/A";
+        askEls.latency.textContent = "N/A";
+        askEls.sources.innerHTML = '<tr><td colspan="4" class="muted">No sources available.</td></tr>';
+      } finally {
+        askEls.button.disabled = false;
+        askEls.button.textContent = "Ask";
+      }
+    }
+
+    askEls.button.addEventListener("click", ask);
+    askEls.question.addEventListener("keydown", (evt) => {
+      if ((evt.metaKey || evt.ctrlKey) && evt.key === "Enter") {
+        ask();
+      }
+    });
+
+    fetchStatus();
+    setInterval(fetchStatus, 60000);
+  </script>
+</body>
+</html>

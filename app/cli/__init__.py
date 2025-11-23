@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import json
@@ -12,6 +13,8 @@ import httpx
 from watchfiles import watch
 
 from app.observability.status_service import get_system_status
+from app.ingest.config import DEFAULT_VAULT_ROOT
+from app.ingest.vault_root import ingest_vault_root
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
 from app.services.note_update import NoteUpdateResult, process_note_update
@@ -78,12 +81,18 @@ def _truthy_flag(value: Any) -> bool:
     return bool(value)
 
 
-def _resolve_vault_root_path(value: Path | None) -> Path | None:
+def _resolve_vault_root_path(
+    value: Path | None, *, allow_env: bool = True, fallback_to_default: bool = False
+) -> Path | None:
+    """Resolve vault root, defaulting to the alpha vault path when requested."""
     if value is not None:
         return value
-    env_root = os.getenv("VAULT_ROOT")
-    if env_root:
-        return Path(env_root)
+    if allow_env:
+        env_root = os.getenv("VAULT_ROOT")
+        if env_root:
+            return Path(env_root)
+    if fallback_to_default:
+        return DEFAULT_VAULT_ROOT
     return None
 
 
@@ -183,6 +192,33 @@ def pipe(source: str, as_json: bool, trace_id: Optional[str]) -> None:
         }
     )
     _dump(output, as_json)
+
+
+@cli.command(
+    name="ingest-vault-root",
+    help="Ingest markdown files from vault root (root-only, non-recursive ingest; defaults to PKM - Alpha vault).",
+)
+@click.option(
+    "--root",
+    "root_dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Override vault root (default is PKM - Alpha vault).",
+)
+@click.option("--limit", type=int, default=None, help="Maximum number of markdown files to ingest from the vault root.")
+def ingest_vault_root_cmd(root_dir: Path | None, limit: int | None) -> None:
+    resolved = _resolve_vault_root_path(root_dir, allow_env=False, fallback_to_default=True)
+    if resolved is None:
+        raise click.BadParameter("Vault root could not be resolved.")
+    resolved = resolved.expanduser()
+    if not resolved.exists() or not resolved.is_dir():
+        raise click.BadParameter(f"Vault root not found or not a directory: {resolved}")
+
+    click.echo(
+        f"Ingesting up to {limit if limit is not None else 'all'} markdown files from vault root (non-recursive): {resolved}"
+    )
+    count = ingest_vault_root(resolved, limit=limit)
+    click.echo(f"Successfully ingested {count} files.")
 
 
 @cli.command(help="Ask a question through the planner/orchestrator pipeline.")

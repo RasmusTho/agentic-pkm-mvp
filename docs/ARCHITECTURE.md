@@ -41,7 +41,26 @@ The sections below retain the v4.5A Canon details as a historical baseline; inva
 ## Core Architecture
 
 ### Runtime Surfaces
-See [Local Ports & Services](PORTS.md) for the canonical mapping between Docker containers, observability helpers, and the host ports they expose during development.
+Centralized reference for HTTP apps and ports during local development and docker-compose runs.
+
+#### HTTP Apps
+| Module | Variable | Purpose | Primary Routes / Notes | How to Run |
+| --- | --- | --- | --- | --- |
+| `app.main` | `app` | Reality-MVP PKM HTTP API (status + ASK + interim GUI) | `/api/status`, `/api/ask`, optional `/api/ingest`, `/api/search`, `/` serves static dashboard | `uvicorn app.main:app --reload --port 18000` (docker-compose maps container `8000` → host `18000`) |
+| `app.legacy_http` | `app` | Legacy agent/interesting/demo endpoints | `/agent/health`, `/interesting`, `/dashboard`; uses stub repo in lifespan | `uvicorn app.legacy_http:app --reload --port 18001` (dev-only) |
+| `app._legacy.main` | `app` | Deprecated pre-Reality API with rate limits/metrics | `/`, `/health`, `/version`, `/context`, `/items`, `/ingest`, `/search`, agent/ui routes; requires DB + settings | `uvicorn app._legacy.main:app --reload` (not recommended for new runs) |
+| `api.app` | `app` | WS golden-data demo API | `/query` returns mock answer + citations from `golden/` | `uvicorn api.app:app --reload --port 8001` when needed |
+
+#### Ports
+| Service | Purpose | Default Port | How it’s exposed / notes |
+| --- | --- | ---: | --- |
+| Reality-MVP HTTP API | PKM status + ASK endpoints | 18000 | Run locally via `uvicorn app.main:app --reload --port 18000`; docker-compose exposes container `8000` on host `18000`. |
+| Postgres (app DB) | Stores/agents persistence | 15432 | `db` service in `docker-compose.yaml` listens on 5432 in-container; default DSN `postgresql+psycopg://app:app@localhost:15432/app`. |
+| OTLP collector (optional) | Traces via OpenTelemetry Collector | 4318 (HTTP) / 4317 (gRPC) | Endpoints configured in `otelcol.yaml`; point trace exporters at `http://localhost:4318` when running a collector. |
+| Prometheus (optional) | Metrics scrape endpoint | 9090 | `ops/observability/docker-compose.yaml` publishes Prometheus on 9090. |
+| Grafana (optional) | Observability UI | 3000 | `ops/observability/docker-compose.yaml` publishes Grafana on 3000 with admin/admin defaults. |
+
+This table supersedes the prior `docs/PORTS.md` listing.
 
 ### Agents
 - Normalizer — accepts capture payloads, enforces Core-6 fields, and strips unsafe metadata.

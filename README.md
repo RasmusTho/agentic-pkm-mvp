@@ -61,6 +61,23 @@ python -m app.fitness.report
 Du ska se 8-radig CI-sammanfattning:
 LATENCY / EVAL / DELTA / RELATION COVERAGE / RELATIONS / DIARIZATION / REASONING / GATES
 
+### Run Reality-MVP HTTP API locally
+
+From the repo root:
+
+```bash
+source .venv/bin/activate
+
+export STORE_BACKEND=pg
+export DATABASE_URL="postgresql+psycopg://app:app@localhost:15432/app"
+export VECTOR_BACKEND=pgvector
+
+uvicorn app.main:app --reload --port 18000
+```
+
+- GET http://127.0.0.1:18000/api/status → system status snapshot
+- POST http://127.0.0.1:18000/api/ask → ASK pipeline with sources + latency
+
 ⸻
 
 🧠 Arkitektur — v4.10
