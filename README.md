@@ -78,6 +78,32 @@ uvicorn app.main:app --reload --port 18000
 - GET http://127.0.0.1:18000/api/status → system status snapshot
 - POST http://127.0.0.1:18000/api/ask → ASK pipeline with sources + latency
 
+### Bootstrap data for the dashboard & ASK
+
+The dashboard and `/api/ask` will look “empty” until at least one object has been ingested into the ObjectStore and indexed. If the Stores table shows `vault: 0` and `external: 0` and ASK returns “No results found.”, it usually just means nothing has been ingested yet for the current `STORE_BACKEND` / `DATABASE_URL`.
+
+From the repo root, run:
+
+```bash
+source .venv/bin/activate
+
+export STORE_BACKEND=pg
+export DATABASE_URL="postgresql+psycopg://app:app@localhost:15432/app"
+export VECTOR_BACKEND=pgvector
+
+python -m app.cli ingest-vault-root --limit 25
+```
+
+You can quickly verify that object counts are non-zero with:
+
+```bash
+python -m app.cli status
+```
+
+Then reload the dashboard at http://127.0.0.1:18000. The Stores table should show a non-zero object count for at least one store, and ASK will have something to retrieve.
+
+If the Stores table still shows 0 objects after a successful ingest run, double-check that you are using the same STORE_BACKEND and DATABASE_URL settings when starting uvicorn and when running the ingest-vault-root CLI command.
+
 ⸻
 
 🧠 Arkitektur — v4.10

@@ -207,18 +207,27 @@
         statusEls.stores.innerHTML = '<tr><td colspan="4" class="muted">No stores reported.</td></tr>';
         return;
       }
+      let allEmpty = true;
       stores.forEach((store) => {
+        const count = store.object_count ?? 0;
+        if (count > 0) allEmpty = false;
         const tr = document.createElement("tr");
         const ingest = formatDate(store.last_ingest_at);
         const error = formatDate(store.last_error_at);
         tr.innerHTML = `
           <td>${store.name || ""}</td>
-          <td>${store.object_count ?? "0"}</td>
+          <td>${count}</td>
           <td>${ingest}</td>
           <td>${error}</td>
         `;
         statusEls.stores.appendChild(tr);
       });
+      if (allEmpty) {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          '<td colspan="4" class="muted">No objects indexed yet – ASK will return "No results found." until you ingest notes via the CLI (see README).</td>';
+        statusEls.stores.appendChild(tr);
+      }
     }
 
     function renderIngestion(ingestion) {
