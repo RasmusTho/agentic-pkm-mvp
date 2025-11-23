@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import json
 import time
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Iterable
 
+from app.observability.ingest_meta import get_ingest_status
 from app.observability.status_model import AskStatus, IngestionStatus, StoreStatus, SystemStatus
 from app.stores import get_object_store
 from app.version import get_sot_version
 
 _ASK_LATENCIES: list[tuple[float, float]] = []
 _ASK_WINDOW = timedelta(hours=24)
-_INGEST_STATUS_PATH = Path("tmp/ingest_status.json")
 
 
 def record_ask_query(latency_ms: float) -> None:
@@ -58,24 +56,8 @@ def get_store_status() -> list[StoreStatus]:
     return statuses
 
 
-def _read_ingest_status() -> IngestionStatus:
-    if not _INGEST_STATUS_PATH.exists():
-        return IngestionStatus()
-    try:
-        data = json.loads(_INGEST_STATUS_PATH.read_text(encoding="utf-8"))
-        last_run_at = data.get("last_run_at")
-        last_error_at = data.get("last_error_at")
-        return IngestionStatus(
-            last_run_at=datetime.fromisoformat(last_run_at) if last_run_at else None,
-            last_run_ok=data.get("last_run_ok"),
-            last_error_message=data.get("last_error_message"),
-        )
-    except Exception:
-        return IngestionStatus()
-
-
 def get_ingestion_status() -> IngestionStatus:
-    return _read_ingest_status()
+    return get_ingest_status()
 
 
 def get_ask_status() -> AskStatus:

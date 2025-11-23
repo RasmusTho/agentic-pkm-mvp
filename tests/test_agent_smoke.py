@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 import app.db as db_module
-import app.main as main_module
+import app.legacy_http as main_module
 from app.agents.qa import agent as qa_agent
 from app.retrieval.hybrid import get_store
 from tests.stub_repositories import MemoryAgentRepository
