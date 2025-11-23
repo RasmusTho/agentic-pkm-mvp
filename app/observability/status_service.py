@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from app.observability.ingest_meta import get_ingest_status
@@ -32,6 +32,19 @@ def _iter_object_records(store) -> Iterable[dict]:
         objs = getattr(store, "_objects")
         if isinstance(objs, dict):
             return objs.values()
+    try:
+        from app.stores.pg import PgObjectStore, _connect  # type: ignore
+    except Exception:
+        return []
+    if isinstance(store, PgObjectStore):
+        try:
+            with _connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT payload FROM store_objects")
+                    rows = cur.fetchall()
+            return ({"payload": row.get("payload") or {}} for row in rows)
+        except Exception:
+            return []
     return []
 
 
@@ -72,7 +85,7 @@ def get_ask_status() -> AskStatus:
 
 def get_system_status() -> SystemStatus:
     return SystemStatus(
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         sot_version=get_sot_version(),
         stores=get_store_status(),
         ingestion=get_ingestion_status(),

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.observability.status_service import get_system_status, record_ask_query
@@ -14,7 +14,7 @@ def test_get_system_status_returns_counts_and_timestamp():
     record_ask_query(50.0)
     status = get_system_status()
 
-    assert status.timestamp <= datetime.utcnow()
+    assert status.timestamp <= datetime.now(timezone.utc)
     assert status.sot_version
     names = {s.name: s.object_count for s in status.stores}
     assert names.get("vault", 0) >= 1
