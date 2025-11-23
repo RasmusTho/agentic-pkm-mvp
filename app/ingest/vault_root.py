@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -84,7 +84,7 @@ def ingest_vault_root(root: Path, limit: int | None = None) -> int:
     Run the existing ingestion pipeline on up to `limit` markdown files
     in the vault root. Returns the number of files successfully ingested.
     """
-    run_started = datetime.utcnow()
+    run_started = datetime.now(timezone.utc)
     processed = 0
     failures = 0
     files = iter_vault_root_markdown(root, limit)

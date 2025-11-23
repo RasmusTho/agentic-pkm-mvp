@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from app.observability.ingest_meta import get_ingest_status
@@ -85,7 +85,7 @@ def get_ask_status() -> AskStatus:
 
 def get_system_status() -> SystemStatus:
     return SystemStatus(
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         sot_version=get_sot_version(),
         stores=get_store_status(),
         ingestion=get_ingestion_status(),

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -54,7 +54,7 @@ def _ensure_loaded() -> None:
 
 def record_ingest_success(dt: Optional[datetime] = None) -> None:
     global _last_ingest_run_at, _last_ingest_run_ok, _last_ingest_error_message
-    _last_ingest_run_at = dt or datetime.utcnow()
+    _last_ingest_run_at = dt or datetime.now(timezone.utc)
     _last_ingest_run_ok = True
     _last_ingest_error_message = None
     _write_status(_last_ingest_run_at, True, None)
@@ -62,7 +62,7 @@ def record_ingest_success(dt: Optional[datetime] = None) -> None:
 
 def record_ingest_failure(dt: Optional[datetime], message: str) -> None:
     global _last_ingest_run_at, _last_ingest_run_ok, _last_ingest_error_message
-    _last_ingest_run_at = dt or datetime.utcnow()
+    _last_ingest_run_at = dt or datetime.now(timezone.utc)
     _last_ingest_run_ok = False
     _last_ingest_error_message = message
     _write_status(_last_ingest_run_at, False, message)
