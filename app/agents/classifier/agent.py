@@ -66,7 +66,13 @@ def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
     ]
     content = None
     try:
-        content = generate(messages, reasoning=True)
+        content = generate(
+            messages,
+            reasoning=True,
+            agent="classifier",
+            kind="classification",
+            trace_id=trace_id,
+        )
         data = _parse_json_block(content) or {}
     except Exception:
         data = {}

@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
+from uuid import UUID
+
+from pydantic import BaseModel, Field
 
 from app.events.types import PROMOTION_EVALUATE_DONE
+from app.reasoning.provider import get_reasoner
+from app.reasoning.schema import ReasoningInput, ReasoningOutput
+from app.stores import get_object_store
 from app.store.object_store import ObjectStore
 from app.services.decisions import insert_decision, latest_decision
 from app.services.audit import audit_event
@@ -105,3 +111,60 @@ def evaluate_object(object_id: str, *, trace_id: str, threshold: float = 0.8) ->
 
 def run(object_id: str, *, trace_id: str, threshold: float = 0.8) -> dict[str, Any]:
     return evaluate_object(object_id, trace_id=trace_id, threshold=threshold)
+
+
+class RankedCandidate(BaseModel):
+    object_id: str
+    score: float
+    reasons: list[str] = Field(default_factory=list)
+
+
+class SetEvaluationResult(BaseModel):
+    question: str
+    ranking: list[RankedCandidate] = Field(default_factory=list)
+
+
+def run_set_evaluator(object_ids: Sequence[str], *, question: str, trace_id: str | None = None) -> SetEvaluationResult:
+    """
+    Rank a set of candidate objects for a question, attaching lightweight reasons.
+    Uses the Reasoning provider to keep behavior consistent with single-note tests.
+    """
+    store = ObjectStore()
+    fallback_store = get_object_store()
+    reasoner = get_reasoner()
+    ranking: list[RankedCandidate] = []
+    for idx, object_id in enumerate(object_ids):
+        obj = store.get_object(object_id)
+        payload = obj.payload if obj else {}
+        if not payload:
+            try:
+                alt = fallback_store.get(UUID(str(object_id)))
+            except Exception:
+                alt = None
+            if alt and isinstance(alt, dict):
+                payload = alt.get("payload") or {}
+        text = ""
+        if isinstance(payload, dict):
+            text = payload.get("text") or payload.get("content") or ""
+        reasoning_input = ReasoningInput(
+            object_uuid=str(object_id),
+            text=text,
+            metadata={},
+            relations=[],
+        )
+        try:
+            reasoning_output = reasoner.reason(reasoning_input)
+        except Exception:
+            reasoning_output = ReasoningOutput()
+        reasons = [claim.text for claim in reasoning_output.claims[:2]]
+        if not reasons:
+            snippet = text.strip()
+            if snippet:
+                reasons.append(snippet[:160])
+        if not reasons:
+            reasons.append("No reasoning available")
+        score = max(0.0, 1.0 - 0.05 * idx)
+        ranking.append(RankedCandidate(object_id=str(object_id), score=score, reasons=reasons))
+    if not ranking:
+        raise ValueError("No candidates provided to SetEvaluator")
+    return SetEvaluationResult(question=question, ranking=ranking)
