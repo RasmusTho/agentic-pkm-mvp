@@ -122,6 +122,8 @@ def call_llm(
     trace_id: Optional[str] = None,
 ) -> str:
     provider = os.getenv("LLM_PROVIDER", "fake").lower()
+    if provider == "llm":
+        provider = "ollama"
     model = os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", "llama3.1:8b"))
     temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
     system = pack.get("system", "")

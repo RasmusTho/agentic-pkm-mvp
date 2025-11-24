@@ -74,12 +74,19 @@ class OllamaReasoner(BaseReasoner):
 def get_reasoner() -> BaseReasoner:
     backend = os.getenv("REASONING_PROVIDER", "").strip().lower()
     llm_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
-    if os.getenv("CI", "") or backend in {"", "mock"}:
+    ci = os.getenv("CI", "") == "1"
+
+    if backend in {"mock", "golden"} or (ci and backend == ""):
         return MockReasoner()
-    if backend in {"ollama"}:
-        if llm_provider == "ollama":
-            return OllamaReasoner()
-        return MockReasoner()
+
+    if backend == "":
+        backend = "llm"
+
+    if backend in {"llm", "ollama"}:
+        if llm_provider == "mock":
+            return MockReasoner()
+        return OllamaReasoner()
+
     return MockReasoner()
 
 

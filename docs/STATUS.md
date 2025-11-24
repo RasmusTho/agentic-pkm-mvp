@@ -88,6 +88,8 @@ Reasoning Alpha (local LLM)
   export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
   export OPENAI_API_KEY=sk-local
   export LLM_PROVIDER=llm
+  export REASONING_PROVIDER=llm
+  export PLANNER_PROVIDER=llm
   export REASONING_ENABLE=1
   export LLM_TRACE_ENABLE=1
   export LLM_TRACE_PATH=tmp/llm-trace.jsonl
@@ -103,6 +105,11 @@ Reasoning Alpha (local LLM)
     tests/agents/test_planner_reasoning_e2e.py
   ```
 - The same env routes calls through the local LLM and writes JSONL traces for inspection.
+
+Provider policy
+- Local default (CI unset, providers empty): reasoning/planner prefer LLM backends.
+- CI default: `LLM_PROVIDER=mock`, `REASONING_PROVIDER=mock`, `PLANNER_PROVIDER=mock`, `REASONING_ENABLE=1`; alpha LLM tests are skipped via `-m "not alpha_llm"`.
+- Use `@pytest.mark.alpha_llm` tests for real LLM flows; they respect your env and never force mock providers.
 
 ## Metrics Snapshot
 - QAS-003 p95: 0.000127 s

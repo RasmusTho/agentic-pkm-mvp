@@ -50,17 +50,22 @@ jobs:
       - name: Run smoke tests (mock LLM, no PG)
         env:
           LLM_PROVIDER: mock
+          REASONING_PROVIDER: mock
+          PLANNER_PROVIDER: mock
+          REASONING_ENABLE: "1"
           LLM_MOCK_RESPONSE: '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}'
           STORE_BACKEND: memory
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          pytest -q -c /dev/null -m "not pg"
+          pytest -q -c /dev/null -m "not pg and not alpha_llm"
       - name: CLI smoke commands
         env:
           PYTHONPATH: ${{ github.workspace }}
           STORE_BACKEND: memory
           LLM_PROVIDER: mock
+          REASONING_PROVIDER: mock
+          PLANNER_PROVIDER: mock
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
           python -m app.cli --help >/dev/null

@@ -307,8 +307,16 @@ class LLMPlanner(BasePlanner):
 
 
 def get_planner() -> BasePlanner:
-    provider = os.getenv("PLANNER_PROVIDER", "mock").strip().lower()
-    llm_provider = os.getenv("LLM_PROVIDER", "mock").strip().lower()
+    provider = os.getenv("PLANNER_PROVIDER", "").strip().lower()
+    llm_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
+    ci = os.getenv("CI", "") == "1"
+
+    if provider in {"mock", "golden"} or (ci and provider == ""):
+        return MockPlanner()
+
+    if provider == "":
+        provider = "llm"
+
     if provider == "llm":
         if llm_provider == "mock":
             audit_log(
@@ -320,6 +328,7 @@ def get_planner() -> BasePlanner:
             )
             return MockPlanner()
         return LLMPlanner()
+
     return MockPlanner()
 
 

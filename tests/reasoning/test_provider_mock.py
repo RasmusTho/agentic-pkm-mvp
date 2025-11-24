@@ -29,7 +29,7 @@ def test_mock_reasoner_returns_fixture() -> None:
 def test_get_reasoner_falls_back_to_mock_when_ollama_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.setenv("REASONING_PROVIDER", "ollama")
-    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
     assert isinstance(get_reasoner(), MockReasoner)
 
 

@@ -9,12 +9,12 @@ from app.reasoning.store import reset_reasoning_store
 from app.stores import get_object_store
 from tests.helpers.pkm_alpha_helper import load_pkm_alpha_subset_for_reasoning, reset_memory_stores
 
+pytestmark = [pytest.mark.not_pg, pytest.mark.alpha_llm]
+
 
 @pytest.fixture
 def memory_object_store(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STORE_BACKEND", "memory")
-    monkeypatch.setenv("LLM_PROVIDER", "mock")
-    monkeypatch.setenv("REASONING_PROVIDER", "mock")
     monkeypatch.setenv("REASONING_ENABLE", "1")
     reset_memory_stores()
     yield get_object_store()

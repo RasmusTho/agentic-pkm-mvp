@@ -17,13 +17,12 @@ from app.stores import get_object_store
 from tests.helpers.pkm_alpha_helper import load_pkm_alpha_subset_for_reasoning, reset_memory_stores
 
 QUESTION = "Based on my existing notes, how should I refine my PKM zone model to reduce cognitive load in my daily work?"
+pytestmark = [pytest.mark.not_pg, pytest.mark.alpha_llm]
 
 
 @pytest.fixture
 def memory_object_store(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STORE_BACKEND", "memory")
-    monkeypatch.setenv("LLM_PROVIDER", "mock")
-    monkeypatch.setenv("REASONING_PROVIDER", "mock")
     monkeypatch.setenv("REASONING_ENABLE", "1")
     reset_memory_stores()
     yield get_object_store()
@@ -37,10 +36,7 @@ def settings_runtime(monkeypatch: pytest.MonkeyPatch):
         def enable_planner_and_reasoning(self) -> None:
             monkeypatch.setenv("PLANNER_ENABLE", "1")
             monkeypatch.setenv("ORCHESTRATOR_ENABLE", "1")
-            monkeypatch.setenv("PLANNER_PROVIDER", "mock")
             monkeypatch.setenv("REASONING_ENABLE", "1")
-            monkeypatch.setenv("REASONING_PROVIDER", "mock")
-            monkeypatch.setenv("LLM_PROVIDER", "mock")
 
     return RuntimeToggles()
 

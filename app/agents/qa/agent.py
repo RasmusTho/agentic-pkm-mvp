@@ -39,7 +39,8 @@ def _max_tokens() -> int:
 
 
 def _provider() -> str:
-    return (os.getenv("LLM_PROVIDER") or _QA_SETTINGS.llm.provider).lower()
+    prov = (os.getenv("LLM_PROVIDER") or _QA_SETTINGS.llm.provider).lower()
+    return "ollama" if prov == "llm" else prov
 
 
 def _llm_host() -> str:

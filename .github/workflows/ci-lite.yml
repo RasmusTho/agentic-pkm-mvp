@@ -22,6 +22,11 @@ jobs:
     env:
       DATABASE_URL: postgresql://app:app@localhost:5432/app
       PYTHONPATH: ${{ github.workspace }}
+      STORE_BACKEND: memory
+      LLM_PROVIDER: mock
+      REASONING_PROVIDER: mock
+      PLANNER_PROVIDER: mock
+      REASONING_ENABLE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,7 +40,7 @@ jobs:
       - name: Upgrade database
         run: alembic upgrade head || true
       - name: Run unit tests (fast)
-        run: pytest -q | tee pytest.log
+        run: pytest -q -m "not alpha_llm" | tee pytest.log
       - name: Upload unit test log
         if: always()
         uses: actions/upload-artifact@v4

@@ -10,7 +10,8 @@ from app.llm.trace import log_llm_call
 
 
 def _prov() -> str:
-    return os.getenv("LLM_PROVIDER", "ollama").lower()
+    prov = os.getenv("LLM_PROVIDER", "ollama").lower()
+    return "ollama" if prov == "llm" else prov
 
 
 def _model() -> str:

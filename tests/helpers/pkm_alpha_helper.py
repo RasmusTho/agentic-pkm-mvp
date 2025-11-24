@@ -74,7 +74,6 @@ def load_pkm_alpha_subset_for_reasoning(object_store=None) -> dict[str, str]:
     ObjectStore. Returns a mapping of semantic labels to deterministic ids.
     """
     os.environ.setdefault("STORE_BACKEND", "memory")
-    os.environ.setdefault("LLM_PROVIDER", "mock")
 
     # Ensure the caller's store is materialized for downstream lookups.
     if object_store is None:
