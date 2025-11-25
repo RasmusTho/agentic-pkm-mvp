@@ -48,7 +48,7 @@ def test_select_flow_pattern_prompt_picks_first_entries() -> None:
 def test_llm_planner_parses_valid_plan(monkeypatch: pytest.MonkeyPatch) -> None:
     planner = LLMPlanner()
 
-    def fake_call_llm(name: str, pack: dict) -> str:
+    def fake_call_llm(name: str, pack: dict, **_: object) -> str:
         return json.dumps(_fake_plan_payload())
 
     monkeypatch.setattr("app.planner.provider.call_llm", fake_call_llm)
@@ -65,7 +65,7 @@ def test_llm_planner_includes_flow_profile_guidance(monkeypatch: pytest.MonkeyPa
     planner = LLMPlanner()
     captured: Dict[str, str] = {}
 
-    def fake_call_llm(name: str, pack: dict) -> str:
+    def fake_call_llm(name: str, pack: dict, **_: object) -> str:
         captured["user"] = pack["user"]
         return json.dumps(_fake_plan_payload())
 
@@ -96,7 +96,7 @@ def test_llm_planner_includes_flow_profile_guidance(monkeypatch: pytest.MonkeyPa
 
 def test_llm_planner_falls_back_on_invalid_output(monkeypatch: pytest.MonkeyPatch) -> None:
     planner = LLMPlanner()
-    monkeypatch.setattr("app.planner.provider.call_llm", lambda name, pack: "not-json")
+    monkeypatch.setattr("app.planner.provider.call_llm", lambda name, pack, **_: "not-json")
     inp = PlannerInput(object_uuid="obj-10", goal="Goal", text="body", metadata={"trace_id": "trace-x"})
     before = _audit_ring_snapshot()
     plan = planner.plan(inp)
@@ -110,7 +110,7 @@ def test_llm_planner_legacy_prompt_without_profiles(monkeypatch: pytest.MonkeyPa
     planner = LLMPlanner()
     captured: Dict[str, str] = {}
 
-    def fake_call_llm(name: str, pack: dict) -> str:
+    def fake_call_llm(name: str, pack: dict, **_: object) -> str:
         captured["user"] = pack["user"]
         return json.dumps(_fake_plan_payload())
 

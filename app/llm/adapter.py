@@ -81,6 +81,7 @@ def generate(
         kind=kind,
         messages=messages,
         response=raw_response,
+        response_text=content,
         trace_id=trace_id,
     )
     return content

@@ -30,6 +30,8 @@ def test_reasoning_inert_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_reasoning_runs_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("REASONING_ENABLE", "1")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("REASONING_PROVIDER", "mock")
     obj = {
         "uuid": "reasoning-sample-1",
         "text": "Alpha memo states that solar storage reduces peak load and cites grid stability data.",

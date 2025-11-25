@@ -59,6 +59,7 @@ def _call_llm(messages: List[Dict[str, str]], *, trace_id: str, max_tokens: int)
             kind="qa.draft",
             messages=messages,
             response={"content": content},
+            response_text=content,
             trace_id=trace_id,
         )
         return content
@@ -89,6 +90,7 @@ def _call_llm(messages: List[Dict[str, str]], *, trace_id: str, max_tokens: int)
         kind="qa.draft",
         messages=messages,
         response=data,
+        response_text=content,
         trace_id=trace_id,
     )
     return content

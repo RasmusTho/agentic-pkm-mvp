@@ -5,8 +5,7 @@ from uuid import UUID
 import pytest
 
 from app.agents.pipeline import _collect_relation_snapshots
-from app.reasoning.provider import get_reasoner
-from app.reasoning.schema import ReasoningInput
+from app.reasoning.provider import run_reasoning_claims_for_object
 from app.reasoning.store import reset_reasoning_store
 from app.stores import get_object_store
 from tests.helpers.pkm_alpha_helper import load_pkm_alpha_subset_for_reasoning, reset_memory_stores
@@ -17,6 +16,8 @@ pytestmark = [pytest.mark.not_pg, pytest.mark.alpha_llm]
 @pytest.fixture
 def memory_object_store(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("REASONING_PROVIDER", "mock")
     reset_memory_stores()
     yield get_object_store()
     reset_reasoning_store()
@@ -24,18 +25,7 @@ def memory_object_store(monkeypatch: pytest.MonkeyPatch):
 
 
 def run_reasoning_for_object(object_id: str):
-    store = get_object_store()
-    obj = store.get(UUID(object_id))
-    assert obj is not None, "object missing from memory store"
-    payload = obj.get("payload") or {}
-    text = payload.get("text") or payload.get("content") or ""
-    reasoning_input = ReasoningInput(
-        object_uuid=object_id,
-        text=text,
-        metadata=payload,
-        relations=_collect_relation_snapshots(object_id),
-    )
-    return get_reasoner().reason(reasoning_input)
+    return run_reasoning_claims_for_object(object_id)
 
 
 def test_reasoning_layer_produces_claims_and_evidence(memory_object_store, monkeypatch: pytest.MonkeyPatch) -> None:

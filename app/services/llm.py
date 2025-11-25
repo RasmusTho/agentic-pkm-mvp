@@ -95,6 +95,50 @@ def _deterministic_llm_response() -> str:
     )
 
 
+def _deterministic_reasoning_response() -> str:
+    return json.dumps(
+        {
+            "claims": [
+                {
+                    "id": "det-claim-1",
+                    "object_uuid": "det-object",
+                    "text": "Deterministic claim about the note.",
+                    "modality": "assertion",
+                    "confidence": 0.8,
+                }
+            ],
+            "evidence": [
+                {
+                    "id": "det-evidence-1",
+                    "object_uuid": "det-object",
+                    "source_ref": "deterministic-source",
+                    "kind": "document",
+                    "strength": 0.7,
+                }
+            ],
+            "inferences": [
+                {
+                    "id": "det-inf-1",
+                    "premises": ["det-claim-1"],
+                    "conclusion_id": "det-claim-1",
+                    "type": "support",
+                    "rationale": "Deterministic rationale.",
+                }
+            ],
+        }
+    )
+
+
+def _deterministic_ranking_response(object_ids: list[str]) -> str:
+    ranking = []
+    for idx, oid in enumerate(object_ids):
+        score = max(0.0, 1.0 - 0.05 * idx)
+        ranking.append({"object_uuid": oid, "score": score, "reason": f"Deterministic ranking for {oid}"})
+    if not ranking:
+        ranking = [{"object_uuid": "det-object", "score": 0.9, "reason": "Deterministic ranking"}]
+    return json.dumps({"ranking": ranking})
+
+
 def with_llm_retries(
     fn: Callable[[], Any], *, max_retries: int | None = None, base_delay: float | None = None
 ) -> Any:
@@ -140,6 +184,13 @@ def call_llm(
             response_text = _deterministic_llm_response()
         except (socket.timeout, ConnectionRefusedError, RuntimeError):
             response_text = _deterministic_llm_response()
+    if str(response_text or "").strip() in {"", "{}"}:
+        if kind and "ranking" in str(kind):
+            response_text = _deterministic_ranking_response([str(p) for p in pack.values() if isinstance(p, str)])
+        elif kind and "reasoning" in str(kind):
+            response_text = _deterministic_reasoning_response()
+        else:
+            response_text = _deterministic_llm_response()
 
     log_llm_call(
         provider=provider or "unknown",
@@ -148,6 +199,7 @@ def call_llm(
         kind=kind or name or "unknown",
         messages=messages,
         response={"content": response_text},
+        response_text=response_text,
         trace_id=trace_id,
     )
 
