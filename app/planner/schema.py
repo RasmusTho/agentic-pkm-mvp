@@ -25,6 +25,8 @@ class PlanStep(BaseModel):
     description: str
     agent: Optional[str] = None
     intent: Optional[str] = None
+    reason: Optional[str] = None
+    explanation: Optional[str] = None
     tool: Optional[str] = None
     tool_args: Dict[str, Any] = Field(default_factory=dict)
     depends_on: List[str] = Field(default_factory=list)
@@ -69,12 +71,14 @@ def make_simple_plan(*, goal: str, source_object_uuid: str, created_by: str = "p
                 description="Review the note context",
                 agent="review-agent",
                 intent="analyze",
+                reason="Review context to ground follow-up actions",
             ),
             PlanStep(
                 id="step-2",
                 kind="decision",
                 description="Decide whether follow-up actions are needed",
                 depends_on=["step-1"],
+                reason="Guardrail before taking further steps",
             ),
         ],
         goal=goal,

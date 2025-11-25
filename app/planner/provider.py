@@ -77,6 +77,8 @@ def _step_from_target(step_data: Any, index: int, inp: "PlannerInput") -> PlanSt
     description = raw_entry.get("description")
     intent = raw_entry.get("intent")
     metadata = dict(raw_entry.get("metadata") or {})
+    reason_text = raw_entry.get("reason") or raw_entry.get("rationale")
+    explanation = raw_entry.get("explanation")
     args = dict(raw_entry.get("args") or {})
     prefix = ""
     remainder = target_value
@@ -93,6 +95,8 @@ def _step_from_target(step_data: Any, index: int, inp: "PlannerInput") -> PlanSt
             description=description or f"Execute agent '{description_fallback}'",
             agent=remainder or None,
             intent=intent,
+            reason=reason_text or description or f"Agent call for {remainder or description_fallback}",
+            explanation=explanation,
         )
     if prefix in {"tool", "mcp"}:
         tool_name = remainder
@@ -109,18 +113,24 @@ def _step_from_target(step_data: Any, index: int, inp: "PlannerInput") -> PlanSt
             description=description or f"Invoke tool '{tool_name}'",
             tool=tool_name,
             tool_args=tool_args,
+            reason=reason_text or description or f"Tool call for {tool_name}",
+            explanation=explanation,
         )
     if prefix == "decision":
         return PlanStep(
             id=step_id,
             kind="decision",
             description=description or f"Decision: {description_fallback}",
+            reason=reason_text or description or f"Decision for {description_fallback}",
+            explanation=explanation,
             metadata=metadata,
         )
     return PlanStep(
         id=step_id,
         kind="note",
         description=description or f"Note: {description_fallback}",
+        reason=reason_text or description or f"Note about {description_fallback}",
+        explanation=explanation,
         metadata={"target": target_value, **metadata},
     )
 
@@ -186,6 +196,7 @@ class MockPlanner(BasePlanner):
                     description="Summarize the object and identify follow-ups",
                     agent="ingest-agent",
                     intent="summarize",
+                    reason="Summaries guide the follow-up actions",
                 ),
                 PlanStep(
                     id="step-2",
@@ -198,12 +209,14 @@ class MockPlanner(BasePlanner):
                         "tags": ["ingest-summary"],
                     },
                     depends_on=["step-1"],
+                    reason="Persist the summary back to the note",
                 ),
                 PlanStep(
                     id="step-3",
                     kind="decision",
                     description="Decide whether to route to relations agent",
                     depends_on=["step-1"],
+                    reason="Decide if relation building is warranted",
                 ),
             ]
         plan = Plan(
@@ -244,12 +257,18 @@ class LLMPlanner(BasePlanner):
             metadata=inp.metadata,
             planning_guidance=planning_guidance,
         )
+        trace_id = None
+        if isinstance(inp.metadata, dict):
+            trace_id = inp.metadata.get("trace_id")
         raw = call_llm(
             "planner",
             {
                 "system": PLANNER_SYSTEM_PROMPT,
                 "user": prompt,
             },
+            agent="planner",
+            kind="planner.plan",
+            trace_id=trace_id,
         )
         try:
             payload = json.loads(raw)
@@ -288,8 +307,16 @@ class LLMPlanner(BasePlanner):
 
 
 def get_planner() -> BasePlanner:
-    provider = os.getenv("PLANNER_PROVIDER", "mock").strip().lower()
-    llm_provider = os.getenv("LLM_PROVIDER", "mock").strip().lower()
+    provider = os.getenv("PLANNER_PROVIDER", "").strip().lower()
+    llm_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
+    ci = os.getenv("CI", "") == "1"
+
+    if provider in {"mock", "golden"} or (ci and provider == ""):
+        return MockPlanner()
+
+    if provider == "":
+        provider = "llm"
+
     if provider == "llm":
         if llm_provider == "mock":
             audit_log(
@@ -301,6 +328,7 @@ def get_planner() -> BasePlanner:
             )
             return MockPlanner()
         return LLMPlanner()
+
     return MockPlanner()
 
 

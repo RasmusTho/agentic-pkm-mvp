@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 
 import httpx
 
+from app.llm.trace import log_llm_call
 from app.obs.log import span, with_trace_id
 from app.quality.guardrails import enforce_quality
 from app.retrieval.hybrid import hybrid_search
@@ -38,7 +39,8 @@ def _max_tokens() -> int:
 
 
 def _provider() -> str:
-    return (os.getenv("LLM_PROVIDER") or _QA_SETTINGS.llm.provider).lower()
+    prov = (os.getenv("LLM_PROVIDER") or _QA_SETTINGS.llm.provider).lower()
+    return "ollama" if prov == "llm" else prov
 
 
 def _llm_host() -> str:
@@ -47,13 +49,23 @@ def _llm_host() -> str:
 
 def _call_llm(messages: List[Dict[str, str]], *, trace_id: str, max_tokens: int) -> str:
     provider = _provider()
+    model = os.getenv("OLLAMA_MODEL", _QA_SETTINGS.llm.model)
     if provider == "mock":
-        return os.getenv("LLM_MOCK_RESPONSE", "Mock response [#1]").strip()
+        content = os.getenv("LLM_MOCK_RESPONSE", "Mock response [#1]").strip()
+        log_llm_call(
+            provider=provider,
+            model=model,
+            agent="qa",
+            kind="qa.draft",
+            messages=messages,
+            response={"content": content},
+            trace_id=trace_id,
+        )
+        return content
     if provider != "ollama":
         raise ValueError(f"Unsupported provider for QA agent: {provider}")
 
     host = _llm_host()
-    model = os.getenv("OLLAMA_MODEL", _QA_SETTINGS.llm.model)
     resp = httpx.post(
         f"{host}/api/chat",
         json={
@@ -69,7 +81,17 @@ def _call_llm(messages: List[Dict[str, str]], *, trace_id: str, max_tokens: int)
     data = resp.json()
     message = data.get("message", {})
     content = message.get("content") or data.get("response") or ""
-    return str(content).strip()
+    content = str(content).strip()
+    log_llm_call(
+        provider=provider,
+        model=model,
+        agent="qa",
+        kind="qa.draft",
+        messages=messages,
+        response=data,
+        trace_id=trace_id,
+    )
+    return content
 
 
 def _format_context(ctx_docs: List[dict]) -> str:

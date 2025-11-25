@@ -29,6 +29,7 @@ from app.media.transcribe import transcribe_source
 from app.obs.log import with_trace_id
 from app.cli.health import run_health
 from app.settings.compiler import compile_all
+from app.llm.trace_inspect import group_by_trace_id, load_trace
 
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 _DOWNLOAD_DIR = Path("tmp/normalize")
@@ -294,6 +295,58 @@ def ask(question: str, vault_root: Path | None, enable_mcp_vault: bool) -> None:
         raise SystemExit(exit_code)
 
 
+
+
+@cli.command(name="llm-trace-flows", help="Inspect LLM trace flows grouped by trace_id.")
+@click.option("--agent", default=None, help="Filter by agent name.")
+@click.option("--limit", default=1, show_default=True, help="Number of trace groups to display.")
+def llm_trace_flows(agent: Optional[str], limit: int) -> None:
+    path = Path(os.getenv("LLM_TRACE_PATH", "tmp/llm-trace.jsonl"))
+    records = load_trace(path)
+    if agent:
+        records = [r for r in records if r.agent == agent]
+    if not records:
+        click.echo("No trace records found.")
+        return
+    grouped = group_by_trace_id(records)
+    count = 0
+    for trace_id, recs in grouped.items():
+        click.echo(f"=== trace_id: {trace_id} ===")
+        for idx, rec in enumerate(recs, start=1):
+            click.echo(f"[{idx}] agent={rec.agent} kind={rec.kind}")
+            click.echo(f"    prompt:   {rec.prompt_preview}")
+            click.echo(f"    response: {rec.response_preview}")
+            click.echo()
+        count += 1
+        if count >= max(1, limit):
+            break
+
+
+@cli.command(name="llm-trace-planner-flows", help="Show planner-centric LLM traces (planner → reasoning → answer).")
+@click.option("--limit", default=1, show_default=True, help="Number of trace groups to display.")
+def llm_trace_planner_flows(limit: int) -> None:
+    allowed_agents = {"planner", "reasoning", "set_evaluator", "reviewer", "orchestrator", "qa"}
+    path = Path(os.getenv("LLM_TRACE_PATH", "tmp/llm-trace.jsonl"))
+    records = [rec for rec in load_trace(path) if rec.agent in allowed_agents]
+    if not records:
+        click.echo("No planner-centric trace records found.")
+        return
+    grouped = group_by_trace_id(records)
+    count = 0
+    for trace_id, recs in grouped.items():
+        has_planner = any(rec.agent == "planner" or rec.kind.startswith("planner.") for rec in recs)
+        has_other = any(rec.agent != "planner" for rec in recs)
+        if not (has_planner and has_other):
+            continue
+        click.echo(f"=== trace_id: {trace_id} ===")
+        for idx, rec in enumerate(recs, start=1):
+            click.echo(f"[{idx}] agent={rec.agent} kind={rec.kind}")
+            click.echo(f"    prompt:   {rec.prompt_preview}")
+            click.echo(f"    response: {rec.response_preview}")
+            click.echo()
+        count += 1
+        if count >= max(1, limit):
+            break
 
 
 @cli.command(help="Run the AI panel pipeline on a note and optionally dispatch events.")

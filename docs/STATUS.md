@@ -57,6 +57,59 @@
 - Fitness: PASS — `python -m app.fitness.report` (latest sample: QAS-003 p95=0.000126 s, QAS-010 p95=0.000006 s).
 - Golden evaluation: PASS — `pytest -q -m "not pg" -k "golden_metrics"` plus `python -m app.fitness.report` (ce_local vs baseline with ΔnDCG@10=+0.070, ΔP@10=+0.000).
 - Relation coverage sample: 81.82% of promoted items (golden relations corpus).
+- Alpha reasoning + reviewer (local LLM): export the vars below, then run the two single-note tests to inspect real reasoning output.
+
+```bash
+export STORE_BACKEND=memory
+export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+export OPENAI_API_KEY=sk-local
+export LLM_PROVIDER=llm
+export REASONING_ENABLE=1
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+
+.venv/bin/pytest tests/reasoning/test_reasoning_single_note.py \
+                 tests/agents/test_reviewer_single_note.py
+```
+
+LLM trace (local/alpha only)
+- Toggle tracing locally to capture all LLM calls in JSONL:
+  - `export LLM_TRACE_ENABLE=1`
+  - `export LLM_TRACE_PATH=tmp/llm-trace.jsonl`
+- Inspect with `jq . tmp/llm-trace.jsonl | head` after running reasoning flows.
+
+Reasoning alpha (multi-note, ranking, planning)
+- CI (mock) now covers multi-note reasoning on pkm-alpha notes, SetEvaluator ranking with reasons, and a planner/orchestrator reasoning flow.
+- Re-run locally with `LLM_PROVIDER=llm` + `LLM_TRACE_ENABLE=1` to inspect real LLM calls in `tmp/llm-trace.jsonl`.
+
+Reasoning Alpha (local LLM)
+- Environment for running the full reasoning suite against Ollama + tracing:
+  ```bash
+  export STORE_BACKEND=memory
+  export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+  export OPENAI_API_KEY=sk-local
+  export LLM_PROVIDER=llm
+  export REASONING_PROVIDER=llm
+  export PLANNER_PROVIDER=llm
+  export REASONING_ENABLE=1
+  export LLM_TRACE_ENABLE=1
+  export LLM_TRACE_PATH=tmp/llm-trace.jsonl
+  export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+  ```
+- Run the full alpha suite:
+  ```bash
+  .venv/bin/pytest -q \
+    tests/reasoning/test_reasoning_single_note.py \
+    tests/agents/test_reviewer_single_note.py \
+    tests/reasoning/test_reasoning_multi_note.py \
+    tests/agents/test_set_evaluator_pkm_alpha.py \
+    tests/agents/test_planner_reasoning_e2e.py
+  ```
+- The same env routes calls through the local LLM and writes JSONL traces for inspection.
+
+Provider policy
+- Local default (CI unset, providers empty): reasoning/planner prefer LLM backends.
+- CI default: `LLM_PROVIDER=mock`, `REASONING_PROVIDER=mock`, `PLANNER_PROVIDER=mock`, `REASONING_ENABLE=1`; alpha LLM tests are skipped via `-m "not alpha_llm"`.
+- Use `@pytest.mark.alpha_llm` tests for real LLM flows; they respect your env and never force mock providers.
 
 ## Metrics Snapshot
 - QAS-003 p95: 0.000127 s

@@ -5,7 +5,9 @@ import json
 import os
 import socket
 import time
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
+
+from app.llm.trace import log_llm_call
 
 _DEFAULT_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 _DEFAULT_BASE_DELAY = float(os.getenv("LLM_BASE_DELAY", "0.1"))
@@ -111,21 +113,42 @@ def with_llm_retries(
             time.sleep(max(bd, 0.0) * attempt)
 
 
-def call_llm(name: str, pack: Dict[str, Any]) -> str:
+def call_llm(
+    name: str,
+    pack: Dict[str, Any],
+    *,
+    agent: str | None = None,
+    kind: str | None = None,
+    trace_id: Optional[str] = None,
+) -> str:
     provider = os.getenv("LLM_PROVIDER", "fake").lower()
+    if provider == "llm":
+        provider = "ollama"
     model = os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", "llama3.1:8b"))
     temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
     system = pack.get("system", "")
     user = pack.get("user", "")
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    response_text: str
 
     if provider != "ollama":
-        return _deterministic_llm_response()
+        response_text = _deterministic_llm_response()
+    else:
+        try:
+            response_text = with_llm_retries(lambda: _ollama_chat(system, user, model, temperature))
+        except LLMError:
+            response_text = _deterministic_llm_response()
+        except (socket.timeout, ConnectionRefusedError, RuntimeError):
+            response_text = _deterministic_llm_response()
 
-    try:
-        return with_llm_retries(
-            lambda: _ollama_chat(system, user, model, temperature),
-        )
-    except LLMError:
-        return _deterministic_llm_response()
-    except (socket.timeout, ConnectionRefusedError, RuntimeError):
-        return _deterministic_llm_response()
+    log_llm_call(
+        provider=provider or "unknown",
+        model=model,
+        agent=agent or name or "unknown",
+        kind=kind or name or "unknown",
+        messages=messages,
+        response={"content": response_text},
+        trace_id=trace_id,
+    )
+
+    return response_text

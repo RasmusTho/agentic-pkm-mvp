@@ -30,10 +30,14 @@ jobs:
       - name: Compile vault settings
         env:
           LLM_PROVIDER: mock
+          REASONING_PROVIDER: mock
+          PLANNER_PROVIDER: mock
         run: python -m app.cli settings compile
       - name: Run settings test
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
           STORE_BACKEND: memory
           LLM_PROVIDER: mock
+          REASONING_PROVIDER: mock
+          PLANNER_PROVIDER: mock
         run: pytest -q tests/settings/test_compile.py

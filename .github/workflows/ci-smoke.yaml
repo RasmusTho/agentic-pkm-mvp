@@ -18,6 +18,9 @@ jobs:
       PYTHONPATH: ${{ github.workspace }}
       STORE_BACKEND: memory
       LLM_PROVIDER: mock
+      REASONING_PROVIDER: mock
+      PLANNER_PROVIDER: mock
+      REASONING_ENABLE: "1"
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       INDEX_PERSIST_PATH: tmp/index.jsonl
     steps:
@@ -65,7 +68,7 @@ jobs:
         run: mkdir -p tmp
 
       - name: Pytest smoke (memory)
-        run: pytest -q -c /dev/null -m "not pg"
+        run: pytest -q -c /dev/null -m "not pg and not alpha_llm"
 
       - name: Verify persisted vector index
         run: test -s "$INDEX_PERSIST_PATH"
