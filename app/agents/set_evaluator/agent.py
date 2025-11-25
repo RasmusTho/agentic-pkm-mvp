@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.events.types import PROMOTION_EVALUATE_DONE
-from app.reasoning.provider import get_reasoner
+from app.reasoning.provider import run_reasoning, ReasoningMode
 from app.reasoning.schema import ReasoningInput, ReasoningOutput
 from app.stores import get_object_store
 from app.store.object_store import ObjectStore
@@ -131,40 +131,46 @@ def run_set_evaluator(object_ids: Sequence[str], *, question: str, trace_id: str
     """
     store = ObjectStore()
     fallback_store = get_object_store()
-    reasoner = get_reasoner()
     ranking: list[RankedCandidate] = []
-    for idx, object_id in enumerate(object_ids):
-        obj = store.get_object(object_id)
-        payload = obj.payload if obj else {}
-        if not payload:
-            try:
-                alt = fallback_store.get(UUID(str(object_id)))
-            except Exception:
-                alt = None
-            if alt and isinstance(alt, dict):
-                payload = alt.get("payload") or {}
-        text = ""
-        if isinstance(payload, dict):
-            text = payload.get("text") or payload.get("content") or ""
-        reasoning_input = ReasoningInput(
-            object_uuid=str(object_id),
-            text=text,
-            metadata={},
-            relations=[],
-        )
-        try:
-            reasoning_output = reasoner.reason(reasoning_input)
-        except Exception:
-            reasoning_output = ReasoningOutput()
-        reasons = [claim.text for claim in reasoning_output.claims[:2]]
-        if not reasons:
+    run = run_reasoning(
+        ReasoningMode.RANKING,
+        list(map(str, object_ids)),
+        trace_id=trace_id,
+        question=question,
+        agent=AGENT,
+        kind="reasoning.ranking",
+    )
+    if run.status == "ok" and isinstance(run.result, dict):
+        items = run.result.get("ranking") or []
+        for idx, entry in enumerate(items):
+            oid = str(entry.get("object_uuid") or object_ids[idx] if idx < len(object_ids) else "")
+            score = float(entry.get("score") or max(0.0, 1.0 - 0.05 * idx))
+            reason_text = str(entry.get("reason") or "").strip()
+            reasons = [reason_text] if reason_text else []
+            if not reasons:
+                reasons.append("No reasoning available")
+            ranking.append(RankedCandidate(object_id=oid, score=score, reasons=reasons))
+    if not ranking:
+        # fallback deterministic path (existing behavior)
+        for idx, object_id in enumerate(object_ids):
+            obj = store.get_object(object_id)
+            payload = obj.payload if obj else {}
+            if not payload:
+                try:
+                    alt = fallback_store.get(UUID(str(object_id)))
+                except Exception:
+                    alt = None
+                if alt and isinstance(alt, dict):
+                    payload = alt.get("payload") or {}
+            text = ""
+            if isinstance(payload, dict):
+                text = payload.get("text") or payload.get("content") or ""
+            reasons = []
             snippet = text.strip()
             if snippet:
                 reasons.append(snippet[:160])
-        if not reasons:
-            reasons.append("No reasoning available")
-        score = max(0.0, 1.0 - 0.05 * idx)
-        ranking.append(RankedCandidate(object_id=str(object_id), score=score, reasons=reasons))
-    if not ranking:
-        raise ValueError("No candidates provided to SetEvaluator")
+            if not reasons:
+                reasons.append("No reasoning available")
+            score = max(0.0, 1.0 - 0.05 * idx)
+            ranking.append(RankedCandidate(object_id=str(object_id), score=score, reasons=reasons))
     return SetEvaluationResult(question=question, ranking=ranking)

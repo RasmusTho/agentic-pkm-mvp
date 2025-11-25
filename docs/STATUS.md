@@ -110,6 +110,74 @@ Provider policy
 - Local default (CI unset, providers empty): reasoning/planner prefer LLM backends.
 - CI default: `LLM_PROVIDER=mock`, `REASONING_PROVIDER=mock`, `PLANNER_PROVIDER=mock`, `REASONING_ENABLE=1`; alpha LLM tests are skipped via `-m "not alpha_llm"`.
 - Use `@pytest.mark.alpha_llm` tests for real LLM flows; they respect your env and never force mock providers.
+- Reasoning now supports modes (claims, review, ranking) via `run_reasoning(...)`; traces use kinds `reasoning.claims`, `reasoning.review`, `reasoning.ranking`.
+
+## Alpha Vault Observability (DEFAULT_VAULT_ROOT)
+- DEFAULT_VAULT_ROOT: `/Users/rasmus/Library/Mobile Documents/iCloud~md~obsidian/Documents/PKM - Alpha`
+- Observability path for trace Markdown: `<DEFAULT_VAULT_ROOT>/System/Observability/LLM Traces/`
+- Mermaid sequence diagrams exported by `llm-trace-sequence` should be written into `System/Observability/LLM Traces/`.
+
+### Live alpha LLM trace check (manual, not in CI)
+Run this locally against your Ollama setup to ensure traces are populated (response_preview not `{}`):
+```bash
+cd ~/workspace/agentic-pkm-mvp
+export STORE_BACKEND=memory
+export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+export OPENAI_API_KEY=sk-local
+export LLM_TRACE_ENABLE=1
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+
+.venv/bin/pytest -q tests/reasoning/test_reasoning_llm_live_alpha.py -m alpha_llm_live
+```
+Then inspect with:
+```bash
+python -m app.cli llm-trace-flows --agent reasoning --limit 3
+python -m app.cli llm-trace-flows --agent set_evaluator --limit 3
+python -m app.cli llm-trace-planner-flows --limit 3
+```
+Expect non-empty response previews (claims/evidence/ranking) rather than `{}`.
+
+### Run alpha LLM suite with tracing and export latest trace
+```bash
+cd ~/workspace/agentic-pkm-mvp
+
+export STORE_BACKEND=memory
+export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+export OPENAI_API_KEY=sk-local
+export LLM_PROVIDER=llm
+export REASONING_PROVIDER=llm
+export PLANNER_PROVIDER=llm
+export REASONING_ENABLE=1
+export LLM_TRACE_ENABLE=1
+export LLM_TRACE_PATH=tmp/llm-trace.jsonl
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+
+# Run alpha LLM reasoning suite against local Ollama
+.venv/bin/pytest -q -m alpha_llm
+
+# Export the latest LLM flow as a Mermaid sequence diagram (Obsidian-ready)
+python -m app.cli llm-trace-sequence \
+  --latest \
+  --format mermaid \
+  --out-file "/Users/rasmus/Library/Mobile Documents/iCloud~md~obsidian/Documents/PKM - Alpha/System/Observability/LLM Traces/trace-latest.md"
+
+# Inspect reasoning and set_evaluator flows (response_preview should show JSON/text, not {})
+python -m app.cli llm-trace-flows --agent reasoning --limit 3
+python -m app.cli llm-trace-flows --agent set_evaluator --limit 3
+python -m app.cli llm-trace-planner-flows --limit 3
+```
+Note: reasoning calls are tagged by mode (`reasoning.claims`, `reasoning.review`, `reasoning.ranking`) and traces fall back to raw previews so responses are visible even without `LLM_TRACE_DETAIL=debug`.
+
+Mock-mode contract run (CI-friendly):
+```bash
+STORE_BACKEND=memory LLM_PROVIDER=mock REASONING_PROVIDER=mock PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+  pytest -q tests/reasoning/test_reasoning_modes_contract.py \
+          tests/reasoning/test_reasoning_single_note.py \
+          tests/reasoning/test_reasoning_multi_note.py \
+          tests/agents/test_reviewer_single_note.py \
+          tests/agents/test_set_evaluator_pkm_alpha.py
+```
+Reasoning invariants: claims succeeds only if claims+evidence is non-empty; ranking succeeds only if the ranking list is non-empty and has reasons.
 
 ## Metrics Snapshot
 - QAS-003 p95: 0.000127 s

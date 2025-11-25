@@ -100,8 +100,19 @@ Every agent follows Plan → Execute → Reflect. Plan inspects the latest event
 When `DIARIZE_ENABLE=1`, the ingestion pipeline now feeds diarization metadata (speaker, start, end) into `speaker_aware_chunks()` so spans are cut on speaker changes or size boundaries (O(n) over segment length). Each emitted chunk carries `{speaker,start,end,speaker_segments}` metadata that flows through `ingest_and_chunk()` to indexing, and the audit stream (`text.chunk.created`) records `speaker_count` so reviewers can trace diarization coverage. With the flag disabled, `build_chunks()` preserves the legacy token/character splitter to keep defaults inert and deterministic.
 Oversized per-speaker segments are deterministically pre-split to respect `max_chars`; proportional start/end timestamps keep timelines monotonic without re-reading audio.
 
-### Reasoning Layer v1 (SoT v4.7-A)
-`app/reasoning/provider.get_reasoner()` selects a backend (`mock` for CI, `ollama` locally) that consumes `ReasoningInput` (note text + relation snapshots) and emits structured JSON (`claims`, `evidence`, `inferences`) validated via `app/reasoning/schema`. The pipeline runs this step only when `REASONING_ENABLE=1`, stores results in the in-memory ReasoningStore, and audits `reasoning.claim.added` / `reasoning.inference.added` counts. Mock outputs are fixture-backed (`data/golden/reasoning_samples.jsonl`) so CI remains deterministic, while live runs go through the standard Ollama client with strict JSON prompts and retry bounds.
+### Reasoning Layer (modes & PER-style runs)
+Reasoning is now a multi-mode layer (`app/reasoning/models.py`) rather than a single JSON extractor. `ReasoningMode` defines the supported modes and `ReasoningRun` captures each run (id, mode, trace_id, object_uuids, steps, result, status/error). The router `run_reasoning(...)` in `app/reasoning/provider.py` orchestrates:
+
+- `claims`: existing claims/evidence/inferences extraction (backed by `ReasoningInput` + `ReasoningOutput`); still fixture-backed for mock runs (`data/golden/reasoning_samples.jsonl`) and Ollama-backed locally.
+- `review`: lightweight review/critique of a note (summary/issues/suggestions), mock-deterministic in CI, LLM-backed locally.
+- `ranking`: candidate ranking with reasons, mock-deterministic in CI, LLM-backed locally (SetEvaluator consumes this).
+- `planning`: reserved/TBD.
+
+Calls include `agent` and `kind` (e.g., `reasoning.claims`, `reasoning.review`, `reasoning.ranking`) for tracing. The pipeline still gates on `REASONING_ENABLE=1` and stores claims outputs in the ReasoningStore; other modes feed agents directly (Reviewer, SetEvaluator) while remaining observable via the JSONL trace.
+
+Invariants:
+- `claims` is successful (`status="ok"`) only when at least one claim or evidence exists; fully empty `{claims:[], evidence:[], inferences:[]}` is `status="failed"`.
+- `ranking` is successful only when the ranking list is non-empty and contains at least one non-empty reason; otherwise `status="failed"`.
 
 ## Persistence & Execution Modes
 - `STORE_BACKEND=memory` is the default for CI and unit tests; it instantiates in-memory implementations of ObjectStore, VectorIndex, and RelationIndex with deterministic UUID seeds.

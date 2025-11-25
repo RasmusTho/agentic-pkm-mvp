@@ -13,6 +13,8 @@ pytestmark = pytest.mark.not_pg
 @pytest.fixture
 def memory_object_store(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("REASONING_PROVIDER", "mock")
     reset_memory_stores()
     yield get_object_store()
     reset_memory_stores()

@@ -29,7 +29,13 @@ from app.media.transcribe import transcribe_source
 from app.obs.log import with_trace_id
 from app.cli.health import run_health
 from app.settings.compiler import compile_all
-from app.llm.trace_inspect import group_by_trace_id, load_trace
+from app.llm.trace_inspect import (
+    build_sequence_for_trace,
+    group_by_trace_id,
+    LLMSequence,
+    list_agents_in_sequence,
+    load_trace,
+)
 
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 _DOWNLOAD_DIR = Path("tmp/normalize")
@@ -97,6 +103,48 @@ def _resolve_vault_root_path(
     return None
 
 
+def _truncate_preview(text: str, limit: int) -> str:
+    text = text or ""
+    text = text.replace("\n", "\\n")
+    return text[:limit] + ("..." if len(text) > limit else "")
+
+
+def _response_text(rec) -> str:
+    for candidate in (rec.response_preview, getattr(rec, "response_text_preview", ""), getattr(rec, "raw_response_preview", "")):
+        if candidate and candidate.strip() not in {"", "{}"}:
+            return candidate
+    return rec.response_preview or getattr(rec, "raw_response_preview", "") or ""
+
+
+def _render_text_sequence(seq: LLMSequence) -> str:
+    lines = [f"Trace: {seq.trace_id}", ""]
+    for step in seq.steps:
+        mode = f" mode={step.mode}" if getattr(step, "mode", "") else ""
+        status = f" status={step.status}" if getattr(step, "status", "") else ""
+        lines.append(f"Step {step.index}: agent={step.agent}{mode}{status} kind={step.kind}")
+        lines.append(f"  input:  {_truncate_preview(step.prompt_preview, 160)}")
+        lines.append(f"  output: {_truncate_preview(step.response_preview, 160)}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def _render_mermaid_sequence(seq: LLMSequence) -> str:
+    agents = list_agents_in_sequence(seq)
+    lines = [f"# LLM Trace {seq.trace_id}", "", "```mermaid", "sequenceDiagram"]
+    for agent in agents:
+        lines.append(f"    participant {agent}")
+    lines.append("    participant LLM")
+    lines.append("")
+    for step in seq.steps:
+        prompt = _truncate_preview(step.prompt_preview, 110)
+        response = _truncate_preview(step.response_preview, 110)
+        lines.append(f"    {step.agent}->>LLM: {step.kind}\\ninput: {prompt}")
+        lines.append(f"    LLM-->>{step.agent}: output: {response}")
+        lines.append("")
+    lines.append("```")
+    return "\n".join(lines).rstrip()
+
+
 class _RecordingOrchestrator(Orchestrator):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -125,6 +173,57 @@ def _extract_note_path(results: list[dict[str, Any]]) -> str | None:
 @click.group(help="Agentic PKM CLI")
 def cli() -> None:
     ...
+
+
+@cli.command(name="llm-trace-sequence", help="Render a single trace flow as text or Mermaid sequence diagram.")
+@click.option("--trace-id", "trace_id", default="", help="Trace ID to visualize.")
+@click.option("--latest", is_flag=True, default=False, help="Use the most recent trace_id when none is provided.")
+@click.option(
+    "--format",
+    "-f",
+    "fmt",
+    type=click.Choice(["mermaid", "text"], case_sensitive=False),
+    default="mermaid",
+    show_default=True,
+    help="Output format.",
+)
+@click.option(
+    "--out-file",
+    "-o",
+    "out_file",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional path to write Markdown output (for Obsidian).",
+)
+def llm_trace_sequence(trace_id: str, latest: bool, fmt: str, out_file: Path | None) -> None:
+    path = Path(os.getenv("LLM_TRACE_PATH", "tmp/llm-trace.jsonl"))
+    records = load_trace(path)
+    if not records:
+        click.echo("No trace records found.")
+        return
+    target_trace_id = trace_id.strip()
+    if not target_trace_id:
+        if latest:
+            target_trace_id = max(records, key=lambda r: r.timestamp).trace_id
+        else:
+            click.echo("Please provide --trace-id or use --latest to select the most recent trace.")
+            raise SystemExit(1)
+    try:
+        seq = build_sequence_for_trace(records, target_trace_id)
+    except ValueError as exc:
+        click.echo(str(exc))
+        raise SystemExit(1)
+
+    fmt_normalized = fmt.strip().lower()
+    output = _render_mermaid_sequence(seq) if fmt_normalized == "mermaid" else _render_text_sequence(seq)
+
+    if out_file:
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        content = output if output.endswith("\n") else output + "\n"
+        out_file.write_text(content, encoding="utf-8")
+        click.echo(f"Wrote sequence to {out_file}")
+    else:
+        click.echo(output)
 
 
 @cli.command(
@@ -313,9 +412,11 @@ def llm_trace_flows(agent: Optional[str], limit: int) -> None:
     for trace_id, recs in grouped.items():
         click.echo(f"=== trace_id: {trace_id} ===")
         for idx, rec in enumerate(recs, start=1):
-            click.echo(f"[{idx}] agent={rec.agent} kind={rec.kind}")
+            mode = f" mode={rec.mode}" if getattr(rec, "mode", "") else ""
+            status = f" status={rec.status}" if getattr(rec, "status", "") else ""
+            click.echo(f"[{idx}] agent={rec.agent}{mode}{status} kind={rec.kind}")
             click.echo(f"    prompt:   {rec.prompt_preview}")
-            click.echo(f"    response: {rec.response_preview}")
+            click.echo(f"    response: {_response_text(rec)}")
             click.echo()
         count += 1
         if count >= max(1, limit):
@@ -340,9 +441,11 @@ def llm_trace_planner_flows(limit: int) -> None:
             continue
         click.echo(f"=== trace_id: {trace_id} ===")
         for idx, rec in enumerate(recs, start=1):
-            click.echo(f"[{idx}] agent={rec.agent} kind={rec.kind}")
+            mode = f" mode={rec.mode}" if getattr(rec, "mode", "") else ""
+            status = f" status={rec.status}" if getattr(rec, "status", "") else ""
+            click.echo(f"[{idx}] agent={rec.agent}{mode}{status} kind={rec.kind}")
             click.echo(f"    prompt:   {rec.prompt_preview}")
-            click.echo(f"    response: {rec.response_preview}")
+            click.echo(f"    response: {_response_text(rec)}")
             click.echo()
         count += 1
         if count >= max(1, limit):

@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Iterable, List, Sequence
 from uuid import UUID
 
-from app.reasoning.provider import get_reasoner
-from app.reasoning.schema import Claim, Evidence, Inference, ReasoningInput, ReasoningOutput
+from app.reasoning.provider import run_reasoning_claims_for_object
+from app.reasoning.schema import Claim, Evidence, Inference, ReasoningOutput
 from app.stores import get_object_store
 
 
@@ -41,25 +41,18 @@ def _build_synthesis_inference(claims: Sequence[Claim], object_ids: Sequence[str
     )
 
 
-def run_multi_note_reasoning(object_ids: Sequence[str]) -> ReasoningOutput:
+def run_multi_note_reasoning(object_ids: Sequence[str], *, trace_id: str | None = None) -> ReasoningOutput:
     """
     Run reasoning across multiple notes and merge the results.
     Falls back gracefully if any note is missing.
     """
-    reasoner = get_reasoner()
     texts = _load_texts(object_ids)
     all_claims: List[Claim] = []
     all_evidence: List[Evidence] = []
     all_inferences: List[Inference] = []
     for object_id, text in texts:
-        reasoning_input = ReasoningInput(
-            object_uuid=object_id,
-            text=text,
-            metadata={},
-            relations=[],
-        )
         try:
-            result = reasoner.reason(reasoning_input)
+            result = run_reasoning_claims_for_object(object_id, trace_id=trace_id)
         except Exception:
             result = ReasoningOutput()
         all_claims.extend(result.claims)

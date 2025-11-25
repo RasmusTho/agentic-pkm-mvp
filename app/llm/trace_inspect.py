@@ -17,8 +17,30 @@ class LLMTraceRecord:
     model: str
     agent: str
     kind: str
-    prompt_preview: str
-    response_preview: str
+    prompt_preview: str = ""
+    response_preview: str = ""
+    mode: str = ""
+    status: str = ""
+    raw_response_preview: str = ""
+    response_text_preview: str = ""
+
+
+@dataclass
+class LLMSequenceStep:
+    index: int
+    timestamp: float
+    agent: str
+    kind: str
+    prompt_preview: str = ""
+    response_preview: str = ""
+    mode: str = ""
+    status: str = ""
+
+
+@dataclass
+class LLMSequence:
+    trace_id: str
+    steps: List[LLMSequenceStep]
 
 
 def _as_path(path: Optional[Path] = None) -> Path:
@@ -54,8 +76,12 @@ def load_trace(path: Optional[Path] = None) -> List[LLMTraceRecord]:
                             model=str(obj.get("model") or ""),
                             agent=str(obj.get("agent") or ""),
                             kind=str(obj.get("kind") or ""),
+                            mode=str(obj.get("mode") or ""),
+                            status=str(obj.get("status") or ""),
                             prompt_preview=str(obj.get("prompt_preview") or ""),
                             response_preview=str(obj.get("response_preview") or ""),
+                            raw_response_preview=str(obj.get("raw_response_preview") or ""),
+                            response_text_preview=str(obj.get("response_text_preview") or ""),
                         )
                     )
                 except Exception:
@@ -90,4 +116,47 @@ def filter_flows(
     return filtered
 
 
-__all__ = ["LLMTraceRecord", "load_trace", "group_by_trace_id", "filter_flows"]
+def build_sequence_for_trace(records: List[LLMTraceRecord], trace_id: str) -> LLMSequence:
+    """Filter records by trace_id and build a sorted sequence."""
+    selected = [r for r in records if r.trace_id == trace_id]
+    if not selected:
+        raise ValueError(f"No trace records found for trace_id={trace_id!r}")
+    selected.sort(key=lambda r: r.timestamp)
+    steps: List[LLMSequenceStep] = []
+    for idx, rec in enumerate(selected, start=1):
+        steps.append(
+            LLMSequenceStep(
+                index=idx,
+                timestamp=rec.timestamp,
+                agent=rec.agent,
+                kind=rec.kind,
+                mode=getattr(rec, "mode", ""),
+                status=getattr(rec, "status", ""),
+                prompt_preview=rec.prompt_preview,
+                response_preview=rec.response_preview,
+            )
+        )
+    return LLMSequence(trace_id=trace_id, steps=steps)
+
+
+def list_agents_in_sequence(seq: LLMSequence) -> List[str]:
+    """Return distinct agents in order of first appearance."""
+    seen = set()
+    ordered: List[str] = []
+    for step in seq.steps:
+        if step.agent not in seen:
+            seen.add(step.agent)
+            ordered.append(step.agent)
+    return ordered
+
+
+__all__ = [
+    "LLMTraceRecord",
+    "LLMSequence",
+    "LLMSequenceStep",
+    "build_sequence_for_trace",
+    "load_trace",
+    "group_by_trace_id",
+    "filter_flows",
+    "list_agents_in_sequence",
+]
