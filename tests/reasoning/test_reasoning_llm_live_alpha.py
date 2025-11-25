@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import pytest
 from uuid import UUID
 
@@ -10,6 +11,8 @@ from app.stores import get_object_store
 from app.reasoning.store import reset_reasoning_store
 from tests.helpers.pkm_alpha_helper import load_pkm_alpha_subset_for_reasoning, reset_memory_stores
 
+pytestmark = [pytest.mark.alpha_llm_live, pytest.mark.alpha_llm]
+
 
 def _prime_store(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -19,6 +22,10 @@ def _prime_store(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.alpha_llm_live
 def test_reasoning_single_note_live_llm_has_non_empty_response_preview(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    if os.getenv("ALPHA_LLM_LIVE", "0") != "1":
+        pytest.skip("Set ALPHA_LLM_LIVE=1 to run live LLM trace assertions")
+    if os.getenv("CI") == "1":
+        pytest.skip("Live LLM tests are opt-in only")
     trace_path = tmp_path / "llm-trace-live.jsonl"
     monkeypatch.setenv("LLM_TRACE_ENABLE", "1")
     monkeypatch.setenv("LLM_TRACE_PATH", str(trace_path))
@@ -43,6 +50,10 @@ def test_reasoning_single_note_live_llm_has_non_empty_response_preview(monkeypat
 
 @pytest.mark.alpha_llm_live
 def test_set_evaluator_live_llm_has_non_empty_response_preview(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    if os.getenv("ALPHA_LLM_LIVE", "0") != "1":
+        pytest.skip("Set ALPHA_LLM_LIVE=1 to run live LLM trace assertions")
+    if os.getenv("CI") == "1":
+        pytest.skip("Live LLM tests are opt-in only")
     trace_path = tmp_path / "llm-trace-live-set.jsonl"
     monkeypatch.setenv("LLM_TRACE_ENABLE", "1")
     monkeypatch.setenv("LLM_TRACE_PATH", str(trace_path))
