@@ -321,6 +321,29 @@ def ingest_vault_root_cmd(root_dir: Path | None, limit: int | None) -> None:
     click.echo(f"Successfully ingested {count} files.")
 
 
+@cli.command(
+    name="pkm-alpha-ingest",
+    help="Convenience wrapper for ingesting markdown files from the PKM - Alpha vault root.",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=50,
+    show_default=True,
+    help="Maximum number of markdown files to ingest from the PKM - Alpha vault root.",
+)
+def pkm_alpha_ingest(limit: int | None) -> None:
+    resolved = DEFAULT_VAULT_ROOT.expanduser()
+    if not resolved.exists() or not resolved.is_dir():
+        raise click.BadParameter(f"DEFAULT_VAULT_ROOT not found or not a directory: {resolved}")
+
+    click.echo(
+        f"PKM - Alpha ingest (DEFAULT_VAULT_ROOT): {resolved} | limit={limit if limit is not None else 'all'}"
+    )
+    count = ingest_vault_root(resolved, limit=limit)
+    click.echo(f"Successfully ingested {count} files.")
+
+
 @cli.command(help="Ask a question through the planner/orchestrator pipeline.")
 @click.argument("question")
 @click.option("--vault-root", type=click.Path(path_type=Path), default=None, help="Path to vault root for MCP writes.")

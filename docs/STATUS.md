@@ -106,6 +106,66 @@ Reasoning Alpha (local LLM)
   ```
 - The same env routes calls through the local LLM and writes JSONL traces for inspection.
 
+## PKM-Alpha Alpha Reasoning Run (local LLM)
+- End-to-end local run against the real PKM-Alpha vault (limited ingest, alpha LLM tests, trace export to Obsidian).
+
+Environment (local LLM + memory/pg)
+```bash
+cd ~/workspace/agentic-pkm-mvp
+
+# Stores: for alpha runs we can use memory or pg; document both options.
+# Option A: memory store (fast experimentation)
+export STORE_BACKEND=memory
+
+# Option B: PG store (commented out; user can switch)
+# export STORE_BACKEND=pg
+# export DATABASE_URL="postgresql+psycopg://app:app@localhost:15432/app"
+
+# Local LLM (Ollama)
+export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+export OPENAI_API_KEY=sk-local
+export LLM_PROVIDER=llm
+export REASONING_PROVIDER=llm
+
+# Reasoning + tracing
+export REASONING_ENABLE=1
+export LLM_TRACE_ENABLE=1
+export LLM_TRACE_PATH=tmp/llm-trace-alpha.jsonl
+
+# Pytest isolation
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+```
+
+Ingest a controlled subset from PKM-Alpha
+```bash
+# Ingest a limited number of notes from the PKM-Alpha vault
+python -m app.cli pkm-alpha-ingest --limit 50
+```
+- Uses DEFAULT_VAULT_ROOT (`/Users/rasmus/Library/Mobile Documents/iCloud~md~obsidian/Documents/PKM - Alpha`) under the hood.
+- Start with limit=50 for quick iterations; raise as needed after the first pass.
+
+Run the alpha reasoning suite against real notes
+```bash
+.venv/bin/pytest -q \
+  tests/reasoning/test_reasoning_single_note.py \
+  tests/agents/test_reviewer_single_note.py \
+  tests/reasoning/test_reasoning_multi_note.py \
+  tests/agents/test_set_evaluator_pkm_alpha.py \
+  tests/agents/test_planner_reasoning_e2e.py \
+  -m alpha_llm
+```
+- Covers single-note and multi-note reasoning, reviewer, set_evaluator ranking, and planner/orchestrator reasoning paths.
+- These tests call the real provider (llm → Ollama) and expect PKM-Alpha content already ingested; no monkeypatching of LLM or Stores.
+
+Export latest trace as a Mermaid sequence into PKM-Alpha
+```bash
+python -m app.cli llm-trace-sequence \
+  --latest \
+  --format mermaid \
+  --out-file "/Users/rasmus/Library/Mobile Documents/iCloud~md~obsidian/Documents/PKM - Alpha/System/Observability/LLM Traces/trace-latest.md"
+```
+- Writes a Markdown file with a `sequenceDiagram` into the vault; opening `System/Observability/LLM Traces/trace-latest.md` in Obsidian shows the full reasoning flow (agents, modes, prompts, responses).
+
 Provider policy
 - Local default (CI unset, providers empty): reasoning/planner prefer LLM backends.
 - CI default: `LLM_PROVIDER=mock`, `REASONING_PROVIDER=mock`, `PLANNER_PROVIDER=mock`, `REASONING_ENABLE=1`; alpha LLM tests are skipped via `-m "not alpha_llm"`.
