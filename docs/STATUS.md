@@ -81,6 +81,10 @@ Reasoning alpha (multi-note, ranking, planning)
 - CI (mock) now covers multi-note reasoning on pkm-alpha notes, SetEvaluator ranking with reasons, and a planner/orchestrator reasoning flow.
 - Re-run locally with `LLM_PROVIDER=llm` + `LLM_TRACE_ENABLE=1` to inspect real LLM calls in `tmp/llm-trace.jsonl`.
 
+Human-facing validation (alpha)
+- Alpha changes to classification, AI panels, ASK responses, or promotion flows should be validated against `docs/HUMAN-FLOWS.md`.
+- Quick check: “Does this change match the human expectations in HUMAN-FLOWS §3.x?”
+
 Reasoning Alpha (local LLM)
 - Environment for running the full reasoning suite against Ollama + tracing:
   ```bash

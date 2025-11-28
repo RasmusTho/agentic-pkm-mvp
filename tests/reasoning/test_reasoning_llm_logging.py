@@ -50,7 +50,7 @@ def _fake_reasoning_json(object_uuid: str = "OBJ1") -> str:
 def _patch_reasoning_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("REASONING_PROVIDER", "llm")
-    monkeypatch.setenv("LLM_PROVIDER", "fake")
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.delenv("CI", raising=False)
 
 
