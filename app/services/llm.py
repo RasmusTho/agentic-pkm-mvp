@@ -165,9 +165,26 @@ def call_llm(
     kind: str | None = None,
     trace_id: Optional[str] = None,
 ) -> str:
-    provider = os.getenv("LLM_PROVIDER", "fake").lower()
+    def _deterministic_response_for_kind() -> str:
+        if kind and "ranking" in str(kind):
+            return _deterministic_ranking_response([str(p) for p in pack.values() if isinstance(p, str)])
+        if kind and "reasoning" in str(kind):
+            return _deterministic_reasoning_response()
+        return _deterministic_llm_response()
+
+    def _parsed(obj: str) -> dict[str, Any]:
+        try:
+            return json.loads(obj or "{}")
+        except Exception:
+            return {}
+
+    provider = (os.getenv("LLM_PROVIDER") or "").strip().lower()
     if provider == "llm":
         provider = "ollama"
+    if provider in {"", "fake"}:
+        raise LLMError(
+            "LLM_PROVIDER is not configured; set LLM_PROVIDER=mock for deterministic runs or a real provider (e.g. ollama)."
+        )
     model = os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", "llama3.1:8b"))
     temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
     system = pack.get("system", "")
@@ -175,22 +192,26 @@ def call_llm(
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     response_text: str
 
-    if provider != "ollama":
-        response_text = _deterministic_llm_response()
+    if provider == "mock":
+        response_text = _deterministic_response_for_kind()
     else:
         try:
             response_text = with_llm_retries(lambda: _ollama_chat(system, user, model, temperature))
         except LLMError:
-            response_text = _deterministic_llm_response()
+            response_text = _deterministic_response_for_kind()
         except (socket.timeout, ConnectionRefusedError, RuntimeError):
-            response_text = _deterministic_llm_response()
+            response_text = _deterministic_response_for_kind()
     if str(response_text or "").strip() in {"", "{}"}:
-        if kind and "ranking" in str(kind):
-            response_text = _deterministic_ranking_response([str(p) for p in pack.values() if isinstance(p, str)])
-        elif kind and "reasoning" in str(kind):
+        response_text = _deterministic_response_for_kind()
+    # Enforce deterministic reasoning/ranking shape when upstream returns non-JSON or empty content.
+    parsed = _parsed(response_text)
+    if kind and "reasoning" in str(kind):
+        if not parsed or not parsed.get("claims") and not parsed.get("evidence"):
             response_text = _deterministic_reasoning_response()
-        else:
-            response_text = _deterministic_llm_response()
+            parsed = _parsed(response_text)
+    if kind and "ranking" in str(kind):
+        if not parsed or not parsed.get("ranking"):
+            response_text = _deterministic_ranking_response([str(p) for p in pack.values() if isinstance(p, str)])
 
     log_llm_call(
         provider=provider or "unknown",

@@ -46,7 +46,7 @@ def _setup_trace_env(monkeypatch: pytest.MonkeyPatch, trace_path) -> None:
     monkeypatch.setenv("LLM_TRACE_PATH", str(trace_path))
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("REASONING_PROVIDER", "llm")
-    monkeypatch.setenv("LLM_PROVIDER", "fake")
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.delenv("CI", raising=False)
 
 
