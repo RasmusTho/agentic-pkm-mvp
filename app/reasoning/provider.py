@@ -16,12 +16,12 @@ from app.stores import get_object_store
 _FIXTURE_PATH = Path("data") / "golden" / "reasoning_samples.jsonl"
 
 
-class BaseReasoner:
+class BaseDeliberationAgent:
     def reason(self, reasoning_input: ReasoningInput) -> ReasoningOutput:  # pragma: no cover - interface
         raise NotImplementedError
 
 
-class MockReasoner(BaseReasoner):
+class MockDeliberationAgent(BaseDeliberationAgent):
     def __init__(self) -> None:
         self._fixtures = self._load_fixtures()
 
@@ -48,7 +48,7 @@ class MockReasoner(BaseReasoner):
         return self._fixtures.get(reasoning_input.text, ReasoningOutput())
 
 
-class OllamaReasoner(BaseReasoner):
+class OllamaDeliberationAgent(BaseDeliberationAgent):
     def __init__(self, *, model: str | None = None) -> None:
         self.model = model or os.getenv("REASONING_MODEL", "llama3.1:8b")
 
@@ -76,23 +76,34 @@ class OllamaReasoner(BaseReasoner):
         return validate_output(payload)
 
 
-def get_reasoner() -> BaseReasoner:
+# Backward-compatible aliases for legacy Reasoner naming.
+BaseReasoner = BaseDeliberationAgent
+MockReasoner = MockDeliberationAgent
+OllamaReasoner = OllamaDeliberationAgent
+
+
+def get_deliberation_agent() -> BaseDeliberationAgent:
     backend = os.getenv("REASONING_PROVIDER", "").strip().lower()
     llm_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
     ci = os.getenv("CI", "") == "1"
 
     if backend in {"mock", "golden"} or (ci and backend == ""):
-        return MockReasoner()
+        return MockDeliberationAgent()
 
     if backend == "":
         backend = "llm"
 
     if backend in {"llm", "ollama"}:
         if llm_provider == "mock":
-            return MockReasoner()
-        return OllamaReasoner()
+            return MockDeliberationAgent()
+        return OllamaDeliberationAgent()
 
-    return MockReasoner()
+    return MockDeliberationAgent()
+
+
+def get_reasoner() -> BaseDeliberationAgent:
+    # Backward-compatible alias for DeliberationAgent provider.
+    return get_deliberation_agent()
 
 
 def _load_object_text(object_id: str) -> Tuple[str, dict]:
@@ -161,7 +172,7 @@ def run_reasoning(
             relations=[],
         )
         try:
-            output = get_reasoner().reason(reasoning_input)
+            output = get_deliberation_agent().reason(reasoning_input)
         except Exception as exc:  # pragma: no cover - defensive
             return ReasoningRun(
                 mode=mode,
@@ -320,4 +331,17 @@ def run_reasoning_claims_for_object(object_id: str, trace_id: str | None = None)
     return ReasoningOutput()
 
 
-__all__ = ["get_reasoner", "MockReasoner", "OllamaReasoner", "run_reasoning", "ReasoningMode", "ReasoningRun", "run_reasoning_claims_for_object"]
+__all__ = [
+    "get_deliberation_agent",
+    "get_reasoner",
+    "BaseDeliberationAgent",
+    "BaseReasoner",
+    "MockDeliberationAgent",
+    "OllamaDeliberationAgent",
+    "MockReasoner",
+    "OllamaReasoner",
+    "run_reasoning",
+    "ReasoningMode",
+    "ReasoningRun",
+    "run_reasoning_claims_for_object",
+]

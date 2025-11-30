@@ -3,12 +3,19 @@
 ## 1. Purpose & Scope
 - This document states the intended behavior of the Agentic PKM system from the human (Rasmus) perspective, not the code structure.
 - It complements `docs/ARCHITECTURE.md` and `docs/STATUS.md`: those describe internals and current state; this file is the human-facing contract for how core flows should feel and behave.
-- Applies to the PKM-Alpha vault surface plus the Agentic PKM runtime (ObjectStore, SetDB, Reasoner, Outbox-driven agents, etc.), covering both ingestion and ASK/reasoning loops.
+- Applies to the PKM-Alpha vault surface plus the Agentic PKM runtime (ObjectStore, SetDB, Reasoning Layer, Outbox-driven agents incl. DeliberationAgent, etc.), covering both ingestion and ASK/reasoning loops.
+- I den här dokumentationen avser “PKM-Alpha vault” samma Obsidian-valv som nu kallas Mimer – kunskapsmodulen i det större systemet Yggdrasil.
 
 ## 2. Mental Model: Layers and Roles
 - **Surface layer (Obsidian PKM-Alpha vault)** — Human-authored notes, minimal frontmatter, free linking; this is where the human reads and writes.
 - **System layer** — `ObjectStore` / `SetDB` hold UUID-based knowledge objects; a metadata mirror lives under `System/Metadata/VaultMirror/.../uuid.md`; Outbox emits events that drive agents and downstream stores.
-- **Key agents (as seen by the human)** — Ingest/Normalizer (pulls notes safely), Classifier (proposes types/facets), ASK/QA (answers questions), Reasoner (multi-step thinking), SetEvaluator (ranks/evaluates candidates), Planner/Orchestrator (orders work), PanelAgent (handles AI panels in notes), Promotion/Evergreen logic (moves maturity forward). These collaborate to keep vault writing human-first while the system maintains structure underneath.
+- **Key agents (as seen by the human)** — Ingest/Normalizer (pulls notes safely), Classifier (proposes types/facets), ASK/QA (answers questions), DeliberationAgent (multi-step deliberation for ASK), SetEvaluator (ranks/evaluates candidates), Planner/Orchestrator (orders work), PanelAgent (handles AI panels in notes), Promotion/Evergreen logic (moves maturity forward). These collaborate to keep vault writing human-first while the system maintains structure underneath, and reasoning är en grundförmåga som alla agenter kan använda.
+
+### Per-noteloggen (maskinlogg)
+- För varje note med `uuid` finns en speglad metadatafil `uuid.md` i `System/Metadata/VaultMirror/<vault-relativ path>/`.
+- Samma fil är både metadata-spegel och per-note-logg: här kan systemet samla agentbeslut, promotionshistorik, konfliktlösning och proveniens från satelliter.
+- Den är den kanoniska maskinlogg-/historikfilen för noten och fungerar som synk-/merge-ankare mellan master och satelliter.
+- Den mänskliga noten hålls ren; maskinbrus hör hemma i spegelns `uuid.md`.
 
 ## 3. Core Flows (From the Human’s Perspective)
 

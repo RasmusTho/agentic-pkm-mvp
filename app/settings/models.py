@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -107,7 +108,19 @@ class QaSettings(AgentBase):
     llm: QaLLMSettings = Field(default_factory=QaLLMSettings)
 
 
+class YggdrasilPaths(BaseModel):
+    yggdrasil_root: Path
+    mimer_root: Path
+    hugin_root: Optional[Path] = None
+    munin_root: Optional[Path] = None
+    ratatosk_root: Optional[Path] = None
+    brokkr_root: Optional[Path] = None
+    tyr_root: Optional[Path] = None
+    heimdall_root: Optional[Path] = None
+
+
 class SettingsBundle(BaseModel):
     global_: GlobalSettings = Field(default_factory=GlobalSettings)
     providers: Providers = Field(default_factory=Providers)
     agents: Dict[str, Any] = Field(default_factory=dict)
+    yggdrasil_paths: Optional[YggdrasilPaths] = None

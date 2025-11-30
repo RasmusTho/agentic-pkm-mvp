@@ -111,7 +111,7 @@ Reasoning Alpha (local LLM)
 - The same env routes calls through the local LLM and writes JSONL traces for inspection.
 
 ## PKM-Alpha Alpha Reasoning Run (local LLM)
-- End-to-end local run against the real PKM-Alpha vault (limited ingest, alpha LLM tests, trace export to Obsidian).
+- End-to-end local run against the real PKM-Alpha vault (Mimer-modulen i Yggdrasil) (limited ingest, alpha LLM tests, trace export to Obsidian).
 
 Environment (local LLM + memory/pg)
 ```bash

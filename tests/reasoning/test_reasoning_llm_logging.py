@@ -8,7 +8,7 @@ import pytest
 
 from app.agents.set_evaluator.agent import run_set_evaluator
 from app.reasoning.multi import run_multi_note_reasoning
-from app.reasoning.provider import get_reasoner
+from app.reasoning.provider import get_deliberation_agent
 from app.reasoning.schema import ReasoningInput
 from app.stores import get_object_store, reset_store_backends
 
@@ -66,11 +66,11 @@ def test_reasoning_single_note_logs_real_json(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr("app.services.llm.log_llm_call", fake_log_llm_call)
     monkeypatch.setattr("app.services.llm._deterministic_llm_response", lambda: fake_json)
 
-    reasoner = get_reasoner()
+    deliberation_agent = get_deliberation_agent()
     note_text = "Note about safety and alignment."
     ri = ReasoningInput(object_uuid="OBJ-SINGLE", text=note_text, metadata={"trace_id": "T-single"}, relations=[])
 
-    output = reasoner.reason(ri)
+    output = deliberation_agent.reason(ri)
 
     assert output.claims and output.evidence and output.inferences
     assert captured, "log_llm_call should be invoked"

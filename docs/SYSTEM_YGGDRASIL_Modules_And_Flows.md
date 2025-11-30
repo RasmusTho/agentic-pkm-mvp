@@ -2,8 +2,10 @@
 
 High-level map of modules and how material moves between them. This orients intent and responsibilities; detailed technical design, data contracts, and runtime specifics live in `docs/ARCHITECTURE.md`.
 
+In SoT v4.10 this codebase primarily implements the Mimer module (the Obsidian vault + ingestion/indexing/agents). The other Yggdrasil modules (Hugin, Munin, Ratatosk, Brokkr, Tyr, Heimdall) are currently partly conceptual and/or handled by external tools and file-system organization.
+
 ## Modules at a glance
-- **Mimer — Knowledge (Obsidian vault)**: Human-first vault with notes, ontology, and semantic links; minimal frontmatter plus UUID identity. Acts as the cognitive graph that threads together interpretations of media, records, and projects. Provides Core-6 projections and references (e.g., `source_ref`) into other modules without duplicating their artifacts.
+- **Mimer — Knowledge (Obsidian vault)**: Human-first vault with notes, ontology, and semantic links; minimal frontmatter plus UUID identity. Acts as the cognitive graph that threads together interpretations of media, records, and projects. Provides Core-6 projections and references (e.g., `source_ref`) into other modules without duplicating their artifacts. This is the same vault historically referred to as PKM-Alpha.
 - **Hugin — Intelligence & agents**: Hosts agent profiles, policies, reasoning traces, plans, and experiments. Runs ASK/QA, reasoning loops, and evaluator workflows that read from Mimer and stores, then emit structured spans and decisions. Optimized for explainable, replayable agentic behavior rather than storage.
 - **Munin — Media & raw memory**: Holds photos, audio, video, recordings, and ebooks/audiobooks in original or lightly processed form. Serves as the media source of truth; derived transcripts or annotations link back into Mimer via citations and `source_ref`. Supports indexing hooks without altering the originals.
 - **Ratatosk — Ingestion & pipelines**: Inbox and ETL flows that capture material from devices, apps, or external feeds. Normalizes and routes payloads into Munin/Brokkr/Tyr as appropriate while seeding stubs in Mimer for interpretation. Prioritizes idempotent, auditable moves with Outbox events for agents.
@@ -30,6 +32,11 @@ Mimer is the cognitive hub. It hosts human-authored notes and semantic structure
 - Hugin owns agents and reasoning: profiles, policies, reasoning traces, generated plans, experiments, and ASK/QA logic.
 - Heimdall owns runtime and observability: deployment/configuration, system logs, metrics, dashboards, and operational runbooks.
 - "Agents conceptually belong to Hugin (intelligence), while Heimdall is responsible for infrastructure and observability. Hugin holds the 'mind', Heimdall the 'machinery'."
+
+### Git & Obsidian automation
+- Obsidian Git-automation (Obsidian Git-plugin eller motsvarande) är en nyckel i Mimers synkväv: den commitar/pushar/pullar Markdown-noter och per-note-loggar så text och loggar är portabla mellan instanser.
+- Automationen ligger i Machina/Heimdall-lagret: infrastruktur vi lutar oss mot men inte helt styr själva.
+- Eftersom Git kan skriva vid sidan av agenterna måste systemet tåla out-of-band-commits och merges; agenter kan inte anta att de är ensamma skribenter.
 
 ### Flows between Modules
 - Brokkr contains full project folders; `Mimer/Projects` holds each project’s semantic brain (status, decisions, links) and references Brokkr outputs instead of copying them.

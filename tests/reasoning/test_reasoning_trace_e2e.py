@@ -7,7 +7,7 @@ import pytest
 
 from app.agents.set_evaluator.agent import run_set_evaluator
 from app.llm.trace_inspect import load_trace
-from app.reasoning.provider import get_reasoner
+from app.reasoning.provider import get_deliberation_agent
 from app.reasoning.schema import ReasoningInput
 from app.reasoning.multi import run_multi_note_reasoning
 from app.stores import get_object_store, reset_store_backends
@@ -57,9 +57,9 @@ def test_reasoning_single_note_trace_has_non_empty_response_preview(monkeypatch:
     fake_json = _fake_reasoning_json("OBJ-SINGLE")
     monkeypatch.setattr("app.services.llm._deterministic_llm_response", lambda: fake_json)
 
-    reasoner = get_reasoner()
+    deliberation_agent = get_deliberation_agent()
     ri = ReasoningInput(object_uuid="OBJ-SINGLE", text="Note A about testing.", metadata={"trace_id": "T-single"}, relations=[])
-    out = reasoner.reason(ri)
+    out = deliberation_agent.reason(ri)
 
     assert out.claims and out.evidence and out.inferences
     assert trace_path.exists()

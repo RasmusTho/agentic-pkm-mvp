@@ -21,6 +21,7 @@ from .models import (
     QaSettings,
     ReviewerSettings,
     SettingsBundle,
+    YggdrasilPaths,
 )
 from .parsers import parse_section
 from .writeback import writeback_settings_block
@@ -191,6 +192,18 @@ def compile_all(*, auto_heal: bool | None = None) -> SettingsBundle:
     if "providers" in file_paths:
         _update_reference(file_paths["providers"], "Providers", bundle.providers, auto_heal_enabled)
 
+    yggdrasil_payload = _merge_sections(file_sections.get("yggdrasil", {}))
+    if yggdrasil_payload:
+        ygg_model, ygg_canonical, ygg_fixed = _hydrate_model(
+            payload=yggdrasil_payload,
+            model_cls=YggdrasilPaths,
+        )
+        bundle.yggdrasil_paths = ygg_model
+        if auto_heal_enabled and ygg_fixed and "yggdrasil" in file_paths:
+            writeback_settings_block(file_paths["yggdrasil"], ygg_canonical)
+        if "yggdrasil" in file_paths:
+            _update_reference(file_paths["yggdrasil"], "Yggdrasil", ygg_model, auto_heal_enabled)
+
     agents_cfg: Dict[str, Any] = {}
     for agent_name, sections in agent_sections.items():
         merged = _merge_sections(sections)
@@ -213,6 +226,8 @@ def compile_all(*, auto_heal: bool | None = None) -> SettingsBundle:
 
     dump("global.yaml", bundle.global_.model_dump())
     dump("providers.yaml", bundle.providers.model_dump())
+    if bundle.yggdrasil_paths is not None:
+        dump("yggdrasil.yaml", bundle.yggdrasil_paths.model_dump())
 
     agents_output_dir = RUNTIME / "agents"
     existing_agent_files = {

@@ -4,6 +4,8 @@ System map: `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md` covers the high-level Y
 
 `docs/HUMAN-FLOWS.md` captures the intended human experience and interaction flows; any architecture change that alters user-facing behavior should be validated against that contract before shipping.
 
+This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system. A high-level overview of Yggdrasil’s modules and flows lives in `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`, and human interaction patterns in `docs/HUMAN-FLOWS.md`.
+
 ## Reality-MVP Orientation
 - Primary focus: make ingestion of the real Obsidian vault stable, add a minimal external ingest path, expose a reliable ASK API, and ship observability plus an interim GUI so the system is usable end to end.
 - Zoned cognition overlay (Active/ Warm/ Cold) applied on top of the knowledge base; zones are derived from signals (usage, recency, trust) rather than folder names.
@@ -22,6 +24,11 @@ System map: `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md` covers the high-level Y
 - Vault plane (Obsidian): the human graph of linkable notes; minimal human frontmatter is allowed/encouraged, but the system does not require heavy YAML. Notes belong here when the user might want to read or link them directly.
 - External corpus plane: imported newsletters/emails/PDFs/raw docs that should be searchable and usable for answers but should not appear as notes. These objects live only in Stores/AMG with origins such as `origin: external_newsletter` and review states like `external_raw`.
 - Human frontmatter vs system metadata: frontmatter is for user-facing fields (uuid, title, type/status/area); system metadata (signals, zone inference inputs, relations, promotions, usage counts) remains in SetDB/AMG and Stores. Core-6 remains a projection ({uuid, title, origin, review_state, trust, source_ref}) and is not the full truth.
+
+### Note Log i metadata-spegeln
+- För varje objekt/uuid i valvet finns en motsvarande `uuid.md` i metadata-spegeln (`System/Metadata/VaultMirror/<vault-relativ path>/`).
+- Samma fil är metadata-spegel och per-note-logg: den samlar körningar från agenter, promotionshändelser, proveniens och ev. satellit-synk-bevis så att maskinhistoriken följer objektet oavsett backend.
+- Note Log är portabel Markdown som kan flyttas via Git mellan instanser även om SetDB/AMG eller andra Stores skiljer sig.
 
 ## Reality-MVP Architecture Components
 1) **Vault ingestion** — CLI/agent path to ingest selected Obsidian folders, normalize into Core-6 envelopes, persist in ObjectStore, emit Outbox events, chunk/index into VectorIndex, and keep provenance intact.
@@ -104,15 +111,15 @@ Every agent follows Plan → Execute → Reflect. Plan inspects the latest event
 When `DIARIZE_ENABLE=1`, the ingestion pipeline now feeds diarization metadata (speaker, start, end) into `speaker_aware_chunks()` so spans are cut on speaker changes or size boundaries (O(n) over segment length). Each emitted chunk carries `{speaker,start,end,speaker_segments}` metadata that flows through `ingest_and_chunk()` to indexing, and the audit stream (`text.chunk.created`) records `speaker_count` so reviewers can trace diarization coverage. With the flag disabled, `build_chunks()` preserves the legacy token/character splitter to keep defaults inert and deterministic.
 Oversized per-speaker segments are deterministically pre-split to respect `max_chars`; proportional start/end timestamps keep timelines monotonic without re-reading audio.
 
-### Reasoning Layer (modes & PER-style runs)
-Reasoning is now a multi-mode layer (`app/reasoning/models.py`) rather than a single JSON extractor. `ReasoningMode` defines the supported modes and `ReasoningRun` captures each run (id, mode, trace_id, object_uuids, steps, result, status/error). The router `run_reasoning(...)` in `app/reasoning/provider.py` orchestrates:
+### Reasoning Layer (cross-agent capability + DeliberationAgent)
+Reasoning är en tvärgående förmåga som alla agenter kan använda för planering, granskning och reflektion. Lagret är multi-mode (`app/reasoning/models.py`) snarare än en enkel JSON-extraktor. `ReasoningMode` definierar stödda lägen och `ReasoningRun` fångar varje körning (id, mode, trace_id, object_uuids, steps, result, status/error). Routern `run_reasoning(...)` i `app/reasoning/provider.py` orkestrerar:
 
 - `claims`: existing claims/evidence/inferences extraction (backed by `ReasoningInput` + `ReasoningOutput`); still fixture-backed for mock runs (`data/golden/reasoning_samples.jsonl`) and Ollama-backed locally.
 - `review`: lightweight review/critique of a note (summary/issues/suggestions), mock-deterministic in CI, LLM-backed locally.
 - `ranking`: candidate ranking with reasons, mock-deterministic in CI, LLM-backed locally (SetEvaluator consumes this).
 - `planning`: reserved/TBD.
 
-Calls include `agent` and `kind` (e.g., `reasoning.claims`, `reasoning.review`, `reasoning.ranking`) for tracing. The pipeline still gates on `REASONING_ENABLE=1` and stores claims outputs in the ReasoningStore; other modes feed agents directly (Reviewer, SetEvaluator) while remaining observable via the JSONL trace.
+Calls include `agent` and `kind` (e.g., `reasoning.claims`, `reasoning.review`, `reasoning.ranking`) for tracing. The pipeline still gates on `REASONING_ENABLE=1` and stores claims outputs in the ReasoningStore; other modes feed agents directly (Reviewer, SetEvaluator) while remaining observable via the JSONL trace. DeliberationAgent är den specialiserade multi-step-ASK-agenten som använder Reasoning Layer för att gå flera hopp, men samma mönster återanvänds av t.ex. Reviewer, SetEvaluator och Planner.
 
 Invariants:
 - `claims` is successful (`status="ok"`) only when at least one claim or evidence exists; fully empty `{claims:[], evidence:[], inferences:[]}` is `status="failed"`.
@@ -203,7 +210,7 @@ Envelopes reuse Core-6 metadata and append an `a2a.intent` field so determinism 
 Agents subscribe to A2A messages through the same PER scheduler: Plan inspects incoming envelopes (if enabled), Execute performs the requested action, and Reflect emits the response event plus standard audit spans. A2A never replaces Store interactions; it simply allows agents to chain themselves without introducing side channels. Hooks remain inert unless the flag is set, ensuring default CI paths stay unchanged.
 
 ### Sample Chain
-Classifier can request deeper reasoning by emitting `agent.request.created(intent="reason")` for the Reasoner; once processed, Reasoner answers via `agent.response.created` and can critique via `agent.critique.created`. PromotionAgent or Projector may then issue a follow-up request to Projector for packaging, giving a deterministic Classifier → Reasoner → Projector chain that is fully audited yet optional.
+Classifier can request deeper deliberation by emitting `agent.request.created(intent="reason")` for DeliberationAgent; once processed, DeliberationAgent answers via `agent.response.created` and can critique via `agent.critique.created`. PromotionAgent or Projector may then issue a follow-up request to Projector for packaging, giving a deterministic Classifier → DeliberationAgent → Projector chain that is fully audited yet optional, even though strukturerat resonemang är en tvärgående förmåga alla agenter använder.
 
 ## A2A Message Flow
 The A2A protocol is intentionally narrow and mediated entirely by the Orchestrator. Envelopes remain internal:

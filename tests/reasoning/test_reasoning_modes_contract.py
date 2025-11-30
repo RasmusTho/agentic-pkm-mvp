@@ -39,7 +39,7 @@ def test_run_reasoning_claims_mode_failed_when_empty(monkeypatch: pytest.MonkeyP
     reset_store_backends()
     store = get_object_store()
     object_id = uuid4()
-    store.put(object_id, kind="note", source_ref="b.md", payload={"text": "Unrecognized text for mock reasoner"})
+    store.put(object_id, kind="note", source_ref="b.md", payload={"text": "Unrecognized text for mock deliberation agent"})
 
     run = run_reasoning(ReasoningMode.CLAIMS, [str(object_id)])
 

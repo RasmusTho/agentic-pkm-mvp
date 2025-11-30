@@ -36,6 +36,7 @@ from app.llm.trace_inspect import (
     list_agents_in_sequence,
     load_trace,
 )
+from app.settings.runtime import get_settings_bundle
 
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 _DOWNLOAD_DIR = Path("tmp/normalize")
@@ -101,6 +102,20 @@ def _resolve_vault_root_path(
     if fallback_to_default:
         return DEFAULT_VAULT_ROOT
     return None
+
+
+def _resolve_yggdrasil_root(path_override: Path | None) -> Path:
+    if path_override is not None:
+        return path_override
+    try:
+        settings_bundle = get_settings_bundle()
+        settings_root = getattr(settings_bundle, "yggdrasil_paths", None)
+        if settings_root and getattr(settings_root, "yggdrasil_root", None):
+            return Path(settings_root.yggdrasil_root)
+    except Exception:
+        # Settings are optional for scaffolding; fall back to default root.
+        pass
+    return Path.home() / "Yggdrasil"
 
 
 def _truncate_preview(text: str, limit: int) -> str:
@@ -342,6 +357,96 @@ def pkm_alpha_ingest(limit: int | None) -> None:
     )
     count = ingest_vault_root(resolved, limit=limit)
     click.echo(f"Successfully ingested {count} files.")
+
+
+@cli.command(name="yggdrasil-init", help="Initialize a Yggdrasil root with module folders and the Mimer vault layout.")
+@click.option(
+    "--root",
+    "root_dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional Yggdrasil root path (defaults to settings.yggdrasil_paths.yggdrasil_root or ~/Yggdrasil).",
+)
+def yggdrasil_init(root_dir: Path | None) -> None:
+    yggdrasil_root = _resolve_yggdrasil_root(root_dir).expanduser()
+    module_paths = {
+        "Mimer": yggdrasil_root / "Mimer",
+        "Hugin": yggdrasil_root / "Hugin",
+        "Munin": yggdrasil_root / "Munin",
+        "Ratatosk": yggdrasil_root / "Ratatosk",
+        "Brokkr": yggdrasil_root / "Brokkr",
+        "Tyr": yggdrasil_root / "Tyr",
+        "Heimdall": yggdrasil_root / "Heimdall",
+    }
+
+    created: list[Path] = []
+    existed: list[Path] = []
+
+    for path in module_paths.values():
+        if path.exists():
+            existed.append(path)
+        else:
+            created.append(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+    mimer_subdirs = [
+        "Index",
+        "Workspace",
+        "Ingress",
+        "Projects",
+        "Domains",
+        "Corpus",
+        "Sources",
+        "Ontology",
+        "Taxonomy",
+        "Canon",
+        "Archive",
+        "Machina",
+        "@Settings",
+    ]
+    mimer_root = module_paths["Mimer"]
+    for subdir in mimer_subdirs:
+        subdir_path = mimer_root / subdir
+        if subdir_path.exists():
+            existed.append(subdir_path)
+        else:
+            created.append(subdir_path)
+        subdir_path.mkdir(parents=True, exist_ok=True)
+
+    settings_dir = mimer_root / "@Settings"
+    placeholder = settings_dir / "global.md"
+    if not any(settings_dir.iterdir()):
+        placeholder.write_text(
+            "\n".join(
+                [
+                    "---",
+                    "kind: settings",
+                    "scope: global",
+                    "module: Mimer",
+                    "system: Yggdrasil",
+                    "---",
+                    "",
+                    "# Global settings for Mimer (Yggdrasil)",
+                    "",
+                    "This is an initial placeholder created by the `yggdrasil-init` command.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        created.append(placeholder)
+    elif placeholder.exists():
+        existed.append(placeholder)
+
+    click.echo(f"Yggdrasil root: {yggdrasil_root}")
+    if created:
+        click.echo("Created:")
+        for path in sorted(created):
+            click.echo(f"  - {path}")
+    if existed:
+        click.echo("Already existed:")
+        for path in sorted(set(existed)):
+            click.echo(f"  - {path}")
 
 
 @cli.command(help="Ask a question through the planner/orchestrator pipeline.")
