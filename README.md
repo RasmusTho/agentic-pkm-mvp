@@ -204,7 +204,7 @@ Stegvalidering (unik ID, uppfyllda dependencies) sker före körning. Exekvering
 Allt valideras av schema.
 Reasoning-resultat kopplas till relationsgrafen och påverkar promotion gates.
 
-I CI används en 100% deterministisk MockReasoner.
+I CI används en 100% deterministisk MockDeliberationAgent.
 
 ⸻
 

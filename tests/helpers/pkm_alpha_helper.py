@@ -1,3 +1,4 @@
+"""Helper for the Mimer Obsidian vault (historically called 'PKM-Alpha') in the Yggdrasil system."""
 # Reasoning entrypoint: app/agents/pipeline.py:ingest_and_chunk() → _run_reasoning_if_enabled()
 # Reviewer entrypoint: app/agents/reviewer/agent.py:run(...) (graph wrapper in app/agents/reviewer/graph.py:invoke)
 # pkm-alpha path: app/ingest/config.DEFAULT_VAULT_ROOT (local repo mirror under vault/)

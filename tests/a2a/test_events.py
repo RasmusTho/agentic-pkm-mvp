@@ -28,7 +28,7 @@ def test_emit_agent_request_event(monkeypatch) -> None:
     recorder = AuditRecorder()
     monkeypatch.setattr("app.a2a.events.audit_log", recorder)
 
-    message = new_request(sender="Classifier", recipient="Reasoner", intent="reason")
+    message = new_request(sender="Classifier", recipient="DeliberationAgent", intent="reason")
     emit_agent_request_event(message, object_id="obj-1")
 
     record = recorder.records.pop()
@@ -41,10 +41,10 @@ def test_emit_agent_response_and_error_events(monkeypatch) -> None:
     recorder = AuditRecorder()
     monkeypatch.setattr("app.a2a.events.audit_log", recorder)
 
-    response = new_response(sender="Reasoner", recipient="Classifier", status="ok")
+    response = new_response(sender="DeliberationAgent", recipient="Classifier", status="ok")
     emit_agent_response_event(response)
     error = new_error(
-        sender="Reasoner",
+        sender="DeliberationAgent",
         recipient="Classifier",
         error_type="failed",
         error_message="no context",

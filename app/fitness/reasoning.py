@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import List
 
-from app.reasoning.provider import MockReasoner
+from app.reasoning.provider import MockDeliberationAgent
 from app.reasoning.schema import ReasoningInput, RelationSnapshot
 
 DATASET_PATH = Path("data") / "golden" / "reasoning_samples.jsonl"
@@ -29,7 +29,7 @@ def reasoning_metrics(flag_enabled: bool) -> dict[str, float]:
     samples = _load_samples()
     if not samples:
         return {"claims_avg": 0.0, "inferences_avg": 0.0, "conflicts": 0.0}
-    reasoner = MockReasoner()
+    reasoner = MockDeliberationAgent()
     claims_total = 0
     inference_total = 0
     conflicts = 0

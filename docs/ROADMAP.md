@@ -96,7 +96,7 @@ SoT v4.6-A expands the corpus to 16 deterministic queries (10 candidates each) a
 
 ## Forward Outlook (v4.7)
 ### Objective A — LLM Reasoning Layer v1 *(active — SoT v4.7-A)*
-- `REASONING_ENABLE=1` routes notes + relation snapshots through `get_reasoner()` (mock in CI, Ollama locally) using strict prompts; outputs must pass schema validation (`claims`, `evidence`, `inferences`) before being stored/audited.
+- `REASONING_ENABLE=1` routes notes + relation snapshots through `get_deliberation_agent()` (mock i CI, Ollama lokalt) using strict prompts; outputs must pass schema validation (`claims`, `evidence`, `inferences`) before being stored/audited.
 - Fitness adds an eighth summary line `CI SUMMARY REASONING claims_avg=<v> inferences_avg=<v> conflicts=<n> flag=on` with baselines defined in `ops/quality/baselines.yaml`; gates require non-zero inferences_avg and conflicts ≤ baseline when the flag is on.
 - Docs + README describe baselines and overrides (`THRESHOLDS_PATH`, `GATE_STRICT=1`), ensuring PRs paste the seven existing lines plus the new REASONING line.
 
@@ -104,13 +104,13 @@ SoT v4.6-A expands the corpus to 16 deterministic queries (10 candidates each) a
 ### Goals
 - Introduce the canonical A2A envelope schema (`agent.request.created`, `agent.response.created`, `agent.error`) and thread it through the Orchestrator so multi-agent work stays audited.
 - Allow agents to request, respond, and critique peer work without bypassing Stores/Outbox, keeping Planner Agent outputs replayable.
-- Enable deterministic multi-agent task sequences (e.g., Classifier → Reasoner → Projector) with Orchestrator-managed routing.
-- Provide orchestration hooks plus a sample chain template (Classifier → Reasoner → Projector) that operators can rehearse locally.
+- Enable deterministic multi-agent task sequences (e.g., Classifier → DeliberationAgent → Projector) with Orchestrator-managed routing.
+- Provide orchestration hooks plus a sample chain template (Classifier → DeliberationAgent → Projector) that operators can rehearse locally.
 
 ### Acceptance Criteria
 - `agent.request.created`, `agent.response.created`, and `agent.error` documented under Event Choreography with Core-6 + trace requirements.
 - Base agent exposes `handle_agent_message()` and routes envelopes via A2A middleware managed by the Orchestrator.
-- ≥1 multi-agent interaction scenario scripted end-to-end (Classifier requests Reasoner, Reasoner responds, Projector critiques) with deterministic fixtures.
+- ≥1 multi-agent interaction scenario scripted end-to-end (Classifier requests DeliberationAgent, DeliberationAgent responds, Projector critiques) with deterministic fixtures.
 - CI ships mock-backed A2A fixtures; default flags keep the feature inert (no new smoke gates) until `A2A_ENABLE=1`.
 
 ### Delivered so far

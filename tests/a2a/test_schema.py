@@ -11,7 +11,7 @@ from app.a2a.schema import AgentError, new_error, new_request, new_response
 def test_agent_request_roundtrip_serializable() -> None:
     request = new_request(
         sender="Classifier",
-        recipient="Reasoner",
+        recipient="DeliberationAgent",
         intent="reason",
         payload={"topic": "delta"},
         metadata={"priority": "low"},
@@ -25,7 +25,7 @@ def test_agent_request_roundtrip_serializable() -> None:
 
 
 def test_agent_response_defaults() -> None:
-    response = new_response(sender="Reasoner", recipient="Classifier")
+    response = new_response(sender="DeliberationAgent", recipient="Classifier")
     assert response.status == "ok"
     assert response.kind == "response"
 

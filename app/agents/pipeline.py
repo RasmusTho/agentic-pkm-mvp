@@ -18,7 +18,7 @@ from app.events.types import (
     TEXT_CHUNK_CREATED,
 )
 from app.orchestrator.runtime import Orchestrator, OrchestratorError, PlanValidationError
-from app.reasoning.provider import get_reasoner
+from app.reasoning.provider import get_deliberation_agent
 from app.reasoning.schema import ReasoningInput, RelationSnapshot, ReasoningValidationError
 from app.reasoning.store import get_reasoning_store
 from app.stores import get_relation_index
@@ -114,9 +114,9 @@ def _run_reasoning_if_enabled(obj: Dict[str, Any], text: str) -> None:
         metadata=obj.get("metadata") or obj.get("frontmatter") or {},
         relations=relations,
     )
-    reasoner = get_reasoner()
+    deliberation_agent = get_deliberation_agent()
     try:
-        output = reasoner.reason(reasoning_input)
+        output = deliberation_agent.reason(reasoning_input)
     except ReasoningValidationError as exc:
         audit_log(
             object_id=object_id,

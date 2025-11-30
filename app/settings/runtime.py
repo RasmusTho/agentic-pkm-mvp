@@ -15,6 +15,7 @@ from .models import (
     QaSettings,
     ReviewerSettings,
     SettingsBundle,
+    YggdrasilPaths,
 )
 from .hotreload import init_hot_reload
 
@@ -42,6 +43,7 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
 def _build_bundle() -> SettingsBundle:
     global_yaml = _read_yaml(RUNTIME / "global.yaml")
     providers_yaml = _read_yaml(RUNTIME / "providers.yaml")
+    yggdrasil_yaml = _read_yaml(RUNTIME / "yggdrasil.yaml")
     agents_dir = RUNTIME / "agents"
     agents: Dict[str, Any] = {}
     if agents_dir.exists():
@@ -52,10 +54,17 @@ def _build_bundle() -> SettingsBundle:
                 agents[file.stem] = model_cls(**agent_data)
             else:
                 agents[file.stem] = agent_data
+    yggdrasil_paths = None
+    if yggdrasil_yaml:
+        try:
+            yggdrasil_paths = YggdrasilPaths(**yggdrasil_yaml)
+        except Exception:
+            yggdrasil_paths = None
     bundle = SettingsBundle(
         global_=GlobalSettings(**global_yaml),
         providers=Providers(**providers_yaml),
         agents=agents,
+        yggdrasil_paths=yggdrasil_paths,
     )
     return bundle
 
