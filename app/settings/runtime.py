@@ -10,6 +10,7 @@ from .compiler import RUNTIME
 from .models import (
     ClassifierSettings,
     GlobalSettings,
+    InstanceSettings,
     PromotionSettings,
     Providers,
     QaSettings,
@@ -43,6 +44,7 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
 def _build_bundle() -> SettingsBundle:
     global_yaml = _read_yaml(RUNTIME / "global.yaml")
     providers_yaml = _read_yaml(RUNTIME / "providers.yaml")
+    instance_yaml = _read_yaml(RUNTIME / "instance.yaml")
     yggdrasil_yaml = _read_yaml(RUNTIME / "yggdrasil.yaml")
     agents_dir = RUNTIME / "agents"
     agents: Dict[str, Any] = {}
@@ -60,11 +62,18 @@ def _build_bundle() -> SettingsBundle:
             yggdrasil_paths = YggdrasilPaths(**yggdrasil_yaml)
         except Exception:
             yggdrasil_paths = None
+    instance_settings = InstanceSettings()
+    if instance_yaml:
+        try:
+            instance_settings = InstanceSettings(**instance_yaml)
+        except Exception:
+            instance_settings = InstanceSettings()
     bundle = SettingsBundle(
         global_=GlobalSettings(**global_yaml),
         providers=Providers(**providers_yaml),
         agents=agents,
         yggdrasil_paths=yggdrasil_paths,
+        instance=instance_settings,
     )
     return bundle
 

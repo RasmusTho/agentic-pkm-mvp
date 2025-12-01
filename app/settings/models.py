@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -119,8 +119,20 @@ class YggdrasilPaths(BaseModel):
     heimdall_root: Optional[Path] = None
 
 
+class InstanceSettings(BaseModel):
+    id: str = Field(
+        default="home",
+        description="Logical instance id (e.g. 'home', 'work', 'laptop').",
+    )
+    role: Literal["master", "satellite"] = Field(
+        default="master",
+        description="Instance role; 'master' is canonical, 'satellite' runs a partial view.",
+    )
+
+
 class SettingsBundle(BaseModel):
     global_: GlobalSettings = Field(default_factory=GlobalSettings)
     providers: Providers = Field(default_factory=Providers)
     agents: Dict[str, Any] = Field(default_factory=dict)
     yggdrasil_paths: Optional[YggdrasilPaths] = None
+    instance: InstanceSettings = Field(default_factory=InstanceSettings)
