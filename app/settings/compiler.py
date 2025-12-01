@@ -16,6 +16,7 @@ from .loader import read_text, split_sections
 from .models import (
     ClassifierSettings,
     GlobalSettings,
+    InstanceSettings,
     PromotionSettings,
     Providers,
     QaSettings,
@@ -204,6 +205,9 @@ def compile_all(*, auto_heal: bool | None = None) -> SettingsBundle:
         if "yggdrasil" in file_paths:
             _update_reference(file_paths["yggdrasil"], "Yggdrasil", ygg_model, auto_heal_enabled)
 
+    instance_payload = _merge_sections(file_sections.get("instance", {}))
+    bundle.instance = InstanceSettings(**instance_payload) if instance_payload else InstanceSettings()
+
     agents_cfg: Dict[str, Any] = {}
     for agent_name, sections in agent_sections.items():
         merged = _merge_sections(sections)
@@ -226,6 +230,7 @@ def compile_all(*, auto_heal: bool | None = None) -> SettingsBundle:
 
     dump("global.yaml", bundle.global_.model_dump())
     dump("providers.yaml", bundle.providers.model_dump())
+    dump("instance.yaml", bundle.instance.model_dump())
     if bundle.yggdrasil_paths is not None:
         dump("yggdrasil.yaml", bundle.yggdrasil_paths.model_dump())
 

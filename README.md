@@ -57,6 +57,8 @@ export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 
 python -m app.cli pipe /tmp/demo.md
 python -m app.fitness.report
+python -m app.cli yggdrasil-init --root /tmp/yg-demo
+LLM_TRACE_PATH=/tmp/llm-trace-sample.jsonl python -m app.cli llm-trace-sequence --latest --format mermaid > /tmp/llm-trace-seq.md
 
 Du ska se 8-radig CI-sammanfattning:
 LATENCY / EVAL / DELTA / RELATION COVERAGE / RELATIONS / DIARIZATION / REASONING / GATES
