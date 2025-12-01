@@ -2,7 +2,7 @@
 
 | Version | Goal | Delivered | Open | Next | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Reality-MVP (SoT v4.10) | Reliable vault ingestion + minimal external plane + ASK API + observability + interim GUI | PER-loop agents stable; ASK CLI/API baseline over vault objects; zones/planes defined; external object schema (`external_raw`) ready | Harden real-vault ingest runs, wire minimal external drop ingest, build observability backend + interim GUI | Stabilize FastAPI ASK endpoint with sources/latency; ship status CLI/dashboard; run ingest on real vault snapshots | Single-user focus; collaboration deferred; zones are derived overlays |
+| Reality-MVP (SoT v4.10) | Reliable vault ingestion + minimal external plane + ASK API + observability + interim GUI | PER-loop agents stable; ASK CLI/API baseline over vault objects; zones/planes defined; external object schema (`external_raw`) ready; InstanceSettings + `instance_id` on events as internal plumbing | Harden real-vault ingest runs, wire minimal external drop ingest, build observability backend + interim GUI | Stabilize FastAPI ASK endpoint with sources/latency; ship status CLI/dashboard; run ingest on real vault snapshots | Single-user focus; collaboration deferred; zones are derived overlays |
 | v4.4 | Observability + Store abstraction | JSONL audit, Outbox, Core-6 identity | None | Keep doc set frozen | Stable legacy cut |
 | v4.5A | Deterministic ingestion baseline | Full PER loop, promotion cooldowns, memory CI | Route ingestion polish to v4.5B | Monitor metrics + guard rails | Current green baseline |
 | v4.5B | Fitness guards + ingestion polish | Delivered 2025-02-14 — rerank hooks, chunk/dedup, CI gates | — | Prep v4.6 rollout, keep fitness monitors green | Ready for tagging |

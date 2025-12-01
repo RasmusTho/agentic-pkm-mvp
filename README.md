@@ -150,6 +150,7 @@ a2a.response.created
 promote.done
 
 Outbox-formatet är identiskt mellan memory- och postgres-backends.
+Händelser bär standardmetadata (event_type, trace_id, instance_id, created_at, source) så körningar kan spåras över tid och mellan instanser utan att ändra mänskliga flows.
 
 ⸻
 

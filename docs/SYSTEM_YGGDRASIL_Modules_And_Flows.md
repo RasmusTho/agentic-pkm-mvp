@@ -43,3 +43,9 @@ Mimer is the cognitive hub. It hosts human-authored notes and semantic structure
 - Munin stores raw media; `Mimer/Sources` and `Mimer/Corpus` interpret, transcribe, and link to it with citations.
 - Tyr stores formal records; Mimer captures interpretations, approvals, and downstream decisions while preserving pointers back to Tyr.
 - Ratatosk is the ingestion path that moves material into Munin/Brokkr/Tyr and seeds appropriate stubs in Mimer so agents can classify, link, and plan follow-up work.
+
+### Deployment & instances (high level)
+- Yggdrasil kan köras som en eller flera logiska instanser för samma människa (t.ex. en “home”-master på en Mac mini plus satelliter på arbetslaptop eller kontorsmaskin).
+- Varje runtime har `InstanceSettings` (`settings.instance.id` och `settings.instance.role`), med default `id: home`, `role: master` så Reality-MVP förblir en singel runtime.
+- Alla events bär `instance_id` och märker vilken runtime som emitterade dem, så audit/Outbox kan särskilja master och framtida satelliter.
+- Multi-instanssynk och master/satellit-protokoll är inte färdiga ännu; de dokumenteras separat när protokollet landar.

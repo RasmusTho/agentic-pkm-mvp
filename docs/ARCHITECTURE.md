@@ -6,6 +6,11 @@ System map: `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md` covers the high-level Y
 
 This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system. A high-level overview of Yggdrasil’s modules and flows lives in `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`, and human interaction patterns in `docs/HUMAN-FLOWS.md`.
 
+### Instance model (internal master/satellite plumbing)
+- SettingsBundle innehåller `instance` med `id` (t.ex. `home`, `work`, `laptop`) och `role` (`master` eller `satellite`).
+- Default när inget är konfigurerat: `id="home"` och `role="master"`, vilket matchar Reality-MVP:s singelruntime-fokus.
+- Scope: endast intern plumbing som informerar events/loggar och framtida sync-topologi; ingen ändring av Obsidian-ytan eller frontmatter.
+
 ## Reality-MVP Orientation
 - Primary focus: make ingestion of the real Obsidian vault stable, add a minimal external ingest path, expose a reliable ASK API, and ship observability plus an interim GUI so the system is usable end to end.
 - Zoned cognition overlay (Active/ Warm/ Cold) applied on top of the knowledge base; zones are derived from signals (usage, recency, trust) rather than folder names.
@@ -92,6 +97,7 @@ ObjectStore persists object envelopes and agent decisions; VectorIndex stores ch
 2. `ingest.object.normalized`, `.classified`, `.chunked`, `.deduped`, `.citation_checked` mark completion of each agent and carry `trace_id` plus payload diff.
 3. `index.object.embedded` signals VectorIndex writes and unlocks the Reviewer.
 4. `promote.pending` captures Reviewer approval; `promote.done` finalizes PromotionAgent moves and informs subscribers such as search indexing or set sync.
+- Alla events bär `instance_id` från `SettingsBundle.instance.id` (default `home`) så audit/Outbox kan markera vilken runtime som emitterade händelsen och förbereda master/satellit utan att ändra vault-UX.
 
 ### PromotionAgent Rules
 - Idempotent writes: promotion can be retried safely because target maturity and storage side effects are computed deterministically from audit trails.

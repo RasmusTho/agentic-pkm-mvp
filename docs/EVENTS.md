@@ -10,6 +10,7 @@
 | `created_at` | `timestamptz` | Enqueue timestamp (UTC).                     |
 | `delivered_at` | `timestamptz NULL` | Set when acked; `NULL` means pending. |
 | `attempts`   | `int`       | Optional retry counter (worker maintained).    |
+- `instance_id` (`string`) — logical instance identifier for the emitter (e.g. `home`, `work`); defaults to `home` when no explicit instance config exists.
 
 - `write_outbox_event(conn, topic, payload)` inserts the tuple `(id, topic, payload, created_at)` and opens/closes its own connection if `conn` is `None`.
 - `poll_outbox_one(conn, handler) -> bool` invokes `handler(topic, payload)` whenever a message is available and returns `True` only in that case.
@@ -27,9 +28,12 @@ Minimal payload (fields may extend but these are guaranteed):
   "uuid": "abc-123",
   "kind": "capture_note",
   "trace_id": "trace-1",
+  "instance_id": "home",
   "ts": "2025-11-08T12:00:00Z"
 }
 ```
+
+`instance_id` is the canonical emitter identity in the envelope and comes from settings (`instance.id`), defaulting to `home`.
 
 ## Ingest
 - ingest.normalize.request
