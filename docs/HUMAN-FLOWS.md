@@ -31,13 +31,45 @@
 - Some classifications can trigger automations or flows, but only after alignment with explicit human intent.
 
 ### 3.3 AI Panels in notes
-- An AI panel is a discrete, temporary block in a note, delimited by `%% AI:Start %%` and `%% AI:End %%`. It is written in human language, not code, and hosts AI suggestions or human instructions.
-- Panel content is not ingested into the knowledge base and is never treated as a fact about the world.
-- Suggestions appear as simple checkboxes, e.g.:
+- An AI panel is a discrete, temporary block delimited by *AI comment fences* and structured headings:
+
+  ```
+  %% AI:Start %%
+  ## AI-instruktion
+  ...
+  ## AI-åtgärder
+  ...
+  ## AI-logg
+  ...
+  %% AI:End %%
+  ```
+
+  The fence rule is forgiving: any Obsidian comment line that starts with `%%` (ignoring leading spaces) and contains `ai` (case-insensitive) opens a panel; the next such line closes it; the third opens the next, etc. Older notes that only use the headings without fences are still treated as panels, but new panels should use fences.
+- Panel content is *not* part of the knowledge base and must not be indexed or used as facts.
+- Suggestions appear as simple checkboxes inside `## AI-åtgärder`, e.g.:
   - `[ ] Category: Concept`
   - `[ ] Category: Entity / Company`
 - When the human checks an option, the system updates classification in ObjectStore/metadata accordingly; once handled, the entire panel disappears (checked and unchecked options are removed).
 - Panels are optional; any note may have zero, one, or several panels.
+
+### 3.3.1 Validate panel stripping in alpha runs
+- To verify that panel content is not contaminating indexing/QA in the PKM-Alpha vault, use the alpha-human-flows CLI with a clean outbox:
+
+  ```
+  export STORE_BACKEND=memory
+  export LLM_PROVIDER=mock
+  export INDEX_OUTBOX_PATH=/tmp/index-outbox-alpha.jsonl
+  python -m app.cli alpha-human-flows --reset-outbox
+  ```
+
+- Then inspect the outbox for unwanted panel text:
+
+  ```
+  grep -i "two moons" /tmp/index-outbox-alpha.jsonl || echo "no panel contamination"
+  grep -i "AI-instruktion" /tmp/index-outbox-alpha.jsonl || echo "no AI headings in outbox"
+  ```
+
+- Without `--reset-outbox`, the outbox may contain historic events (including older, pre-fix panel content). Use a fresh path or `--reset-outbox` for clean validation.
 
 ### 3.4 Questions, ASK, and reasoning
 - `/api/ask` answers are grounded in actual notes and metadata; the response surfaces which notes/paths contributed to the answer.

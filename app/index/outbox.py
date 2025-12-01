@@ -48,6 +48,12 @@ def append_jsonl(obj: Dict[str, Any]) -> None:
         text = payload.get("content") or payload.get("text")
         if text:
             from app.retrieval.hybrid import get_store
+            try:
+                from app.agents.panel.filters import strip_ai_panels
+
+                text = strip_ai_panels(text)
+            except Exception:
+                pass
 
             get_store().add_document(
                 doc_id=obj["object_id"],

@@ -2,6 +2,8 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 from typing import Any, Iterable
 
+from app.agents.panel.filters import strip_ai_panels
+
 # --- Noops om stores/bm25 saknas i minimal miljö -----------------------------
 
 class _NoopVectorIndex:
@@ -263,10 +265,11 @@ def _fake_embed(text: str, dims: int) -> list[float]:
 
 def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, text: str, **__):
     oid = object_id or uuid4()
+    safe_text = strip_ai_panels(text)
     # 1) standardisera payload-fält
     payload_out = dict(payload or {})
-    payload_out.setdefault("text", text)
-    payload_out.setdefault("content", text)
+    payload_out.setdefault("text", safe_text)
+    payload_out.setdefault("content", safe_text)
     payload_out.setdefault("object_type", kind)
     payload_out.setdefault("system_intent", "learn")
     payload_out.setdefault("emergent_tags", [])
@@ -292,7 +295,7 @@ def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, 
     except Exception:
         model_name = "openai/text-embedding-3-large"
 
-    embedding = _fake_embed(text, 1536)
+    embedding = _fake_embed(safe_text, 1536)
     idx = get_vector_index()
     # försök flera upsert-varianter
     try:
@@ -319,16 +322,16 @@ def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, 
             item = st[oid]
             if isinstance(item, dict):
                 item.setdefault("payload", {})
-                item["payload"].setdefault("text", text)
-                item["payload"].setdefault("content", text)
+                item["payload"].setdefault("text", safe_text)
+                item["payload"].setdefault("content", safe_text)
                 item["payload"].setdefault("object_type", kind)
                 item["payload"].setdefault("system_intent", "learn")
                 item["payload"].setdefault("emergent_tags", [])
             else:
                 pl = getattr(item, "payload", None)
                 if isinstance(pl, dict):
-                    pl.setdefault("text", text)
-                    pl.setdefault("content", text)
+                    pl.setdefault("text", safe_text)
+                    pl.setdefault("content", safe_text)
                     pl.setdefault("object_type", kind)
                     pl.setdefault("system_intent", "learn")
                     pl.setdefault("emergent_tags", [])
