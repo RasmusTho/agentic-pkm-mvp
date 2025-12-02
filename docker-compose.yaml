@@ -1,32 +1,41 @@
----
-version: '3.9'
 services:
   db:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
       POSTGRES_DB: app
     ports:
       - "15432:5432"
+
   api:
-    image: python:3.12-slim
+    build: .
+    image: workspace-app
     working_dir: /app
     volumes:
       - ./:/app
-    command: bash -lc "pip install -r app/requirements.txt requests && uvicorn app.api.app:app --host 0.0.0.0 --port 8000"
+    command: ["/bin/bash", "/app/scripts/start_api.sh"]
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/app
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
+      DB_DSN: postgresql+psycopg://app:app@db:5432/app
+      STORE_BACKEND: pg
+      LLM_PROVIDER: mock
     ports:
       - "18000:8000"
     depends_on:
       - db
+
   worker:
-    image: python:3.12-slim
+    build: .
+    image: workspace-app
     working_dir: /app
     volumes:
       - ./:/app
-    command: bash -lc "pip install -r app/requirements.txt && python -m app.workers.outbox_worker"
+    command: ["python", "-m", "app.workers.outbox_worker"]
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/app
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
+      DB_DSN: postgresql+psycopg://app:app@db:5432/app
+      STORE_BACKEND: pg
+      LLM_PROVIDER: mock
     depends_on:
       - db

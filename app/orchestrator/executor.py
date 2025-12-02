@@ -4,7 +4,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, MutableMapping, Protocol
 
-from app.a2a.events import send_agent_request
+from app.a2a.events import emit_agent_error_event, send_agent_request
+from app.a2a.schema import new_error
 from app.agents.base.loop import Agent
 from app.mcp.vault_tools import VaultToolError, append_note
 
@@ -20,10 +21,10 @@ def _flag_enabled(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-        normalized = value.strip().lower()
-        if not normalized:
-            return False
-        return normalized in {"1", "true", "yes", "on"}
+            normalized = value.strip().lower()
+            if not normalized:
+                return False
+            return normalized in {"1", "true", "yes", "on"}
     if isinstance(value, (int, float)):
         return value != 0
     return bool(value)
@@ -103,8 +104,17 @@ class MockPlanExecutor(PlanExecutor):
             trace_id=context.trace_id,
             object_id=context.object_id,
         )
-        # Dispatch to the default handler to keep behavior deterministic and audited.
-        self._default_agent.handle_agent_request(request)
+        response = self._default_agent.handle_agent_request(request)
+        if response is None:
+            error = new_error(
+                sender="orchestrator.runtime",
+                recipient=agent_name,
+                error_type="not_implemented",
+                error_message=f"{agent_name} cannot handle A2A messages.",
+                correlation_id=str(request.id),
+                trace_id=context.trace_id,
+            )
+            emit_agent_error_event(error, object_id=context.object_id)
         return {"agent": agent_name, "request_id": str(request.id)}
 
     def _execute_tool_call(self, step: PlanStep, context: StepContext) -> Dict[str, Any]:

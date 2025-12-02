@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from click.testing import CliRunner
 
 from app.cli import cli
 from app.retrieval.hybrid import get_store
+from app.stores import reset_store_backends
 from scripts.yaml_roundtrip import load_frontmatter
 
 
@@ -26,7 +28,13 @@ def _prepare_vault(tmp_path: Path) -> Path:
     return dest
 
 
+def _extract_ingested(output: str) -> int:
+    match = re.search(r"ingested\s+(\d+)\s+notes", output)
+    return int(match.group(1)) if match else -1
+
+
 def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
+    reset_store_backends()
     get_store().set_documents([])
     vault = _prepare_vault(tmp_path)
     runner = CliRunner()
@@ -93,3 +101,60 @@ def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
     for path in skipped_paths:
         mirror_candidate = vault / "System/Metadata/VaultMirror" / path.relative_to(vault).parent
         assert not mirror_candidate.exists()
+
+
+def test_vault_alpha_ingest_force_reingests(tmp_path: Path) -> None:
+    reset_store_backends()
+    get_store().set_documents([])
+    vault = _prepare_vault(tmp_path)
+    runner = CliRunner()
+    env = _base_env(tmp_path)
+
+    first = runner.invoke(
+        cli,
+        [
+            "vault-alpha-ingest",
+            "--vault-root",
+            str(vault),
+            "--max-notes",
+            "10",
+            "--include-test-note",
+        ],
+        env=env,
+    )
+    assert first.exit_code == 0, first.output
+    ingested_first = _extract_ingested(first.output)
+    assert ingested_first > 0
+
+    second = runner.invoke(
+        cli,
+        [
+            "vault-alpha-ingest",
+            "--vault-root",
+            str(vault),
+            "--max-notes",
+            "10",
+            "--include-test-note",
+        ],
+        env=env,
+    )
+    assert second.exit_code == 0, second.output
+    ingested_second = _extract_ingested(second.output)
+    assert ingested_second == 0
+
+    third = runner.invoke(
+        cli,
+        [
+            "vault-alpha-ingest",
+            "--vault-root",
+            str(vault),
+            "--max-notes",
+            "10",
+            "--include-test-note",
+            "--force",
+        ],
+        env=env,
+    )
+    assert third.exit_code == 0, third.output
+    ingested_third = _extract_ingested(third.output)
+    assert ingested_third > 0

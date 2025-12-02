@@ -178,13 +178,11 @@ def call_llm(
         except Exception:
             return {}
 
-    provider = (os.getenv("LLM_PROVIDER") or "").strip().lower()
+    provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
     if provider == "llm":
         provider = "ollama"
     if provider in {"", "fake"}:
-        raise LLMError(
-            "LLM_PROVIDER is not configured; set LLM_PROVIDER=mock for deterministic runs or a real provider (e.g. ollama)."
-        )
+        provider = "mock"
     model = os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", "llama3.1:8b"))
     temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
     system = pack.get("system", "")

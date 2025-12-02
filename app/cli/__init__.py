@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import json
@@ -39,6 +38,7 @@ from app.llm.trace_inspect import (
     load_trace,
 )
 from app.settings.runtime import get_settings_bundle
+from app.settings.yggdrasil_scaffolder import YggdrasilScaffolder
 
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 _DOWNLOAD_DIR = Path("tmp/normalize")
@@ -379,12 +379,19 @@ def pkm_alpha_ingest(limit: int | None) -> None:
     help="Maximum number of notes to ingest.",
 )
 @click.option("--include-test-note", is_flag=True, help="Include Test/Alpha-HumanFlows.md in this run.")
-def vault_alpha_ingest(vault_root: Path | None, max_notes: int, include_test_note: bool) -> None:
+@click.option("--force", is_flag=True, help="Re-ingest notes even if they appear already ingested or mirrored.")
+def vault_alpha_ingest(vault_root: Path | None, max_notes: int, include_test_note: bool, force: bool) -> None:
     resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=True)
     if resolved is None:
         raise click.BadParameter("Vault root could not be resolved.")
-    summary = run_vault_alpha_ingest(resolved, max_notes=max_notes, include_test_note=include_test_note)
-    click.echo(f"Scanned {summary.scanned} files; ingested {summary.ingested} notes.")
+    summary = run_vault_alpha_ingest(resolved, max_notes=max_notes, include_test_note=include_test_note, force=force)
+    if summary.ingested == 0 and not summary.force:
+        click.echo(
+            f"Scanned {summary.scanned} files; ingested {summary.ingested} notes (already up to date; run with --force to resync if the store is empty)"
+        )
+    else:
+        suffix = f" (force={summary.force})" if summary.force else ""
+        click.echo(f"Scanned {summary.scanned} files; ingested {summary.ingested} notes{suffix}")
     click.echo(f"Included folders: {', '.join(summary.included_folders) if summary.included_folders else '-'}")
 
 
@@ -606,8 +613,6 @@ def ask(question: str, vault_root: Path | None, enable_mcp_vault: bool) -> None:
         raise SystemExit(exit_code)
 
 
-
-
 @cli.command(name="llm-trace-flows", help="Inspect LLM trace flows grouped by trace_id.")
 @click.option("--agent", default=None, help="Filter by agent name.")
 @click.option("--limit", default=1, show_default=True, help="Number of trace groups to display.")
@@ -773,6 +778,7 @@ def note_scan(target: Path, pattern: str) -> None:
 
     if errors:
         raise SystemExit(1)
+
 
 @cli.command(
     help="Kör funktionskontroller för lokala beroenden (ffmpeg, yt-dlp, index-outbox, Ollama)."

@@ -49,7 +49,19 @@ def upgrade():
 
     # Index som matchar frågorna vi kör
     op.execute("CREATE INDEX IF NOT EXISTS ix_decisions_object_key_created ON public.decisions(object_id, key, created_at DESC)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_chunks_object_pos ON public.chunks(object_id, pos)")
+    op.execute("""
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='chunks' AND column_name='pos'
+      ) THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS ix_chunks_object_pos ON public.chunks(object_id, pos)';
+      ELSE
+        EXECUTE 'CREATE INDEX IF NOT EXISTS ix_chunks_object_idx ON public.chunks(object_id, idx)';
+      END IF;
+    END$$;
+    """)
 
     # Hjälpfunktion: hämta senaste beslutet för ett key
     op.execute("""
