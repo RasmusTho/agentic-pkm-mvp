@@ -27,6 +27,11 @@ try:
 except ImportError:
     ask_router = None
 
+try:
+    from app.api.routers.agent import router as agent_router
+except ImportError:
+    agent_router = None
+
 static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
 
 app = FastAPI(title="Agentic PKM API")
@@ -42,6 +47,8 @@ if status_router is not None:
     app.include_router(status_router, prefix="/api")
 if ask_router is not None:
     app.include_router(ask_router, prefix="/api")
+if agent_router is not None:
+    app.include_router(agent_router)
 
 
 @app.get("/", response_class=HTMLResponse)

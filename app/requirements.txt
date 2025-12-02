@@ -9,4 +9,6 @@ debugpy==1.8.17
 PyYAML==6.0.3
 jsonschema==4.23.0
 requests>=2.32.0
+prometheus-fastapi-instrumentator==7.1.0
+prometheus-client==0.23.1
 langgraph>=0.2.39

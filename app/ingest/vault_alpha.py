@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple
 
+import click
+
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.filters import strip_ai_panels
 from app.index.outbox import append_jsonl
@@ -23,6 +25,7 @@ class VaultAlphaSummary:
     scanned: int
     ingested: int
     included_folders: List[str]
+    force: bool = False
 
 
 _EXCLUDED_TOP = {"System", "Templates", ".obsidian"}
@@ -109,6 +112,40 @@ def _select_candidates(vault_root: Path, *, include_test_note: bool, max_notes: 
     return candidates, included_folders
 
 
+def _store_object_count(store: ObjectStore) -> int:
+    try:
+        objs = getattr(store, "_objects", None)
+        if isinstance(objs, dict):
+            return len(objs)
+    except Exception:
+        pass
+    try:
+        from app.stores.pg import PgObjectStore, _connect  # type: ignore
+
+        if isinstance(store, PgObjectStore):
+            with _connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT count(*) FROM store_objects")
+                    row = cur.fetchone()
+                    if row:
+                        return int(row[0]) if isinstance(row, (list, tuple)) else int(row.get("count", 0))
+    except Exception:
+        pass
+    return 0
+
+
+def _resolve_uuid_for_check(path: Path, vault_root: Path) -> str:
+    try:
+        frontmatter, _ = load_frontmatter(path.read_text(encoding="utf-8"))
+    except Exception:
+        frontmatter = {}
+    rel_path = path.relative_to(vault_root)
+    note_uuid = str(frontmatter.get("uuid") or frontmatter.get("id") or "").strip()
+    if note_uuid:
+        return note_uuid
+    return _existing_mirror_uuid(vault_root, rel_path)
+
+
 def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
     rel_path = path.relative_to(vault_root)
     raw_text = path.read_text(encoding="utf-8")
@@ -141,7 +178,6 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
         "maturity": maturity,
     }
 
-    # Persist into the classic ObjectStore for classifier compatibility
     obj = DomainObject(
         uuid=note_uuid,
         kind="note",
@@ -204,18 +240,40 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
     return note_uuid
 
 
-def run_vault_alpha_ingest(vault_root: Path, *, max_notes: int = 200, include_test_note: bool = False) -> VaultAlphaSummary:
+def run_vault_alpha_ingest(vault_root: Path, *, max_notes: int = 200, include_test_note: bool = False, force: bool = False) -> VaultAlphaSummary:
     vault_root = vault_root.expanduser().resolve()
+    store = get_object_store()
     candidates, included_folders = _select_candidates(vault_root, include_test_note=include_test_note, max_notes=max_notes)
+
+    if not force:
+        store_count = _store_object_count(store)
+        mirror_root = vault_root / "System/Metadata/VaultMirror"
+        has_mirrors = mirror_root.exists() and any(mirror_root.rglob("*.md"))
+        if store_count == 0 and has_mirrors:
+            click.echo("Vault mirrors exist but vault store is empty (0 objects). Use --force to resync from the vault.")
+
     ingested = 0
     for path in candidates:
         try:
+            note_uuid = _resolve_uuid_for_check(path, vault_root)
+            skip_existing = False
+            if note_uuid and not force:
+                try:
+                    parsed_uuid = uuid.UUID(note_uuid)
+                    existing = store.get(parsed_uuid)
+                    if existing is not None:
+                        skip_existing = True
+                except Exception:
+                    skip_existing = False
+            if skip_existing:
+                continue
+
             trace_id = with_trace_id(None)
             _ingest_single(path, vault_root=vault_root, trace_id=trace_id)
             ingested += 1
         except Exception:
             continue
-    return VaultAlphaSummary(scanned=len(candidates), ingested=ingested, included_folders=included_folders)
+    return VaultAlphaSummary(scanned=len(candidates), ingested=ingested, included_folders=included_folders, force=force)
 
 
 __all__ = ["run_vault_alpha_ingest", "VaultAlphaSummary"]

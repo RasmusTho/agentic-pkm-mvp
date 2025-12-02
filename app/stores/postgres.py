@@ -10,6 +10,27 @@ def _dsn() -> str:
     return url.replace("+psycopg", "")
 
 
+def _ensure_decisions(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute("create extension if not exists pgcrypto")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS decisions (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                object_id uuid NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+                agent text,
+                kind text,
+                key text NOT NULL,
+                value jsonb NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now()
+            )
+            """
+        )
+        cur.execute("ALTER TABLE decisions ADD COLUMN IF NOT EXISTS agent text")
+        cur.execute("ALTER TABLE decisions ADD COLUMN IF NOT EXISTS kind text")
+        cur.execute("ALTER TABLE decisions ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()")
+
+
 class PgObjects:
     def upsert(self, *, id: str | None = None, kind: str, payload: dict, source_ref: str | None = None, path: str | None = None):
         conn = psycopg.connect(_dsn())
@@ -26,7 +47,7 @@ class PgObjects:
                         (str_id, str_id, kind, source_ref, json.dumps(payload), path),
                     )
                     row = cur.fetchone()
-            return {"id": (row["id"] if isinstance(row, dict) else row[0])}
+            return {"id": (row[0] if isinstance(row, (list, tuple)) else row.get("id"))}
         finally:
             conn.close()
 
@@ -36,6 +57,7 @@ class PgDecisions:
         conn = psycopg.connect(_dsn())
         try:
             with conn:
+                _ensure_decisions(conn)
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO decisions (id, object_id, agent, kind, key, value, created_at) "
@@ -44,6 +66,6 @@ class PgDecisions:
                         (str(uuid4()), object_id, agent, kind, key, json.dumps(value)),
                     )
                     row = cur.fetchone()
-            return {"id": (row["id"] if isinstance(row, dict) else row[0])}
+            return {"id": (row[0] if isinstance(row, (list, tuple)) else row.get("id"))}
         finally:
             conn.close()

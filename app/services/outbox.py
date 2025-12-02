@@ -19,13 +19,22 @@ except Exception:  # pragma: no cover
 
 def _open_conn():
     if conn_rw:
-        return conn_rw()
+        try:
+            return conn_rw()
+        except Exception:
+            pass
     import psycopg
 
     url = os.environ.get("DATABASE_URL")
     if not url:
         raise RuntimeError("DATABASE_URL not set")
-    return psycopg.connect(url)
+    try:
+        from app.db.dsn import resolve_dsn
+        url = resolve_dsn(url)
+    except Exception:
+        if url.startswith("postgresql+psycopg://"):
+            url = "postgresql://" + url.split("postgresql+psycopg://", 1)[1]
+    return psycopg.connect(url, autocommit=True)
 
 
 def _use_conn(maybe_conn: Any) -> Tuple[Any, bool]:
@@ -61,6 +70,7 @@ def bootstrap(conn: Any = None) -> None:
             ensure_schema(conn)  # type: ignore[arg-type]
         except Exception:
             pass
+        _exec(conn, "create extension if not exists pgcrypto")
         _exec(
             conn,
             """

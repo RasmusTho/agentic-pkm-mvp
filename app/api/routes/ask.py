@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from app.observability.status_service import record_ask_query
 from app.retrieval.hybrid import hybrid_search
@@ -71,6 +71,13 @@ router = APIRouter()
 class AskRequest(BaseModel):
     question: str
     zone_strategy: str | None = "default"
+
+    @model_validator(mode="before")
+    @classmethod
+    def allow_query_alias(cls, data):
+        if isinstance(data, dict) and "question" not in data and "query" in data:
+            data = {**data, "question": data.get("query")}
+        return data
 
 
 class AskSource(BaseModel):

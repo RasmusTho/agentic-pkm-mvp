@@ -382,3 +382,7 @@ Two commands exist on purpose: `panel-update` runs the AI panel in isolation for
 - you want snapshot-aware, UUID-first safe writes with stale detection,
 - you want panel output + event dispatch + orchestrator plans,
 - you want behaviour consistent with note-scan and future watchers.
+
+## Runtime & Infrastructure
+- Compose/ports/startup details live in docs/INFRASTRUCTURE.md.
+- The compose stack runs db (pgvector), api (FastAPI on 8000 mapped to 18000), and worker (outbox consumer) on Colima-backed Docker.
