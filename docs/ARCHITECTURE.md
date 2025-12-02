@@ -339,10 +339,24 @@ For this slice the Planner and Orchestrator keep their previous behaviour; the n
 the vault-backed configuration available for upcoming integrations.
 
 ## AI panel: human-first note interaction
-Notes may optionally expose a lightweight AI panel so humans drive intent directly in Markdown without custom syntax. The panel recognises three sections:
+Notes may optionally expose a lightweight AI panel so humans drive intent directly in Markdown without custom syntax. Panels are delimited by forgiving AI comment fences (`%% ...AI... %%` after trimming spaces), where the first fence opens a panel, the second closes it, the third opens the next, etc. Inside a panel the schema is:
 - **AI-instruktion** — free-text instructions that describe what the human wants from the system for this note.
 - **AI-åtgärder** — markdown checkbox actions (`- [ ] ...` / `- [x] ...`) that the human can tick to request a discrete move.
 - **AI-logg** — chronological bullet log of what the system already executed for the note.
+
+Example:
+```
+%% AI:Start %%
+## AI-instruktion
+...
+## AI-åtgärder
+...
+## AI-logg
+...
+%% AI:End %%
+```
+
+Fences are tolerant to label variations (any `%%` line containing `ai`); legacy notes that only use the headings without fences are still parsed as panels, but new panels should use fences. Panel content is not part of the knowledge base and must not be indexed or used for QA.
 
 `PanelState` (pydantic) normalises these sections so agents can diff old vs. new states deterministically. The `PanelAgent` parses prior/current note bodies, emits `PanelIntent` records for newly-checked actions or instruction edits, and proposes updated Markdown by removing one-shot actions and appending a simple log entry (e.g., `- Action: "..."`). The agent remains local/in-memory for now: it is not wired to Planner/Orchestrator yet, but its output objects are ready for the future event pipeline.
 

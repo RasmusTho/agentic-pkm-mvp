@@ -14,7 +14,9 @@ from watchfiles import watch
 
 from app.observability.status_service import get_system_status
 from app.ingest.config import DEFAULT_VAULT_ROOT
+from app.cli.alpha_human_flows import run_alpha_human_flows
 from app.ingest.vault_root import ingest_vault_root
+from app.ingest.vault_alpha import run_vault_alpha_ingest
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
 from app.services.note_update import NoteUpdateResult, process_note_update
@@ -359,6 +361,84 @@ def pkm_alpha_ingest(limit: int | None) -> None:
     click.echo(f"Successfully ingested {count} files.")
 
 
+@cli.command(
+    name="vault-alpha-ingest",
+    help="Ingest Concept notes from the PKM - Alpha vault with panel stripping and mirror handling.",
+)
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional vault root (defaults to DEFAULT_VAULT_ROOT or VAULT_ROOT).",
+)
+@click.option(
+    "--max-notes",
+    type=int,
+    default=200,
+    show_default=True,
+    help="Maximum number of notes to ingest.",
+)
+@click.option("--include-test-note", is_flag=True, help="Include Test/Alpha-HumanFlows.md in this run.")
+def vault_alpha_ingest(vault_root: Path | None, max_notes: int, include_test_note: bool) -> None:
+    resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=True)
+    if resolved is None:
+        raise click.BadParameter("Vault root could not be resolved.")
+    summary = run_vault_alpha_ingest(resolved, max_notes=max_notes, include_test_note=include_test_note)
+    click.echo(f"Scanned {summary.scanned} files; ingested {summary.ingested} notes.")
+    click.echo(f"Included folders: {', '.join(summary.included_folders) if summary.included_folders else '-'}")
+
+
+@cli.command(
+    name="alpha-human-flows",
+    help=(
+        "Run alpha human flows end-to-end (sample ingest, test note, panel, promotion, ASK) "
+        "against a vault root."
+    ),
+)
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional vault root (defaults to DEFAULT_VAULT_ROOT).",
+)
+@click.option("--dry-run", is_flag=True, help="Print actions without writing to disk.")
+@click.option(
+    "--sample-size",
+    type=int,
+    default=6,
+    show_default=True,
+    help="Maximum sample notes to ingest in Flow A.",
+)
+@click.option(
+    "--explain-only",
+    is_flag=True,
+    help="Print checklist of flows without running any steps.",
+)
+@click.option(
+    "--reset-outbox",
+    is_flag=True,
+    help="Truncate the index outbox file before running (no effect in dry-run or explain-only).",
+)
+def alpha_human_flows(
+    vault_root: Path | None, dry_run: bool, sample_size: int, explain_only: bool, reset_outbox: bool
+) -> None:
+    """
+    Flows: A) ingest sample notes; B) ensure Test/Alpha-HumanFlows.md exists;
+    C) ingest + report mirror path; D) insert AI panel and reingest;
+    E) set promoted/evergreen frontmatter and reingest; F) run ASK queries.
+    """
+    resolved = _resolve_vault_root_path(vault_root, allow_env=False, fallback_to_default=True)
+    if resolved is None:
+        raise click.BadParameter("Vault root could not be resolved.")
+    run_alpha_human_flows(
+        resolved,
+        dry_run=dry_run,
+        sample_size=sample_size,
+        explain_only=explain_only,
+        reset_outbox=reset_outbox,
+    )
+
+
 @cli.command(name="yggdrasil-init", help="Initialize a Yggdrasil root with module folders and the Mimer vault layout.")
 @click.option(
     "--root",
@@ -454,6 +534,10 @@ def yggdrasil_init(root_dir: Path | None) -> None:
 @click.option("--vault-root", type=click.Path(path_type=Path), default=None, help="Path to vault root for MCP writes.")
 @click.option("--enable-mcp-vault", is_flag=True, default=False, help="Enable real MCP vault writes.")
 def ask(question: str, vault_root: Path | None, enable_mcp_vault: bool) -> None:
+    # ASK call chain:
+    # CLI -> new ask.query.received event -> planner.plan_for_event -> Orchestrator.run_plan
+    # -> PlanExecutor executes agent/tool/decision steps. QA answers come from app.agents.qa.answer
+    # (hybrid_search over retrieval store -> LLM provider mock/ollama) when a plan step targets QA.
     question_text = question.strip()
     if not question_text:
         raise click.BadParameter("Question must not be empty.")

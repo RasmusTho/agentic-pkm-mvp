@@ -8,6 +8,7 @@ from typing import Iterable
 
 from app.agents.classifier.agent import run as classify_run
 from app.agents.normalizer.agent import run as normalize_run
+from app.agents.panel.filters import strip_ai_panels
 from app.index.outbox import append_jsonl
 from app.observability.ingest_meta import record_ingest_failure, record_ingest_success
 from app.obs.log import with_trace_id
@@ -37,7 +38,14 @@ def iter_vault_root_markdown(root: Path, limit: int | None = None) -> Iterable[P
 
 def _ingest_file(path: Path, *, trace_id: str) -> str:
     text = path.read_text(encoding="utf-8")
+    stripped_text = strip_ai_panels(text)
     normalize_res = normalize_run(str(path), trace_id=trace_id)
+    sanitize_normalize = dict(normalize_res)
+    payload_copy = dict(normalize_res.get("payload") or {})
+    if "raw_text" in payload_copy:
+        payload_copy["raw_text"] = stripped_text
+    payload_copy.setdefault("text", stripped_text)
+    sanitize_normalize["payload"] = payload_copy
     object_id = str(normalize_res.get("object_id") or normalize_res.get("uuid") or "").strip()
     if not object_id:
         raise RuntimeError("normalize did not return object_id")
@@ -48,7 +56,7 @@ def _ingest_file(path: Path, *, trace_id: str) -> str:
             "object_id": object_id,
             "kind": "pipeline",
             "source_ref": str(path),
-            "payload": {"normalize": normalize_res, "classify": classify_res},
+            "payload": {"normalize": sanitize_normalize, "classify": classify_res},
         }
     )
 
@@ -65,14 +73,16 @@ def _ingest_file(path: Path, *, trace_id: str) -> str:
             kind="note",
             source_ref=str(path),
             payload=payload,
-            text=text,
+            text=stripped_text,
         )
     except Exception:
         logger.exception("Vector index ingest failed for %s", path)
 
     try:
         store = get_object_store()
-        store.put(object_uuid, kind="note", source_ref=str(path), payload={**payload, "text": text})
+        store.put(
+            object_uuid, kind="note", source_ref=str(path), payload={**payload, "text": stripped_text}
+        )
     except Exception:
         logger.exception("Object store upsert failed for %s", path)
 

@@ -16,3 +16,7 @@ class PanelState(BaseModel):
     instruction_text: str = ""
     actions: list[PanelAction] = Field(default_factory=list)
     logs: list[PanelLogEntry] = Field(default_factory=list)
+    spans: list[tuple[int, int]] = Field(
+        default_factory=list, description="Line index spans (inclusive) that belong to panel blocks."
+    )
+    fenced: bool = Field(default=False, description="Whether AI comment fences were detected.")

@@ -9,6 +9,8 @@ def test_parse_panel_empty():
     assert state.instruction_text == ""
     assert state.actions == []
     assert state.logs == []
+    assert state.spans == []
+    assert state.fenced is False
 
 
 def test_parse_panel_instruction_only():
@@ -27,6 +29,8 @@ def test_parse_panel_instruction_only():
     assert state.instruction_text == "Detta är min intention.\nMer text här."
     assert state.actions == []
     assert state.logs == []
+    assert state.spans != []
+    assert state.fenced is False
 
 
 def test_parse_panel_actions_only():
@@ -46,6 +50,8 @@ def test_parse_panel_actions_only():
         "Arkivera den här anteckningen",
         "Skapa en separat sammanfattningsanteckning",
     ]
+    assert state.spans != []
+    assert state.fenced is False
 
 
 def test_parse_panel_full_with_log():
@@ -77,3 +83,47 @@ def test_parse_panel_full_with_log():
         '- 2025-11-19 22:05 – Gjorde: "Gör denna anteckning evergreen"',
         '- 2025-11-20 08:10 – Gjorde: "Arkivera den här anteckningen"',
     ]
+    assert state.spans != []
+    assert state.fenced is False
+
+
+def test_parse_panel_with_fences():
+    markdown = textwrap.dedent(
+        """
+        # Note with fenced panel
+
+        %% AI:Start %%
+        ## AI-instruktion
+        Detta är min intention.
+
+        ## AI-åtgärder
+        - [ ] Gör denna anteckning evergreen
+
+        %% ai slut %%
+        """
+    )
+    state = parse_panel(markdown)
+    assert state.instruction_text == "Detta är min intention."
+    assert [a.text for a in state.actions] == ["Gör denna anteckning evergreen"]
+    assert state.fenced is True
+    assert len(state.spans) == 1
+    start, end = state.spans[0]
+    assert start < end
+
+
+def test_parse_panel_tolerant_ai_fences():
+    markdown = textwrap.dedent(
+        """
+        %%AI panel%%
+        ## AI-instruktion
+        Gör saker.
+        ## AI-åtgärder
+        - [ ] Förslag 1
+        %%   ai   %%
+        """
+    )
+    state = parse_panel(markdown)
+    assert state.fenced is True
+    assert len(state.spans) == 1
+    assert state.instruction_text.startswith("Gör saker")
+    assert [a.text for a in state.actions] == ["Förslag 1"]
