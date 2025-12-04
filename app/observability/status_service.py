@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Iterable
 
 from app.observability.ingest_meta import get_ingest_status
 from app.observability.status_model import AskStatus, IngestionStatus, StoreStatus, SystemStatus
@@ -28,26 +27,39 @@ def _prune_ask_metrics(now: float | None = None) -> None:
 
 
 def _iter_object_records(store) -> Iterable[dict]:
+    seen: set[str] = set()
+    records: list[dict] = []
+
     if hasattr(store, "_objects"):
         objs = getattr(store, "_objects")
         if isinstance(objs, dict):
-            return objs.values()
+            for rec in objs.values():
+                oid = str(rec.get("object_id") or rec.get("id") or "")
+                if oid:
+                    seen.add(oid)
+                records.append(rec)
+
     try:
-        from app.stores.pg import PgObjectStore, _connect  # type: ignore
+        from app.stores.pg import _connect  # type: ignore
     except Exception:
-        return []
-    if isinstance(store, PgObjectStore):
-        try:
-            with _connect() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT payload FROM store_objects")
-                    rows = cur.fetchall()
-            return ({"payload": row.get("payload") or {}} for row in rows)
-        except Exception:
-            return []
-    return []
+        return records
 
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT object_id, payload, source_ref FROM store_objects")
+                rows = cur.fetchall()
+        for row in rows or []:
+            oid = str(row.get("object_id") or "")
+            if oid and oid in seen:
+                continue
+            records.append({"object_id": oid, "payload": row.get("payload") or {}, "source_ref": row.get("source_ref")})
+            if oid:
+                seen.add(oid)
+    except Exception:
+        return records
 
+    return records
 def _classify_domain(record: dict) -> str:
     payload = record.get("payload") or {}
     origin = str(payload.get("origin") or payload.get("source") or payload.get("source_ref") or "").lower()

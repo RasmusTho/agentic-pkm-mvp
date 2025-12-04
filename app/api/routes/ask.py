@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 from fastapi import APIRouter
-from pydantic import BaseModel, model_validator
+from pydantic import AliasChoices, BaseModel, Field
 
 from app.observability.status_service import record_ask_query
 from app.retrieval.hybrid import hybrid_search
@@ -12,6 +12,35 @@ from app.retrieval.hybrid import get_store as get_hybrid_store
 from app.stores import get_object_store
 
 _HYBRID_WARMED = False
+
+
+def _load_pg_documents(hybrid, seen: set[str]) -> int:
+    try:
+        from app.stores.pg import _connect  # type: ignore
+    except Exception:
+        return 0
+
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT object_id, payload, source_ref FROM store_objects")
+                rows = cur.fetchall()
+    except Exception:
+        return 0
+
+    docs_added = 0
+    for row in rows or []:
+        payload = row.get("payload") or {}
+        text = payload.get("text") or payload.get("content")
+        if not text:
+            continue
+        doc_id = str(row.get("object_id"))
+        if doc_id in seen:
+            continue
+        hybrid.add_document(doc_id=doc_id, text=str(text), source_ref=row.get("source_ref"))
+        seen.add(doc_id)
+        docs_added += 1
+    return docs_added
 
 
 def _ensure_hybrid_store_loaded() -> None:
@@ -23,6 +52,7 @@ def _ensure_hybrid_store_loaded() -> None:
 
     store = get_object_store()
     docs_added = 0
+    seen: set[str] = set()
 
     # Memory store path
     try:
@@ -33,37 +63,14 @@ def _ensure_hybrid_store_loaded() -> None:
                 text = payload.get("text") or payload.get("content")
                 if not text:
                     continue
-                hybrid.add_document(doc_id=str(oid), text=str(text), source_ref=rec.get("source_ref"))
+                doc_id = str(oid)
+                hybrid.add_document(doc_id=doc_id, text=str(text), source_ref=rec.get("source_ref"))
+                seen.add(doc_id)
                 docs_added += 1
     except Exception:
         pass
 
-    # PG store path
-    try:
-        from app.stores.pg import PgObjectStore, _connect  # type: ignore
-    except Exception:
-        PgObjectStore = None  # type: ignore
-        _connect = None  # type: ignore
-
-    if PgObjectStore is not None and isinstance(store, PgObjectStore) and _connect is not None:
-        try:
-            with _connect() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT object_id, payload, source_ref FROM store_objects")
-                    rows = cur.fetchall()
-            for row in rows:
-                payload = row.get("payload") or {}
-                text = payload.get("text") or payload.get("content")
-                if not text:
-                    continue
-                hybrid.add_document(
-                    doc_id=str(row.get("object_id")),
-                    text=str(text),
-                    source_ref=row.get("source_ref"),
-                )
-                docs_added += 1
-        except Exception:
-            pass
+    docs_added += _load_pg_documents(hybrid, seen)
 
     if docs_added > 0:
         _HYBRID_WARMED = True
@@ -72,15 +79,8 @@ router = APIRouter()
 
 
 class AskRequest(BaseModel):
-    question: str
+    question: str = Field(validation_alias=AliasChoices("question", "query"))
     zone_strategy: str | None = "default"
-
-    @model_validator(mode="before")
-    @classmethod
-    def allow_query_alias(cls, data):
-        if isinstance(data, dict) and "question" not in data and "query" in data:
-            data = {**data, "question": data.get("query")}
-        return data
 
 
 class AskSource(BaseModel):
