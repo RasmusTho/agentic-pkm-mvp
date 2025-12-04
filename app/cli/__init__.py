@@ -424,7 +424,7 @@ def vault_alpha_ingest(vault_root: Path | None, max_notes: int, include_test_not
 @click.option(
     "--reset-outbox",
     is_flag=True,
-    help="Truncate the index outbox file before running (no effect in dry-run or explain-only).",
+    help="Development/diagnostic only: truncates the index outbox file before running (no effect in dry-run or explain-only).",
 )
 def alpha_human_flows(
     vault_root: Path | None, dry_run: bool, sample_size: int, explain_only: bool, reset_outbox: bool
