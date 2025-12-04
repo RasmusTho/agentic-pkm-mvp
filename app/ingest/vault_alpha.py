@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -33,6 +34,13 @@ _ALLOWED_TOP = {"Concepts"}
 _TEST_NOTE_REL = Path("Test") / "Alpha-HumanFlows.md"
 
 
+def _compute_ingest_fingerprint(stripped_text: str, path: Path) -> dict[str, int | str]:
+    return {
+        "text_sha256": hashlib.sha256(stripped_text.encode("utf-8")).hexdigest(),
+        "mtime_ns": path.stat().st_mtime_ns,
+    }
+
+
 def _derive_title(body: str, path: Path) -> str:
     for line in body.splitlines():
         stripped = line.strip()
@@ -61,6 +69,34 @@ def _existing_mirror_uuid(vault_root: Path, rel_path: Path) -> str:
         except Exception:
             continue
     return ""
+
+
+def _ensure_note_uuid_frontmatter(path: Path, frontmatter: dict, body: str, note_uuid: str, *, rel_path: Path) -> tuple[str, bool]:
+    existing_uuid = str(frontmatter.get("uuid") or "").strip()
+    existing_id = str(frontmatter.get("id") or "").strip()
+    if existing_uuid:
+        if existing_uuid != note_uuid:
+            click.echo(
+                f"Warning: {rel_path} frontmatter uuid {existing_uuid} differs from derived {note_uuid}; using frontmatter uuid.",
+                err=True,
+            )
+            return existing_uuid, False
+        return existing_uuid, False
+    if existing_id:
+        if existing_id != note_uuid:
+            click.echo(
+                f"Warning: {rel_path} frontmatter id {existing_id} differs from derived {note_uuid}; using frontmatter id.",
+                err=True,
+            )
+        updated_frontmatter = dict(frontmatter)
+        updated_frontmatter["uuid"] = existing_id
+        path.write_text(dump_frontmatter(updated_frontmatter, body), encoding="utf-8")
+        return existing_id, True
+
+    updated_frontmatter = dict(frontmatter)
+    updated_frontmatter["uuid"] = note_uuid
+    path.write_text(dump_frontmatter(updated_frontmatter, body), encoding="utf-8")
+    return note_uuid, True
 
 
 def _write_mirror(vault_root: Path, rel_path: Path, *, note_uuid: str, title: str, review_state: str, maturity: str) -> Path:
@@ -134,30 +170,29 @@ def _store_object_count(store: ObjectStore) -> int:
     return 0
 
 
-def _resolve_uuid_for_check(path: Path, vault_root: Path) -> str:
-    try:
-        frontmatter, _ = load_frontmatter(path.read_text(encoding="utf-8"))
-    except Exception:
-        frontmatter = {}
-    rel_path = path.relative_to(vault_root)
-    note_uuid = str(frontmatter.get("uuid") or frontmatter.get("id") or "").strip()
-    if note_uuid:
-        return note_uuid
-    return _existing_mirror_uuid(vault_root, rel_path)
-
-
 def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
     rel_path = path.relative_to(vault_root)
     raw_text = path.read_text(encoding="utf-8")
     frontmatter, body = load_frontmatter(raw_text)
-    note_uuid = str(frontmatter.get("uuid") or frontmatter.get("id") or "").strip()
-    if not note_uuid:
-        note_uuid = _existing_mirror_uuid(vault_root, rel_path) or str(uuid.uuid4())
+    frontmatter_uuid = str(frontmatter.get("uuid") or frontmatter.get("id") or "").strip()
+    mirror_uuid = _existing_mirror_uuid(vault_root, rel_path)
+    note_uuid = frontmatter_uuid or mirror_uuid or str(uuid.uuid4())
+    if frontmatter_uuid and mirror_uuid and frontmatter_uuid != mirror_uuid:
+        click.echo(
+            f"Warning: {rel_path} mirror uuid {mirror_uuid} differs from frontmatter uuid {frontmatter_uuid}; using frontmatter uuid.",
+            err=True,
+        )
+
+    note_uuid, _ = _ensure_note_uuid_frontmatter(path, frontmatter, body, note_uuid, rel_path=rel_path)
+    frontmatter = dict(frontmatter)
+    frontmatter["uuid"] = note_uuid
+
     title = str(frontmatter.get("title") or _derive_title(body, path))
     review_state = str(frontmatter.get("review_state") or "provisional")
     maturity = str(frontmatter.get("maturity") or "note")
     stripped_body = strip_ai_panels(body)
     stripped_text = stripped_body.strip()
+    ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
 
     mirror_path = vault_root / note_log_path(note_uuid, rel_path)
     if not mirror_path.exists():
@@ -176,6 +211,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
         "text": stripped_text,
         "source_path": str(path),
         "maturity": maturity,
+        "ingest_fingerprint": ingest_fingerprint,
     }
 
     obj = DomainObject(
@@ -200,7 +236,18 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
 
     try:
         # Store abstraction (memory/pg) used by ASK/status/hybrid warm-loads.
-        get_object_store().put(object_uuid, kind="note", source_ref=str(path), payload={"title": title, "origin": "vault", "source": str(path), "text": stripped_text})
+        get_object_store().put(
+            object_uuid,
+            kind="note",
+            source_ref=str(path),
+            payload={
+                "title": title,
+                "origin": "vault",
+                "source": str(path),
+                "text": stripped_text,
+                "ingest_fingerprint": ingest_fingerprint,
+            },
+        )
     except Exception:
         pass
 
@@ -257,14 +304,26 @@ def run_vault_alpha_ingest(vault_root: Path, *, max_notes: int = 200, include_te
     ingested = 0
     for path in candidates:
         try:
-            note_uuid = _resolve_uuid_for_check(path, vault_root)
+            rel_path = path.relative_to(vault_root)
+            raw_text = path.read_text(encoding="utf-8")
+            frontmatter, body = load_frontmatter(raw_text)
+            frontmatter_uuid = str(frontmatter.get("uuid") or frontmatter.get("id") or "").strip()
+            mirror_uuid = _existing_mirror_uuid(vault_root, rel_path)
+            note_uuid = frontmatter_uuid or mirror_uuid
+            stripped_text = strip_ai_panels(body).strip()
+            ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
             skip_existing = False
             if note_uuid and not force:
                 try:
                     parsed_uuid = uuid.UUID(note_uuid)
                     existing = store.get(parsed_uuid)
                     if existing is not None:
-                        skip_existing = True
+                        payload = existing.get("payload") or {}
+                        stored_fp = payload.get("ingest_fingerprint")
+                        if stored_fp:
+                            skip_existing = stored_fp == ingest_fingerprint
+                        else:
+                            skip_existing = False
                 except Exception:
                     skip_existing = False
             if skip_existing:

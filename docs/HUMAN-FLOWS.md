@@ -30,6 +30,11 @@
 - Human choices take precedence: the system never overwrites a human-chosen classification unless the human explicitly reclassifies.
 - Some classifications can trigger automations or flows, but only after alignment with explicit human intent.
 
+### 3.2.1 Alpha vault UUID and ingest guarantees
+- Alpha ingest writes a `uuid` into each note’s frontmatter (YAML round-tripped) when missing; if a frontmatter `uuid`/`id` conflicts with a mirror, the frontmatter value remains canonical and the mismatch is logged.
+- Mirrors under `System/Metadata/VaultMirror/**` and the Store share the same UUID for a given note.
+- Re-ingest is idempotent: unchanged notes are skipped via a simple ingest fingerprint (text hash + mtime), while `--force` replays everything even if unchanged.
+
 ### 3.3 AI Panels in notes
 - An AI panel is a discrete, temporary block delimited by *AI comment fences* and structured headings:
 
