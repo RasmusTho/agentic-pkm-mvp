@@ -22,6 +22,7 @@ def _ensure_hybrid_store_loaded() -> None:
         return
 
     store = get_object_store()
+    docs_added = 0
 
     # Memory store path
     try:
@@ -33,6 +34,7 @@ def _ensure_hybrid_store_loaded() -> None:
                 if not text:
                     continue
                 hybrid.add_document(doc_id=str(oid), text=str(text), source_ref=rec.get("source_ref"))
+                docs_added += 1
     except Exception:
         pass
 
@@ -59,10 +61,11 @@ def _ensure_hybrid_store_loaded() -> None:
                     text=str(text),
                     source_ref=row.get("source_ref"),
                 )
+                docs_added += 1
         except Exception:
             pass
 
-    if hybrid.all():
+    if docs_added > 0:
         _HYBRID_WARMED = True
 
 router = APIRouter()

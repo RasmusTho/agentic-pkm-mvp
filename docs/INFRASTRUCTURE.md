@@ -74,8 +74,8 @@ export OLLAMA_EMBED_MODEL=nomic-embed-text:latest
 export INDEX_OUTBOX_PATH=/tmp/index-outbox-alpha-concepts.jsonl
 
 python -m app.cli vault-alpha-ingest \
-  --max-notes 200 \
-  --include-test-note \
-  --force
+    --max-notes 200 \
+    --include-test-note \
+    --force
 ```
 Ensure `docker compose up -d` (or `scripts/dev_bootstrap.sh`) is running so the worker consumes new outbox events and re-indexes the vault.

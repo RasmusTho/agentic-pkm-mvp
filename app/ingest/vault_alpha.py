@@ -185,6 +185,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
         source_ref=str(path),
         created_at=datetime.now(timezone.utc),
     )
+    # Legacy ObjectStore keeps classifier/normalizer flows working with memory fallback during tests.
     ObjectStore().save_object(obj, emit_outbox=False, trace_id=trace_id)
 
     try:
@@ -198,6 +199,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
         object_uuid = uuid.uuid4()
 
     try:
+        # Store abstraction (memory/pg) used by ASK/status/hybrid warm-loads.
         get_object_store().put(object_uuid, kind="note", source_ref=str(path), payload={"title": title, "origin": "vault", "source": str(path), "text": stripped_text})
     except Exception:
         pass

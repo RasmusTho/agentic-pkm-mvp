@@ -70,6 +70,7 @@
   ```
 
 - Without `--reset-outbox`, the outbox may contain historic events (including older, pre-fix panel content). Use a fresh path or `--reset-outbox` for clean validation.
+- `--reset-outbox` truncates the JSONL file; it is intended for local experiments/regression checks and should not run in automated or production flows.
 
 ### 3.4 Questions, ASK, and reasoning
 - `/api/ask` answers are grounded in actual notes and metadata; the response surfaces which notes/paths contributed to the answer.
@@ -100,3 +101,10 @@
 - System metadata must not pollute the main vault surface; only agreed frontmatter fields appear in notes.
 - ASK answers must cite contributing notes/paths; losing source visibility is a regression.
 - Promotion/Evergreen steps must not rewrite note bodies; frontmatter and moves follow documented policies with logs in the mirror.
+
+## 7. Current Reality-MVP surfaces (implementation snapshot)
+- `vault-alpha-ingest` ingests Concepts (and optionally `Test/Alpha-HumanFlows.md`), strips AI panels, writes VaultMirror `uuid.md` files when missing, and populates the configured Store backend plus the in-process HybridStore used by ASK; `--force` reingests even when a UUID already exists.
+- `alpha-human-flows` orchestrates flows A–F on top of the same ingest path; `--reset-outbox` is a destructive, dev-only flag for local regression checks that truncates the configured index outbox.
+- `/api/ask` and the QA agent backends use BM25+embedding hybrid search over the in-process HybridStore, warmed from `store_objects` on first request; answers are the top-hit snippet and sources include doc ids and `source_ref` paths, while zones are not surfaced yet.
+- External corpus ingest is not automated; external objects only appear if inserted into the Store with an `origin` such as `external_raw`, and they surface in ASK/status alongside vault entries.
+- The CLI `ask` command still routes through the planner/orchestrator pipeline (QA steps fall back to the same hybrid retrieval), while `ingest-vault-root`/`pkm-alpha-ingest` provide quick root-level ingest helpers for the Alpha vault.
