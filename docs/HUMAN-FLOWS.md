@@ -31,9 +31,10 @@
 - Some classifications can trigger automations or flows, but only after alignment with explicit human intent.
 
 ### 3.2.1 Alpha vault UUID and ingest guarantees
-- Alpha ingest writes a `uuid` into each note’s frontmatter (YAML round-tripped) when missing; if a frontmatter `uuid`/`id` conflicts with a mirror, the frontmatter value remains canonical and the mismatch is logged.
-- Mirrors under `System/Metadata/VaultMirror/**` and the Store share the same UUID for a given note.
-- Re-ingest is idempotent: unchanged notes are skipped via a simple ingest fingerprint (text hash + mtime), while `--force` replays everything even if unchanged.
+- Alpha ingest writes a `uuid` into each note’s frontmatter (YAML round-tripped) when missing; the stored value is an Obsidian wikilink (`uuid: [[<uuid>]]`) pointing at the per-note metadata log. If a frontmatter `uuid`/`id` conflicts with a mirror, the frontmatter value remains canonical and the mismatch is logged.
+- Mirrors under `System/Metadata/VaultMirror/**` mirror the frontmatter identity and act as a log; when only the mirror carries a UUID, ingest writes it back into the note as a wikilink, and when neither exists a new UUID is generated and written to both.
+- The ingest fingerprint (text hash + mtime) is stored in the metadata mirror and the Store payload only; it drives skips only when the Store already has objects and mirror + Store fingerprints agree with the freshly computed fingerprint.
+- `--force` bypasses fingerprint/store skips, re-ingests everything, and backfills missing frontmatter/mirrors (the recovery path for “new DB + old mirrors”).
 
 ### 3.3 AI Panels in notes
 - An AI panel is a discrete, temporary block delimited by *AI comment fences* and structured headings:
@@ -108,7 +109,7 @@
 - Promotion/Evergreen steps must not rewrite note bodies; frontmatter and moves follow documented policies with logs in the mirror.
 
 ## 7. Current Reality-MVP surfaces (implementation snapshot)
-- `vault-alpha-ingest` ingests Concepts (and optionally `Test/Alpha-HumanFlows.md`), strips AI panels, writes VaultMirror `uuid.md` files when missing, and populates the configured Store backend plus the in-process HybridStore used by ASK; `--force` reingests even when a UUID already exists.
+- `vault-alpha-ingest` ingests Concepts (and optionally `Test/Alpha-HumanFlows.md`), strips AI panels, writes/updates VaultMirror `uuid.md` mirrors to match frontmatter, and populates the configured Store backend plus the in-process HybridStore used by ASK; fingerprints live in mirrors/store, skip unchanged notes once the Store is populated, and `--force` bypasses fingerprints/store checks, reingests everything, and heals missing frontmatter (run this after a fresh DB paired with existing mirrors).
 - `alpha-human-flows` orchestrates flows A–F on top of the same ingest path; `--reset-outbox` is a destructive, dev-only flag for local regression checks that truncates the configured index outbox.
 - `/api/ask` and the QA agent backends use BM25+embedding hybrid search over the in-process HybridStore, warmed from `store_objects` on first request; answers are the top-hit snippet and sources include doc ids and `source_ref` paths, while zones are not surfaced yet.
 - External corpus ingest is not automated; external objects only appear if inserted into the Store with an `origin` such as `external_raw`, and they surface in ASK/status alongside vault entries.

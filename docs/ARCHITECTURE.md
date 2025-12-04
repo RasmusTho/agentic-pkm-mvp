@@ -108,9 +108,9 @@ ObjectStore persists object envelopes and agent decisions; VectorIndex stores ch
 Every agent follows Plan → Execute → Reflect. Plan inspects the latest event plus Core-6 envelope to decide whether work is required, Execute performs the mutation using the Store layer, and Reflect writes audit spans, metrics, and Outbox entries. Data hand-offs are immutable payloads: Normalizer emits `normalized_object`, Chunker emits `chunk_set`, Deduper adds a `relation_patch`, CitationChecker appends `citation_report`, and Indexer produces an `embedding_batch`. The Reviewer consumes the cumulative context to assert maturity, then Projector and PromotionAgent close the loop. Failed executions requeue themselves by emitting a retryable event with the same `trace_id`.
 
 ### Note Ingestion Defaults
-- Obsidian notes (including vault-alpha ingest) are auto-healed before Panel runs: the frontmatter `uuid` is written or retained via the YAML round-trip helpers, preferring any existing `uuid`/`id` even when mirrors disagree.
-- Notes without UUIDs are still ingested and snapshotted; the ingest pipeline materializes the `uuid` into the note frontmatter and mirror before proceeding so identity stays stable across runs.
-- Vault ingest uses a simple ingest fingerprint (text SHA + file mtime) to decide whether to reprocess a vault note; unchanged notes are skipped unless `--force` is provided.
+- Obsidian notes (including vault-alpha ingest) are auto-healed before Panel runs: the frontmatter `uuid` is written or retained via the YAML round-trip helpers (always as `uuid: [[<uuid>]]`), preferring any existing `uuid`/`id` even when mirrors disagree.
+- Notes without UUIDs are still ingested and snapshotted; the ingest pipeline materializes the `uuid` into the note frontmatter (wikilink) and mirror before proceeding so identity stays stable across runs.
+- Vault ingest stores an ingest fingerprint (text SHA + file mtime) in mirrors and the Store; skips only apply when the Store already has an object and those fingerprints agree with the freshly computed fingerprint. `--force` bypasses fingerprint/store checks, reingests everything, and is the recovery path for “new DB + old mirrors.”
 - `note_moves_enable` defaults to false in runtime/global settings; Planner demotes move/rename/re-file steps to log-only and Promotion logs `promote.skip.move` instead of moving files.
 - Operators can enable moves later by setting `note_moves_enable: true` in `vault/@Settings/global` (propagates into `runtime/settings/global.yaml`).
 
