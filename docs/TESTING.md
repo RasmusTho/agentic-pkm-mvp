@@ -4,12 +4,15 @@
 - Unit: pure functions and single-agent logic
 - Contract: `.done` event payload shape and DB side-effects per agent
 - E2E: normalizer → classifier → chunker → deduper → citation → indexer → reviewer → projector
+- LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`)
 
 ## Commands
 - Single test
   - pytest -q tests/agents/test_normalizer.py
 - E2E graph
   - PYTHONPATH="$(pwd)" env DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" pytest -q tests/e2e/test_pipe_graph.py
+- Eval (opt-in)
+  - PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "eval"  # DeepEval/Ragas; not part of fast CI
 
 ## Determinism
 - Hashing-based embeddings in tests for stable semantics
