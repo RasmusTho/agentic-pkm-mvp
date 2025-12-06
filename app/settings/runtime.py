@@ -8,6 +8,7 @@ import yaml
 
 from .compiler import RUNTIME
 from .models import (
+    AskSettings,
     ClassifierSettings,
     GlobalSettings,
     InstanceSettings,
@@ -29,6 +30,7 @@ AGENT_MODEL_MAP: Dict[str, Any] = {
     "promotion": PromotionSettings,
     "reviewer": ReviewerSettings,
     "qa": QaSettings,
+    "ask": AskSettings,
 }
 
 

@@ -111,15 +111,19 @@ def _ingest_note(path: Path) -> Tuple[str, dict | None]:
         )
     except Exception:
         pass
+    store_payload = {**payload, "text": stripped_text}
     try:
         store = get_object_store()
-        store.put(
-            object_uuid, kind="note", source_ref=str(path), payload={**payload, "text": stripped_text}
-        )
+        store.put(object_uuid, kind="note", source_ref=str(path), payload=store_payload)
     except Exception:
         pass
     try:
-        get_store().add_document(doc_id=str(object_uuid), text=stripped_text, source_ref=str(path))
+        get_store().add_document(
+            doc_id=str(object_uuid),
+            text=stripped_text,
+            source_ref=str(path),
+            payload=store_payload,
+        )
     except Exception:
         pass
     classification = classify_res.get("classification") if isinstance(classify_res, dict) else None

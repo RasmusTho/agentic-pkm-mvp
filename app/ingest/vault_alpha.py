@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +35,13 @@ _ALLOWED_TOP = {"Concepts"}
 _TEST_NOTE_REL = Path("Test") / "Alpha-HumanFlows.md"
 
 
+def _compute_ingest_fingerprint(stripped_text: str, path: Path) -> dict[str, int | str]:
+    return {
+        "text_sha256": hashlib.sha256(stripped_text.encode("utf-8")).hexdigest(),
+        "mtime_ns": path.stat().st_mtime_ns,
+    }
+
+
 def _derive_title(body: str, path: Path) -> str:
     for line in body.splitlines():
         stripped = line.strip()
@@ -47,35 +56,119 @@ def _derive_title(body: str, path: Path) -> str:
     return path.stem
 
 
-def _existing_mirror_uuid(vault_root: Path, rel_path: Path) -> str:
+def _normalize_uuid(raw: str | None) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, (list, tuple)):
+        if not raw:
+            return ""
+        return _normalize_uuid(raw[0])
+    value = str(raw).strip()
+    if value.startswith("[[") and value.endswith("]]"):
+        value = value[2:-2].strip()
+    return value
+
+
+def _uuid_wikilink(note_uuid: str) -> str:
+    return f"[[{note_uuid}]]"
+
+
+def _is_wikilink(raw: str | None) -> bool:
+    if raw is None:
+        return False
+    if isinstance(raw, (list, tuple)):
+        if not raw:
+            return False
+        return _is_wikilink(raw[0])
+    value = str(raw).strip()
+    return value.startswith("[[") and value.endswith("]]")
+
+
+def _load_mirror_frontmatter(vault_root: Path, rel_path: Path) -> tuple[Path | None, dict, str]:
     mirror_dir = vault_root / Path("System/Metadata/VaultMirror") / rel_path.parent
     if not mirror_dir.exists():
-        return ""
+        return None, {}, ""
     for cand in sorted(mirror_dir.glob("*.md")):
         try:
-            fm, _ = load_frontmatter(cand.read_text(encoding="utf-8"))
-            existing = str(fm.get("uuid") or fm.get("id") or "").strip()
+            fm, body = load_frontmatter(cand.read_text(encoding="utf-8"))
             source_ref = str(fm.get("source_ref") or "").strip()
-            if existing and source_ref == str(rel_path):
-                return existing
+            if source_ref == str(rel_path):
+                return cand, fm, body
         except Exception:
             continue
-    return ""
+    return None, {}, ""
 
 
-def _write_mirror(vault_root: Path, rel_path: Path, *, note_uuid: str, title: str, review_state: str, maturity: str) -> Path:
+def _existing_mirror_uuid(vault_root: Path, rel_path: Path) -> str:
+    _, fm, _ = _load_mirror_frontmatter(vault_root, rel_path)
+    return _normalize_uuid(fm.get("uuid") or fm.get("id") or "")
+
+
+def _ensure_note_uuid_frontmatter(path: Path, frontmatter: dict, body: str, note_uuid: str, *, rel_path: Path) -> tuple[str, bool]:
+    existing_uuid_raw = frontmatter.get("uuid")
+    existing_uuid = _normalize_uuid(existing_uuid_raw)
+    existing_id_raw = frontmatter.get("id")
+    existing_id = _normalize_uuid(existing_id_raw)
+
+    if existing_uuid:
+        if existing_uuid != note_uuid:
+            click.echo(
+                f"Warning: {rel_path} frontmatter uuid {existing_uuid} differs from derived {note_uuid}; using frontmatter uuid.",
+                err=True,
+            )
+            note_uuid = existing_uuid
+        if not _is_wikilink(existing_uuid_raw):
+            updated_frontmatter = dict(frontmatter)
+            updated_frontmatter["uuid"] = _uuid_wikilink(existing_uuid)
+            path.write_text(dump_frontmatter(updated_frontmatter, body), encoding="utf-8")
+            return existing_uuid, True
+        return existing_uuid, False
+
+    if existing_id:
+        if existing_id != note_uuid:
+            click.echo(
+                f"Warning: {rel_path} frontmatter id {existing_id} differs from derived {note_uuid}; using frontmatter id.",
+                err=True,
+            )
+        updated_frontmatter = dict(frontmatter)
+        updated_frontmatter["uuid"] = _uuid_wikilink(existing_id)
+        path.write_text(dump_frontmatter(updated_frontmatter, body), encoding="utf-8")
+        return existing_id, True
+
+    updated_frontmatter = dict(frontmatter)
+    updated_frontmatter["uuid"] = _uuid_wikilink(note_uuid)
+    path.write_text(dump_frontmatter(updated_frontmatter, body), encoding="utf-8")
+    return note_uuid, True
+
+
+def _write_mirror(
+    vault_root: Path,
+    rel_path: Path,
+    *,
+    note_uuid: str,
+    title: str,
+    review_state: str,
+    maturity: str,
+    ingest_fingerprint: dict[str, int | str],
+    existing_frontmatter: dict | None = None,
+    existing_body: str | None = None,
+) -> Path:
     mirror_path = vault_root / note_log_path(note_uuid, rel_path)
     mirror_path.parent.mkdir(parents=True, exist_ok=True)
-    frontmatter = {
-        "uuid": note_uuid,
-        "title": title,
-        "kind": "note",
-        "origin": "vault",
-        "source_ref": str(rel_path),
-        "review_state": review_state,
-        "maturity": maturity,
-    }
-    body = f"Mirror for {rel_path}"
+    frontmatter = dict(existing_frontmatter or {})
+    frontmatter.update(
+        {
+            "uuid": note_uuid,
+            "title": title,
+            "kind": "note",
+            "origin": "vault",
+            "source_ref": str(rel_path),
+            "review_state": review_state,
+            "maturity": maturity,
+            "ingest_fingerprint": ingest_fingerprint,
+        }
+    )
+    body = existing_body if (existing_body or "").strip() else f"Mirror for {rel_path}"
     mirror_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
     return mirror_path
 
@@ -134,34 +227,56 @@ def _store_object_count(store: ObjectStore) -> int:
     return 0
 
 
-def _resolve_uuid_for_check(path: Path, vault_root: Path) -> str:
-    try:
-        frontmatter, _ = load_frontmatter(path.read_text(encoding="utf-8"))
-    except Exception:
-        frontmatter = {}
-    rel_path = path.relative_to(vault_root)
-    note_uuid = str(frontmatter.get("uuid") or frontmatter.get("id") or "").strip()
-    if note_uuid:
-        return note_uuid
-    return _existing_mirror_uuid(vault_root, rel_path)
-
-
 def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
     rel_path = path.relative_to(vault_root)
     raw_text = path.read_text(encoding="utf-8")
     frontmatter, body = load_frontmatter(raw_text)
-    note_uuid = str(frontmatter.get("uuid") or frontmatter.get("id") or "").strip()
-    if not note_uuid:
-        note_uuid = _existing_mirror_uuid(vault_root, rel_path) or str(uuid.uuid4())
+    mirror_path, mirror_frontmatter, mirror_body = _load_mirror_frontmatter(vault_root, rel_path)
+    frontmatter_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
+    mirror_uuid = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
+    note_uuid = frontmatter_uuid or mirror_uuid or str(uuid.uuid4())
+    # Frontmatter is the canonical identity; mirror is a log to help heal missing metadata.
+    if frontmatter_uuid and mirror_uuid and frontmatter_uuid != mirror_uuid:
+        click.echo(
+            f"Warning: {rel_path} mirror uuid {mirror_uuid} differs from frontmatter uuid {frontmatter_uuid}; using frontmatter uuid.",
+            err=True,
+        )
+
+    note_uuid, rewrote_uuid = _ensure_note_uuid_frontmatter(path, frontmatter, body, note_uuid, rel_path=rel_path)
+    updated_frontmatter = dict(frontmatter)
+    updated_frontmatter["uuid"] = _uuid_wikilink(note_uuid)
+    if "ingest_fingerprint" in updated_frontmatter:
+        updated_frontmatter.pop("ingest_fingerprint", None)
+        rewrote_uuid = True
+    if rewrote_uuid:
+        path.write_text(dump_frontmatter(updated_frontmatter, body), encoding="utf-8")
+    frontmatter = updated_frontmatter
+
     title = str(frontmatter.get("title") or _derive_title(body, path))
     review_state = str(frontmatter.get("review_state") or "provisional")
     maturity = str(frontmatter.get("maturity") or "note")
     stripped_body = strip_ai_panels(body)
     stripped_text = stripped_body.strip()
+    ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
 
-    mirror_path = vault_root / note_log_path(note_uuid, rel_path)
-    if not mirror_path.exists():
-        _write_mirror(vault_root, rel_path, note_uuid=note_uuid, title=title, review_state=review_state, maturity=maturity)
+    try:
+        mtime_ns = int(ingest_fingerprint.get("mtime_ns", 0))
+        if mtime_ns > 0:
+            os.utime(path, ns=(mtime_ns, mtime_ns))
+    except Exception:
+        pass
+
+    _write_mirror(
+        vault_root,
+        rel_path,
+        note_uuid=note_uuid,
+        title=title,
+        review_state=review_state,
+        maturity=maturity,
+        ingest_fingerprint=ingest_fingerprint,
+        existing_frontmatter=mirror_frontmatter if mirror_path else None,
+        existing_body=mirror_body if mirror_path else None,
+    )
 
     core6 = {
         "id": note_uuid,
@@ -176,6 +291,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
         "text": stripped_text,
         "source_path": str(path),
         "maturity": maturity,
+        "ingest_fingerprint": ingest_fingerprint,
     }
 
     obj = DomainObject(
@@ -198,14 +314,32 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
     except Exception:
         object_uuid = uuid.uuid4()
 
+    store_payload = {
+        "title": title,
+        "origin": "vault",
+        "source": str(path),
+        "text": stripped_text,
+        "ingest_fingerprint": ingest_fingerprint,
+    }
+
     try:
         # Store abstraction (memory/pg) used by ASK/status/hybrid warm-loads.
-        get_object_store().put(object_uuid, kind="note", source_ref=str(path), payload={"title": title, "origin": "vault", "source": str(path), "text": stripped_text})
+        get_object_store().put(
+            object_uuid,
+            kind="note",
+            source_ref=str(path),
+            payload=store_payload,
+        )
     except Exception:
         pass
 
     try:
-        get_store().add_document(doc_id=str(object_uuid), text=stripped_text, source_ref=str(path))
+        get_store().add_document(
+            doc_id=str(object_uuid),
+            text=stripped_text,
+            source_ref=str(path),
+            payload=store_payload,
+        )
     except Exception:
         pass
 
@@ -247,27 +381,43 @@ def run_vault_alpha_ingest(vault_root: Path, *, max_notes: int = 200, include_te
     store = get_object_store()
     candidates, included_folders = _select_candidates(vault_root, include_test_note=include_test_note, max_notes=max_notes)
 
-    if not force:
-        store_count = _store_object_count(store)
-        mirror_root = vault_root / "System/Metadata/VaultMirror"
-        has_mirrors = mirror_root.exists() and any(mirror_root.rglob("*.md"))
-        if store_count == 0 and has_mirrors:
-            click.echo("Vault mirrors exist but vault store is empty (0 objects). Use --force to resync from the vault.")
+    store_count = _store_object_count(store)
+    mirror_root = vault_root / "System/Metadata/VaultMirror"
+    has_mirrors = mirror_root.exists() and any(mirror_root.rglob("*.md"))
+    cold_rebuild = not force and store_count == 0 and has_mirrors
+    if cold_rebuild:
+        click.echo(
+            "Vault mirrors exist but vault store is empty (0 objects). Treating this as a cold rebuild from the vault (no fingerprint skips)."
+        )
 
     ingested = 0
     for path in candidates:
         try:
-            note_uuid = _resolve_uuid_for_check(path, vault_root)
-            skip_existing = False
-            if note_uuid and not force:
+            rel_path = path.relative_to(vault_root)
+            raw_text = path.read_text(encoding="utf-8")
+            frontmatter, body = load_frontmatter(raw_text)
+            frontmatter_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
+            mirror_path, mirror_frontmatter, _ = _load_mirror_frontmatter(vault_root, rel_path)
+            mirror_uuid = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
+            note_uuid = frontmatter_uuid or mirror_uuid
+            stripped_text = strip_ai_panels(body).strip()
+            ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
+            should_skip = False
+            if note_uuid and not force and not cold_rebuild:
+                parsed_uuid = None
                 try:
                     parsed_uuid = uuid.UUID(note_uuid)
-                    existing = store.get(parsed_uuid)
-                    if existing is not None:
-                        skip_existing = True
                 except Exception:
-                    skip_existing = False
-            if skip_existing:
+                    parsed_uuid = None
+                existing = store.get(parsed_uuid) if parsed_uuid else None
+                if existing is not None:
+                    payload = existing.get("payload") or {}
+                    stored_fp = payload.get("ingest_fingerprint")
+                    mirror_fp = mirror_frontmatter.get("ingest_fingerprint")
+                    if stored_fp and mirror_fp:
+                        if stored_fp == mirror_fp == ingest_fingerprint:
+                            should_skip = True
+            if should_skip:
                 continue
 
             trace_id = with_trace_id(None)

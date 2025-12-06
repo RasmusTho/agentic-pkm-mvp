@@ -1,20 +1,20 @@
-# Developer Workflow — SoT v4.2
+# Developer Workflow — SoT v4.10
 
-## Development Loop
-1. Choose agent to work on (e.g. Deduper)
-2. Write or extend its tests in `tests/agents/<agent>.py`
-3. Run the test directly until green
-4. Commit and push
-5. When multiple agents work, validate with `tests/e2e/test_pipe_graph.py`
+## Development Loop (order of operations)
+1) **Update SoT/docs first when behavior changes** — `docs/ARCHITECTURE.md`, `docs/HUMAN-FLOWS.md`, `docs/AGENTS.md`, `docs/EVENTS.md` stay authoritative. If code and docs disagree, fix the docs or mark the delta.
+2) **Add/adjust tests before coding** — follow `docs/TESTING.md` and `docs/CI.md`; write or extend unit/contract/e2e/eval tests that express the intended change.
+3) **Implement within the documented architecture** — respect Stores/Outbox/Index layers and existing agent flows.
+4) **Run tests/evals** — at minimum `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`; add targeted suites (e.g., `tests/api`, eval harnesses) when retrieval/reasoning or surfaces change.
+5) **Reflect progress** — update `docs/STATUS.md` or `docs/ROADMAP.md` when the SoT shifts.
 
-## Example
-pytest -q tests/agents/test_deduper.py
-pytest -q tests/e2e/test_pipe_graph.py
+## AI-assisted development
+- AI/code agents are accelerators, not architects; the SoT docs and tests stay in charge.
+- Follow `docs/AI_DEVELOPMENT.md` for dev-layer guardrails (scope, constraints, required tests).
+- Keep runtime prompts/behavior separate from dev prompts; runtime lives in `docs/ARCHITECTURE.md` / `docs/AGENTS.md`.
 
 ## Branch Strategy
 - main → stable
-- chore/ws-docs-consistency+langgraph-poc → active dev branch
-- feature/* → short-lived branches
+- feature/* → short-lived, scoped changes
 
 ## Coding Discipline
 - Deterministic: no randomness

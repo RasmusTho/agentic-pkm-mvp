@@ -60,6 +60,7 @@ def append_jsonl(obj: Dict[str, Any]) -> None:
                 text=str(text),
                 language=payload.get("language"),
                 source_ref=obj.get("source_ref"),
+                payload=payload,
             )
     except Exception:
         # retrieval store is best-effort; never block outbox writes

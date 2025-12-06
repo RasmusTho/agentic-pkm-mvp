@@ -140,11 +140,16 @@ def run_reasoning(
     trace_id: str | None = None,
     *,
     question: str | None = None,
+    context: str | None = None,
+    system_prompt: str | None = None,
+    answer_style: str | None = None,
     agent: str | None = None,
     kind: str | None = None,
 ) -> ReasoningRun:
     agent_name = agent or "reasoning"
     kind_name = kind or f"reasoning.{mode.value}"
+    if mode == ReasoningMode.ASK_ANSWER and kind is None:
+        kind_name = "ask.answer"
     if mode == ReasoningMode.CLAIMS:
         if not object_ids:
             return ReasoningRun(
@@ -311,6 +316,69 @@ def run_reasoning(
             result={"ranking": ranking},
             status="ok" if ok else "failed",
             error=None if ok else "ranking has no reasons" if ranking else "no ranking produced",
+        )
+    if mode == ReasoningMode.ASK_ANSWER:
+        backend = _reasoning_backend()
+        provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
+        provider = "mock" if provider in {"", "fake"} else provider
+        is_mock_provider = provider == "mock"
+        if not question:
+            return ReasoningRun(
+                mode=mode,
+                trace_id=trace_id,
+                object_uuids=list(object_ids),
+                status="failed",
+                error="question is required for ask_answer mode",
+                result={"answer": ""},
+            )
+        if backend == "mock" or is_mock_provider:
+            preview = _simple_preview(context or "", 160)
+            answer_text = f"MOCK_ASK_ANSWER: {question}"
+            if preview:
+                answer_text = f"{answer_text} | context: {preview}"
+            return ReasoningRun(
+                mode=mode,
+                trace_id=trace_id,
+                object_uuids=list(object_ids),
+                result={"answer": answer_text},
+                status="ok",
+            )
+        user_lines = [f"Question: {question}"]
+        if context:
+            user_lines.append("")
+            user_lines.append("Sources:")
+            user_lines.append(context)
+        user_prompt = "\n".join(user_lines).strip()
+        sys_prompt = system_prompt or (
+            "You answer questions using only the provided sources. Prefer vault-origin and hot-zone items when present."
+        )
+        try:
+            raw = call_llm(
+                "ask",
+                {"system": sys_prompt, "user": user_prompt},
+                agent=agent_name,
+                kind=kind_name,
+                trace_id=trace_id,
+            )
+            answer_text = (raw or "").strip()
+        except Exception as exc:
+            return ReasoningRun(
+                mode=mode,
+                trace_id=trace_id,
+                object_uuids=list(object_ids),
+                status="failed",
+                error=str(exc),
+                result={"answer": ""},
+            )
+        status_val = "ok" if answer_text else "failed"
+        err_val = None if status_val == "ok" else "empty answer"
+        return ReasoningRun(
+            mode=mode,
+            trace_id=trace_id,
+            object_uuids=list(object_ids),
+            result={"answer": answer_text},
+            status=status_val,
+            error=err_val,
         )
     return ReasoningRun(
         mode=mode,

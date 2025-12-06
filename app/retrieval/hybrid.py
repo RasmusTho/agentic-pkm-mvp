@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import numpy as np
 from rank_bm25 import BM25Okapi
@@ -18,6 +18,7 @@ class Document:
     text: str
     language: Optional[str] = None
     source_ref: Optional[str] = None
+    payload: dict[str, Any] | None = None
 
 
 class MemoryHybridStore:
@@ -41,8 +42,17 @@ class MemoryHybridStore:
         text: str,
         language: Optional[str] = None,
         source_ref: Optional[str] = None,
+        payload: Optional[dict[str, Any]] = None,
     ) -> None:
-        self._docs.append(Document(doc_id=doc_id, text=text, language=language, source_ref=source_ref))
+        self._docs.append(
+            Document(
+                doc_id=doc_id,
+                text=text,
+                language=language,
+                source_ref=source_ref,
+                payload=dict(payload or {}),
+            )
+        )
         self._invalidate()
 
     def set_documents(self, docs: List[dict]) -> None:
@@ -52,6 +62,7 @@ class MemoryHybridStore:
                 text=str(doc["text"]),
                 language=doc.get("language"),
                 source_ref=doc.get("source_ref"),
+                payload=dict(doc.get("payload") or {}),
             )
             for doc in docs
         ]
@@ -172,6 +183,7 @@ def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None) -> 
         doc = docs[int(idx)]
         score = float(np.clip(combined[int(idx)], 0.0, 1.0))
         snippet = _snippet(doc.text, query)
+        payload = dict(doc.payload or {})
         results.append(
             {
                 "id": doc.doc_id,
@@ -180,6 +192,7 @@ def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None) -> 
                 "score": score,
                 "snippet": snippet,
                 "source_ref": doc.source_ref,
+                "payload": payload,
             }
         )
     return maybe_rerank(query, results)

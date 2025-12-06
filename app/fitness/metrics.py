@@ -31,6 +31,7 @@ def _snapshot_store(store: MemoryHybridStore) -> List[dict]:
             "text": doc.text,
             "language": doc.language,
             "source_ref": doc.source_ref,
+            "payload": doc.payload,
         }
         for doc in store.all()
     ]
