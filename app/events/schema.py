@@ -17,11 +17,17 @@ class OutboxEvent(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     event: str
+    event_id: str = Field(default_factory=lambda: uuid4().hex)
     trace_id: str = Field(default_factory=lambda: uuid4().hex)
     source: str
     timestamp: str = Field(default_factory=_now_iso)
     payload: Dict[str, Any] = Field(default_factory=dict)
     meta: Dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def event_type(self) -> str:
+        # Backwards-compatible alias for consumers expecting `event_type`.
+        return self.event
 
 
 def make_outbox_event(

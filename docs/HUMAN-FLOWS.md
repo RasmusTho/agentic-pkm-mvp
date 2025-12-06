@@ -52,6 +52,7 @@
 
   The fence rule is forgiving: any Obsidian comment line that starts with `%%` (ignoring leading spaces) and contains `ai` (case-insensitive) opens a panel; the next such line closes it; the third opens the next, etc. Older notes that only use the headings without fences are still treated as panels, but new panels should use fences.
 - Panel content is *not* part of the knowledge base and must not be indexed or used as facts.
+- Checkbox actions can be mapped to internal intents/events (via `vault/_system/panel-actions`); the PanelAgent translates newly checked items into auditable outbox events (`source=panel.agent`) and appends simple log entries so the human can see what happened.
 - Suggestions appear as simple checkboxes inside `## AI-åtgärder`, e.g.:
   - `[ ] Category: Concept`
   - `[ ] Category: Entity / Company`
