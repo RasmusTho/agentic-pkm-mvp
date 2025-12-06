@@ -2,19 +2,38 @@
 
 ## Outbox contract
 
-| Column       | Type        | Semantics                                       |
-|--------------|-------------|-------------------------------------------------|
-| `id`         | `uuid`      | Message identifier referenced by `ack_outbox`. |
-| `topic`      | `text`      | Event topic (e.g. `ingest.object.created`).     |
-| `payload`    | `jsonb`     | Event body written by Stores/agents.           |
-| `created_at` | `timestamptz` | Enqueue timestamp (UTC).                     |
-| `delivered_at` | `timestamptz NULL` | Set when acked; `NULL` means pending. |
-| `attempts`   | `int`       | Optional retry counter (worker maintained).    |
-- `instance_id` (`string`) — logical instance identifier for the emitter (e.g. `home`, `work`); defaults to `home` when no explicit instance config exists.
+All events share a minimal envelope:
 
-- `write_outbox_event(conn, topic, payload)` inserts the tuple `(id, topic, payload, created_at)` and opens/closes its own connection if `conn` is `None`.
-- `poll_outbox_one(conn, handler) -> bool` invokes `handler(topic, payload)` whenever a message is available and returns `True` only in that case.
-- `ack_outbox(msg_id, [conn]) -> bool` sets `delivered_at`, is idempotent (multiple calls are safe), and accepts an optional connection argument. Workers should `ack` even when handlers are re-entrant to avoid duplicates.
+- `event` (`string`): event name, e.g. `ingest.object.created`, `index.object.embedded`.
+- `trace_id` (`string`): correlation id for the run/trace.
+- `source` (`string`): emitting component/agent (e.g. `indexer`, `ingest`).
+- `timestamp` (`ISO-8601 string, UTC`): emission time; set automatically.
+- `payload` (`object`): event-specific data (object_id, path, payloads, etc.).
+- `meta` (`object`, optional): free-form metadata (defaults to `{}`).
+- Additional legacy fields may be present alongside the envelope (e.g. `object_id`, `topic`) for backward compatibility.
+
+Example (`index.object.embedded` as written by `app.outbox.events.emit_index_object_embedded`):
+
+```json
+{
+  "event": "index.object.embedded",
+  "trace_id": "c41df3e7b7a94f1fbac93f6bafc8bd52",
+  "source": "indexer",
+  "timestamp": "2025-03-01T12:00:00Z",
+  "payload": {
+    "object_id": "obj-1",
+    "kind": "note",
+    "source_ref": "vault/demo.md",
+    "payload": {"trace_id": "c41df3e7b7a94f1fbac93f6bafc8bd52"},
+    "embedding": [0.1, 0.2],
+    "model": "mock-embedding",
+    "topic": "index.object.embedded",
+    "source": "indexer"
+  }
+}
+```
+
+All emitters must populate the envelope; schema is contract-tested under `tests/architecture/test_events_outbox_contracts.py`.
 
 ## Topics in use
 

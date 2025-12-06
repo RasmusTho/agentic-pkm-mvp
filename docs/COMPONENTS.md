@@ -32,6 +32,7 @@ Canonical list of current modular building blocks. Keep this aligned with the co
 - **Outbox/events** — `app.outbox.events`, `app.index.outbox`, event types in `app.events.types`. Inputs: structured event dicts. Outputs: JSONL (`INDEX_OUTBOX_PATH`) + handlers (indexer consumer). Maturity: baseline.
 - **Status/metrics** — `app.observability.*`, status service, ingest meta, metrics wiring in `app.api.routes.status` and `app.observability.ingest_meta`. Maturity: baseline.
 - **Logging/audit** — Agent audit logs (`app.services.audit`, agents), JSONL traces under `logs/`. Maturity: baseline.
+- **Event schema** — Canonical outbox envelope in `app/events/schema.py` (`event`, `trace_id`, `source`, `timestamp`, `payload`, `meta`); contract-tested in `tests/architecture/test_events_outbox_contracts.py`. Emitters should write via outbox helpers to keep envelope fields present.
 
 ## Dev-layer helpers & governance
 - **Architecture tests** — `tests/architecture/test_import_rules.py` enforce layering (no psycopg in API, agents server-agnostic, components entrypoints for embeddings/rerankers).
