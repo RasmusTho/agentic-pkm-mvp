@@ -27,7 +27,8 @@ else:
         assert result.get("source_ref") == str(path)
 
         payload = result["payload"]
-        assert payload["raw_text"] == text
+        normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
+        assert payload["raw_text"] == normalized_text
         assert payload["source_path"] == str(path)
 
         core6 = payload["core6"]

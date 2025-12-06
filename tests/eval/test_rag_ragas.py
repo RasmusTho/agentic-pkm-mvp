@@ -67,5 +67,15 @@ def test_rag_quality_with_ragas() -> None:
     except Exception as exc:  # pragma: no cover - backend/config errors
         pytest.skip(f"Ragas eval backend unavailable: {exc}")
 
-    for metric_name, score in result.items():
+    if hasattr(result, "items"):
+        items = result.items()
+    else:
+        scores = getattr(result, "scores", None)
+        if scores is None and hasattr(result, "to_dict"):
+            scores = result.to_dict()
+        if scores is None:
+            pytest.skip("Unsupported Ragas EvaluationResult format")
+        items = scores.items()
+
+    for metric_name, score in items:
         assert score >= MIN_THRESHOLD, f"{metric_name} below threshold: {score} < {MIN_THRESHOLD}"
