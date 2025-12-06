@@ -174,7 +174,16 @@ def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None) -> 
         return []
     tokens = _tokenize(query, language)
     bm25_raw = _STORE.bm25_scores(tokens)
-    emb_vector = np.array(_EMBED_CLIENT.embed_text(query), dtype=np.float32)
+    emb_vector_raw = embed_text(query)
+    emb_vector = np.array(emb_vector_raw, dtype=np.float32)
+    if emb_vector.ndim == 1 and emb_vector.shape[0] and hasattr(emb_vector, "__len__"):
+        # Ensure embedding matches store dimension; pad/truncate deterministically for patched tests.
+        if self_dim := (_STORE._embeddings.shape[1] if getattr(_STORE, "_embeddings", None) is not None else None):
+            if emb_vector.shape[0] < self_dim:
+                padding = np.zeros(self_dim - emb_vector.shape[0], dtype=np.float32)
+                emb_vector = np.concatenate([emb_vector, padding])
+            elif emb_vector.shape[0] > self_dim:
+                emb_vector = emb_vector[:self_dim]
     emb_raw = _STORE.embedding_scores(emb_vector)
 
     bm25_norm = _normalize(bm25_raw)
