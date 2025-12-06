@@ -20,6 +20,26 @@ def _load_cases() -> list[dict[str, Any]]:
     return []
 
 
+def _metric_names(metrics: list[Any]) -> list[str]:
+    names: list[str] = []
+    for metric in metrics:
+        name = getattr(metric, "name", None) or getattr(metric, "__name__", None)
+        names.append(str(name or metric))
+    return names
+
+
+def _score_value(raw_score: Any) -> float:
+    # Ragas score objects have varied APIs across versions; normalize to float.
+    for attr in ("value", "score"):
+        if hasattr(raw_score, attr):
+            return float(getattr(raw_score, attr))
+    if isinstance(raw_score, dict):
+        for key in ("value", "score"):
+            if key in raw_score:
+                return float(raw_score[key])
+    return float(raw_score)
+
+
 @pytest.mark.eval
 def test_rag_quality_with_ragas() -> None:
     try:
@@ -28,6 +48,9 @@ def test_rag_quality_with_ragas() -> None:
         from ragas.metrics import answer_relevancy, faithfulness
     except Exception as exc:
         pytest.skip(f"Ragas dependencies not available: {exc}")
+
+    metrics = [answer_relevancy, faithfulness]
+    metric_names = _metric_names(metrics)
 
     cfg = configure_eval_openai_env()
     if cfg.mode == "skip":
@@ -63,7 +86,7 @@ def test_rag_quality_with_ragas() -> None:
     dataset = Dataset.from_list(rows)
 
     try:
-        result = evaluate(dataset, metrics=[answer_relevancy, faithfulness])
+        result = evaluate(dataset, metrics=metrics)
     except Exception as exc:  # pragma: no cover - backend/config errors
         pytest.skip(f"Ragas eval backend unavailable: {exc}")
 
@@ -75,7 +98,18 @@ def test_rag_quality_with_ragas() -> None:
             scores = result.to_dict()
         if scores is None:
             pytest.skip("Unsupported Ragas EvaluationResult format")
-        items = scores.items()
+        if isinstance(scores, dict):
+            items = scores.items()
+        elif isinstance(scores, list):
+            if len(scores) != len(metric_names):
+                pytest.skip("Unsupported Ragas scores list length")
+            try:
+                mapped_scores = {name: _score_value(score) for name, score in zip(metric_names, scores)}
+            except Exception as exc:  # pragma: no cover - defensive
+                pytest.skip(f"Unsupported Ragas scores list format: {exc}")
+            items = mapped_scores.items()
+        else:
+            pytest.skip("Unsupported Ragas EvaluationResult scores type")
 
     for metric_name, score in items:
         assert score >= MIN_THRESHOLD, f"{metric_name} below threshold: {score} < {MIN_THRESHOLD}"
