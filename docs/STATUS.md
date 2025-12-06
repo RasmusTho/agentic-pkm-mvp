@@ -13,6 +13,8 @@
 | v4.10 | Orchestrator Runtime (LangGraph execution engine) | Skeleton delivered — plan validation + audit + mocked MCP/A2A execution | Integrate LangGraph + real MCP/agent loops (post-MVP) | Validate planner playback + CLI parity; fold into Reality-MVP interim GUI/ASK path | Flag: `ORCHESTRATOR_ENABLE`; Reality-MVP consumes skeleton |
 | v5.x | Symbolic reasoning + reflexive agents | Governance concepts, Agent Memory Graph sketches | RDF/OWL/SHACL enforcement, logic gates | Define policy bundles + knowledge graph API | Dependent on v4.6 telemetry |
 
+Eval baseline: DeepEval ASK + Ragas RAG suites are available under `@pytest.mark.eval` (seed cases; opt-in, diagnostics only).
+
 ## Reality-MVP Snapshot
 - Implemented: PER-loop ingestion against vault objects with Core-6 projection + Stores/Outbox; ASK CLI/API baseline over the vault plane; zones/planes defined with `external_raw` schema for non-vault objects; Planner/Reasoning layers remain optional overlays.
 - In progress: Running ingest on real vault snapshots and hardening resume/error handling; minimal external drop ingest for newsletters/PDFs into `external_raw`; FastAPI ASK endpoint with answers + sources + latency; zone/plane tags exposed in ASK responses.

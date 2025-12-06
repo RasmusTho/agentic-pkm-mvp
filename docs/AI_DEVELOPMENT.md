@@ -101,6 +101,8 @@ For any non-trivial change:
   - `docs/STATUS.md` (current reality)
   - or `docs/ROADMAP.md` (planned evolution).
 
+- Eval tests live under `tests/eval/` and are marked `@pytest.mark.eval` (see `docs/eval.md` for commands and metrics).
+
 ## Patterns & references
 
 When in doubt:
@@ -110,4 +112,3 @@ When in doubt:
 - Follow existing agent patterns (PER-loop, Stores + Outbox, audit events) instead of
   inventing new ones.
 - Keep behavior deterministic in tests; use the documented mocks/providers in docs/TESTING.md.
-

@@ -56,6 +56,7 @@ For any non-trivial change:
     - scope (dev-time only),
     - constraints (layers, Core-6, events),
     - required test commands.
+- Eval tests live under `tests/eval/`, are marked `@pytest.mark.eval`, and remain opt-in (see `docs/eval.md`).
 - Keep runtime prompts/behavior separate from dev prompts:
     - runtime rules live in docs/ARCHITECTURE.md, docs/AGENTS.md, and settings,
     - dev-layer prompts live in .codex/AGENTS.md.
