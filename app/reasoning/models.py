@@ -12,6 +12,7 @@ class ReasoningMode(str, Enum):
     REVIEW = "review"
     RANKING = "ranking"
     PLANNING = "planning"
+    ASK_ANSWER = "ask_answer"
 
 
 class ReasoningStep(BaseModel):
@@ -29,4 +30,3 @@ class ReasoningRun(BaseModel):
     result: Any | None = None
     status: Literal["ok", "failed"] = "ok"
     error: str | None = None
-

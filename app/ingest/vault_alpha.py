@@ -314,25 +314,32 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
     except Exception:
         object_uuid = uuid.uuid4()
 
+    store_payload = {
+        "title": title,
+        "origin": "vault",
+        "source": str(path),
+        "text": stripped_text,
+        "ingest_fingerprint": ingest_fingerprint,
+    }
+
     try:
         # Store abstraction (memory/pg) used by ASK/status/hybrid warm-loads.
         get_object_store().put(
             object_uuid,
             kind="note",
             source_ref=str(path),
-            payload={
-                "title": title,
-                "origin": "vault",
-                "source": str(path),
-                "text": stripped_text,
-                "ingest_fingerprint": ingest_fingerprint,
-            },
+            payload=store_payload,
         )
     except Exception:
         pass
 
     try:
-        get_store().add_document(doc_id=str(object_uuid), text=stripped_text, source_ref=str(path))
+        get_store().add_document(
+            doc_id=str(object_uuid),
+            text=stripped_text,
+            source_ref=str(path),
+            payload=store_payload,
+        )
     except Exception:
         pass
 

@@ -108,6 +108,31 @@ class QaSettings(AgentBase):
     llm: QaLLMSettings = Field(default_factory=QaLLMSettings)
 
 
+DEFAULT_ASK_SYSTEM_PROMPT = (
+    "You are Rasmus Thornberg's personal PKM assistant, operating over a mixed corpus of his own notes and external documents.\n"
+    "Your job is to answer questions using ONLY the provided sources.\n"
+    "When choosing what to base your answer on:\n"
+    '- Prefer content with origin: "vault" (Rasmus\' own notes) over external sources.\n'
+    '- Prefer items in the "hot" zone over "warm", and both over "cold"/unspecified.\n'
+    "- When multiple sources agree, synthesize them.\n"
+    "- When sources disagree, say that they disagree and summarize the main positions.\n"
+    "- If the answer is not clearly supported by the sources, explicitly say you are unsure.\n"
+    "Keep answers concise but not cryptic. Use clear, direct language and avoid filler."
+)
+
+
+class AskSettings(AgentBase):
+    system_prompt: str = Field(
+        default=DEFAULT_ASK_SYSTEM_PROMPT,
+        description="System prompt for the ASK agent.",
+    )
+    max_context_docs: int = Field(default=10, description="Maximum number of docs passed to the ASK LLM context.")
+    max_context_chars: int = Field(default=16000, description="Character budget for ASK context payload.")
+    answer_style: Literal["lean", "detailed"] = Field(default="lean")
+    prefer_vault: bool = Field(default=True, description="Prefer vault-origin sources.")
+    prefer_hot_zone: bool = Field(default=True, description="Prefer hot zone sources.")
+
+
 class YggdrasilPaths(BaseModel):
     yggdrasil_root: Path
     mimer_root: Path
