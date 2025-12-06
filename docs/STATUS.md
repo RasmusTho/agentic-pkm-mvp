@@ -19,6 +19,7 @@ Eval baseline: DeepEval ASK + Ragas RAG suites are available under `@pytest.mark
 - Implemented: PER-loop ingestion against vault objects with Core-6 projection + Stores/Outbox; ASK CLI/API baseline over the vault plane; zones/planes defined with `external_raw` schema for non-vault objects; Planner/Reasoning layers remain optional overlays.
 - In progress: Running ingest on real vault snapshots and hardening resume/error handling; minimal external drop ingest for newsletters/PDFs into `external_raw`; FastAPI ASK endpoint with answers + sources + latency; zone/plane tags exposed in ASK responses.
 - Planned/queued: Observability backend + CLI (object counts per plane, ingest timestamps/errors, ASK counts/latency); interim GUI dashboard showing status + ASK; external ingest sample set; collaboration/multi-user explicitly deferred.
+- Reality-MVP smoke: canonical note → ingest → index → ASK path is captured in `docs/scenarios/REALITY_MVP.md` and enforced by `tests/e2e/test_reality_mvp_pipeline.py`.
 
 ## Note Ingestion Defaults
 - Notes always get a UUID via `ensure_note_uuid` before watcher/update runs; the YAML round-trip helper is the only parser/writer for frontmatter.

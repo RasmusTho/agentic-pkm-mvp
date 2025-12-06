@@ -7,7 +7,7 @@ from pathlib import Path
 
 import duckdb
 
-from app.search.embeddings import embed_text
+from app.components.embeddings import get_embedding_client
 from app.search.service import search_hybrid
 
 from .models import AgentState, ContextItem
@@ -53,8 +53,9 @@ def _recall_documents(state: AgentState) -> AgentState:
         state.ctx = []
         return state
 
+    client = get_embedding_client("deterministic")
     try:
-        embedding = embed_text(query)
+        embedding = client.embed_text(query)
     except ValueError:
         state.result = "Frågan kunde inte embedas."
         state.cites = []

@@ -56,3 +56,46 @@ def test_agents_do_not_depend_on_fastapi() -> None:
         "Agent modules should stay server-agnostic; found FastAPI/Starlette imports in: "
         f"{[str(p.relative_to(REPO_ROOT)) for p in offenders]}"
     )
+
+
+def test_high_level_imports_use_components_entrypoints() -> None:
+    """
+    High-level layers must import embeddings/rerankers via app.components.* entrypoints,
+    not concrete implementations.
+    """
+    scan_roots = [
+        REPO_ROOT / "app" / "api",
+        REPO_ROOT / "app" / "agents",
+        REPO_ROOT / "app" / "agent",
+        REPO_ROOT / "app" / "retrieval",
+        REPO_ROOT / "app" / "plugins",
+        REPO_ROOT / "app" / "fitness",
+    ]
+    forbidden = {
+        "app.llm.embeddings",
+        "app.index.embeddings",
+        "app.search.embeddings",
+        "app.retrieval.rerank",
+        "app.retrieval.rerank.provider",
+        "app.search.rerank",
+    }
+    allow_subpaths = {
+        REPO_ROOT / "app" / "components",
+        REPO_ROOT / "app" / "retrieval" / "rerank",
+    }
+    offenders: list[tuple[Path, set[str]]] = []
+    for root in scan_roots:
+        for path in _iter_py_files(root):
+            if any(path.is_relative_to(allowed) for allowed in allow_subpaths):
+                continue
+            imports = _imports(path)
+            hits = {mod for mod in imports if any(mod == f or mod.startswith(f + ".") for f in forbidden)}
+            # Internal retrieval modules may import their own rerank implementations.
+            if path.is_relative_to(REPO_ROOT / "app" / "retrieval") and hits:
+                hits = {mod for mod in hits if not mod.startswith("app.retrieval.rerank")}
+            if hits:
+                offenders.append((path, hits))
+    assert not offenders, (
+        "Use app.components.embeddings/rerankers entrypoints instead of concrete modules: "
+        f"{[(str(p.relative_to(REPO_ROOT)), sorted(list(mods))) for p, mods in offenders]}"
+    )

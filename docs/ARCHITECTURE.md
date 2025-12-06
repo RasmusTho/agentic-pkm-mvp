@@ -11,6 +11,9 @@ This architecture focuses on the runtime and data model for the Mimer module (th
 - Default när inget är konfigurerat: `id="home"` och `role="master"`, vilket matchar Reality-MVP:s singelruntime-fokus.
 - Scope: endast intern plumbing som informerar events/loggar och framtida sync-topologi; ingen ändring av Obsidian-ytan eller frontmatter.
 
+## Component Catalog
+- See `docs/COMPONENTS.md` for the canonical, human- and machine-readable list of active components (stores, agents, embeddings, rerankers, eval stack, observability). Update it when wiring new component entrypoints under `app/components/*`.
+
 ## Reality-MVP Orientation
 - Primary focus: make ingestion of the real Obsidian vault stable, add a minimal external ingest path, expose a reliable ASK API, and ship observability plus an interim GUI so the system is usable end to end.
 - Zoned cognition overlay (Active/ Warm/ Cold) applied on top of the knowledge base; zones are derived from signals (usage, recency, trust) rather than folder names.

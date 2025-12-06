@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Iterable, List
 
-from app.retrieval.rerank import RerankItem, get_reranker
+from app.components.rerankers import get_reranker
+from app.retrieval.rerank import RerankItem
 
 
 def apply_optional_rerank(query: str, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
