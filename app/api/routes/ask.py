@@ -20,10 +20,13 @@ TOP_K_INITIAL = 40
 TOP_K_LLM_DEFAULT = 10
 
 
-def _load_pg_documents(hybrid, seen: set[str]) -> int:
+def _load_pg_documents(store, hybrid, seen: set[str]) -> int:
     try:
-        from app.stores.pg import _connect  # type: ignore
+        from app.stores.pg import PgObjectStore, _connect  # type: ignore
     except Exception:
+        return 0
+
+    if not isinstance(store, PgObjectStore):
         return 0
 
     try:
@@ -81,7 +84,7 @@ def _ensure_hybrid_store_loaded() -> None:
     except Exception:
         pass
 
-    docs_added += _load_pg_documents(hybrid, seen)
+    docs_added += _load_pg_documents(store, hybrid, seen)
     if docs_added > 0:
         _HYBRID_WARMED = True
 

@@ -1,0 +1,6 @@
+- question: "What is the Reality-MVP focus?"
+  expected_contains: "Reality-MVP"
+- question: "How are UUIDs handled in the Alpha vault?"
+  expected_contains: "frontmatter"
+- question: "What does the ASK API return?"
+  expected_contains: "answer"

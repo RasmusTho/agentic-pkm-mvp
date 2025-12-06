@@ -1,3 +1,5 @@
+State: Planned / not implemented (target SoT v5.x)
+
 # Satellite Sync Protocol (Draft)
 
 This draft defines how a master Yggdrasil instance and one or more satellite instances for the same human synchronize knowledge. The focus is text-first sync (Markdown notes + VaultMirror logs) using Git/iCloud as transport, and how `instance_id` and per-note logs fit in. It is a conceptual contract for future implementation, not current production behaviour.
@@ -53,3 +55,5 @@ Sync follows Git workflows (branching/rebasing/merging). Database state is deriv
 
 - Non-goals for Reality-MVP: no automatic cross-instance DB replication; no automatic semantic conflict resolution; no multi-user guarantees (single human across machines only).
 - Status: InstanceSettings + `instance_id` on events + VaultMirror `uuid.md` + Git/iCloud sync provide the plumbing. This draft will be paired with future CLI/agent tooling that MUST follow this protocol.
+# Satellite Sync Protocol (Draft)
+# Satellite Sync Protocol (Draft)

@@ -1,27 +1,86 @@
-# Developer Workflow — SoT v4.10
+# **Developer Workflow — SoT v4.10**
 
-## Development Loop (order of operations)
-1) **Update SoT/docs first when behavior changes** — `docs/ARCHITECTURE.md`, `docs/HUMAN-FLOWS.md`, `docs/AGENTS.md`, `docs/EVENTS.md` stay authoritative. If code and docs disagree, fix the docs or mark the delta.
-2) **Add/adjust tests before coding** — follow `docs/TESTING.md` and `docs/CI.md`; write or extend unit/contract/e2e/eval tests that express the intended change.
-3) **Implement within the documented architecture** — respect Stores/Outbox/Index layers and existing agent flows.
-4) **Run tests/evals** — at minimum `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`; add targeted suites (e.g., `tests/api`, eval harnesses) when retrieval/reasoning or surfaces change.
-5) **Reflect progress** — update `docs/STATUS.md` or `docs/ROADMAP.md` when the SoT shifts.
+This document describes how to work _on the codebase_ for the Agentic PKM / Yggdrasil
+system. It complements docs/ARCHITECTURE.md (runtime design) and docs/AI_DEVELOPMENT.md
+(dev-layer AI policy).
 
-## AI-assisted development
-- AI/code agents are accelerators, not architects; the SoT docs and tests stay in charge.
-- Follow `docs/AI_DEVELOPMENT.md` for dev-layer guardrails (scope, constraints, required tests).
-- Keep runtime prompts/behavior separate from dev prompts; runtime lives in `docs/ARCHITECTURE.md` / `docs/AGENTS.md`.
+## **Development loop (order of operations)**
 
-## Branch Strategy
-- main → stable
-- feature/* → short-lived, scoped changes
+For any non-trivial change:
 
-## Coding Discipline
-- Deterministic: no randomness
-- Explicit: every write must be visible in audit
-- Transparent: logs include agent, action, trace_id
-- Modular: agents are replaceable
+1. **Update SoT/docs when behavior changes**
+    - If the change alters runtime behavior, flows, or contracts:
+        - Update (or at least annotate) the relevant docs first:
+            - docs/ARCHITECTURE.md
+            - docs/HUMAN-FLOWS.md
+            - docs/AGENTS.md
+            - docs/EVENTS.md, docs/DATA_MODEL.md, etc.
+    - The docs should remain descriptive of reality. If code and docs disagree, either:
+        - fix the docs, or
+        - clearly mark that the code is ahead of the docs.
 
-## Debugging
+2. **Add or adjust tests before coding**
+    - Follow docs/TESTING.md for which layers to exercise:
+        - Unit tests for pure functions and small components.
+        - Contract tests for .done events, Store behavior, and API contracts.
+        - E2E/eval tests for whole flows (ingest, ASK, promotion).
+    - Express the intended change in tests before or alongside implementation.
+
+3. **Implement within the documented architecture**
+    - Respect the layering:
+        - Use Stores/Outbox/Index abstractions; no new ad-hoc DB access paths.
+        - Keep agents server-agnostic; API stays as a thin HTTP surface.
+    - Reuse patterns from docs/AGENTS.md and docs/settings/sample-* where applicable.
+
+4. **Run tests and evals**
+    - Minimum for non-trivial changes:
+
+      ```bash
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"
+      ```
+
+    - For changes touching retrieval/reasoning/ASK or external surfaces:
+        - run relevant API tests (e.g. tests/api) and eval suites described in docs/eval.md.
+
+5. **Reflect progress in SoT**
+    - When the SoT has actually shifted (architecture stabilized, new agent flow in production):
+        - update docs/STATUS.md with current reality, and
+        - adjust docs/ROADMAP.md if future milestones change.
+
+## **AI-assisted development**
+
+- AI/code agents are **accelerators**, not architects.
+    - Architecture and SoT docs define _what is allowed_.
+    - Tests and evals define _what is acceptable_.
+- Follow docs/AI_DEVELOPMENT.md for:
+    - scope (dev-time only),
+    - constraints (layers, Core-6, events),
+    - required test commands.
+- Eval tests live under `tests/eval/`, are marked `@pytest.mark.eval`, and remain opt-in (see `docs/eval.md`).
+- Keep runtime prompts/behavior separate from dev prompts:
+    - runtime rules live in docs/ARCHITECTURE.md, docs/AGENTS.md, and settings,
+    - dev-layer prompts live in .codex/AGENTS.md.
+
+## **Branch strategy**
+
+- main → stable SoT.
+- feature/* → short-lived, scoped branches.
+- Keep branches focused on one coherent change (feature, refactor, or SoT-step).
+
+## **Coding discipline**
+
+- **Deterministic**: no unseeded randomness in logic or tests.
+- **Explicit**: every state-changing action must be observable in logs/events.
+- **Transparent**: logs consistently include agent, action, trace_id where applicable.
+- **Modular**: agents and services should be replaceable behind clear interfaces.
+
+## **Debugging (local)**
+
+Examples:
+
+```
 tail -n 50 /tmp/agent.log
 docker compose logs -f api
+```
+
+Add more detailed troubleshooting steps in docs/runbooks/* as the system evolves.
