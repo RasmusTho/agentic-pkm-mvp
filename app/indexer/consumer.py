@@ -20,7 +20,9 @@ def process_event(evt: Dict[str, Any]) -> None:
     object_id = UUID(str(evt["object_id"]))
     kind = str(evt["kind"])
     source_ref = str(evt["source_ref"])
-    payload = dict(evt["payload"])
+    raw_payload = dict(evt["payload"])
+    # Envelope-compatible: unwrap nested payload if present
+    payload = raw_payload.get("payload", raw_payload) if isinstance(raw_payload.get("payload"), dict) else raw_payload
     embedding = _coerce_embedding(evt["embedding"])
     model = str(evt["model"])
 

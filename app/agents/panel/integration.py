@@ -6,6 +6,7 @@ from typing import Any, Dict, Mapping, MutableMapping
 from pydantic import BaseModel, Field
 
 from app.events.models import Event
+from app.events.schema import OutboxEvent
 from app.orchestrator.handler import OrchestratorContext, handle_event
 from app.planner.schema import Plan
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
@@ -50,7 +51,7 @@ def panel_events_enabled(ctx: OrchestratorContext | Mapping[str, Any] | None = N
 
 class PanelPipelineResult(BaseModel):
     panel: PanelAgentResult
-    events: list[Event]
+    events: list[Event | OutboxEvent]
     plans: list[Plan] = Field(default_factory=list)
     dispatch_count: int = 0
 

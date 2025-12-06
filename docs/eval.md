@@ -23,9 +23,9 @@
   - Set `EVAL_LLM_MODE=skip` to skip if no LLM is available.
 
 ## Golden cases for ASK
-- Seed cases live in `docs/eval/ask_cases.yaml` (3–5 representative ASK queries with expected hints).
+- Seed cases live in `docs/eval/ask_cases.yaml` plus `docs/eval/ask_cases_bilingual.yaml` (English + Swedish probes).
 - Tests in `tests/eval/test_ask_deepeval.py` load these cases and run DeepEval metrics (e.g., answer relevancy).
-- Thresholds are conservative (e.g., 0.5) and should be revisited as retrieval quality improves.
+- Thresholds are conservative (e.g., 0.5) and should be revisited as retrieval quality improves; bilingual coverage reflects the English-first + Swedish-important profile.
 
 ## RAG eval (Ragas, seed suite)
 - Seed RAG cases live in `docs/eval/rag_cases.yaml`.

@@ -12,14 +12,21 @@ from app.api.app import app
 from app.eval.llm_client import configure_eval_openai_env
 
 CASES_PATH = Path("docs/eval/ask_cases.yaml")
+CASES_BILINGUAL_PATH = Path("docs/eval/ask_cases_bilingual.yaml")
 
 
 def _load_cases() -> list[dict[str, Any]]:
-    if CASES_PATH.exists():
-        return yaml.safe_load(CASES_PATH.read_text(encoding="utf-8")) or []
+    cases: list[dict[str, Any]] = []
+    for path in (CASES_PATH, CASES_BILINGUAL_PATH):
+        if path.exists():
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or []
+            if isinstance(loaded, list):
+                cases.extend(loaded)
+    if cases:
+        return cases
     return [
         {"question": "What is the Reality-MVP focus?", "expected_contains": "Reality-MVP"},
-        {"question": "How are UUIDs handled in the Alpha vault?", "expected_contains": "frontmatter"},
+        {"question": "Vilket fokus har Reality-MVP?", "expected_contains": "Reality-MVP"},
     ]
 
 

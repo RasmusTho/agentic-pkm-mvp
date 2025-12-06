@@ -23,6 +23,7 @@ Canonical list of current modular building blocks. Keep this aligned with the co
 ## ASK / reasoning
 - **ASK API** — `/api/ask` FastAPI route; `app.api.routes.ask`. Inputs: question payload. Outputs: `AskResponse(answer, sources, latency_ms)` using hybrid retrieval, optional reasoning overlay. Config: `REASONING_ENABLE`, `AskSettings` in runtime settings. Maturity: baseline.
 - **Reasoning layer** — Optional modes (claims/review/ranking/ask.answer); `app.reasoning.*`. Inputs: question + context. Outputs: structured reasoning runs. Config: `REASONING_ENABLE`, providers via env/settings. Maturity: experimental/opt-in.
+- **Panel/NoteInteractionAgent** — `app/agents/panel/*`, `app/agents/panel/parser.py`. Inputs: note text with AI panel; outputs: parsed panel state, panel intents, outbox events (`source=panel.agent`), updated log entries. Config: panel action mappings (`vault/_system/panel-actions/*.md` or `docs/settings/panel-actions*`). Maturity: experimental.
 
 ## Eval stack
 - **DeepEval ASK** — `tests/eval/test_ask_deepeval.py`, cases in `docs/eval/ask_cases.yaml`; uses FastAPI TestClient against `/api/ask`. Config: `EVAL_LLM_MODE`, `LLM_PROVIDER`. Maturity: experimental/opt-in (`@pytest.mark.eval`).
@@ -32,6 +33,7 @@ Canonical list of current modular building blocks. Keep this aligned with the co
 - **Outbox/events** — `app.outbox.events`, `app.index.outbox`, event types in `app.events.types`. Inputs: structured event dicts. Outputs: JSONL (`INDEX_OUTBOX_PATH`) + handlers (indexer consumer). Maturity: baseline.
 - **Status/metrics** — `app.observability.*`, status service, ingest meta, metrics wiring in `app.api.routes.status` and `app.observability.ingest_meta`. Maturity: baseline.
 - **Logging/audit** — Agent audit logs (`app.services.audit`, agents), JSONL traces under `logs/`. Maturity: baseline.
+- **Event schema** — Canonical outbox envelope in `app/events/schema.py` (`event`, `trace_id`, `source`, `timestamp`, `payload`, `meta`); contract-tested in `tests/architecture/test_events_outbox_contracts.py`. Emitters should write via outbox helpers to keep envelope fields present.
 
 ## Dev-layer helpers & governance
 - **Architecture tests** — `tests/architecture/test_import_rules.py` enforce layering (no psycopg in API, agents server-agnostic, components entrypoints for embeddings/rerankers).

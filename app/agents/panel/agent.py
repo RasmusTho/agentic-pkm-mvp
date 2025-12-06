@@ -5,7 +5,7 @@ from typing import Dict
 
 from pydantic import BaseModel, Field
 
-from app.events.models import Event
+from app.events.schema import OutboxEvent
 from app.settings.panel_actions import PanelActionMapping
 
 from .events import panel_intent_to_event
@@ -20,7 +20,7 @@ class PanelAgentResult(BaseModel):
     state: PanelState
     intents: list[PanelIntent]
     updated_markdown: str
-    events: list[Event] = Field(default_factory=list)
+    events: list[OutboxEvent] = Field(default_factory=list)
 
 
 def handle_note_update(
