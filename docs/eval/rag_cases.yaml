@@ -1,0 +1,12 @@
+- id: hot-focus
+  question: "What is the Reality-MVP focus for the PKM system?"
+  expected_answer: "Reality-MVP focuses on stable vault ingestion, hybrid ASK, and observability."
+  notes: "Should retrieve current/active system overview."
+- id: vault-uuid
+  question: "How are UUIDs handled during Alpha vault ingest?"
+  expected_answer: "UUIDs are written into frontmatter and mirrored; frontmatter remains canonical."
+  notes: "Tests ingestion + identity handling."
+- id: ask-api
+  question: "What does the ASK API return to the caller?"
+  expected_answer: "An answer plus sources with UUID, origin, and source_ref/path."
+  notes: "Checks ASK response contract and source visibility."

@@ -28,6 +28,7 @@ dev = [
     "mypy>=1.9",
     "deepeval>=0.20.60",
     "ragas>=0.1.11",
+    "datasets>=2.21.0",
 ]
 
 [tool.setuptools.packages.find]

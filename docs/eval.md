@@ -2,7 +2,7 @@
 
 ## Eval stack overview
 - Primary LLM eval framework: **DeepEval** (pytest-integrated).
-- RAG-focused metrics: **Ragas** (to be added next, either via DeepEval or directly).
+- RAG-focused metrics: **Ragas** (directly, starting with seed RAG evals).
 - Optional tools (future/adjacent):
   - **TruLens** for tracing + eval.
   - **promptfoo** for prompt/agent scenario testing and red-teaming (optional CLI tool).
@@ -27,7 +27,16 @@
 - Tests in `tests/eval/test_ask_deepeval.py` load these cases and run DeepEval metrics (e.g., answer relevancy).
 - Thresholds are conservative (e.g., 0.5) and should be revisited as retrieval quality improves.
 
+## RAG eval (Ragas, seed suite)
+- Seed RAG cases live in `docs/eval/rag_cases.yaml`.
+- Tests in `tests/eval/test_rag_ragas.py` run Ragas metrics (answer relevancy, faithfulness/contextual precision when context is available).
+- Run just this suite via:
+  ```bash
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "eval" tests/eval/test_rag_ragas.py
+  ```
+- Thresholds are conservative (~0.5) and should be tightened as retrieval quality improves; add more cases over time.
+
 ## Metrics (initial)
 - Answer relevancy / answer-quality style metrics via DeepEval.
 - Faithfulness/hallucination metrics can be added once context is surfaced in ASK responses.
-- Ragas metrics (precision/recall, context relevance) are planned next.
+- Ragas metrics (precision/recall, context relevance) are seeded via `tests/eval/test_rag_ragas.py`.
