@@ -6,9 +6,6 @@ from typing import Any
 
 import pytest
 import yaml
-from deepeval.evaluate import evaluate
-from deepeval.metrics import AnswerRelevancyMetric
-from deepeval.test_case import LLMTestCase
 from fastapi.testclient import TestClient
 
 from app.api.app import app
@@ -28,6 +25,13 @@ def _load_cases() -> list[dict[str, Any]]:
 
 @pytest.mark.eval
 def test_ask_answer_relevancy() -> None:
+    try:
+        from deepeval.evaluate import evaluate
+        from deepeval.metrics import AnswerRelevancyMetric
+        from deepeval.test_case import LLMTestCase
+    except Exception as exc:
+        pytest.skip(f"deepeval not available: {exc}")
+
     cfg = configure_eval_openai_env()
     if cfg.mode == "skip":
         pytest.skip("EVAL_LLM_MODE=skip")
