@@ -1,34 +1,113 @@
 # AI-Assisted Development — Dev-Layer Policy (SoT v4.10)
 
-This document governs how AI/code agents (e.g., Codex, local LLMs) operate **during development**. It does **not** define runtime agent behavior; see `docs/ARCHITECTURE.md`, `docs/AGENTS.md`, and related SoT docs for runtime rules.
+This document governs how AI/code agents (e.g. Codex, local LLM helpers, code-gen scripts)
+are allowed to interact with this repository *during development*.
+
+It does **not** define the runtime behavior of PKM agents (Hugin, Reasoner, Promotion Agent, etc.).
+Runtime rules live in `docs/ARCHITECTURE.md`, `docs/AGENTS.md`, and related SoT docs.
 
 ## Scope
-- Applies to development-time tooling: Codex prompts, local LLM helpers, code-gen scripts.
-- Does not change the runtime behavior of PKM agents (Hugin, Reasoner, Promotion Agent, etc.).
+
+- Applies to:
+  - Codex / workspace LLMs in editors.
+  - Local LLM helpers/tools that generate or refactor code, tests, or docs.
+- Does **not** apply to:
+  - Runtime calls made by the Agentic PKM system itself (ASK, Reasoner, PanelAgent, etc.).
+  - How Hugin or other agents answer questions or transform notes at runtime.
 
 ## Sources of truth
-- Architecture & flows: `docs/ARCHITECTURE.md`, `docs/HUMAN-FLOWS.md`, `docs/AGENTS.md`.
-- Development workflow: `docs/DEV_WORKFLOW.md`.
-- Testing and CI: `docs/TESTING.md`, `docs/CI.md`, `docs/eval.md`, `docs/guardrails.md`.
-- Settings and SoT variants: `docs/STATUS.md`, `docs/ROADMAP.md`.
+
+When making non-trivial changes, conceptually read and respect:
+
+- Architecture & flows:
+  - `docs/ARCHITECTURE.md`
+  - `docs/HUMAN-FLOWS.md`
+  - `docs/AGENTS.md`
+  - `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
+- Development workflow:
+  - `docs/DEV_WORKFLOW.md`
+- Testing and CI:
+  - `docs/TESTING.md`
+  - `docs/CI.md`
+  - `docs/eval.md`
+  - `docs/guardrails.md`
+- SoT variants and planning:
+  - `docs/STATUS.md`
+  - `docs/ROADMAP.md`
+
+If code and docs disagree, prefer to update the docs (or clearly mark the delta) before
+treating the new behavior as the SoT.
 
 ## Hard constraints
-- Use documented layers: Stores/Outbox/Index abstractions are the IO boundary; avoid ad-hoc DB access in new code.
-- Keep Core-6 semantics, zones, kinds, and events consistent with `docs/ARCHITECTURE.md` / `docs/EVENTS.md`; no new kinds/zones/events without updating the SoT.
-- Respect existing agent patterns (Normalizer → Classifier → Chunker → Deduper → CitationChecker → Indexer → Reviewer → Promotion/Projector); do not bypass them in code changes.
-- Separate dev prompts from runtime prompts; runtime agent prompts live with runtime docs, not in dev-layer guidance.
+
+When generating or modifying code:
+
+- **Respect layers.**
+  - Use Stores/Outbox/Index abstractions for data access. Do not introduce new direct
+    DB access paths; reuse existing DB helpers only where documented.
+- **Do not redesign Core-6.**
+  - Do not change the semantics of Core-6 frontmatter (`uuid`, `origin`, `kind`, `trust`,
+    `review_state`, `zone`) without an explicit architecture update.
+- **Do not invent new global categories on the fly.**
+  - New zones, kinds, event names, or top-level settings must first be reflected in
+    `docs/ARCHITECTURE.md` and/or `docs/EVENTS.md` / `docs/schema/*` before being used in code.
+- **Keep dependencies under control.**
+  - Do not add new external dependencies without updating `pyproject.toml` and, if relevant,
+    `docs/DEPENDENCIES.md` / `docs/CI.md`.
+- **Keep tests deterministic.**
+  - In tests, use documented mocks, stubs, or deterministic providers (see `docs/TESTING.md`).
+  - Avoid randomness and non-repeatable side effects.
 
 ## Required tests (baseline)
-- Run the fast test matrix for any non-trivial change: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`.
-- When touching retrieval/reasoning/ASK surfaces, also run: `pytest -q tests/api` and relevant evals noted in `docs/eval.md`.
-- Keep lint/mypy in line with `docs/CI.md` guidance (ruff, mypy).
+
+For any non-trivial change:
+
+- Run the fast test matrix:
+
+  ```bash
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"
+  ```
+
+- When touching retrieval, reasoning, or ASK surfaces:
+
+  - Also run:
+
+    ```bash
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/api
+    ```
+
+- And the relevant evals referenced in docs/eval.md (golden sets, guardrail metrics).
+
+- Keep lint/mypy in line with CI:
+
+  ```bash
+  ruff check app tests
+  mypy app
+  ```
+
+- (See docs/CI.md for the current CI stack.)
 
 ## Working with AI/code agents
-- Read the relevant SoT docs **before** structural changes; if docs and code disagree, update the docs first or alongside the change.
-- Prefer updating/adding tests before code changes; AI helpers should implement within those test constraints.
-- Log significant SoT shifts in `docs/STATUS.md` or `docs/ROADMAP.md` when applicable.
-- Treat AI outputs as drafts: verify against architecture, tests, and governance docs before merging.
+
+- Read the relevant SoT docs **before** structural changes; if docs and code disagree,
+  update the docs first or at least in the same change.
+- Prefer updating or adding tests **before** implementation. AI helpers should implement
+  code that makes those tests pass.
+- Treat AI output as a draft:
+  - Check it against architecture docs, tests, and guardrails.
+  - Do not silently accept API shape, event names, or frontmatter changes that are not
+    grounded in SoT docs.
+- Log significant SoT shifts briefly in:
+  - `docs/STATUS.md` (current reality)
+  - or `docs/ROADMAP.md` (planned evolution).
 
 ## Patterns & references
-- Follow examples in `docs/settings/sample-*`, `docs/AGENTS.md`, and existing agent flows when adding or modifying surfaces.
-- Keep behavior deterministic in tests; rely on mocks/stubs where documented (see `docs/TESTING.md`).
+
+When in doubt:
+
+- Look at docs/settings/sample-* and docs/AGENTS.md for examples of agent and flow
+  configuration.
+- Follow existing agent patterns (PER-loop, Stores + Outbox, audit events) instead of
+  inventing new ones.
+- Keep behavior deterministic in tests; use the documented mocks/providers in docs/TESTING.md.
+
