@@ -82,7 +82,6 @@ def _ensure_hybrid_store_loaded() -> None:
         pass
 
     docs_added += _load_pg_documents(hybrid, seen)
-
     if docs_added > 0:
         _HYBRID_WARMED = True
 
