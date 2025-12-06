@@ -29,6 +29,7 @@ dev = [
     "deepeval>=0.20.60",
     "ragas>=0.1.11",
     "datasets>=2.21.0",
+    "hypothesis>=6.108.0",
 ]
 
 [tool.setuptools.packages.find]

@@ -5,6 +5,7 @@
 - Contract: `.done` event payload shape and DB side-effects per agent
 - E2E: normalizer → classifier → chunker → deduper → citation → indexer → reviewer → projector
 - LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`)
+- Property-based ingest invariants: `tests/ingest/test_normalize_properties.py` ensures normalize outputs Core-6 fields robustly.
 
 ## Commands
 - Single test
