@@ -8,7 +8,7 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 from rapidfuzz import process
 
-from app.index.embeddings import embed_batches, embed_text
+from app.components.embeddings import get_embedding_client
 from app.retrieval.hook_adapter import maybe_rerank
 
 
@@ -83,7 +83,7 @@ class MemoryHybridStore:
             self._bm25 = BM25Okapi(self._tokenized)
         if self._embeddings is None:
             vectors: List[List[float]] = []
-            for chunk in embed_batches((doc.text for doc in self._docs)):
+            for chunk in _EMBED_CLIENT.embed_batches((doc.text for doc in self._docs)):
                 vectors.extend(chunk)
             if not vectors:
                 self._embeddings = np.zeros((0, 0), dtype=np.float32)
@@ -114,6 +114,17 @@ class MemoryHybridStore:
 
 
 _STORE = MemoryHybridStore()
+_EMBED_CLIENT = get_embedding_client()
+
+
+def embed_text(text: str, language: Optional[str] = None) -> list[float]:
+    """Backwards-compatible embedding helper for tests that patch this symbol."""
+    return _EMBED_CLIENT.embed_text(text)
+
+
+def embed_batches(texts: Iterable[str], batch_size: int = 32) -> Iterator[list[list[float]]]:
+    """Backwards-compatible batch embedding helper for tests that patch this symbol."""
+    yield from _EMBED_CLIENT.embed_batches(texts, batch_size=batch_size)
 
 
 def get_store() -> MemoryHybridStore:
@@ -163,7 +174,7 @@ def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None) -> 
         return []
     tokens = _tokenize(query, language)
     bm25_raw = _STORE.bm25_scores(tokens)
-    emb_vector = np.array(embed_text(query), dtype=np.float32)
+    emb_vector = np.array(_EMBED_CLIENT.embed_text(query), dtype=np.float32)
     emb_raw = _STORE.embedding_scores(emb_vector)
 
     bm25_norm = _normalize(bm25_raw)

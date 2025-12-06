@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, List
 
+from app.components.embeddings import get_embedding_client
 from app.events.types import INGEST_INDEX_DONE
 from app.store.object_store import ObjectStore
-from app.search.embeddings import embed_text
 
 
 AGENT = "indexer"
@@ -39,7 +39,7 @@ def _safe_embed(text: str) -> list[float]:
     if not text.strip():
         return [0.0]
     try:
-        return embed_text(text)
+        return get_embedding_client("deterministic").embed_text(text)
     except Exception:
         return [0.0]
 

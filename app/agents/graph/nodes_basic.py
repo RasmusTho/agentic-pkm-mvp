@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Dict, List
-from app.search.rerank import HeuristicReranker, ScoredHit
+from app.components.rerankers import ScoredHit, get_reranker
 
 def _dummy_hits() -> List[ScoredHit]:
     return [
@@ -15,8 +15,8 @@ def retrieve(state: Dict) -> Dict:
 def rerank(state: Dict) -> Dict:
     hits = state.get("hits", [])
     q = state.get("query", "")
-    r = HeuristicReranker()
-    state["hits"] = r.rerank(q, hits, k=2)
+    r = get_reranker("heuristic")
+    state["hits"] = r.rerank(q, hits, top_k=2)  # type: ignore[arg-type]
     return state
 
 def answer(state: Dict) -> Dict:

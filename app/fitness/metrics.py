@@ -6,7 +6,7 @@ from statistics import fmean
 from typing import Dict, List, Sequence
 from uuid import uuid4
 
-from app.index.embeddings import embed_text
+from app.components.embeddings import get_embedding_client
 from app.retrieval.hybrid import MemoryHybridStore, hybrid_search, get_store
 from app.stores.memory import MemoryVectorIndex
 
@@ -98,7 +98,7 @@ def _process_outbox_event(
     *,
     vector_index: MemoryVectorIndex,
 ) -> None:
-    vec = embed_text(payload["text"])
+    vec = get_embedding_client().embed_text(payload["text"])
     vector_index.upsert(
         uuid4(),
         kind="fitness",

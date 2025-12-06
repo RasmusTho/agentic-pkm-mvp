@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from app.components.embeddings import get_embedding_client
 from app.events.types import CURATION_DEDUPE_DONE
 from app.store.object_store import ObjectStore
-from app.search.embeddings import embed_text
 
 
 AGENT = "deduper"
@@ -29,8 +29,9 @@ def _score_pair(t1: str, t2: str) -> float:
     """
     if not t1.strip() or not t2.strip():
         return 0.0
-    v1 = embed_text(t1)
-    v2 = embed_text(t2)
+    client = get_embedding_client("deterministic")
+    v1 = client.embed_text(t1)
+    v2 = client.embed_text(t2)
     return _cosine(v1, v2)
 
 
