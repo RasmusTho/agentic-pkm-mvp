@@ -71,17 +71,17 @@ Kort orientering: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global 
 
   The fence rule is forgiving: any Obsidian comment line that starts with `%%` (ignoring leading spaces) and contains `ai` (case-insensitive) opens a panel; the next such line closes it; the third opens the next, etc. Older notes that only use the headings without fences are still treated as panels, but new panels should use fences.
 - Panel content is *not* part of the knowledge base and must not be indexed or used as facts.
-- Checkbox actions can be mapped to internal intents/events (via `vault/_system/panel-actions`); the PanelAgent translates newly checked items into auditable outbox events (`source=panel.agent`) and appends simple log entries so the human can see what happened.
+- Checkbox actions can be mapped to internal intents/events (via `vault/_system/panel-actions`); PanelAgent (v5.0 step 1) reads the panel from ObjectStore and emits a single `panel.intent.created` event per panel with both checked and unchecked actions.
 - Suggestions appear as simple checkboxes inside `## AI actions`, e.g.:
   - `[ ] Category: Concept`
   - `[ ] Category: Entity / Company`
-- When the human checks an option, the system updates classification in ObjectStore/metadata accordingly; once handled, the entire panel disappears (checked and unchecked options are removed). Panels are optional; any note may have zero, one, or several panels.
+- Human flow (step 1): write/update the panel → run `python -m app.cli panel run --uuid <note_uuid>` → inspect Outbox for structured intents. The runtime does not modify the note content or trigger downstream tools yet. Panels are optional; any note may have zero, one, or several panels.
 
 #### Infra touchpoints
 - Surfaces: Obsidian panels.
-- Agents/components: PanelAgent, downstream classifiers/promotion hooks.
-- Stores: Outbox events (intent), ObjectStore/metadata after actions, VaultMirror logs.
-- Observability: panel intent events, outbox volume, optional spans for intent handling.
+- Agents/components: PanelAgent runtime (step 1), downstream dispatch is deferred.
+- Stores: Outbox events (panel.intent.created), ObjectStore mirror as source of truth for panel text.
+- Observability: panel intent events, outbox volume.
 
 ### Eval & QA (dev-side)
 - Dev-side validation keeps panel text out of indexing and ensures ingest/ASK guardrails hold.

@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: v5.0 – PanelAgent step 1 (adds panel.intent.created; base remains v4.10).
 # EVENTS
 
 ## Outbox contract
@@ -37,6 +37,15 @@ Example (`index.object.embedded` as written by `app.outbox.events.emit_index_obj
 All emitters must populate the envelope; schema is contract-tested under `tests/architecture/test_events_outbox_contracts.py`.
 
 ## Topics in use
+
+### `panel.intent.created`
+- Emitter: PanelAgent runtime (`app/agents/panel_agent/agent.py`) via CLI `panel run --uuid ...`.
+- When: after scanning a note’s AI panel(s) and mapping actions to panel action settings.
+- Payload highlights:
+  - `note.uuid` (+ optional `path`/`origin` from ObjectStore).
+  - `panel.panel_id`, `panel.instruction`, optional `panel.raw_block`.
+  - `actions[]`: `id` (mapping id or normalized label), `label`, `checked`, `mapping` (intent_type, downstream_event, params) or `null` if unmapped.
+  - Envelope includes `version="1.0"` and `source={component:"panel_agent", trigger:"cli", sot:"v5.0-step1"}`.
 
 ### `ingest.object.created`
 

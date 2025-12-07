@@ -1,7 +1,7 @@
-State: SoT v4.10 Reality-MVP (current core).
-# PanelAgent / NoteInteractionAgent (Reality-MVP)
+State: v5.0 – PanelAgent step 1 (runtime loop on Reality-MVP base).
+# PanelAgent / NoteInteractionAgent (Runtime v5.0 step 1)
 
-Purpose: translate human-driven AI panels in vault notes into internal intents/events while keeping the panel simple, optional, and human-first.
+Purpose: translate human-driven AI panels in vault notes into structured intents/events while keeping the panel simple, optional, and human-first.
 
 ## Panel syntax (Markdown)
 - Panels are delimited by tolerant AI fences: any `%% ...ai... %%` (case-insensitive) line opens/closes a panel. First fence opens, second closes, third opens the next, etc.
@@ -25,24 +25,38 @@ Please promote this note after verifying the summary.
 %% AI:End %%
 ```
 
-## Parsing model
-- `app/agents/panel/parser.py` → `PanelState` (instruction text, actions, logs, spans, fenced flag).
-- `PanelAction`: `checked`, `text`.
-- `PanelLogEntry`: raw log line (append-only).
+## Runtime (v5.0 step 1)
+- Invocation: `python -m app.cli panel run --uuid <note_uuid>`.
+- Reads the note from ObjectStore (vault mirror), not directly from the filesystem.
+- Finds each AI panel, parses instruction + checkbox actions, enriches actions via `docs/settings/panel-actions.md` mappings, and emits **one** Outbox event per panel: `panel.intent.created`.
+- No planners/tools are called in this step; it is introspective-only (read → parse → map → Outbox).
 
-## Action mapping → events
-- Mappings come from `vault/_system/panel-actions/*.md` (or `docs/settings/panel-actions*` fallback) via `app.settings.panel_actions`.
-- `app/agents/panel/events.py` maps triggered actions to `OutboxEvent` using the canonical envelope (`event`, `trace_id`, `source="panel.agent"`, `timestamp`, `payload`, `meta`).
-- Minimal payload: `note_id`, `action_text`, plus any mapping `payload_template`; `instruction_text` is included when present.
+### Event payload (panel.intent.created)
+```json
+{
+  "event": "panel.intent.created",
+  "version": "1.0",
+  "source": {"component": "panel_agent", "trigger": "cli", "sot": "v5.0-step1"},
+  "payload": {
+    "note": {"uuid": "NOTE-UUID", "path": "vault/Note.md", "origin": "vault"},
+    "panel": {"panel_id": "panel-1", "instruction": "Do the thing"},
+    "actions": [
+      {
+        "id": "promote.evergreen",
+        "label": "Gör denna anteckning evergreen",
+        "checked": true,
+        "mapping": {
+          "intent_type": "promotion",
+          "downstream_event": "review.promote.evergreen",
+          "params": {"maturity": "evergreen"}
+        }
+      },
+      {"id": "unknown-action", "label": "Other", "checked": false, "mapping": null}
+    ]
+  }
+}
+```
 
-## Agent flow (minimal, deterministic)
-- `handle_note_update(note_id, old_markdown, new_markdown, mappings)`:
-  1. Parse old/new panels.
-  2. Diff to find newly checked actions (`PanelIntent`).
-  3. Enrich intents via mappings, convert to `OutboxEvent`.
-  4. Remove triggered actions from the panel and append simple log entries.
-- The agent is stateless; panel edits drive intent emission. Panel text remains the human-facing control surface.
-
-## Contract tests
-- Parser/agent behaviour is covered under `tests/panel/*`.
-- Outbox envelope is enforced separately in `tests/architecture/test_events_outbox_contracts.py`.
+## Next steps (v5.0 step 2 ideas)
+- Option A — pure fan-out: consume `panel.intent.created`, emit one `panel.action.intent.created` per checked action (still no tools), keeping AI-logg untouched.
+- Option B — minimal orchestration: consume `panel.intent.created`, write human-readable previews back into `AI-logg` for visibility, while deferring real tool calls to later steps.
