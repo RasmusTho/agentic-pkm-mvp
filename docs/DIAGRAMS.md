@@ -7,13 +7,13 @@ These diagrams reflect the active Reality-MVP architecture (SoT v4.10). They are
 ## System Context (C4 Level 1)
 ```mermaid
 flowchart LR
-    user([Human user (Rasmus)]):::actor
-    obsidian[[Obsidian vault (Mimer)]]
-    api[[PKM API/Agents (Yggdrasil)]]:::system
-    ollama[(Ollama LLM server)]
-    db[(Postgres / pgvector)]
-    observability[[Grafana / Prometheus / Loki]]
-    git[[Git / GitHub (code + docs + VaultMirror)]]
+    user([Human user]):::actor
+    obsidian[[Obsidian vault (Mimer)]]:::actor
+    api[[PKM API / Agents (Yggdrasil)]]:::system
+    ollama[(Ollama LLM server)]:::ext
+    db[(Postgres / pgvector)]:::ext
+    observability[[Grafana / Prometheus / Loki]]:::ext
+    git[[Git / GitHub (code + docs + VaultMirror)]]:::ext
 
     user <--> obsidian
     user -->|ASK / CLI| api
@@ -23,8 +23,9 @@ flowchart LR
     api -->|metrics / logs| observability
     api -->|code + docs + VaultMirror| git
 
-    classDef actor fill:#f0f8ff,stroke:#1a4;
+    classDef actor fill:#f0f8ff,stroke:#1a4,stroke-width:1px;
     classDef system fill:#e8f5ff,stroke:#06c,stroke-width:2px;
+    classDef ext fill:#fdf6e3,stroke:#b58900,stroke-width:1px;
 ```
 The Agentic PKM system sits between the human/vault surfaces and local dependencies: Postgres/pgvector for stores, Ollama for LLM/embeddings, and Grafana/Prometheus/Loki for observability. Git/GitHub hold code/docs and VaultMirror snapshots.
 
@@ -32,13 +33,13 @@ The Agentic PKM system sits between the human/vault surfaces and local dependenc
 ```mermaid
 flowchart LR
     subgraph host[Local host / Colima]
-        api[(FastAPI service :18000→8000)]
+        api[(FastAPI service 18000/8000)]
         agent[(Agent runtime / workers)]
-        pg[(Postgres + pgvector :15432→5432)]
-        ollama[(Ollama :11434)]
-        grafana[(Grafana :3000)]
-        prometheus[(Prometheus :9090)]
-        loki[(Loki :3100)]
+        pg[(Postgres + pgvector 15432/5432)]
+        ollama[(Ollama 11434)]
+        grafana[(Grafana 3000)]
+        prometheus[(Prometheus 9090)]
+        loki[(Loki 3100)]
     end
 
     cli([CLI entrypoints]):::actor
@@ -58,7 +59,7 @@ flowchart LR
     grafana --> loki
     git --> api
 
-    classDef actor fill:#f0f8ff,stroke:#1a4;
+    classDef actor fill:#f0f8ff,stroke:#1a4,stroke-width:1px;
 ```
 Ports align with `docs/SYSTEM_DESIGN_v4.10.md`: API 18000→8000, Postgres 15432→5432, Ollama 11434, Grafana 3000, Prometheus 9090, Loki 3100.
 
