@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, List, Tuple, Optional
 
 from app.store.object_store import ObjectStore
+from app.store.membership_store import save_membership
 from app.services.decisions import latest_decision
 from app.events.types import (
     PROMOTION_PROJECT_DONE,
@@ -28,8 +29,11 @@ def _latest_evaluation(object_id: str) -> dict[str, Any] | None:
 
 def _record_membership_db(object_id: str, set_name: str, trace_id: str) -> None:
     """
-    Placeholder for DB persistence of membership. Reality-MVP uses audit + in-memory fallback.
+    Try to persist membership in Postgres. If DB not available, swallow.
+    Schema assumption (see migrations): membership(object_id uuid, set_id uuid, created_at timestamptz).
     """
+    # best-effort persistence via membership store (handles DB/no-DB)
+    save_membership(object_id, set_name, trace_id=trace_id)
     return None
 
 
