@@ -6,6 +6,7 @@ from typing import Any, List, Tuple, Optional
 
 from app.store.object_store import ObjectStore
 from app.services.decisions import latest_decision
+from app.db.db import conn_rw
 from app.events.types import (
     PROMOTION_PROJECT_DONE,
     PROMOTION_PROJECT_MEMBERSHIP_UPSERT,
@@ -28,8 +29,40 @@ def _latest_evaluation(object_id: str) -> dict[str, Any] | None:
 
 def _record_membership_db(object_id: str, set_name: str, trace_id: str) -> None:
     """
-    Placeholder for DB persistence of membership. Reality-MVP uses audit + in-memory fallback.
+    Try to persist membership in Postgres. If DB not available, swallow.
+    Schema assumption (see migrations): membership(object_id uuid, set_id uuid, created_at timestamptz).
     """
+    if conn_rw is None:
+        return None
+    now = datetime.now(timezone.utc)
+    try:
+        with conn_rw() as conn:
+            with conn.cursor() as cur:
+                # best-effort membership upsert
+                cur.execute(
+                    """
+                    INSERT INTO membership (object_id, set_id, created_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (object_id, set_name, now),
+                )
+                # audit row for traceability
+                cur.execute(
+                    """
+                    INSERT INTO audit (trace_id, event, payload, created_at)
+                    VALUES (%s, %s, %s::jsonb, %s)
+                    """,
+                    (
+                        trace_id,
+                        PROMOTION_PROJECT_MEMBERSHIP_UPSERT,
+                        json.dumps({"object_id": object_id, "set_name": set_name}),
+                        now,
+                    ),
+                )
+    except Exception:
+        # offline / no DB: swallow
+        return None
     return None
 
 
