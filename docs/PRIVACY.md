@@ -1,3 +1,4 @@
+State: SoT v4.10 (current; details may lag ARCHITECTURE).
 # Privacy & PII
 
 The pipeline processes personal material (notes, audio), so logs and storage must remain conservative.

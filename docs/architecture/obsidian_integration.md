@@ -1,3 +1,4 @@
+State: Planned / partially implemented. Align carefully with STATUS (SoT v4.10) before applying.
 # Obsidian Integration & Lifecycle — SoT v4.3 Deep Dive
 
 This addendum documents how SoT v4.3 connects the ingestion pipeline with an Obsidian vault while preserving the Core-6 data model and promotion governance.

@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Status — Operational Snapshot
 
 | Version | Goal | Delivered | Open | Next | Notes |

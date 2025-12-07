@@ -1,3 +1,4 @@
+State: Planned / partially implemented. Align carefully with STATUS (SoT v4.10) before applying.
 # Agentminne v4.2 – Överblick
 Syfte: stödja PER-loop med explicit episodiskt, semantiskt och proceduralt minne som första-klassiga artefakter i AMG/SetDB. SoT v4.2 förtydligar minnesnamnrymder, konsistens och gate-integration.
 Mål: låg latens, idempotens, spårbarhet via trace_id och run_id, deterministisk läs/skriv-semantik, enkla UPSERTs.

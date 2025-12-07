@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Runtime Inventory
 
 Single source of truth for configuration, dependencies, and operational contracts. Update in the same PR as related code or CI changes.

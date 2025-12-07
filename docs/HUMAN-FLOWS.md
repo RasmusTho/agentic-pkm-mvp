@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Human Flows — Agentic PKM
 
 ## 1. Purpose & Scope

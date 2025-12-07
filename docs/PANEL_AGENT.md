@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # PanelAgent / NoteInteractionAgent (Reality-MVP)
 
 Purpose: translate human-driven AI panels in vault notes into internal intents/events while keeping the panel simple, optional, and human-first.

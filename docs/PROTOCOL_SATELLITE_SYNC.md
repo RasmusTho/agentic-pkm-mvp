@@ -1,4 +1,4 @@
-State: Planned / not implemented (target SoT v5.x)
+State: Planned / not implemented (target SoT v5.x).
 
 # Satellite Sync Protocol (Draft)
 

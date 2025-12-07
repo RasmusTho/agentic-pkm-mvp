@@ -1,3 +1,4 @@
+State: SoT v4.10 (current; details may lag ARCHITECTURE).
 ingestion_quality:
   frontmatter_core6_complete: true
   chunk_semantics_ok: true

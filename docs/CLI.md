@@ -1,3 +1,4 @@
+State: SoT v4.10 (current; details may lag ARCHITECTURE).
 # CLI Reference
 
 Click-based CLI surfaces ingestion, transcription, and health checks via `python -m app.cli`.

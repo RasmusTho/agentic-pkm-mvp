@@ -1,3 +1,4 @@
+State: Planned / not implemented. Target SoT: v5.x.
 # AI panel example note
 
 ```markdown

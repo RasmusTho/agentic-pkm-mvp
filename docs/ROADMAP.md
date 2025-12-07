@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Roadmap — Strategic Control
 
 ## Reality-MVP (Current focus — SoT v4.10)

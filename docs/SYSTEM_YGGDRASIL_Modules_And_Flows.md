@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Yggdrasil: Modules and Flows
 
 High-level map of modules and how material moves between them. This orients intent and responsibilities; detailed technical design, data contracts, and runtime specifics live in `docs/ARCHITECTURE.md`.

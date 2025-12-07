@@ -1,3 +1,4 @@
+State: SoT v4.10 (current; details may lag ARCHITECTURE).
 # Data Model (AMG/SetDB)
 
 ## objects

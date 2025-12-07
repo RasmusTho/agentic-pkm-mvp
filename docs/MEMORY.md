@@ -1,3 +1,4 @@
+State: Historical / partially outdated (e.g. SoT v4.2). See ARCHITECTURE SoT v4.10 for current intent.
 # Memory Design (SoT v4.3 plan)
 
 ## Syfte

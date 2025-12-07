@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Observability
 
 Logs are the primary tracing surface; no external APM is required for the current MVP.

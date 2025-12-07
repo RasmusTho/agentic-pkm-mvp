@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Eval — LLM quality checks (SoT v4.10)
 
 ## Eval stack overview

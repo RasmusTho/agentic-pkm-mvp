@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Local Observability Stack
 
 This repo already emits structured logs (JSON) and exposes Prometheus metrics when `METRICS_ENABLED=1`. The steps below give a lightweight single-developer setup to inspect those signals locally.

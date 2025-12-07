@@ -1,3 +1,4 @@
+State: Planned / partially implemented. Align carefully with STATUS (SoT v4.10) before applying.
 # SoT 4.3.1–5 Bridge — Next Steps
 
 **Focus:** Kvalitet, observability och robusthet före expansion.

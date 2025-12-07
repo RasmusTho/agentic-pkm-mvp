@@ -1,4 +1,8 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Architecture — SoT v4.10 Reality-MVP
+
+Historic SoT snapshots and older plans live in `docs/archive/`.
+They are kept for reference but are not considered active truth for the current SoT v4.10 Reality-MVP.
 
 System map: `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md` covers the high-level Yggdrasil modules and flows; this document remains the detailed technical architecture.
 
