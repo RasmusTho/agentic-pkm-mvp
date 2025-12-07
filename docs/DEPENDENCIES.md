@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current).
 # Dependencies
 
 Overview of tools and libraries required in each environment.

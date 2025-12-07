@@ -1,3 +1,4 @@
+State: Partially outdated; template ingest flow (not loaded in SoT v4.10 runtime).
 ---
 flow_id: ingest
 name: "Ingest pipeline"

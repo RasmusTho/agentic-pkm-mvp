@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current).
 # Obsidian-first sync
 
 This doc describes how the Obsidian vault PKM-Alpha (Mimer) is synced and mirrored. For how this fits into the overall system, see `docs/HUMAN-FLOWS.md` (Capture & Ingest flow) and the surfaces in `docs/SYSTEM_DESIGN_v4.10.md`.

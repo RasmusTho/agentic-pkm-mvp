@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current, with known debt).
 # Agent-spec (PER + kontrakt)
 
 ## Normalizer

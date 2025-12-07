@@ -1,3 +1,4 @@
+State: Partially outdated; template for future planner orchestration (not used in SoT v4.10).
 ---
 agent_id: planner
 agent_type: planner

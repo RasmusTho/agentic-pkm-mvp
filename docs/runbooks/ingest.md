@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current, with known debt).
 # Runbook – Ingest incidenter
 - Symptom: dubbletter / saknade poster i `index-outbox.jsonl`
 - Checklista:

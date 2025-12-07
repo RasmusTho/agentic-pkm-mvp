@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current).
 # Reality-MVP: note → ingest → index → ASK
 
 Single-note Reality-MVP flow that already fits the existing SoT (vault plane, memory backend for tests).

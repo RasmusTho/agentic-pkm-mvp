@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current).
 # Glossary
 
 Brief definitions for recurring concepts.

@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current).
 # Codex Guidelines (agentic-pkm-mvp)
 
 ## Grundprinciper
