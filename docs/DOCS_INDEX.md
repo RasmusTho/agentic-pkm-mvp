@@ -86,7 +86,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development policy | Aligned (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
 | docs/DEV_WORKFLOW.md | Dev workflow | Aligned (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
-| docs/SCENARIOS/REALITY_MVP.md | Scenario walkthrough | Aligned (v4.10) | 2025-12-07 | Matches e2e pipeline test and ASK expectations. |
+| docs/scenarios/REALITY_MVP.md | Scenario walkthrough | Aligned (v4.10) | 2025-12-07 | Matches e2e pipeline test and ASK expectations. |
 
 ## Architecture Subdocuments
 | Path | Scope | Review status | Last reviewed | Notes |
