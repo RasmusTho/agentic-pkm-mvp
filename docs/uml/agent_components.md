@@ -1,4 +1,5 @@
-# Agent Service Component Overview
+State: Legacy (archived); component diagram is not current. See `docs/DIAGRAMS.md` for Reality-MVP.
+# Agent Service Component Overview (historical)
 
 ```mermaid
 graph TD
@@ -57,8 +58,5 @@ graph TD
     Promotion -.-> API
 ```
 
-## Gaps & Follow-Ups
-- **File watcher ingestion**: Dokumentationen flaggar watchern som legacy (se `docs/TODO.md`); ersätt med script/UI-trigger.
-- **Promotion automation**: `/ingest/pending` och `/ingest/review` saknas fortfarande; utan dem är provisional → reviewed manuellt.
-- **Loggrotation & alerting**: Supervisor/agent-loggar ligger i `/tmp`; konfigurera rotation och larm för frekventa omstarter.
-- **Konfigurationsdrift**: Endast en `config/agent.yaml`-profil stöds; överväg validering + multi-profile om behov uppstår.
+## Notes
+- Depicts run_agent.py-era services and plugins that are not part of Reality-MVP. Current runtime is FastAPI + agents/ASK + ingest CLI; see `docs/ARCHITECTURE.md` and `docs/DIAGRAMS.md` for the canonical view.

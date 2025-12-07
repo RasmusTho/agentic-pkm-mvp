@@ -1,3 +1,4 @@
+State: Partially outdated (template); align with docs/DEV_WORKFLOW.md and CI docs.
 # Contributing
 
 ## Toolchain

@@ -1,3 +1,4 @@
+State: Planned / not implemented in SoT v4.10.
 ---
 agent_id: normalizer
 agent_type: worker
@@ -18,7 +19,6 @@ tools:
 prompt_template_ref: normalizer.prompts.default
 ---
 
-# Normalizer Agent Configuration
+# Normalizer Agent Configuration (sample)
 
-A worker that tidies new notes before downstream flows act on them. The YAML frontmatter is
-identical to the data loaded in tests under `tests/settings/test_agent_configs.py`.
+Sample config for future agent-config loading. Reality-MVP uses direct functions/graphs for ingest; this YAML is not consumed at runtime. Keep for v5.x reference alongside `docs/INGEST.md`.

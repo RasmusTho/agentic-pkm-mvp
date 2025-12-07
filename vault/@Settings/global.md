@@ -1,4 +1,10 @@
+uuid: 00000000-0000-0000-0000-000000000001
+title: Global Settings
+origin: user
+review_state: evergreen
+trust: internal
 ---
+State: Example / sandbox (not authoritative).
 uuid: 00000000-0000-0000-0000-000000000001
 title: Global Settings
 origin: user
@@ -22,9 +28,5 @@ secrets:
   telemetry_token: ${SECRET:OTEL_TOKEN}
 ```
 
-## Förklaringar & möjliga värden
-<!-- BEGIN:settings:reference -->
-| key | type | default | allowed | description |
-|-----|------|---------|---------|-------------|
-| _pending | _ | _ | _ | Run `python -m app.cli settings compile --auto-heal` to update this table. |
-<!-- END:settings:reference -->
+## Notes
+This file is illustrative; current runtime does not parse `@Settings` markdown. Use env vars and code defaults (`docs/SETTINGS.md`, `docs/LLM.md`).

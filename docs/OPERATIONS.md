@@ -1,84 +1,38 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: SoT v4.10 Reality-MVP (current).
 # Operations Playbook
 
-## Version & Release Workflow
-- Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory (supporting `--dry-run`).
-- Commit the bump with `chore(version): bump to X.Y.Z`, then create an annotated tag using `python scripts/tag_release.py [--dry-run|--push]` (tags default to `v<version>`).
-- Share noteworthy changes after tagging; the bump script already appends to the decision log.
+Reality-MVP ops target local development and single-user runs. Production hardening (HA, backups, rate-limits) is out of scope for v4.10.
 
-## Runtime Compose Stack
-- `docker-compose.yaml` starts FastAPI (`api`), the background agent (`agent`), Postgres, and Redis for local development.
-- Ensure `.env` contains the desired secrets before running `docker compose up --build`.
-- Postgres data lives in the `postgres-data` volume; `docker compose down -v` wipes it.
-- The API container runs `scripts/start_api.sh`, which performs `alembic -c app/alembic.ini upgrade head` before launching `uvicorn`.
-- The agent container runs `python scripts/start_agent_service.py`; the script loads `.env`, skips Alembic when `alembic current` already reports `(head)`, and executes `python -u run_agent.py` in a 30 s restart loop.
-- Supervisor logs land in `/tmp/agent.log` (stdout/stderr) and agent output appends to `/tmp/agent_app.log`; secure volumes or log shipping if the container is recreated.
+## Runtime stack (Reality-MVP)
+- Local dev: `uvicorn app.main:app --reload --port 18000` (defaults `STORE_BACKEND=memory`, `LLM_PROVIDER=mock`).
+- Docker Compose (`docker-compose.yaml`): starts Postgres (`db`), FastAPI (`api` → `app.main:app`), and a worker (`app.workers.outbox_worker`). Ports: Postgres `15432`, API `18000→8000`. Ensure `pgvector` is available in the db image (default `pgvector/pgvector:pg16`).
+- Alembic: `scripts/start_api.sh` runs `alembic -c app/alembic.ini upgrade head` before launching the API. The worker uses the configured `STORE_BACKEND` and reads from the same database.
+- Metrics: expose `/metrics` when `METRICS_ENABLED=1` (see `docs/OBSERVABILITY_STACK.md` for Prometheus/Grafana).
 
-## Storage Maintenance
-- The FastAPI service writes DuckDB artifacts to `storage/agent.duckdb` and provenance trails to `provenance.jsonl`.
-- Rotate them with `python scripts/rotate_storage.py [--dry-run|--copy|--truncate]`, which archives into `storage/archive/` by default and keeps a bounded history (`--max-backups`).
-- Schedule the script (cron/systemd/GitHub Actions) to run routinely; review `--copy/--truncate` flags depending on whether live readers expect files to remain.
-- Prior to rotation, ensure no long-running agent sessions depend on the files; quiesce the service if necessary.
-- Monitor free disk space and set alerts when the combined storage exceeds the agreed threshold.
-- Use `--max-age-days` alongside `--max-backups` to purge old archives (set policy, e.g. 30 days).
-- Run `pre-commit install` locally so lint/type/test hooks run automatically before each commit.
-- Vector data now lives in Postgres (`objects` + `embeddings`); ensure the `pgvector` extension is installed and run `VACUUM ANALYZE embeddings` periodically as the cluster grows.
+## Data/storage
+- Primary stores: Postgres (object + vector tables via `STORE_BACKEND=pg`) or in-memory for smoke/tests. `INDEX_OUTBOX_PATH` defaults to `tmp/index-outbox.jsonl` for event/audit sinks.
+- DuckDB/provenance files (`storage/agent.duckdb`, `provenance.jsonl`) are only used by legacy health checks; not required for the Reality-MVP pipeline.
+- Back up Postgres volumes if you care about persisted objects/vectors; wiping the volume (`docker compose down -v`) clears all data.
 
-## Agent Supervisor Runbook
-1. **Start locally** – `python scripts/start_agent_service.py` (add `--dry-run` to validate migrations without executing). The script loads `.env` if `python-dotenv` exists; otherwise it uses the current environment.
-2. **Migrations** – runs `alembic -c app/alembic.ini current`. If `(head)` is already present it logs `Detected Alembic at HEAD — skipping migrations`; otherwise executes `upgrade head` with a 180 s timeout (failures exit 1).
-3. **Agent loop** – supervisor runs `python -u run_agent.py` and restarts it after 30 s whenever the exit code is non-zero.
-4. **Logs** – tail `/tmp/agent.log` for supervisor events and `/tmp/agent_app.log` for agent stdout/stderr. Rotate via logrotate or cron to prevent unbounded growth.
-5. **Stop signal** – SIGINT/SIGTERM sets an internal flag, waits for the active `run_agent.py` to finish, and stops further restarts. Sends SIGKILL after 10 s if shutdown stalls.
-6. **Alerting** – page when the same host logs `"Agent exited with code"` more than three times within ten minutes; indicates `run_agent.py` needs investigation or lacks input data.
+## Common workflows
+- **Health**: `python -m app.cli health --json` (checks ffmpeg, yt-dlp, Ollama when enabled, outbox path).
+- **Ingest vault notes**: `python -m app.cli vault-alpha-ingest --max-notes 200 [--force]` (safe/idempotent ingest with UUID healing + mirror writes). For a quick non-recursive scan: `python -m app.cli ingest-vault-root --limit 10`.
+- **ASK**: `python -m app.cli ask "Question"` (runs planner/orchestrator flow; mock LLM by default) or HTTP `POST /api/ask`.
+- **Status**: `GET /api/status` (store counts, ingest/ASK metrics window).
 
-## Ingestion Review Runbook
-1. **Prepare payload** – gather metadata in a JSON-compatible dict plus raw text under `text`.
-2. **Ingest** – `POST /ingest` with `{id?, kind?, source_ref?, payload, text}`. Response returns `object_id` + model/dimensions.
-3. **Validate** – call `POST /search`:
-   - `query_text` only for lexical shape.
-   - Combine `query_text` + `query_embedding` (if an external embedding generator is used) for hybrid RRF.
-4. **Maintain** – run `scripts/bench.py` after major data imports to watch latency (p50/p95) and adjust `ivfflat` parameters.
-
-## Auth & Rate Limiting
-- Refer to `docs/AUTH_RATE_LIMITING.md` for implementation guidance (API key dependency + `slowapi` limiter).
-- Store the API key in environment or secret manager; rotate by updating deployments and monitoring logs for legacy usage.
-- Run Redis (or alternative backend) alongside FastAPI to support shared rate-limit counters; configure via env in future work.
-
-## Observability
-- Logs: JSON-formatted via `app/observability.setup_logging()`. Hook into your logging stack (CloudWatch, ELK, etc.).
-- Metrics: enable `METRICS_ENABLED=1` to expose Prometheus metrics under `/metrics` using `prometheus-fastapi-instrumentator` (secure access appropriately).
-- Local Prometheus+Grafana recipe lives in `docs/OBSERVABILITY_STACK.md` (Docker Compose).
-
-<!-- SECTION:OPS-RUNBOOKS:BEGIN -->
 ## Runbooks (quick reference)
 | Issue | Symptom | Action |
 | --- | --- | --- |
-| yt-dlp 403/429 | Health passes but `transcribe` fails with `DownloadError` | Run `yt-dlp -v URL`, add cookies (`--cookies-from-browser`), or download via a piped host (see `docs/DEPENDENCIES.md`). |
-| Missing ffmpeg | Health `ffmpeg=false`, CLI raises `CalledProcessError` | Install the package, verify with `which ffmpeg`. |
-| Ollama offline | Health `ollama=false`, agent replies “Insufficient evidence” | Start `ollama serve`, `ollama pull <model>`, confirm via `curl $OLLAMA_URL/api/tags`. |
-| `INDEX_OUTBOX_PATH` write failure | Health `index_outbox=false`, CLI raises `ValueError: index-outbox entry missing ...` | Fix filesystem permissions or point env to a writable directory. |
+| Ollama offline | Health `ollama=false`, LLM calls fail | Start `ollama serve`, pull the model (e.g., `ollama pull llama3.1:8b`). |
+| Missing ffmpeg | Health `ffmpeg=false`, `transcribe` fails | Install ffmpeg; rerun health. |
+| yt-dlp 403/429 | `transcribe` download errors | Retry with `yt-dlp -v URL`, add `--cookies-from-browser` if needed. |
+| Outbox unwritable | Health `index_outbox=false` | Point `INDEX_OUTBOX_PATH` to a writable file/dir. |
 
-## SLO / SLA
-| Level | Target | Measurement |
-| --- | --- | --- |
-| Ingestion latency | < 5 s from CLI start to JSONL entry | Compare CLI start with `transcribe` / `agent.answer` spans. |
-| Retrieval p95 | < 250 ms | `jq 'select(.node=="agent.answer") | .latency_ms'`. |
-| ASR wall time | < 30 s for a 5-minute clip | `transcribe` span. |
-| Health CLI | 100 % coverage before every release | Smoke step fails otherwise. |
+## Targets (observational, not enforced)
+- Retrieval p95 < 250 ms (tracked by fitness report QAS-003 in CI).
+- Ingest→index propagation within ~2 s (fitness report QAS-010 in CI).
+- ASR/transcribe < 30 s for a 5-minute clip (ffmpeg + mock ASR by default).
 
-## Incident handling (manual)
-1. **Identify** – use `health` + `jq` to find the failing node.
-2. **Stabilize** – set `LLM_PROVIDER=mock` or `STORE_BACKEND=memory` to keep working while debugging.
-3. **Communicate** – add a short note to `docs/CHANGELOG.md` under “Unreleased incidents”.
-4. **Restore** – restart Ollama/ffmpeg/CLI depending on the root cause. Restore `tmp/index-outbox.jsonl` from backup if corrupt.
-
-## Backup / restore for index-outbox
-- Default path is `tmp/index-outbox.jsonl`. Simple rotation:
-  ```bash
-  cp tmp/index-outbox.jsonl "tmp/index-outbox.$(date +%Y%m%d%H%M%S).jsonl"
-  truncate -s 0 tmp/index-outbox.jsonl
-  ```
-- In CI, archive the file as an artifact when needed.
-- Restore: copy the file back and rerun the indexer (future CLI) or inspect via `python -m json.tool`.
-<!-- SECTION:OPS-RUNBOOKS:END -->
+## Notes on legacy tools
+- `scripts/start_agent_service.py` and `run_agent.py` remain for legacy agent loops; Reality-MVP uses the FastAPI + worker stack described above.
+- `scripts/rotate_storage.py` only matters if you opt into DuckDB/provenance logging; otherwise ignore.

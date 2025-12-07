@@ -1,12 +1,14 @@
+State: SoT v4.10 Reality-MVP (current).
 # LLM Backends
 
 The QA agent and classifier can switch backends via environment variables. This document captures capabilities, timeouts, and planned improvements.
 
 <!-- SECTION:LLM:BEGIN -->
 ## Supported backends
-- **Mock** – `LLM_PROVIDER=mock`. Returns `LLM_MOCK_RESPONSE` and avoids network calls (`app/agents/qa/agent.py:24-28`, `app/llm/adapter.py:12-14`). Default in CI/tests.
-- **Ollama** – Production default (`LLM_PROVIDER=ollama`). QA hits `/api/chat` (`app/agents/qa/agent.py:31-48`), embeddings use `/api/embeddings` (`app/llm/embeddings.py:34-43`). Requires the local Ollama daemon.
-- **OpenAI & DeepSeek** – Routed through `app/llm/adapter.py:25-47`. Require API keys and are used by services calling `generate(...)`.
+- **Mock** — `LLM_PROVIDER=mock`. Returns `LLM_MOCK_RESPONSE` and avoids network calls (`app/agents/qa/agent.py`, `app/llm/adapter.py`). Default in CI/tests.
+- **Ollama** — Local default (`LLM_PROVIDER=ollama`). QA hits `/api/chat`; embeddings use `/api/embeddings` (`app/llm/embeddings.py`). Requires the local Ollama daemon.
+- **OpenAI** — Routed through `app/llm/adapter.py`; requires `OPENAI_API_KEY` and is used by services calling `generate(...)`.
+- **DeepSeek** — Routed through `app/llm/adapter.py`; requires `DEEPSEEK_API_KEY`. Optional; defaults stay local/mock.
 
 ## Configuration
 | Scenario | Variables | Notes |

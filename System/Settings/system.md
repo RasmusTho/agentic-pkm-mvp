@@ -5,4 +5,5 @@ sync:
 agents:
   reembed_on_body_diff: true
 ---
-System policies for vault synchronisation.
+State: Partially outdated; placeholders not enforced in Reality-MVP.
+System policies for vault synchronisation (vault UI defaults). These settings are not currently read by ingest/agents; treat as illustrative defaults for future sync tooling.

@@ -1,4 +1,5 @@
-# Agent Supervisor Sequence
+State: Legacy (archived); describes old supervisor loop. See DIAGRAMS.md for current topology.
+# Agent Supervisor Sequence (historical)
 
 ```mermaid
 sequenceDiagram
@@ -39,9 +40,6 @@ sequenceDiagram
     Sup->>Sup: handle shutdown (terminate agent, close loop)
 ```
 
-## Updated Observations
-- **Supervisor loop requires data**: utan seedade objekt i Postgres blir `run_agent.py` kortlivad och restarts loggas var 30:e sekund.
-- **Loggrotation saknas**: `/tmp/agent_app.log` växer obegränsat; sätt upp `logrotate` eller container-volymer.
-- **API-nyckel tom**: `.env` har `API_KEY=`; produktion måste sätta nyckel innan `/ingest` och `/search` exponeras.
-- **Legacy watchfolder**: filesystem-droppar gör inget; ersätt med nytt ingest-trigger-script eller ta bort referenser.
-- **Alerting**: övervaka `"Agent exited with code"` och migreringsfel för att fånga trasiga releaser.
+## Notes
+- Captures a v4.x supervisor/run_agent.py restart loop that is not part of Reality-MVP.
+- Ingestion watchers/endpoints referenced here are legacy. Use `docs/INGEST.md` + CLI for current ingest, and `docs/DIAGRAMS.md` for up-to-date C4 diagrams.

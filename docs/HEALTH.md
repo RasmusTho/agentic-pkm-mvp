@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current).
 # Health CLI
 
 Fast way to verify local dependencies before running the ingestion / agent pipeline.
@@ -23,6 +24,6 @@ python -m app.cli health --json
 The command is wrapped with `@span("health.check")`, so the JSON log (`docs/OBSERVABILITY.md`) records each invocation. Exceptions populate `extra.error`.
 
 ## CI behavior
-- `.github/workflows/smoke.yml` runs the command with `LLM_PROVIDER=mock` to avoid network dependencies.
+- `.github/workflows/ci-smoke.yaml` runs the command with `LLM_PROVIDER=mock` to avoid network dependencies.
 - Locally, run the health check before `python -m app.cli pipe ...` for faster diagnostics.
 <!-- SECTION:HEALTH:END -->

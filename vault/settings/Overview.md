@@ -1,3 +1,10 @@
+uuid: "SET-BY-SYSTEM"
+title: "System Settings — Overview"
+origin: "local"
+review_state: "processed"
+trust: "own"
+source_ref: "vault://settings/Overview.md"
+State: Example / sandbox (not authoritative).
 ---
 uuid: "SET-BY-SYSTEM"
 title: "System Settings — Overview"
@@ -9,18 +16,11 @@ source_ref: "vault://settings/Overview.md"
 
 # System Settings — Overview
 
-Detta är en **läsbar** översikt för människor. Den **kanoniska** konfigurationen ligger i:
+Human-readable overview; the canonical runtime config is env-based plus `_system/settings/system-settings.yaml` (see `docs/SETTINGS.md`). This page is an example; current runtime does not compile settings from here.
 
-```
-vault/_system/settings/system-settings.yaml
-```
-
-Rekommendation: öppna YAML-filen ovan när du faktiskt vill ändra värden. Den här sidan länkar vidare, ger förklaringar och kan visa dashboards (Dataview).
-
-## Snabbnavigering
-
-- Kanon: [[../_system/settings/system-settings.yaml]]
-- Eventkatalog: [[../_system/events/]]
-- Scheman: [[../_system/schemas/]]
-- Arbetsyta: [[../@Desk/]]
+## Quick links
+- Canonical YAML: [[../_system/settings/system-settings.yaml]]
+- Events catalog: [[../_system/events/]]
+- Schemas: [[../_system/schemas/]]
+- Workspace: [[../@Desk/]]
 - Inbox: [[../@Inbox/]]

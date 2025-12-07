@@ -8,7 +8,8 @@ The agent loop prioritizes deterministic policies over heuristic “best effort�
 - **Forbidden content** – `_FORBIDDEN_RE` blocks strings matching `api key|password|secret` (case-insensitive). Sanitize responses before returning.
 - **Token budget** – `enforce_quality` default `max_tokens=800`. Exceeding it emits `too_long`.
 - **Source requirement** – `min_sources=1`. Empty `sources` → `insufficient_sources`.
-- **Circuit breaker** – `CircuitBreaker` + `DEFAULT_BREAKER` track failed calls (3 failures within 60 s). Not wired into QA yet.
+- **Circuit breaker** – `CircuitBreaker` + `DEFAULT_BREAKER` track failed calls (3 failures within 60 s). Not wired into QA/ASK responses yet; helper only.
+- Scope: these checks are applied by the QA agent pipeline (planner/CLI flows). The `/api/ask` Reality-MVP path uses the ASK graph (retrieve → optional rerank → answer) and does not run `enforce_quality` today; it relies on retrieval grounding + visible sources.
 
 ## Agent loop controls
 | Step | Location | Check | Failure pattern |
@@ -17,11 +18,11 @@ The agent loop prioritizes deterministic policies over heuristic “best effort�
 | `self_check` | app/agents/qa/agent.py:82-107 | Verifies references + word count ≥ 30. | `missing_references`, `too_short`. |
 | `finalize` | app/agents/qa/agent.py:109-115 | Appends a notice when evidence is weak. | `_Note: limited evidence._` appended. |
 | `enforce_quality` | app/quality/guardrails.py:14-29 | Final filter before returning. | `issues` array feeds the client/log. |
+Scope: this QA agent loop is used in planner/CLI flows; `/api/ask` uses `app/agents/ask/graph.py` (single-pass retrieve → rerank → answer) with optional LLM and no self-check loop.
 
 ## Performance budgets (tracked via spans)
-- **ASR / transcribe** (`transcribe`) – target < 30 s for a 5-minute clip (`jq 'select(.node=="transcribe")'`).
-- **Retrieval** (`agent.answer` early stage) – p95 < 250 ms (link CLI `trace_id`).
-- **QA answer** (`agent.answer`) – p95 < 1.2 s with Ollama 8B locally. If `status=error`, consider opening the breaker.
+- **Fitness gates (CI)** — `python -m app.fitness.report` emits QAS-003 (hybrid search latency) and QAS-010 (outbox→index latency). `ci-smoke` asserts `GATES.ok=true`, so these thresholds are gating in the PR smoke workflow (memory stores, mock LLM).
+- **Targets/observability (not gating)** — ASR/transcribe spans target <30 s for a 5-minute clip; retrieval p95 <250 ms; QA answer p95 <1.2 s on local Ollama 8B. These are observational targets rather than enforced gates today.
 
 ## Planned improvements
 1. Wrap `_call_llm` with `DEFAULT_BREAKER` and log `extra={"breaker": "open"}` when tripped.

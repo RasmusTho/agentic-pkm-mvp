@@ -1,31 +1,23 @@
-State: SoT v4.10 (current; details may lag ARCHITECTURE).
+State: SoT v4.10 Reality-MVP (current).
 # SETTINGS
 
-Runtime env vars (STORE_BACKEND, INDEX_OUTBOX_PATH, METRICS_ENABLED, etc.) are captured in `docs/SYSTEM_DESIGN_v4.10.md`; this file focuses on settings schema/flags.
+Runtime/env configuration is simple in Reality-MVP: defaults favor local development (memory stores, mock LLM). For topology and ports see `docs/SYSTEM_DESIGN_v4.10.md`.
 
-## Required
-- DATABASE_URL: SQLAlchemy/psycopg URL. Example: postgresql+psycopg://app:app@127.0.0.1:15432/app
-- SOT_VERSION: Current Source-of-Truth schema version. Example: 4.10
+## Core env vars
+- `STORE_BACKEND` — `memory` (default) or `pg`. When `pg`, set `DATABASE_URL=postgresql+psycopg://app:app@127.0.0.1:15432/app`.
+- `INDEX_OUTBOX_PATH` — JSONL outbox path (default `tmp/index-outbox.jsonl`).
+- `METRICS_ENABLED` — `1` to expose Prometheus metrics on `/metrics` (disabled by default).
+- `LLM_PROVIDER` — `mock` (default for CI/smoke), `ollama`, `openai`, `deepseek`. Chat/QA defaults are derived from this.
+- `LLM_MODEL` — chat/QA model id (e.g., `llama3.1:8b` for Ollama).
+- `EMBED_MODEL` — embedding model id (e.g., `nomic-embed-text` for Ollama); deterministic hash embedding is used in tests.
+- `RERANK_ENABLE` / `RERANK_PROVIDER` — optional rerank; defaults keep rerank off in smoke/CI.
+- `METRICS_ENABLED`, `OBSERVABILITY_OTLP_ENDPOINT` — enable metrics/traces (optional; see `docs/OBSERVABILITY_STACK.md`).
 
-## LLM
-- LLM_PROVIDER: ollama|openai|azureopenai|anthropic
-- LLM_MODEL: default chat/model for non-reasoning prompts
-- LLM_REASONING_MODEL: advanced model for deliberate reasoning
-- OLLAMA_HOST: base URL to local server, default http://127.0.0.1:11434
-- LLM_TIMEOUT_SECONDS: default 120
-
-## Retrieval
-- VECTOR_BACKEND: pgvector
-- EMBED_MODEL: identifier string for embeddings (e.g. openai/text-embedding-3-large). Tests use a deterministic hashing-based embedding in code.
-- BM25_BACKEND: bm25_lite
-
-## Operational flags
-- LOG_LEVEL: INFO|DEBUG
-- FEATURE_REVIEW_AUTOPROMOTE: true|false (default true)
-- FEATURE_REASONING_ON_REVIEW: true|false (default true)
-- MAX_CHUNK_TOKENS: default 800
-- CHUNK_OVERLAP_TOKENS: default 120
+## CLI/health helpers
+- `LLM_MOCK_RESPONSE` — text/JSON returned when `LLM_PROVIDER=mock`.
+- `INGEST_STATUS_PATH` — where ingest status JSON is written during CLI flows (defaults under `tmp/`).
+- `PLANNER_ENABLE` / `ORCHESTRATOR_ENABLE` / `A2A_ENABLE` / `MCP_ENABLE` — feature flags; default off for smoke runs. CLI `ask` enables orchestrator flow regardless of these flags for the demo pipeline.
 
 ## Conventions
-- All services read from environment first, then fall back to sensible defaults in app/settings.py and agent modules.
-- Never check secrets into the repo. Use .env for local dev only.
+- Services read env first, then fall back to defaults in settings bundles (`app/settings/*`) or agent modules.
+- Keep secrets out of the repo; `.env` is for local dev only. Use the same env variables for Compose and bare-metal runs.

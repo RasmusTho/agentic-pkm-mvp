@@ -1,3 +1,4 @@
+State: Planned / not implemented in SoT v4.10 (for future planner flows).
 ---
 flow_id: ingest
 name: "Ingest pipeline"
@@ -44,12 +45,6 @@ prompt_profiles:
     prompt_template_ref: prompts/planner/ingest-fast.md
 ---
 
-# Ingest Flow Profile
+# Ingest Flow Profile (sample)
 
-Sample profile that lives in `vault/_system/flows/ingest.flow.md` when running against a live
-vault. This file documents the YAML frontmatter accepted by `app.settings.flow_profiles`.
-
-- `event_triggers` declares which events enable the profile.
-- `intent` and `suggested_patterns` capture the human strategy for the flow.
-- `planner_mode` and `prompt_profiles` advise the planner but do not force execution paths.
-- Pattern steps accept structured entries with `target`, optional `description`, and `args` for tool calls.
+Reference YAML for a future planner/orchestrator-driven ingest flow. Reality-MVP does not load or enforce this file; ingest today is driven by CLI (`vault-alpha-ingest`, `pkm-alpha-ingest`) and the HybridStore path in `docs/INGEST.md`. Keep as a template for v5.x planner work.

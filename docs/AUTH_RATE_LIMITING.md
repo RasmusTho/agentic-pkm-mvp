@@ -1,4 +1,4 @@
-State: SoT v4.10 (current; details may lag ARCHITECTURE).
+State: SoT v4.10 Reality-MVP (planned; not implemented yet).
 # Auth & Rate Limiting Strategy
 
 ## Goals
@@ -14,7 +14,7 @@ State: SoT v4.10 (current; details may lag ARCHITECTURE).
 | OAuth2 / OIDC (Auth0, Azure AD) | Scales to multiple users, granular scopes | Requires IdP setup, token validation complexity | Defer until external stakeholders need SSO |
 | mTLS | Strong identity auth | Operationally heavy, cert lifecycle | Defer |
 
-**Proposed implementation**
+**Proposed implementation (not yet wired)**
 - Add `API_KEY` to `.env`/environment. Default to disabled when empty.
 - Create dependency `get_api_key` that validates the header; raise `HTTPException(401)` when invalid.
 - Apply to routers via `Depends(get_api_key)` or `APIKeyHeader` from `fastapi.security`.
@@ -28,13 +28,13 @@ State: SoT v4.10 (current; details may lag ARCHITECTURE).
 | Reverse proxy (nginx/traefik) limits | Offloads enforcement, no code changes | Need config + metrics integration | Consider for edge services |
 | Application-level counters (in-memory) | Zero dependencies | Not distributed-safe | Useful for local dev only |
 
-**Proposed rollout**
+**Proposed rollout (not yet wired)**
 1. Start with `slowapi` + Redis (or DuckDB-backed cache for dev using `slowapi.Limiter` with memory storage).
 2. Apply route-specific limits, e.g. `@limiter.limit("60/minute")` on read endpoints and stricter on POST.
 3. Expose headers (`X-RateLimit-Remaining`, etc.) for clients.
 4. Include bypass ability for internal cron jobs by matching API key prefixes.
 
-## Implementation Plan
+## Implementation Plan (future work)
 1. Introduce `settings.api_key` and `settings.rate_limit_enabled` fields.
 2. Create `auth.py` module housing API key dependency and optional FastAPI security scheme.
 3. Wire dependency into routers or include globally via middleware.
@@ -42,12 +42,12 @@ State: SoT v4.10 (current; details may lag ARCHITECTURE).
 5. Document curl examples and failure responses (`401`, `429`).
 6. Expand tests: API key required, missing key, exhausted limit triggers `429`.
 
-## Operational Considerations
+## Operational Considerations (future)
 - Rotate API keys by updating the env and restarting; keep old key for grace period if needed.
 - Monitor rate-limit metrics via `slowapi` storage backend (Redis stats).
 - When migrating to OAuth/OIDC, reuse dependency pattern; replace API key check with token validation.
 
 ## Next Steps
-- Implement API-key dependency and apply across routers.
+- Implement API-key dependency and apply across routers (planned).
 - Introduce slowapi with configurable rules; ensure CI includes new deps.
 - Evaluate long-term IdP integration once external users are on-boarded.

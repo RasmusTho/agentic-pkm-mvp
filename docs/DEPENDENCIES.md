@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current).
 # Dependencies
 
 Overview of tools and libraries required in each environment.
@@ -23,7 +24,7 @@ Overview of tools and libraries required in each environment.
 | Environment | Env setup | Dependencies | Notes |
 | --- | --- | --- | --- |
 | Local dev | `LLM_PROVIDER=mock` (or `ollama`), `STORE_BACKEND=memory`, `INDEX_OUTBOX_PATH=./tmp/index-outbox.jsonl` | Python venv, yt-dlp, ffmpeg, optional Ollama. | Health CLI proves ffmpeg/yt-dlp/outbox readiness. |
-| CI smoke (`.github/workflows/smoke.yml`) | `LLM_PROVIDER=mock`, `STORE_BACKEND=memory`, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` | Installs ffmpeg via apt, pip installs requirements. | No Ollama; health runs in mock mode. |
+| CI smoke (`.github/workflows/ci-smoke.yaml`) | `LLM_PROVIDER=mock`, `STORE_BACKEND=memory`, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` | Installs ffmpeg via apt, pip installs requirements. | No Ollama; health runs in mock mode. |
 | “Prod” workstation | `LLM_PROVIDER=ollama`, `OLLAMA_HOST`, `OLLAMA_MODEL`, `INDEX_OUTBOX_PATH` on persistent storage (e.g. `~/logs/index-outbox.jsonl`) | Same as local + Ollama daemon + Postgres when `STORE_BACKEND=pg`. | Add log rotation/backups for `INDEX_OUTBOX_PATH` (see `docs/OPERATIONS.md`). |
 
 ## YouTube transcripts and anti-bot notes

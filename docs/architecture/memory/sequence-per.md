@@ -1,5 +1,4 @@
-State: Planned / partially implemented. Align carefully with STATUS (SoT v4.10) before applying.
-# Sekvens: PER
-Plan: get/query(kind=procedural|semantic, scope=session|global)
-Execute: put(kind=episodic, scope=session|object), audit
-Reflect: transact {query episodic→derive semantic; upsert edges; update scorecards}; gate-policy körs före commit
+State: Legacy (archived); PER memory sequence not implemented in SoT v4.10.
+# Sequence: PER (memory v4.2)
+
+Describes PER steps for a memory store that is not part of Reality-MVP. Current agent flows are documented in `docs/AGENTS.md` and `docs/INGEST.md`; PER base is optional and not enforced.

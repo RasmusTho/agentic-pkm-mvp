@@ -1,64 +1,17 @@
-State: Historical / partially outdated (e.g. SoT v4.2). See ARCHITECTURE SoT v4.10 for current intent.
-# DB SCHEMA
+State: Partially outdated relative to SoT v4.10; reflects legacy tables and current store schema.
+# DB schema (Reality-MVP vs legacy)
 
-## objects
-- id uuid pk
-- kind text
-- source_ref text
-- ts timestamptz default now()
-- payload jsonb
-- search_vector tsvector (generated from payload fields)
+## Active tables (Store abstraction)
+- `store_objects(object_id UUID PK, kind TEXT, source_ref TEXT, payload JSONB, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ)`
+- `store_vector_index(object_id UUID PK, kind TEXT, source_ref TEXT, payload JSONB, embedding DOUBLE PRECISION[], model TEXT, updated_at TIMESTAMPTZ)`
+- `store_relations(src_id UUID, dst_id UUID, rel TEXT, payload JSONB DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ, PRIMARY KEY (src_id, dst_id, rel))`
+- Optional `decisions(id UUID PK DEFAULT gen_random_uuid(), object_id UUID, agent TEXT, kind TEXT, key TEXT, value JSONB, created_at TIMESTAMPTZ)` used by classifiers/reviewers.
 
-## chunks
-- id uuid pk
-- object_id uuid fk→objects(id) on delete cascade
-- idx int
-- offset_start int
-- offset_end int
-- text text
+## Legacy tables (historical; not used in Reality-MVP)
+- `objects`, `chunks`, `embeddings` (legacy ingestion/indexing pipeline)
+- `sets`, `membership` (SetDB/AMG concepts)
+- `audit` (historical audit log table)
 
-## embeddings
-- id uuid pk (equals object_id for object-level, or chunk uuid if per-chunk)
-- object_id uuid fk→objects(id)
-- model text
-- dim int
-- vec vector
-
-## relations
-- id uuid pk
-- src uuid
-- dst uuid
-- kind text
-- payload jsonb
-
-## sets
-- id uuid pk
-- name text
-- payload jsonb
-
-## membership
-- set_id uuid fk→sets(id)
-- object_id uuid fk→objects(id)
-- role text
-- payload jsonb
-
-## decisions
-- id uuid pk
-- object_id uuid fk→objects(id)
-- key text
-- value jsonb
-- created_at timestamptz default now()
-
-## audit
-- id uuid pk
-- object_id uuid nullable
-- agent text
-- action text
-- ts timestamptz default now()
-- trace_id text
-- details jsonb
-
-## indexes
-- GIN on objects.search_vector
-- ivfflat/hnsw on embeddings.vec (pgvector)
-- helpful btree indexes on (object_id), (key), (set_id)
+## Indexes (when using pgvector)
+- `store_vector_index.embedding` can use pgvector (ivfflat/hnsw) when available; the current pg schema stores embeddings as arrays for compatibility.
+- Add btree indexes on `store_objects.kind` / `source_ref` as needed; defaults are minimal for local dev.

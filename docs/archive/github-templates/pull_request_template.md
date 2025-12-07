@@ -1,3 +1,4 @@
+State: Legacy (archived); moved from `.github` (v4.6-focused PR scaffold).
 ## Summary
 - 
 

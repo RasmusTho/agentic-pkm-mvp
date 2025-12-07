@@ -1,5 +1,4 @@
-State: Planned / partially implemented. Align carefully with STATUS (SoT v4.10) before applying.
-# C4: Container
-Containers: API/Agents (LangGraph), Postgres, Ollama
-Dataflöde: agent → memory adapter → DB; reflect kör i samma transaktion som episoder → semantik → procedur
-Observability: audit jsonl + tabell, trace_id obligatoriskt
+State: Legacy (archived); superseded by SoT v4.10.
+# C4: Container (memory v4.2)
+
+Legacy container view for the old memory adapter. Current containers/topology are in `docs/SYSTEM_DESIGN_v4.10.md` and `docs/ARCHITECTURE.md`; use those for Reality-MVP.

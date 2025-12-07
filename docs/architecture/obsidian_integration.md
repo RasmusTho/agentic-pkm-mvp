@@ -1,14 +1,10 @@
-State: Planned / partially implemented. Align carefully with STATUS (SoT v4.10) before applying.
+State: Legacy (archived); superseded by SoT v4.10 (see INGEST.md, OBSIDIANSYNC.md, HUMAN-FLOWS.md).
 # Obsidian Integration & Lifecycle — SoT v4.3 Deep Dive
 
 This addendum documents how SoT v4.3 connects the ingestion pipeline with an Obsidian vault while preserving the Core-6 data model and promotion governance.
 
-## 1. File-first lifecycle
-- **Create**: New Markdown files under the watch path trigger normalization; the file hash becomes the provenance key.
-- **Update**: Hash/mtime deltas re-run the normalizer while keeping `core6.id` and `created` intact; `updated` reflects the new ingest time.
-- **Rename**: Hash match with new path results in `core6.origin` update only; deduper is bypassed.
-- **Delete**: Missing files mark the object as `archived=true` (manual removal from vault; DB row retained for audit).
-- **Conflict**: Distinct hashes with same title are sent to Deduper; canonical object keeps the original `core6.id`, alternates receive suffix `(alt n)`.
+## 1. File-first lifecycle (historical)
+- Watcher-driven ingest with hash-based provenance was a v4.3 concept. Reality-MVP uses manual CLI ingest (`vault-alpha-ingest`) with UUID healing and HybridStore writes (see `docs/INGEST.md` and `docs/HUMAN-FLOWS.md`).
 
 ```mermaid
 sequenceDiagram
@@ -29,7 +25,7 @@ sequenceDiagram
     ReviewStack-->>Obsidian: status updated (promotion state)
 ```
 
-## 2. Promotion pathway
+## 2. Promotion pathway (historical)
 - Reviewer logs trust, citations, duplicate flags and produces `review` decisions + memory.
 - SetEvaluator computes promotion score (`evaluate` decisions) using review, citation, embedding stats.
 - Projector enforces `membership(set_id, object_id)` when `promote=true`, emitting audit and episodic memory entries.
@@ -50,7 +46,7 @@ sequenceDiagram
     Projector-->>Reviewer: promotion outcome (memory+audit)
 ```
 
-## 3. Export workflow
+## 3. Export workflow (historical)
 - `scripts/export_objects.py` selects objects with `review_state="approved"` or `promote=true`.
 - YAML frontmatter includes Core-6 plus `trust`, `maturity`, `evidence_level`, `review_state`, and provenance timestamps.
 - Body contains normalized text; optional chunk appendices (`export/<id>_chunk_<n>.md`) for development.
@@ -67,11 +63,8 @@ sequenceDiagram
     ExportJob-->>Postgres: audit export event (optional)
 ```
 
-## 4. Rename/update reconciliation
-- The watcher compares file hashes to `objects.file_hash`.
-- If hash unchanged but path differs → update `core6.origin` only.
-- If hash changed → re-run full pipeline.
-- Ambiguity triggers Deduper to prevent duplicate published items.
+## 4. Rename/update reconciliation (historical)
+- Describes a watcher comparing hashes. Reality-MVP has no watcher; path changes are handled via ingest CLI and VaultMirror reconciliation.
 
 ```mermaid
 sequenceDiagram
@@ -87,14 +80,8 @@ sequenceDiagram
     end
 ```
 
-## 5. Backfill hygiene
-- `make backfill` (wrapper for `app/jobs/backfill.py`) fills historical gaps: missing chunks → chunker, missing embeddings → indexer, missing reviews/evaluations → reviewer/set_evaluator, promoted-without-membership → projector.
-- Views (`view_objects_missing_chunks`, `view_chunks_missing_embeddings`, `view_objects_missing_review`, `view_objects_ready_for_projection`) track outstanding items before/after the job.
+## 5. Backfill hygiene (historical)
+- `make backfill` and view-based audits are not part of Reality-MVP; current ingest is rebuilt via CLI as needed.
 
-## 6. Operational checklist
-- Ensure watch service mirrors the vault path into SetDB.
-- Run export job after promotion or nightly cron; configure vault path through CLI.
-- Maintain Ollama/LLM credentials consistent with ingestion tests.
-- Periodically execute `make backfill` to keep historical notes aligned with new lifecycle rules.
-
-The v4.3 lifecycle preserves SoT v4.2 guarantees while allowing Obsidian to remain the human-first editing surface.
+## 6. Operational checklist (historical)
+- Watch services/export jobs referenced here are not active in v4.10. Use `docs/INGEST.md` and `docs/OBSIDIANSYNC.md` for the current Obsidian vault integration (manual CLI ingest, UUID healing, panel stripping).

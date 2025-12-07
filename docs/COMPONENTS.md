@@ -8,12 +8,12 @@ Canonical list of current modular building blocks. Keep this aligned with the co
 | --- | --- | --- |
 | ObjectStore | Postgres / in-memory | Core-6 objects and payloads |
 | VectorIndex | pgvector / in-memory | Embeddings from components |
-| RelationIndex | (planned, see ROADMAP) | Future knowledge graph |
+| RelationIndex | Postgres / in-memory | Relations (supports/extends/contradicts/derived_from); surfaced to gates |
 | Outbox | JSONL at `INDEX_OUTBOX_PATH` | Canonical event envelope |
 
 - **ObjectStore (memory/pg)** — Persists Core-6 envelopes + payloads; `app.stores.*`, access via `app.stores.get_object_store()`. Inputs: `{object_id, kind, source_ref, payload}`. Outputs: persisted record + retrieval via `.get/.list_by_kind`. Config: `STORE_BACKEND` (`memory` default, `pg` optional). Maturity: baseline/stable.
 - **VectorIndex (memory/pg)** — Embedding storage + similarity search; `app.stores.*`. Inputs: `{object_id, kind, source_ref, payload, embedding, model}`. Outputs: hits with scores. Config: `STORE_BACKEND`, `INDEX_PERSIST_PATH/LOAD` (memory snapshot). Maturity: baseline/stable.
-- **RelationIndex/AMG (memory/pg)** — Relation graph storage; `app.stores.*`. Inputs: relation tuples (supports/extends/contradicts/derived_from). Outputs: neighbors/has_any. Config: `STORE_BACKEND`. Maturity: baseline.
+- **RelationIndex/AMG (memory/pg)** — Relation graph storage; `app.stores.*`. Inputs: relation tuples (supports/extends/contradicts/derived_from). Outputs: neighbors/has_any. Config: `STORE_BACKEND`. Maturity: baseline for extraction/storage; not yet surfaced in ASK answers.
 
 ## Ingest/PER agents
 - **Normalizer** — Reads source markdown, emits Core-6 envelope + payload; `app.agents.normalizer.*`. Inputs: file path. Outputs: `{event=ingest.normalize.done, core6, payload}` saved via ObjectStore. Maturity: baseline.

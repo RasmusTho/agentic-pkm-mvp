@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current).
 # Infrastructure — Local Runtime (Docker + Colima)
 
 This document describes the current local runtime for the Agentic PKM stack. It mirrors the active docker-compose setup and the supporting scripts.
@@ -24,7 +25,7 @@ API and worker share the same Python image built from the repo.
 - **db**: `pgvector/pgvector:pg16`, credentials `app/app`, database `app`, exposed on `127.0.0.1:15432`.
 - **api**: FastAPI app (`app.main:app`) listening on `8000` in-container, mapped to `18000` on the host.
 - **worker**: Background outbox consumer (`app.workers.outbox_worker`) sharing the same image and code as the API.
-- **redis/agent**: May be present as historical/orphaned containers; not required for the current Reality-MVP path.
+- **redis/agent**: Legacy; not required for the current Reality-MVP path.
 
 ## Environment & Configuration
 - Database DSN: `DATABASE_URL` / `DB_DSN` (e.g. `postgresql+psycopg://app:app@db:5432/app`).
@@ -49,8 +50,8 @@ API and worker share the same Python image built from the repo.
    - Polls the outbox and triggers the indexer for ingest events.
 
 ## Observability
-- Health endpoints: `/agent/health` (legacy agent surface) and `/api/status` (Reality-MVP status) on port `18000`.
-- Prometheus instrumentation is available via `prometheus-fastapi-instrumentator` (metrics exposure is gated by settings).
+- Health endpoints: `/api/status` (Reality-MVP status) on port `18000`; `/agent/health` is legacy.
+- Prometheus instrumentation is available via `prometheus-fastapi-instrumentator` (metrics exposure is gated by `METRICS_ENABLED`).
 
 ## Relation to Alpha Vault & Ingest
 - Ingest/ASK flows talk to the same Postgres DSN used by compose (`127.0.0.1:15432`).

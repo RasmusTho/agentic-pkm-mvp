@@ -36,49 +36,14 @@ Example (`index.object.embedded` as written by `app.outbox.events.emit_index_obj
 
 All emitters must populate the envelope; schema is contract-tested under `tests/architecture/test_events_outbox_contracts.py`.
 
-## Topics in use
+## Topics in use (Reality-MVP)
 
-### `ingest.object.created`
+Canonical names live in `app/events/types.py`; tests enforce the envelope and type list. Key clusters in v4.10:
 
-Minimal payload (fields may extend but these are guaranteed):
+- Ingest/index: `ingest.object.created|updated|metadata`, `ingest.normalize.done`, `ingest.chunk.done`, `ingest.index.done`, `index.object.embedded`, `text.chunk.created`.
+- Planner/orchestrator/MCP: `planner.plan.created|error|fallback`, `orchestrator.step.started|finished|error`, `mcp.tool.call.started|finished`.
+- Agent-to-agent: `agent.request.created`, `agent.response.created`, `agent.error.created`.
+- Curation/promotion: `curation.classify.done`, `curation.dedupe.done`, `curation.citation_check.done`, `promotion.*`, `promote.*`, `promotion.pending_move`.
+- ASK and jobs: `ask.query.received`, `jobs.backfill.done`, `relation.missing`.
 
-```json
-{
-  "event": "ingest.object.created",
-  "uuid": "abc-123",
-  "kind": "capture_note",
-  "trace_id": "trace-1",
-  "instance_id": "home",
-  "ts": "2025-11-08T12:00:00Z"
-}
-```
-
-`instance_id` is the canonical emitter identity in the envelope and comes from settings (`instance.id`), defaulting to `home`.
-
-## Ingest
-- ingest.normalize.request
-- ingest.normalize.done
-- ingest.chunk.request
-- ingest.chunk.done
-- ingest.index.request
-- ingest.index.done
-
-## Curation
-- curation.classify.request
-- curation.classify.done
-- curation.dedupe.request
-- curation.dedupe.done
-- curation.citation.request
-- curation.citation.checked
-- curation.review.request
-- curation.review.done
-- curation.set.eval.request
-- curation.set.eval.done
-
-## Projector
-- projector.sync.request
-- projector.sync.done
-
-## Contract
-- Every `.done` carries a minimal contract payload used by downstream steps.
-- All events are mirrored into `audit` with `action` equal to event and `details` containing payload diff.
+`instance_id` travels via the envelope when provided by emitters (`instance.id`, default `home`).

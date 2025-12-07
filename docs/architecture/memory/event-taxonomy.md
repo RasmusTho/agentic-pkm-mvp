@@ -1,8 +1,4 @@
-State: Planned / partially implemented. Align carefully with STATUS (SoT v4.10) before applying.
-# Eventtaxonomi v4.2
-memory.store.request|done|error
-memory.fetch.request|done|miss
-memory.reflect.request|done|error
-memory.edge.upsert
-memory.retention.sweep.done
-agent.per.plan|execute|reflect.done
+State: Legacy (archived); superseded by SoT v4.10 event contracts.
+# Event taxonomy v4.2 (historical)
+
+Memory-specific events listed here are not emitted in Reality-MVP. Current event contracts live in `docs/EVENTS.md` and `app/events/types.py`. Use those for active topics.

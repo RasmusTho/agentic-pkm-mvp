@@ -1,24 +1,29 @@
-State: Planned / not implemented. Target SoT: v5.x.
+State: Aligned (v4.10, with known debt — panel dispatch is flag-gated).
 # AI panel example note
+
+Example note that the current PanelAgent can parse. Headings remain in Swedish (`AI-instruktion`, `AI-åtgärder`, `AI-logg`) because the parser keys on them; fences are recommended.
 
 ```markdown
 ---
 uuid: 123e4567-panel-demo
-kind: evergreen
+title: Panel demo note
 ---
 
-# Min anteckning om Agentic PKM
-
+%% AI:Start %%
 ## AI-instruktion
-Jag vill förbättra sammanfattningen och säkerställa att den här sidan blir evergreen.
+Please verify this note and promote it if ready.
 
 ## AI-åtgärder
-- [ ] Gör denna anteckning evergreen
-- [ ] Skapa en kort executive summary
-- [x] Kontrollera länkarna i research-listan
+- [ ] Promote this note
+- [x] Re-classify as Concept
 
 ## AI-logg
-- 2025-02-18 09:12 – Gjorde: "Kontrollera länkarna i research-listan"
+- 2025-12-07 10:00 – Action: "Re-classify as Concept"
+%% AI:End %%
 ```
 
-Humans edit the instruction and checkbox list directly; once they tick an action the PanelAgent notices the newly checked line, emits a `PanelIntent(kind="action_triggered", action_text="...")`, removes the line from `AI-åtgärder`, and appends a log bullet under `AI-logg`. Instructions stay as-is so the note remains human-first while still giving agents clear intent.
+When a checkbox is newly checked, PanelAgent:
+1) Parses the panel, strips it from indexing, and detects the new action.
+2) Enriches it with panel-action mappings (`docs/settings/panel-actions.md` or vault overrides).
+3) Emits an `OutboxEvent` (`source=panel.agent`) if `PANEL_EVENTS_ENABLE` is on; otherwise returns the intent without dispatching.
+4) Removes one-shot actions and appends a log entry.

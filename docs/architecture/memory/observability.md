@@ -1,4 +1,4 @@
-State: Planned / partially implemented. Align carefully with STATUS (SoT v4.10) before applying.
-# Observability
-Metrics: memory_hit_rate, memory_write_success, reflect_latency_ms, edges_updated, retention_removed
-Logs: audit med trace_id, run_id, agent, action, details
+State: Legacy (archived); not applicable to SoT v4.10.
+# Observability (memory v4.2)
+
+Proposed metrics/logs for a memory store that does not exist in Reality-MVP. Current observability is covered in `docs/OBSERVABILITY.md` / `docs/OBSERVABILITY_STACK.md`.

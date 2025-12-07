@@ -1,61 +1,34 @@
-State: SoT v4.10 (current; details may lag ARCHITECTURE).
-# Data Model (AMG/SetDB)
+State: SoT v4.10 Reality-MVP (current).
+# Data Model (Stores)
 
-## objects
-id uuid pk
-kind text
-source_ref text
-ts timestamptz default now()
-payload jsonb
-search_vector tsvector generated
+Reality-MVP uses the Store abstraction (memory/pg) backed by three active tables. Legacy SetDB/AMG concepts (sets, membership, audit) are not present in the current runtime.
 
-## chunks
-id uuid pk
-object_id uuid fk objects(id) on delete cascade
-idx int
-offset_start int
-offset_end int
-text text
+## store_objects
+- `object_id` UUID PK
+- `kind` TEXT
+- `source_ref` TEXT
+- `payload` JSONB (holds Core-6 projection: `{id/uuid, title, origin, review_state, trust?, text/raw_text, ingest_fingerprint, source}` etc.)
+- `created_at` TIMESTAMPTZ DEFAULT now()
+- `updated_at` TIMESTAMPTZ DEFAULT now()
 
-## embeddings
-id uuid pk
-object_id uuid fk objects(id) on delete cascade
-model text
-dim int
-vec vector
+## store_vector_index
+- `object_id` UUID PK (matches store_objects.object_id)
+- `kind` TEXT
+- `source_ref` TEXT
+- `payload` JSONB (mirrors object metadata; may include title/origin/zone/trust for retrieval)
+- `embedding` DOUBLE PRECISION[] (pgvector alternative when available)
+- `model` TEXT
+- `updated_at` TIMESTAMPTZ DEFAULT now()
 
-## relations
-id uuid pk
-src uuid
-dst uuid
-kind text
+## store_relations
+- `src_id` UUID
+- `dst_id` UUID
+- `rel` TEXT (`supports|extends|contradicts|derived_from`; see RelationIndex)
+- `payload` JSONB (evidence/source)
+- `created_at` TIMESTAMPTZ DEFAULT now()
 
-## sets
-id uuid pk
-slug text unique
-kind text
-title text
-rules jsonb
+### Decisions (classifier / review hints)
+- Memory and pg backends expose a lightweight `decisions` store (id, object_id, agent, kind, key, value, created_at) used by classifiers/reviewers. In pg this lives alongside the legacy `objects` table; in memory it is an in-process list.
 
-## membership
-id uuid pk
-set_id uuid fk sets(id) on delete cascade
-object_id uuid fk objects(id) on delete cascade
-reason text
-score float
-
-## decisions
-id uuid pk
-object_id uuid fk objects(id) on delete cascade
-key text
-value jsonb
-created_at timestamptz default now()
-
-## audit
-id uuid pk
-object_id uuid null
-agent text
-action text
-ts timestamptz default now()
-trace_id text
-details jsonb
+### Legacy (not active in Reality-MVP)
+- Historical tables such as `chunks`, `sets`, `membership`, and `audit` describe past designs and are not created/used by the current Store abstraction. Keep references for context only; they do not run in v4.10.

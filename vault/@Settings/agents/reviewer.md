@@ -5,6 +5,7 @@ origin: user
 review_state: evergreen
 trust: internal
 ---
+State: Example / sandbox (not authoritative).
 ## Toggles
 - [x] enable
 
@@ -22,9 +23,5 @@ rules:
 labels: ["agent:reviewer","stage:curation"]
 ```
 
-## Förklaringar & möjliga värden
-<!-- BEGIN:settings:reference -->
-| key | type | default | allowed | description |
-|-----|------|---------|---------|-------------|
-| _pending | _ | _ | _ | Run `python -m app.cli settings compile --auto-heal` to update this table. |
-<!-- END:settings:reference -->
+## Notes
+Example only; reviewer thresholds live in code/tests (`docs/AGENTS.md`, `docs/agents/AGENT_SPEC.md`). Runtime does not parse this file.

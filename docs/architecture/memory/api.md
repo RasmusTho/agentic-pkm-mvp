@@ -1,10 +1,4 @@
-State: Planned / partially implemented. Align carefully with STATUS (SoT v4.10) before applying.
-# Memory API v4.2
-put(agent, kind, key, value, scope, trace_id, run_id) -> row_id
-get(agent, kind, key, scope) -> value|None
-query(agent, kind, filters, scope, limit, order) -> list
-edge_upsert(src_id, dst_id, rel, weight, trace_id) -> edge_id
-transact(ops[]) -> result
-reflect(agent, inputs, policy) -> updates
-Scopes: session, object:<uuid>, global
-Kinds: episodic, semantic, procedural
+State: Legacy (archived); v4.2 memory API superseded by SoT v4.10 (ObjectStore + decisions).
+# Memory API v4.2 (historical)
+
+Describes a planned agent-memory API (put/get/query/edges/reflect) that is not implemented in Reality-MVP. Current storage is `ObjectStore` + `VectorIndex` + lightweight decisions; see `docs/DATA_MODEL.md` and `docs/INGEST.md` for active contracts.

@@ -1,27 +1,16 @@
 State: SoT v4.10 Reality-MVP (current core).
-# 6.0 Agentloop (deterministisk)
+# Agents — Reality-MVP
 
-## ASK AgentState (Reality-MVP)
+## ASK AgentState (current behavior)
 - `trace_id`: propagated through ASK runs.
 - `query`: user question.
 - `hits`: retrieval results `{object_id, score, origin, zone, trust, title, path, snippet, payload}`.
-- `answer`: composed answer text (LLM-backed when enabled; otherwise top-hit snippet).
-- `reasoning`: optional reasoning trace.
+- `answer`: composed answer text; defaults to the top-hit snippet, swaps to an LLM draft when `REASONING_ENABLE=1`.
+- `reasoning`: optional reasoning trace (empty when reasoning is disabled).
 
-Flow: `query → retrieve (hybrid search) → rerank (ask_score + reranker) → answer (LLM optional)`. The canonical implementation lives in `app/agents/ask/graph.py` and is invoked by `/api/ask`.
+Execution path (single pass): `query → retrieve (hybrid search) → rerank (ask_score + reranker when configured) → answer`. The canonical graph lives in `app/agents/ask/graph.py` and is invoked by `/api/ask`. There is no self-check loop in the current Reality-MVP path.
 
-## Graf
-`retrieve -> draft -> self-check -> final` (max 2 iterationer)
-
-## Promptstruktur
-- Instructions
-- Context (quoted excerpts with source IDs)
-- Question
-- Requirements (format, language, citation requirements)
-
-## Svarskontrakt
-- `Summary`
-- `Sources` (list: doc_id + timestamps when relevant)
+Prompting/answering: context is built from the top reranked hits (bounded by `max_context_docs` in ask settings). With reasoning disabled the answer is the top snippet; with reasoning enabled an LLM answer is attempted with the same context.
 
 ## Agent Matrix (Reality-MVP)
 
@@ -35,7 +24,7 @@ Flow: `query → retrieve (hybrid search) → rerank (ask_score + reranker) → 
 | Indexer | Write embeddings to VectorIndex | Capture & Ingest / ASK | Active |
 | ASK Agent | Retrieve, rerank, and draft answers | ASK | Active |
 | PanelAgent | Translate AI panels into intents/events | Panel Interaction | Active |
-| Promotion Agent | Apply promotion/evergreen actions | Review & Promotion | Active |
+| Promotion Agent | Apply promotion/evergreen actions | Review & Promotion | Active (flag/entrypoint wiring varies) |
 | Reviewer | Human-aligned review of objects/promotions | Review & Promotion | Active |
 | SetEvaluator | Score/rank candidates for promotion/sets | Review & Promotion / ASK (ranking) | Active |
 | MergeResolverAgent | Resolve conflicts/merges across sources | Capture & Ingest | Parked (future) |

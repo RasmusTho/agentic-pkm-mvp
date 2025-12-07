@@ -1,7 +1,7 @@
 State: SoT v4.10 Reality-MVP (current core).
 # Human Flows — Agentic PKM
 
-Kort orientering: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global system design). Keep the two in sync when surfaces, dependencies, or flows change.
+Orientation: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global system design). Keep the two in sync when surfaces, dependencies, or flows change.
 
 ## 1. Purpose & Scope
 - This document states the intended behavior of the Agentic PKM system from the human (Rasmus) perspective, not the code structure.
@@ -14,7 +14,7 @@ Kort orientering: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global 
 - **System layer** — `ObjectStore` / `SetDB` hold UUID-based knowledge objects; a metadata mirror lives under `System/Metadata/VaultMirror/.../uuid.md`; Outbox emits events that drive agents and downstream stores.
 - **Key agents (as seen by the human)** — Ingest/Normalizer (pulls notes safely), Classifier (proposes types/facets), ASK/QA (answers questions), DeliberationAgent (multi-step deliberation for ASK), SetEvaluator (ranks/evaluates candidates), Planner/Orchestrator (orders work), PanelAgent (handles AI panels in notes), Promotion/Evergreen logic (moves maturity forward). These collaborate to keep vault writing human-first while the system maintains structure underneath, and reasoning is a cross-cutting capability available to every agent.
 
-### Per-noteloggen (maskinlogg)
+### Per-note log (machine log)
 - For each note with `uuid` there is a mirrored metadata file `uuid.md` in `System/Metadata/VaultMirror/<vault-relative path>/`.
 - The same file is both metadata mirror and per-note log: the system collects agent decisions, promotion history, conflict resolution, and provenance from satellites there.
 - It is the canonical machine log/history file for the note and serves as the sync/merge anchor between master and satellite runtimes.
@@ -23,11 +23,11 @@ Kort orientering: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global 
 ## 3. Core Flows (from the human’s perspective)
 
 ### Capture & Ingest
-- When the human creates or edits a note in the PKM-Alpha vault, the system ensures a stable `uuid` in frontmatter (often stored as an Obsidian link like `[[uuid]]`).
+- When the human creates or edits a note in the PKM-Alpha vault, the ingest path ensures a stable `uuid` in frontmatter (stored as a wikilink `[[uuid]]`).
 - Ingestion mirrors the note into ObjectStore and into `System/Metadata/VaultMirror/.../uuid.md` without generating duplicate objects for the same note.
-- Ingestion only treats files as new/changed when their content or relevant metadata actually changed; it is safe and idempotent to re-run.
-- Classification proposes types and facets (task, meeting note, entity card, concept, etc.) and records a “pending user confirmation” state until the human confirms; human choices win.
-- Alpha ingest writes `uuid` into frontmatter when missing; if only the mirror carries a UUID, ingest writes it back, and if neither exists a new UUID is generated and written to both. The ingest fingerprint (text hash + mtime) lives in mirror + Store; `--force` bypasses skips and heals missing frontmatter/mirrors.
+- Ingestion only treats files as new/changed when their content or relevant metadata changed; fingerprint checks (text hash + mtime) drive skips, `--force` bypasses them.
+- Classification proposes types/facets via heuristics + optional LLM; it records a provisional decision in the store/decisions table. There is no automated human-confirmation loop yet; human edits to frontmatter override system guesses.
+- Alpha ingest writes `uuid` into frontmatter when missing; if only the mirror carries a UUID, ingest writes it back, and if neither exists a new UUID is generated and written to both. The ingest fingerprint lives in mirror + Store; `--force` also heals missing frontmatter/mirrors.
 
 #### Infra touchpoints
 - Surfaces: Obsidian vault (Mimer), CLI ingest helpers.
@@ -36,8 +36,9 @@ Kort orientering: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global 
 - Observability: ingest throughput/errors, outbox events, span traces when enabled.
 
 ### ASK
-- `/api/ask` answers are grounded in actual notes and metadata; responses include contributing notes/paths.
-- Reasoning is multi-step (retrieve → rerank → draft/self-check → final), not a single opaque LLM call; speculation is labeled.
+- `/api/ask` answers are grounded in stored objects; responses include contributing notes/paths and latency.
+- Execution is a single-pass graph: retrieve (hybrid BM25 + embeddings) → optional rerank → answer. By default the answer is the top-hit snippet; when `REASONING_ENABLE=1` an LLM drafts the answer using the same context.
+- Zones are not yet surfaced in answers; `origin`/`path` are included when present in payloads.
 
 #### Infra touchpoints
 - Surfaces: CLI `ask`, HTTP `/api/ask`.
@@ -60,22 +61,22 @@ Kort orientering: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global 
 
   ```
   %% AI:Start %%
-  ## AI-instruktion
+  ## AI instruction
   ...
-## AI actions
+  ## AI actions
   ...
-  ## AI-logg
+  ## AI log
   ...
   %% AI:End %%
   ```
 
   The fence rule is forgiving: any Obsidian comment line that starts with `%%` (ignoring leading spaces) and contains `ai` (case-insensitive) opens a panel; the next such line closes it; the third opens the next, etc. Older notes that only use the headings without fences are still treated as panels, but new panels should use fences.
 - Panel content is *not* part of the knowledge base and must not be indexed or used as facts.
-- Checkbox actions can be mapped to internal intents/events (via `vault/_system/panel-actions`); the PanelAgent translates newly checked items into auditable outbox events (`source=panel.agent`) and appends simple log entries so the human can see what happened.
+- Checkbox actions can be mapped to internal intents/events (via `vault/_system/panel-actions`); the PanelAgent translates newly checked items into auditable outbox events (`source=panel.agent`) and appends simple log entries so the human can see what happened. Event dispatch to Planner/Orchestrator is flag-gated (`PANEL_EVENTS_ENABLE`); without it, intents are returned but not dispatched.
 - Suggestions appear as simple checkboxes inside `## AI actions`, e.g.:
   - `[ ] Category: Concept`
   - `[ ] Category: Entity / Company`
-- When the human checks an option, the system updates classification in ObjectStore/metadata accordingly; once handled, the entire panel disappears (checked and unchecked options are removed). Panels are optional; any note may have zero, one, or several panels.
+- When the human checks an option, the agent removes one-shot actions and appends a log entry; panels are optional and any note may have zero, one, or several panels.
 
 #### Infra touchpoints
 - Surfaces: Obsidian panels.
@@ -98,7 +99,7 @@ Kort orientering: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global 
 
   ```
   grep -i "two moons" /tmp/index-outbox-alpha.jsonl || echo "no panel contamination"
-  grep -i "AI-instruktion" /tmp/index-outbox-alpha.jsonl || echo "no AI headings in outbox"
+  grep -i "AI instruction" /tmp/index-outbox-alpha.jsonl || echo "no AI headings in outbox"
   ```
 
 - Without `--reset-outbox`, the outbox may contain historic events (including older, pre-fix panel content). Use a fresh path or `--reset-outbox` for clean validation. `--reset-outbox` truncates the JSONL file; it is intended for local experiments/regression checks and should not run in automated or production flows.
@@ -133,6 +134,6 @@ Kort orientering: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global 
 ## 7. Current Reality-MVP surfaces (implementation snapshot)
 - `vault-alpha-ingest` ingests Concepts (and optionally `Test/Alpha-HumanFlows.md`), strips AI panels, writes/updates VaultMirror `uuid.md` mirrors to match frontmatter, and populates the configured Store backend plus the in-process HybridStore used by ASK; fingerprints live in mirrors/store, skip unchanged notes once the Store is populated, and `--force` bypasses fingerprints/store checks, reingests everything, and heals missing frontmatter (run this after a fresh DB paired with existing mirrors).
 - `alpha-human-flows` orchestrates flows A–F on top of the same ingest path; `--reset-outbox` is a destructive, dev-only flag for local regression checks that truncates the configured index outbox.
-- `/api/ask` and the QA agent backends use BM25+embedding hybrid search over the in-process HybridStore, warmed from `store_objects` on first request; answers are the top-hit snippet and sources include doc ids and `source_ref` paths, while zones are not surfaced yet.
+- `/api/ask` uses BM25+embedding hybrid search over the in-process HybridStore warmed from `store_objects` on first request; answers are the top-hit snippet by default and sources include doc ids and `source_ref` paths; zones are not surfaced yet.
 - External corpus ingest is not automated; external objects only appear if inserted into the Store with an `origin` such as `external_raw`, and they surface in ASK/status alongside vault entries.
-- The CLI `ask` command still routes through the planner/orchestrator pipeline (QA steps fall back to the same hybrid retrieval), while `ingest-vault-root`/`pkm-alpha-ingest` provide quick root-level ingest helpers for the Alpha vault.
+- The CLI `ask` command routes through the planner/orchestrator pipeline (QA steps fall back to the same hybrid retrieval), while `ingest-vault-root`/`pkm-alpha-ingest` provide quick root-level ingest helpers for the Alpha vault.

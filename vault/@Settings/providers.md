@@ -1,11 +1,10 @@
-
----
 uuid: 00000000-0000-0000-0000-000000000002
 title: Providers
 origin: user
 review_state: evergreen
 trust: internal
 ---
+State: Example / sandbox (not authoritative).
 ## Provider defaults
 ```yaml settings
 llm:
@@ -23,9 +22,5 @@ reranker:
     device: cpu
 ```
 
-## Förklaringar & möjliga värden
-<!-- BEGIN:settings:reference -->
-| key | type | default | allowed | description |
-|-----|------|---------|---------|-------------|
-| _pending | _ | _ | _ | Run `python -m app.cli settings compile --auto-heal` to update this table. |
-<!-- END:settings:reference -->
+## Notes
+Example only; actual provider configuration is via env vars (`LLM_PROVIDER`, `LLM_MODEL`, etc.) and defaults in `docs/LLM.md` / `docs/SETTINGS.md`.

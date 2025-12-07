@@ -5,6 +5,7 @@ origin: user
 review_state: evergreen
 trust: internal
 ---
+State: Example / sandbox (not authoritative).
 ## Toggles
 - [x] enable
 
@@ -24,9 +25,5 @@ llm:
 labels: ["agent:qa","stage:answer"]
 ```
 
-## Förklaringar & möjliga värden
-<!-- BEGIN:settings:reference -->
-| key | type | default | allowed | description |
-|-----|------|---------|---------|-------------|
-| _pending | _ | _ | _ | Run `python -m app.cli settings compile --auto-heal` to update this table. |
-<!-- END:settings:reference -->
+## Notes
+Example only; QA behaviour is governed by ASK/LLM settings (`docs/SETTINGS.md`, `docs/AGENTS.md`), not by this file.

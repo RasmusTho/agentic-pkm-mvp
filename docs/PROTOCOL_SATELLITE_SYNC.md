@@ -30,7 +30,7 @@ This draft defines how a master Yggdrasil instance and one or more satellite ins
 - Notes: frontmatter may later gain fields such as `origin_instance` or `last_touched_instance`; absent fields are interpreted using the local `instance.id`.
 - Per-note logs (`System/Metadata/VaultMirror/.../<uuid>.md`): may include entries that record `instance_id`, timestamps, and key events (promotion, merges, conflict resolutions). Agents can derive these entries from event metadata (`instance_id`, `trace_id`, etc.). These logs are human-readable history and sync anchors.
 
-## 5. Sync flows (conceptual)
+## 5. Sync flows (conceptual, not implemented)
 
 ### 5.1 Satellite → master
 
@@ -54,6 +54,4 @@ Sync follows Git workflows (branching/rebasing/merging). Database state is deriv
 ## 7. Non-goals and current status
 
 - Non-goals for Reality-MVP: no automatic cross-instance DB replication; no automatic semantic conflict resolution; no multi-user guarantees (single human across machines only).
-- Status: InstanceSettings + `instance_id` on events + VaultMirror `uuid.md` + Git/iCloud sync provide the plumbing. This draft will be paired with future CLI/agent tooling that MUST follow this protocol.
-# Satellite Sync Protocol (Draft)
-# Satellite Sync Protocol (Draft)
+- Status: InstanceSettings + `instance_id` on events + VaultMirror `uuid.md` + Git/iCloud sync provide the plumbing. Future CLI/agent tooling would need to implement this protocol; not present today.

@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current).
 # Reality-MVP: note → ingest → index → ASK
 
 Single-note Reality-MVP flow that already fits the existing SoT (vault plane, memory backend for tests).
@@ -7,3 +8,7 @@ Single-note Reality-MVP flow that already fits the existing SoT (vault plane, me
 - Expected answer: mentions the memory store backend and cites the ingested note.
 - Source expectations: origin `vault`, path points to the ingested note; zone/trust are inherited from current pipeline defaults.
 - Purpose: canonical, deterministic end-to-end check without changing runtime prompts or agent behavior.
+
+## References
+- Enforced by `tests/e2e/test_reality_mvp_pipeline.py` (memory store, mock LLM).
+- CLI ingest in the test uses `ingest_vault_root` (non-recursive) to populate HybridStore before `/api/ask`.

@@ -1,4 +1,4 @@
-
+State: Example / sandbox (not authoritative).
 uuid: 00000000-0000-0000-0000-000000000102
 title: Promotion Agent Settings
 origin: user
@@ -28,9 +28,5 @@ move_policy:
 labels: ["agent:promotion","stage:governance"]
 ```
 
-## Förklaringar & möjliga värden
-<!-- BEGIN:settings:reference -->
-| key | type | default | allowed | description |
-|-----|------|---------|---------|-------------|
-| _pending | _ | _ | _ | Run `python -m app.cli settings compile --auto-heal` to update this table. |
-<!-- END:settings:reference -->
+## Notes
+Illustrative only; Reality-MVP does not read `@Settings` markdown. Promotion is stubbed (audit/membership) as documented in `docs/AGENTS.md`/`docs/PROJECTOR.md`.

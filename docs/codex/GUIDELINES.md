@@ -1,52 +1,31 @@
+State: SoT v4.10 Reality-MVP (current dev-layer quick guide).
 # Codex Guidelines (agentic-pkm-mvp)
 
-## Grundprinciper
-- Arkitektur: LangGraph med PER-loop (plan → act → reflect → emit) för alla agenter.
-- Eventkoreografi: `subject.verb.state` (t.ex. `ingest.normalize.done`).
-- Sanning: AMG/SetDB i Postgres (pgvector). Core-6 frontmatter skrivs bara av Normalizer; Projector uppdaterar endast whitelist (maturity, trust, aliases, related, parent, canonical, sets, scope, relevance_score).
-- Idempotens: alla writes är UPSERT; samma input ger samma output (t.ex. Normalizer-ID).
-- TDD: följ testernas kontrakt; uppdatera endast kod som krävs för gröna tester.
+Purpose: quick checklist for the coding assistant. Canonical prompt lives in `.codex/AGENTS.md`; defer to it and the SoT docs for details.
 
-## Repo-konventioner
-- Kataloger:
-  - `app/agents/<agent>/{agent.py,graph.py}`
-  - `app/search/{bm25_lite.py, vector_index.py, embeddings.py}`
-  - `app/alembic/*` (migrationer)
-  - `tests/agents/*`, `tests/e2e/*`
-- DB: läs `DATABASE_URL`. Använd psycopg och UPSERT. Kolumner: `objects`, `chunks`, `embeddings`, `relations`, `sets`, `membership`, `decisions`, `audit`.
-- Loggning: jsonl-liknande audit via `audit_log(object_id, agent, action, trace_id, details)`.
+## Scope & SoT anchors
+- Follow SoT: `docs/ARCHITECTURE.md`, `docs/SYSTEM_DESIGN_v4.10.md`, `docs/AGENTS.md`, `docs/PANEL_AGENT.md`, `docs/EVENTS.md`, `docs/COMPONENTS.md`, `docs/STATUS.md`, `docs/ROADMAP.md`, `docs/INGEST.md`, `docs/RETRIEVAL.md`, `docs/DATA_MODEL.md`.
+- Dev policy: `docs/AI_DEVELOPMENT.md`, `docs/DEV_WORKFLOW.md`.
+- Historical/planned docs are context only; never override current SoT.
 
-## LLM & Reasoning
-- Lokal default: Ollama (`LLM_PROVIDER=ollama`, `LLM_MODEL=llama3.1:8b`, `LLM_REASONING_MODEL=deepseek-r1:8b`).
-- Tillåt fallback till molnmodeller via env-var om uttryckligen efterfrågat.
+## Core rules
+- Stores + Outbox + Components only; no raw DB/SDK shortcuts.
+- Agents are runtime-agnostic: keep FastAPI/web concerns out of `app/agents/*`.
+- Preserve invariants: Core-6 semantics, Outbox envelope, ASK AgentState contract.
+- Event names come from `app/events/types.py` and `docs/EVENTS.md`; use the envelope even for best-effort audit.
 
-## Agents (PER-mönster)
-- `graph.py` innehåller LangGraph-noden/kanterna för plan/act/reflect/emit.
-- `agent.py` kapslar ren funktionslogik (körbar utan graph).
-- `emit` returnerar standardiserat `{ "event": "...", "object_id": "...", ... }` och skriver audit.
+## Current agent reality (MVP)
+- ASK: retrieve → rerank → answer; default answer is top snippet when reasoning is off.
+- PanelAgent: flag-gated dispatch; panels are not indexed.
+- Promotion/Projector: audit + membership stubs; no filesystem/frontmatter projection yet.
+- Future/parked: planner/orchestrator/MCP, MergeResolver, NoteHygiene; treat as planned, not active.
 
-## Naming & events
-- Normalizer: `ingest.normalize.done`
-- Classifier: `curation.classify.done`
-- Chunker: `ingest.chunk.done`
-- Deduper: `curation.dedupe.done`
-- CitationChecker: `curation.citation.checked`
-- Indexer: `ingest.index.done` (+ `ingest.index.ready` för WS)
-- Reviewer: `curation.review.passed|blocked|feedback`
-- SetEvaluator: `curation.sets.updated`
-- Projector: `curation.projector.written`
+## LLM/retrieval defaults
+- CI/smoke: `LLM_PROVIDER=mock` for determinism.
+- Local dev: Ollama (`LLM_MODEL=llama3.1:8b`), optional reasoning model (`LLM_REASONING_MODEL`, e.g., DeepSeek). Timeouts ~120s chat / ~60s embeddings.
+- Retrieval: hybrid BM25 + embeddings; optional rerank; reasoning off by default.
 
-## BM25/Vector
-- BM25: in-memory för test (deterministisk). Indexera rubriker och brödtext.
-- Vector: pgvector via `PgVectorIndex`; embeddings via deterministisk hashing i testläge.
-
-## Terminalpolicy (viktig)
-- Inga `applypatch`.
-- Inga shell-kommentarer i instruktioner.
-- När filer ska ändras: ge hela filinnehållet (cat > … <<'EOF').
-
-## TDD-ordning resten av MVP
-1) Reviewer (gates enligt `data/context/maturity.yaml`)
-2) SetEvaluator (membership, scope)
-3) Projector (whitelist → frontmatter)
-4) E2E smoke (hela pipen)
+## Workflow expectations
+- TDD + docs-first: confirm contract → add/adjust tests → minimal code → docs with correct `State:` lines.
+- Reply with a short plan, concrete edits, validation commands, and an explicit SoT delta statement.
+- Use `apply_patch` for focused edits; keep changes small and aligned to one goal.

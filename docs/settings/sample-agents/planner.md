@@ -1,3 +1,4 @@
+State: Planned / not implemented in SoT v4.10.
 ---
 agent_id: planner
 agent_type: planner
@@ -22,7 +23,6 @@ tools:
 prompt_template_ref: planner.prompts.default
 ---
 
-# Planner Agent Configuration
+# Planner Agent Configuration (sample)
 
-This sample mirrors the `vault/_system/agents/planner.md` document that will ship with
-agent-first planning. Runtime code can load this via `app.settings.agents.load_agent_configs`.
+Template for future planner/orchestrator wiring. Reality-MVP does not load or execute planner configs; keep for v5.x design reference. For current behaviour see `docs/AGENTS.md` and `docs/PANEL_AGENT.md`.

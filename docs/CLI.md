@@ -1,4 +1,4 @@
-State: SoT v4.10 (current; details may lag ARCHITECTURE).
+State: SoT v4.10 Reality-MVP (current).
 # CLI Reference
 
 Click-based CLI surfaces ingestion, transcription, and health checks via `python -m app.cli`.
@@ -7,18 +7,26 @@ Click-based CLI surfaces ingestion, transcription, and health checks via `python
 ## Commands
 | Command | Description | Key flags |
 | --- | --- | --- |
-| `normalize SOURCE` | Materialize file/URL and run the normalizer agent. | `--json`, `--trace-id`. |
-| `classify OBJECT_ID` | Classify a previously normalized object. | `--json`, `--trace-id`. |
-| `transcribe SOURCE` | yt-dlp → ffmpeg → faster-whisper (URL or file). | `--json`, `--trace-id`. |
-| `pipe SOURCE` | normalize → classify (auto-transcribe for audio candidates). | `--json`, `--trace-id`. |
-| `health` | Local dependency checks. | `--json`, `--trace-id`. |
+| `health` | Local dependency checks (ffmpeg, yt-dlp, Ollama, outbox path). | `--json`, `--trace-id` |
+| `ask QUESTION` | Orchestrated ASK via planner/orchestrator pipeline (mock LLM default). | `--vault-root`, `--enable-mcp-vault` |
+| `normalize SOURCE` | Materialize file/URL and run the normalizer agent. | `--json`, `--trace-id` |
+| `classify OBJECT_ID` | Classify a previously normalized object. | `--json`, `--trace-id` |
+| `transcribe SOURCE` | yt-dlp → ffmpeg → mock/real ASR (URL or file). | `--json`, `--trace-id` |
+| `pipe SOURCE` | normalize → classify (auto-transcribe for audio candidates). | `--json`, `--trace-id` |
+| `ingest-vault-root` | Non-recursive ingest of vault root (for quick smoke). | `--root`, `--limit` |
+| `pkm-alpha-ingest` | Convenience wrapper for ingesting the PKM-Alpha vault root. | `--limit` |
+| `vault-alpha-ingest` | Ingest Concepts (+ optional test note) with panel stripping + mirrors. | `--vault-root`, `--max-notes`, `--include-test-note`, `--force` |
+| `alpha-human-flows` | Runs flows A–F for demo/regression (ingest + panel + promotion + ASK). | `--vault-root`, `--sample-size`, `--reset-outbox`, `--dry-run` |
+| `yggdrasil-init` | Create a Yggdrasil folder skeleton (Mimer/Hugin/Munin/…). | `--root` |
+| `llm-trace-flows` | Inspect recent LLM traces grouped by `trace_id`. | `--agent`, `--limit` |
 
 ## Commands → Human Flows
 
 | Command | Human Flow | Description |
 | --- | --- | --- |
-| `python -m app.cli pipe` | Capture & Ingest | Normalize and ingest files/notes (with auto-transcribe for audio) |
-| `python -m app.cli ask` | ASK | Ask questions against the indexed store |
+| `python -m app.cli vault-alpha-ingest` | Capture & Ingest | Ingest vault notes safely (UUID healing + mirror updates) |
+| `python -m app.cli ask` | ASK | Orchestrated ASK over hybrid retrieval (mock LLM by default) |
+| `python -m app.cli alpha-human-flows` | Demo / regression | Walkthrough of ingest → panel → promotion → ASK |
 
 See `docs/HUMAN-FLOWS.md` for flow semantics and `docs/SYSTEM_DESIGN_v4.10.md` for how the CLI fits into the surfaces/topology.
 
@@ -35,6 +43,12 @@ python -m app.cli pipe notes/meeting.md
 
 # Health check before a release
 LLM_PROVIDER=mock python -m app.cli health --json
+
+# Ingest vault notes (Concepts)
+python -m app.cli vault-alpha-ingest --max-notes 200
+
+# Ask a question through the orchestrator
+python -m app.cli ask "What does Reality-MVP focus on?"
 ```
 
 ## Exit codes
@@ -47,4 +61,5 @@ LLM_PROVIDER=mock python -m app.cli health --json
 - Set `PYTHONPATH="$(pwd)"` to ensure local modules resolve.
 - `--trace-id` makes it easy to correlate CLI output with logs (`docs/OBSERVABILITY.md`).
 - When `pipe` runs on audio URLs the transcribe step covers both CLI output and outbox write—no extra commands required.
+- For deterministic runs (tests/CI), set `LLM_PROVIDER=mock` and `STORE_BACKEND=memory`.
 <!-- SECTION:CLI:END -->

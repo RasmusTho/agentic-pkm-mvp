@@ -1,30 +1,27 @@
 State: SoT v4.10 Reality-MVP (current core).
-# Continuous Integration — SoT v4.2
+# Continuous Integration — Reality-MVP
 
-## CI Stack
-- GitHub Actions: `.github/workflows/ci.yml`
-- Steps:
-  1. Checkout repo
-  2. Set up Python
-  3. Install dependencies
-  4. Lint: ruff, mypy
-  5. Fast tests: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not eval"` (unit/contract/e2e without eval)
-  6. Validate migrations: alembic upgrade head --sql
+Primary workflow: `ci-smoke` (push/PR) in `.github/workflows/ci-smoke.yaml`. It runs on Ubuntu with memory stores and mock LLMs and asserts:
+1) Doc guardrails (mermaid block in DIAGRAMS, README link markers, no TODO/FIXME in docs/README/CHANGELOG, key phrases in ARCHITECTURE/ROADMAP/STATUS).
+2) `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -c /dev/null -m "not pg and not alpha_llm"` (fast smoke; excludes Postgres and alpha_llm tests).
+3) `python -m app.fitness.report` → validates QAS-003/QAS-010 summary lines and requires `GATES.ok=true`.
+4) CLI smoke (`python -m app.cli --help`, `python -m app.cli health --json || true`).
+Env defaults mirror docs: `STORE_BACKEND=memory`, `LLM_PROVIDER=mock`, rerank off.
 
-## Local lint/test
-ruff check app tests
-mypy app
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not eval"
+Other workflows:
+- `ci.yml` (manual) — YAML/JSON lint of `data/**`, presence checks, a small workspace smoke (`/query`) for the legacy API.
+- `ci-lite.yml` (manual) — Postgres-backed smoke; installs dev deps, runs `pytest -q -m "not alpha_llm"` and uploads logs.
+- Additional specialty workflows exist (`architecture-ci`, `settings-ci`) but are not on the main PR path.
 
-## Conventions
-- All migrations must apply cleanly to an empty DB.
-- CI rejects commits that break black/ruff/mypy rules.
-- Test artifacts (`.pytest_cache`, `__pycache__`) are ignored in git.
+Local commands (match smoke):
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -c /dev/null -m "not pg and not alpha_llm"`
+- `python -m app.fitness.report` (expects `GATES.ok=true`)
+- For Postgres-backed checks: `DATABASE_URL=postgresql+psycopg://app:app@127.0.0.1:15432/app pytest -q -m "not alpha_llm"`
 
-## Eval tests (opt-in / separate job)
-- LLM eval suites live under `tests/eval/` and are marked `@pytest.mark.eval` (see `docs/eval.md`).
-- Run manually or in a separate job when LLM/vector backends are available, e.g.:
+Eval tests (opt-in)
+- Marked `@pytest.mark.eval` under `tests/eval/`; run manually when LLM/vector deps are available (see `docs/eval.md`).
+- Examples:
   - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "eval"`
   - `pytest -q -m "eval" tests/eval/test_ask_deepeval.py`
   - `pytest -q -m "eval" tests/eval/test_rag_ragas.py`
-- Intended as quality diagnostics (answer relevancy, faithfulness); not required on every PR until datasets/thresholds are stable.
+- Diagnostic only; not required on PR smoke.
