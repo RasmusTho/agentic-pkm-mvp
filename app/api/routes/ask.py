@@ -15,38 +15,6 @@ from app.stores import get_object_store
 _HYBRID_WARMED = False
 
 
-def _load_pg_documents(store, hybrid, seen: set[str]) -> int:
-    try:
-        from app.stores.pg import PgObjectStore, _connect  # type: ignore
-    except Exception:
-        return 0
-
-    if not isinstance(store, PgObjectStore):
-        return 0
-
-    try:
-        with _connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT object_id, payload, source_ref FROM store_objects")
-                rows = cur.fetchall()
-    except Exception:
-        return 0
-
-    docs_added = 0
-    for row in rows or []:
-        payload = row.get("payload") or {}
-        text = payload.get("text") or payload.get("content")
-        if not text:
-            continue
-        doc_id = str(row.get("object_id"))
-        if doc_id in seen:
-            continue
-        hybrid.add_document(doc_id=doc_id, text=str(text), source_ref=row.get("source_ref"), payload=payload)
-        seen.add(doc_id)
-        docs_added += 1
-    return docs_added
-
-
 def _ensure_hybrid_store_loaded() -> None:
     global _HYBRID_WARMED
     hybrid = get_hybrid_store()
@@ -56,31 +24,33 @@ def _ensure_hybrid_store_loaded() -> None:
 
     store = get_object_store()
     docs_added = 0
-    seen: set[str] = set()
-
-    # Memory store path
     try:
-        objs = getattr(store, "_objects", {})
-        if isinstance(objs, dict) and objs:
-            for oid, rec in objs.items():
-                payload = rec.get("payload") or {}
-                text = payload.get("text") or payload.get("content")
-                if not text:
-                    continue
-                doc_id = str(oid)
-                hybrid.add_document(
-                    doc_id=doc_id,
-                    text=str(text),
-                    source_ref=rec.get("source_ref"),
-                    payload=payload,
-                )
-                seen.add(doc_id)
-                docs_added += 1
+        for obj in store.list_objects():
+            if hasattr(obj, "payload"):
+                payload = obj.payload or {}
+                source_ref = getattr(obj, "source_ref", None)
+                doc_id = getattr(obj, "uuid", None) or getattr(obj, "id", None)
+            elif isinstance(obj, dict):
+                payload = obj.get("payload") or {}
+                source_ref = obj.get("source_ref")
+                doc_id = obj.get("uuid") or obj.get("id") or obj.get("object_id")
+            else:
+                continue
+
+            text = payload.get("text") or payload.get("content")
+            if not text or not doc_id:
+                continue
+            hybrid.add_document(
+                doc_id=str(doc_id),
+                text=str(text),
+                source_ref=source_ref,
+                payload=payload,
+            )
+            docs_added += 1
     except Exception:
         pass
 
-    docs_added += _load_pg_documents(store, hybrid, seen)
-    if docs_added > 0:
+    if docs_added:
         _HYBRID_WARMED = True
 
 router = APIRouter()

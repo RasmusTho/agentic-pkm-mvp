@@ -98,6 +98,15 @@ class MemoryObjectStore(ObjectStore):
                 break
         return out
 
+    def list_all(self) -> Iterable[dict]:
+        for oid in self._order:
+            rec = self._objects.get(oid)
+            if rec:
+                yield rec
+
+    def list_objects(self) -> list[dict]:
+        return list(self.list_all())
+
 
 @dataclass
 class _VectorEntry:

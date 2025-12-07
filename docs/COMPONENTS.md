@@ -29,6 +29,16 @@ Canonical list of current modular building blocks. Keep this aligned with the co
 - **Embeddings** — Entry via `app.components.embeddings`; defaults to `app.index.embeddings` (LLM-backed) with deterministic profile for tests. Inputs: text sequences. Outputs: embedding vectors. Config: `EMBED_MODEL/OLLAMA_EMBED_MODEL` via `app.llm.embeddings`. Maturity: baseline.
 Model defaults and configuration live in `docs/LLM.md`; deployment/infra context (Ollama, ports) is documented in `docs/SYSTEM_DESIGN_v4.10.md`.
 
+## Dependency rules (Reality-MVP)
+
+| From | May depend on | Must not depend on |
+| --- | --- | --- |
+| api | agents, services, components, store abstractions | DB helpers (`app.db.*`), provider SDKs directly |
+| agents | services, components, store abstractions | api, DB helpers, provider SDKs directly |
+| services | store abstractions, components | api, agents |
+| components | provider SDKs, config | api, agents |
+| store | DB layer, config | api, agents, components |
+
 ## ASK / reasoning
 - **ASK API** — `/api/ask` FastAPI route; `app.api.routes.ask`. Inputs: question payload. Outputs: `AskResponse(answer, sources, latency_ms)` using hybrid retrieval, optional reasoning overlay. Config: `REASONING_ENABLE`, `AskSettings` in runtime settings. Maturity: baseline.
 - **Reasoning layer** — Optional modes (claims/review/ranking/ask.answer); `app.reasoning.*`. Inputs: question + context. Outputs: structured reasoning runs. Config: `REASONING_ENABLE`, providers via env/settings. Maturity: experimental/opt-in.

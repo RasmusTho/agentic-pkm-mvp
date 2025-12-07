@@ -99,3 +99,44 @@ def test_high_level_imports_use_components_entrypoints() -> None:
         "Use app.components.embeddings/rerankers entrypoints instead of concrete modules: "
         f"{[(str(p.relative_to(REPO_ROOT)), sorted(list(mods))) for p, mods in offenders]}"
     )
+
+
+def test_components_do_not_depend_on_api_or_agents() -> None:
+    """Components are low-level and must not import API or agent modules."""
+    components_root = REPO_ROOT / "app" / "components"
+    offenders: list[tuple[Path, set[str]]] = []
+    for path in _iter_py_files(components_root):
+        imports = _imports(path)
+        hits = {mod for mod in imports if mod.startswith("app.api") or mod.startswith("app.agents")}
+        if hits:
+            offenders.append((path, hits))
+    assert not offenders, (
+        "Components should not import API/agents: "
+        f"{[(str(p.relative_to(REPO_ROOT)), sorted(list(mods))) for p, mods in offenders]}"
+    )
+
+
+def test_high_level_layers_do_not_import_db_helpers() -> None:
+    """API/agents should avoid app.db helpers; use stores/services instead."""
+    scan_roots = [
+        REPO_ROOT / "app" / "api",
+        REPO_ROOT / "app" / "agents",
+        REPO_ROOT / "app" / "agent",
+    ]
+    forbidden_prefixes = ("app.db", "app.stores.pg")
+    allowlist = {
+        REPO_ROOT / "app" / "api" / "routes" / "search.py",  # legacy search route
+    }
+    offenders: list[tuple[Path, set[str]]] = []
+    for root in scan_roots:
+        for path in _iter_py_files(root):
+            if path in allowlist:
+                continue
+            imports = _imports(path)
+            hits = {mod for mod in imports if mod.startswith(forbidden_prefixes)}
+            if hits:
+                offenders.append((path, hits))
+    assert not offenders, (
+        "High-level layers should use stores/services instead of app.db/app.stores.pg: "
+        f"{[(str(p.relative_to(REPO_ROOT)), sorted(list(mods))) for p, mods in offenders]}"
+    )

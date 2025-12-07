@@ -193,3 +193,49 @@ class ObjectStore:
 
         # mirror final state again just to be sure
         _MEMORY_STORE[obj.uuid] = obj
+
+    def list_objects(self) -> list[DomainObject]:
+        """
+        Return all known objects from memory plus Postgres if reachable.
+        Deduplicates by uuid/id with Postgres overwriting memory entries when available.
+        """
+        objects: dict[str, DomainObject] = {k: v for k, v in _MEMORY_STORE.items()}
+
+        if not _pg_available():
+            return list(objects.values())
+
+        conn = _db_connect()
+        if conn is None:
+            return list(objects.values())
+
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        select
+                            id,
+                            uuid,
+                            kind,
+                            source_ref,
+                            payload,
+                            created_at
+                        from objects
+                        """
+                    )
+                    for row in cur.fetchall() or []:
+                        obj_uuid = row.get("uuid") or row.get("id")
+                        if not obj_uuid:
+                            continue
+                        objects[str(obj_uuid)] = DomainObject(
+                            uuid=str(obj_uuid),
+                            kind=row["kind"],
+                            payload=row["payload"],
+                            source_ref=row.get("source_ref"),
+                            created_at=row["created_at"],
+                        )
+        except Exception:
+            # best effort; fall back to memory results
+            pass
+
+        return list(objects.values())

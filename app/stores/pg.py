@@ -145,6 +145,20 @@ class PgObjectStore(ObjectStore):
                 )
                 return cur.fetchall()
 
+    def list_all(self) -> Iterable[dict]:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT object_id, kind, source_ref, payload, created_at
+                    FROM store_objects
+                    """
+                )
+                return cur.fetchall()
+
+    def list_objects(self) -> list[dict]:
+        return list(self.list_all())
+
 
 @dataclass
 class _VectorHit:
