@@ -1,3 +1,4 @@
+State: Historical / partially outdated (e.g. SoT v4.2). See ARCHITECTURE SoT v4.10 for current intent.
 # Diagrams
 
 Visual references for the SoT v4.5 ingestion, store, and promotion flows. Rendered via Mermaid and exportable with `mmdc`.

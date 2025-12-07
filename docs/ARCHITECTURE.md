@@ -1,4 +1,9 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Architecture — SoT v4.10 Reality-MVP
+
+Historic SoT snapshots and older plans live in `docs/archive/`.
+They are kept for reference but are not considered active truth for the current SoT v4.10 Reality-MVP.
+External dependencies, deployment topology, and human-facing surfaces are captured in `docs/SYSTEM_DESIGN_v4.10.md`; this document focuses on internal architecture and runtime contracts.
 
 System map: `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md` covers the high-level Yggdrasil modules and flows; this document remains the detailed technical architecture.
 
@@ -7,9 +12,9 @@ System map: `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md` covers the high-level Y
 This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system. A high-level overview of Yggdrasil’s modules and flows lives in `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`, and human interaction patterns in `docs/HUMAN-FLOWS.md`.
 
 ### Instance model (internal master/satellite plumbing)
-- SettingsBundle innehåller `instance` med `id` (t.ex. `home`, `work`, `laptop`) och `role` (`master` eller `satellite`).
-- Default när inget är konfigurerat: `id="home"` och `role="master"`, vilket matchar Reality-MVP:s singelruntime-fokus.
-- Scope: endast intern plumbing som informerar events/loggar och framtida sync-topologi; ingen ändring av Obsidian-ytan eller frontmatter.
+- SettingsBundle includes `instance` with `id` (e.g., `home`, `work`, `laptop`) and `role` (`master` or `satellite`).
+- Default when nothing is configured: `id="home"` and `role="master"`, matching the Reality-MVP single-runtime focus.
+- Scope: internal plumbing that informs events/logs and future sync topology; no change to the Obsidian surface or frontmatter.
 
 ## Component Catalog
 - See `docs/COMPONENTS.md` for the canonical, human- and machine-readable list of active components (stores, agents, embeddings, rerankers, eval stack, observability). Update it when wiring new component entrypoints under `app/components/*`.
@@ -34,10 +39,10 @@ This architecture focuses on the runtime and data model for the Mimer module (th
 - External corpus plane: imported newsletters/emails/PDFs/raw docs that should be searchable and usable for answers but should not appear as notes. These objects live only in Stores/AMG with origins such as `origin: external_newsletter` and review states like `external_raw`.
 - Human frontmatter vs system metadata: frontmatter is for user-facing fields (uuid, title, type/status/area); system metadata (signals, zone inference inputs, relations, promotions, usage counts) remains in SetDB/AMG and Stores. Core-6 remains a projection ({uuid, title, origin, review_state, trust, source_ref}) and is not the full truth.
 
-### Note Log i metadata-spegeln
-- För varje objekt/uuid i valvet finns en motsvarande `uuid.md` i metadata-spegeln (`System/Metadata/VaultMirror/<vault-relativ path>/`).
-- Samma fil är metadata-spegel och per-note-logg: den samlar körningar från agenter, promotionshändelser, proveniens och ev. satellit-synk-bevis så att maskinhistoriken följer objektet oavsett backend.
-- Note Log är portabel Markdown som kan flyttas via Git mellan instanser även om SetDB/AMG eller andra Stores skiljer sig.
+### Note Log in the metadata mirror
+- For each object/uuid in the vault there is a matching `uuid.md` in the metadata mirror (`System/Metadata/VaultMirror/<vault-relative path>/`).
+- The same file is both metadata mirror and per-note log: it collects agent runs, promotion history, provenance, and any future satellite sync evidence so the machine history follows the object regardless of backend.
+- The Note Log is portable Markdown that can move via Git between instances even when SetDB/AMG or other Stores differ.
 
 ## Reality-MVP Architecture Components
 1) **Vault ingestion** — CLI/agent path to ingest selected Obsidian folders, normalize into Core-6 envelopes, persist in ObjectStore, emit Outbox events, chunk/index into VectorIndex, and keep provenance intact.
@@ -52,8 +57,8 @@ Advanced zone logic, reflection workflows, serendipity, and collaboration are de
 The sections below retain the v4.5A Canon details as a historical baseline; invariants still apply unless superseded by the Reality-MVP notes above.
 
 ## Purpose & Principles
-- Human-first and agentisk PKM: agents stay assistive, preserve author context, and only advance maturity when a reviewer signs off.
-- Observability-first to främja transparens: every agent emits structured audit spans plus deterministic fixtures so regressions reproduce in CI.
+- Human-first and agentic PKM: agents stay assistive, preserve author context, and only advance maturity when a reviewer signs off.
+- Observability-first to drive transparency: every agent emits structured audit spans plus deterministic fixtures so regressions reproduce in CI.
 - Core-6 frontmatter & UUID identity: each object carries the Core-6 envelope (id, type, title, created, updated, origin) and a stable UUID threaded through stores and events.
 - Store abstraction & Outbox events: ObjectStore, VectorIndex, and RelationIndex share a Store interface, while the Outbox broadcasts change events for asynchronous consumers.
 - Separation of trust and audit: trust levels gate promotion; audit trails remain append-only so reviewers can replay any decision independently.
@@ -101,7 +106,7 @@ ObjectStore persists object envelopes and agent decisions; VectorIndex stores ch
 2. `ingest.object.normalized`, `.classified`, `.chunked`, `.deduped`, `.citation_checked` mark completion of each agent and carry `trace_id` plus payload diff.
 3. `index.object.embedded` signals VectorIndex writes and unlocks the Reviewer.
 4. `promote.pending` captures Reviewer approval; `promote.done` finalizes PromotionAgent moves and informs subscribers such as search indexing or set sync.
-- Alla events bär `instance_id` från `SettingsBundle.instance.id` (default `home`) så audit/Outbox kan markera vilken runtime som emitterade händelsen och förbereda master/satellit utan att ändra vault-UX.
+- All events carry `instance_id` from `SettingsBundle.instance.id` (default `home`) so audit/Outbox can mark which runtime emitted the event and prepare master/satellite without changing the vault UX.
 
 ### PromotionAgent Rules
 - Idempotent writes: promotion can be retried safely because target maturity and storage side effects are computed deterministically from audit trails.
@@ -123,14 +128,14 @@ When `DIARIZE_ENABLE=1`, the ingestion pipeline now feeds diarization metadata (
 Oversized per-speaker segments are deterministically pre-split to respect `max_chars`; proportional start/end timestamps keep timelines monotonic without re-reading audio.
 
 ### Reasoning Layer (cross-agent capability + DeliberationAgent)
-Reasoning är en tvärgående förmåga som alla agenter kan använda för planering, granskning och reflektion. Lagret är multi-mode (`app/reasoning/models.py`) snarare än en enkel JSON-extraktor. `ReasoningMode` definierar stödda lägen och `ReasoningRun` fångar varje körning (id, mode, trace_id, object_uuids, steps, result, status/error). Routern `run_reasoning(...)` i `app/reasoning/provider.py` orkestrerar:
+Reasoning is a cross-cutting capability every agent can use for planning, critique, and reflection. The layer is multi-mode (`app/reasoning/models.py`) rather than a single JSON extractor. `ReasoningMode` defines supported modes and `ReasoningRun` captures each run (id, mode, trace_id, object_uuids, steps, result, status/error). The router `run_reasoning(...)` in `app/reasoning/provider.py` orchestrates:
 
 - `claims`: existing claims/evidence/inferences extraction (backed by `ReasoningInput` + `ReasoningOutput`); still fixture-backed for mock runs (`data/golden/reasoning_samples.jsonl`) and Ollama-backed locally.
 - `review`: lightweight review/critique of a note (summary/issues/suggestions), mock-deterministic in CI, LLM-backed locally.
 - `ranking`: candidate ranking with reasons, mock-deterministic in CI, LLM-backed locally (SetEvaluator consumes this).
 - `planning`: reserved/TBD.
 
-Calls include `agent` and `kind` (e.g., `reasoning.claims`, `reasoning.review`, `reasoning.ranking`) for tracing. The pipeline still gates on `REASONING_ENABLE=1` and stores claims outputs in the ReasoningStore; other modes feed agents directly (Reviewer, SetEvaluator) while remaining observable via the JSONL trace. DeliberationAgent är den specialiserade multi-step-ASK-agenten som använder Reasoning Layer för att gå flera hopp, men samma mönster återanvänds av t.ex. Reviewer, SetEvaluator och Planner.
+Calls include `agent` and `kind` (e.g., `reasoning.claims`, `reasoning.review`, `reasoning.ranking`) for tracing. The pipeline still gates on `REASONING_ENABLE=1` and stores claims outputs in the ReasoningStore; other modes feed agents directly (Reviewer, SetEvaluator) while remaining observable via the JSONL trace. DeliberationAgent is the specialized multi-step ASK agent that uses the Reasoning Layer to take multiple hops, and the same pattern is reused by Reviewer, SetEvaluator, and Planner.
 
 Invariants:
 - `claims` is successful (`status="ok"`) only when at least one claim or evidence exists; fully empty `{claims:[], evidence:[], inferences:[]}` is `status="failed"`.
@@ -188,24 +193,24 @@ Control surface: `vault/@Settings/**`
 Runtime source of truth: `runtime/settings/**/*.yaml`
 
 ### Human → Machine pipeline
-1) Markdown → Loader → Sektioner  
-2) Sektioner → Parsers → Semantiska dicts  
-3) Merge + Precedens → Compiler → Typning (Pydantic) + Secrets-resolve  
-4) Artefakter skrivs till `runtime/settings/**` + `settings.changed` event
+1) Markdown → Loader → Sections  
+2) Sections → Parsers → Semantic dicts  
+3) Merge + Precedence → Compiler → Typing (Pydantic) + secrets resolution  
+4) Artifacts are written to `runtime/settings/**` + `settings.changed` event
 
-### Precedens
+### Precedence
 Process overrides > ENV/.env > Vault Markdown > Defaults
 
-### Sekret
-Vault refererar endast `${SECRET:NAME}`. Upplösning från `.env` eller SOPS-krypterade filer. Råvärden skrivs aldrig till Markdown eller `runtime/`.
+### Secrets
+Vault only references `${SECRET:NAME}`. Resolution comes from `.env` or SOPS-encrypted files. Raw values are never written to Markdown or `runtime/`.
 
 ### Hot-reload
-Komponenter prenumererar på `settings.changed` och läser om idempotent.
+Components subscribe to `settings.changed` and re-read idempotently.
 
 ### Markup-regler
-- Checkrutor → bool
-- Tvåkolumnstabell → nyckel: värde med dot-path
-- ```yaml settings → auktoritativ sektion
+- Checkboxes → bool
+- Two-column table → key: value with dot-path
+- ```yaml settings → authoritative section
 
 ## Agent Coordination Layer (A2A) — v4.8
 A2A introduces a declarative agent-to-agent messaging fabric layered on Stores + Events + the PER loop. When `A2A_ENABLE=1`, the Outbox registers an additional channel that carries envelopes between agents without bypassing audit or promotion invariants, and every agent can opt into message handling via `handle_agent_message()` while continuing to emit the standard ingest events. The canonical schema (request/response/error) plus audit events (`agent.request.created`, `agent.response.created`, `agent.error.created`) now ship in-tree so tests can exercise protocol hooks while routing/orchestrator wiring remains feature-gated.
@@ -221,7 +226,7 @@ Envelopes reuse Core-6 metadata and append an `a2a.intent` field so determinism 
 Agents subscribe to A2A messages through the same PER scheduler: Plan inspects incoming envelopes (if enabled), Execute performs the requested action, and Reflect emits the response event plus standard audit spans. A2A never replaces Store interactions; it simply allows agents to chain themselves without introducing side channels. Hooks remain inert unless the flag is set, ensuring default CI paths stay unchanged.
 
 ### Sample Chain
-Classifier can request deeper deliberation by emitting `agent.request.created(intent="reason")` for DeliberationAgent; once processed, DeliberationAgent answers via `agent.response.created` and can critique via `agent.critique.created`. PromotionAgent or Projector may then issue a follow-up request to Projector for packaging, giving a deterministic Classifier → DeliberationAgent → Projector chain that is fully audited yet optional, even though strukturerat resonemang är en tvärgående förmåga alla agenter använder.
+Classifier can request deeper deliberation by emitting `agent.request.created(intent="reason")` for DeliberationAgent; once processed, DeliberationAgent answers via `agent.response.created` and can critique via `agent.critique.created`. PromotionAgent or Projector may then issue a follow-up request to Projector for packaging, giving a deterministic Classifier → DeliberationAgent → Projector chain that is fully audited yet optional, even though structured reasoning is a cross-cutting capability every agent uses.
 
 ## A2A Message Flow
 The A2A protocol is intentionally narrow and mediated entirely by the Orchestrator. Envelopes remain internal:
@@ -345,18 +350,18 @@ the vault-backed configuration available for upcoming integrations.
 
 ## AI panel: human-first note interaction
 Notes may optionally expose a lightweight AI panel so humans drive intent directly in Markdown without custom syntax. Panels are delimited by forgiving AI comment fences (`%% ...AI... %%` after trimming spaces), where the first fence opens a panel, the second closes it, the third opens the next, etc. Inside a panel the schema is:
-- **AI-instruktion** — free-text instructions that describe what the human wants from the system for this note.
-- **AI-åtgärder** — markdown checkbox actions (`- [ ] ...` / `- [x] ...`) that the human can tick to request a discrete move.
-- **AI-logg** — chronological bullet log of what the system already executed for the note.
+- **AI instruction** — free-text instructions that describe what the human wants from the system for this note.
+- **AI actions** — markdown checkbox actions (`- [ ] ...` / `- [x] ...`) that the human can tick to request a discrete move.
+- **AI log** — chronological bullet log of what the system already executed for the note.
 
 Example:
 ```
 %% AI:Start %%
-## AI-instruktion
+## AI instruction
 ...
-## AI-åtgärder
+## AI actions
 ...
-## AI-logg
+## AI log
 ...
 %% AI:End %%
 ```
@@ -369,7 +374,7 @@ Vault-first mappings under `vault/_system/panel-actions/*.md` (with docs fallbac
 
 `handle_panel_update()` wraps this flow: it parses the panel, applies mappings, and when `PANEL_EVENTS_ENABLE=1` it dispatches each PanelAgent event through `handle_event()` so the existing Planner/Orchestrator pipeline runs (down to mock MCP tool calls in tests). With the flag disabled the integration stays dry-run and only returns rewritten markdown plus intent metadata, keeping panel edits local until the operator opts in.
 
-`python -m app.cli panel-update path/to/note.md --old-path path/to/old.md` exposes this in the CLI for manual runs: it reads the note, executes `handle_panel_update()`, writes back the AI-åtgärder/log updates, and reports how many panel events were created/dispatched (respecting `PANEL_EVENTS_ENABLE` and `EVENT_ORCHESTRATOR_ENABLE`).
+`python -m app.cli panel-update path/to/note.md --old-path path/to/old.md` exposes this in the CLI for manual runs: it reads the note, executes `handle_panel_update()`, writes back the AI actions/log updates, and reports how many panel events were created/dispatched (respecting `PANEL_EVENTS_ENABLE` and `EVENT_ORCHESTRATOR_ENABLE`).
 
 `NoteUpdateService` builds on that by treating the note UUID as the durable identity: `process_note_update()` loads the note, checks an optional expected path (stale detection), hydrates prior snapshots from `tmp/note_update_snapshots`, and runs `handle_panel_update()` before writing the updated markdown + snapshot. The `note-update` CLI batches this over one or more files (`python -m app.cli note-update vault/@Inbox --glob '*.md'`), emits per-note status, and summarizes processed/changed/dispatch counts. This is the same entrypoint future filesystem watchers will call when they notice edited notes, so behaviour stays deterministic whether triggered manually or automatically.
 

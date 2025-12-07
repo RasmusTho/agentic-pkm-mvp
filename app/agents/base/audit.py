@@ -6,22 +6,12 @@ import threading
 from pathlib import Path
 from typing import Any
 
-try:
-    import psycopg  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - memory mode has no psycopg
-    psycopg = None  # type: ignore
-
 from app.events.models import Event, new_event
+from app.services.audit import audit_event
 
 _AUDIT_CACHE: list[str] = []
 _AUDIT_CACHE_LIMIT = 1024
 _AUDIT_LOCK = threading.Lock()
-
-
-def _dsn() -> str:
-    return (os.environ.get("DATABASE_URL") or "postgresql+psycopg://app:app@127.0.0.1:15432/app").replace(
-        "postgresql+psycopg://", "postgresql://"
-    )
 
 
 def _serialize_event(event: Event) -> str:
@@ -71,24 +61,18 @@ def audit_log(
     )
     json_line = _serialize_event(event)
 
-    backend = os.getenv("STORE_BACKEND", "memory").lower()
-    use_pg = backend == "pg" and psycopg is not None
-    if not use_pg:
-        _cache_and_maybe_persist(json_line)
-        return
-
+    _cache_and_maybe_persist(json_line)
     try:
-        with psycopg.connect(_dsn(), autocommit=True) as conn:  # type: ignore[arg-type]
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO audit(id, object_id, agent, action, ts, trace_id, details)
-                    VALUES (%s, %s, %s, %s, now(), %s, %s::jsonb)
-                    """,
-                    (event.event_id, object_id, agent, action, trace_id, json.dumps(details or {})),
-                )
+        audit_event(
+            event=action,
+            object_id=object_id,
+            agent=agent,
+            trace_id=trace_id or "",
+            extra=details or {},
+        )
     except Exception:
-        _cache_and_maybe_persist(json_line)
+        # Best effort: fall back to cache/file only.
+        return
 
 
 def _audit_ring_snapshot() -> list[dict[str, Any]]:

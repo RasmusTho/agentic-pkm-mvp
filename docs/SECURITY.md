@@ -1,3 +1,4 @@
+State: SoT v4.10 (current; details may lag ARCHITECTURE).
 # Security
 
 Lightweight policy for local and CI runs.

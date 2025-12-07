@@ -1,3 +1,4 @@
+State: Planned / partially implemented. Align carefully with STATUS (SoT v4.10) before applying.
 # Datamodell v4.2
 Tabeller:
 agent_memories(id, agent, kind, key, scope, value, ts, trace_id, run_id)

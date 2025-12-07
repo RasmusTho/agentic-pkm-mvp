@@ -1,8 +1,21 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Yggdrasil: Modules and Flows
 
 High-level map of modules and how material moves between them. This orients intent and responsibilities; detailed technical design, data contracts, and runtime specifics live in `docs/ARCHITECTURE.md`.
 
 In SoT v4.10 this codebase primarily implements the Mimer module (the Obsidian vault + ingestion/indexing/agents). The other Yggdrasil modules (Hugin, Munin, Ratatosk, Brokkr, Tyr, Heimdall) are currently partly conceptual and/or handled by external tools and file-system organization.
+
+| Module | Role / Domain | Concrete artefacts (v4.10) |
+| --- | --- | --- |
+| Mimer | Knowledge surface | Obsidian vault PKM-Alpha (+ sub-vaults) |
+| Hugin | Agents / reasoning | `app/agents/*`, ASK graph, PanelAgent, DeliberationAgent |
+| Munin | Media & raw memories | Planned; see ROADMAP for media/raw ingestion |
+| Ratatosk | Ingest & pipelines | `app/ingest/*`, CLI `pipe`, Outbox events |
+| Brokkr | Project workshop | Planned: project workspaces/tools |
+| Tyr | Formal archives | Planned: admin/records integration |
+| Heimdall | Infra & observability | Observability stack (Grafana/Prometheus/Loki) |
+
+See `docs/SYSTEM_DESIGN_v4.10.md` for how these modules map onto deployment topology and surfaces.
 
 ## Modules at a glance
 - **Mimer — Knowledge (Obsidian vault)**: Human-first vault with notes, ontology, and semantic links; minimal frontmatter plus UUID identity. Acts as the cognitive graph that threads together interpretations of media, records, and projects. Provides Core-6 projections and references (e.g., `source_ref`) into other modules without duplicating their artifacts. This is the same vault historically referred to as PKM-Alpha.
@@ -34,9 +47,9 @@ Mimer is the cognitive hub. It hosts human-authored notes and semantic structure
 - "Agents conceptually belong to Hugin (intelligence), while Heimdall is responsible for infrastructure and observability. Hugin holds the 'mind', Heimdall the 'machinery'."
 
 ### Git & Obsidian automation
-- Obsidian Git-automation (Obsidian Git-plugin eller motsvarande) är en nyckel i Mimers synkväv: den commitar/pushar/pullar Markdown-noter och per-note-loggar så text och loggar är portabla mellan instanser.
-- Automationen ligger i Machina/Heimdall-lagret: infrastruktur vi lutar oss mot men inte helt styr själva.
-- Eftersom Git kan skriva vid sidan av agenterna måste systemet tåla out-of-band-commits och merges; agenter kan inte anta att de är ensamma skribenter.
+- Obsidian Git automation (Obsidian Git plugin or equivalent) is a key part of Mimer’s sync fabric: it commits/pushes/pulls Markdown notes and per-note logs so text and logs stay portable between instances.
+- The automation lives in the Machina/Heimdall layer: infrastructure we rely on but do not fully control.
+- Because Git can write alongside agents, the system must tolerate out-of-band commits and merges; agents cannot assume they are the only writers.
 
 ### Flows between Modules
 - Brokkr contains full project folders; `Mimer/Projects` holds each project’s semantic brain (status, decisions, links) and references Brokkr outputs instead of copying them.
@@ -45,7 +58,7 @@ Mimer is the cognitive hub. It hosts human-authored notes and semantic structure
 - Ratatosk is the ingestion path that moves material into Munin/Brokkr/Tyr and seeds appropriate stubs in Mimer so agents can classify, link, and plan follow-up work.
 
 ### Deployment & instances (high level)
-- Yggdrasil kan köras som en eller flera logiska instanser för samma människa (t.ex. en “home”-master på en Mac mini plus satelliter på arbetslaptop eller kontorsmaskin).
-- Varje runtime har `InstanceSettings` (`settings.instance.id` och `settings.instance.role`), med default `id: home`, `role: master` så Reality-MVP förblir en singel runtime.
-- Alla events bär `instance_id` och märker vilken runtime som emitterade dem, så audit/Outbox kan särskilja master och framtida satelliter.
-- Multi-instanssynk och master/satellit-protokoll är inte färdiga ännu; de dokumenteras separat när protokollet landar.
+- Yggdrasil can run as one or more logical instances for the same human (e.g., a “home” master on a Mac mini plus satellites on a work laptop or office machine).
+- Each runtime has `InstanceSettings` (`settings.instance.id` and `settings.instance.role`), defaulting to `id: home`, `role: master` so Reality-MVP remains a single runtime.
+- All events carry `instance_id` to mark which runtime emitted them, letting audit/Outbox distinguish master and future satellites.
+- Multi-instance sync and master/satellite protocols are not finalized; they will be documented separately once the protocol lands.

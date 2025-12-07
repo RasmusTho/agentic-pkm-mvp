@@ -1,30 +1,35 @@
 # Obsidian-first sync
-## Principer
-- Människa först: maskinen ändrar aldrig body, endast frontmatter-nycklar
-- UUID = identitet, filnamn = kosmetik
-- Git som primär förändringskälla, iCloud som transport
+
+This doc describes how the Obsidian vault PKM-Alpha (Mimer) is synced and mirrored. For how this fits into the overall system, see `docs/HUMAN-FLOWS.md` (Capture & Ingest flow) and the surfaces in `docs/SYSTEM_DESIGN_v4.10.md`.
+
+## Principles
+- Human-first: the system never edits the note body, only agreed frontmatter keys.
+- UUID = identity, filename = cosmetic.
+- Git is the primary change channel; iCloud can be used as transport.
+
 ## Plugins
 - Required: Obsidian Git, Dataview
 - Recommended: Templater/QuickAdd, MetaEdit/Properties++, Advanced URI, Linter
-## Flöden
-- Obsidian→DB: commit→watcher→/ingest|/update→outbox→indexer
-- DB→Obsidian: event→frontmatter write (om inaktiv) annars förslag i /Inbox
-## Skrivpolicy
-- Aldrig body, inga auto-rename, debounce + hash, rename/move uppdaterar bara path
 
+## Flows
+- Obsidian → DB: commit → watcher → /ingest|/update → outbox → indexer
+- DB → Obsidian: event → frontmatter write (if inactive) otherwise suggestion into /Inbox
 
-## Rename-policy
-- Fil-rename eller flytt uppdaterar endast `objects.path` samt `file_state.path` via watcher-stödet.
-- Ingen re-embedding triggas vid rename/move; indexering körs endast om filens body ändras.
+## Write policy
+- Never touch the body, no auto-rename, debounce + hash; rename/move only updates path.
+
+## Rename policy
+- File rename or move only updates `objects.path` and `file_state.path` via the watcher.
+- No re-embedding is triggered on rename/move; indexing runs only when the file body changes.
 
 ## Settings hot-reload
-- Backend laddar `vault/_system/settings/system-settings.yaml` när mtime ändras och applicerar policies utan omstart.
-- Felaktig YAML (validerad mot `schemas/system-settings.schema.json`) loggas och stoppar inte befintliga policies.
+- Backend reloads `vault/_system/settings/system-settings.yaml` on mtime change and applies policies without restart.
+- Invalid YAML (validated against `schemas/system-settings.schema.json`) is logged and does not stop existing policies.
 
 ## Filesystem fallback
-- `scripts/fs_watcher.py` speglar samma policy som git-watchern och ger offline-idempotens.
-- Aktiv fil (detekterad via `settings.policy()`) skrivs inte tillbaka utan triagemeddelande i Inbox med Advanced-URI-länk.
+- `scripts/fs_watcher.py` mirrors the same policy as the git watcher and provides offline idempotence.
+- An active file (detected via `settings.policy()`) is not written back; instead a triage message is added to Inbox with an Advanced-URI link.
 
 ## Advanced-URI UX
-- Alla Inbox-poster får `obsidian://advanced-uri`-länkar för snabb navigering till berörd fil.
-- Dashboarden `System/Dashboards/*.md` visar senaste händelser via Dataview-tabeller.
+- All Inbox items get `obsidian://advanced-uri` links for quick navigation to the affected file.
+- The `System/Dashboards/*.md` dashboard shows the latest events via Dataview tables.

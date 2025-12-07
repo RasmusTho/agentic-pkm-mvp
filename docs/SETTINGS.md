@@ -1,8 +1,11 @@
+State: SoT v4.10 (current; details may lag ARCHITECTURE).
 # SETTINGS
+
+Runtime env vars (STORE_BACKEND, INDEX_OUTBOX_PATH, METRICS_ENABLED, etc.) are captured in `docs/SYSTEM_DESIGN_v4.10.md`; this file focuses on settings schema/flags.
 
 ## Required
 - DATABASE_URL: SQLAlchemy/psycopg URL. Example: postgresql+psycopg://app:app@127.0.0.1:15432/app
-- SOT_VERSION: Current Source-of-Truth schema version. Example: 4.2
+- SOT_VERSION: Current Source-of-Truth schema version. Example: 4.10
 
 ## LLM
 - LLM_PROVIDER: ollama|openai|azureopenai|anthropic

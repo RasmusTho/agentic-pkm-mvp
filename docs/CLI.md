@@ -1,3 +1,4 @@
+State: SoT v4.10 (current; details may lag ARCHITECTURE).
 # CLI Reference
 
 Click-based CLI surfaces ingestion, transcription, and health checks via `python -m app.cli`.
@@ -11,6 +12,15 @@ Click-based CLI surfaces ingestion, transcription, and health checks via `python
 | `transcribe SOURCE` | yt-dlp → ffmpeg → faster-whisper (URL or file). | `--json`, `--trace-id`. |
 | `pipe SOURCE` | normalize → classify (auto-transcribe for audio candidates). | `--json`, `--trace-id`. |
 | `health` | Local dependency checks. | `--json`, `--trace-id`. |
+
+## Commands → Human Flows
+
+| Command | Human Flow | Description |
+| --- | --- | --- |
+| `python -m app.cli pipe` | Capture & Ingest | Normalize and ingest files/notes (with auto-transcribe for audio) |
+| `python -m app.cli ask` | ASK | Ask questions against the indexed store |
+
+See `docs/HUMAN-FLOWS.md` for flow semantics and `docs/SYSTEM_DESIGN_v4.10.md` for how the CLI fits into the surfaces/topology.
 
 ## Examples
 ```bash

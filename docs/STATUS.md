@@ -1,4 +1,7 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Status — Operational Snapshot
+
+Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and deployment topology for this SoT.
 
 | Version | Goal | Delivered | Open | Next | Notes |
 | --- | --- | --- | --- | --- | --- |

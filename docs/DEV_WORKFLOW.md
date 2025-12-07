@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # **Developer Workflow — SoT v4.10**
 
 This document describes how to work _on the codebase_ for the Agentic PKM / Yggdrasil

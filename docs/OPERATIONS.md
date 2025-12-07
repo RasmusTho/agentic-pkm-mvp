@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Operations Playbook
 
 ## Version & Release Workflow

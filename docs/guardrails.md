@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # 6.5 Gardrails (kvalitet & prestanda)
 
 ## Kvalitetsaspekter

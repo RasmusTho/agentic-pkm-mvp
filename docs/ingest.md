@@ -1,3 +1,4 @@
+State: Historical / partially outdated (e.g. SoT v4.2). See ARCHITECTURE SoT v4.10 for current intent.
 # 4.5 Ingest (MVP)
 **Mål:** få in fil/URL/ljud robust, normalisera, skriva `index-outbox.jsonl`.
 

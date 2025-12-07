@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # AI-Assisted Development — Dev-Layer Policy (SoT v4.10)
 
 This document governs how AI/code agents (e.g. Codex, local LLM helpers, code-gen scripts)

@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Continuous Integration — SoT v4.2
 
 ## CI Stack

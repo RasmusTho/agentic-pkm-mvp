@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current core).
 # Quality & Guardrails
 
 The agent loop prioritizes deterministic policies over heuristic “best effort”.
