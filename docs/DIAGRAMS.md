@@ -7,13 +7,13 @@ These diagrams reflect the active Reality-MVP architecture (SoT v4.10). They are
 ## System Context (C4 Level 1)
 ```mermaid
 flowchart LR
-    user([Human user]):::actor
-    obsidian[[Obsidian vault (Mimer)]]:::actor
-    api[[PKM API / Agents (Yggdrasil)]]:::system
-    ollama[(Ollama LLM server)]:::ext
-    db[(Postgres / pgvector)]:::ext
-    observability[[Grafana / Prometheus / Loki]]:::ext
-    git[[Git / GitHub (code + docs + VaultMirror)]]:::ext
+    user["Human user"]:::actor
+    obsidian["Obsidian vault (Mimer)"]:::actor
+    api["PKM API / Agents (Yggdrasil)"]:::system
+    ollama["Ollama LLM server"]:::ext
+    db["Postgres / pgvector"]:::ext
+    observability["Grafana / Prometheus / Loki"]:::ext
+    git["Git / GitHub (code + docs + VaultMirror)"]:::ext
 
     user <--> obsidian
     user -->|ASK / CLI| api
@@ -33,18 +33,18 @@ The Agentic PKM system sits between the human/vault surfaces and local dependenc
 ```mermaid
 flowchart LR
     subgraph host[Local host / Colima]
-        api[(FastAPI service 18000/8000)]
-        agent[(Agent runtime / workers)]
-        pg[(Postgres + pgvector 15432/5432)]
-        ollama[(Ollama 11434)]
-        grafana[(Grafana 3000)]
-        prometheus[(Prometheus 9090)]
-        loki[(Loki 3100)]
+        api["FastAPI service 18000/8000"]
+        agent["Agent runtime / workers"]
+        pg["Postgres + pgvector 15432/5432"]
+        ollama["Ollama 11434"]
+        grafana["Grafana 3000"]
+        prometheus["Prometheus 9090"]
+        loki["Loki 3100"]
     end
 
-    cli([CLI entrypoints]):::actor
-    obsidian[[Obsidian vault (PKM-Alpha)]]:::actor
-    git[[Git/GitHub]]:::actor
+    cli["CLI entrypoints"]:::actor
+    obsidian["Obsidian vault (PKM-Alpha)"]:::actor
+    git["Git/GitHub"]:::actor
 
     cli -->|ingest / ask| api
     obsidian -->|vault sync| api
@@ -67,19 +67,19 @@ Ports align with `docs/SYSTEM_DESIGN_v4.10.md`: API 18000→8000, Postgres 15432
 ```mermaid
 flowchart TB
     subgraph app[Application Container]
-        api_layer[[API layer<br/>app/api]]
-        cli_layer[[CLI commands<br/>app/cli]]
-        agents[[Agents<br/>app/agents]]
-        services[[Services<br/>app/services]]
-        components[[Components<br/>embeddings/rerankers/LLM]]
-        retrieval[[Retrieval<br/>app/retrieval]]
-        stores[[Stores<br/>app/store, app/stores, Outbox]]
-        eval[[Eval/QA<br/>app/eval, tests]]
+        api_layer["API layer<br/>app/api"]
+        cli_layer["CLI commands<br/>app/cli"]
+        agents["Agents<br/>app/agents"]
+        services["Services<br/>app/services"]
+        components["Components<br/>embeddings/rerankers/LLM"]
+        retrieval["Retrieval<br/>app/retrieval"]
+        stores["Stores<br/>app/store, app/stores, Outbox"]
+        eval["Eval/QA<br/>app/eval, tests"]
     end
 
-    provider[(Ollama / providers)]:::ext
-    db[(Postgres/pgvector)]:::ext
-    vault[[Obsidian vault]]:::ext
+    provider["Ollama / providers"]:::ext
+    db["Postgres/pgvector"]:::ext
+    vault["Obsidian vault"]:::ext
 
     api_layer --> agents
     api_layer --> services
@@ -120,14 +120,14 @@ flowchart LR
 #### Promotion → Reasoning Prep (v4.5)
 ```mermaid
 flowchart TD
-    INTENT[promote.intent.created] --> PROMO[Promotion Agent]
-    PROMO -->|validate cooldown| CHECK[Policy + cooldown]
-    PROMO -->|update frontmatter| VAULT[ObjectStore]
-    PROMO -->|emit provenance| REL2[RelationIndex]
-    VAULT -->|emit_outbox=False| QUIET[(No loop)]
-    PROMO -->|promote.done| OUTBOX2[Index Outbox]
-    OUTBOX2 --> INDEXER[Index / Rerank Workers]
-    REL2 --> REASON[Reasoning Layer (RDF/OWL draft)]
+    INTENT["promote.intent.created"] --> PROMO["Promotion Agent"]
+    PROMO -->|validate cooldown| CHECK["Policy + cooldown"]
+    PROMO -->|update frontmatter| VAULT["ObjectStore"]
+    PROMO -->|emit provenance| REL2["RelationIndex"]
+    VAULT -->|emit_outbox=False| QUIET["(No loop)"]
+    PROMO -->|promote.done| OUTBOX2["Index Outbox"]
+    OUTBOX2 --> INDEXER["Index / Rerank Workers"]
+    REL2 --> REASON["Reasoning Layer (RDF/OWL draft)"]
 ```
 
 ### Export to PNG/SVG

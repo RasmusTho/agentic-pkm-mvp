@@ -22,6 +22,7 @@ State: SoT v4.10 Reality-MVP (current core).
   - `OPENAI_BASE_URL` (default: `http://127.0.0.1:11434/v1`)
   - `OPENAI_API_KEY` (default: `sk-local`)
   - Set `EVAL_LLM_MODE=skip` to skip if no LLM is available.
+- Ragas/DeepEval dependencies are not installed in minimal environments; tests will skip with a clear message when missing.
 
 ## Golden cases for ASK
 - Seed cases live in `docs/eval/ask_cases.yaml` plus `docs/eval/ask_cases_bilingual.yaml` (English + Swedish probes).
@@ -30,12 +31,13 @@ State: SoT v4.10 Reality-MVP (current core).
 
 ## RAG eval (Ragas, seed suite)
 - Seed RAG cases live in `docs/eval/rag_cases.yaml`.
-- Tests in `tests/eval/test_rag_ragas.py` run Ragas metrics (answer relevancy, faithfulness/contextual precision when context is available).
+- Tests in `tests/eval/test_rag_ragas.py` run Ragas metrics (answer relevancy, faithfulness/context precision).
 - Run just this suite via:
   ```bash
   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "eval" tests/eval/test_rag_ragas.py
   ```
 - Thresholds are conservative (~0.5) and should be tightened as retrieval quality improves; add more cases over time.
+- Tests skip cleanly when Ragas or eval LLM config is missing; keep dependencies optional.
 
 ## Metrics (initial)
 - Answer relevancy / answer-quality style metrics via DeepEval.

@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.eval.llm_client import configure_eval_openai_env
+from app.retrieval.hybrid import get_store as get_hybrid_store
 
 CASES_PATH = Path("docs/eval/rag_cases.yaml")
 MIN_THRESHOLD = 0.5  # seed threshold; tighten as retrieval quality improves
@@ -59,6 +60,9 @@ def test_rag_quality_with_ragas() -> None:
     cases = _load_cases()
     if not cases:
         pytest.skip("No RAG cases available")
+
+    # Ensure hybrid store is primed; tests may run with an empty store otherwise.
+    get_hybrid_store().set_documents([])
 
     client = TestClient(app)
     rows: list[dict[str, Any]] = []
