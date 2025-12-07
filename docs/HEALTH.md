@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current).
 # Health CLI
 
 Fast way to verify local dependencies before running the ingestion / agent pipeline.

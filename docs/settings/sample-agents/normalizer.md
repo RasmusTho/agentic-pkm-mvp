@@ -1,4 +1,5 @@
 ---
+State: Partially outdated; template only (runtime uses direct normalizer, not this YAML) in SoT v4.10.
 agent_id: normalizer
 agent_type: worker
 enabled: true

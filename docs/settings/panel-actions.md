@@ -1,4 +1,5 @@
 ---
+State: SoT v4.10 Reality-MVP (current, with known debt).
 mappings:
   - text: "Gör denna anteckning evergreen"
     event_type: "review.promote.evergreen"

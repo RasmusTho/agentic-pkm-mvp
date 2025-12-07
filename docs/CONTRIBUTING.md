@@ -1,3 +1,4 @@
+State: Partially outdated relative to SoT v4.10; see DEV_WORKFLOW.md.
 # Contributing
 
 ## Toolchain

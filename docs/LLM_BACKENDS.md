@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current).
 # LLM Backends
 
 The QA agent and classifier can switch backends via environment variables. This document captures capabilities, timeouts, and planned improvements.

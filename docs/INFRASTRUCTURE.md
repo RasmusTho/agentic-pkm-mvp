@@ -1,3 +1,4 @@
+State: SoT v4.10 Reality-MVP (current).
 # Infrastructure — Local Runtime (Docker + Colima)
 
 This document describes the current local runtime for the Agentic PKM stack. It mirrors the active docker-compose setup and the supporting scripts.

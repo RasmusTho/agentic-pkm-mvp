@@ -62,7 +62,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/ALIGNMENT.md | Alignment guide | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
 | docs/SETTINGS.md | Settings | Aligned (v4.10) | 2025-12-07 | Core env vars (STORE_BACKEND/LLM/metrics flags) documented. |
 | docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Partially outdated | 2025-12-07 | Planned API key + slowapi; not implemented in Reality-MVP. |
-| docs/INGEST.md | Ingest (historical/current) | Aligned (v4.10) | 2025-12-07 | Vault-first ingest (CLI, UUID healing, mirror, HybridStore); legacy commands noted. |
+| docs/ingest.md | Ingest (historical/current) | Aligned (v4.10) | 2025-12-07 | Vault-first ingest (CLI, UUID healing, mirror, HybridStore); legacy commands noted. |
 | docs/OBSIDIANSYNC.md | Obsidian sync | Aligned (v4.10) | 2025-12-07 | Reality-MVP: manual CLI ingest; no active watcher; UUID healing only. |
 | docs/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/PROTOCOL_SATELLITE_SYNC.md | Satellite sync protocol | Unreviewed | — |  |
@@ -86,7 +86,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development policy | Aligned (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
 | docs/DEV_WORKFLOW.md | Dev workflow | Aligned (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
-| docs/SCENARIOS/REALITY_MVP.md | Scenario walkthrough | Aligned (v4.10) | 2025-12-07 | Matches e2e pipeline test and ASK expectations. |
+| docs/scenarios/REALITY_MVP.md | Scenario walkthrough | Aligned (v4.10) | 2025-12-07 | Matches e2e pipeline test and ASK expectations. |
 
 ## Architecture Subdocuments
 | Path | Scope | Review status | Last reviewed | Notes |
@@ -176,11 +176,11 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development | Aligned (v4.10) | 2025-12-07 | Current dev-layer AI policy (docs-first, mocks/defaults). |
 | docs/DEV_WORKFLOW.md | Dev workflow | Aligned (v4.10) | 2025-12-07 | TDD/docs-first workflow aligned with SoT v4.10. |
-| docs/INGEST.md | Ingest doc | Aligned (v4.10) | 2025-12-07 | Vault-first ingest (CLI, UUID healing, mirror, HybridStore); legacy commands noted. |
 | docs/PROJECTOR.md | Projector | Aligned (v4.10) | 2025-12-07 | Promotion projector emits audit/membership; no filesystem projection. |
 | docs/ALIGNMENT.md | Alignment | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
 | docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2025-12-07 | Historical v4.2 overview; superseded by SoT v4.10. |
 | docs/GLOSSARY.md | Glossary | Aligned (v4.10) | 2025-12-07 | Updated definitions for hybrid/rerank/outbox/health. |
+| docs/MEMORY.md | Memory design (historical) | Legacy (archived) | 2025-12-07 | v4.3 memory plan; superseded by DATA_MODEL/ARCHITECTURE v4.10. |
 
 ## Settings / Vault / System / Inbox
 | Path | Scope | Review status | Last reviewed | Notes |
