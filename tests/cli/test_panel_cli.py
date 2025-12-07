@@ -1,80 +1,76 @@
 from __future__ import annotations
 
-import textwrap
+import json
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
-import pytest
 from click.testing import CliRunner
 
 from app.cli import cli
-from app.settings.panel_actions import PanelActionMapping
+from app.store import object_store as object_store_module
+from app.store.object_store import DomainObject, ObjectStore
 
 
-def _write_note(path: Path, checked: bool) -> None:
-    checkbox = "x" if checked else " "
+def _seed_panel_note(note_uuid: str, markdown: str) -> None:
+    obj = DomainObject(
+        uuid=note_uuid,
+        kind="note",
+        payload={"raw_text": markdown},
+        source_ref="vault/Note.md",
+        created_at=datetime.now(timezone.utc),
+    )
+    ObjectStore().save_object(obj, emit_outbox=False, trace_id="trace-cli")
+
+
+def _settings_file(tmp_path: Path) -> Path:
+    path = tmp_path / "panel-actions.md"
     path.write_text(
-        textwrap.dedent(
-            f"""
-            ## AI-instruktion
-            Gör något fint.
-
-            ## AI-åtgärder
-            - [{checkbox}] Skapa en separat sammanfattningsanteckning
-            """
-        ).strip()
-        + "\n",
+        """---
+mappings:
+  - id: mapped
+    label: "Do Thing"
+    intent_type: task
+    downstream_event: action.do
+---
+""",
         encoding="utf-8",
     )
+    return path
 
 
-def _ensure_mapping(tmp_path: Path) -> dict[str, PanelActionMapping]:
-    return {
-        "Skapa en separat sammanfattningsanteckning": PanelActionMapping(
-            text="Skapa en separat sammanfattningsanteckning",
-            event_type="ask.query.received",
-            payload_template={"question": "What now?", "object_id": "cli-panel"},
-        )
-    }
+def test_panel_cli_emits_outbox(tmp_path: Path, monkeypatch) -> None:
+    # clear memory store between runs
+    object_store_module._MEMORY_STORE.clear()
 
+    note_uuid = str(uuid4())
+    markdown = """%% AI:Start %%
+## AI-instruktion
+Please do the thing.
+## AI-åtgärder
+- [x] Do Thing
+- [ ] Other Thing
+%% AI:End %%
+"""
+    _seed_panel_note(note_uuid, markdown)
 
-def _run_panel_cli(args: list[str], env: dict[str, str] | None = None):
+    settings_path = _settings_file(tmp_path)
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+
     runner = CliRunner()
-    return runner.invoke(cli, ["panel-update", *args], env=env)
+    env = {
+        "INDEX_OUTBOX_PATH": str(outbox_path),
+        "PANEL_ACTIONS_PATH": str(settings_path),
+    }
+    result = runner.invoke(cli, ["panel", "run", "--uuid", note_uuid], env=env)
 
-
-def test_panel_update_cli_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    new_note = tmp_path / "note.md"
-    old_note = tmp_path / "note-old.md"
-    _write_note(old_note, checked=False)
-    _write_note(new_note, checked=True)
-
-    mappings = _ensure_mapping(tmp_path)
-    monkeypatch.setattr("app.settings.panel_actions.load_panel_action_mappings", lambda: mappings)
-    monkeypatch.setenv("PANEL_EVENTS_ENABLE", "0")
-
-    result = _run_panel_cli([str(new_note), "--old-path", str(old_note)])
-
-    assert result.exit_code == 0
-    updated = new_note.read_text(encoding="utf-8")
-    assert "- [x]" not in updated
-    assert "## AI-logg" in updated
-    assert "Panel events: 1 created, 0 dispatched" in result.output
-
-
-def test_panel_update_cli_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    new_note = tmp_path / "note.md"
-    old_note = tmp_path / "note-old.md"
-    _write_note(old_note, checked=False)
-    _write_note(new_note, checked=True)
-
-    mappings = _ensure_mapping(tmp_path)
-    monkeypatch.setattr("app.settings.panel_actions.load_panel_action_mappings", lambda: mappings)
-    monkeypatch.setenv("PANEL_EVENTS_ENABLE", "1")
-    monkeypatch.setenv("EVENT_ORCHESTRATOR_ENABLE", "1")
-
-    result = _run_panel_cli([str(new_note), "--old-path", str(old_note)])
-
-    assert result.exit_code == 0
-    updated = new_note.read_text(encoding="utf-8")
-    assert "- [x]" not in updated
-    assert "Panel events: 1 created, 1 dispatched" in result.output
+    assert result.exit_code == 0, result.output
+    assert outbox_path.exists()
+    lines = outbox_path.read_text(encoding="utf-8").splitlines()
+    assert lines, "expected an outbox entry"
+    record = json.loads(lines[-1])
+    assert record.get("event") == "panel.intent.created"
+    payload = record.get("payload") or {}
+    assert payload.get("note", {}).get("uuid") == note_uuid
+    assert len(payload.get("actions", [])) == 2

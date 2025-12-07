@@ -1,11 +1,25 @@
 ---
-State: SoT v4.10 Reality-MVP (current, with known debt).
+State: v5.0 – PanelAgent step 1 (runtime mapping).
 mappings:
-  - text: "Gör denna anteckning evergreen"
+  - id: "promote.evergreen"
+    label: "Gör denna anteckning evergreen"
+    text: "Gör denna anteckning evergreen"
+    intent_type: "promotion"
+    downstream_event: "review.promote.evergreen"
     event_type: "review.promote.evergreen"
-  - text: "Arkivera den här anteckningen"
+    params:
+      maturity: "evergreen"
+  - id: "note.archive"
+    label: "Arkivera den här anteckningen"
+    text: "Arkivera den här anteckningen"
+    intent_type: "archival"
+    downstream_event: "note.archive"
     event_type: "note.archive"
-  - text: "Skapa en separat sammanfattningsanteckning"
+  - id: "ingest.summary.create"
+    label: "Skapa en separat sammanfattningsanteckning"
+    text: "Skapa en separat sammanfattningsanteckning"
+    intent_type: "ingest"
+    downstream_event: "ingest.summary.create"
     event_type: "ingest.summary.create"
 ---
 

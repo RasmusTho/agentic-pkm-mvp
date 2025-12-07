@@ -16,6 +16,7 @@ from app.ingest.config import DEFAULT_VAULT_ROOT
 from app.cli.alpha_human_flows import run_alpha_human_flows
 from app.ingest.vault_root import ingest_vault_root
 from app.ingest.vault_alpha import run_vault_alpha_ingest
+from app.cli.panel import panel as panel_cli
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
 from app.services.note_update import NoteUpdateResult, process_note_update
@@ -859,6 +860,8 @@ def settings_watch(watch_path: Path, auto_heal: bool) -> None:
             last = now
     except KeyboardInterrupt:
         click.echo("stopped watching settings")
+
+cli.add_command(panel_cli, name="panel")
 
 
 if __name__ == "__main__":
