@@ -1,50 +1,68 @@
 State: SoT v4.10 Reality-MVP (current core).
 # Human Flows — Agentic PKM
 
+Kort orientering: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global system design). Keep the two in sync when surfaces, dependencies, or flows change.
+
 ## 1. Purpose & Scope
 - This document states the intended behavior of the Agentic PKM system from the human (Rasmus) perspective, not the code structure.
-- It complements `docs/ARCHITECTURE.md` and `docs/STATUS.md`: those describe internals and current state; this file is the human-facing contract for how core flows should feel and behave.
+- It complements `docs/ARCHITECTURE.md`, `docs/STATUS.md`, and `docs/SYSTEM_DESIGN_v4.10.md`: those describe internals, current state, and system design; this file is the human-facing contract for how core flows should feel and behave.
 - Applies to the PKM-Alpha vault surface plus the Agentic PKM runtime (ObjectStore, SetDB, Reasoning Layer, Outbox-driven agents incl. DeliberationAgent, etc.), covering both ingestion and ASK/reasoning loops.
-- I den här dokumentationen avser “PKM-Alpha vault” samma Obsidian-valv som nu kallas Mimer – kunskapsmodulen i det större systemet Yggdrasil.
+- In this documentation “PKM-Alpha vault” refers to the same Obsidian vault now called Mimer—the knowledge module in the wider Yggdrasil system.
 
 ## 2. Mental Model: Layers and Roles
 - **Surface layer (Obsidian PKM-Alpha vault)** — Human-authored notes, minimal frontmatter, free linking; this is where the human reads and writes.
 - **System layer** — `ObjectStore` / `SetDB` hold UUID-based knowledge objects; a metadata mirror lives under `System/Metadata/VaultMirror/.../uuid.md`; Outbox emits events that drive agents and downstream stores.
-- **Key agents (as seen by the human)** — Ingest/Normalizer (pulls notes safely), Classifier (proposes types/facets), ASK/QA (answers questions), DeliberationAgent (multi-step deliberation for ASK), SetEvaluator (ranks/evaluates candidates), Planner/Orchestrator (orders work), PanelAgent (handles AI panels in notes), Promotion/Evergreen logic (moves maturity forward). These collaborate to keep vault writing human-first while the system maintains structure underneath, and reasoning är en grundförmåga som alla agenter kan använda.
+- **Key agents (as seen by the human)** — Ingest/Normalizer (pulls notes safely), Classifier (proposes types/facets), ASK/QA (answers questions), DeliberationAgent (multi-step deliberation for ASK), SetEvaluator (ranks/evaluates candidates), Planner/Orchestrator (orders work), PanelAgent (handles AI panels in notes), Promotion/Evergreen logic (moves maturity forward). These collaborate to keep vault writing human-first while the system maintains structure underneath, and reasoning is a cross-cutting capability available to every agent.
 
 ### Per-noteloggen (maskinlogg)
-- För varje note med `uuid` finns en speglad metadatafil `uuid.md` i `System/Metadata/VaultMirror/<vault-relativ path>/`.
-- Samma fil är både metadata-spegel och per-note-logg: här kan systemet samla agentbeslut, promotionshistorik, konfliktlösning och proveniens från satelliter.
-- Den är den kanoniska maskinlogg-/historikfilen för noten och fungerar som synk-/merge-ankare mellan master och satelliter.
-- Den mänskliga noten hålls ren; maskinbrus hör hemma i spegelns `uuid.md`.
+- For each note with `uuid` there is a mirrored metadata file `uuid.md` in `System/Metadata/VaultMirror/<vault-relative path>/`.
+- The same file is both metadata mirror and per-note log: the system collects agent decisions, promotion history, conflict resolution, and provenance from satellites there.
+- It is the canonical machine log/history file for the note and serves as the sync/merge anchor between master and satellite runtimes.
+- The human note stays clean; machine noise lives in the mirror `uuid.md`.
 
-## 3. Core Flows (From the Human’s Perspective)
+## 3. Core Flows (from the human’s perspective)
 
-### 3.1 Creating and editing notes in Obsidian
+### Capture & Ingest
 - When the human creates or edits a note in the PKM-Alpha vault, the system ensures a stable `uuid` in frontmatter (often stored as an Obsidian link like `[[uuid]]`).
 - Ingestion mirrors the note into ObjectStore and into `System/Metadata/VaultMirror/.../uuid.md` without generating duplicate objects for the same note.
-- The note body remains untouched by the system; no extra or noisy frontmatter appears beyond the agreed essentials.
-
-### 3.2 Ingestion and classification
 - Ingestion only treats files as new/changed when their content or relevant metadata actually changed; it is safe and idempotent to re-run.
-- Classification proposes types and facets (task, meeting note, entity card, concept, etc.) and records a “pending user confirmation” state until the human confirms.
-- Human choices take precedence: the system never overwrites a human-chosen classification unless the human explicitly reclassifies.
-- Some classifications can trigger automations or flows, but only after alignment with explicit human intent.
+- Classification proposes types and facets (task, meeting note, entity card, concept, etc.) and records a “pending user confirmation” state until the human confirms; human choices win.
+- Alpha ingest writes `uuid` into frontmatter when missing; if only the mirror carries a UUID, ingest writes it back, and if neither exists a new UUID is generated and written to both. The ingest fingerprint (text hash + mtime) lives in mirror + Store; `--force` bypasses skips and heals missing frontmatter/mirrors.
 
-### 3.2.1 Alpha vault UUID and ingest guarantees
-- Alpha ingest writes a `uuid` into each note’s frontmatter (YAML round-tripped) when missing; the stored value is an Obsidian wikilink (`uuid: [[<uuid>]]`) pointing at the per-note metadata log. If a frontmatter `uuid`/`id` conflicts with a mirror, the frontmatter value remains canonical and the mismatch is logged.
-- Mirrors under `System/Metadata/VaultMirror/**` mirror the frontmatter identity and act as a log; when only the mirror carries a UUID, ingest writes it back into the note as a wikilink, and when neither exists a new UUID is generated and written to both.
-- The ingest fingerprint (text hash + mtime) is stored in the metadata mirror and the Store payload only; it drives skips only when the Store already has objects and mirror + Store fingerprints agree with the freshly computed fingerprint.
-- `--force` bypasses fingerprint/store skips, re-ingests everything, and backfills missing frontmatter/mirrors (the recovery path for “new DB + old mirrors”).
+#### Infra touchpoints
+- Surfaces: Obsidian vault (Mimer), CLI ingest helpers.
+- Agents/components: Watcher/ingest CLI, Normalizer, Classifier, Chunker, Deduper, Indexer.
+- Stores: ObjectStore, VectorIndex, VaultMirror, Outbox (events), fingerprints.
+- Observability: ingest throughput/errors, outbox events, span traces when enabled.
 
-### 3.3 AI Panels in notes
+### ASK
+- `/api/ask` answers are grounded in actual notes and metadata; responses include contributing notes/paths.
+- Reasoning is multi-step (retrieve → rerank → draft/self-check → final), not a single opaque LLM call; speculation is labeled.
+
+#### Infra touchpoints
+- Surfaces: CLI `ask`, HTTP `/api/ask`.
+- Agents/components: ASK Agent (planner/reranker/answerer).
+- Stores: ObjectStore, VectorIndex.
+- Observability: ASK latency, hit counts, rerank traces, answer errors.
+
+### Review & Promotion
+- “Promote” / “make evergreen” advances maturity so a note becomes durable long-term memory (zones can still vary: Active/Warm/Cold).
+- Promotion/Evergreen logic updates frontmatter predictably, may move files per policy, and logs actions in the metadata mirror; note bodies are never rewritten by automation.
+
+#### Infra touchpoints
+- Surfaces: CLI/API triggers, Obsidian (frontmatter changes).
+- Agents/components: Reviewer, SetEvaluator, Promotion Agent.
+- Stores: ObjectStore, Outbox, VaultMirror.
+- Observability: promotion/review events, guardrail metrics, spans around frontmatter writes.
+
+### Panel Interaction
 - An AI panel is a discrete, temporary block delimited by *AI comment fences* and structured headings:
 
   ```
   %% AI:Start %%
   ## AI-instruktion
   ...
-  ## AI-åtgärder
+## AI actions
   ...
   ## AI-logg
   ...
@@ -54,13 +72,19 @@ State: SoT v4.10 Reality-MVP (current core).
   The fence rule is forgiving: any Obsidian comment line that starts with `%%` (ignoring leading spaces) and contains `ai` (case-insensitive) opens a panel; the next such line closes it; the third opens the next, etc. Older notes that only use the headings without fences are still treated as panels, but new panels should use fences.
 - Panel content is *not* part of the knowledge base and must not be indexed or used as facts.
 - Checkbox actions can be mapped to internal intents/events (via `vault/_system/panel-actions`); the PanelAgent translates newly checked items into auditable outbox events (`source=panel.agent`) and appends simple log entries so the human can see what happened.
-- Suggestions appear as simple checkboxes inside `## AI-åtgärder`, e.g.:
+- Suggestions appear as simple checkboxes inside `## AI actions`, e.g.:
   - `[ ] Category: Concept`
   - `[ ] Category: Entity / Company`
-- When the human checks an option, the system updates classification in ObjectStore/metadata accordingly; once handled, the entire panel disappears (checked and unchecked options are removed).
-- Panels are optional; any note may have zero, one, or several panels.
+- When the human checks an option, the system updates classification in ObjectStore/metadata accordingly; once handled, the entire panel disappears (checked and unchecked options are removed). Panels are optional; any note may have zero, one, or several panels.
 
-### 3.3.1 Validate panel stripping in alpha runs
+#### Infra touchpoints
+- Surfaces: Obsidian panels.
+- Agents/components: PanelAgent, downstream classifiers/promotion hooks.
+- Stores: Outbox events (intent), ObjectStore/metadata after actions, VaultMirror logs.
+- Observability: panel intent events, outbox volume, optional spans for intent handling.
+
+### Eval & QA (dev-side)
+- Dev-side validation keeps panel text out of indexing and ensures ingest/ASK guardrails hold.
 - To verify that panel content is not contaminating indexing/QA in the PKM-Alpha vault, use the alpha-human-flows CLI with a clean outbox:
 
   ```
@@ -77,17 +101,13 @@ State: SoT v4.10 Reality-MVP (current core).
   grep -i "AI-instruktion" /tmp/index-outbox-alpha.jsonl || echo "no AI headings in outbox"
   ```
 
-- Without `--reset-outbox`, the outbox may contain historic events (including older, pre-fix panel content). Use a fresh path or `--reset-outbox` for clean validation.
-- `--reset-outbox` truncates the JSONL file; it is intended for local experiments/regression checks and should not run in automated or production flows.
+- Without `--reset-outbox`, the outbox may contain historic events (including older, pre-fix panel content). Use a fresh path or `--reset-outbox` for clean validation. `--reset-outbox` truncates the JSONL file; it is intended for local experiments/regression checks and should not run in automated or production flows.
 
-### 3.4 Questions, ASK, and reasoning
-- `/api/ask` answers are grounded in actual notes and metadata; the response surfaces which notes/paths contributed to the answer.
-- Reasoning is multi-step (planning/evaluation when relevant), not a single opaque LLM call; if the system speculates beyond vault facts, it clearly signals that it is guessing.
-
-### 3.5 Promotion, evergreen notes, and long-term memory
-- “Promote” / “make evergreen” means advancing a note’s maturity so it becomes durable long-term memory (zoner alignment can still vary: Active/Warm/Cold).
-- Promotion/Evergreen logic updates frontmatter in a predictable, documented way, may move files according to policies, and logs actions in the metadata mirror.
-- The human-written note content is never rewritten by automation; only agreed frontmatter fields change and moves happen transparently.
+#### Infra touchpoints
+- Surfaces: CLI eval runners.
+- Agents/components: eval flows, ASK Agent (for QA), ingest pipeline when re-running fixtures.
+- Stores: Outbox (fixtures), ObjectStore, VectorIndex.
+- Observability: eval run logs, ASK metrics in CI, optional OTLP traces.
 
 ## 4. Visibility and Noise (What must never leak into the user surface)
 - System metadata never appears in the note body; frontmatter stays minimal (uuid, title, essential Core-6/12 fields), while heavier metadata lives in the metadata mirror or DB.

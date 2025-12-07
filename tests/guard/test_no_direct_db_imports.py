@@ -30,10 +30,6 @@ ALLOW_FILES = (
     'app/memory/store.py',
     'app/agent/repository.py',
     'app/api/routes/search.py',
-    'app/agents/citation_checker/agent.py',
-    'app/agents/projector/agent.py',
-    'app/agents/base/audit.py',
-    'app/agents/base/memory.py',
 )
 
 def _allowed(p: Path) -> bool:

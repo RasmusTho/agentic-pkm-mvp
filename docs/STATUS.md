@@ -1,6 +1,8 @@
 State: SoT v4.10 Reality-MVP (current core).
 # Status — Operational Snapshot
 
+Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and deployment topology for this SoT.
+
 | Version | Goal | Delivered | Open | Next | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Reality-MVP (SoT v4.10) | Reliable vault ingestion + minimal external plane + ASK API + observability + interim GUI | PER-loop agents stable; ASK CLI/API baseline over vault objects; zones/planes defined; external object schema (`external_raw`) ready; InstanceSettings + `instance_id` on events as internal plumbing | Harden real-vault ingest runs, wire minimal external drop ingest, build observability backend + interim GUI | Stabilize FastAPI ASK endpoint with sources/latency; ship status CLI/dashboard; run ingest on real vault snapshots | Single-user focus; collaboration deferred; zones are derived overlays |

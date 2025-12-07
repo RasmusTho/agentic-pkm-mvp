@@ -4,6 +4,13 @@ State: SoT v4.10 Reality-MVP (current core).
 Canonical list of current modular building blocks. Keep this aligned with the codebase; no future placeholders beyond explicit OCR stubs below.
 
 ## Stores
+| Store abstraction | Backend (v4.10) | Notes |
+| --- | --- | --- |
+| ObjectStore | Postgres / in-memory | Core-6 objects and payloads |
+| VectorIndex | pgvector / in-memory | Embeddings from components |
+| RelationIndex | (planned, see ROADMAP) | Future knowledge graph |
+| Outbox | JSONL at `INDEX_OUTBOX_PATH` | Canonical event envelope |
+
 - **ObjectStore (memory/pg)** — Persists Core-6 envelopes + payloads; `app.stores.*`, access via `app.stores.get_object_store()`. Inputs: `{object_id, kind, source_ref, payload}`. Outputs: persisted record + retrieval via `.get/.list_by_kind`. Config: `STORE_BACKEND` (`memory` default, `pg` optional). Maturity: baseline/stable.
 - **VectorIndex (memory/pg)** — Embedding storage + similarity search; `app.stores.*`. Inputs: `{object_id, kind, source_ref, payload, embedding, model}`. Outputs: hits with scores. Config: `STORE_BACKEND`, `INDEX_PERSIST_PATH/LOAD` (memory snapshot). Maturity: baseline/stable.
 - **RelationIndex/AMG (memory/pg)** — Relation graph storage; `app.stores.*`. Inputs: relation tuples (supports/extends/contradicts/derived_from). Outputs: neighbors/has_any. Config: `STORE_BACKEND`. Maturity: baseline.
@@ -20,6 +27,7 @@ Canonical list of current modular building blocks. Keep this aligned with the co
 - **Hybrid retrieval** — BM25 + embeddings + optional rerank; `app.retrieval.hybrid`, `app.retrieval.hook_adapter`. Inputs: query string; store documents (doc_id/text/source_ref/payload). Outputs: ranked hit dicts. Config: `RERANK_ENABLE`, `RERANK_TOP_K`. Maturity: baseline.
 - **Rerankers** — Cross-encoder stack with deterministic local/mock fallbacks; `app.components.rerankers` → `app.retrieval.rerank.*`. Inputs: query + `RerankItem` list. Outputs: ordered `RerankResult` ids. Config: `RERANK_PROVIDER` (`none|mock|ce_local|ce_http`). Maturity: baseline.
 - **Embeddings** — Entry via `app.components.embeddings`; defaults to `app.index.embeddings` (LLM-backed) with deterministic profile for tests. Inputs: text sequences. Outputs: embedding vectors. Config: `EMBED_MODEL/OLLAMA_EMBED_MODEL` via `app.llm.embeddings`. Maturity: baseline.
+Model defaults and configuration live in `docs/LLM.md`; deployment/infra context (Ollama, ports) is documented in `docs/SYSTEM_DESIGN_v4.10.md`.
 
 ## ASK / reasoning
 - **ASK API** — `/api/ask` FastAPI route; `app.api.routes.ask`. Inputs: question payload. Outputs: `AskResponse(answer, sources, latency_ms)` using hybrid retrieval, optional reasoning overlay. Config: `REASONING_ENABLE`, `AskSettings` in runtime settings. Maturity: baseline.
