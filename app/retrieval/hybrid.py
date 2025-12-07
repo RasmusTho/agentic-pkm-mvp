@@ -83,7 +83,8 @@ class MemoryHybridStore:
             self._bm25 = BM25Okapi(self._tokenized)
         if self._embeddings is None:
             vectors: List[List[float]] = []
-            for chunk in _EMBED_CLIENT.embed_batches((doc.text for doc in self._docs)):
+            texts = [doc.text for doc in self._docs]
+            for chunk in embed_batches(texts):
                 vectors.extend(chunk)
             if not vectors:
                 self._embeddings = np.zeros((0, 0), dtype=np.float32)
