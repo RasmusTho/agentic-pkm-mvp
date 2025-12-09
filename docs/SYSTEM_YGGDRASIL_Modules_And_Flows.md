@@ -9,10 +9,10 @@ In SoT v4.10 this codebase primarily implements the Mimer module (the Obsidian v
 | --- | --- | --- |
 | Mimer | Knowledge surface | Obsidian vault PKM-Alpha (+ sub-vaults) |
 | Hugin | Agents / reasoning | `app/agents/*`, ASK graph, PanelAgent, DeliberationAgent |
-| Munin | Media & raw memories | Planned; see ROADMAP for media/raw ingestion |
+| Munin | Media & raw memories (planned v5.x) | Planned; see ROADMAP for media/raw ingestion |
 | Ratatosk | Ingest & pipelines | `app/ingest/*`, CLI `pipe`, Outbox events |
-| Brokkr | Project workshop | Planned: project workspaces/tools |
-| Tyr | Formal archives | Planned: admin/records integration |
+| Brokkr | Project workshop (planned v5.x) | Planned: project workspaces/tools |
+| Tyr | Formal archives (planned v5.x) | Planned: admin/records integration |
 | Heimdall | Infra & observability | Observability stack (Grafana/Prometheus/Loki) |
 
 See `docs/SYSTEM_DESIGN_v4.10.md` for how these modules map onto deployment topology and surfaces.

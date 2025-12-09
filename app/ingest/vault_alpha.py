@@ -3,12 +3,13 @@ from __future__ import annotations
 import hashlib
 import uuid
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Iterable, Set
 
 import click
+import yaml
 
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.filters import strip_ai_panels
@@ -28,6 +29,11 @@ class VaultAlphaSummary:
     ingested: int
     included_folders: List[str]
     force: bool = False
+    malformed: int = 0
+    malformed_notes: List[str] = field(default_factory=list)
+    errors: int = 0
+    error_notes: List[str] = field(default_factory=list)
+    processed_notes: List[str] = field(default_factory=list)
 
 
 _EXCLUDED_TOP = {"System", "Templates", ".obsidian"}
@@ -102,6 +108,27 @@ def _load_mirror_frontmatter(vault_root: Path, rel_path: Path) -> tuple[Path | N
 def _existing_mirror_uuid(vault_root: Path, rel_path: Path) -> str:
     _, fm, _ = _load_mirror_frontmatter(vault_root, rel_path)
     return _normalize_uuid(fm.get("uuid") or fm.get("id") or "")
+
+
+def _load_frontmatter_with_reporting(raw_text: str, path: Path) -> tuple[dict, str, bool]:
+    """
+    Safe frontmatter loader that logs malformed YAML and returns a flag.
+    """
+    if not raw_text.startswith("---"):
+        return {}, raw_text, False
+    parts = raw_text.split("---", 2)
+    if len(parts) < 3:
+        return {}, raw_text, False
+    fm_block = parts[1]
+    body = parts[2]
+    try:
+        data = yaml.safe_load(fm_block) or {}
+        if not isinstance(data, dict):
+            data = {}
+        return data, body.lstrip("\n"), False
+    except yaml.YAMLError as exc:
+        click.echo(f"Warning: Malformed frontmatter in {path}: {exc}", err=True)
+        return {}, body.lstrip("\n"), True
 
 
 def _ensure_note_uuid_frontmatter(path: Path, frontmatter: dict, body: str, note_uuid: str, *, rel_path: Path) -> tuple[str, bool]:
@@ -230,7 +257,7 @@ def _store_object_count(store: ObjectStore) -> int:
 def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
     rel_path = path.relative_to(vault_root)
     raw_text = path.read_text(encoding="utf-8")
-    frontmatter, body = load_frontmatter(raw_text)
+    frontmatter, body, _ = _load_frontmatter_with_reporting(raw_text, path)
     mirror_path, mirror_frontmatter, mirror_body = _load_mirror_frontmatter(vault_root, rel_path)
     frontmatter_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
     mirror_uuid = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
@@ -376,7 +403,14 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
     return note_uuid
 
 
-def run_vault_alpha_ingest(vault_root: Path, *, max_notes: int = 200, include_test_note: bool = False, force: bool = False) -> VaultAlphaSummary:
+def run_vault_alpha_ingest(
+    vault_root: Path,
+    *,
+    max_notes: int = 200,
+    include_test_note: bool = False,
+    force: bool = False,
+    resume_from: Iterable[str] | None = None,
+) -> VaultAlphaSummary:
     vault_root = vault_root.expanduser().resolve()
     store = get_object_store()
     candidates, included_folders = _select_candidates(vault_root, include_test_note=include_test_note, max_notes=max_notes)
@@ -391,11 +425,19 @@ def run_vault_alpha_ingest(vault_root: Path, *, max_notes: int = 200, include_te
         )
 
     ingested = 0
+    malformed: List[str] = []
+    errors: List[str] = []
+    processed: Set[str] = set(resume_from or [])
     for path in candidates:
         try:
             rel_path = path.relative_to(vault_root)
+            if str(rel_path) in processed:
+                continue
             raw_text = path.read_text(encoding="utf-8")
-            frontmatter, body = load_frontmatter(raw_text)
+            frontmatter, body, fm_error = _load_frontmatter_with_reporting(raw_text, path)
+            if fm_error:
+                malformed.append(str(rel_path))
+                continue
             frontmatter_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
             mirror_path, mirror_frontmatter, _ = _load_mirror_frontmatter(vault_root, rel_path)
             mirror_uuid = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
@@ -423,9 +465,23 @@ def run_vault_alpha_ingest(vault_root: Path, *, max_notes: int = 200, include_te
             trace_id = with_trace_id(None)
             _ingest_single(path, vault_root=vault_root, trace_id=trace_id)
             ingested += 1
-        except Exception:
+            processed.add(str(rel_path))
+        except Exception as exc:
+            rel_display = str(rel_path) if "rel_path" in locals() else str(path)
+            errors.append(rel_display)
+            click.echo(f"Error ingesting {rel_display}: {exc}", err=True)
             continue
-    return VaultAlphaSummary(scanned=len(candidates), ingested=ingested, included_folders=included_folders, force=force)
+    return VaultAlphaSummary(
+        scanned=len(candidates),
+        ingested=ingested,
+        included_folders=included_folders,
+        force=force,
+        malformed=len(malformed),
+        malformed_notes=malformed,
+        errors=len(errors),
+        error_notes=errors,
+        processed_notes=sorted(processed),
+    )
 
 
 __all__ = ["run_vault_alpha_ingest", "VaultAlphaSummary"]

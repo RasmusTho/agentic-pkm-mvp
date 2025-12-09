@@ -8,9 +8,14 @@ State: SoT v4.10 Reality-MVP (current core).
 - Human frontmatter stays lightweight; system metadata (signals, usage, relations, promotions, zone inference) lives in SetDB/AMG + Stores. Core-6 remains a projection.
 - Collaboration and multi-user flows are explicitly deferred until after the Reality-MVP is solid.
 
+### Remaining Reality-MVP (v4.10) work
+- Harden vault ingestion on the real vault (resume/error handling now recorded in summaries; malformed frontmatter handled gracefully) and finalize external drop-folder ingest into `external_raw` (txt/md path delivered; extend to real newsletter/PDF samples).
+- Polish ASK API responses (sources + zone/plane tags + latency surfaced) and wire observability backend + CLI (object counts per plane, ingest timestamps/errors, ASK latency/error metrics).
+- Build the interim GUI (status + ASK surface) and advance Orchestrator runtime beyond the skeleton (LangGraph + real MCP/agent execution with dual CLI/Orchestrator toggles).
+
 ### Reality-MVP scope
 1) **Vault ingestion** — CLI/agent command to ingest selected vault folders into ObjectStore with Core-6 fields and provenance; emit Outbox events and index into VectorIndex.
-2) **External corpus (minimal)** — ingest a small, real set of external documents (e.g., exported newsletters/PDFs) into `external_raw` objects; store + index them without exposing them as vault notes.
+2) **External corpus (minimal)** — ingest a small, real set of external documents (e.g., exported newsletters/PDFs) into `external_raw` objects; store + index them without exposing them as vault notes (txt/md drop-folder path implemented).
 3) **ASK API** — FastAPI endpoint that answers questions with sources `{uuid, title, origin (vault/external), zone if known, path/source_ref}` and latency.
 4) **Observability backend** — status service + CLI that surfaces per-store object counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency.
 5) **Interim GUI** — simple FastAPI-served page showing system status and an ASK box with visible sources; explicitly a temporary observability/interaction surface.
@@ -27,10 +32,10 @@ State: SoT v4.10 Reality-MVP (current core).
 | v4.6-B | Relation coverage lift (deterministic extraction + audit trail). | Delivered |
 | v4.6-C | Diarization-aware chunking & metrics. | Delivered (flagged feature) |
 | v4.6-D | CI gates + summary hardening. | Delivered (2025-02-18) |
-| v4.7 | Reasoning layer & reflexive agents over the knowledge graph. | Deferred until after Reality-MVP |
+| v4.7 | Reasoning layer & reflexive agents over the knowledge graph. | Deferred until after Reality-MVP (flag-gated/mocks only in CI) |
 | v4.8 | Agent Coordination (A2A Protocol V1 + Orchestrator messaging hooks). | Planned (post-MVP) |
-| v4.9 | MCP Integration V1 + Planner Agent (LLM) plan schema. | Delivered |
-| v4.10 | Orchestrator Runtime V1 (LangGraph execution of Planner Agent output). | Delivered skeleton; folded into Reality-MVP |
+| v4.9 | MCP Integration V1 + Planner Agent (LLM) plan schema. | Delivered (planning schema + descriptors; transport mocked) |
+| v4.10 | Orchestrator Runtime V1 (LangGraph execution of Planner Agent output). | Delivered skeleton; further LangGraph/MCP execution planned alongside Reality-MVP |
 
 Current Reality-MVP work supersedes the statuses of the older tracks above; rows remain for SoT history.
 
@@ -38,6 +43,11 @@ Current Reality-MVP work supersedes the statuses of the older tracks above; rows
 - **Short-term (Reality-MVP)** — finish vault ingestion (real vault folders), minimal external ingest (`external_raw` pipeline), ASK API with sources + latency, observability backend (object counts, ingest runs, ASK usage), and interim GUI surface. Zones and planes are enforced as overlays without requiring folder moves; collaboration deferred.
 - **Medium-term** — Reflection layer (weekly review support with zone coverage and idea-level histories/diffs); Serendipity (exploration modes that surface Cold/older but relevant items using zone + temporal signals); Synthesis/communication pipeline (turn fragments into slides/reports/posts with traceable provenance and citations); Lifelong learning layer (goals, progression, spaced recall tied to learning objectives and note relations).
 - **Long-term** — Collaboration and collective intelligence (multi-user vaults/sets/spaces, shared promotion flows, team-level knowledge graphs) after single-user Reality-MVP and reflective layers are stable.
+
+## v5.x outlook (post-4.x)
+- Master/satellite sync protocol (Git/iCloud over Markdown + VaultMirror; see `docs/PROTOCOL_SATELLITE_SYNC.md`), targeting a single human across multiple runtimes.
+- PanelAgent follow-ons (v5.0 step 2+) that fan out `panel.intent.created` into actionable flows and integrate with Planner/Orchestrator; AI panel UX remains per `docs/examples/ai-panel-example.md`.
+- Expansion of Yggdrasil modules beyond Mimer/Hugin/Ratatosk: Munin (media), Brokkr (project workshops), Tyr (formal records), and fuller Heimdall stack, keeping Mimer as the semantic hub (see `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`).
 
 ## Current Stable Baseline (v4.5A)
 v4.5A is the deployable baseline: Normalizer→PromotionAgent path is verified end-to-end, promotion cooldowns are enforced, and CI is green when `pytest -q -m "not pg"` passes using `STORE_BACKEND=memory` and mock LLMs. Architectural invariants to preserve: Core-6 frontmatter is immutable once normalized, Outbox events remain append-only, PromotionAgent decisions are idempotent, and audit logs stay deterministic JSONL. Any change that violates these invariants or introduces non-deterministic mocks must be postponed to v4.5B+. The historical sections below (v4.5B–v4.10) remain for context while Reality-MVP sequencing above defines the active work.

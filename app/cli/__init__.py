@@ -16,6 +16,7 @@ from app.ingest.config import DEFAULT_VAULT_ROOT
 from app.cli.alpha_human_flows import run_alpha_human_flows
 from app.ingest.vault_root import ingest_vault_root
 from app.ingest.vault_alpha import run_vault_alpha_ingest
+from app.ingest.external import ingest_external_folder
 from app.cli.panel import panel as panel_cli
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
@@ -394,6 +395,25 @@ def vault_alpha_ingest(vault_root: Path | None, max_notes: int, include_test_not
         suffix = f" (force={summary.force})" if summary.force else ""
         click.echo(f"Scanned {summary.scanned} files; ingested {summary.ingested} notes{suffix}")
     click.echo(f"Included folders: {', '.join(summary.included_folders) if summary.included_folders else '-'}")
+
+
+@cli.command(
+    name="ingest-external",
+    help="Ingest external files (txt/md) from a drop folder into the external plane (external_raw).",
+)
+@click.option(
+    "--root",
+    "root_dir",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Path to the external drop folder.",
+)
+@click.option("--limit", type=int, default=None, help="Maximum number of files to ingest.")
+def ingest_external_cmd(root_dir: Path, limit: int | None) -> None:
+    summary = ingest_external_folder(root_dir, limit=limit)
+    click.echo(f"External ingest: scanned={summary.scanned} ingested={summary.ingested} errors={summary.errors}")
+    if summary.error_files:
+        click.echo(f"Error files: {', '.join(summary.error_files)}", err=True)
 
 
 @cli.command(

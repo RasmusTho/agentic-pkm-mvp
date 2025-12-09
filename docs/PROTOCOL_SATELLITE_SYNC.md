@@ -2,7 +2,7 @@ State: Planned / not implemented (target SoT v5.x).
 
 # Satellite Sync Protocol (Draft)
 
-This draft defines how a master Yggdrasil instance and one or more satellite instances for the same human synchronize knowledge. The focus is text-first sync (Markdown notes + VaultMirror logs) using Git/iCloud as transport, and how `instance_id` and per-note logs fit in. It is a conceptual contract for future implementation, not current production behaviour.
+This draft defines how a master Yggdrasil instance and one or more satellite instances for the same human synchronize knowledge. The focus is text-first sync (Markdown notes + VaultMirror logs) using Git/iCloud as transport, and how `instance_id` and per-note logs fit in. It is a conceptual contract for future implementation, not current production behaviour, and is the canonical plan for v5.x master/satellite sync in the roadmap.
 
 ## 1. Instance roles and identity
 

@@ -46,7 +46,7 @@ This architecture focuses on the runtime and data model for the Mimer module (th
 
 ## Reality-MVP Architecture Components
 1) **Vault ingestion** — CLI/agent path to ingest selected Obsidian folders, normalize into Core-6 envelopes, persist in ObjectStore, emit Outbox events, chunk/index into VectorIndex, and keep provenance intact.
-2) **External corpus ingest (minimal)** — a small drop folder/pipeline for real external documents ingested as `external_raw` objects, stored in ObjectStore and indexed without surfacing as vault notes.
+2) **External corpus ingest (minimal)** — a small drop folder/pipeline for real external documents ingested as `external_raw` objects, stored in ObjectStore and indexed without surfacing as vault notes (txt/md drop-folder CLI implemented; newsletters/PDFs can extend the same path).
 3) **ASK API** — FastAPI endpoint returning answer text plus sources `{uuid, title, origin (vault/external), zone if known, path/source_ref}` and latency; uses hybrid retrieval over both planes with an in-process HybridStore warmed from `store_objects` on first use. Zone overlays are planned but not yet populated in responses.
 4) **Observability backend** — status service that aggregates per-store object counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency; exposed via CLI and interim GUI.
 5) **Interim GUI** — simple FastAPI-served page that shows status (object counts, last ingest, ASK stats) and an ASK input with answers + visible sources; explicitly a temporary observability/interaction surface.
@@ -121,6 +121,8 @@ Every agent follows Plan → Execute → Reflect. Plan inspects the latest event
 - Notes without UUIDs are still ingested and snapshotted; the ingest pipeline materializes the `uuid` into the note frontmatter (wikilink) and mirror before proceeding so identity stays stable across runs.
 - Vault ingest stores an ingest fingerprint (text SHA + file mtime) in mirrors and the Store; skips only apply when the Store already has an object and those fingerprints agree with the freshly computed fingerprint. `--force` bypasses fingerprint/store checks, reingests everything, and is the recovery path for “new DB + old mirrors.”
 - `note_moves_enable` defaults to false in runtime/global settings; Planner demotes move/rename/re-file steps to log-only and Promotion logs `promote.skip.move` instead of moving files.
+- Malformed frontmatter is tolerated: invalid YAML is skipped with a warning and reported in the ingest summary rather than crashing the run.
+- Ingest errors are recorded (counts + paths) in the ingest summary; reruns can resume from already-processed notes (via `resume_from` in code paths) while finishing remaining items.
 - Operators can enable moves later by setting `note_moves_enable: true` in `vault/@Settings/global` (propagates into `runtime/settings/global.yaml`).
 
 ### Diarization-aware Chunking (v4.6-C)

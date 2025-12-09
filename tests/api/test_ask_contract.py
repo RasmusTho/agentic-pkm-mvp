@@ -42,6 +42,7 @@ def test_ask_contract_structure(monkeypatch) -> None:
         hit = sources[0]
         assert isinstance(hit.get("uuid"), str)
         assert isinstance(hit.get("origin"), str)
+        assert hit.get("plane") == hit.get("origin"), "plane should mirror origin"
         assert "path" in hit
         if hit.get("zone") is not None:
             assert isinstance(hit.get("zone"), str)
