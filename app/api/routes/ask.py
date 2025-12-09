@@ -95,6 +95,7 @@ class AskSource(BaseModel):
     uuid: str
     title: str
     origin: str
+    plane: str
     zone: str | None = None
     path: str | None = None
 
@@ -115,6 +116,7 @@ def _to_source(hit: Any) -> AskSource:
         raw = {}
     payload = raw.get("payload") or {}
     origin = str(payload.get("origin") or "vault")
+    plane = str(payload.get("plane") or origin)
     path = raw.get("source_ref") or payload.get("source_ref") or raw.get("path")
     title = payload.get("title") or raw.get("title") or ""
     raw_zone = payload.get("zone") or raw.get("zone")
@@ -123,6 +125,7 @@ def _to_source(hit: Any) -> AskSource:
         uuid=str(raw.get("id") or raw.get("doc_id") or raw.get("object_id") or payload.get("uuid") or ""),
         title=str(title),
         origin=origin,
+        plane=plane,
         zone=zone,
         path=str(path) if path else None,
     )

@@ -6,6 +6,7 @@ import shutil
 import uuid
 from pathlib import Path
 from unittest.mock import patch
+from textwrap import dedent
 
 import pytest
 from click.testing import CliRunner
@@ -449,3 +450,110 @@ def test_vault_alpha_ingest_force_reingests(tmp_path: Path) -> None:
     assert third.exit_code == 0, third.output
     ingested_third = _extract_ingested(third.output)
     assert ingested_third > 0
+
+
+def test_vault_alpha_ingest_handles_malformed_frontmatter(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    reset_store_backends()
+    get_store().set_documents([])
+    vault = tmp_path
+    concepts = vault / "Concepts"
+    concepts.mkdir(parents=True, exist_ok=True)
+    bad = concepts / "Broken.md"
+    bad.write_text(
+        dedent(
+            """\
+            ---
+            title: bad: [unclosed
+            ---
+            Body
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    summary = run_vault_alpha_ingest(vault, max_notes=10, include_test_note=False, force=True)
+
+    captured = capsys.readouterr()
+    assert "Malformed frontmatter" in captured.err
+    assert summary.scanned == 1
+    assert summary.ingested == 0
+    assert summary.malformed == 1
+    assert str(Path("Concepts") / "Broken.md") in summary.malformed_notes
+
+
+def test_vault_alpha_ingest_records_errors_and_resumes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reset_store_backends()
+    get_store().set_documents([])
+    vault = tmp_path
+    concepts = vault / "Concepts"
+    concepts.mkdir(parents=True, exist_ok=True)
+    good_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    bad_uuid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    good = concepts / "Good.md"
+    bad = concepts / "Bad.md"
+    good.write_text(
+        dedent(
+            f"""\
+            ---
+            uuid: [[{good_uuid}]]
+            title: Good
+            ---
+            Body good
+            """
+        ),
+        encoding="utf-8",
+    )
+    bad.write_text(
+        dedent(
+            f"""\
+            ---
+            uuid: [[{bad_uuid}]]
+            title: Bad
+            ---
+            Body bad
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    import app.ingest.vault_alpha as vault_alpha
+
+    original_ingest = vault_alpha._ingest_single
+    fail_once = {"done": False}
+
+    def fake_ingest(path: Path, *, vault_root: Path, trace_id: str) -> str:
+        rel = path.relative_to(vault_root)
+        if rel.name == "Bad.md" and not fail_once["done"]:
+            fail_once["done"] = True
+            raise RuntimeError("boom")
+        return original_ingest(path, vault_root=vault_root, trace_id=trace_id)
+
+    monkeypatch.setattr(vault_alpha, "_ingest_single", fake_ingest)
+
+    summary_first = run_vault_alpha_ingest(vault, max_notes=10, include_test_note=False, force=False)
+    captured_first = capsys.readouterr()
+    assert "Error ingesting" in captured_first.err
+    assert summary_first.errors == 1
+    assert str(Path("Concepts") / "Bad.md") in summary_first.error_notes
+    assert summary_first.ingested == 1
+
+    # Resume using processed list to avoid rework on already ingested files
+    summary_second = run_vault_alpha_ingest(
+        vault,
+        max_notes=10,
+        include_test_note=False,
+        force=False,
+        resume_from=summary_first.processed_notes,
+    )
+    assert summary_second.errors == 0
+    assert summary_second.ingested >= 1
+    assert len(summary_second.processed_notes) >= 2
+
+    store = get_object_store()
+    assert store.get(uuid.UUID(good_uuid)) is not None
+    assert store.get(uuid.UUID(bad_uuid)) is not None
+
+    # restore original ingest
+    monkeypatch.setattr(vault_alpha, "_ingest_single", original_ingest)

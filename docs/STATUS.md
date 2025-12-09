@@ -20,9 +20,13 @@ Eval baseline: DeepEval ASK + Ragas RAG suites are available under `@pytest.mark
 
 ## Reality-MVP Snapshot
 - Implemented: PER-loop ingestion against vault objects with Core-6 projection + Stores/Outbox; ASK CLI/API baseline over the vault plane; zones/planes defined with `external_raw` schema for non-vault objects; Planner/Reasoning layers remain optional overlays.
+- Malformed frontmatter is now handled gracefully in vault ingest (skip + warning + summary counters), preventing crashes on bad YAML; ingest errors are recorded with counts/paths and runs can resume to finish remaining notes.
+- ASK API now returns sources with plane/origin tags and latency alongside answers.
+- Minimal external ingest path delivered: drop-folder → external_raw objects stored/indexed (txt/md), retrievable via ASK with origin/plane tags.
 - In progress: Running ingest on real vault snapshots and hardening resume/error handling; minimal external drop ingest for newsletters/PDFs into `external_raw`; FastAPI ASK endpoint with answers + sources + latency; zone/plane tags exposed in ASK responses.
 - Planned/queued: Observability backend + CLI (object counts per plane, ingest timestamps/errors, ASK counts/latency); interim GUI dashboard showing status + ASK; external ingest sample set; collaboration/multi-user explicitly deferred.
 - Reality-MVP smoke: canonical note → ingest → index → ASK path is captured in `docs/scenarios/REALITY_MVP.md` and enforced by `tests/e2e/test_reality_mvp_pipeline.py`.
+- Remaining v4.10 tasks: harden vault ingest (resume, malformed frontmatter), finalize external drop-folder ingest to `external_raw`, polish ASK responses (sources + zone/plane + latency), deliver observability backend + CLI, build interim GUI (status + ASK), and advance Orchestrator runtime beyond the skeleton (LangGraph + real MCP/agent execution with dual-run toggles).
 
 ## Note Ingestion Defaults
 - Notes always get a UUID via `ensure_note_uuid` before watcher/update runs; the YAML round-trip helper is the only parser/writer for frontmatter.

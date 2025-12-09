@@ -60,3 +60,4 @@ Please promote this note after verifying the summary.
 ## Next steps (v5.0 step 2 ideas)
 - Option A — pure fan-out: consume `panel.intent.created`, emit one `panel.action.intent.created` per checked action (still no tools), keeping AI-logg untouched.
 - Option B — minimal orchestration: consume `panel.intent.created`, write human-readable previews back into `AI-logg` for visibility, while deferring real tool calls to later steps.
+- These remain planned v5.x follow-ons in the roadmap (panel flows feeding Planner/Orchestrator once Reality-MVP is stable).

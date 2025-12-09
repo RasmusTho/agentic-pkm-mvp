@@ -22,14 +22,14 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 ## Core SoT Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/ARCHITECTURE.md | Architecture (SoT v4.10) | Aligned (v4.10) | 2025-12-07 | Current Reality-MVP architecture; historical v4.5 baseline kept as legacy context. |
+| docs/ARCHITECTURE.md | Architecture (SoT v4.10) | Aligned (v4.10) | 2025-12-07 | Current Reality-MVP architecture; ingest tolerates malformed frontmatter, records errors/resume, and documents external drop-folder path. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Aligned (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
-| docs/STATUS.md | Operational snapshot | Aligned (v4.10) | 2025-12-07 | Snapshot updated for Reality-MVP (ingest/ASK/status; GUI/zone surfacing still future). |
-| docs/ROADMAP.md | Strategic roadmap | Aligned (v4.10) | 2025-12-07 | Reflects v4.10 baseline and v5.x themes. |
+| docs/STATUS.md | Operational snapshot | Aligned (v4.10) | 2025-12-07 | Reality-MVP snapshot; ASK polish + ingest hardening + external ingest noted; GUI/observability still future. |
+| docs/ROADMAP.md | Strategic roadmap | Aligned (v4.10) | 2025-12-07 | Reality-MVP remaining work enumerated; post-v4.x/v5.x themes linked. |
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (v4.10) | 2025-12-07 | RelationIndex marked baseline (memory/pg) with ASK surfacing deferred. |
 | docs/AGENTS.md | Agents overview | Aligned (v4.10) | 2025-12-07 | ASK graph clarified (retrieve→rerank→answer, no self-check loop). |
 | docs/PLANNER.md | Planner contract | Aligned (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
-| docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (v5.0 – PanelAgent step 1) | 2025-12-07 | Runtime loop documented (panel.intent.created, CLI run, ObjectStore source). |
+| docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (v5.0 – PanelAgent step 1) | 2025-12-07 | Runtime loop documented (panel.intent.created, CLI run, ObjectStore source); next steps tied to v5.x roadmap. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent step 1) | 2025-12-07 | Envelope + topic clusters aligned; adds `panel.intent.created`. |
 | docs/DIAGRAMS.md | C4 diagrams | Aligned (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
 | docs/HUMAN-FLOWS.md | Human flows | Aligned (v5.0 – PanelAgent step 1) | 2025-12-07 | Panel flow notes manual CLI + panel.intent.created; ingest/ASK flows unchanged. |
@@ -66,7 +66,6 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/ingest.md | Ingest (historical/current) | Aligned (v4.10) | 2025-12-07 | Vault-first ingest (CLI, UUID healing, mirror, HybridStore); legacy commands noted. |
 | docs/OBSIDIANSYNC.md | Obsidian sync | Aligned (v4.10) | 2025-12-07 | Reality-MVP: manual CLI ingest; no active watcher; UUID healing only. |
 | docs/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
-| docs/PROTOCOL_SATELLITE_SYNC.md | Satellite sync protocol | Unreviewed | — |  |
 | docs/AI_DEVELOPMENT.md | AI-assisted development policy | Aligned (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
 | docs/DEV_WORKFLOW.md | Developer workflow | Aligned (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
 | docs/OPERATIONS.md | Operations playbook | Aligned (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
@@ -164,7 +163,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/scenarios/REALITY_MVP.md | Reality-MVP scenario | Aligned (v4.10) | 2025-12-07 | Matches e2e pipeline test and ASK expectations. |
-| docs/PROTOCOL_SATELLITE_SYNC.md | Satellite sync protocol | Planned / not implemented | 2025-12-07 | Draft v5.x cross-instance sync; not implemented in Reality-MVP. |
+| docs/PROTOCOL_SATELLITE_SYNC.md | Satellite sync protocol | Planned / not implemented | 2025-12-07 | Draft v5.x master/satellite sync; not implemented in Reality-MVP. |
 
 ## Additional Docs (misc)
 | Path | Scope | Review status | Last reviewed | Notes |
