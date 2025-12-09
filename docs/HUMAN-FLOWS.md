@@ -83,6 +83,9 @@ Kort orientering: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global 
 - Stores: Outbox events (panel.intent.created), ObjectStore mirror as source of truth for panel text.
 - Observability: panel intent events, outbox volume.
 
+### Planner-driven flows
+- Triggering a goal like “Make this note evergreen” causes Planner to create a plan, run a bounded sequence of steps (spawning sub-plans when needed), and adjust the note’s metadata (e.g., review_state) through domain agents. The loop stops when the goal is reached or when bounds/guardrails refuse to proceed, keeping the flow explainable and safe.
+
 ### Eval & QA (dev-side)
 - Dev-side validation keeps panel text out of indexing and ensures ingest/ASK guardrails hold.
 - To verify that panel content is not contaminating indexing/QA in the PKM-Alpha vault, use the alpha-human-flows CLI with a clean outbox:

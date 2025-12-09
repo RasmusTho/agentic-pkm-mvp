@@ -28,6 +28,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/ROADMAP.md | Strategic roadmap | Aligned (v4.10) | 2025-12-07 | Reflects v4.10 baseline and v5.x themes. |
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (v4.10) | 2025-12-07 | RelationIndex marked baseline (memory/pg) with ASK surfacing deferred. |
 | docs/AGENTS.md | Agents overview | Aligned (v4.10) | 2025-12-07 | ASK graph clarified (retrieve→rerank→answer, no self-check loop). |
+| docs/PLANNER.md | Planner contract | Aligned (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (v5.0 – PanelAgent step 1) | 2025-12-07 | Runtime loop documented (panel.intent.created, CLI run, ObjectStore source). |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent step 1) | 2025-12-07 | Envelope + topic clusters aligned; adds `panel.intent.created`. |
 | docs/DIAGRAMS.md | C4 diagrams | Aligned (v4.10) | 2025-12-07 | Diagrams reflect current topology. |

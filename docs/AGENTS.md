@@ -40,3 +40,8 @@ Flow: `query → retrieve (hybrid search) → rerank (ask_score + reranker) → 
 | SetEvaluator | Score/rank candidates for promotion/sets | Review & Promotion / ASK (ranking) | Active |
 | MergeResolverAgent | Resolve conflicts/merges across sources | Capture & Ingest | Parked (future) |
 | NoteHygieneAgent | Suggest cleanups and consistency fixes | Capture & Ingest / Panel Interaction | Parked (future) |
+
+## Planner (Reality-MVP)
+- Builds hierarchical plans (parent_plan + depth) and enforces bounds (max depth/steps/replans/total steps).
+- Executes primitive steps via domain mutations (e.g., review_state updates) and tracks executed_steps.
+- Wraps every primitive step in guardrail pre/post checks so policies can allow/modify/block/fail tool calls.

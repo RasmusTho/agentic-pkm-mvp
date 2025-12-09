@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TypedDict, Any, Callable
+from typing import TypedDict, Any, Callable, Optional
 from dataclasses import dataclass
 from langgraph.graph import StateGraph, START, END
 
@@ -11,6 +11,10 @@ class AgentState(TypedDict, total=False):
     reflection: dict
     output: dict
     meta: dict
+    current_plan_id: Optional[str]
+    current_step_id: Optional[str]
+    total_steps: Optional[int]
+    max_total_steps: Optional[int]
 
 @dataclass
 class PERSpec:
