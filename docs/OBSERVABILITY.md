@@ -3,6 +3,10 @@ State: SoT v4.10 Reality-MVP (current core).
 
 Logs are the primary tracing surface; no external APM is required for the current MVP.
 
+## Status snapshot (CLI)
+- `app.observability.status_service.get_system_status()` aggregates per-plane object counts (vault vs external), ingest run timestamps/error counts (via ingest summaries), and ASK query counts/latency/error counts over the last 24h window.
+- The `python -m app.cli status` (or `poetry run app status`) command renders the snapshot for humans; the interim GUI (root `/` in the FastAPI app) reuses the same backend and surfaces a basic ASK form.
+
 <!-- SECTION:OBS:BEGIN -->
 ## JSON log and span schema
 `app/obs/log.py:11-58` emits one line per span with:

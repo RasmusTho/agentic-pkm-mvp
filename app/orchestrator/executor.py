@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Mapping, MutableMapping, Protocol
 
 from app.a2a.events import emit_agent_error_event, send_agent_request
 from app.a2a.schema import new_error
 from app.agents.base.loop import Agent
 from app.mcp.vault_tools import VaultToolError, append_note
-
 
 from app.planner.schema import PlanMetadata, PlanStep
 from app.planner.tools import get_tool_descriptor
@@ -135,7 +135,9 @@ class MockPlanExecutor(PlanExecutor):
             object_id=context.object_id,
             trace_id=context.trace_id,
         )
-        if self._should_use_real_tool(descriptor.name, context):
+        if descriptor.kind == "internal":
+            result_payload = self._run_internal_tool(descriptor.name, args, context)
+        elif self._should_use_real_tool(descriptor.name, context):
             result_payload = self._run_vault_append(args, context)
         else:
             result_payload = dict(descriptor.mock_result or {"status": "ok"})
@@ -148,6 +150,18 @@ class MockPlanExecutor(PlanExecutor):
             trace_id=context.trace_id,
         )
         return {"tool": descriptor.name, "result": result_payload}
+
+    def _run_internal_tool(self, name: str, args: Mapping[str, Any], context: StepContext) -> Dict[str, Any]:
+        if name == "internal.ingest_external":
+            try:
+                from app.ingest.external import ingest_external_folder
+
+                root = Path(args["root_dir"])
+                summary = ingest_external_folder(root, limit=args.get("limit"))
+                return {"status": "ok", "summary": asdict(summary)}
+            except Exception as exc:
+                raise StepExecutionError(f"external ingest failed: {exc}", error_type="internal_tool_error") from exc
+        raise StepExecutionError(f"unsupported internal tool '{name}'", error_type="invalid_tool")
 
     def _should_use_real_tool(self, tool_name: str, context: StepContext) -> bool:
         if tool_name != "mcp.vault.append_note":

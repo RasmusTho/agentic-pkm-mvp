@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: SoT v4.10 Reality-MVP (baseline locked; v5.x Agentic PKM is the forward line).
 # 6.0 Agentloop (deterministisk)
 
 ## ASK AgentState (Reality-MVP)

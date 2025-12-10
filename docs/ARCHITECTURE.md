@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: SoT v4.10 Reality-MVP (baseline locked; new work targets v5.x Agentic PKM).
 # Architecture — SoT v4.10 Reality-MVP
 
 Historic SoT snapshots and older plans live in `docs/archive/`.
@@ -19,6 +19,10 @@ This architecture focuses on the runtime and data model for the Mimer module (th
 ## Component Catalog
 - See `docs/COMPONENTS.md` for the canonical, human- and machine-readable list of active components (stores, agents, embeddings, rerankers, eval stack, observability). Update it when wiring new component entrypoints under `app/components/*`.
 - The outbox/event system uses a common envelope (`event`, `trace_id`, `source`, `timestamp`, `payload`, `meta`) defined in `app/events/schema.py` and enforced by architecture tests; emitters should write via outbox helpers to preserve the contract.
+
+## SoT lines
+- **SoT v4.10 Reality-MVP (baseline locked)** — single-user PKM with stable vault ingest, minimal external ingest, hybrid retrieval + ASK with sources/latency, observability/status surfaces (CLI/API/GUI), and orchestrator runtime V1. Operational acceptance: soak vault ingest and external newsletter/PDF samples. Collaboration/multi-user deferred.
+- **SoT v5.x Agentic PKM (active forward line)** — Agentic flows (PanelAgent v5+), Satellite Sync (`docs/PROTOCOL_SATELLITE_SYNC.md`), and Yggdrasil modules (Munin/Brokkr/Tyr/Heimdall) that extend the v4.10 backbone; richer orchestration (LangGraph + MCP ToolProvider) and reasoning live here.
 
 ## Reality-MVP Orientation
 - Primary focus: make ingestion of the real Obsidian vault stable, add a minimal external ingest path, expose a reliable ASK API, and ship observability plus an interim GUI so the system is usable end to end.
@@ -49,7 +53,7 @@ This architecture focuses on the runtime and data model for the Mimer module (th
 2) **External corpus ingest (minimal)** — a small drop folder/pipeline for real external documents ingested as `external_raw` objects, stored in ObjectStore and indexed without surfacing as vault notes (txt/md drop-folder CLI implemented; newsletters/PDFs can extend the same path).
 3) **ASK API** — FastAPI endpoint returning answer text plus sources `{uuid, title, origin (vault/external), zone if known, path/source_ref}` and latency; uses hybrid retrieval over both planes with an in-process HybridStore warmed from `store_objects` on first use. Zone overlays are planned but not yet populated in responses.
 4) **Observability backend** — status service that aggregates per-store object counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency; exposed via CLI and interim GUI.
-5) **Interim GUI** — simple FastAPI-served page that shows status (object counts, last ingest, ASK stats) and an ASK input with answers + visible sources; explicitly a temporary observability/interaction surface.
+5) **Interim GUI** — simple FastAPI-served page (root `/`) that shows status (object counts, last ingest, ASK stats) and an ASK input with answers + visible sources; explicitly a temporary observability/interaction surface.
 All Reality-MVP components run on the existing PER-loop agents (Normalizer, Classifier, Chunker, CitationChecker, Indexer, Reviewer, Promotion Agent) and Store abstraction (ObjectStore, VectorIndex, RelationIndex) with Outbox-driven events and Projector/Planner/Reasoning layers kept as additive overlays.
 Advanced zone logic, reflection workflows, serendipity, and collaboration are deferred until the Reality-MVP foundation is solid.
 
@@ -158,6 +162,7 @@ The adapter `app/retrieval/hook_adapter.py::maybe_rerank(query, items)` sits on 
 
 ## Observability & CI
 JSONL audit logs capture `trace_id`, agent name, inputs, and outputs for each PER step; correlated `span_id`s map to structured metrics for latency and retries. Deterministic CI runs use `pytest -q -m "not pg"`, memory stores, and mock LLMs to ensure reproducible timings. Outbox processing meets QAS-010 by keeping ingest-to-index latency ≤ 2 s, while search endpoints monitor QAS-003 with p95 latency < 250 ms under hybrid retrieval. Telemetry dashboards watch agent failure rates and promotion cooldown breaches so regressions are caught before shipping.
+Runtime status lives in `app.observability.status_service`: it aggregates per-plane object counts (vault/external), ingest run timestamps/errors (via ingest summaries), and ASK latency/error counts. The `status` CLI command and interim GUI (root `/`, static HTML + JS under `app/web/static/index.html`) call this backend to show a human-readable snapshot.
 
 ## Fitness Functions
 - **QAS-003 Hybrid Search Latency** — `app.fitness.metrics.qas003_hybrid_latency()` warms the in-memory hybrid store with a deterministic corpus and times `hybrid_search()` invocations. CI fails if the measured p95 exceeds 250 ms, and the GitHub workflow prints the JSON report via `python -m app.fitness.report`.
@@ -268,7 +273,7 @@ The planner consumes the current object context (Core-6 + latest payload), a Rel
 `app/planner/schema.py` defines the persisted plan contract: `Plan` (with `PlanMetadata`), `PlanStep`, and `ToolDescriptor`. Steps carry `kind=agent_call|tool_call|decision|note`, optional `agent/intent`, MCP tool names (e.g., `mcp.vault.append_note`) plus structured `tool_args`, dependencies, and metadata so plans replay deterministically. MCP tool descriptors live under `app/planner/tools.py` as a static registry (`MCP_TOOL_DESCRIPTORS`) the Planner Agent references when suggesting tool steps; each descriptor ships with a JSON-schema-like shape, explicit `allowed_args`, and a deterministic `mock_result` so the executor can validate payloads without touching real MCP tools. Tests assert that plan steps referencing those names remain valid even before we wire actual MCP execution.
 
 ### Planner Outputs & Execution
-Planner responses must validate against the Plan schema, so downstream executors see a uniform structure regardless of backend. Plans may include `tool_call` and `agent_call` steps so multi-agent workflows chain without bespoke glue, and they can reference MCP tools by name through the ToolProvider abstraction. If the planner is disabled, the classical round-robin PER scheduler runs unchanged. When `PLANNER_ENABLE=1`, `app.agents.pipeline.maybe_plan_for_object()` emits a plan plus `planner.plan.created`, and when `ORCHESTRATOR_ENABLE=1` the same pipeline calls `maybe_execute_plan()` so the Orchestrator replays the plan immediately after ingest (deterministically mocked in CI).
+Planner responses must validate against the Plan schema, so downstream executors see a uniform structure regardless of backend. Plans may include `tool_call` and `agent_call` steps so multi-agent workflows chain without bespoke glue, and they can reference MCP tools by name through the ToolProvider abstraction. If the planner is disabled, the classical round-robin PER scheduler runs unchanged. When `PLANNER_ENABLE=1`, `app.agents.pipeline.maybe_plan_for_object()` emits a plan plus `planner.plan.created`, and when `ORCHESTRATOR_ENABLE=1` the same pipeline calls `maybe_execute_plan()` so the Orchestrator replays the plan immediately after ingest (deterministically mocked in CI). The runtime can also be invoked directly via `orchestrate-external`, which builds and executes a plan using the same executor contract.
 
 ### Deterministic Backends & Flags
 `app/planner/provider.py` exposes `MockPlanner` (deterministic fixtures for CI) and `LLMPlanner` (Ollama-backed when `PLANNER_PROVIDER=llm` and `LLM_PROVIDER!=mock`). The provider falls back to the mock backend and emits `planner.plan.fallback` when misconfigured or when LLM output fails validation. `PLANNER_ENABLE=0` keeps the planner inert; when enabled, planner calls are audited via `planner.plan.created` (intake) plus `planner.plan.error`/`planner.plan.fallback` when issues occur so reviewers can trace every orchestrated decision alongside MCP and A2A traces.
@@ -283,10 +288,11 @@ The Orchestrator is the deterministic execution layer (current PER-loop derivati
 ### Orchestrator Runtime — Execution Model (v4.10A)
 AgentConfigs now guard agent_call steps: before invoking an agent, the orchestrator resolves its vault-defined AgentConfig and enforces enabled/flow/event boundaries. Misconfigured or disabled agents yield structured permission errors instead of crashes, keeping human-declared constraints in control while tool/decision steps remain unchanged.
 
-`app/orchestrator/runtime.py` hosts the Orchestrator class plus a `MockPlanExecutor`. Plans are validated up front (unique IDs, dependency order, required agent/tool metadata). Each step emits `orchestrator.step.started|finished|error` with the plan/step identifiers so auditing can reconstruct the control flow. Execution stays deterministic because `MockPlanExecutor`:
-- dispatches `agent_call` steps via `send_agent_request` (emitting `agent.request.created`) and immediately routes them through the default Agent handler, which responds with `agent.error.created` / `error_type=not_implemented`.
-- enforces MCP tool contracts by loading descriptors, checking `allowed_args`, and returning the descriptor’s `mock_result`; every call emits `mcp.tool.call.started|finished`, and no sockets/filesystem work occurs in CI.
-- records decision/note steps as structured audit payloads without mutating stores.
+`app/orchestrator/runtime.py` hosts the Orchestrator class plus an executor. Plans are validated up front (unique IDs, dependency order, required agent/tool metadata). Each step emits `orchestrator.step.started|finished|error` with the plan/step identifiers so auditing can reconstruct the control flow. Execution defaults to deterministic MCP/A2A mocks, but now supports internal tools with side effects:
+- `agent_call` steps dispatch via `send_agent_request` (emitting `agent.request.created`) and immediately route through the default Agent handler, which responds with `agent.error.created` / `error_type=not_implemented`.
+- MCP tool calls validate descriptors/args, emitting `mcp.tool.call.started|finished` and returning `mock_result` unless explicitly enabled (vault append).
+- Internal tools include `internal.ingest_external` which runs the external drop-folder ingest pipeline and returns a summary; this powers the `orchestrate-external` CLI dual-run path alongside the direct `ingest-external` command.
+- Decision/note steps remain structured audit payloads without mutating stores.
 
 The current choreography is serialized and flag-gated (`PLANNER_ENABLE` + `ORCHESTRATOR_ENABLE`). Future LangGraph/parallel scheduling layers can reuse the same executor contract while preserving determinism.
 

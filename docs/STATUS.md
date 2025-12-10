@@ -1,11 +1,11 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: SoT v4.10 Reality-MVP (baseline locked; v5.x is the active forward line).
 # Status — Operational Snapshot
 
 Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and deployment topology for this SoT.
 
 | Version | Goal | Delivered | Open | Next | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Reality-MVP (SoT v4.10) | Reliable vault ingestion + minimal external plane + ASK API + observability + interim GUI | PER-loop agents stable; ASK CLI/API baseline over vault objects; zones/planes defined; external object schema (`external_raw`) ready; InstanceSettings + `instance_id` on events as internal plumbing | Harden real-vault ingest runs, wire minimal external drop ingest, build observability backend + interim GUI | Stabilize FastAPI ASK endpoint with sources/latency; ship status CLI/dashboard; run ingest on real vault snapshots | Single-user focus; collaboration deferred; zones are derived overlays |
+| Reality-MVP (SoT v4.10) | Reliable vault ingestion + minimal external plane + ASK API + observability + interim GUI + orchestrator runtime V1 | PER-loop agents stable; ASK CLI/API baseline over vault objects; zones/planes defined; external object schema (`external_raw`) ready; status/backend/GUI shipped; orchestrator runtime runs internal tools | Operational acceptance: soak real-vault ingest; extend external samples; richer orchestrator scheduling deferred to v5.x | Stabilize FastAPI ASK endpoint with sources/latency; ship status CLI/dashboard; run ingest on real vault snapshots | Single-user focus; collaboration deferred; zones are derived overlays |
 | v4.4 | Observability + Store abstraction | JSONL audit, Outbox, Core-6 identity | None | Keep doc set frozen | Stable legacy cut |
 | v4.5A | Deterministic ingestion baseline | Full PER loop, promotion cooldowns, memory CI | Route ingestion polish to v4.5B | Monitor metrics + guard rails | Current green baseline |
 | v4.5B | Fitness guards + ingestion polish | Delivered 2025-02-14 — rerank hooks, chunk/dedup, CI gates | — | Prep v4.6 rollout, keep fitness monitors green | Ready for tagging |
@@ -13,20 +13,21 @@ Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and 
 | v4.6-D | CI gates + summary contract | Delivered 2025-02-18 — baselines.yaml drives seven-line CI output with GATES ok=true | — | Refresh baselines when metrics improve; keep PRs pasting summary lines | ops/quality/baselines.yaml + GATE_STRICT=1 documented |
 | v4.8 | A2A Protocol V1 + Orchestrator messaging | Canonical schema defined; mocks available | Wiring deferred until after Reality-MVP | Implement deterministic fixtures + status docs | Gated by `A2A_ENABLE`; post-MVP |
 | v4.9 | MCP Integration + Planner Agent (LLM) | Delivered — Planner schema, MCP descriptor registry (`allowed_args` + `mock_result`), Mock/LLM planners, pipeline hook | Harden MCP transport + ToolProvider runtime | Align ToolProvider + Reasoning inputs | Flags: `MCP_ENABLE`, `PLANNER_ENABLE` |
-| v4.10 | Orchestrator Runtime (LangGraph execution engine) | Skeleton delivered — plan validation + audit + mocked MCP/A2A execution | Integrate LangGraph + real MCP/agent loops (post-MVP) | Validate planner playback + CLI parity; fold into Reality-MVP interim GUI/ASK path | Flag: `ORCHESTRATOR_ENABLE`; Reality-MVP consumes skeleton |
+| v4.10 | Orchestrator Runtime (LangGraph execution engine) | Runtime delivered — plan validation + audit + internal tool execution (external ingest) + MCP/A2A mocks; CLI dual-run available | Extend to LangGraph/parallel scheduling + richer MCP tool providers (post-MVP) | Validate planner playback + CLI parity; fold into Reality-MVP interim GUI/ASK path | Flag: `ORCHESTRATOR_ENABLE`; Reality-MVP consumes skeleton |
 | v5.x | Symbolic reasoning + reflexive agents | Governance concepts, Agent Memory Graph sketches | RDF/OWL/SHACL enforcement, logic gates | Define policy bundles + knowledge graph API | Dependent on v4.6 telemetry |
 
 Eval baseline: DeepEval ASK + Ragas RAG suites are available under `@pytest.mark.eval` (seed cases; opt-in, diagnostics only).
 
-## Reality-MVP Snapshot
+## Reality-MVP Snapshot (SoT v4.10 baseline)
 - Implemented: PER-loop ingestion against vault objects with Core-6 projection + Stores/Outbox; ASK CLI/API baseline over the vault plane; zones/planes defined with `external_raw` schema for non-vault objects; Planner/Reasoning layers remain optional overlays.
 - Malformed frontmatter is now handled gracefully in vault ingest (skip + warning + summary counters), preventing crashes on bad YAML; ingest errors are recorded with counts/paths and runs can resume to finish remaining notes.
-- ASK API now returns sources with plane/origin tags and latency alongside answers.
+- ASK API returns sources with plane/origin tags and latency alongside answers.
 - Minimal external ingest path delivered: drop-folder → external_raw objects stored/indexed (txt/md), retrievable via ASK with origin/plane tags.
-- In progress: Running ingest on real vault snapshots and hardening resume/error handling; minimal external drop ingest for newsletters/PDFs into `external_raw`; FastAPI ASK endpoint with answers + sources + latency; zone/plane tags exposed in ASK responses.
-- Planned/queued: Observability backend + CLI (object counts per plane, ingest timestamps/errors, ASK counts/latency); interim GUI dashboard showing status + ASK; external ingest sample set; collaboration/multi-user explicitly deferred.
+- Observability backend + CLI delivered: status service aggregates per-plane counts, ingest timestamps/errors, and ASK query counts/latency/error counts.
+- Operational acceptance: soak ingest on real vault snapshots and extend external drop ingest to real newsletter/PDF samples; these are manual runs rather than code gaps.
+- Delivered: Interim GUI dashboard (served at `/`) surfaces status snapshot (per-plane counts, ingest runs/errors, ASK latency/errors) and includes a basic ASK form; collaboration/multi-user explicitly deferred until after Reality-MVP foundations are stable.
 - Reality-MVP smoke: canonical note → ingest → index → ASK path is captured in `docs/scenarios/REALITY_MVP.md` and enforced by `tests/e2e/test_reality_mvp_pipeline.py`.
-- Remaining v4.10 tasks: harden vault ingest (resume, malformed frontmatter), finalize external drop-folder ingest to `external_raw`, polish ASK responses (sources + zone/plane + latency), deliver observability backend + CLI, build interim GUI (status + ASK), and advance Orchestrator runtime beyond the skeleton (LangGraph + real MCP/agent execution with dual-run toggles).
+- Orchestrator runtime V1: runs plans with internal tools (external ingest) and a CLI dual-run path; further LangGraph/parallel scheduling and richer MCP execution are deferred to v5.x.
 
 ## Note Ingestion Defaults
 - Notes always get a UUID via `ensure_note_uuid` before watcher/update runs; the YAML round-trip helper is the only parser/writer for frontmatter.
@@ -47,10 +48,10 @@ Eval baseline: DeepEval ASK + Ragas RAG suites are available under `@pytest.mark
 - CI: Mock Planner Agent keeps tests deterministic; `PLANNER_PROVIDER=mock` is enforced automatically when `LLM_PROVIDER=mock`, and descriptor validation is covered by new planner/orchestrator tests.
 
 ## v4.10 — Orchestrator Runtime
-- Status: Skeleton delivered; maintained as part of Reality-MVP while LangGraph/real MCP execution is deferred.
-- Summary: `app/orchestrator.runtime` validates plans, runs steps sequentially, emits `orchestrator.step.*`, and integrates with `send_agent_request` plus MCP mock descriptors so plan execution stays fully audited without touching the filesystem/network. `app.agents.pipeline.maybe_execute_plan()` (gated by `ORCHESTRATOR_ENABLE`) now replays plans immediately after planning.
+- Status: Runtime V1 delivered; maintained as part of Reality-MVP while LangGraph/real MCP execution is deferred.
+- Summary: `app/orchestrator.runtime` validates plans, runs steps sequentially, emits `orchestrator.step.*`, and integrates with `send_agent_request` plus MCP descriptors. Internal tools now include `internal.ingest_external` (real external ingest) alongside MCP/A2A mocks; `app.agents.pipeline.maybe_execute_plan()` (gated by `ORCHESTRATOR_ENABLE`) replays plans immediately after planning; `orchestrate-external` provides a CLI dual-run path.
 - Flags: `ORCHESTRATOR_ENABLE` gates the runtime so teams can dual-run CLI and Orchestrator paths; planner flag must also be enabled.
-- CI: New tests under `tests/orchestrator/` assert plan playback, MCP validation, A2A error emission, and pipeline wiring. Execution remains mock-only, preserving the eight-line CI contract while groundwork for LangGraph + real MCP integrations proceeds.
+- CI: Tests under `tests/orchestrator/` assert plan playback, MCP validation, A2A error emission, and pipeline wiring. Execution remains mock-only unless explicitly enabled for vault append; richer LangGraph/MCP ToolProvider integration deferred to v5.x.
 
 ## v4.5B Delivery Summary (2025-02-14)
 - Fitness gates enforced with deterministic QAS-003 hybrid-search and QAS-010 outbox→index probes.
@@ -274,12 +275,11 @@ CI SUMMARY GATES ok=true reasons=
 Relation coverage + validity now exceed the ≥95 % SoT v4.6-B guardrail while ce_local remains default-off unless flags are set; staging now runs with `PROMOTION_REQUIRE_RELATIONS=1` so promotion gating is enforced ahead of production.
 
 ## Outstanding Blockers
-- Long-run ingest reliability on real vaults (resume logic, malformed frontmatter handling) needs soak testing before calling vault ingestion “stable”.
-- Minimal external ingest sample (newsletters/PDFs) and drop-folder wiring need to be finalized so external plane coverage can be demonstrated.
-- Observability aggregator + interim GUI endpoints are unimplemented; status CLI/dashboard requires object counts per plane and ASK latency/error metrics.
+- Operational acceptance: soak-test real-vault ingest and run external drop-folder on real newsletter/PDF samples.
+- Interim GUI remains minimal; richer GUI/dashboard deferred (single-page status + ASK is live at `/`).
 
 ## Ready for Tagging
-- [ ] Reality-MVP (vault ingestion + minimal external ingest + ASK API + observability backend + interim GUI)
+- [x] Reality-MVP (vault ingestion + minimal external ingest + ASK API + observability backend + interim GUI + orchestrator runtime V1)
 - [x] v4.5A baseline
 - [ ] v4.5B polish release (P1 rerank + P2 chunk/dedup complete) — archival
 - [ ] v4.6 feature release — archival

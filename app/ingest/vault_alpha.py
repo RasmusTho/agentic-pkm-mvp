@@ -14,6 +14,7 @@ import yaml
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.filters import strip_ai_panels
 from app.index.outbox import append_jsonl
+from app.observability.ingest_meta import record_ingest_run
 from app.obs.log import with_trace_id
 from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
@@ -471,7 +472,7 @@ def run_vault_alpha_ingest(
             errors.append(rel_display)
             click.echo(f"Error ingesting {rel_display}: {exc}", err=True)
             continue
-    return VaultAlphaSummary(
+    summary = VaultAlphaSummary(
         scanned=len(candidates),
         ingested=ingested,
         included_folders=included_folders,
@@ -482,6 +483,19 @@ def run_vault_alpha_ingest(
         error_notes=errors,
         processed_notes=sorted(processed),
     )
+    try:
+        record_ingest_run(
+            "vault",
+            scanned=summary.scanned,
+            ingested=summary.ingested,
+            errors=summary.errors,
+            malformed=summary.malformed,
+            ok=summary.errors == 0,
+            message=None if summary.errors == 0 else "ingest errors",
+        )
+    except Exception:
+        pass
+    return summary
 
 
 __all__ = ["run_vault_alpha_ingest", "VaultAlphaSummary"]

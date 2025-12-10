@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: SoT v4.10 Reality-MVP (baseline locked; v5.x Agentic PKM is the forward line).
 # Components Catalog (Reality-MVP)
 
 Canonical list of current modular building blocks. Keep this aligned with the codebase; no future placeholders beyond explicit OCR stubs below.

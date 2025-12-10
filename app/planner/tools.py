@@ -39,6 +39,20 @@ MCP_TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
         allowed_args={"query": "string", "k": "integer"},
         mock_result={"status": "ok", "results": []},
     ),
+    "internal.ingest_external": ToolDescriptor(
+        name="internal.ingest_external",
+        kind="internal",
+        schema={
+            "type": "object",
+            "properties": {
+                "root_dir": {"type": "string", "description": "Path to external drop folder"},
+                "limit": {"type": "integer", "description": "Optional max files to ingest"},
+            },
+            "required": ["root_dir"],
+        },
+        allowed_args={"root_dir": "string", "limit": "integer"},
+        mock_result={"status": "ok", "ingested": 0},
+    ),
 }
 
 
