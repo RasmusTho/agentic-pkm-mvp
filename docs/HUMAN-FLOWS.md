@@ -140,3 +140,36 @@ Kort orientering: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global 
 - `/api/ask` and the QA agent backends use BM25+embedding hybrid search over the in-process HybridStore, warmed from `store_objects` on first request; answers are the top-hit snippet and sources include doc ids and `source_ref` paths, while zones are not surfaced yet.
 - External corpus ingest is not automated; external objects only appear if inserted into the Store with an `origin` such as `external_raw`, and they surface in ASK/status alongside vault entries.
 - The CLI `ask` command still routes through the planner/orchestrator pipeline (QA steps fall back to the same hybrid retrieval), while `ingest-vault-root`/`pkm-alpha-ingest` provide quick root-level ingest helpers for the Alpha vault.
+
+## 8. Planned v5.x Watcher-driven Flows (Vault Watcher + siblings)
+State: SoT v4.10 (Reality-MVP) and v5.0 (PanelAgent Runtime V1) are locked baselines. Watcher-driven flows are planned v5.x work (v5.1–v5.4) and describe how the system should feel once delivered.
+
+### Mental model (human)
+- I edit and save a note in Obsidian. After a short cooldown, the system catches up: the change is ingested into Stores and, if the note has an AI panel that matches the auto-run policy, PanelAgent runtime can run for that note. I can still run the same CLI/service entrypoints manually; the watcher is convenience, not magic.
+- I expect batching: agents do not fire on every save. A short cooldown window collects edits and then runs ingest/panel once per batch.
+- I can see what ran: ingest and panel runs emit the usual events, AI-log entries, and status metrics; nothing rewrites my note body.
+
+### Mental model (system, high level)
+- Vault Watcher detects changed markdown files in the Obsidian vault (git watcher preferred, filesystem watcher as fallback per `docs/OBSIDIANSYNC.md`), batches them over a cooldown window, then triggers existing entrypoints:
+  - Ingestion via the vault ingest pipeline, including targeted ingest using `ingest-vault-paths` for the changed files.
+  - Panel/policy flows via note-update/PanelAgent runtime for notes whose panels satisfy an explicit auto-run policy (planned v5.3); the same pipelines are available via CLI by hand.
+  - Future flows (relations, summaries, hygiene) can reuse the same batching trigger.
+- The watcher does not rewrite note content; it only calls the existing ingest/update pipelines. It surfaces runs/errors/metrics into the existing observability/status surfaces.
+
+### Cooldown and batching
+- Watchers are not per-keystroke. They collect file changes during a short cooldown/batch window, then run ingest/panel once per batch. The human experience is “after a short while the system catches up,” not “agents fire on every save.”
+
+### Watcher types (planned)
+- Vault Watcher (v5.1–v5.4): watches Obsidian vault markdown files, triggers ingest and, once policy exists, panel runtime via note-update; emits watcher metrics (runs, changed files, errors).
+- External Inbox Watcher (future): watches an external drop folder/inbox and triggers external ingest into the `external_raw` plane via the existing external ingest CLI.
+- Scheduler/Time-based Watcher (future): triggers periodic flows (daily review, weekly summary, hygiene jobs).
+- All watcher types call the same CLI/service entrypoints as manual runs, integrate with observability/status, and are opt-in/auditable (no hidden automation).
+
+### PanelAgent runtime + watcher integration
+- PanelAgent Runtime V1 (SoT v5.0) interprets AI panels, emits `panel.intent.created`, `panel.intent.executed`, `panel.action.*`, emits `promote.intent.created` for mapped promotion actions, and writes AI logs (`panel_logs`) into note payloads.
+- Watcher track (v5.1–v5.3) adds automation that calls the same panel pipeline via note-update/PanelAgent runtime based on explicit policy (e.g., a flag on the note/panel). Manual CLI (`panel run` / `panel run-many` / note-update) and watcher-triggered runs share the same pipeline; watchers simply automate when to call it.
+- A multi-note CLI (`panel run-many`) runs the same PanelAgent parse/runtime for multiple notes in one invocation (emit-only supported); it is the watcher-ready entrypoint when a batch of notes changed.
+- Vault Watcher MVP (v5.2) ships as a polling CLI (`vault-watcher-run`) that diffs the vault against a snapshot, ingests changed notes via `ingest-vault-paths`, optionally runs `panel run-many` on those notes, prints a summary, refreshes the snapshot, and exits. It is intended for manual/cron use, not a long-lived daemon yet.
+- Auto-panel policy (v5.3 planned/delivered in CLI): watcher-driven panel runs are opt-in per note. Frontmatter controls: `ai_panel_auto_run: watcher` allows watcher auto-run; missing/`manual` defaults to skip; `never` forbids watcher auto-run. Nested form `ai_panel: { auto_run: watcher|manual|never }` is also accepted. Manual CLI (`panel run` / `panel run-many`) is unaffected and always allowed; watchers only run panels when explicitly permitted.
+- Hardening (v5.4): `vault-watcher-run` supports `--dry-run` (no ingest/panel, shows what would run) and `--max-notes` with optional `--force` to prevent storming on large change sets. Summaries report changed notes, ingest attempts, panel candidates/runs, skips, and errors. Watchers remain opt-in and bounded by both global flags and per-note policy.
+- See also: `docs/UAT_PANEL_WATCHER.md` for a human-facing walkthrough of manual + watcher UAT.

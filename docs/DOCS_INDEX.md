@@ -27,17 +27,19 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 ## Core SoT Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/ARCHITECTURE.md | Architecture (SoT v4.10) | Aligned (SoT v4.10 locked) | 2025-12-10 | Reality-MVP baseline; ingest hardening, external drop-folder path, status backend/CLI/GUI, orchestrator runtime V1; forward v5.x line now includes watcher/agent infra phases (v5.1–v5.4) on top of v5.0 PanelAgent runtime, plus targeted ingest via `ingest-vault-paths` (v5.1 start). |
+| docs/ARCHITECTURE.md | Architecture (SoT v4.10) | Aligned (SoT v4.10 locked) | 2025-12-10 | Reality-MVP baseline; ingest hardening, external drop-folder path, status backend/CLI/GUI, orchestrator runtime V1; forward v5.x line includes watcher/agent infra phases (v5.1–v5.4) on top of v5.0 PanelAgent runtime, plus targeted ingest, multi-note panel CLI, v5.2 snapshot-based watcher CLI, v5.3 frontmatter-gated auto-panel policy, and v5.4 dry-run/max-notes hardening. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Aligned (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
-| docs/STATUS.md | Operational snapshot | Aligned (SoT v4.10 locked) | 2025-12-10 | Reality-MVP locked (v4.10); v5.0 PanelAgent runtime baseline; v5.x forward line includes watcher/agent infra milestones v5.1–v5.4 alongside Satellite Sync/Yggdrasil/Orchestrator+Reasoning 2.0. |
-| docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v4.10 locked) | 2025-12-10 | Reality-MVP baseline locked; v5.0 PanelAgent runtime baseline; v5.x track now includes watcher/agent infra milestones (v5.1–v5.4) in addition to existing themes. |
+| docs/STATUS.md | Operational snapshot | Aligned (SoT v4.10 locked) | 2025-12-10 | Reality-MVP locked (v4.10); v5.0 PanelAgent runtime baseline; v5.x watcher/agent milestones: v5.1 targeted ingest + multi-note panel CLI, v5.2 snapshot-based watcher CLI, v5.3 frontmatter-gated auto-panel policy, v5.4 dry-run/max-notes hardening. |
+| docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v4.10 locked) | 2025-12-10 | Reality-MVP baseline locked; v5.0 PanelAgent runtime baseline; v5.1 targeted ingest + multi-note panel CLI; v5.2 snapshot-based Vault Watcher CLI; v5.3 explicit auto-panel policy; v5.4 dry-run + max-notes hardening; existing themes maintained. |
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP components; v5.x will extend (PanelAgent, sync, richer orchestration). |
 | docs/AGENTS.md | Agents overview | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP agent set; v5.x Agentic extensions sit on top. |
 | docs/PLANNER.md | Planner contract | Aligned (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline: step 1 parse/map + runtime fan-out to promotion/logs. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline; includes runtime events (`panel.intent.executed`/`panel.action.*`/`panel.log.created`) and promotion fan-out. |
 | docs/DIAGRAMS.md | C4 diagrams | Aligned (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
-| docs/HUMAN-FLOWS.md | Human flows | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline: default CLI runs runtime fan-out; emit-only preserves step 1; notes include targeted ingest via `ingest-vault-paths` as v5.1 watcher-ready step. |
+| docs/HUMAN-FLOWS.md | Human flows | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline; includes v5.x watcher-driven flows (cooldown/batching, panel policy, other watcher types), targeted ingest, multi-note panel CLI, `vault-watcher-run` snapshot polling CLI (v5.2), v5.3 frontmatter-based auto-panel policy, and v5.4 dry-run/max-notes safety for watcher runs. |
+| docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Runtime V1 fan-out + promotion intent + AI-log; documents multi-note CLI and frontmatter auto-run policy (`ai_panel_auto_run` / `ai_panel.auto_run`) for watcher-triggered runs (v5.3); UAT guide at UAT_PANEL_WATCHER.md. |
+| docs/UAT_PANEL_WATCHER.md | UAT guide (panel + watcher) | Aligned | 2025-12-10 | Human-facing UAT flow for PanelAgent + Vault Watcher (prep notes, targeted ingest, panel run-many, watcher dry-run/run, observations). |
 | docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Aligned (v4.10) | 2025-12-07 | High-level module map reviewed; Reality-MVP scope noted. |
 
 ## Supporting Docs (Quality, Ops, Flows, Data)
@@ -69,7 +71,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/SETTINGS.md | Settings | Aligned (v4.10) | 2025-12-07 | Core env vars (STORE_BACKEND/LLM/metrics flags) documented. |
 | docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Partially outdated | 2025-12-07 | Planned API key + slowapi; not implemented in Reality-MVP. |
 | docs/ingest.md | Ingest (historical/current) | Aligned (v4.10) | 2025-12-07 | Vault-first ingest (CLI, UUID healing, mirror, HybridStore); legacy commands noted. |
-| docs/OBSIDIANSYNC.md | Obsidian sync | Aligned (v4.10) | 2025-12-07 | Reality-MVP: manual CLI ingest; no active watcher; UUID healing only. |
+| docs/OBSIDIANSYNC.md | Obsidian sync | Aligned (v4.10) | 2025-12-10 | Reality-MVP: git watcher primary, filesystem watcher fallback; describes Obsidian → watcher → ingest/update → outbox → indexer; aligned with v5.x watcher track and the v5.2 snapshot-based Vault Watcher CLI. |
 | docs/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/AI_DEVELOPMENT.md | AI-assisted development policy | Aligned (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
 | docs/DEV_WORKFLOW.md | Developer workflow | Aligned (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
@@ -97,7 +99,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/architecture/next-steps.md | Architecture future/bridge | Legacy (archived) | 2025-12-07 | Historical v4.3 bridge; superseded by STATUS/ROADMAP v4.10. |
-| docs/architecture/obsidian_integration.md | Obsidian integration deep dive | Legacy (archived) | 2025-12-07 | v4.3 watcher-based flow; superseded by INGEST/OBSIDIANSYNC (CLI, UUID healing). |
+| docs/architecture/obsidian_integration.md | Obsidian integration deep dive | Legacy (archived) | 2025-12-11 | SoT v4.3 watcher-based flow (historical); superseded by v4.10/v5.x docs; watcher → ingest → outbox pattern reused in planned v5.x track. |
 | docs/architecture/memory/api.md | Memory API v4.2 | Legacy (archived) | 2025-12-07 | V4.2 agent-memory API; not in Reality-MVP. |
 | docs/architecture/memory/c4-component.md | Memory C4 component | Legacy (archived) | 2025-12-07 | Legacy memory component view; see ARCHITECTURE/DATA_MODEL. |
 | docs/architecture/memory/c4-container.md | Memory C4 container | Legacy (archived) | 2025-12-07 | Legacy container diagram; superseded by SYSTEM_DESIGN_v4.10. |
@@ -111,7 +113,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/architecture/memory/overview.md | Memory overview | Legacy (archived) | 2025-12-07 | V4.2 memory overview; replaced by ObjectStore/VectorIndex. |
 | docs/uml/README.md | UML overview | Legacy (archived) | 2025-12-07 | Supervisor-era UML; canonical diagrams in DIAGRAMS.md. |
 | docs/uml/agent_sequence.md | UML sequence | Legacy (archived) | 2025-12-07 | Run_agent supervisor loop; not part of Reality-MVP. |
-| docs/uml/agent_components.md | UML components | Legacy (archived) | 2025-12-07 | Legacy agent service components; see ARCHITECTURE/DIAGRAMS. |
+| docs/uml/agent_components.md | UML components | Legacy (archived) | 2025-12-11 | Legacy agent service components; watcher block marked removed and superseded by planned v5.x watcher track (see ROADMAP/STATUS/HUMAN-FLOWS). |
 
 ## Runbooks, How-to, Settings Examples, and Examples
 | Path | Scope | Review status | Last reviewed | Notes |
@@ -162,7 +164,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/archive/VERSIONING.md | Versioning (archived) | Legacy (archived) | — |  |
 | docs/archive/codex_plan.md | Codex plan (archived) | Legacy (archived) | — |  |
 | docs/legacy/PROJECT_OVERVIEW.md | Legacy overview | Legacy (archived) | — |  |
-| docs/legacy/TODO.md | Legacy TODO | Legacy (archived) | — |  |
+| docs/legacy/TODO.md | Legacy TODO | Legacy (archived) | 2025-12-11 | Notes that the old ingestion watcher is deprecated; planned v5.x watcher track supersedes it. |
 
 ## Scenario and Protocol Docs
 | Path | Scope | Review status | Last reviewed | Notes |

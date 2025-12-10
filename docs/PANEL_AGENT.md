@@ -27,6 +27,7 @@ Please promote this note after verifying the summary.
 
 ## Runtime V1 (fan-out, promotion intent, AI-log)
 - Invocation: `python -m app.cli panel run --uuid <note_uuid>` (default runs the runtime loop). Use `--emit-only` to keep legacy “emit-only” behaviour without executing runtime actions.
+- Multi-note invocation: `python -m app.cli panel run-many <uuid> [<uuid> ...]` (default runs runtime; `--emit-only` supported). Used by watcher flows; auto-run policy gates watcher-driven calls.
 - Reads the note from ObjectStore (vault mirror), not directly from the filesystem.
 - Finds each AI panel, parses instruction + checkbox actions, enriches actions via `docs/settings/panel-actions.md` mappings, and emits **one** Outbox event per panel: `panel.intent.created`.
 - Interprets checked actions and:
@@ -36,6 +37,15 @@ Please promote this note after verifying the summary.
   - emits `promote.intent.created` when an action has `intent_type: promotion` (e.g. `promote.evergreen` mapping) so Promotion Agent flows can react,
   - emits `panel.log.created` and mirrors the same human-readable entry into the note’s `panel_logs` payload (AI-log/traceability).
 - No LangGraph/planner/tool calls; this remains a lightweight runtime loop on top of Reality-MVP.
+- Auto-run policy (SoT v5.3, watcher-facing): watchers only auto-run panels when the note explicitly allows it via frontmatter, e.g.:
+  - `ai_panel_auto_run: watcher` (watcher may auto-run panel runtime)
+  - `ai_panel_auto_run: manual` or missing (default, watcher skips; manual CLI still allowed)
+  - `ai_panel_auto_run: never` (watcher must not auto-run; manual CLI still allowed)
+  - Nested form also supported: `ai_panel: { auto_run: watcher|manual|never }`
+  Manual CLI commands (`panel run`, `panel run-many`) ignore the policy; it gates watcher-driven automation only.
+
+## UAT / Trying it out
+- The quickest way to exercise PanelAgent + watcher flows on a small set of notes is in `docs/UAT_PANEL_WATCHER.md` (prep notes, targeted ingest, panel run-many, watcher dry-run/run, and what to observe).
 
 ### Event payload (panel.intent.created)
 ```json
