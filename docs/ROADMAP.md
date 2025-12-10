@@ -35,8 +35,31 @@ State: SoT v4.10 Reality-MVP (current core).
 | v4.8 | Agent Coordination (A2A Protocol V1 + Orchestrator messaging hooks). | Planned (post-MVP) |
 | v4.9 | MCP Integration V1 + Planner Agent (LLM) plan schema. | Delivered (planning schema + descriptors; transport mocked) |
 | v4.10 | Orchestrator Runtime V1 (LangGraph execution of Planner Agent output). | Delivered skeleton; further LangGraph/MCP execution planned alongside Reality-MVP |
+| v5.0 | PanelAgent Runtime V1 on the v4.10 baseline (first v5.x milestone) | Delivered — runtime executes default panel flow; no changes to v4.10 |
+| v5.1 | Watcher-ready ingest & panel flows (builds on v5.0) | Planned — CLI ingest of single/changed notes; controlled multi-note panel runs; watcher-compatible docs |
+| v5.2 | Vault Watcher MVP (CLI, polling) | Planned — manual/background CLI watcher polls for changes, triggers ingest, reports runs/metrics |
+| v5.3 | Auto-panel as explicit policy | Planned — watcher-triggered panel runs under explicit policy/flags with clear AI log + events |
+| v5.4 | Watcher hardening & ergonomics | Planned — backoff/error handling, pause/stop, human flows for living with watcher + panels |
 
 Current Reality-MVP work supersedes the statuses of the older tracks above; rows remain for SoT history.
+
+## v5.0 — PanelAgent Runtime V1 (SoT v5.x baseline)
+- Sits on top of the locked SoT v4.10 Reality-MVP baseline; does not change v4.10 scope or acceptance.
+- PanelAgent step 1 (parse + map + `panel.intent.created`) is live and feeds runtime V1.
+- PanelAgent runtime V1:
+  - interprets `panel.intent.created`,
+  - fans out promotion actions to `promote.intent.created`,
+  - logs actions via `panel.intent.executed`, `panel.action.*`, `panel.log.created`,
+  - writes AI-log to note payloads (`panel_logs`).
+- CLI: default panel runs execute the runtime; `--emit-only` preserves step-1-only emission when needed.
+- Positions v5.0 as the first v5.x baseline; later v5.x work (Satellite Sync, Yggdrasil modules, Orchestrator/Reasoning 2.0) builds on this without altering SoT v4.10.
+
+## v5.x Watcher + Agent Infra Track (builds on v5.0 PanelAgent Runtime V1)
+- v5.1 — Watcher-ready ingest & panel flows: CLI supports ingesting single/changed notes (not only full vault), controlled multi-note PanelAgent runtime runs, and docs (Architecture/Human-Flows) outline watcher-compatible flows with Obsidian as the passive surface and CLI as the control surface.
+- v5.2 — Vault Watcher MVP (CLI, polling): a manual/background CLI watcher polls for changed notes, triggers ingest via existing commands, emits events/status logs, and surfaces basic watcher metrics (runs, changed files, errors); no automatic panel runs yet.
+- v5.3 — Auto-panel as explicit policy: define clear policy/flags for when panel auto-run is allowed; watcher can trigger `panel-run` after ingest according to that policy; AI log/events make auto-runs explicit.
+- v5.4 — Watcher hardening & ergonomics: add backoff/error handling, pause/stop controls, refined human flows for living with watcher + panels, and decide practical run modes (service/cron/etc.) without needing full prod infra.
+- This track is additive to existing v5.x themes (Satellite Sync, Yggdrasil modules, Orchestrator/Reasoning 2.0); all build on the v5.0 baseline.
 
 ## Priority Bands
 - **Short-term (Reality-MVP)** — finish vault ingestion (real vault folders), minimal external ingest (`external_raw` pipeline), ASK API with sources + latency, observability backend (object counts, ingest runs, ASK usage), and interim GUI surface. Zones and planes are enforced as overlays without requiring folder moves; collaboration deferred.
@@ -45,7 +68,7 @@ Current Reality-MVP work supersedes the statuses of the older tracks above; rows
 
 ## v5.x outlook (post-4.x)
 - Master/satellite sync protocol (Git/iCloud over Markdown + VaultMirror; see `docs/PROTOCOL_SATELLITE_SYNC.md`), targeting a single human across multiple runtimes.
-- PanelAgent follow-ons (v5.0 step 2+) that fan out `panel.intent.created` into actionable flows and integrate with Planner/Orchestrator; AI panel UX remains per `docs/examples/ai-panel-example.md`.
+- PanelAgent follow-ons (post-v5.0) that extend runtime V1 fan-out (`panel.intent.created` → promotion/actions) into richer flows and integrate with Planner/Orchestrator; AI panel UX remains per `docs/examples/ai-panel-example.md`.
 - Expansion of Yggdrasil modules beyond Mimer/Hugin/Ratatosk: Munin (media), Brokkr (project workshops), Tyr (formal records), and fuller Heimdall stack, keeping Mimer as the semantic hub (see `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`).
 
 ## Current Stable Baseline (v4.5A)
