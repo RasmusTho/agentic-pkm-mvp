@@ -75,7 +75,7 @@ Kort orientering: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global 
 - Suggestions appear as simple checkboxes inside `## AI actions`, e.g.:
   - `[ ] Category: Concept`
   - `[ ] Category: Entity / Company`
-- Human flow (step 1): write/update the panel → run `python -m app.cli panel run --uuid <note_uuid>` → inspect Outbox for structured intents. The runtime does not modify the note content or trigger downstream tools yet. Panels are optional; any note may have zero, one, or several panels.
+- Human flow (runtime V1): write/update the panel → run `python -m app.cli panel run --uuid <note_uuid>` (default executes runtime; use `--emit-only` to skip) → Outbox receives `panel.intent.created` plus `panel.intent.executed` and action logs. Promotion-labelled actions (`intent_type: promotion`, e.g., “Gör denna anteckning evergreen”) fan out to `promote.intent.created`; other actions are logged as placeholders (`panel.action.logged`). A minimal AI-log entry (`panel.log.created`) is emitted and mirrored into the note’s `panel_logs` payload. The human note body is not rewritten; panels remain optional and non-indexed.
 
 #### Infra touchpoints
 - Surfaces: Obsidian panels.

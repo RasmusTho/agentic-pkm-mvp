@@ -1,4 +1,4 @@
-State: v5.0 – PanelAgent step 1 (adds panel.intent.created; base remains v4.10).
+State: v5.0 – PanelAgent runtime V1 (panel.intent.executed, promotion fan-out; base remains v4.10).
 # EVENTS
 
 ## Outbox contract
@@ -46,6 +46,30 @@ All emitters must populate the envelope; schema is contract-tested under `tests/
   - `panel.panel_id`, `panel.instruction`, optional `panel.raw_block`.
   - `actions[]`: `id` (mapping id or normalized label), `label`, `checked`, `mapping` (intent_type, downstream_event, params) or `null` if unmapped.
   - Envelope includes `version="1.0"` and `source={component:"panel_agent", trigger:"cli", sot:"v5.0-step1"}`.
+
+### `panel.intent.executed`
+- Emitter: PanelAgent runtime (post-processing of `panel.intent.created`).
+- When: immediately after interpreting a parsed panel; summarizes action outcomes.
+- Payload: `{note, panel, actions:[{id,label,checked,status,emitted_events,intent_type}]}`; source trigger is `runtime`, sot `v5.0-runtime1`.
+
+### `panel.action.triggered`
+- Emitter: PanelAgent runtime.
+- When: a checked action is handled and turned into a downstream intent (e.g. promotion).
+- Payload: `{note, panel_id, action:{id,label}, target_event}`.
+
+### `panel.action.logged`
+- Emitter: PanelAgent runtime.
+- When: a checked action is valid but has no runtime handler yet (v5.x placeholder) or is unmapped.
+- Payload: `{note, panel_id, action:{id,label,checked}, reason, mapping?}`.
+
+### `panel.log.created`
+- Emitter: PanelAgent runtime.
+- When: after evaluating a panel, as a minimal AI-log marker for humans and monitoring.
+- Payload: human-readable log entry `{summary, note, panel_id, actions}`; also mirrored into `panel_logs` on the note’s object payload.
+
+### `promote.intent.created`
+- Emitter: PanelAgent runtime (from panel actions with `intent_type: promotion`).
+- Payload: `{note, panel, action, instruction, maturity?, origin?}` with `source="panel_agent.runtime"`; consumed by promotion flows.
 
 ### `ingest.object.created`
 
