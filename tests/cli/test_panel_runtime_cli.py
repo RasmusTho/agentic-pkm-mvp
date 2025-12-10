@@ -102,7 +102,6 @@ mappings:
     lines = [json.loads(line) for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     events = {entry.get("event") for entry in lines}
     assert events == {"panel.intent.created"}
-<<<<<<< HEAD
 
 
 def test_panel_cli_run_many_happy_path(tmp_path: Path, monkeypatch) -> None:
