@@ -15,7 +15,7 @@ from app.observability.status_service import get_system_status
 from app.ingest.config import DEFAULT_VAULT_ROOT
 from app.cli.alpha_human_flows import run_alpha_human_flows
 from app.ingest.vault_root import ingest_vault_root
-from app.ingest.vault_alpha import run_vault_alpha_ingest
+from app.ingest.vault_alpha import run_vault_alpha_ingest, run_vault_alpha_ingest_paths
 from app.ingest.external import ingest_external_folder
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
@@ -396,6 +396,31 @@ def vault_alpha_ingest(vault_root: Path | None, max_notes: int, include_test_not
         suffix = f" (force={summary.force})" if summary.force else ""
         click.echo(f"Scanned {summary.scanned} files; ingested {summary.ingested} notes{suffix}")
     click.echo(f"Included folders: {', '.join(summary.included_folders) if summary.included_folders else '-'}")
+
+
+@cli.command(
+    name="ingest-vault-paths",
+    help="Ingest specific vault markdown files by path (relative or absolute, resolved within the vault root).",
+)
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional vault root (defaults to DEFAULT_VAULT_ROOT or VAULT_ROOT).",
+)
+@click.argument("paths", nargs=-1, type=click.Path(path_type=Path))
+def ingest_vault_paths_cmd(vault_root: Path | None, paths: tuple[Path, ...]) -> None:
+    if not paths:
+        raise click.BadParameter("At least one path must be provided.")
+    resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=True)
+    if resolved is None:
+        raise click.BadParameter("Vault root could not be resolved.")
+    summary = run_vault_alpha_ingest_paths(resolved, paths, force=False)
+    click.echo(
+        f"Scanned {summary.scanned} paths; ingested {summary.ingested} notes (malformed={summary.malformed}, errors={summary.errors})"
+    )
+    if summary.error_notes:
+        click.echo(f"Error ingesting: {', '.join(summary.error_notes)}", err=True)
 
 
 @cli.command(
