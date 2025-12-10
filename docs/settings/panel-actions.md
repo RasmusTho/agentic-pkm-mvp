@@ -1,5 +1,5 @@
 ---
-State: v5.0 – PanelAgent step 1 (runtime mapping).
+State: v5.0 – PanelAgent runtime V1 (promotion fan-out).
 mappings:
   - id: "promote.evergreen"
     label: "Gör denna anteckning evergreen"
@@ -24,3 +24,4 @@ mappings:
 ---
 
 Human-first reference mappings that connect checkbox text under `## AI-åtgärder` to structured event types.
+Runtime V1 uses `intent_type: promotion` mappings (e.g. `promote.evergreen`) to emit `promote.intent.created`; other mapped actions are logged for future v5.x handling.

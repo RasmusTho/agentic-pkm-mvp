@@ -29,10 +29,10 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP components; v5.x will extend (PanelAgent, sync, richer orchestration). |
 | docs/AGENTS.md | Agents overview | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP agent set; v5.x Agentic extensions sit on top. |
 | docs/PLANNER.md | Planner contract | Aligned (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
-| docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (v5.0 – PanelAgent step 1) | 2025-12-07 | Runtime loop documented (panel.intent.created, CLI run, ObjectStore source); next steps tied to v5.x roadmap. |
-| docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent step 1) | 2025-12-07 | Envelope + topic clusters aligned; adds `panel.intent.created`. |
+| docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-09 | Documents runtime V1 fan-out (panel.intent.executed, promote.intent.created, AI-log) on top of step 1 parsing. |
+| docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-09 | Adds runtime V1 events (panel.intent.executed/action.logged/log.created) and promotion fan-out. |
 | docs/DIAGRAMS.md | C4 diagrams | Aligned (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
-| docs/HUMAN-FLOWS.md | Human flows | Aligned (v5.0 – PanelAgent step 1) | 2025-12-07 | Panel flow notes manual CLI + panel.intent.created; ingest/ASK flows unchanged. |
+| docs/HUMAN-FLOWS.md | Human flows | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-09 | Panel flow now includes runtime V1: CLI default runs fan-out to promotion + logs; emit-only preserves step 1. |
 | docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Aligned (v4.10) | 2025-12-07 | High-level module map reviewed; Reality-MVP scope noted. |
 
 ## Supporting Docs (Quality, Ops, Flows, Data)
@@ -116,7 +116,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/settings/sample-flows/ingest.flow.md | Sample flow | Partially outdated | 2025-12-07 | Template for future planner/orchestrator ingest; not loaded in v4.10. |
 | docs/settings/sample-agents/planner.md | Sample agent config | Partially outdated | 2025-12-07 | Planner config template for v5.x; unused in Reality-MVP. |
 | docs/settings/sample-agents/normalizer.md | Sample agent config | Partially outdated | 2025-12-07 | Normalizer config template; runtime uses direct agents, not these YAMLs. |
-| docs/settings/panel-actions.md | Panel action mappings | Aligned (v4.10, with known debt) | 2025-12-07 | Fallback mappings for PanelAgent; dispatch flag-gated. |
+| docs/settings/panel-actions.md | Panel action mappings | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-09 | Fallback mappings include promotion intent; runtime V1 logs unmapped/unhandled actions. |
 | docs/examples/ai-panel-example.md | AI panel example note | Aligned (v4.10, with known debt) | 2025-12-07 | Panel fences + Swedish headings; dispatch optional. |
 
 ## Eval and Quality

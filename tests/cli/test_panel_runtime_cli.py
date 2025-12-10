@@ -8,53 +8,45 @@ from uuid import uuid4
 from click.testing import CliRunner
 
 from app.cli import cli
-from app.store import object_store as object_store_module
 from app.store.object_store import DomainObject, ObjectStore
 
 
-def _seed_panel_note(note_uuid: str, markdown: str) -> None:
+def _seed_note(note_uuid: str, markdown: str) -> None:
     obj = DomainObject(
         uuid=note_uuid,
         kind="note",
-        payload={"raw_text": markdown},
+        payload={"raw_text": markdown, "origin": "vault"},
         source_ref="vault/Note.md",
         created_at=datetime.now(timezone.utc),
     )
-    ObjectStore().save_object(obj, emit_outbox=False, trace_id="trace-cli")
+    ObjectStore().save_object(obj, emit_outbox=False, trace_id="trace-runtime-cli")
 
 
-def _settings_file(tmp_path: Path) -> Path:
-    path = tmp_path / "panel-actions.md"
-    path.write_text(
+def test_panel_cli_runs_runtime_by_default(tmp_path: Path, monkeypatch) -> None:
+    note_uuid = str(uuid4())
+    markdown = """%% AI:Start %%
+## AI-instruktion
+Promote please.
+## AI-åtgärder
+- [x] Gör denna anteckning evergreen
+%% AI:End %%
+"""
+    _seed_note(note_uuid, markdown)
+
+    settings_path = tmp_path / "panel-actions.md"
+    settings_path.write_text(
         """---
 mappings:
-  - id: mapped
-    label: "Do Thing"
-    intent_type: task
-    downstream_event: action.do
+  - id: promote.evergreen
+    label: "Gör denna anteckning evergreen"
+    intent_type: promotion
+    downstream_event: review.promote.evergreen
+    params:
+      maturity: evergreen
 ---
 """,
         encoding="utf-8",
     )
-    return path
-
-
-def test_panel_cli_emits_outbox(tmp_path: Path, monkeypatch) -> None:
-    # clear memory store between runs
-    object_store_module._MEMORY_STORE.clear()
-
-    note_uuid = str(uuid4())
-    markdown = """%% AI:Start %%
-## AI-instruktion
-Please do the thing.
-## AI-åtgärder
-- [x] Do Thing
-- [ ] Other Thing
-%% AI:End %%
-"""
-    _seed_panel_note(note_uuid, markdown)
-
-    settings_path = _settings_file(tmp_path)
     outbox_path = tmp_path / "index-outbox.jsonl"
     monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
 
@@ -66,35 +58,36 @@ Please do the thing.
     result = runner.invoke(cli, ["panel", "run", "--uuid", note_uuid], env=env)
 
     assert result.exit_code == 0, result.output
-    assert outbox_path.exists()
     lines = [json.loads(line) for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    assert lines, "expected an outbox entry"
-
-    events = {record.get("event") for record in lines}
+    events = {entry.get("event") for entry in lines}
     assert "panel.intent.created" in events
     assert "panel.intent.executed" in events
-    assert "panel.action.logged" in events
-
-    created = next(rec for rec in lines if rec.get("event") == "panel.intent.created")
-    payload = created.get("payload") or {}
-    assert payload.get("note", {}).get("uuid") == note_uuid
-    assert len(payload.get("actions", [])) == 2
+    assert "promote.intent.created" in events
 
 
-def test_panel_cli_can_emit_only_without_runtime(tmp_path: Path, monkeypatch) -> None:
-    object_store_module._MEMORY_STORE.clear()
-
+def test_panel_cli_emit_only_skips_runtime(tmp_path: Path, monkeypatch) -> None:
     note_uuid = str(uuid4())
     markdown = """%% AI:Start %%
 ## AI-instruktion
-Please do the thing.
+Only emit.
 ## AI-åtgärder
-- [x] Do Thing
+- [x] Gör denna anteckning evergreen
 %% AI:End %%
 """
-    _seed_panel_note(note_uuid, markdown)
+    _seed_note(note_uuid, markdown)
 
-    settings_path = _settings_file(tmp_path)
+    settings_path = tmp_path / "panel-actions.md"
+    settings_path.write_text(
+        """---
+mappings:
+  - id: promote.evergreen
+    label: "Gör denna anteckning evergreen"
+    intent_type: promotion
+    downstream_event: review.promote.evergreen
+---
+""",
+        encoding="utf-8",
+    )
     outbox_path = tmp_path / "index-outbox.jsonl"
     monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
 
@@ -107,5 +100,5 @@ Please do the thing.
 
     assert result.exit_code == 0, result.output
     lines = [json.loads(line) for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    events = {record.get("event") for record in lines}
+    events = {entry.get("event") for entry in lines}
     assert events == {"panel.intent.created"}
