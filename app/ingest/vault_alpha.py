@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Tuple, Iterable, Set
+from typing import List, Tuple, Iterable, Set, Sequence
 
 import click
 import yaml
@@ -413,8 +413,56 @@ def run_vault_alpha_ingest(
     resume_from: Iterable[str] | None = None,
 ) -> VaultAlphaSummary:
     vault_root = vault_root.expanduser().resolve()
-    store = get_object_store()
     candidates, included_folders = _select_candidates(vault_root, include_test_note=include_test_note, max_notes=max_notes)
+    return _ingest_candidates(
+        vault_root,
+        candidates=candidates,
+        included_folders=included_folders,
+        force=force,
+        resume_from=resume_from,
+    )
+
+
+def run_vault_alpha_ingest_paths(
+    vault_root: Path, paths: Sequence[Path], *, force: bool = False, resume_from: Iterable[str] | None = None
+) -> VaultAlphaSummary:
+    vault_root = vault_root.expanduser().resolve()
+    candidates: List[Path] = []
+    included_folders: List[str] = []
+
+    for raw in paths:
+        resolved = raw.expanduser()
+        if not resolved.is_absolute():
+            resolved = vault_root / resolved
+        resolved = resolved.resolve()
+        try:
+            rel_path = resolved.relative_to(vault_root)
+        except ValueError:
+            raise click.BadParameter(f"Path {resolved} is outside vault root {vault_root}")
+        candidates.append(resolved)
+        if rel_path.parts:
+            top = rel_path.parts[0]
+            if top not in included_folders:
+                included_folders.append(top)
+
+    return _ingest_candidates(
+        vault_root,
+        candidates=candidates,
+        included_folders=included_folders,
+        force=force,
+        resume_from=resume_from,
+    )
+
+
+def _ingest_candidates(
+    vault_root: Path,
+    *,
+    candidates: Sequence[Path],
+    included_folders: List[str],
+    force: bool,
+    resume_from: Iterable[str] | None,
+) -> VaultAlphaSummary:
+    store = get_object_store()
 
     store_count = _store_object_count(store)
     mirror_root = vault_root / "System/Metadata/VaultMirror"
@@ -498,4 +546,4 @@ def run_vault_alpha_ingest(
     return summary
 
 
-__all__ = ["run_vault_alpha_ingest", "VaultAlphaSummary"]
+__all__ = ["run_vault_alpha_ingest", "run_vault_alpha_ingest_paths", "VaultAlphaSummary"]

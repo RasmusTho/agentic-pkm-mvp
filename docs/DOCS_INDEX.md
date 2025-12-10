@@ -8,6 +8,11 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 - `Legacy (archived)` — historical snapshot; not current truth.
 - `Deprecated` — kept only for reference; avoid for current work.
 
+## SoT Notes
+- v4.10 — locked Reality-MVP baseline.
+- v5.0 — PanelAgent Runtime V1 baseline on top of v4.10.
+- v5.x — forward line for Satellite Sync, Yggdrasil modules, Orchestrator/Reasoning 2.0.
+
 ## Root and Repo Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
@@ -22,17 +27,17 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 ## Core SoT Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/ARCHITECTURE.md | Architecture (SoT v4.10) | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP baseline; ingest hardening, external drop-folder path, status backend/CLI/GUI, orchestrator runtime V1; forward line is v5.x. |
+| docs/ARCHITECTURE.md | Architecture (SoT v4.10) | Aligned (SoT v4.10 locked) | 2025-12-10 | Reality-MVP baseline; ingest hardening, external drop-folder path, status backend/CLI/GUI, orchestrator runtime V1; forward v5.x line now includes watcher/agent infra phases (v5.1–v5.4) on top of v5.0 PanelAgent runtime, plus targeted ingest via `ingest-vault-paths` (v5.1 start). |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Aligned (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
-| docs/STATUS.md | Operational snapshot | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP delivered; operational soak items noted; v5.x is the forward line. |
-| docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP baseline locked; operational acceptance noted; v5.x/Agentic PKM is the forward track. |
+| docs/STATUS.md | Operational snapshot | Aligned (SoT v4.10 locked) | 2025-12-10 | Reality-MVP locked (v4.10); v5.0 PanelAgent runtime baseline; v5.x forward line includes watcher/agent infra milestones v5.1–v5.4 alongside Satellite Sync/Yggdrasil/Orchestrator+Reasoning 2.0. |
+| docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v4.10 locked) | 2025-12-10 | Reality-MVP baseline locked; v5.0 PanelAgent runtime baseline; v5.x track now includes watcher/agent infra milestones (v5.1–v5.4) in addition to existing themes. |
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP components; v5.x will extend (PanelAgent, sync, richer orchestration). |
 | docs/AGENTS.md | Agents overview | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP agent set; v5.x Agentic extensions sit on top. |
 | docs/PLANNER.md | Planner contract | Aligned (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
-| docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-09 | Documents runtime V1 fan-out (panel.intent.executed, promote.intent.created, AI-log) on top of step 1 parsing. |
-| docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-09 | Adds runtime V1 events (panel.intent.executed/action.logged/log.created) and promotion fan-out. |
+| docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline: step 1 parse/map + runtime fan-out to promotion/logs. |
+| docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline; includes runtime events (`panel.intent.executed`/`panel.action.*`/`panel.log.created`) and promotion fan-out. |
 | docs/DIAGRAMS.md | C4 diagrams | Aligned (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
-| docs/HUMAN-FLOWS.md | Human flows | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-09 | Panel flow now includes runtime V1: CLI default runs fan-out to promotion + logs; emit-only preserves step 1. |
+| docs/HUMAN-FLOWS.md | Human flows | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline: default CLI runs runtime fan-out; emit-only preserves step 1; notes include targeted ingest via `ingest-vault-paths` as v5.1 watcher-ready step. |
 | docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Aligned (v4.10) | 2025-12-07 | High-level module map reviewed; Reality-MVP scope noted. |
 
 ## Supporting Docs (Quality, Ops, Flows, Data)
@@ -116,7 +121,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/settings/sample-flows/ingest.flow.md | Sample flow | Partially outdated | 2025-12-07 | Template for future planner/orchestrator ingest; not loaded in v4.10. |
 | docs/settings/sample-agents/planner.md | Sample agent config | Partially outdated | 2025-12-07 | Planner config template for v5.x; unused in Reality-MVP. |
 | docs/settings/sample-agents/normalizer.md | Sample agent config | Partially outdated | 2025-12-07 | Normalizer config template; runtime uses direct agents, not these YAMLs. |
-| docs/settings/panel-actions.md | Panel action mappings | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-09 | Fallback mappings include promotion intent; runtime V1 logs unmapped/unhandled actions. |
+| docs/settings/panel-actions.md | Panel action mappings | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline; fallback mappings include promotion intent and runtime logging for unmapped actions. |
 | docs/examples/ai-panel-example.md | AI panel example note | Aligned (v4.10, with known debt) | 2025-12-07 | Panel fences + Swedish headings; dispatch optional. |
 
 ## Eval and Quality

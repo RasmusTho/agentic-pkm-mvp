@@ -1,9 +1,10 @@
 Agentic PKM — Second-Brain Engine
 
-System-of-Truth v4.10 (Active Baseline)
+System-of-Truth v4.10 (Locked Baseline — Reality-MVP)
 
 Agentic PKM är ett agentdrivet, eventstyrt och CI-säkrat system för personlig kunskapshantering.
 Det använder ett mänskligt gränssnitt (Markdown-vault) och ett maskinellt ”System-of-Truth” bestående av Stores, Outbox-händelser och en flerstegs agent-pipeline.
+SoT v4.10 är den låsta Reality-MVP-baslinjen. All ny utveckling sker på v5.x-linjen (Agentic PKM / PanelAgent / Satellite Sync / Yggdrasil).
 
 <!-- DOCS-LINKS:BEGIN -->
 - [Architecture](docs/ARCHITECTURE.md)
@@ -18,11 +19,12 @@ What works today
 - Zones and planes defined: vault as human surface with minimal frontmatter; `external_raw` objects stay out of Obsidian but are indexed for answers.
 - Deterministic CI via the eight-line contract (latency, eval, relations, diarization, reasoning, gates).
 
-Current focus — Reality-MVP
-- Harden real-vault ingestion (selected folders) and provenance into ObjectStore + VectorIndex.
-- Minimal external ingest (newsletters/PDFs) into `external_raw` objects indexed but not rendered as notes.
-- Ship ASK FastAPI endpoint with answers + sources + latency plus status CLI/backend (object counts, ingest runs, ASK usage).
-- Provide an interim FastAPI-served GUI for status + ASK; collaboration/multi-user and advanced serendipity/reflection features are explicitly deferred.
+Reality-MVP (SoT v4.10) — what is included
+- Hardened ingest of real Obsidian vault folders into ObjectStore + VectorIndex, with tolerant frontmatter handling, error tracking, and resume support.
+- Minimal external ingest: a drop-folder (txt/md) feeding `external_raw` objects that are indexed but not rendered as notes in the vault.
+- ASK FastAPI endpoint with answers + sources + latency, plus status API/CLI showing object counts per plane, ingest runs, and ASK metrics.
+- Interim FastAPI-served GUI for status + ASK (no multi-user collaboration or advanced serendipity features yet).
+- Orchestrator Runtime V1 for running external ingest plans, with dual execution paths: direct CLI (`ingest-external`) or plan-based orchestrator run via `orchestrate-external`.
 
 
 I v4.10 är kärnan komplett:
@@ -32,10 +34,17 @@ I v4.10 är kärnan komplett:
 	•	Reasoning Layer v1 (Claim/Evidence/Inference)
 	•	LLM-planering via Planner Agent
 	•	A2A-protokoll för agent-till-agent kommunikation
-	•	Orchestrator runtime som exekverar planer och använder MCP-verktyg säkert
+	•	Orchestrator Runtime V1 för utvalda planer (t.ex. extern ingest) med A2A/MCP-hookar; mer avancerad orkestrering är v5.x-arbete.
 	•	Fullt deterministisk CI via 8-line contract
 
-Orchestrator-skelettet (SoT v4.10A) kör varje plan deterministiskt när `ORCHESTRATOR_ENABLE=1`: varje steg loggar `orchestrator.step.started|finished|error`, agent-steg skickar riktiga A2A-requests (default-agent svarar med `not_implemented`) och MCP-steg kör mot stubbade `mock_result` utan side effects. CI får därmed full plan → exekvering-länk utan att röra disk eller externa verktyg.
+🧭 Orchestrator Runtime (v4.10 — V1)
+
+Orchestrator kör planer sekventiellt (flaggan `ORCHESTRATOR_ENABLE=1`):
+- validerar steg och loggar `orchestrator.step.started|finished|error` för deterministisk spårbarhet,
+- agent_call kör A2A-requests (default-agent svarar `not_implemented` om steget saknar stöd),
+- tool_call validerar MCP-deskriptorer och kör mock/stubbar; interna verktyg inkluderar `internal.ingest_external` som kan köra extern drop-folder-ingest via orchestrator eller CLI (`orchestrate-external`).
+
+Full LangGraph/MCP-bred orkestrering av hela pipelines (ingest → relate → reason → promote) är uttryckligen v5.x-arbete.
 
 Det mänskliga lagret (vaulten) är frivilligt, men stöds alltid. Obsidian är endast en visuell client — systemets källa är Stores + Events.
 
@@ -278,23 +287,22 @@ Referensvärden ligger i ops/quality/baselines.yaml.
 
 🧭 Roadmap
 
-v4.10 — Delivered
-	•	Full Orchestrator runtime
-	•	Planner Agent exekverad via A2A
-	•	MCP-tool integration
-	•	PlanStore och execution graph
-	•	Stabil ingestion → plan → orchestrate → promote
+v4.10 — Reality-MVP (Locked Baseline)
+	•	Hardened ingest (vault + external) into ObjectStore/VectorIndex with tolerant frontmatter handling and resume/error tracking.
+	•	Hybrid retrieval + ASK API with sources, plane/origin, and latency surfaced.
+	•	Observability backend + status API/CLI + interim GUI for system status and ASK.
+	•	Orchestrator Runtime V1 for external ingest plans (dual CLI/orchestrator path).
+	•	8-line CI contract enforced as a gate for all runs.
 
-v4.11 — In progress
-	•	Persistence för execution graphs
-	•	Self-healing planner hints
-	•	Time-travel debugging (event replay)
+Operational acceptance (4.10)
+	•	Soak-runs on real vault and external sources (operational runs, not code changes).
+	•	Fine-tuning thresholds and dashboards where needed.
 
-v5.x — Research
-	•	Multi-agent reasoning (graph-level)
-	•	Symbolic constraints (OWL/RDF)
-	•	SetDB som fristående backend
-	•	Hypergraph-query engine
+v5.x — Agentic PKM / Forward Line
+	•	PanelAgent / NoteInteractionAgent: AI panel actions mapped to Planner/Orchestrator.
+	•	Satellite Sync: master–satellite protocol for second-brain instances (`docs/PROTOCOL_SATELLITE_SYNC.md`).
+	•	Yggdrasil modules: Munin (media/memories), Brokkr (project workshop), Tyr (formal archives) as first-class domains on top of the Stores.
+	•	Orchestrator/Reasoning 2.0: richer LangGraph/MCP-based execution, more pipelines, and deeper agentic planning built on the locked v4.10 baseline.
 
 ⸻
 

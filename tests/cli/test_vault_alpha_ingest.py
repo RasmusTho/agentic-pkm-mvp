@@ -557,3 +557,138 @@ def test_vault_alpha_ingest_records_errors_and_resumes(
 
     # restore original ingest
     monkeypatch.setattr(vault_alpha, "_ingest_single", original_ingest)
+
+
+def _write_note(vault: Path, rel_path: Path, title: str, body: str = "Body") -> Path:
+    path = vault / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        dedent(
+            f"""\
+            ---
+            title: {title}
+            ---
+            {body}
+            """
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _store_count() -> int:
+    store = get_object_store()
+    objs = getattr(store, "_objects", None)
+    if isinstance(objs, dict):
+        return len(objs)
+    return 0
+
+
+def test_ingest_vault_paths_single_note(tmp_path: Path) -> None:
+    reset_store_backends()
+    get_store().set_documents([])
+    vault = tmp_path / "vault"
+    note_a = _write_note(vault, Path("Concepts/NoteA.md"), title="Note A")
+    _write_note(vault, Path("Concepts/NoteB.md"), title="Note B")
+
+    runner = CliRunner()
+    env = _base_env(tmp_path)
+
+    with patch.dict(os.environ, env, clear=False):
+        result = runner.invoke(
+            cli,
+            [
+                "ingest-vault-paths",
+                "--vault-root",
+                str(vault),
+                str(note_a),
+            ],
+            env=env,
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Scanned 1 paths" in result.output
+    assert "ingested 1 notes" in result.output
+
+    fm_a, _ = load_frontmatter(note_a.read_text(encoding="utf-8"))
+    note_a_uuid = _assert_wikilink_uuid(fm_a.get("uuid"))
+    store = get_object_store()
+    assert store.get(uuid.UUID(note_a_uuid)) is not None
+
+    fm_b, _ = load_frontmatter((vault / "Concepts/NoteB.md").read_text(encoding="utf-8"))
+    assert not _bare_uuid(fm_b.get("uuid"))
+    assert _store_count() == 1
+
+
+def test_ingest_vault_paths_multiple_notes(tmp_path: Path) -> None:
+    reset_store_backends()
+    get_store().set_documents([])
+    vault = tmp_path / "vault"
+    note_a = _write_note(vault, Path("Concepts/NoteA.md"), title="Note A")
+    note_b = _write_note(vault, Path("Concepts/NoteB.md"), title="Note B")
+    _write_note(vault, Path("Concepts/NoteC.md"), title="Note C (not ingested)")
+
+    runner = CliRunner()
+    env = _base_env(tmp_path)
+
+    with patch.dict(os.environ, env, clear=False):
+        result = runner.invoke(
+            cli,
+            [
+                "ingest-vault-paths",
+                "--vault-root",
+                str(vault),
+                str(note_a),
+                str(note_b),
+            ],
+            env=env,
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Scanned 2 paths" in result.output
+    assert "ingested 2 notes" in result.output
+    assert _store_count() == 2
+
+    for note in (note_a, note_b):
+        fm, _ = load_frontmatter(note.read_text(encoding="utf-8"))
+        note_uuid = _assert_wikilink_uuid(fm.get("uuid"))
+        assert get_object_store().get(uuid.UUID(note_uuid)) is not None
+
+    note_c = vault / "Concepts/NoteC.md"
+    fm_c, _ = load_frontmatter(note_c.read_text(encoding="utf-8"))
+    assert not _bare_uuid(fm_c.get("uuid"))
+
+
+def test_ingest_vault_paths_handles_missing_files(tmp_path: Path) -> None:
+    reset_store_backends()
+    get_store().set_documents([])
+    vault = tmp_path / "vault"
+    note_a = _write_note(vault, Path("Concepts/NoteA.md"), title="Note A")
+    missing = vault / "Concepts/Missing.md"
+
+    runner = CliRunner()
+    env = _base_env(tmp_path)
+
+    with patch.dict(os.environ, env, clear=False):
+        result = runner.invoke(
+            cli,
+            [
+                "ingest-vault-paths",
+                "--vault-root",
+                str(vault),
+                str(note_a),
+                str(missing),
+            ],
+            env=env,
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Scanned 2 paths" in result.output
+    assert "ingested 1 notes" in result.output
+    assert "errors=1" in result.output
+    assert "Error ingesting Concepts/Missing.md" in result.output
+
+    fm_a, _ = load_frontmatter(note_a.read_text(encoding="utf-8"))
+    note_a_uuid = _assert_wikilink_uuid(fm_a.get("uuid"))
+    assert get_object_store().get(uuid.UUID(note_a_uuid)) is not None
+    assert _store_count() == 1
