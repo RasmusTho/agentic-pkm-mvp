@@ -1,29 +1,28 @@
 State: SoT v4.10 Reality-MVP (current core).
 # Roadmap — Strategic Control
 
-## Reality-MVP (Current focus — SoT v4.10)
-- Deliver a reliable single-user Reality-MVP: stable ingestion of the real Obsidian vault, minimal external ingest, ASK API, observability backend, and an interim GUI for status + ASK.
+## Reality-MVP (SoT v4.10 — baseline locked)
+- Delivered a reliable single-user Reality-MVP: stable ingestion of the real Obsidian vault, minimal external ingest, ASK API, observability backend + interim GUI, and orchestrator runtime V1.
 - Zones overlay (Active/Warm/Cold) runs as a derived projection across Stores; orthogonal to lifecycle (inbox → processed → evergreen → archived) and temporal value (ephemeral/normal/evergreen).
 - Two planes: vault (human graph with minimal frontmatter) and external corpus (newsletters/emails/PDFs) that are indexed and retrievable but not shown as Obsidian notes.
 - Human frontmatter stays lightweight; system metadata (signals, usage, relations, promotions, zone inference) lives in SetDB/AMG + Stores. Core-6 remains a projection.
 - Collaboration and multi-user flows are explicitly deferred until after the Reality-MVP is solid.
 
-### Remaining Reality-MVP (v4.10) work
-- Harden vault ingestion on the real vault (resume/error handling now recorded in summaries; malformed frontmatter handled gracefully) and finalize external drop-folder ingest into `external_raw` (txt/md path delivered; extend to real newsletter/PDF samples).
-- Polish ASK API responses (sources + zone/plane tags + latency surfaced) and wire observability backend + CLI (object counts per plane, ingest timestamps/errors, ASK latency/error metrics).
-- Build the interim GUI (status + ASK surface) and advance Orchestrator runtime beyond the skeleton (LangGraph + real MCP/agent execution with dual CLI/Orchestrator toggles).
+### Reality-MVP acceptance (v4.10)
+- Operational soak: run vault ingest against the real vault and extend external drop-folder ingest to real newsletter/PDF samples (manual acceptance steps).
+- Orchestrator runtime V1 runs plans with internal tools (external ingest) and a dual CLI/orchestrator path; further LangGraph/parallel scheduling + richer MCP execution remain future work (v5.x+). Interim GUI (status + ASK surface at `/`) is delivered as a minimal page on the existing FastAPI app.
 
 ### Reality-MVP scope
 1) **Vault ingestion** — CLI/agent command to ingest selected vault folders into ObjectStore with Core-6 fields and provenance; emit Outbox events and index into VectorIndex.
 2) **External corpus (minimal)** — ingest a small, real set of external documents (e.g., exported newsletters/PDFs) into `external_raw` objects; store + index them without exposing them as vault notes (txt/md drop-folder path implemented).
 3) **ASK API** — FastAPI endpoint that answers questions with sources `{uuid, title, origin (vault/external), zone if known, path/source_ref}` and latency.
 4) **Observability backend** — status service + CLI that surfaces per-store object counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency.
-5) **Interim GUI** — simple FastAPI-served page showing system status and an ASK box with visible sources; explicitly a temporary observability/interaction surface.
+5) **Interim GUI** — simple FastAPI-served page at `/` showing system status (per-plane counts, ingest runs/errors, ASK latency/errors) and an ASK box with visible sources; explicitly a temporary observability/interaction surface.
 
 ## Version Ladder Overview
 | Version | Intent | State |
 | --- | --- | --- |
-| Reality-MVP (SoT v4.10) | Vault ingestion + external corpus plane + ASK API + observability + interim GUI | Active (current focus) |
+| Reality-MVP (SoT v4.10) | Vault ingestion + external corpus plane + ASK API + observability + interim GUI + orchestrator runtime V1 | Delivered (baseline locked) |
 | v4.3 | Establish the PER ingest loop, Outbox wiring, and CI contracts. | Delivered |
 | v4.4 | Harden observability, Store abstraction, and identity plus conflict handling. | Delivered |
 | v4.5A | Stabilize unified ingestion, enforce deterministic memory-first CI, and document promotion rules. | Delivered |
@@ -141,17 +140,14 @@ The in-process MCP server/client and LangGraph-native orchestration continue und
 ### Goal
 - Align A2A, MCP, and Planner so they form a unified multi-agent execution model while preserving backward compatibility with CLI-only workflows; older scripts continue to function with all new flags disabled.
 
-## v4.10 — Orchestrator Runtime *(Active — Skeleton delivered)*
+## v4.10 — Orchestrator Runtime *(Delivered — Runtime V1)*
 ### Delivered so far
-- `app/orchestrator/` runtime + executor that validate plan structure, emit `orchestrator.step.*`, replay agent/tool steps deterministically, and keep MCP/A2A calls mocked in CI.
-- MCP stub execution now enforces descriptor `allowed_args`, returns descriptor `mock_result`, and logs `mcp.tool.call.started|finished`.
-- Agent calls route through `send_agent_request` + the default Agent handler, producing `agent.request.created` and default `agent.error.created` (`error_type=not_implemented`) so the control plane stays audited end-to-end.
-- Pipeline hook `maybe_execute_plan()` gated on `ORCHESTRATOR_ENABLE` runs immediately after planning, keeping CLI ingest backward compatible when the flag is off.
+- `app/orchestrator/` runtime validates plans, emits `orchestrator.step.*`, and executes internal tools with side effects (external ingest) plus MCP/A2A mocks. Tool descriptors include `internal.ingest_external`.
+- Pipeline hook `maybe_execute_plan()` gated on `ORCHESTRATOR_ENABLE` keeps planner/orchestrator runs flag-controlled; CLI dual-run exposed via `orchestrate-external` alongside the direct `ingest-external` command.
 
 ### Next Milestones
-- Replace the mock executor with an MCP-connected ToolProvider plus LangGraph scheduling primitives for branching + retries.
-- Add richer status reporting (plan aggregates, step retries) and CLI toggles that let operators dual-run CLI + Orchestrator before promoting the new runtime to default.
-- Continue keeping CI deterministic: new integration tests must rely on mocks and the eight-line summary contract.
+- Extend executor to LangGraph/parallel scheduling and real MCP ToolProvider integration for richer tool coverage.
+- Add richer status reporting (plan aggregates, step retries) while keeping determinism in CI; keep CLI and orchestrator modes in parity.
 
 ## Forward Outlook (v5.x)
 Symbolic reasoning layer adds RDF/OWL/SHACL validation before promotion. Knowledge graph services expose RelationIndex externally for governance queries. Logic gates allow Reviewer/PromotionAgent to assert multi-object policies. Reflexive agents learn from audit feedback to auto-tune PER plans without skipping human checkpoints.

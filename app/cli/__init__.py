@@ -17,6 +17,7 @@ from app.cli.alpha_human_flows import run_alpha_human_flows
 from app.ingest.vault_root import ingest_vault_root
 from app.ingest.vault_alpha import run_vault_alpha_ingest
 from app.ingest.external import ingest_external_folder
+from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
@@ -414,6 +415,42 @@ def ingest_external_cmd(root_dir: Path, limit: int | None) -> None:
     click.echo(f"External ingest: scanned={summary.scanned} ingested={summary.ingested} errors={summary.errors}")
     if summary.error_files:
         click.echo(f"Error files: {', '.join(summary.error_files)}", err=True)
+
+
+@cli.command(
+    name="orchestrate-external",
+    help="Run the external ingest pipeline via the orchestrator runtime (plan + executor).",
+)
+@click.option(
+    "--root",
+    "root_dir",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Path to the external drop folder.",
+)
+@click.option("--limit", type=int, default=None, help="Maximum number of files to ingest.")
+def orchestrate_external(root_dir: Path, limit: int | None) -> None:
+    plan = Plan(
+        id=new_plan_id(),
+        meta=PlanMetadata(goal="External ingest", source_object_uuid=str(uuid.uuid4()), created_by="cli.orchestrator"),
+        steps=[
+            PlanStep(
+                id="ingest-external",
+                kind="tool_call",
+                description="Ingest external drop folder",
+                tool="internal.ingest_external",
+                tool_args={"root_dir": str(root_dir), **({"limit": limit} if limit is not None else {})},
+            )
+        ],
+        goal="External ingest",
+    )
+    orchestrator = Orchestrator()
+    results = orchestrator.run_plan(plan)
+    click.echo(f"Plan {plan.id} results:")
+    for entry in results:
+        status = entry.get("status")
+        detail = entry.get("error") or entry.get("result")
+        click.echo(f"  - step={entry.get('step_id')} status={status} detail={detail}")
 
 
 @cli.command(
@@ -832,12 +869,29 @@ def status() -> None:
         click.echo("  status: unknown")
     else:
         click.echo(f"  status: {'OK' if status.ingestion.last_run_ok else 'FAILED'}")
+    click.echo(
+        "  totals: "
+        f"scanned={status.ingestion.total_scanned} "
+        f"ingested={status.ingestion.total_ingested} "
+        f"errors={status.ingestion.total_errors} "
+        f"malformed={status.ingestion.total_malformed}"
+    )
+    if status.ingestion.planes:
+        click.echo("  per-plane:")
+        for plane in status.ingestion.planes:
+            last_run = plane.last_run_at.isoformat() if plane.last_run_at else "-"
+            click.echo(
+                "    - "
+                f"{plane.plane}: scanned={plane.scanned or 0} ingested={plane.ingested or 0} "
+                f"errors={plane.errors or 0} malformed={plane.malformed or 0} last_run={last_run}"
+            )
     click.echo(f"  last_error: {status.ingestion.last_error_message or '-'}")
     click.echo("ASK:")
     avg_latency = (
         f"{status.ask.avg_latency_ms_24h:.0f} ms" if status.ask.avg_latency_ms_24h is not None else "-"
     )
     click.echo(f"  queries (24h): {status.ask.total_queries_24h}")
+    click.echo(f"  errors (24h): {getattr(status.ask, 'error_count_24h', 0)}")
     click.echo(f"  avg latency: {avg_latency}")
 
 

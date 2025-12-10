@@ -22,12 +22,12 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 ## Core SoT Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/ARCHITECTURE.md | Architecture (SoT v4.10) | Aligned (v4.10) | 2025-12-07 | Current Reality-MVP architecture; ingest tolerates malformed frontmatter, records errors/resume, and documents external drop-folder path. |
+| docs/ARCHITECTURE.md | Architecture (SoT v4.10) | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP baseline; ingest hardening, external drop-folder path, status backend/CLI/GUI, orchestrator runtime V1; forward line is v5.x. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Aligned (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
-| docs/STATUS.md | Operational snapshot | Aligned (v4.10) | 2025-12-07 | Reality-MVP snapshot; ASK polish + ingest hardening + external ingest noted; GUI/observability still future. |
-| docs/ROADMAP.md | Strategic roadmap | Aligned (v4.10) | 2025-12-07 | Reality-MVP remaining work enumerated; post-v4.x/v5.x themes linked. |
-| docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (v4.10) | 2025-12-07 | RelationIndex marked baseline (memory/pg) with ASK surfacing deferred. |
-| docs/AGENTS.md | Agents overview | Aligned (v4.10) | 2025-12-07 | ASK graph clarified (retrieve→rerank→answer, no self-check loop). |
+| docs/STATUS.md | Operational snapshot | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP delivered; operational soak items noted; v5.x is the forward line. |
+| docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP baseline locked; operational acceptance noted; v5.x/Agentic PKM is the forward track. |
+| docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP components; v5.x will extend (PanelAgent, sync, richer orchestration). |
+| docs/AGENTS.md | Agents overview | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP agent set; v5.x Agentic extensions sit on top. |
 | docs/PLANNER.md | Planner contract | Aligned (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (v5.0 – PanelAgent step 1) | 2025-12-07 | Runtime loop documented (panel.intent.created, CLI run, ObjectStore source); next steps tied to v5.x roadmap. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent step 1) | 2025-12-07 | Envelope + topic clusters aligned; adds `panel.intent.created`. |
@@ -45,7 +45,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/SECURITY.md | Security | Aligned (v4.10) | 2025-12-07 | Single-user/local; auth not wired; key handling guidance. |
 | docs/PRIVACY.md | Privacy | Aligned (v4.10) | 2025-12-07 | Local-first, outbound only on optional remote LLMs. |
 | docs/DEPENDENCIES.md | Dependencies | Aligned (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
-| docs/OBSERVABILITY.md | Observability | Aligned (v4.10) | 2025-12-07 | JSON logs + span schema; metrics via METRICS_ENABLED. |
+| docs/OBSERVABILITY.md | Observability | Aligned (v4.10) | 2025-02-24 | JSON logs + span schema; status backend/CLI + interim GUI (status + ASK) share the snapshot service. |
 | docs/OBSERVABILITY_STACK.md | Local observability stack | Aligned (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/OPERATIONS.md | Operations playbook | Aligned (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
 | docs/INFRASTRUCTURE.md | Infrastructure notes | Aligned (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
@@ -82,7 +82,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/INVENTORY.md | Inventory | Aligned (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
 | docs/OVERVIEW_WS.md | Overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/DEPENDENCIES.md | Dependencies | Aligned (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
-| docs/OBSERVABILITY.md | Observability | Aligned (v4.10) | 2025-12-07 | JSON logs + span schema; metrics via METRICS_ENABLED. |
+| docs/OBSERVABILITY.md | Observability | Aligned (v4.10) | 2025-02-24 | JSON logs + span schema; status backend/CLI + interim GUI (status + ASK) share the snapshot service. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development policy | Aligned (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
 | docs/DEV_WORKFLOW.md | Dev workflow | Aligned (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
@@ -172,7 +172,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | docs/INFRASTRUCTURE.md | Infrastructure | Aligned (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
 | docs/OVERVIEW_WS.md | Overview workspace | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/DEPENDENCIES.md | Dependencies | Aligned (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
-| docs/OBSERVABILITY.md | Observability | Aligned (v4.10) | 2025-12-07 | JSON logs + span schema; metrics via METRICS_ENABLED. |
+| docs/OBSERVABILITY.md | Observability | Aligned (v4.10) | 2025-02-24 | JSON logs + span schema; status backend/CLI + interim GUI (status + ASK) share the snapshot service. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development | Aligned (v4.10) | 2025-12-07 | Current dev-layer AI policy (docs-first, mocks/defaults). |
 | docs/DEV_WORKFLOW.md | Dev workflow | Aligned (v4.10) | 2025-12-07 | TDD/docs-first workflow aligned with SoT v4.10. |

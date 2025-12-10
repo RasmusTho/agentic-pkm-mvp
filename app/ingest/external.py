@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterable, List
 from uuid import uuid4
 
+from app.observability.ingest_meta import record_ingest_run
 from app.search.service import ingest_object as index_ingest_object
 from app.stores import get_object_store
 
@@ -63,7 +64,20 @@ def ingest_external_folder(root: Path, *, limit: int | None = None) -> ExternalI
             logger.warning("Failed to ingest external file %s: %s", path, exc)
             continue
 
-    return ExternalIngestSummary(scanned=scanned, ingested=ingested, errors=len(errors), error_files=errors)
+    summary = ExternalIngestSummary(scanned=scanned, ingested=ingested, errors=len(errors), error_files=errors)
+    try:
+        record_ingest_run(
+            "external",
+            scanned=summary.scanned,
+            ingested=summary.ingested,
+            errors=summary.errors,
+            malformed=0,
+            ok=summary.errors == 0,
+            message=None if summary.errors == 0 else "external ingest errors",
+        )
+    except Exception:
+        pass
+    return summary
 
 
 __all__ = ["ingest_external_folder", "ExternalIngestSummary", "SUPPORTED_EXTENSIONS"]

@@ -8,7 +8,7 @@ from pydantic import AliasChoices, BaseModel, Field
 
 from app.agents.ask.graph import run_ask_graph
 from app.agents.ask.utils import get_ask_settings
-from app.observability.status_service import record_ask_query
+from app.observability.status_service import record_ask_error, record_ask_query
 from app.retrieval.hybrid import get_store as get_hybrid_store
 from app.stores import get_object_store
 
@@ -137,7 +137,11 @@ async def ask(req: AskRequest) -> AskResponse:
         _ensure_hybrid_store_loaded()
     start = time.perf_counter()
     ask_settings = get_ask_settings()
-    state = run_ask_graph(req.question, ask_settings=ask_settings)
+    try:
+        state = run_ask_graph(req.question, ask_settings=ask_settings)
+    except Exception:
+        record_ask_error()
+        raise
     answer_text = state.answer or "No results found."
     top_hits = state.hits
     latency_ms = int((time.perf_counter() - start) * 1000)
