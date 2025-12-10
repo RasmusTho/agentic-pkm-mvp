@@ -19,6 +19,7 @@ from app.ingest.vault_alpha import run_vault_alpha_ingest, run_vault_alpha_inges
 from app.ingest.external import ingest_external_folder
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
+from app.cli.watcher import vault_watcher_run
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
 from app.services.note_update import NoteUpdateResult, process_note_update
@@ -961,6 +962,7 @@ def settings_watch(watch_path: Path, auto_heal: bool) -> None:
         click.echo("stopped watching settings")
 
 cli.add_command(panel_cli, name="panel")
+cli.add_command(vault_watcher_run)
 
 
 if __name__ == "__main__":

@@ -49,7 +49,7 @@ graph TD
 
     %% Missing / planned components
     subgraph Missing
-        Watcher[File watcher ingest pipeline (removed)]
+        Watcher[File watcher ingest pipeline (removed; superseded by planned v5.x watcher track)]
         Promotion[Ingest promotion endpoints / automation]
     end
 
@@ -58,7 +58,7 @@ graph TD
 ```
 
 ## Gaps & Follow-Ups
-- **File watcher ingestion**: Dokumentationen flaggar watchern som legacy (se `docs/TODO.md`); ersätt med script/UI-trigger.
+- **File watcher ingestion**: Documented as legacy; superseded by the planned v5.x watcher/agent track (v5.1–v5.4) that will reuse CLI/service entrypoints per ROADMAP/STATUS/HUMAN-FLOWS.
 - **Promotion automation**: `/ingest/pending` och `/ingest/review` saknas fortfarande; utan dem är provisional → reviewed manuellt.
 - **Loggrotation & alerting**: Supervisor/agent-loggar ligger i `/tmp`; konfigurera rotation och larm för frekventa omstarter.
 - **Konfigurationsdrift**: Endast en `config/agent.yaml`-profil stöds; överväg validering + multi-profile om behov uppstår.

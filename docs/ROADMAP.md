@@ -36,10 +36,10 @@ State: SoT v4.10 Reality-MVP (current core).
 | v4.9 | MCP Integration V1 + Planner Agent (LLM) plan schema. | Delivered (planning schema + descriptors; transport mocked) |
 | v4.10 | Orchestrator Runtime V1 (LangGraph execution of Planner Agent output). | Delivered skeleton; further LangGraph/MCP execution planned alongside Reality-MVP |
 | v5.0 | PanelAgent Runtime V1 on the v4.10 baseline (first v5.x milestone) | Delivered — runtime executes default panel flow; no changes to v4.10 |
-| v5.1 | Watcher-ready ingest & panel flows (builds on v5.0) | Planned — CLI ingest of single/changed notes; controlled multi-note panel runs; watcher-compatible docs |
-| v5.2 | Vault Watcher MVP (CLI, polling) | Planned — manual/background CLI watcher polls for changes, triggers ingest, reports runs/metrics |
-| v5.3 | Auto-panel as explicit policy | Planned — watcher-triggered panel runs under explicit policy/flags with clear AI log + events |
-| v5.4 | Watcher hardening & ergonomics | Planned — backoff/error handling, pause/stop, human flows for living with watcher + panels |
+| v5.1 | Watcher-ready ingest & panel flows (builds on v5.0) | Planned — CLI ingest of single/changed notes + multi-note panel runtime CLI; watcher-compatible docs |
+| v5.2 | Vault Watcher MVP (CLI, polling) | Delivered — snapshot-based CLI watcher (`vault-watcher-run`) polls for changes, triggers ingest, optional panel runtime, reports runs/metrics (no auto-panel policy yet) |
+| v5.3 | Auto-panel as explicit policy | Delivered — watcher-triggered panel runs gated by explicit frontmatter policy (`ai_panel_auto_run`); PanelAgent runtime + note-update remain manual-capable |
+| v5.4 | Watcher hardening & ergonomics | Delivered — dry-run mode, max-notes guard with optional force, structured summaries for watcher runs |
 
 Current Reality-MVP work supersedes the statuses of the older tracks above; rows remain for SoT history.
 
@@ -55,10 +55,10 @@ Current Reality-MVP work supersedes the statuses of the older tracks above; rows
 - Positions v5.0 as the first v5.x baseline; later v5.x work (Satellite Sync, Yggdrasil modules, Orchestrator/Reasoning 2.0) builds on this without altering SoT v4.10.
 
 ## v5.x Watcher + Agent Infra Track (builds on v5.0 PanelAgent Runtime V1)
-- v5.1 — Watcher-ready ingest & panel flows: CLI supports ingesting single/changed notes (not only full vault), controlled multi-note PanelAgent runtime runs, and docs (Architecture/Human-Flows) outline watcher-compatible flows with Obsidian as the passive surface and CLI as the control surface.
+- v5.1 — Watcher-ready ingest & panel flows: CLI supports ingesting single/changed notes (not only full vault), controlled multi-note PanelAgent runtime runs (`panel run-many`), and docs (Architecture/Human-Flows) outline watcher-compatible flows with Obsidian as the passive surface and CLI as the control surface.
 - v5.2 — Vault Watcher MVP (CLI, polling): a manual/background CLI watcher polls for changed notes, triggers ingest via existing commands, emits events/status logs, and surfaces basic watcher metrics (runs, changed files, errors); no automatic panel runs yet.
-- v5.3 — Auto-panel as explicit policy: define clear policy/flags for when panel auto-run is allowed; watcher can trigger `panel-run` after ingest according to that policy; AI log/events make auto-runs explicit.
-- v5.4 — Watcher hardening & ergonomics: add backoff/error handling, pause/stop controls, refined human flows for living with watcher + panels, and decide practical run modes (service/cron/etc.) without needing full prod infra.
+- v5.3 — Auto-panel as explicit policy: define clear policy/flags for when panel auto-run is allowed; watcher can trigger `panel-run`/note-update after ingest according to that policy; AI log/events make auto-runs explicit.
+- v5.4 — Watcher hardening & ergonomics: adds dry-run mode, max-notes guard (with override), structured summaries for watcher runs; manual/cron friendly while avoiding storms.
 - This track is additive to existing v5.x themes (Satellite Sync, Yggdrasil modules, Orchestrator/Reasoning 2.0); all build on the v5.0 baseline.
 
 ## Priority Bands
