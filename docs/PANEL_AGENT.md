@@ -16,6 +16,7 @@ Purpose: translate human-driven AI panels in vault notes into structured intents
 - Planner/Orchestrator integration (A2A/plan objects) executes chosen actions (promotion, summaries, hygiene) with the same guardrails as other agents.
 - PanelAgent Runtime V1 remains the baseline until this LangGraph-driven 2.0 path is implemented and proven in production.
 - LangGraph control flow now supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `rule` remains the default to preserve current behaviour, while `llm` is an opt-in, experimental action selector using the shared LLM provider.
+- LLM-driven contract tests live under `tests/e2e/test_panel_llm_e2e.py` (gated by `@pytest.mark.panel_llm_e2e` and `PANEL_AGENT_LLM_E2E=1`) to validate end-to-end promotion/non-promotion scenarios using the real decider.
 
 ## Panel syntax (Markdown)
 - Panels are delimited by tolerant AI fences: any `%% ...ai... %%` (case-insensitive) line opens/closes a panel. First fence opens, second closes, third opens the next, etc.
