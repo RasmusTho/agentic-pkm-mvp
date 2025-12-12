@@ -36,8 +36,6 @@ def _write_outbox_events(outbox_path: Path, events: Iterable[Any]) -> None:
             else:
                 continue
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
-
-
 def _persist_log(note: NoteRef, log_entry: PanelLogEntry) -> None:
     store = ObjectStore()
     existing = store.get_object(note.uuid)
