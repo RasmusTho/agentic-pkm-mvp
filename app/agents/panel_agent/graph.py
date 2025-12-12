@@ -186,10 +186,13 @@ def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str
             f"- id: {descriptor.id} | kind: {descriptor.kind or descriptor.intent_type} | labels: {labels} | hint: {hint}"
         )
     hint_lines = [f"- {a.label} (checked={a.checked})" for a in actions]
-    system = (
-        "You are PanelAgent. Given the note context, panel instruction, checkbox hints, and available canonical actions, "
-        "choose which actions to execute by returning JSON with an 'actions' array of objects "
-        "with fields {id, reason?, message?}. Only use the provided action IDs. Do not invent new IDs."
+    system = " ".join(
+        [
+            "You are PanelAgent.",
+            "Given the note context, panel instruction, checkbox hints, and available canonical actions,",
+            "choose which actions to execute by returning JSON with an 'actions' array of objects",
+            "with fields {id, reason?, message?}. Only use the provided action IDs. Do not invent new IDs.",
+        ]
     )
     user_parts = [
         f"Instruction: {state.panel.instruction}",
