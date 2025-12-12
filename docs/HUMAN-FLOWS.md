@@ -166,6 +166,9 @@ State: SoT v4.10 (Reality-MVP) and v5.0 (PanelAgent Runtime V1) are locked basel
 - All watcher types call the same CLI/service entrypoints as manual runs, integrate with observability/status, and are opt-in/auditable (no hidden automation).
 
 ### PanelAgent runtime + watcher integration
+- When a panel is auto-run by the watcher today, PanelAgent Runtime V1 uses its fixed mapping from checked actions to follow-up events; behaviour matches the v5.0 baseline.
+- Forward-looking (v5.5+): PanelAgent 2.0 will use LLM-based reasoning inside a LangGraph graph to decide which actions to trigger, making watcher-driven panels more adaptive without changing current behaviour until proven.
+- PanelAgent now consults a catalog of canonical actions (`docs/settings/panel-actions.md`) and can run in either rule-mode (default, deterministic label→action mapping) or optional LLM-mode, which uses the catalog plus panel/note context; checkbox states are treated as hints rather than hard gates in LLM-mode.
 - PanelAgent Runtime V1 (SoT v5.0) interprets AI panels, emits `panel.intent.created`, `panel.intent.executed`, `panel.action.*`, emits `promote.intent.created` for mapped promotion actions, and writes AI logs (`panel_logs`) into note payloads.
 - Watcher track (v5.1–v5.3) adds automation that calls the same panel pipeline via note-update/PanelAgent runtime based on explicit policy (e.g., a flag on the note/panel). Manual CLI (`panel run` / `panel run-many` / note-update) and watcher-triggered runs share the same pipeline; watchers simply automate when to call it.
 - A multi-note CLI (`panel run-many`) runs the same PanelAgent parse/runtime for multiple notes in one invocation (emit-only supported); it is the watcher-ready entrypoint when a batch of notes changed.

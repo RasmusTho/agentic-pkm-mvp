@@ -5,10 +5,13 @@ from pathlib import Path
 from typing import Dict, List
 from uuid import uuid4
 
-from app.components.settings.panel_actions_loader import load_panel_action_mapping, normalize_label
+from app.components.settings.panel_actions_loader import (
+    PanelActionCatalog,
+    load_panel_action_catalog,
+    normalize_label,
+)
 from app.events.panel import (
     NoteRef,
-    PanelActionMapping,
     PanelEventSource,
     PanelInfo,
     PanelIntentAction,
@@ -43,10 +46,10 @@ def _note_ref(domain_obj: DomainObject) -> NoteRef:
     )
 
 
-def _map_action(action: ParsedAction, mappings: Dict[str, PanelActionMapping]) -> PanelIntentAction:
-    normalized = normalize_label(action.label)
-    mapping = mappings.get(normalized)
-    action_id = mapping.id if mapping else (normalized or uuid4().hex)
+def _map_action(action: ParsedAction, catalog: PanelActionCatalog) -> PanelIntentAction:
+    descriptor = catalog.find_by_label(action.label)
+    mapping = descriptor.to_mapping() if descriptor else None
+    action_id = descriptor.id if descriptor else (normalize_label(action.label) or uuid4().hex)
     return PanelIntentAction(id=action_id, label=action.label, checked=action.checked, mapping=mapping)
 
 
@@ -55,9 +58,9 @@ def _panel_payload(
     *,
     panel_id: str,
     note: NoteRef,
-    mappings: Dict[str, PanelActionMapping],
+    catalog: PanelActionCatalog,
 ) -> PanelIntentPayload:
-    actions = [_map_action(action, mappings) for action in parsed.actions]
+    actions = [_map_action(action, catalog) for action in parsed.actions]
     panel = PanelInfo(panel_id=panel_id, instruction=parsed.instruction, raw_block=parsed.raw_block)
     return PanelIntentPayload(note=note, panel=panel, actions=actions)
 
@@ -78,13 +81,13 @@ def run_panel_intent_for_note(note_uuid: str, trace_id: str | None = None) -> Li
     domain_obj = _read_note_from_store(note_uuid)
     note_text = _resolve_note_text(domain_obj)
     note = _note_ref(domain_obj)
-    mappings = load_panel_action_mapping()
+    catalog = load_panel_action_catalog()
 
     resolved_trace_id = trace_id or uuid4().hex
     events: list[PanelIntentEvent] = []
     for block in find_panels(note_text):
         parsed = parse_panel(block.raw_block, panel_id=block.panel_id)
-        payload = _panel_payload(parsed, panel_id=block.panel_id, note=note, mappings=mappings)
+        payload = _panel_payload(parsed, panel_id=block.panel_id, note=note, catalog=catalog)
         event = PanelIntentEvent(
             payload=payload,
             trace_id=resolved_trace_id,

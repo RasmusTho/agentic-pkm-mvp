@@ -3,6 +3,20 @@ State: v5.0 – PanelAgent runtime V1 (promotion fan-out + AI-log on Reality-MVP
 
 Purpose: translate human-driven AI panels in vault notes into structured intents/events while keeping the panel simple, optional, and human-first.
 
+## PanelAgent Runtime V1 (current baseline)
+- SoT v5.0 baseline built on top of the locked v4.10 Reality-MVP.
+- Runtime V1 uses a fixed mapping from panel actions to follow-up events (e.g., promotion intents) and mirrors them into `panel_logs` for traceability.
+- This is a simplified bridge/runtime loop, not the final agentic design; it keeps watcher and manual panel flows working while the agent migrates to LangGraph.
+- Internal implementation now runs through a LangGraph-based control flow (`PanelAgentState`), but external behaviour and emitted events remain identical.
+- Action catalog (`docs/settings/panel-actions.md`) is the canonical list of actions (id, kind, labels/synonyms, description/llm_hint, downstream event, params). Rule-mode matches checkbox labels deterministically; LLM-mode is opt-in and uses the catalog + panel/note context with checkboxes as hints.
+
+## PanelAgent 2.0 (planned v5.5)
+- Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `graph.py`).
+- LLM-based reasoning decides which panel actions to execute (and in what order) rather than relying on fixed mappings.
+- Planner/Orchestrator integration (A2A/plan objects) executes chosen actions (promotion, summaries, hygiene) with the same guardrails as other agents.
+- PanelAgent Runtime V1 remains the baseline until this LangGraph-driven 2.0 path is implemented and proven in production.
+- LangGraph control flow now supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `rule` remains the default to preserve current behaviour, while `llm` is an opt-in, experimental action selector using the shared LLM provider.
+
 ## Panel syntax (Markdown)
 - Panels are delimited by tolerant AI fences: any `%% ...ai... %%` (case-insensitive) line opens/closes a panel. First fence opens, second closes, third opens the next, etc.
 - Inside a panel:

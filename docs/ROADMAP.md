@@ -40,6 +40,8 @@ State: SoT v4.10 Reality-MVP (current core).
 | v5.2 | Vault Watcher MVP (CLI, polling) | Delivered — snapshot-based CLI watcher (`vault-watcher-run`) polls for changes, triggers ingest, optional panel runtime, reports runs/metrics (no auto-panel policy yet) |
 | v5.3 | Auto-panel as explicit policy | Delivered — watcher-triggered panel runs gated by explicit frontmatter policy (`ai_panel_auto_run`); PanelAgent runtime + note-update remain manual-capable |
 | v5.4 | Watcher hardening & ergonomics | Delivered — dry-run mode, max-notes guard with optional force, structured summaries for watcher runs |
+| v5.5 | PanelAgent 2.0 (LangGraph inner) | Planned — PanelAgentState schema, LangGraph graph (`graph.py`), LLM decision node for actions, Planner/Orchestrator integration via A2A/plan objects |
+| v5.6 | LangGraph rollout to other agents | Planned — select 1–2 agents (Promotion, Reviewer, Hygiene), add AgentState + LangGraph graphs, move non-trivial decision logic from pipelines into those graphs |
 
 Current Reality-MVP work supersedes the statuses of the older tracks above; rows remain for SoT history.
 
@@ -60,6 +62,18 @@ Current Reality-MVP work supersedes the statuses of the older tracks above; rows
 - v5.3 — Auto-panel as explicit policy: define clear policy/flags for when panel auto-run is allowed; watcher can trigger `panel-run`/note-update after ingest according to that policy; AI log/events make auto-runs explicit.
 - v5.4 — Watcher hardening & ergonomics: adds dry-run mode, max-notes guard (with override), structured summaries for watcher runs; manual/cron friendly while avoiding storms.
 - This track is additive to existing v5.x themes (Satellite Sync, Yggdrasil modules, Orchestrator/Reasoning 2.0); all build on the v5.0 baseline.
+
+## v5.5 — PanelAgent 2.0 (LangGraph inner)
+- Define `PanelAgentState` (note reference, panel intent, actions, history, policy) and corresponding schema.
+- Implement LangGraph-driven panel graph (e.g., `graph.py`) with an LLM decision node that selects which actions to run based on panel context.
+- Decider mode is configurable (`PANEL_AGENT_DECIDER=rule|llm`) with `rule` as the default to preserve runtime V1 behaviour; `llm` is opt-in.
+- Integrate chosen actions with Planner/Orchestrator via A2A/plan objects so execution stays auditable.
+- Keep PanelAgent Runtime V1 as the bridge baseline until LangGraph-driven 2.0 is delivered and proven.
+
+## v5.6 — LangGraph rollout to other agents
+- Select 1–2 agents (e.g., Promotion Agent, Reviewer, NoteHygieneAgent) as pilots.
+- Add explicit AgentState + LangGraph graphs for those agents.
+- Move non-trivial decision logic out of pipelines and into the per-agent graphs while keeping coordination via events/A2A.
 
 ## Priority Bands
 - **Short-term (Reality-MVP)** — finish vault ingestion (real vault folders), minimal external ingest (`external_raw` pipeline), ASK API with sources + latency, observability backend (object counts, ingest runs, ASK usage), and interim GUI surface. Zones and planes are enforced as overlays without requiring folder moves; collaboration deferred.
