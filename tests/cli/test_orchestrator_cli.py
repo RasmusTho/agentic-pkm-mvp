@@ -6,7 +6,8 @@ from app.cli import cli
 from app.stores import get_object_store, reset_store_backends
 
 
-def test_orchestrate_external_command(tmp_path: Path) -> None:
+def test_orchestrate_external_command(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("STORE_BACKEND", "memory")
     reset_store_backends()
     root = tmp_path / "drop"
     root.mkdir()

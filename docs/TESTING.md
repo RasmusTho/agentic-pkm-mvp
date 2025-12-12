@@ -15,6 +15,10 @@ State: SoT v4.10 Reality-MVP (current core).
   - PYTHONPATH="$(pwd)" env DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" pytest -q tests/e2e/test_pipe_graph.py
 - Eval (opt-in)
   - PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "eval"  # DeepEval/Ragas; not part of fast CI
+- PanelAgent LLM E2E (opt-in, real LLM)
+  - export PANEL_AGENT_LLM_E2E=1 PANEL_AGENT_DECIDER=llm
+  - export LLM_PROVIDER=<provider> plus any provider-specific env (e.g., OPENAI_BASE_URL/OPENAI_API_KEY)
+  - PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/e2e/test_panel_llm_e2e.py -m "panel_llm_e2e"
 
 ## Reality-MVP pipeline sanity
 - Scenario: `tests/e2e/test_reality_mvp_pipeline.py` runs the canonical note → ingest/normalize/classify → store/outbox/index → hybrid search warm-load → `/api/ask` flow against `tests/fixtures/reality_mvp/demo_note.md` (see `docs/scenarios/REALITY_MVP.md`).

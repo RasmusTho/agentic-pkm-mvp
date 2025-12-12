@@ -28,7 +28,8 @@ def _build_external_plan(root: Path) -> Plan:
     )
 
 
-def test_orchestrator_runs_external_ingest(tmp_path: Path) -> None:
+def test_orchestrator_runs_external_ingest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STORE_BACKEND", "memory")
     reset_store_backends()
     root = tmp_path / "external"
     root.mkdir()
@@ -44,7 +45,8 @@ def test_orchestrator_runs_external_ingest(tmp_path: Path) -> None:
     assert len(getattr(store, "_objects", {})) >= 1
 
 
-def test_orchestrator_reports_tool_errors(tmp_path: Path) -> None:
+def test_orchestrator_reports_tool_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STORE_BACKEND", "memory")
     reset_store_backends()
     plan = Plan(
         id=new_plan_id(),
