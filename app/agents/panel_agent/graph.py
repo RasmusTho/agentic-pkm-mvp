@@ -230,8 +230,7 @@ def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str
                 selected.add(action_id)
                 if reason:
                     reasons[action_id] = reason
-        if not selected:
-            return None
+        # Empty set is a valid decision (LLM chose to run nothing).
         return selected, reasons
     except Exception:
         return None
@@ -279,7 +278,7 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
 
 def _decide_actions_llm_with_fallback(state: PanelAgentState) -> PanelAgentState:
     selection = _select_actions_llm(state)
-    if not selection:
+    if selection is None:
         return _decide_actions_rule(state)
     chosen, reasons = selection
     return _apply_actions(state, selected_ids=chosen, reasons=reasons)
