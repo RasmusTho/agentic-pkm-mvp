@@ -90,8 +90,6 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
     decider_mode = get_panel_agent_decider()
     state = run_panel_graph(initial_state, decider_mode=decider_mode)
 
-    # Build a structured intent for planner-mode consumers (opt-in pipeline); for now we keep
-    # the existing direct runtime path as the default behaviour.
     pipeline_mode = get_panel_agent_pipeline()
     if pipeline_mode == "planner":
         triggered_ids = [a.id for a in state.action_results if a.checked and a.status == "triggered"]

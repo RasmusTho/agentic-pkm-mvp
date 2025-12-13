@@ -65,7 +65,12 @@ def plan_panel_actions(intent: PanelActionIntent, *, event_id: str | None = None
     trigger = PlanTrigger(event_type="panel.intent.created", event_id=event_id or intent.note.uuid, trace_id=trace_id)
     plan = Plan(
         id=new_plan_id(),
-        meta=PlanMetadata(goal=goal, source_object_uuid=intent.note.uuid, created_by="panel_agent", trace_id=trace_id),
+        meta=PlanMetadata(
+            goal=goal,
+            source_object_uuid=intent.note.uuid,
+            created_by="panel_agent",
+            trace_id=trace_id,
+        ),
         steps=_steps_for_actions(intent.actions, intent.note.uuid, intent.resolved_actions, intent.instruction),
         trigger=trigger,
         goal=goal,
