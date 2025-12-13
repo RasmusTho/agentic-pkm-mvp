@@ -30,18 +30,22 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 ## Core SoT Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-03-10 | Locked v4.10 baseline; explicit “multi-agent outer + LangGraph inner per agent”; forward line tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration) on top of v5.0 runtime. |
+| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-03-12 | Locked v4.10 baseline; forward line through v5.5; links to ROADMAP + docs/tracks for plans. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
 | docs/STATUS.md | Operational snapshot | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-11 | Status fields documented (baseline vs forward line, active features, event counters from outbox). |
 | docs/ROADMAP.md | Strategic roadmap | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-10 | Forward line tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration); v5.5A/B captured; v5.6 LangGraph rollout planned; v4.10 baseline referenced only as foundation. |
+| docs/tracks/TRACK_WATCHER.md | Watcher track (v5.1–v5.4) | Aligned (forward line v5.x) | 2025-03-12 | Snapshot watcher track details, policy gating, daemon/ergonomics. |
+| docs/tracks/TRACK_PANELAGENT_LANGGRAPH.md | PanelAgent LangGraph track (v5.5) | Aligned (forward line v5.x) | 2025-03-12 | PanelAgent catalog/decider modes, planner/orchestrator pipeline, promotion consumer. |
+| docs/tracks/TRACK_AGENTOPS_A2A_MCP.md | AgentOps / A2A / MCP track | Aligned (analysis) | 2025-03-12 | Pattern harvest themes for events/A2A/tools/ops; A2A/MCP scaffolding. |
+| docs/ROADMAP.md | Strategic roadmap | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-12 | Forward-looking, skimmable; links to history and track docs under docs/tracks/. |
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP components; v5.x will extend (PanelAgent, sync, richer orchestration). |
 | docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2025-03-10 | Design principle set to LangGraph inner + events/A2A outer; PanelAgent exemplifies the pattern with a catalog-driven decider and planner pipeline opt-in plus CLI-first orchestration; SoT wording calls out forward line through v5.5 with v4.10 as locked base. |
 | docs/PLANNER.md | Planner contract | Baseline-only (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
-| docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline; includes runtime events (`panel.intent.executed`/`panel.action.*`/`panel.log.created`) and promotion fan-out. |
+| docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent runtime V1) | 2025-03-12 | Panel runtime events plus promotion flow now document promote.done/promote.error. |
 | docs/DIAGRAMS.md | C4 diagrams | Baseline-only (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
-| docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2025-03-12 | Watcher + panel UAT via uat-seed/uat-run commands; policy gating and intent vs mutation clarified. |
-| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-12 | Includes deterministic watcher/panel UAT CLI tests and opt-in LLM suite; fast suite commands unchanged. |
-| docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x + planned v5.5 LangGraph) | 2025-03-11 | Runtime V1 fan-out documented; catalog-driven decider and planner pipeline noted; wiring config precedence (env > vault System/Config > repo default) and validation/fallback described; UAT guide at UAT_PANEL_WATCHER.md. |
+| docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2025-03-12 | Watcher + panel UAT checklist now includes promotion consumer and status counters. |
+| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-11 | Lists fast/mock suites; PanelAgent LLM E2E gated; wiring precedence test guidance added; optional CI job `panel-llm-e2e`; deterministic planner/orchestrator CLI tests documented. |
+| docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x + planned v5.5 LangGraph) | 2025-03-12 | Intent vs mutation clarified; promotion consumer required to apply changes; wiring precedence documented. |
 | docs/UAT_PANEL_WATCHER.md | UAT guide (panel + watcher) | Aligned | 2025-12-10 | Human-facing UAT flow for PanelAgent + Vault Watcher (prep notes, targeted ingest, panel run-many, watcher dry-run/run, observations). |
 | docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Baseline-only (v4.10) | 2025-12-07 | High-level module map reviewed; Reality-MVP scope noted. |
 | docs/research/pattern-harvest-agentic-architecture.md | Research synthesis (outer/inner agent architecture) | Aligned (analysis, docs-only) | 2025-03-10 | Pattern harvest of events/A2A/tools/observability/config; backlog + Mermaid diagram; no runtime wiring. |
@@ -50,13 +54,13 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/CI.md | CI overview | Baseline-only (v4.10) | 2025-12-07 | ci-smoke/fitness gates documented; other workflows noted. |
-| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-12 | Includes deterministic watcher/panel UAT CLI tests and opt-in LLM suite; fast suite commands unchanged. |
+| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-10 | Commands/markers match ci-smoke; panel planner/orchestrator CLI tests and LLM-gated panel E2E are documented as opt-in. |
 | docs/QUALITY.md | Quality gates | Baseline-only (v4.10) | 2025-12-07 | Clarified QA agent scope vs /api/ask; CI fitness gates noted. |
 | docs/guardrails.md | Guardrails | Baseline-only (v4.10) | 2025-12-07 | Runtime guardrails + CI fitness gates; removed legacy thresholds. |
 | docs/SECURITY.md | Security | Baseline-only (v4.10) | 2025-12-07 | Single-user/local; auth not wired; key handling guidance. |
 | docs/PRIVACY.md | Privacy | Baseline-only (v4.10) | 2025-12-07 | Local-first, outbound only on optional remote LLMs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
-| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-12 | Feature-line counters include promotion_executed; guidance for watcher/uat-run interpretation. |
+| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-12 | Feature-line status counters include promotion executed; watcher interpretations updated. |
 | docs/OBSERVABILITY_STACK.md | Local observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/OPERATIONS.md | Operations playbook | Baseline-only (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
 | docs/INFRASTRUCTURE.md | Infrastructure notes | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
@@ -94,7 +98,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/INVENTORY.md | Inventory | Baseline-only (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
 | docs/OVERVIEW_WS.md | Overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
-| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-12 | Feature-line counters include promotion_executed; guidance for watcher/uat-run interpretation. |
+| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-12 | Feature-line status counters include promotion executed; watcher interpretations updated. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development policy | Baseline-only (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
 | docs/DEV_WORKFLOW.md | Dev workflow | Baseline-only (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
@@ -184,7 +188,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/INFRASTRUCTURE.md | Infrastructure | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
 | docs/OVERVIEW_WS.md | Overview workspace | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
-| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-12 | Feature-line counters include promotion_executed; guidance for watcher/uat-run interpretation. |
+| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-12 | Feature-line status counters include promotion executed; watcher interpretations updated. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development | Baseline-only (v4.10) | 2025-12-07 | Current dev-layer AI policy (docs-first, mocks/defaults). |
 | docs/DEV_WORKFLOW.md | Dev workflow | Baseline-only (v4.10) | 2025-12-07 | TDD/docs-first workflow aligned with SoT v4.10. |
@@ -262,10 +266,11 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | tmp-test/renamed.md | Temp/test file | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; no impact on SoT. |
 | tmp-test/original.md | Temp/test file | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; no impact on SoT. |
 | tmp-test2/a.md | Temp/test file | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; no impact on SoT. |
+| docs/tracks/TRACK_FITNESS_CI_CONTRACT.md | Fitness & CI contract track | Aligned (forward line v5.x) | 2025-03-12 | Fitness gates QAS003/010, rerank/relations/diarization CI summary lines; reasoning/A2A gates planned. |
+| docs/history/SOT_4X_HISTORY.md | SoT 4.x history | Legacy (archived) | 2025-03-12 | Historical v4.x ladder; roadmap now forward-only. |
 | docs/examples/vault_test_seed/evergreen-strategy.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Promote-evergreen scenario for watcher/panel UAT. |
 | docs/examples/vault_test_seed/reflection-journal.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Reflection-only scenario (no promotion expected). |
 | docs/examples/vault_test_seed/mixed-actions.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Mixed actions; only mapped actions trigger intents. |
 | docs/examples/vault_test_seed/summary-request.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Summary-only scenario aligned with panel wiring. |
 | docs/examples/vault_test_seed/unknown-action.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Unknown action should log but not promote. |
 | docs/examples/vault_test_seed/manual-policy.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Manual policy example; watcher should skip panel. |
-| docs/history/SOT_4X_HISTORY.md | SoT 4.x history | Legacy (archived) | 2025-03-12 | Historical v4.x ladder; roadmap now forward-only.|

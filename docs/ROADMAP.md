@@ -1,37 +1,58 @@
-State: Locked baseline SoT v4.10 (Reality-MVP) with the active forward line tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration).
-# Roadmap — Forward Line Only
+State: Locked baseline SoT v4.10 (Reality-MVP) with active forward line tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration).
+# Roadmap — Strategic Control
 
-This roadmap is forward-looking. Historical 4.x ladder details now live in `docs/history/SOT_4X_HISTORY.md`. Delivered/current truth lives in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
+This roadmap is forward-looking and skimmable. History lives in `docs/history/SOT_4X_HISTORY.md`; deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
+
+## Status vocabulary
+- **Shipped** — merged to main; code/doc exists.
+- **Operationally accepted** — proven on real vault/external samples with runbook/soak.
+- **Baseline locked** — scope frozen; only bugfixes allowed.
+- **Planned / In progress** — tracked work not yet shipped.
 
 ## Baselines
-- **SoT v4.10 (locked baseline)** — Reality-MVP: stable vault ingest, minimal external ingest, ASK API, observability + interim GUI, orchestrator runtime V1. No changes to scope or acceptance.
-- **SoT v5.0+ (forward line)** — PanelAgent runtime + watcher track on top of v4.10. Forward line currently tracked through **v5.5B** (planner pipeline + CLI-first orchestration with promotion consumer).
+- **SoT v4.10 (baseline locked)** — Reality-MVP: stable vault ingest, minimal external ingest, ASK API, observability + interim GUI, orchestrator runtime V1.
+- **SoT v5.0+ (forward line)** — PanelAgent runtime + watcher track on top of v4.10; forward line tracked through **v5.5B** (planner pipeline + CLI-first orchestration with promotion consumer).
 
-## Now / Next (2–4 increments)
-1) **PanelAgent LangGraph decider + watcher auto-exec (v5.5C, planned)**
-   - LangGraph-driven decider turned on safely (`PANEL_AGENT_DECIDER=llm`), with watcher auto-execution gated by policy.
-   - Acceptance: panel runs in watcher produce the same events as direct runs; LLM branch is opt-in and audited; CI still deterministic by default.
-2) **Watcher → Panel → Planner/Orchestrator automation (v5.5D, planned)**
-   - Execute panel-created plans automatically under watcher control (with safety limits); promotion consumer remains opt-in but observable.
-   - Acceptance: watcher summary + status counters reflect plan creation + execution; promotion intents and executions remain idempotent.
-3) **Vault-as-GUI Settings Architecture (v5.6 track, planned)**
-   - Human-editable settings in the vault (`@Settings/`/System/Config) compiled to typed artifacts; schema validation + hot reload.
-   - Acceptance: compiler CLI, schema checks in CI, deterministic artifacts, vault-first precedence over repo defaults.
-4) **LangGraph rollout to additional agents (v5.6)**
-   - Add AgentState + LangGraph graphs to 1–2 agents (Promotion, Reviewer, Hygiene); move decision logic from pipelines into graphs while keeping event/A2A outer contracts.
+## Now / Next / Later
+- **Now**
+  - PanelAgent LangGraph decider opt-in, watcher policy auto-exec plumbing (v5.5C planned).
+  - Watcher → panel → planner/orchestrator automation with safety limits; promotion consumer observable (v5.5D planned).
+  - Vault-first config validation (panel wiring, watcher) with schema enforcement.
+- **Next**
+  - Vault-as-GUI settings compiler (`@Settings` / System/Config) with typed artifacts and CI schema checks (v5.6 track).
+  - LangGraph rollout to additional agents (Promotion/Reviewer/Hygiene) with AgentState + graphs; event/A2A outer contracts preserved.
+  - A2A/MCP orchestration routing with deterministic adapters and audit.
+- **Later**
+  - Watcher auto-exec of panel plans with guardrails and rollback; richer panel actions (summary/reply) via tool/MCP boundary.
+  - Reasoning/reflective layers with eval gates; expanded observability counters for orchestration/A2A.
+  - Collaboration/multi-user after single-user flows are stable.
 
-## Delivered (v5.x forward line)
-- **PanelAgent Runtime V1 (v5.0)** — parses AI panels, emits `panel.intent.created`, runtime emits `panel.intent.executed`/`panel.action.*`/`panel.log.created`, fans out `promote.intent.created`.
-- **Watcher track (v5.1–v5.4)** — targeted ingest (`ingest-vault-paths`), panel run-many CLI, snapshot-based `vault-watcher-run`, policy-gated auto-panel (`ai_panel_auto_run`), dry-run + max-notes + structured summaries.
-- **Panel planner pipeline (v5.5A/B)** — `PanelActionIntent`, planner-mode pipeline creating plans from panel actions, CLI-first orchestration to execute panel plans with promotion tool + consumer emitting `promote.done`; status counters track intents and executions.
+## Reality-MVP acceptance (operator outcomes)
+- Vault ingest and external ingest run successfully on real samples with provenance preserved; no data loss.
+- ASK API returns answers with sources/latency; interim GUI surfaces status + ASK.
+- Observability shows per-plane object counts, ingest runs/errors, and ASK usage.
+- Orchestrator runtime V1 executes internal tools (external ingest) via plan or direct CLI; green CI (`pytest -q -m "not pg"`, memory backend) and docs aligned.
 
-## Tracks (forward-looking)
-- **PanelAgent / Planner / Orchestrator** — converge on LangGraph inner per agent, planner-mode default, orchestrator execution auditable via events and status counters; watcher auto-exec next.
-- **Watcher deployment** — Docker-first `vault-watcher-daemon` with snapshot outside vault (`/state`); host service fallback for iCloud/Obsidian mounts; auto-panel stays policy-gated.
-- **Config & validation** — vault-first wiring (`System/Config/panel-action-wiring.yaml`) with schema validation; future Vault-as-GUI compiler to make settings human-first and typed.
-- **Architecture hardening** — event schema discipline, A2A/tool boundaries, observability runbooks, and eval gating captured in `docs/research/pattern-harvest-agentic-architecture.md`.
+## Reality-MVP scope (operator view)
+1) Vault ingestion of selected folders into ObjectStore with Core-6 projection and provenance; Outbox events emitted; indexed into VectorIndex.
+2) Minimal external ingest of real samples into `external_raw`; stored and indexed without creating Obsidian notes.
+3) ASK API returning `{uuid, title, origin, zone?, path/source_ref}` with latency; hybrid retrieval across planes.
+4) Observability backend + interim GUI surfacing object counts, ingest runs/errors, ASK usage.
+5) Orchestrator runtime V1 available via CLI/plan path for external ingest; future LangGraph/MCP remains additive.
 
-## Links
-- Historical ladder and objectives: `docs/history/SOT_4X_HISTORY.md`
-- Current architecture truth: `docs/ARCHITECTURE.md`
-- Operational snapshot and counters: `docs/STATUS.md`
+## Version ladder (summary)
+| Version | Intent | State |
+| --- | --- | --- |
+| v4.10 | Reality-MVP baseline | Baseline locked |
+| v5.0 | PanelAgent Runtime V1 | Shipped |
+| v5.1–v5.4 | Watcher track (ingest/panel CLI, policy, ergonomics) | Operationally accepted |
+| v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
+| v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
+| v5.6 | LangGraph rollout + Vault-as-GUI settings compiler | Planned |
+
+## Tracks (details moved)
+- Watcher track details: `docs/tracks/TRACK_WATCHER.md`
+- PanelAgent LangGraph track: `docs/tracks/TRACK_PANELAGENT_LANGGRAPH.md`
+- AgentOps/A2A/MCP hardening: `docs/tracks/TRACK_AGENTOPS_A2A_MCP.md`
+- Fitness/CI contract: `docs/tracks/TRACK_FITNESS_CI_CONTRACT.md`
+- Historical ladder: `docs/history/SOT_4X_HISTORY.md`
