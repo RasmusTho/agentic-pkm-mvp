@@ -46,6 +46,17 @@ class IntentStatus(BaseModel):
     source_path: str | None = None
 
 
+class EventCounters(BaseModel):
+    watcher_runs_total: int = 0
+    watcher_runs_24h: int = 0
+    panel_runs_total: int = 0
+    panel_runs_24h: int = 0
+    promote_created_total: int = 0
+    promote_created_24h: int = 0
+    ingest_runs_by_plane: dict[str, int] = Field(default_factory=dict)
+    source_path: str | None = None
+
+
 class SystemStatus(BaseModel):
     timestamp: datetime
     sot_version: str  # legacy alias for baseline SoT
@@ -58,6 +69,7 @@ class SystemStatus(BaseModel):
     ingestion: IngestionStatus
     ask: AskStatus
     intents: Optional[IntentStatus] = None
+    events: Optional[EventCounters] = None
 
 
 __all__ = [
@@ -66,5 +78,6 @@ __all__ = [
     "IngestionStatus",
     "AskStatus",
     "IntentStatus",
+    "EventCounters",
     "SystemStatus",
 ]

@@ -5,16 +5,11 @@ from uuid import uuid4
 import pytest
 
 from app.observability.ingest_meta import record_ingest_run, reset_ingest_meta
-from app.observability.status_service import (
-    get_system_status,
-    record_ask_error,
-    record_ask_query,
-    reset_ask_metrics,
-)
+from app.observability.status_service import get_system_status, record_ask_error, record_ask_query, reset_ask_metrics
 from app.stores import get_object_store, reset_store_backends
 
 
-def test_get_system_status_includes_ingest_and_ask_metrics():
+def test_get_system_status_includes_ingest_and_ask_metrics(monkeypatch):
     reset_store_backends()
     reset_ingest_meta()
     reset_ask_metrics()
@@ -63,9 +58,13 @@ def test_get_system_status_includes_ingest_and_ask_metrics():
     assert status.intents is not None
     assert status.intents.promote_created_total == 0
     assert status.intents.promote_created_24h == 0
+    assert status.events is not None
+    assert status.events.panel_runs_total == 0
+    assert status.events.promote_created_total == 0
+    assert status.events.ingest_runs_by_plane.get("vault") == 1
 
 
-def test_intent_status_counts_outbox(monkeypatch, tmp_path):
+def test_event_counts_from_outbox(monkeypatch, tmp_path):
     reset_store_backends()
     reset_ingest_meta()
     reset_ask_metrics()
@@ -76,14 +75,20 @@ def test_intent_status_counts_outbox(monkeypatch, tmp_path):
     now = datetime.now(timezone.utc)
     older = now - timedelta(days=2)
     records = [
-        {"event": "promote.intent.created", "timestamp": now.isoformat().replace("+00:00", "Z")},
-        {"event": "promote.intent.created", "timestamp": older.isoformat().replace("+00:00", "Z")},
         {"event": "panel.intent.executed", "timestamp": now.isoformat().replace("+00:00", "Z")},
+        {"event": "panel.intent.executed", "timestamp": older.isoformat().replace("+00:00", "Z")},
+        {"event": "promote.intent.created", "timestamp": now.isoformat().replace("+00:00", "Z")},
+        {"event": "watcher.run.completed", "timestamp": now.isoformat().replace("+00:00", "Z")},
     ]
     outbox.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
 
     status = get_system_status()
-    assert status.intents is not None
-    assert status.intents.promote_created_total == 2
-    assert status.intents.promote_created_24h == 1
-    assert status.intents.source_path == str(outbox)
+    assert status.events is not None
+    assert status.events.panel_runs_total == 2
+    assert status.events.panel_runs_24h == 1
+    assert status.events.promote_created_total == 1
+    assert status.events.promote_created_24h == 1
+    assert status.events.watcher_runs_total == 1
+    assert status.events.watcher_runs_24h == 1
+    assert status.events.source_path == str(outbox)
+    assert status.intents.promote_created_total == 1

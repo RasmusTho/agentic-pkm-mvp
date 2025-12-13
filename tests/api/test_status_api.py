@@ -17,3 +17,7 @@ def test_status_endpoint_returns_snapshot():
     assert isinstance(body.get("active_features"), list)
     intents = body.get("intents") or {}
     assert "promote_created_total" in intents
+    events = body.get("events") or {}
+    assert "panel_runs_total" in events
+    assert "watcher_runs_total" in events
+    assert isinstance(events.get("ingest_runs_by_plane", {}), dict)

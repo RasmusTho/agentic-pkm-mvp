@@ -8,7 +8,7 @@ from typing import Iterable
 
 from app.events.types import PROMOTE_INTENT_CREATED
 from app.observability.ingest_meta import get_ingest_status
-from app.observability.status_model import AskStatus, IngestionStatus, IntentStatus, StoreStatus, SystemStatus
+from app.observability.status_model import AskStatus, EventCounters, IngestionStatus, IntentStatus, StoreStatus, SystemStatus
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.stores import get_object_store
 from app.version import SOT_FORWARD, get_sot_version, get_sot_metadata
@@ -16,7 +16,7 @@ from app.version import SOT_FORWARD, get_sot_version, get_sot_metadata
 _ASK_LATENCIES: list[tuple[float, float]] = []
 _ASK_ERRORS: list[float] = []
 _ASK_WINDOW = timedelta(hours=24)
-_INTENT_WINDOW = timedelta(hours=24)
+_EVENT_WINDOW = timedelta(hours=24)
 _ACTIVE_FEATURES = [
     "PanelAgent runtime (v5.0)",
     "Watcher snapshot/policy track (v5.1–v5.4)",
@@ -151,11 +151,10 @@ def _parse_timestamp(value: object) -> datetime | None:
     return None
 
 
-def _get_intent_status(outbox_path: Path) -> IntentStatus:
-    total = 0
-    recent = 0
+def _count_events(outbox_path: Path) -> EventCounters:
+    panel_total = panel_recent = promote_total = promote_recent = watcher_total = watcher_recent = 0
     source = str(outbox_path) if outbox_path else None
-    cutoff = datetime.now(timezone.utc) - _INTENT_WINDOW
+    cutoff = datetime.now(timezone.utc) - _EVENT_WINDOW
     try:
         with outbox_path.open("r", encoding="utf-8") as fh:
             for line in fh:
@@ -167,22 +166,82 @@ def _get_intent_status(outbox_path: Path) -> IntentStatus:
                 except Exception:
                     continue
                 event = record.get("event") or record.get("event_type") or record.get("topic") or ""
-                if event != PROMOTE_INTENT_CREATED:
-                    continue
-                total += 1
                 ts = _parse_timestamp(record.get("timestamp") or record.get("created_at"))
-                if ts and ts >= cutoff:
-                    recent += 1
+                is_recent = ts is not None and ts >= cutoff
+                if event == "panel.intent.executed":
+                    panel_total += 1
+                    if is_recent:
+                        panel_recent += 1
+                if event == PROMOTE_INTENT_CREATED:
+                    promote_total += 1
+                    if is_recent:
+                        promote_recent += 1
+                if event in {"watcher.run.completed", "watcher.run"}:
+                    watcher_total += 1
+                    if is_recent:
+                        watcher_recent += 1
     except FileNotFoundError:
-        return IntentStatus(promote_created_total=0, promote_created_24h=0, source_path=source)
+        return EventCounters(
+            watcher_runs_total=0,
+            watcher_runs_24h=0,
+            panel_runs_total=0,
+            panel_runs_24h=0,
+            promote_created_total=0,
+            promote_created_24h=0,
+            ingest_runs_by_plane={},
+            source_path=source,
+        )
     except Exception:
-        return IntentStatus(promote_created_total=total, promote_created_24h=recent, source_path=source)
-    return IntentStatus(promote_created_total=total, promote_created_24h=recent, source_path=source)
+        return EventCounters(
+            watcher_runs_total=watcher_total,
+            watcher_runs_24h=watcher_recent,
+            panel_runs_total=panel_total,
+            panel_runs_24h=panel_recent,
+            promote_created_total=promote_total,
+            promote_created_24h=promote_recent,
+            ingest_runs_by_plane={},
+            source_path=source,
+        )
+    return EventCounters(
+        watcher_runs_total=watcher_total,
+        watcher_runs_24h=watcher_recent,
+        panel_runs_total=panel_total,
+        panel_runs_24h=panel_recent,
+        promote_created_total=promote_total,
+        promote_created_24h=promote_recent,
+        ingest_runs_by_plane={},
+        source_path=source,
+    )
+
+
+def _fill_ingest_run_counts(counters: EventCounters, ingestion: IngestionStatus) -> EventCounters:
+    per_plane: dict[str, int] = {}
+    for plane in getattr(ingestion, "planes", []) or []:
+        if plane.last_run_at:
+            per_plane[plane.plane] = per_plane.get(plane.plane, 0) + 1
+    counters.ingest_runs_by_plane = per_plane
+    return counters
+
+
+def _get_intent_status(outbox_path: Path) -> IntentStatus:
+    counts = _count_events(outbox_path)
+    return IntentStatus(
+        promote_created_total=counts.promote_created_total,
+        promote_created_24h=counts.promote_created_24h,
+        source_path=counts.source_path,
+    )
 
 
 def get_system_status() -> SystemStatus:
     sot_meta = get_sot_metadata()
-    intent_status = _get_intent_status(Path(INDEX_OUTBOX_PATH)) if INDEX_OUTBOX_PATH else IntentStatus()
+    ingestion = get_ingestion_status()
+    counters = _count_events(Path(INDEX_OUTBOX_PATH)) if INDEX_OUTBOX_PATH else EventCounters()
+    counters = _fill_ingest_run_counts(counters, ingestion)
+    intent_status = IntentStatus(
+        promote_created_total=counters.promote_created_total,
+        promote_created_24h=counters.promote_created_24h,
+        source_path=counters.source_path,
+    )
     return SystemStatus(
         timestamp=datetime.now(timezone.utc),
         sot_version=get_sot_version(),
@@ -192,9 +251,10 @@ def get_system_status() -> SystemStatus:
         feature_line_version=SOT_FORWARD,
         active_features=list(_ACTIVE_FEATURES),
         stores=get_store_status(),
-        ingestion=get_ingestion_status(),
+        ingestion=ingestion,
         ask=get_ask_status(),
         intents=intent_status,
+        events=counters,
     )
 
 
