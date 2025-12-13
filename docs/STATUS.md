@@ -1,4 +1,6 @@
 State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x forward line currently tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration).
+Status snapshot now includes SoT baseline + forward-line fields and intent counters (`promote.intent.created` totals and 24h window) for UAT visibility.
+
 # Status — Operational Snapshot
 
 Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and deployment topology for this SoT.

@@ -64,3 +64,9 @@ State: SoT v4.10 Reality-MVP (current core).
 - `logs/*.jsonl` – JSON spans used by `jq` recipes in `docs/OBSERVABILITY.md`.
 - `tmp/audio/` – yt-dlp cache (unique filenames per test). Clean via `rm -rf tmp/audio/*`.
 <!-- SECTION:TESTING-MATRIX:END -->
+
+- Panel wiring precedence (deterministic):
+  - export PANEL_ACTIONS_PATH=<tmp/actions.md>
+  - optional vault override: set VAULT_ROOT to a temp vault containing System/Config/panel-action-wiring.yaml
+  - env override: PANEL_ACTION_WIRING_PATH points to a temp wiring file
+  - run: pytest -q tests/agents/panel_agent/test_panel_wiring.py -m "not pg"

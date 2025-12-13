@@ -102,3 +102,10 @@ Please promote this note after verifying the summary.
 - `panel.action.logged` — payload `{note, panel_id, action:{id,label,checked}, reason, mapping?}` for unmapped/unimplemented actions.
 - `promote.intent.created` — payload includes `{note, panel, action, instruction, maturity}`; emitted when a checked action has `intent_type: promotion`.
 - `panel.log.created` — payload is a human-readable log entry (`summary`, `note`, `panel_id`, `actions`) also mirrored into `panel_logs` on the note object.
+
+## Wiring configuration
+- Default wiring: `docs/settings/panel-action-wiring.yaml` (maps canonical action ids to target events).
+- Resolution order: `PANEL_ACTION_WIRING_PATH` env override > `VAULT_ROOT/System/Config/panel-action-wiring.yaml` > repo default.
+- Validation: config must define an `actions` list with `id`, `kind` (event|intent, defaults to event), and `event_type`/`target_event` (or `intent_type`). Unknown/invalid configs emit a warning and fall back to the default wiring; runtime behaviour stays unchanged.
+- CLI/Watcher use the same wiring; panel decider (rule/LLM) still selects actions, wiring only controls emitted events.
+
