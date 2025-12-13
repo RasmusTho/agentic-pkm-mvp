@@ -21,6 +21,7 @@ from app.ingest.external import ingest_external_folder
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
 from app.cli.watcher import vault_watcher_run, vault_watcher_daemon
+from app.runtime.runtime_loop import RuntimeLoopConfig, run_forever, run_once
 from app.cli.uat import (
     DEFAULT_FOLDER_NAME,
     DEFAULT_TARGET_SUBDIR,
@@ -1161,6 +1162,59 @@ def uat_run_vault_test(
         raise SystemExit(1)
     if summary.watcher.get("errors", 0) or summary.promotion.get("errors", 0):
         raise SystemExit(1)
+
+
+
+@cli.command(name="runtime-loop", help="Run watcher→panel→promotion loop once or continuously.")
+@click.option("--vault-root", type=click.Path(path_type=Path), required=True, help="Vault root path.")
+@click.option("--snapshot-path", type=click.Path(path_type=Path), default=None, help="Optional snapshot path for watcher state.")
+@click.option("--interval", type=int, default=0, show_default=True, help="Polling interval seconds; 0 runs only once.")
+@click.option("--cooldown-seconds", type=int, default=10, show_default=True, help="Cooldown after a run with changes.")
+@click.option("--max-notes", type=int, default=50, show_default=True, help="Maximum changed notes before abort unless --force.")
+@click.option("--force", is_flag=True, help="Override max-notes guard.")
+@click.option("--dry-run", is_flag=True, help="Skip ingest/panel/promotion side effects.")
+@click.option("--run-panels/--no-run-panels", default=True, show_default=True)
+@click.option("--consume-promotions/--no-consume-promotions", default=True, show_default=True)
+@click.option("--outbox-path", type=click.Path(path_type=Path), default=None, help="Outbox path (defaults to INDEX_OUTBOX_PATH env).")
+def runtime_loop(
+    vault_root: Path,
+    snapshot_path: Path | None,
+    interval: int,
+    cooldown_seconds: int,
+    max_notes: int,
+    force: bool,
+    dry_run: bool,
+    run_panels: bool,
+    consume_promotions: bool,
+    outbox_path: Path | None,
+) -> None:
+    resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=False)
+    if resolved is None:
+        raise click.BadParameter("Vault root could not be resolved.")
+
+    cfg = RuntimeLoopConfig(
+        snapshot_path=snapshot_path,
+        poll_seconds=max(interval, 0) or 30,
+        cooldown_seconds=cooldown_seconds,
+        max_notes=max_notes,
+        force=force,
+        dry_run=dry_run,
+        run_panels=run_panels,
+        run_promotion_consumer=consume_promotions,
+        outbox_path=outbox_path,
+    )
+
+    if interval and interval > 0:
+        run_forever(resolved, cfg)
+        return
+
+    summary = run_once(resolved, cfg)
+    click.echo(
+        "watcher="
+        + json.dumps(summary.watcher, ensure_ascii=False)
+        + " promotion="
+        + json.dumps(summary.promotion, ensure_ascii=False)
+    )
 
 cli.add_command(panel_cli, name="panel")
 cli.add_command(vault_watcher_run)
