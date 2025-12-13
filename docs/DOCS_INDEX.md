@@ -5,8 +5,11 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 - `Unreviewed` — not yet aligned in this total-review pass.
 - `Aligned (forward line v5.x)` — matches the active SoT forward line (currently v5.4) on top of the locked v4.10 baseline.
 - `Aligned (forward line v5.x, with known debt)` — mostly aligned to v5.x; see Notes for drift.
+- `Baseline-only (v4.10)` — reflects the locked baseline; forward-line review pending.
 - `Legacy (archived)` — historical snapshot; not current truth.
 - `Deprecated` — kept only for reference; avoid for current work.
+
+Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Baseline-only (v4.10)` and queued for forward-line review; the forward line is the active SoT.
 
 ## SoT Notes
 - v4.10 — locked Reality-MVP baseline (foundation only).
@@ -28,73 +31,73 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-12-13 | Locked v4.10 baseline; explicit “multi-agent outer + LangGraph inner per agent”; forward line tracked through v5.4 (PanelAgent + watcher infra) on top of v5.0 runtime. |
-| docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Aligned (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
+| docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
 | docs/STATUS.md | Operational snapshot | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-12-13 | Forward line tracked through v5.4 watcher/agent milestones; v5.5 PanelAgent 2.0 and v5.6 LangGraph rollout planned; v4.10 baseline noted as locked foundation. |
 | docs/ROADMAP.md | Strategic roadmap | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-12-13 | Forward line tracked through v5.4 watcher track; v5.5 PanelAgent 2.0 (LangGraph inner) and v5.6 LangGraph rollout rows captured; v4.10 baseline referenced only as foundation. |
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP components; v5.x will extend (PanelAgent, sync, richer orchestration). |
 | docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2025-12-13 | Design principle set to LangGraph inner + events/A2A outer; PanelAgent exemplifies the pattern with a catalog-driven decider; SoT wording calls out forward line through v5.4 with v4.10 as locked base. |
-| docs/PLANNER.md | Planner contract | Aligned (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
+| docs/PLANNER.md | Planner contract | Baseline-only (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (v5.0 baseline + planned v5.5 LangGraph) | 2025-12-12 | Runtime V1 fixed mapping stays baseline; action catalog is canonical; decider configurable (`rule` default, opt-in `llm`) using the shared LangGraph flow; planned PanelAgent 2.0 LangGraph inner with `PanelAgentState` and Planner/Orchestrator integration remains. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline; includes runtime events (`panel.intent.executed`/`panel.action.*`/`panel.log.created`) and promotion fan-out. |
-| docs/DIAGRAMS.md | C4 diagrams | Aligned (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
+| docs/DIAGRAMS.md | C4 diagrams | Baseline-only (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
 | docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2025-12-13 | Panel/watcher flow notes keep Runtime V1 mapping as current state; SoT framing now explicit: forward line through v5.4 (PanelAgent + watcher track) on top of locked v4.10; LangGraph/LLM decider planned for v5.5+. |
 | docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-12-12 | Lists fast/mock suites, adds PanelAgent LLM E2E commands gated by `PANEL_AGENT_LLM_E2E=1`/`@pytest.mark.panel_llm_e2e`, and documents optional CI job `panel-llm-e2e` (skips when LLM secrets/flag absent). |
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x + planned v5.5 LangGraph) | 2025-12-12 | Runtime V1 fan-out + promotion intent + AI-log documented; catalog-driven decider (`PANEL_AGENT_DECIDER`) covers rule + opt-in LLM; planned LangGraph 2.0 path (`PanelAgentState`, Planner/Orchestrator via A2A/plan objects); UAT guide at UAT_PANEL_WATCHER.md. |
 | docs/UAT_PANEL_WATCHER.md | UAT guide (panel + watcher) | Aligned | 2025-12-10 | Human-facing UAT flow for PanelAgent + Vault Watcher (prep notes, targeted ingest, panel run-many, watcher dry-run/run, observations). |
-| docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Aligned (v4.10) | 2025-12-07 | High-level module map reviewed; Reality-MVP scope noted. |
+| docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Baseline-only (v4.10) | 2025-12-07 | High-level module map reviewed; Reality-MVP scope noted. |
 
 ## Supporting Docs (Quality, Ops, Flows, Data)
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/CI.md | CI overview | Aligned (v4.10) | 2025-12-07 | ci-smoke/fitness gates documented; other workflows noted. |
-| docs/TESTING.md | Testing strategy | Aligned (v4.10) | 2025-12-07 | Commands/markers match ci-smoke; eval marked opt-in. |
-| docs/QUALITY.md | Quality gates | Aligned (v4.10) | 2025-12-07 | Clarified QA agent scope vs /api/ask; CI fitness gates noted. |
-| docs/guardrails.md | Guardrails | Aligned (v4.10) | 2025-12-07 | Runtime guardrails + CI fitness gates; removed legacy thresholds. |
-| docs/SECURITY.md | Security | Aligned (v4.10) | 2025-12-07 | Single-user/local; auth not wired; key handling guidance. |
-| docs/PRIVACY.md | Privacy | Aligned (v4.10) | 2025-12-07 | Local-first, outbound only on optional remote LLMs. |
-| docs/DEPENDENCIES.md | Dependencies | Aligned (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
-| docs/OBSERVABILITY.md | Observability | Aligned (v4.10) | 2025-02-24 | JSON logs + span schema; status backend/CLI + interim GUI (status + ASK) share the snapshot service. |
-| docs/OBSERVABILITY_STACK.md | Local observability stack | Aligned (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
-| docs/OPERATIONS.md | Operations playbook | Aligned (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
-| docs/INFRASTRUCTURE.md | Infrastructure notes | Aligned (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
-| docs/HEALTH.md | Health checks | Aligned (v4.10) | 2025-12-07 | CLI health checks (ffmpeg/yt-dlp/outbox/ollama) + ci-smoke reference. |
-| docs/CLI.md | CLI reference | Aligned (v4.10) | 2025-12-07 | Updated commands (ingest/ask flows, alpha demos, health). |
-| docs/LLM.md | LLM integration | Aligned (v4.10) | 2025-12-07 | Providers/env defaults (mock/Ollama/OpenAI/DeepSeek). |
-| docs/LLM_BACKENDS.md | LLM backends | Aligned (v4.10) | 2025-12-07 | Providers mock/ollama/openai/deepseek; timeouts/keys noted. |
-| docs/RETRIEVAL.md | Retrieval | Aligned (v4.10) | 2025-12-07 | Hybrid search + optional rerank; ASK graph defaults noted. |
-| docs/FRONTMATTER.md | Frontmatter rules | Aligned (v4.10) | 2025-12-07 | Vault frontmatter minimal; UUID healing only. |
-| docs/DATA_MODEL.md | Data model | Aligned (v4.10) | 2025-12-07 | Active store_objects/vector_index/relations; legacy tables noted. |
-| docs/DATA_GOVERNANCE.md | Data governance | Aligned (v4.10) | 2025-12-07 | Stores + VaultMirror as truth; promotion gating flagged experimental. |
+| docs/CI.md | CI overview | Baseline-only (v4.10) | 2025-12-07 | ci-smoke/fitness gates documented; other workflows noted. |
+| docs/TESTING.md | Testing strategy | Baseline-only (v4.10) | 2025-12-07 | Commands/markers match ci-smoke; eval marked opt-in. |
+| docs/QUALITY.md | Quality gates | Baseline-only (v4.10) | 2025-12-07 | Clarified QA agent scope vs /api/ask; CI fitness gates noted. |
+| docs/guardrails.md | Guardrails | Baseline-only (v4.10) | 2025-12-07 | Runtime guardrails + CI fitness gates; removed legacy thresholds. |
+| docs/SECURITY.md | Security | Baseline-only (v4.10) | 2025-12-07 | Single-user/local; auth not wired; key handling guidance. |
+| docs/PRIVACY.md | Privacy | Baseline-only (v4.10) | 2025-12-07 | Local-first, outbound only on optional remote LLMs. |
+| docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
+| docs/OBSERVABILITY.md | Observability | Baseline-only (v4.10) | 2025-02-24 | JSON logs + span schema; status backend/CLI + interim GUI (status + ASK) share the snapshot service. |
+| docs/OBSERVABILITY_STACK.md | Local observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
+| docs/OPERATIONS.md | Operations playbook | Baseline-only (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
+| docs/INFRASTRUCTURE.md | Infrastructure notes | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
+| docs/HEALTH.md | Health checks | Baseline-only (v4.10) | 2025-12-07 | CLI health checks (ffmpeg/yt-dlp/outbox/ollama) + ci-smoke reference. |
+| docs/CLI.md | CLI reference | Baseline-only (v4.10) | 2025-12-07 | Updated commands (ingest/ask flows, alpha demos, health). |
+| docs/LLM.md | LLM integration | Baseline-only (v4.10) | 2025-12-07 | Providers/env defaults (mock/Ollama/OpenAI/DeepSeek). |
+| docs/LLM_BACKENDS.md | LLM backends | Baseline-only (v4.10) | 2025-12-07 | Providers mock/ollama/openai/deepseek; timeouts/keys noted. |
+| docs/RETRIEVAL.md | Retrieval | Baseline-only (v4.10) | 2025-12-07 | Hybrid search + optional rerank; ASK graph defaults noted. |
+| docs/FRONTMATTER.md | Frontmatter rules | Baseline-only (v4.10) | 2025-12-07 | Vault frontmatter minimal; UUID healing only. |
+| docs/DATA_MODEL.md | Data model | Baseline-only (v4.10) | 2025-12-07 | Active store_objects/vector_index/relations; legacy tables noted. |
+| docs/DATA_GOVERNANCE.md | Data governance | Baseline-only (v4.10) | 2025-12-07 | Stores + VaultMirror as truth; promotion gating flagged experimental. |
 | docs/DB_SCHEMA.md | DB schema | Partially outdated | 2025-12-07 | Current store_* tables documented; legacy AMG tables retained as historical. |
 | docs/SCORECARDS.md | Scorecards | Partially outdated | 2025-12-07 | Draft targets only; not enforced in Reality-MVP. |
-| docs/PROJECTOR.md | Projector | Aligned (v4.10) | 2025-12-07 | Promotion projector emits audit/membership; no filesystem projection. |
+| docs/PROJECTOR.md | Projector | Baseline-only (v4.10) | 2025-12-07 | Promotion projector emits audit/membership; no filesystem projection. |
 | docs/ALIGNMENT.md | Alignment guide | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
-| docs/SETTINGS.md | Settings | Aligned (v4.10) | 2025-12-07 | Core env vars (STORE_BACKEND/LLM/metrics flags) documented. |
+| docs/SETTINGS.md | Settings | Baseline-only (v4.10) | 2025-12-07 | Core env vars (STORE_BACKEND/LLM/metrics flags) documented. |
 | docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Partially outdated | 2025-12-07 | Planned API key + slowapi; not implemented in Reality-MVP. |
-| docs/ingest.md | Ingest (historical/current) | Aligned (v4.10) | 2025-12-07 | Vault-first ingest (CLI, UUID healing, mirror, HybridStore); legacy commands noted. |
-| docs/OBSIDIANSYNC.md | Obsidian sync | Aligned (v4.10) | 2025-12-10 | Reality-MVP: git watcher primary, filesystem watcher fallback; describes Obsidian → watcher → ingest/update → outbox → indexer; aligned with v5.x watcher track and the v5.2 snapshot-based Vault Watcher CLI. |
+| docs/ingest.md | Ingest (historical/current) | Baseline-only (v4.10) | 2025-12-07 | Vault-first ingest (CLI, UUID healing, mirror, HybridStore); legacy commands noted. |
+| docs/OBSIDIANSYNC.md | Obsidian sync | Baseline-only (v4.10) | 2025-12-10 | Reality-MVP: git watcher primary, filesystem watcher fallback; describes Obsidian → watcher → ingest/update → outbox → indexer; aligned with v5.x watcher track and the v5.2 snapshot-based Vault Watcher CLI. |
 | docs/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
-| docs/AI_DEVELOPMENT.md | AI-assisted development policy | Aligned (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
-| docs/DEV_WORKFLOW.md | Developer workflow | Aligned (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
-| docs/OPERATIONS.md | Operations playbook | Aligned (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
-| docs/INVENTORY.md | Runtime inventory | Aligned (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
-| docs/GLOSSARY.md | Glossary | Aligned (v4.10) | 2025-12-07 | Updated definitions for hybrid/rerank/outbox/health. |
-| docs/QUALITY.md | Quality | Aligned (v4.10) | 2025-12-07 | QA guardrails vs ASK graph clarified; CI fitness gates noted. |
+| docs/AI_DEVELOPMENT.md | AI-assisted development policy | Baseline-only (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
+| docs/DEV_WORKFLOW.md | Developer workflow | Baseline-only (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
+| docs/OPERATIONS.md | Operations playbook | Baseline-only (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
+| docs/INVENTORY.md | Runtime inventory | Baseline-only (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
+| docs/GLOSSARY.md | Glossary | Baseline-only (v4.10) | 2025-12-07 | Updated definitions for hybrid/rerank/outbox/health. |
+| docs/QUALITY.md | Quality | Baseline-only (v4.10) | 2025-12-07 | QA guardrails vs ASK graph clarified; CI fitness gates noted. |
 | docs/CONTRIBUTING.md | Contributing guide | Partially outdated | 2025-12-07 | Setup/tests template; defer to DEV_WORKFLOW/CI for current practice. |
-| docs/CHANGELOG.md | Docs changelog | Aligned (v4.10, with known debt) | 2025-12-07 | Tracks doc updates; may lag implementations. |
+| docs/CHANGELOG.md | Docs changelog | Baseline-only (v4.10, with known debt) | 2025-12-07 | Tracks doc updates; may lag implementations. |
 | docs/PRIVACY.md | Privacy | Unreviewed | — |  |
-| docs/HEALTH.md | Health checks | Aligned (v4.10) | 2025-12-07 | CLI health checks (ffmpeg/yt-dlp/outbox/ollama) + ci-smoke reference. |
-| docs/LLM_BACKENDS.md | LLM backends | Aligned (v4.10) | 2025-12-07 | Providers mock/ollama/openai/deepseek; timeouts/keys noted. |
-| docs/INFRASTRUCTURE.md | Infrastructure | Aligned (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
-| docs/OPERATIONS.md | Operations | Aligned (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
-| docs/INVENTORY.md | Inventory | Aligned (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
+| docs/HEALTH.md | Health checks | Baseline-only (v4.10) | 2025-12-07 | CLI health checks (ffmpeg/yt-dlp/outbox/ollama) + ci-smoke reference. |
+| docs/LLM_BACKENDS.md | LLM backends | Baseline-only (v4.10) | 2025-12-07 | Providers mock/ollama/openai/deepseek; timeouts/keys noted. |
+| docs/INFRASTRUCTURE.md | Infrastructure | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
+| docs/OPERATIONS.md | Operations | Baseline-only (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
+| docs/INVENTORY.md | Inventory | Baseline-only (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
 | docs/OVERVIEW_WS.md | Overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
-| docs/DEPENDENCIES.md | Dependencies | Aligned (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
-| docs/OBSERVABILITY.md | Observability | Aligned (v4.10) | 2025-02-24 | JSON logs + span schema; status backend/CLI + interim GUI (status + ASK) share the snapshot service. |
-| docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
-| docs/AI_DEVELOPMENT.md | AI development policy | Aligned (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
-| docs/DEV_WORKFLOW.md | Dev workflow | Aligned (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
-| docs/scenarios/REALITY_MVP.md | Scenario walkthrough | Aligned (v4.10) | 2025-12-07 | Matches e2e pipeline test and ASK expectations. |
+| docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
+| docs/OBSERVABILITY.md | Observability | Baseline-only (v4.10) | 2025-02-24 | JSON logs + span schema; status backend/CLI + interim GUI (status + ASK) share the snapshot service. |
+| docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
+| docs/AI_DEVELOPMENT.md | AI development policy | Baseline-only (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
+| docs/DEV_WORKFLOW.md | Dev workflow | Baseline-only (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
+| docs/scenarios/REALITY_MVP.md | Scenario walkthrough | Baseline-only (v4.10) | 2025-12-07 | Matches e2e pipeline test and ASK expectations. |
 
 ## Architecture Subdocuments
 | Path | Scope | Review status | Last reviewed | Notes |
@@ -119,32 +122,32 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 ## Runbooks, How-to, Settings Examples, and Examples
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/runbooks/ingest.md | Runbook: ingest | Aligned (v4.10, with known debt) | 2025-12-07 | Troubleshooting vault ingest/outbox; matches current CLI path. |
+| docs/runbooks/ingest.md | Runbook: ingest | Baseline-only (v4.10, with known debt) | 2025-12-07 | Troubleshooting vault ingest/outbox; matches current CLI path. |
 | docs/howto/memory.md | How-to: memory | Legacy (archived) | 2025-12-07 | Agent-memory guide superseded by ObjectStore/decisions in v4.10. |
 | docs/settings/sample-flows/ingest.flow.md | Sample flow | Partially outdated | 2025-12-07 | Template for future planner/orchestrator ingest; not loaded in v4.10. |
 | docs/settings/sample-agents/planner.md | Sample agent config | Partially outdated | 2025-12-07 | Planner config template for v5.x; unused in Reality-MVP. |
 | docs/settings/sample-agents/normalizer.md | Sample agent config | Partially outdated | 2025-12-07 | Normalizer config template; runtime uses direct agents, not these YAMLs. |
 | docs/settings/panel-actions.md | Panel action mappings | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline; fallback mappings include promotion intent and runtime logging for unmapped actions. |
-| docs/examples/ai-panel-example.md | AI panel example note | Aligned (v4.10, with known debt) | 2025-12-07 | Panel fences + Swedish headings; dispatch optional. |
+| docs/examples/ai-panel-example.md | AI panel example note | Baseline-only (v4.10, with known debt) | 2025-12-07 | Panel fences + Swedish headings; dispatch optional. |
 
 ## Eval and Quality
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/eval.md | Eval stack | Aligned (v4.10) | 2025-12-07 | Opt-in DeepEval/Ragas suites; skips when deps/LLM missing. |
+| docs/eval.md | Eval stack | Baseline-only (v4.10) | 2025-12-07 | Opt-in DeepEval/Ragas suites; skips when deps/LLM missing. |
 | docs/SCORECARDS.md | Scorecards | Partially outdated | 2025-12-07 | Draft targets only; not enforced in Reality-MVP. |
-| docs/QUALITY.md | Quality | Aligned (v4.10) | 2025-12-07 | QA guardrails vs ASK graph clarified; CI fitness gates noted. |
+| docs/QUALITY.md | Quality | Baseline-only (v4.10) | 2025-12-07 | QA guardrails vs ASK graph clarified; CI fitness gates noted. |
 
 ## Agents / Codex Guidance
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/agents/AGENT_SPEC.md | Agent spec | Aligned (v4.10, with known debt) | 2025-12-07 | Reality-MVP agent contracts; notes on stubs (chunks/outbox/index) and parked agents. |
-| .codex/AGENTS.md | Coding agent guidance | Aligned (v4.10) | 2025-12-07 | Dev-layer system prompt; hierarchy/constraints/tests-first made current. |
-| docs/codex/GUIDELINES.md | Codex guidelines | Aligned (v4.10) | 2025-12-07 | Quick checklist pointing to .codex/AGENTS and SoT anchors. |
+| docs/agents/AGENT_SPEC.md | Agent spec | Baseline-only (v4.10, with known debt) | 2025-12-07 | Reality-MVP agent contracts; notes on stubs (chunks/outbox/index) and parked agents. |
+| .codex/AGENTS.md | Coding agent guidance | Baseline-only (v4.10) | 2025-12-07 | Dev-layer system prompt; hierarchy/constraints/tests-first made current. |
+| docs/codex/GUIDELINES.md | Codex guidelines | Baseline-only (v4.10) | 2025-12-07 | Quick checklist pointing to .codex/AGENTS and SoT anchors. |
 
 ## ADRs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/adr/INDEX.md | ADR index | Aligned (v4.10, with known debt) | 2025-12-07 | Index updated with legacy/partial states for ADRs. |
+| docs/adr/INDEX.md | ADR index | Baseline-only (v4.10, with known debt) | 2025-12-07 | Index updated with legacy/partial states for ADRs. |
 | docs/adr/ADR-00X-agent-memory-v1.md | ADR (agent memory v1) | Legacy (archived) | 2025-12-07 | Historical PG JSONB memory; superseded by ObjectStore/decisions in v4.10. |
 | docs/adr/ADR-00X-agent-memory-v42.md | ADR (agent memory v42) | Legacy (archived) | 2025-12-07 | Scoped PG memory/edges not implemented in v4.10. |
 | docs/adr/0001-externa-komponenter.md | ADR external components | Legacy (archived) | 2025-12-07 | Superseded by SYSTEM_DESIGN_v4.10 and LLM/COMPONENTS docs. |
@@ -170,35 +173,35 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 ## Scenario and Protocol Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/scenarios/REALITY_MVP.md | Reality-MVP scenario | Aligned (v4.10) | 2025-12-07 | Matches e2e pipeline test and ASK expectations. |
+| docs/scenarios/REALITY_MVP.md | Reality-MVP scenario | Baseline-only (v4.10) | 2025-12-07 | Matches e2e pipeline test and ASK expectations. |
 | docs/PROTOCOL_SATELLITE_SYNC.md | Satellite sync protocol | Planned / not implemented | 2025-12-07 | Draft v5.x master/satellite sync; not implemented in Reality-MVP. |
 
 ## Additional Docs (misc)
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/LLM_BACKENDS.md | LLM backends | Aligned (v4.10) | 2025-12-07 | Providers mock/ollama/openai/deepseek; timeouts/keys noted. |
-| docs/INFRASTRUCTURE.md | Infrastructure | Aligned (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
+| docs/LLM_BACKENDS.md | LLM backends | Baseline-only (v4.10) | 2025-12-07 | Providers mock/ollama/openai/deepseek; timeouts/keys noted. |
+| docs/INFRASTRUCTURE.md | Infrastructure | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
 | docs/OVERVIEW_WS.md | Overview workspace | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
-| docs/DEPENDENCIES.md | Dependencies | Aligned (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
-| docs/OBSERVABILITY.md | Observability | Aligned (v4.10) | 2025-02-24 | JSON logs + span schema; status backend/CLI + interim GUI (status + ASK) share the snapshot service. |
-| docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
-| docs/AI_DEVELOPMENT.md | AI development | Aligned (v4.10) | 2025-12-07 | Current dev-layer AI policy (docs-first, mocks/defaults). |
-| docs/DEV_WORKFLOW.md | Dev workflow | Aligned (v4.10) | 2025-12-07 | TDD/docs-first workflow aligned with SoT v4.10. |
-| docs/PROJECTOR.md | Projector | Aligned (v4.10) | 2025-12-07 | Promotion projector emits audit/membership; no filesystem projection. |
+| docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
+| docs/OBSERVABILITY.md | Observability | Baseline-only (v4.10) | 2025-02-24 | JSON logs + span schema; status backend/CLI + interim GUI (status + ASK) share the snapshot service. |
+| docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
+| docs/AI_DEVELOPMENT.md | AI development | Baseline-only (v4.10) | 2025-12-07 | Current dev-layer AI policy (docs-first, mocks/defaults). |
+| docs/DEV_WORKFLOW.md | Dev workflow | Baseline-only (v4.10) | 2025-12-07 | TDD/docs-first workflow aligned with SoT v4.10. |
+| docs/PROJECTOR.md | Projector | Baseline-only (v4.10) | 2025-12-07 | Promotion projector emits audit/membership; no filesystem projection. |
 | docs/ALIGNMENT.md | Alignment | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
 | docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2025-12-07 | Historical v4.2 overview; superseded by SoT v4.10. |
-| docs/GLOSSARY.md | Glossary | Aligned (v4.10) | 2025-12-07 | Updated definitions for hybrid/rerank/outbox/health. |
+| docs/GLOSSARY.md | Glossary | Baseline-only (v4.10) | 2025-12-07 | Updated definitions for hybrid/rerank/outbox/health. |
 | docs/MEMORY.md | Memory design (historical) | Legacy (archived) | 2025-12-07 | v4.3 memory plan; superseded by DATA_MODEL/ARCHITECTURE v4.10. |
 
 ## Settings / Vault / System / Inbox
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| System/Dashboards/inbox.md | System dashboard | Aligned (v4.10) | 2025-12-07 | Minimal vault dashboard for system inbox notes. |
-| System/Dashboards/conflicts.md | System dashboard | Aligned (v4.10) | 2025-12-07 | Minimal vault dashboard for conflicts inbox. |
+| System/Dashboards/inbox.md | System dashboard | Baseline-only (v4.10) | 2025-12-07 | Minimal vault dashboard for system inbox notes. |
+| System/Dashboards/conflicts.md | System dashboard | Baseline-only (v4.10) | 2025-12-07 | Minimal vault dashboard for conflicts inbox. |
 | System/Settings/system.md | System settings | Partially outdated | 2025-12-07 | Illustrative sync settings; not enforced in Reality-MVP. |
-| Inbox/System-changes.md | Inbox/system changes | Aligned (v4.10) | 2025-12-07 | Log stub for system change notes. |
-| vault/README.md | Vault README | Aligned (v4.10, with known debt) | 2025-12-07 | Vault surface overview; ingest via CLI, UUID healing, panels optional. |
-| vault/0_Atlas/Home.md | Vault note | Aligned (v4.10, with known debt) | 2025-12-07 | Home navigation; points to settings/inbox/desks; panels optional. |
+| Inbox/System-changes.md | Inbox/system changes | Baseline-only (v4.10) | 2025-12-07 | Log stub for system change notes. |
+| vault/README.md | Vault README | Baseline-only (v4.10, with known debt) | 2025-12-07 | Vault surface overview; ingest via CLI, UUID healing, panels optional. |
+| vault/0_Atlas/Home.md | Vault note | Baseline-only (v4.10, with known debt) | 2025-12-07 | Home navigation; points to settings/inbox/desks; panels optional. |
 | vault/@Desk/galaxy-test.md | Vault note | Example / sandbox | 2025-12-07 | Sample note with UUID; non-authoritative. |
 | vault/@Desk/Test fil 2.md | Vault note | Example / sandbox | 2025-12-07 | Empty example note. |
 | vault/Konfigurera.md | Vault note | Example / sandbox | 2025-12-07 | Placeholder/config sandbox. |
@@ -216,7 +219,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 ## Prompts / Data Context
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| data/context/prompts/context_summarizer.md | Prompt context | Aligned (v4.10, with known debt) | 2025-12-07 | Manual prompt snippet; not wired into runtime, English-only, review-before-write. |
+| data/context/prompts/context_summarizer.md | Prompt context | Baseline-only (v4.10, with known debt) | 2025-12-07 | Manual prompt snippet; not wired into runtime, English-only, review-before-write. |
 
 ## Examples / Golden Samples
 | Path | Scope | Review status | Last reviewed | Notes |
