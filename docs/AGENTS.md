@@ -27,7 +27,7 @@ Flow: `query → retrieve (hybrid search) → rerank (ask_score + reranker) → 
 - `Summary`
 - `Sources` (list: doc_id + timestamps when relevant)
 
-## Agent Matrix (Reality-MVP)
+## Agent Matrix (Reality-MVP + forward line v5.x)
 
 | Agent | Role | Primary Human Flow | AgentState / LangGraph | Coordination (events/A2A) | State (active/parked) |
 | --- | --- | --- | --- | --- | --- |
@@ -38,7 +38,8 @@ Flow: `query → retrieve (hybrid search) → rerank (ask_score + reranker) → 
 | CitationChecker | Validate citations for ASK answers | ASK | Planned (graph when critique/repair expands) | Outbox ASK events; future A2A | Active |
 | Indexer | Write embeddings to VectorIndex | Capture & Ingest / ASK | No (deterministic pipeline) | Outbox ingest/index events | Active |
 | ASK Agent | Retrieve, rerank, and draft answers | ASK | Yes (LangGraph + AgentState live in `app/agents/ask/graph.py`) | Planner/Orchestrator optional; Outbox for traces | Active |
-| PanelAgent | Translate AI panels into intents/events | Panel Interaction | Planned (PanelAgent 2.0 LangGraph + PanelAgentState) | Outbox panel/promotion intents; A2A planned | Active |
+| PanelAgent | Translate AI panels into intents/events | Panel Interaction | Yes (LangGraph runtime + PanelActionIntent) | Outbox panel intents; planner pipeline opt-in (`PANEL_AGENT_PIPELINE=planner`) | Active |
+| Planner | Build plans from goals/events (including panel action intents) | Multi-agent orchestration | Planned (LLM-backed; panel-mode mapping shipped) | Outbox plan events; feeds Orchestrator | Active |
 | Promotion Agent | Apply promotion/evergreen actions | Review & Promotion | Planned (LangGraph to encode policy/branching) | Outbox promotion events; Orchestrator integration planned | Active |
 | Reviewer | Human-aligned review of objects/promotions | Review & Promotion | Planned (LangGraph critique/approval) | Outbox review events; A2A planned | Active |
 | SetEvaluator | Score/rank candidates for promotion/sets | Review & Promotion / ASK (ranking) | Planned | Outbox/Planner hooks; A2A planned | Active |

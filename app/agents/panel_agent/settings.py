@@ -4,6 +4,7 @@ import os
 from typing import Literal
 
 DeciderMode = Literal["rule", "llm"]
+PipelineMode = Literal["direct", "planner"]
 
 
 def get_panel_agent_decider() -> DeciderMode:
@@ -13,4 +14,11 @@ def get_panel_agent_decider() -> DeciderMode:
     return value  # type: ignore[return-value]
 
 
-__all__ = ["get_panel_agent_decider", "DeciderMode"]
+def get_panel_agent_pipeline() -> PipelineMode:
+    value = (os.getenv("PANEL_AGENT_PIPELINE") or "direct").strip().lower()
+    if value not in {"direct", "planner"}:
+        return "direct"
+    return value  # type: ignore[return-value]
+
+
+__all__ = ["get_panel_agent_decider", "get_panel_agent_pipeline", "DeciderMode", "PipelineMode"]

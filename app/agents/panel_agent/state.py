@@ -5,6 +5,7 @@ from typing import Any, List
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.components.settings.panel_actions_loader import PanelActionCatalog
+from app.agents.panel_agent.intent import PanelActionIntent
 from app.events.panel import (
     NoteRef,
     PanelInfo,
@@ -37,6 +38,7 @@ class PanelAgentState(BaseModel):
     action_results: List[PanelRuntimeActionResult] = Field(default_factory=list)
     emitted_events: List[Any] = Field(default_factory=list)
     log_entry: PanelLogEntry | None = None
+    panel_action_intent: PanelActionIntent | None = None
 
 
 __all__ = ["PanelAgentState"]
