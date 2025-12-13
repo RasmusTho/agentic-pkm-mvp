@@ -30,10 +30,11 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 ## Core SoT Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-03-10 | Locked v4.10 baseline; explicit “multi-agent outer + LangGraph inner per agent”; forward line tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration) on top of v5.0 runtime. |
+| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-03-12 | Locked v4.10 baseline; forward line through v5.5 (PanelAgent planner/orchestration, watcher track, promotion consumer). |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
 | docs/STATUS.md | Operational snapshot | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-12 | Status fields cover baseline vs forward line, active features, and counters including promote.done. |
-| docs/ROADMAP.md | Strategic roadmap | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-10 | Forward line tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration); v5.5A/B captured; v5.6 LangGraph rollout planned; v4.10 baseline referenced only as foundation. |
+| docs/ROADMAP.md | Strategic roadmap | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-12 | Forward-looking only; history moved to docs/history/SOT_4X_HISTORY.md; tracks through v5.5B. |
+| docs/history/SOT_4X_HISTORY.md | SoT 4.x history | Legacy (archived) | 2025-03-12 | Historical v4.x ladder moved from ROADMAP; forward plan now in ROADMAP. |
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP components; v5.x will extend (PanelAgent, sync, richer orchestration). |
 | docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2025-03-10 | Design principle set to LangGraph inner + events/A2A outer; PanelAgent exemplifies the pattern with a catalog-driven decider and planner pipeline opt-in plus CLI-first orchestration; SoT wording calls out forward line through v5.5 with v4.10 as locked base. |
 | docs/PLANNER.md | Planner contract | Baseline-only (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
