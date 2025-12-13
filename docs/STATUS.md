@@ -5,7 +5,7 @@ Status snapshot now includes SoT baseline + forward-line fields and intent/event
 - `sot_baseline_version`: locked Reality-MVP baseline (v4.10).
 - `sot_forward_line_version` / `feature_line_version`: active forward line (v5.x features on top of v4.10).
 - `active_features`: human-readable list of forward-line capabilities (PanelAgent runtime, watcher track, config-driven wiring).
-- Counters (totals + 24h window): `watcher_runs`, `panel_runs` (`panel.intent.executed`), `promote.intent.created`, and ingest run counts per plane. Use these in UAT to confirm watcher/panel flows; if promotion intents increment but notes do not change, the promotion consumer is not running.
+- Counters (totals + 24h window): `watcher_runs`, `panel_runs` (`panel.intent.executed`), `promote.intent.created`, `promotion_executed` (`promote.done`), and ingest run counts per plane. Use these in UAT to confirm watcher/panel flows; if promotion intents increment but notes do not change, the promotion consumer is not running.
 
 ## Status — Operational Snapshot
 

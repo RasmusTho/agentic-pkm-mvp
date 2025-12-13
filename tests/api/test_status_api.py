@@ -20,4 +20,5 @@ def test_status_endpoint_returns_snapshot():
     events = body.get("events") or {}
     assert "panel_runs_total" in events
     assert "watcher_runs_total" in events
+    assert "promotion_executed_total" in events
     assert isinstance(events.get("ingest_runs_by_plane", {}), dict)
