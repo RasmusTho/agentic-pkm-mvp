@@ -267,3 +267,10 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | tmp-test/original.md | Temp/test file | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; no impact on SoT. |
 | tmp-test2/a.md | Temp/test file | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; no impact on SoT. |
 | docs/tracks/TRACK_FITNESS_CI_CONTRACT.md | Fitness & CI contract track | Aligned (forward line v5.x) | 2025-03-12 | Fitness gates QAS003/010, rerank/relations/diarization CI summary lines; reasoning/A2A gates planned. |
+| docs/history/SOT_4X_HISTORY.md | SoT 4.x history | Legacy (archived) | 2025-03-12 | Historical v4.x ladder; roadmap now forward-only. |
+| docs/examples/vault_test_seed/evergreen-strategy.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Promote-evergreen scenario for watcher/panel UAT. |
+| docs/examples/vault_test_seed/reflection-journal.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Reflection-only scenario (no promotion expected). |
+| docs/examples/vault_test_seed/mixed-actions.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Mixed actions; only mapped actions trigger intents. |
+| docs/examples/vault_test_seed/summary-request.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Summary-only scenario aligned with panel wiring. |
+| docs/examples/vault_test_seed/unknown-action.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Unknown action should log but not promote. |
+| docs/examples/vault_test_seed/manual-policy.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Manual policy example; watcher should skip panel. |
