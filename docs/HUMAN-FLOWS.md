@@ -85,10 +85,12 @@ State: SoT v4.10 (Reality-MVP) and v5.0 (PanelAgent Runtime V1) are locked basel
 - Hardening (v5.4): `vault-watcher-run` supports `--dry-run` (no ingest/panel, shows what would run) and `--max-notes` with optional `--force` to prevent storming on large change sets. Summaries report changed notes, ingest attempts, panel candidates/runs, skips, and errors. Watchers remain opt-in and bounded by both global flags and per-note policy.
 - See also: `docs/UAT_PANEL_WATCHER.md` for a human-facing walkthrough of manual + watcher UAT.
 
-### UAT: Watcher + Panel on vault/Test
-- Export environment: `export VAULT_ROOT=<vault>`; ensure `INDEX_OUTBOX_PATH` is writable. Optionally set `PANEL_ACTION_WIRING_PATH` to a custom wiring file.
-- Dry run: `python -m app.cli vault-watcher-run --vault-root "$VAULT_ROOT/Test" --dry-run --max-notes 20` to see candidates without ingest/panel side effects.
-- Run: `python -m app.cli vault-watcher-run --vault-root "$VAULT_ROOT/Test" --max-notes 20` to ingest changed notes and run panels (policy-gated).
-- Status: `python -m app.cli status` and verify counters increased: `watcher_runs`, `panel_runs` (`panel.intent.executed`), `promote.intent.created`, and ingest plane counts.
-- Policy gating: only notes with panel auto-run policy (`ai_panel_auto_run: watcher` or `ai_panel: { auto_run: watcher }`) will run panels under watcher; others are skipped.
-- Promotion intent vs mutation: `promote.intent.created` proves the panel emitted an intent; promotion/moves require a Promotion Agent/consumer to be running.
+### UAT: Watcher + Panel + Promotion on vault/Test
+- Seed curated notes into your vault Test folder:
+  - `python -m app.cli uat-seed-vault-test --vault-root "<vault_root>"` (defaults to Test/AgenticPKM-UAT).
+- Run the end-to-end flow (watcher + panel runtime + promotion consumer):
+  - `python -m app.cli uat-run-vault-test --vault-root "<vault_root>" --assert`
+  - The runner scopes watcher to `<vault_root>/Test`, uses the seeded folder, runs panel runtime (policy-gated), and then consumes promotion intents to emit `promote.done` and apply the promotion state.
+- Verify status: `python -m app.cli status` and confirm counters increased: watcher_runs, ingest_attempted/ingested, panel_runs (`panel.intent.executed`), promote.intent.created, promote.done.
+- Policy gating: only notes with `ai_panel_auto_run: watcher` (or `ai_panel: { auto_run: watcher }`) are auto-run by watcher; manual/never notes are skipped and reported in the summary.
+- Intent vs mutation: panel runtime emits intents (`promote.intent.created`), while `promote.done` comes from the promotion consumer; note mutation requires the consumer to run (included by default in the UAT runner).
