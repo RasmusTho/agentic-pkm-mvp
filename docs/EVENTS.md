@@ -115,3 +115,8 @@ Minimal payload (fields may extend but these are guaranteed):
 ## Contract
 - Every `.done` carries a minimal contract payload used by downstream steps.
 - All events are mirrored into `audit` with `action` equal to event and `details` containing payload diff.
+### `promote.done`
+Emitted by the promotion consumer when a promotion intent has been applied. Payload includes `note_uuid`, `state`, and `source_event` (the originating `promote.intent.created`).
+
+### `promote.error`
+Emitted by the promotion consumer when a promotion intent cannot be applied (missing uuid or note not found). Payload includes `reason`, optional `note_uuid`, and `source_event`.

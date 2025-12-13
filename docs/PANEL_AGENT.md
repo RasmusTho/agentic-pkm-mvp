@@ -109,3 +109,4 @@ Please promote this note after verifying the summary.
 - Validation: config must define an `actions` list with `id`, `kind` (event|intent, defaults to event), and `event_type`/`target_event` (or `intent_type`). Unknown/invalid configs emit a warning and fall back to the default wiring; runtime behaviour stays unchanged.
 - CLI/Watcher use the same wiring; panel decider (rule/LLM) still selects actions, wiring only controls emitted events.
 
+Promotion intents (`promote.intent.created`) represent intent-only; apply effects by running the promotion consumer (`python -m app.cli promote-consume`), which emits `promote.done` when successful.

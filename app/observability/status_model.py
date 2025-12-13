@@ -53,6 +53,8 @@ class EventCounters(BaseModel):
     panel_runs_24h: int = 0
     promote_created_total: int = 0
     promote_created_24h: int = 0
+    promotion_executed_total: int = 0
+    promotion_executed_24h: int = 0
     ingest_runs_by_plane: dict[str, int] = Field(default_factory=dict)
     source_path: str | None = None
 
