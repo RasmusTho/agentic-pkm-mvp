@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (baseline locked; v5.x Agentic PKM is the forward line).
+State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x Agentic PKM forward line currently tracked through v5.4 (PanelAgent + Watchers).
 # Human Flows — Agentic PKM
 
 Kort orientering: This doc is anchored in `docs/SYSTEM_DESIGN_v4.10.md` (global system design). Keep the two in sync when surfaces, dependencies, or flows change.

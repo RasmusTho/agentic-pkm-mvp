@@ -41,7 +41,10 @@ class AskStatus(BaseModel):
 
 class SystemStatus(BaseModel):
     timestamp: datetime
-    sot_version: str
+    sot_version: str  # legacy alias for baseline SoT
+    sot_baseline_version: str
+    sot_forward_line_version: str
+    sot_label: str
     stores: list[StoreStatus]
     ingestion: IngestionStatus
     ask: AskStatus

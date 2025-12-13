@@ -7,7 +7,7 @@ from typing import Iterable
 from app.observability.ingest_meta import get_ingest_status
 from app.observability.status_model import AskStatus, IngestionStatus, StoreStatus, SystemStatus
 from app.stores import get_object_store
-from app.version import get_sot_version
+from app.version import SOT_BASELINE, SOT_FORWARD, SOT_LABEL, get_sot_version, get_sot_metadata
 
 _ASK_LATENCIES: list[tuple[float, float]] = []
 _ASK_ERRORS: list[float] = []
@@ -126,9 +126,13 @@ def get_ask_status() -> AskStatus:
 
 
 def get_system_status() -> SystemStatus:
+    sot_meta = get_sot_metadata()
     return SystemStatus(
         timestamp=datetime.now(timezone.utc),
         sot_version=get_sot_version(),
+        sot_baseline_version=sot_meta["baseline"],
+        sot_forward_line_version=sot_meta["forward_line"],
+        sot_label=sot_meta["label"],
         stores=get_store_status(),
         ingestion=get_ingestion_status(),
         ask=get_ask_status(),

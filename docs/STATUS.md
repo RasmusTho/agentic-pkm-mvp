@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (baseline locked; v5.x is the active forward line).
+State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x forward line currently tracked through v5.4 (PanelAgent + Watchers).
 # Status — Operational Snapshot
 
 Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and deployment topology for this SoT.

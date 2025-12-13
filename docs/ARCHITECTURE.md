@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (baseline locked; new work targets v5.x Agentic PKM).
+State: SoT v4.10 Reality-MVP (baseline locked) with the active forward line tracked at v5.4 (PanelAgent + Watchers) on top.
 # Architecture — SoT v4.10 Reality-MVP
 
 Historic SoT snapshots and older plans live in `docs/archive/`.
@@ -23,7 +23,7 @@ This architecture focuses on the runtime and data model for the Mimer module (th
 ## SoT lines
 - **SoT v4.10 Reality-MVP (baseline locked)** — single-user PKM with stable vault ingest, minimal external ingest, hybrid retrieval + ASK with sources/latency, observability/status surfaces (CLI/API/GUI), and orchestrator runtime V1. Operational acceptance: soak vault ingest and external newsletter/PDF samples. Collaboration/multi-user deferred.
 - **SoT v5.0 PanelAgent Runtime V1 (first v5.x baseline)** — sits on top of the locked v4.10 baseline; Panel runtime interprets `panel.intent.created`, fans promotion actions to `promote.intent.created`, emits `panel.intent.executed`/`panel.action.*`/`panel.log.created`, and writes AI panel logs (`panel_logs`) that connect the note UI to internal intents.
-- **SoT v5.x Agentic PKM (active forward line)** — Agentic flows (PanelAgent v5+), Satellite Sync (`docs/PROTOCOL_SATELLITE_SYNC.md`), and Yggdrasil modules (Munin/Brokkr/Tyr/Heimdall) that extend the v4.10 backbone; richer orchestration (LangGraph + MCP ToolProvider) and reasoning live here. The forward line now includes a watcher/agent infra track that builds on v5.0: v5.1 watcher-ready ingest/panel flows (including targeted ingest via `ingest-vault-paths` and multi-note panel CLI), v5.2 snapshot-based CLI polling watcher MVP (`vault-watcher-run` driving ingest + panel), v5.3 explicit policy for auto-panel via frontmatter gating watcher runs, and v5.4 watcher hardening/ergonomics (dry-run, max-notes guard, structured summaries).
+- **SoT v5.x Agentic PKM (active forward line, currently through v5.4)** — Agentic flows (PanelAgent v5+), Satellite Sync (`docs/PROTOCOL_SATELLITE_SYNC.md`), and Yggdrasil modules (Munin/Brokkr/Tyr/Heimdall) that extend the v4.10 backbone; richer orchestration (LangGraph + MCP ToolProvider) and reasoning live here. The forward line now includes a watcher/agent infra track that builds on v5.0: v5.1 watcher-ready ingest/panel flows (including targeted ingest via `ingest-vault-paths` and multi-note panel CLI), v5.2 snapshot-based CLI polling watcher MVP (`vault-watcher-run` driving ingest + panel), v5.3 explicit policy for auto-panel via frontmatter gating watcher runs, and v5.4 watcher hardening/ergonomics (dry-run, max-notes guard, structured summaries).
 
 ### Architecture Statement: Multi-agent outer, LangGraph inner
 - Outer architecture: many autonomous agents coordinate via events/A2A envelopes; the Orchestrator routes/executes plans but does not embed each agent’s internal reasoning or decision logic.
