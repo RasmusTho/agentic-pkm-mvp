@@ -1,6 +1,7 @@
 Agentic PKM — Second-Brain Engine
 
-System-of-Truth v4.10 (Locked Baseline — Reality-MVP)
+System-of-Truth baseline: v4.10 (Reality-MVP, locked)
+System-of-Truth forward line: v5.4 (PanelAgent Runtime + Watchers)
 
 Agentic PKM är ett agentdrivet, eventstyrt och CI-säkrat system för personlig kunskapshantering.
 Det använder ett mänskligt gränssnitt (Markdown-vault) och ett maskinellt ”System-of-Truth” bestående av Stores, Outbox-händelser och en flerstegs agent-pipeline.

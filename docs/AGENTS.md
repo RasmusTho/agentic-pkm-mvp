@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (baseline locked; v5.x Agentic PKM is the forward line).
+State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x Agentic PKM forward line currently tracked through v5.4 (PanelAgent + Watchers).
 # 6.0 Agentloop (deterministisk)
 
 ## Design principle

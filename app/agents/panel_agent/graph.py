@@ -186,10 +186,13 @@ def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str
             f"- id: {descriptor.id} | kind: {descriptor.kind or descriptor.intent_type} | labels: {labels} | hint: {hint}"
         )
     hint_lines = [f"- {a.label} (checked={a.checked})" for a in actions]
-    system = (
-        "You are PanelAgent. Given the note context, panel instruction, checkbox hints, and available canonical actions, "
-        "choose which actions to execute by returning JSON with an 'actions' array of objects "
-        "with fields {id, reason?, message?}. Only use the provided action IDs. Do not invent new IDs."
+    system = " ".join(
+        [
+            "You are PanelAgent.",
+            "Given the note context, panel instruction, checkbox hints, and available canonical actions,",
+            "choose which actions to execute by returning JSON with an 'actions' array of objects",
+            "with fields {id, reason?, message?}. Only use the provided action IDs. Do not invent new IDs.",
+        ]
     )
     user_parts = [
         f"Instruction: {state.panel.instruction}",
@@ -230,8 +233,7 @@ def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str
                 selected.add(action_id)
                 if reason:
                     reasons[action_id] = reason
-        if not selected:
-            return None
+        # Empty set is a valid decision (LLM chose to run nothing).
         return selected, reasons
     except Exception:
         return None
@@ -279,7 +281,7 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
 
 def _decide_actions_llm_with_fallback(state: PanelAgentState) -> PanelAgentState:
     selection = _select_actions_llm(state)
-    if not selection:
+    if selection is None:
         return _decide_actions_rule(state)
     chosen, reasons = selection
     return _apply_actions(state, selected_ids=chosen, reasons=reasons)

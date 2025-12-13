@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: SoT v4.10 Reality-MVP (current core) with the active forward line tracked through v5.4 (PanelAgent + Watchers).
 # Roadmap — Strategic Control
 
 ## Reality-MVP (SoT v4.10 — baseline locked)

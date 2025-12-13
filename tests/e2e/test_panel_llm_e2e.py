@@ -106,16 +106,20 @@ def test_panel_llm_promotes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     monkeypatch.setenv("PANEL_AGENT_DECIDER", "llm")
     monkeypatch.setenv("PANEL_ACTIONS_PATH", str(_panel_actions_file(tmp_path)))
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
 
     emitted = _run_panel(note_uuid)
     topics = {getattr(e, "event", None) or e.get("event") for e in emitted}
-    assert "panel.intent.created" in topics
     assert "panel.intent.executed" in topics
     assert "panel.log.created" in topics
     assert "promote.intent.created" in topics
 
     outbox_events = _read_outbox(outbox_path)
-    assert any(ev.get("event") == "promote.intent.created" and ev.get("payload", {}).get("note", {}).get("uuid") == note_uuid for ev in outbox_events)
+    assert any(ev.get("event") == "panel.intent.created" for ev in outbox_events)
+    assert any(
+        ev.get("event") == "promote.intent.created" and ev.get("payload", {}).get("note", {}).get("uuid") == note_uuid
+        for ev in outbox_events
+    )
 
 
 def test_panel_llm_no_promotion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -133,13 +137,14 @@ def test_panel_llm_no_promotion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     monkeypatch.setenv("PANEL_AGENT_DECIDER", "llm")
     monkeypatch.setenv("PANEL_ACTIONS_PATH", str(_panel_actions_file(tmp_path)))
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
 
     emitted = _run_panel(note_uuid)
     topics = {getattr(e, "event", None) or e.get("event") for e in emitted}
-    assert "panel.intent.created" in topics
     assert "panel.intent.executed" in topics
     assert "panel.log.created" in topics
     assert "promote.intent.created" not in topics
 
     outbox_events = _read_outbox(outbox_path)
+    assert any(ev.get("event") == "panel.intent.created" for ev in outbox_events)
     assert not any(ev.get("event") == "promote.intent.created" for ev in outbox_events)

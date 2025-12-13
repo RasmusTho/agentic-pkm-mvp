@@ -9,5 +9,7 @@ def test_status_endpoint_returns_snapshot():
     assert resp.status_code == 200
     body = resp.json()
     assert "timestamp" in body
-    assert "sot_version" in body
+    assert body.get("sot_version")
+    assert body.get("sot_baseline_version")
+    assert body.get("sot_forward_line_version")
     assert isinstance(body.get("stores"), list)

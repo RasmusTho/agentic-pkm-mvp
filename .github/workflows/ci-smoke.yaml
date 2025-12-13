@@ -98,3 +98,47 @@ jobs:
         run: |
           python -m app.cli --help >/dev/null
           python -m app.cli health --json || true
+
+  panel-llm-e2e:
+    runs-on: ubuntu-latest
+    needs: smoke
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      STORE_BACKEND: memory
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PANEL_AGENT_DECIDER: llm
+      PANEL_AGENT_LLM_E2E: "1"
+      PANEL_AGENT_LLM_E2E_CI: ${{ secrets.PANEL_AGENT_LLM_E2E_CI }}
+      LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python deps
+        run: |
+          python -m pip install -U pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
+
+      - name: Guard: skip when LLM E2E not configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${PANEL_AGENT_LLM_E2E_CI:-}" != "true" ]; then
+            echo "PANEL_AGENT_LLM_E2E_CI is not true; skipping PanelAgent LLM E2E job."
+            exit 0
+          fi
+          if [ -z "${LLM_PROVIDER:-}" ] || [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "LLM env (LLM_PROVIDER/OPENAI_API_KEY) missing; skipping PanelAgent LLM E2E job."
+            exit 0
+          fi
+
+      - name: Run PanelAgent LLM E2E
+        run: pytest -q tests/e2e/test_panel_llm_e2e.py -m "panel_llm_e2e"

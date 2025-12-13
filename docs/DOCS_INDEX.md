@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: SoT v4.10 Reality-MVP (baseline locked) with the active forward line tracked through v5.4 (PanelAgent + Watchers).
 # Documentation Review Index — SoT v4.10
 
 Central map of documentation and markdown artifacts in this repo. Review status values:
@@ -11,12 +11,12 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 ## SoT Notes
 - v4.10 — locked Reality-MVP baseline.
 - v5.0 — PanelAgent Runtime V1 baseline on top of v4.10.
-- v5.x — forward line for Satellite Sync, Yggdrasil modules, Orchestrator/Reasoning 2.0.
+- v5.x — active forward line (currently tracked through v5.4: PanelAgent runtime + watcher track) for Satellite Sync, Yggdrasil modules, Orchestrator/Reasoning 2.0.
 
 ## Root and Repo Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| README.md | Top-level overview | Aligned (v4.10) | 2025-12-07 | Confirmed Reality-MVP overview/quickstart; points to SoT docs. |
+| README.md | Top-level overview | Aligned (SoT baseline/forward-line) | 2025-12-13 | Banner now calls out baseline v4.10 (Reality-MVP, locked) and forward line v5.4 (PanelAgent + Watchers); links to SoT docs. |
 | CHANGELOG.md | Repo change log (root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/CHANGELOG.md. |
 | .github/ISSUE_TEMPLATE/v4.6-objective.md | Issue template (historical, root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/ISSUE_TEMPLATE_v4.6-objective.md. |
 | .github/pull_request_template.md | PR template (historical, root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/pull_request_template.md. |
@@ -27,18 +27,18 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 ## Core SoT Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/ARCHITECTURE.md | Architecture (SoT v4.10) | Aligned (SoT v4.10 locked + LangGraph inner principle) | 2025-12-12 | Reality-MVP baseline; explicit “multi-agent outer + LangGraph inner per agent” statement (ASK graph example, PanelAgent migration plan); v5.x watcher/agent infra v5.1–v5.4 remain on top of v5.0 PanelAgent runtime. |
+| docs/ARCHITECTURE.md | Architecture (SoT v4.10) | Aligned (SoT baseline/forward-line) | 2025-12-13 | Reality-MVP baseline locked; explicit “multi-agent outer + LangGraph inner per agent”; forward line tracked through v5.4 (PanelAgent + watcher infra) on top of v5.0 runtime. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Aligned (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
-| docs/STATUS.md | Operational snapshot | Aligned (SoT v4.10 locked + v5.5/v5.6 planned) | 2025-12-12 | Reality-MVP locked (v4.10); v5.0 PanelAgent runtime baseline; v5.1–v5.4 watcher/agent milestones delivered; new v5.5 PanelAgent 2.0 (LangGraph inner) and v5.6 LangGraph rollout marked planned. |
-| docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v4.10 locked + v5.5/v5.6 planned) | 2025-12-12 | Reality-MVP baseline locked; v5.0 PanelAgent runtime baseline; v5.1–v5.4 watcher track captured; new v5.5 PanelAgent 2.0 (LangGraph inner) and v5.6 LangGraph rollout rows added. |
+| docs/STATUS.md | Operational snapshot | Aligned (SoT baseline/forward-line + v5.5/v5.6 planned) | 2025-12-13 | Reality-MVP locked (v4.10) plus v5.0 PanelAgent runtime; forward line tracked through v5.4 watcher/agent milestones; v5.5 PanelAgent 2.0 and v5.6 LangGraph rollout planned. |
+| docs/ROADMAP.md | Strategic roadmap | Aligned (SoT baseline/forward-line + v5.5/v5.6 planned) | 2025-12-13 | Reality-MVP baseline locked; forward line tracked through v5.4 watcher track; v5.5 PanelAgent 2.0 (LangGraph inner) and v5.6 LangGraph rollout rows captured. |
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP components; v5.x will extend (PanelAgent, sync, richer orchestration). |
-| docs/AGENTS.md | Agents overview | Aligned (SoT v4.10 locked + LangGraph inner principle) | 2025-12-12 | Design principle set to LangGraph inner + events/A2A outer; PanelAgent now exemplifies the pattern with a catalog-driven decider (`PANEL_AGENT_DECIDER=rule|llm`), while other agents remain planned for LangGraph alignment. |
+| docs/AGENTS.md | Agents overview | Aligned (SoT baseline/forward-line + LangGraph inner principle) | 2025-12-13 | Design principle set to LangGraph inner + events/A2A outer; PanelAgent exemplifies the pattern with a catalog-driven decider; SoT wording calls out baseline v4.10 and forward line through v5.4. |
 | docs/PLANNER.md | Planner contract | Aligned (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (v5.0 baseline + planned v5.5 LangGraph) | 2025-12-12 | Runtime V1 fixed mapping stays baseline; action catalog is canonical; decider configurable (`rule` default, opt-in `llm`) using the shared LangGraph flow; planned PanelAgent 2.0 LangGraph inner with `PanelAgentState` and Planner/Orchestrator integration remains. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline; includes runtime events (`panel.intent.executed`/`panel.action.*`/`panel.log.created`) and promotion fan-out. |
 | docs/DIAGRAMS.md | C4 diagrams | Aligned (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
-| docs/HUMAN-FLOWS.md | Human flows | Aligned (v5.0 baseline + planned v5.5 LangGraph) | 2025-12-12 | Panel/watcher flow notes keep Runtime V1 mapping as current state, add catalog-driven decider (`rule` default, `llm` opt-in with checkbox hints), and flag PanelAgent 2.0 LangGraph/LLM reasoning as planned (v5.5+); watcher/cooldown/policy/dry-run tracks retained. |
-| docs/TESTING.md | Testing strategy | Aligned (v4.10 + panel LLM E2E gating) | 2025-12-12 | Lists fast/mock suites and adds PanelAgent LLM E2E commands gated by `PANEL_AGENT_LLM_E2E=1` and `@pytest.mark.panel_llm_e2e`. |
+| docs/HUMAN-FLOWS.md | Human flows | Aligned (SoT baseline/forward-line) | 2025-12-13 | Panel/watcher flow notes keep Runtime V1 mapping as current state; SoT framing now explicit: baseline v4.10 locked, forward line through v5.4 (PanelAgent + watcher track); LangGraph/LLM decider planned for v5.5+. |
+| docs/TESTING.md | Testing strategy | Aligned (v4.10 + panel LLM E2E gating) | 2025-12-12 | Lists fast/mock suites, adds PanelAgent LLM E2E commands gated by `PANEL_AGENT_LLM_E2E=1`/`@pytest.mark.panel_llm_e2e`, and documents optional CI job `panel-llm-e2e` (skips when LLM secrets/flag absent). |
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (v5.0 baseline + planned v5.5 LangGraph) | 2025-12-12 | Runtime V1 fan-out + promotion intent + AI-log documented; catalog-driven decider (`PANEL_AGENT_DECIDER`) covers rule + opt-in LLM; planned LangGraph 2.0 path (`PanelAgentState`, Planner/Orchestrator via A2A/plan objects); UAT guide at UAT_PANEL_WATCHER.md. |
 | docs/UAT_PANEL_WATCHER.md | UAT guide (panel + watcher) | Aligned | 2025-12-10 | Human-facing UAT flow for PanelAgent + Vault Watcher (prep notes, targeted ingest, panel run-many, watcher dry-run/run, observations). |
 | docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Aligned (v4.10) | 2025-12-07 | High-level module map reviewed; Reality-MVP scope noted. |

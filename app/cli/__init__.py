@@ -880,7 +880,14 @@ def health(as_json: bool, trace_id: Optional[str]) -> None:
 @cli.command(help="Print a system status snapshot (Reality-MVP observability).")
 def status() -> None:
     status = get_system_status()
-    click.echo(f"SoT version: {status.sot_version}")
+    baseline = getattr(status, "sot_baseline_version", status.sot_version)
+    forward_line = getattr(status, "sot_forward_line_version", None)
+    label = getattr(status, "sot_label", "")
+    click.echo(f"SoT baseline: {baseline} (Reality-MVP, locked)")
+    if forward_line:
+        click.echo(f"SoT forward line: {forward_line} (PanelAgent + Watchers)")
+    if label:
+        click.echo(f"SoT label: {label}")
     click.echo(f"Timestamp: {status.timestamp.isoformat()}Z")
     click.echo("Stores:")
     for store in status.stores:
