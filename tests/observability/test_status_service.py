@@ -5,7 +5,12 @@ from uuid import uuid4
 import pytest
 
 from app.observability.ingest_meta import record_ingest_run, reset_ingest_meta
-from app.observability.status_service import get_system_status, record_ask_error, record_ask_query, reset_ask_metrics
+from app.observability.status_service import (
+    get_system_status,
+    record_ask_error,
+    record_ask_query,
+    reset_ask_metrics,
+)
 from app.stores import get_object_store, reset_store_backends
 
 
