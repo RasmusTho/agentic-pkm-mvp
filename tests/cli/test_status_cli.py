@@ -5,6 +5,7 @@ from click.testing import CliRunner
 from app.cli import cli
 from app.observability.status_model import (
     AskStatus,
+    EventCounters,
     IngestionPlaneStatus,
     IngestionStatus,
     IntentStatus,
@@ -57,6 +58,16 @@ def test_status_cli_prints_snapshot(monkeypatch):
         ),
         ask=AskStatus(total_queries_24h=3, avg_latency_ms_24h=120.0, error_count_24h=1),
         intents=IntentStatus(promote_created_total=2, promote_created_24h=1, source_path="/tmp/outbox.jsonl"),
+        events=EventCounters(
+            watcher_runs_total=4,
+            watcher_runs_24h=2,
+            panel_runs_total=3,
+            panel_runs_24h=2,
+            promote_created_total=2,
+            promote_created_24h=1,
+            ingest_runs_by_plane={"vault": 1, "external": 1},
+            source_path="/tmp/outbox.jsonl",
+        ),
     )
     monkeypatch.setattr("app.cli.get_system_status", lambda: snapshot)
 
@@ -73,6 +84,9 @@ def test_status_cli_prints_snapshot(monkeypatch):
     assert "errors (24h): 1" in result.output
     assert "totals: scanned=5 ingested=4 errors=1 malformed=0" in result.output
     assert "vault: scanned=3 ingested=2 errors=1 malformed=0" in result.output
-    assert "promote.intent.created total: 2" in result.output
-    assert "promote.intent.created (24h): 1" in result.output
+    assert "panel runs: total=3" in result.output
+    assert "promotion intents:" in result.output
+    assert "total=2 (24h=1)" in result.output
+    assert "watcher runs: total=4" in result.output
+    assert "ingest runs by plane:" in result.output
     assert "source: /tmp/outbox.jsonl" in result.output

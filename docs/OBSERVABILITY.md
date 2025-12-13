@@ -9,6 +9,20 @@ Logs are the primary tracing surface; no external APM is required for the curren
 - Status snapshot now reports SoT baseline (v4.10) and forward line (v5.x) plus the active feature list.
 - Intent counters: totals and 24h window for `promote.intent.created`, sourced from the configured outbox path; useful for UAT to confirm panel emission without tailing logs.
 
+## Feature-line + Event Counters
+- **SoT baseline vs forward line**: `sot_baseline_version` remains the locked Reality-MVP (v4.10). `sot_forward_line_version`/`feature_line_version` represent the active forward line (currently v5.x: PanelAgent + Watchers). `active_features` enumerates which forward-line capabilities are present (PanelAgent runtime, watcher snapshot/policy track, config-driven panel wiring).
+- **Counters surfaced** (total + 24h window):
+  - `watcher_runs`: watcher tick completions (`watcher.run`/`watcher.run.completed`).
+  - `panel_runs`: `panel.intent.executed` events (panel runtime actually ran).
+  - `promote.intent.created`: promotion intents emitted by panel runtime or orchestrator/panel plans.
+  - `ingest_runs_by_plane`: count of ingest runs per plane (vault/external) based on last-run metadata.
+- **How counters should move during watcher runs**:
+  - Running `vault-watcher-run` increments watcher runs; if changed notes are ingested, ingest plane counts increase; if panels are allowed and run, panel runs increase; if promotion actions are mapped, `promote.intent.created` increments.
+- **Troubleshooting**:
+  - Counters moved but the note was not updated: promotion intent is emitted, but a promotion consumer is required to mutate notes/files; ensure the Promotion Agent/consumer is running.
+  - Panel runs stay at 0: check panel auto-run policy (frontmatter) and wiring/decider settings; dry-run or max-notes guards may have short-circuited execution.
+  - Watcher runs stay at 0: confirm INDEX_OUTBOX_PATH and vault paths are correct; ensure snapshot path is writable.
+
 <!-- SECTION:OBS:BEGIN -->
 ## JSON log and span schema
 `app/obs/log.py:11-58` emits one line per span with:
@@ -19,7 +33,7 @@ Logs are the primary tracing surface; no external APM is required for the curren
 | `latency_ms` | float | Execution time in milliseconds. |
 | `token_in` / `token_out` | int \| null | Optional token counters passed via `_token_in/out`. |
 | `extra` | dict | Free-form payload (errors, check status, metadata). |
-| `status` | `"ok"` \| `"error"` | Auto-set, with `extra.error` populated on exceptions. |
+| `status` | "ok" \| "error" | Auto-set, with `extra.error` populated on exceptions. |
 
 Example (QA response):
 ```json

@@ -919,6 +919,7 @@ def status() -> None:
     label = getattr(status, "sot_label", "")
     features = getattr(status, "active_features", []) or []
     intents = getattr(status, "intents", None)
+    events = getattr(status, "events", None)
 
     click.echo(f"SoT baseline: {baseline} (Reality-MVP, locked)")
     if forward_line:
@@ -960,6 +961,18 @@ def status() -> None:
                 f"errors={plane.errors or 0} malformed={plane.malformed or 0} last_run={last_run}"
             )
     click.echo(f"  last_error: {status.ingestion.last_error_message or '-'}")
+    if events:
+        click.echo("Events:")
+        click.echo(f"  watcher runs: total={events.watcher_runs_total} (24h={events.watcher_runs_24h})")
+        click.echo(f"  panel runs: total={events.panel_runs_total} (24h={events.panel_runs_24h})")
+        click.echo("  promotion intents:")
+        click.echo(f"    total={events.promote_created_total} (24h={events.promote_created_24h})")
+        if events.ingest_runs_by_plane:
+            click.echo("  ingest runs by plane:")
+            for plane, count in events.ingest_runs_by_plane.items():
+                click.echo(f"    - {plane}: {count}")
+        if getattr(events, 'source_path', None):
+            click.echo(f"  source: {events.source_path}")
     click.echo("ASK:")
     avg_latency = (
         f"{status.ask.avg_latency_ms_24h:.0f} ms" if status.ask.avg_latency_ms_24h is not None else "-"
@@ -967,7 +980,7 @@ def status() -> None:
     click.echo(f"  queries (24h): {status.ask.total_queries_24h}")
     click.echo(f"  errors (24h): {getattr(status.ask, 'error_count_24h', 0)}")
     click.echo(f"  avg latency: {avg_latency}")
-    if intents:
+    if intents and not events:
         click.echo("Intents:")
         click.echo(f"  promote.intent.created total: {intents.promote_created_total}")
         click.echo(f"  promote.intent.created (24h): {intents.promote_created_24h}")
