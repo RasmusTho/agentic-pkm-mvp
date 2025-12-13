@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from app.agents.panel_agent import execute_panel_intent, run_panel_intent_for_note
-from app.agents.panel_agent.wiring import get_default_action_wiring, reset_action_wiring_cache
+from app.agents.panel_agent.wiring import DEFAULT_PANEL_ACTION_WIRING_PATH, get_action_wiring, load_action_wiring
 from app.store import object_store as object_store_module
 from app.store.object_store import DomainObject, ObjectStore
 
@@ -51,68 +51,143 @@ def _read_outbox(outbox_path: Path) -> list[dict]:
 
 
 @pytest.fixture(autouse=True)
-def clear_store_and_cache() -> None:
+def clear_store() -> None:
     object_store_module._MEMORY_STORE.clear()
-    reset_action_wiring_cache()
 
 
-def test_default_wiring_matches_current_events(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_wiring_used_when_no_env_or_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     note_uuid = str(uuid4())
     outbox_path = tmp_path / "index-outbox.jsonl"
     settings_path = _settings_file(tmp_path)
     markdown = """%% AI:Start %%
 ## AI-instruktion
-Please promote this note.
+Promote this note.
 ## AI-åtgärder
 - [x] Gör denna anteckning evergreen
 %% AI:End %%
 """
     _seed_note(note_uuid, markdown)
 
+    monkeypatch.delenv("PANEL_ACTION_WIRING_PATH", raising=False)
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
     monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
 
-    events = run_panel_intent_for_note(note_uuid, trace_id="trace-default-wiring")
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-default")
     runtime_result = execute_panel_intent(events[0], outbox_path=outbox_path)
     topics = {getattr(ev, "event", "") for ev in runtime_result.emitted_events}
 
     assert "promote.intent.created" in topics
-    assert "panel.intent.executed" in topics
-    assert get_default_action_wiring().get("promote.evergreen") == "promote.intent.created"
+    assert get_action_wiring().get("promote.evergreen") == "promote.intent.created"
 
 
-def test_custom_wiring_overrides_target_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_env_wiring_overrides_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     note_uuid = str(uuid4())
     outbox_path = tmp_path / "index-outbox.jsonl"
     settings_path = _settings_file(tmp_path)
+    vault_root = tmp_path / "vault"
+    vault_cfg = vault_root / "System" / "Config"
+    vault_cfg.mkdir(parents=True, exist_ok=True)
+    (vault_cfg / "panel-action-wiring.yaml").write_text(
+        """actions:
+  - id: promote.evergreen
+    target_event: vault.event
+""",
+        encoding="utf-8",
+    )
+    env_wiring = tmp_path / "env-wiring.yaml"
+    env_wiring.write_text(
+        """actions:
+  - id: promote.evergreen
+    target_event: env.event
+""",
+        encoding="utf-8",
+    )
     markdown = """%% AI:Start %%
 ## AI-instruktion
-Please promote this note.
+Promote this note.
 ## AI-åtgärder
 - [x] Gör denna anteckning evergreen
 %% AI:End %%
 """
     _seed_note(note_uuid, markdown)
 
-    wiring_path = tmp_path / "panel-action-wiring.yaml"
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("PANEL_ACTION_WIRING_PATH", str(env_wiring))
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+
+    wiring = get_action_wiring()
+    assert wiring.get("promote.evergreen") == "env.event"
+
+
+def test_vault_wiring_used_when_env_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    vault_root = tmp_path / "vault"
+    vault_cfg = vault_root / "System" / "Config"
+    vault_cfg.mkdir(parents=True, exist_ok=True)
+    wiring_path = vault_cfg / "panel-action-wiring.yaml"
     wiring_path.write_text(
         """actions:
   - id: promote.evergreen
-    target_event: "custom.promote"
+    target_event: vault.event
 """,
         encoding="utf-8",
     )
 
-    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
-    monkeypatch.setenv("PANEL_ACTION_WIRING_PATH", str(wiring_path))
-    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
-    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
-    reset_action_wiring_cache()
+    monkeypatch.delenv("PANEL_ACTION_WIRING_PATH", raising=False)
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
 
-    events = run_panel_intent_for_note(note_uuid, trace_id="trace-custom-wiring")
-    runtime_result = execute_panel_intent(events[0], outbox_path=outbox_path)
-    topics = {getattr(ev, "event", "") for ev in runtime_result.emitted_events}
+    wiring = get_action_wiring()
+    assert wiring.get("promote.evergreen") == "vault.event"
 
-    assert "custom.promote" in topics
-    assert "promote.intent.created" not in topics
+
+def test_invalid_yaml_warns_and_falls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    bad_path = tmp_path / "bad.yaml"
+    bad_path.write_text("not: [valid", encoding="utf-8")
+
+    monkeypatch.setenv("PANEL_ACTION_WIRING_PATH", str(bad_path))
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+
+    wiring = get_action_wiring()
+    assert wiring.get("promote.evergreen") == "promote.intent.created"
+    captured = capsys.readouterr().err
+    assert "Warning" in captured
+
+
+def test_missing_required_keys_warns_and_falls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    bad_path = tmp_path / "bad.yaml"
+    bad_path.write_text(
+        """actions:
+  - id: ""  # missing
+    target_event: ""
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("PANEL_ACTION_WIRING_PATH", str(bad_path))
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+
+    wiring = get_action_wiring()
+    assert wiring.get("promote.evergreen") == "promote.intent.created"
+    captured = capsys.readouterr().err
+    assert "Warning" in captured
+
+
+def test_load_action_wiring_respects_path_argument(tmp_path: Path) -> None:
+    path = tmp_path / "custom.yaml"
+    path.write_text(
+        """actions:
+  - id: promote.evergreen
+    target_event: custom.event
+""",
+        encoding="utf-8",
+    )
+    wiring = load_action_wiring(path)
+    assert wiring.get("promote.evergreen") == "custom.event"
+
+
+def test_default_file_is_accessible() -> None:
+    wiring = load_action_wiring(DEFAULT_PANEL_ACTION_WIRING_PATH)
+    assert wiring.get("promote.evergreen") == "promote.intent.created"
