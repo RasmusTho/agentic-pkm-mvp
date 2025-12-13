@@ -24,6 +24,10 @@ State: SoT v4.10 Reality-MVP (current core).
   - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
   - pytest -q tests/cli/test_panel_orchestrator_cli.py -m "not pg"
   - Planner pipeline remains opt-in (`PANEL_AGENT_PIPELINE=planner`); CLI execution is available via `panel-orchestrate-plan`.
+- Watcher/Panel UAT CLI pack (deterministic, memory backend)
+  - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 INDEX_OUTBOX_PATH=$(mktemp)
+  - pytest -q tests/cli/test_uat_seed_cli.py tests/cli/test_uat_run_cli.py -m "not pg"
+  - Real vault: `python -m app.cli uat-seed-vault-test --vault-root "<vault>"` then `python -m app.cli uat-run-vault-test --vault-root "<vault>" --assert`.
 - Architecture guardrails
   - export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
   - pytest -q tests/architecture/test_outer_inner_boundaries.py -m "not pg"
@@ -70,3 +74,4 @@ State: SoT v4.10 Reality-MVP (current core).
   - optional vault override: set VAULT_ROOT to a temp vault containing System/Config/panel-action-wiring.yaml
   - env override: PANEL_ACTION_WIRING_PATH points to a temp wiring file
   - run: pytest -q tests/agents/panel_agent/test_panel_wiring.py -m "not pg"
+
