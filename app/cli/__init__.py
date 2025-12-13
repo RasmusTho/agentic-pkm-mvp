@@ -12,6 +12,7 @@ import httpx
 from watchfiles import watch
 
 from app.observability.status_service import get_system_status
+from app.promotion.consumer import consume_promotion_intents
 from app.ingest.config import DEFAULT_VAULT_ROOT
 from app.cli.alpha_human_flows import run_alpha_human_flows
 from app.ingest.vault_root import ingest_vault_root
@@ -975,6 +976,8 @@ def status() -> None:
         click.echo(f"  panel runs: total={events.panel_runs_total} (24h={events.panel_runs_24h})")
         click.echo("  promotion intents:")
         click.echo(f"    total={events.promote_created_total} (24h={events.promote_created_24h})")
+        click.echo("  promotion executed:")
+        click.echo(f"    total={events.promotion_executed_total} (24h={events.promotion_executed_24h})")
         if events.ingest_runs_by_plane:
             click.echo("  ingest runs by plane:")
             for plane, count in events.ingest_runs_by_plane.items():
@@ -994,7 +997,17 @@ def status() -> None:
         click.echo(f"  promote.intent.created (24h): {intents.promote_created_24h}")
         if getattr(intents, 'source_path', None):
             click.echo(f"  source: {intents.source_path}")
-
+@cli.command("promote-consume", help="Consume promotion intents from outbox and apply promotion effects.")
+@click.option("--limit", type=int, default=None, help="Maximum number of intents to consume.")
+def promote_consume(limit: int | None) -> None:
+    summary = consume_promotion_intents(limit=limit)
+    click.echo("Promotion consume summary:")
+    click.echo(f"  intents_seen={summary['intents_seen']}")
+    click.echo(f"  applied={summary['applied']}")
+    click.echo(f"  errors={summary['errors']}")
+    click.echo(f"  emitted={summary['emitted']}")
+    if summary.get('errors'):
+        raise SystemExit(1)
 
 @cli.group(help="Settings commands (Vault-as-GUI).")
 def settings() -> None:

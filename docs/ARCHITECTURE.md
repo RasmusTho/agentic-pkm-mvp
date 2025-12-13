@@ -1,7 +1,7 @@
-State: SoT v4.10 Reality-MVP (baseline locked) with the active forward line tracked at v5.4 (PanelAgent + Watchers) on top.
+State: SoT v4.10 Reality-MVP (baseline locked) with the active forward line tracked at v5.5 (PanelAgent planner pipeline + CLI-first orchestration with watcher track).
 # Architecture — SoT v4.10 Reality-MVP
 
-Historic SoT snapshots and older plans live in `docs/archive/`.
+Historic SoT snapshots and older plans live in `docs/archive/`; the 4.x ladder history is in `docs/history/SOT_4X_HISTORY.md`. Forward-looking plan lives in `docs/ROADMAP.md`.
 They are kept for reference but are not considered active truth for the current SoT v4.10 Reality-MVP.
 External dependencies, deployment topology, and human-facing surfaces are captured in `docs/SYSTEM_DESIGN_v4.10.md`; this document focuses on internal architecture and runtime contracts.
 

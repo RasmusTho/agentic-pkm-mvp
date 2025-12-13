@@ -65,6 +65,8 @@ def test_status_cli_prints_snapshot(monkeypatch):
             panel_runs_24h=2,
             promote_created_total=2,
             promote_created_24h=1,
+            promotion_executed_total=2,
+            promotion_executed_24h=1,
             ingest_runs_by_plane={"vault": 1, "external": 1},
             source_path="/tmp/outbox.jsonl",
         ),
@@ -87,6 +89,7 @@ def test_status_cli_prints_snapshot(monkeypatch):
     assert "panel runs: total=3" in result.output
     assert "promotion intents:" in result.output
     assert "total=2 (24h=1)" in result.output
+    assert "promotion executed:" in result.output
     assert "watcher runs: total=4" in result.output
     assert "ingest runs by plane:" in result.output
     assert "source: /tmp/outbox.jsonl" in result.output
