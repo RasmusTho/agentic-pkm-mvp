@@ -1,4 +1,5 @@
 ---
+State: UAT seed example
 uuid: 11111111-1111-4111-8111-111111111111
 title: Evergreen Strategy Note
 ai_panel_auto_run: watcher

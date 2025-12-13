@@ -1,4 +1,5 @@
 ---
+State: UAT seed example
 uuid: 22222222-2222-4222-8222-222222222222
 title: Reflection Journal
 ai_panel_auto_run: watcher

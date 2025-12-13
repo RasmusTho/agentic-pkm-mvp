@@ -1,4 +1,5 @@
 ---
+State: UAT seed example
 uuid: 66666666-6666-4666-8666-666666666666
 title: Manual Policy Note
 ai_panel_auto_run: manual
