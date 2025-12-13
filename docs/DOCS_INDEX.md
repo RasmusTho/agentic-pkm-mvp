@@ -43,8 +43,8 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/PLANNER.md | Planner contract | Baseline-only (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent runtime V1) | 2025-03-12 | Panel runtime events plus promotion flow now document promote.done/promote.error. |
 | docs/DIAGRAMS.md | C4 diagrams | Baseline-only (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
-| docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2025-03-12 | Watcher + panel UAT checklist now includes promotion consumer and status counters. |
-| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-11 | Lists fast/mock suites; PanelAgent LLM E2E gated; wiring precedence test guidance added; optional CI job `panel-llm-e2e`; deterministic planner/orchestrator CLI tests documented. |
+| docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2025-03-13 | Runtime Loop V1 operator flow added; watcher/panel/promotion UAT clarified. |
+| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-13 | Runtime loop deterministic E2E test documented; fast suite unchanged. |
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x + planned v5.5 LangGraph) | 2025-03-12 | Intent vs mutation clarified; promotion consumer required to apply changes; wiring precedence documented. |
 | docs/UAT_PANEL_WATCHER.md | UAT guide (panel + watcher) | Aligned | 2025-12-10 | Human-facing UAT flow for PanelAgent + Vault Watcher (prep notes, targeted ingest, panel run-many, watcher dry-run/run, observations). |
 | docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Baseline-only (v4.10) | 2025-12-07 | High-level module map reviewed; Reality-MVP scope noted. |
@@ -54,13 +54,13 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/CI.md | CI overview | Baseline-only (v4.10) | 2025-12-07 | ci-smoke/fitness gates documented; other workflows noted. |
-| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-10 | Commands/markers match ci-smoke; panel planner/orchestrator CLI tests and LLM-gated panel E2E are documented as opt-in. |
+| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-13 | Runtime loop deterministic E2E test documented; fast suite unchanged. |
 | docs/QUALITY.md | Quality gates | Baseline-only (v4.10) | 2025-12-07 | Clarified QA agent scope vs /api/ask; CI fitness gates noted. |
 | docs/guardrails.md | Guardrails | Baseline-only (v4.10) | 2025-12-07 | Runtime guardrails + CI fitness gates; removed legacy thresholds. |
 | docs/SECURITY.md | Security | Baseline-only (v4.10) | 2025-12-07 | Single-user/local; auth not wired; key handling guidance. |
 | docs/PRIVACY.md | Privacy | Baseline-only (v4.10) | 2025-12-07 | Local-first, outbound only on optional remote LLMs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
-| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-12 | Feature-line status counters include promotion executed; watcher interpretations updated. |
+| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-13 | Intent vs done counters clarified; runtime loop uses same signals. |
 | docs/OBSERVABILITY_STACK.md | Local observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/OPERATIONS.md | Operations playbook | Baseline-only (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
 | docs/INFRASTRUCTURE.md | Infrastructure notes | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
@@ -98,7 +98,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/INVENTORY.md | Inventory | Baseline-only (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
 | docs/OVERVIEW_WS.md | Overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
-| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-12 | Feature-line status counters include promotion executed; watcher interpretations updated. |
+| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-13 | Intent vs done counters clarified; runtime loop uses same signals. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development policy | Baseline-only (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
 | docs/DEV_WORKFLOW.md | Dev workflow | Baseline-only (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
@@ -188,7 +188,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/INFRASTRUCTURE.md | Infrastructure | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
 | docs/OVERVIEW_WS.md | Overview workspace | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
-| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-12 | Feature-line status counters include promotion executed; watcher interpretations updated. |
+| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-13 | Intent vs done counters clarified; runtime loop uses same signals. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development | Baseline-only (v4.10) | 2025-12-07 | Current dev-layer AI policy (docs-first, mocks/defaults). |
 | docs/DEV_WORKFLOW.md | Dev workflow | Baseline-only (v4.10) | 2025-12-07 | TDD/docs-first workflow aligned with SoT v4.10. |
