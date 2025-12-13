@@ -8,6 +8,7 @@ from langgraph.graph import END, START, StateGraph
 from app.components.settings.panel_actions_loader import PanelActionCatalog, PanelActionDescriptor
 from app.agents.panel_agent.settings import DeciderMode
 from app.agents.panel_agent.state import PanelAgentState
+from app.agents.panel_agent.wiring import get_default_action_wiring
 from app.events.panel import (
     PanelActionLoggedEvent,
     PanelEventSource,
@@ -49,7 +50,7 @@ def _build_action_result(
     )
 
 
-def _promotion_event(intent_event: PanelIntentEvent, action: PanelIntentAction) -> OutboxEvent:
+def _promotion_event(intent_event: PanelIntentEvent, action: PanelIntentAction, *, target_event: str = "promote.intent.created") -> OutboxEvent:
     params = action.mapping.params if action.mapping else {}
     payload = {
         "note": intent_event.payload.note.model_dump(mode="json"),
@@ -67,7 +68,7 @@ def _promotion_event(intent_event: PanelIntentEvent, action: PanelIntentAction) 
     if maturity:
         payload["maturity"] = maturity
     return OutboxEvent(
-        event="promote.intent.created",
+        event=target_event,
         trace_id=intent_event.trace_id,
         source="panel_agent.runtime",
         payload=payload,
@@ -106,6 +107,7 @@ def _handle_action(
     *,
     override_checked: bool | None = None,
     reason: str | None = None,
+    action_wiring: dict[str, str] | None = None,
 ) -> Tuple[PanelRuntimeActionResult, list[Any]]:
     action_to_use = action
     if override_checked is not None:
@@ -119,9 +121,12 @@ def _handle_action(
         ), emitted
 
     mapping = action_to_use.mapping
+    wiring = action_wiring or {}
+    target_event = wiring.get(action_to_use.id)
     if mapping and (mapping.intent_type or "").lower() == "promotion":
-        promote_event = _promotion_event(intent_event, action_to_use)
-        triggered_event = _action_triggered_event(intent_event, action_to_use, target_event="promote.intent.created")
+        target = target_event or "promote.intent.created"
+        promote_event = _promotion_event(intent_event, action_to_use, target_event=target)
+        triggered_event = _action_triggered_event(intent_event, action_to_use, target_event=target)
         emitted.extend([promote_event, triggered_event])
         emitted_names.extend([promote_event.event, triggered_event.event])
         return _build_action_result(action_to_use, status="triggered", emitted=emitted_names), emitted
@@ -161,6 +166,8 @@ def _load_context(state: PanelAgentState) -> PanelAgentState:
         state.actions = list(state.intent_event.payload.actions)
     if not state.action_catalog:
         state.action_catalog = PanelActionCatalog.from_descriptors([])
+    if not state.action_wiring:
+        state.action_wiring = dict(get_default_action_wiring())
     return state
 
 
@@ -269,7 +276,9 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
         if selected_ids is not None:
             override_checked = action.id in selected_ids
         reason = reasons.get(action.id) if reasons else None
-        result, new_events = _handle_action(state.intent_event, action, override_checked=override_checked, reason=reason)
+        result, new_events = _handle_action(
+            state.intent_event, action, override_checked=override_checked, reason=reason, action_wiring=state.action_wiring
+        )
         actions.append(result)
         emitted.extend(new_events)
     state.selected_action_ids = list(selected_ids or [])

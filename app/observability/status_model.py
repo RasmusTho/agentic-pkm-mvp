@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class IngestionPlaneStatus(BaseModel):
@@ -30,7 +31,7 @@ class IngestionStatus(BaseModel):
     total_ingested: int = 0
     total_errors: int = 0
     total_malformed: int = 0
-    planes: list[IngestionPlaneStatus] = []
+    planes: list[IngestionPlaneStatus] = Field(default_factory=list)
 
 
 class AskStatus(BaseModel):
@@ -39,15 +40,24 @@ class AskStatus(BaseModel):
     error_count_24h: int = 0
 
 
+class IntentStatus(BaseModel):
+    promote_created_total: int = 0
+    promote_created_24h: int = 0
+    source_path: str | None = None
+
+
 class SystemStatus(BaseModel):
     timestamp: datetime
     sot_version: str  # legacy alias for baseline SoT
     sot_baseline_version: str
     sot_forward_line_version: str
     sot_label: str
+    feature_line_version: Optional[str] = None
+    active_features: List[str] = Field(default_factory=list)
     stores: list[StoreStatus]
     ingestion: IngestionStatus
     ask: AskStatus
+    intents: Optional[IntentStatus] = None
 
 
 __all__ = [
@@ -55,5 +65,6 @@ __all__ = [
     "StoreStatus",
     "IngestionStatus",
     "AskStatus",
+    "IntentStatus",
     "SystemStatus",
 ]

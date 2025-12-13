@@ -26,6 +26,7 @@ class PanelAgentState(BaseModel):
     panel: PanelInfo
     actions: List[PanelIntentAction] = Field(default_factory=list)
     action_catalog: PanelActionCatalog | None = None
+    action_wiring: dict[str, str] = Field(default_factory=dict)
     previous_logs: List[dict[str, Any]] = Field(default_factory=list)
     policy_flags: dict[str, Any] = Field(default_factory=dict)
     selected_action_ids: List[str] = Field(default_factory=list)

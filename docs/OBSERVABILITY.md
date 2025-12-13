@@ -6,6 +6,8 @@ Logs are the primary tracing surface; no external APM is required for the curren
 ## Status snapshot (CLI)
 - `app.observability.status_service.get_system_status()` aggregates per-plane object counts (vault vs external), ingest run timestamps/error counts (via ingest summaries), and ASK query counts/latency/error counts over the last 24h window.
 - The `python -m app.cli status` (or `poetry run app status`) command renders the snapshot for humans; the interim GUI (root `/` in the FastAPI app) reuses the same backend and surfaces a basic ASK form.
+- Status snapshot now reports SoT baseline (v4.10) and forward line (v5.x) plus the active feature list.
+- Intent counters: totals and 24h window for `promote.intent.created`, sourced from the configured outbox path; useful for UAT to confirm panel emission without tailing logs.
 
 <!-- SECTION:OBS:BEGIN -->
 ## JSON log and span schema

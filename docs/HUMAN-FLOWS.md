@@ -160,7 +160,7 @@ State: SoT v4.10 (Reality-MVP) and v5.0 (PanelAgent Runtime V1) are locked basel
 - Watchers are not per-keystroke. They collect file changes during a short cooldown/batch window, then run ingest/panel once per batch. The human experience is “after a short while the system catches up,” not “agents fire on every save.”
 
 ### Watcher types (planned)
-- Vault Watcher (v5.1–v5.4): watches Obsidian vault markdown files, triggers ingest and, once policy exists, panel runtime via note-update; emits watcher metrics (runs, changed files, errors).
+- Vault Watcher (v5.1–v5.4): watches Obsidian vault markdown files, triggers ingest and, once policy exists, panel runtime via note-update; emits watcher metrics (runs, changed files, errors). A Docker-first daemon (`vault-watcher-daemon`) keeps polling with snapshots stored outside the vault (e.g., `/state`); host services (launchd/systemd) remain a fallback when mounts are unreliable.
 - External Inbox Watcher (future): watches an external drop folder/inbox and triggers external ingest into the `external_raw` plane via the existing external ingest CLI.
 - Scheduler/Time-based Watcher (future): triggers periodic flows (daily review, weekly summary, hygiene jobs).
 - All watcher types call the same CLI/service entrypoints as manual runs, integrate with observability/status, and are opt-in/auditable (no hidden automation).
@@ -168,11 +168,20 @@ State: SoT v4.10 (Reality-MVP) and v5.0 (PanelAgent Runtime V1) are locked basel
 ### PanelAgent runtime + watcher integration
 - When a panel is auto-run by the watcher today, PanelAgent Runtime V1 uses its fixed mapping from checked actions to follow-up events; behaviour matches the v5.0 baseline.
 - Forward-looking (v5.5+): PanelAgent 2.0 will use LLM-based reasoning inside a LangGraph graph to decide which actions to trigger, making watcher-driven panels more adaptive without changing current behaviour until proven.
-- PanelAgent now consults a catalog of canonical actions (`docs/settings/panel-actions.md`) and can run in either rule-mode (default, deterministic label→action mapping) or optional LLM-mode, which uses the catalog plus panel/note context; checkbox states are treated as hints rather than hard gates in LLM-mode.
+- PanelAgent now consults a catalog of canonical actions
+- Panel action wiring can be overridden per vault via `System/Config/panel-action-wiring.yaml`; resolution order: `PANEL_ACTION_WIRING_PATH` env > vault System/Config > repo default (`docs/settings/panel-action-wiring.yaml`). Invalid configs emit a warning and fall back to the default wiring without changing behaviour.
+ (`docs/settings/panel-actions.md`) and can run in either rule-mode (default, deterministic label→action mapping) or optional LLM-mode, which uses the catalog plus panel/note context; checkbox states are treated as hints rather than hard gates in LLM-mode.
 - PanelAgent Runtime V1 (SoT v5.0) interprets AI panels, emits `panel.intent.created`, `panel.intent.executed`, `panel.action.*`, emits `promote.intent.created` for mapped promotion actions, and writes AI logs (`panel_logs`) into note payloads.
 - Watcher track (v5.1–v5.3) adds automation that calls the same panel pipeline via note-update/PanelAgent runtime based on explicit policy (e.g., a flag on the note/panel). Manual CLI (`panel run` / `panel run-many` / note-update) and watcher-triggered runs share the same pipeline; watchers simply automate when to call it.
 - A multi-note CLI (`panel run-many`) runs the same PanelAgent parse/runtime for multiple notes in one invocation (emit-only supported); it is the watcher-ready entrypoint when a batch of notes changed.
-- Vault Watcher MVP (v5.2) ships as a polling CLI (`vault-watcher-run`) that diffs the vault against a snapshot, ingests changed notes via `ingest-vault-paths`, optionally runs `panel run-many` on those notes, prints a summary, refreshes the snapshot, and exits. It is intended for manual/cron use, not a long-lived daemon yet.
+- Vault Watcher MVP (v5.2) ships as a polling CLI (`vault-watcher-run`) that diffs the vault against a snapshot, ingests changed notes via `ingest-vault-paths`, optionally runs `panel run-many` on those notes, prints a summary, refreshes the snapshot, and exits. A long-running wrapper (`vault-watcher-daemon`) reuses the same tick logic with `--poll-seconds`/`--cooldown-seconds` to support Docker/host services.
 - Auto-panel policy (v5.3 planned/delivered in CLI): watcher-driven panel runs are opt-in per note. Frontmatter controls: `ai_panel_auto_run: watcher` allows watcher auto-run; missing/`manual` defaults to skip; `never` forbids watcher auto-run. Nested form `ai_panel: { auto_run: watcher|manual|never }` is also accepted. Manual CLI (`panel run` / `panel run-many`) is unaffected and always allowed; watchers only run panels when explicitly permitted.
 - Hardening (v5.4): `vault-watcher-run` supports `--dry-run` (no ingest/panel, shows what would run) and `--max-notes` with optional `--force` to prevent storming on large change sets. Summaries report changed notes, ingest attempts, panel candidates/runs, skips, and errors. Watchers remain opt-in and bounded by both global flags and per-note policy.
 - See also: `docs/UAT_PANEL_WATCHER.md` for a human-facing walkthrough of manual + watcher UAT.
+
+
+### UAT checklist (vault/Test)
+- Set frontmatter auto-run policy on the note panel (`ai_panel_auto_run: watcher` or `ai_panel: { auto_run: watcher }`).
+- Run `python -m app.cli vault-watcher-run --vault-root <vault>` (set `INDEX_OUTBOX_PATH` and `PANEL_ACTION_WIRING_PATH` as needed); expect ingest and panel runs in the watcher summary.
+- Confirm the summary shows `panel_runs` and `panel_promotions` > 0 for eligible notes and that the snapshot file is refreshed.
+- Run `python -m app.cli status` to see SoT baseline/forward lines plus intent counters (`promote.intent.created` totals and 24h window). This proves the panel emitted the intent; the Promotion Agent consumer is still required to apply the promotion.

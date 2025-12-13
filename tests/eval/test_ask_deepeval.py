@@ -44,7 +44,11 @@ def test_ask_answer_relevancy() -> None:
         pytest.skip("EVAL_LLM_MODE=skip")
 
     client = TestClient(app)
-    metric = AnswerRelevancyMetric(model="gpt-3.5-turbo", threshold=0.5)
+    model_name = os.getenv("EVAL_LLM_MODEL", "llama3")
+    try:
+        metric = AnswerRelevancyMetric(model=model_name, threshold=0.5)
+    except ValueError as exc:
+        pytest.skip(f"Eval model not supported by deepeval: {exc}")
 
     test_cases: list[LLMTestCase] = []
     for case in _load_cases():

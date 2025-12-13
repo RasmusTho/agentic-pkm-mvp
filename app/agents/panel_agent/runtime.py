@@ -12,6 +12,7 @@ from app.agents.panel_agent.intent import PanelActionIntent
 from app.agents.panel_agent.planning import plan_panel_actions
 from app.agents.panel_agent.settings import get_panel_agent_decider, get_panel_agent_pipeline
 from app.agents.panel_agent.state import PanelAgentState
+from app.agents.panel_agent.wiring import get_default_action_wiring, load_action_wiring
 from app.components.settings.panel_actions_loader import load_panel_action_catalog
 from app.events.panel import NoteRef, PanelIntentEvent, PanelLogEntry, PanelRuntimeActionResult
 from app.outbox.events import INDEX_OUTBOX_PATH
@@ -65,6 +66,7 @@ class PanelRuntimeResult(BaseModel):
 def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | None = None) -> PanelRuntimeResult:
     resolved_outbox = _resolve_outbox_path(outbox_path)
     catalog = load_panel_action_catalog()
+    wiring = get_default_action_wiring()
     store = ObjectStore()
     note_obj = store.get_object(intent_event.payload.note.uuid)
     note_text = ""
@@ -81,24 +83,26 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
         actions=list(intent_event.payload.actions),
         intent_event=intent_event,
         action_catalog=catalog,
+        action_wiring=wiring,
         note_content=note_text,
         panel_hints=panel_hints,
     )
     decider_mode = get_panel_agent_decider()
     state = run_panel_graph(initial_state, decider_mode=decider_mode)
 
-    # Build a structured intent for planner-mode consumers (opt-in pipeline); for now we keep
-    # the existing direct runtime path as the default behaviour.
     pipeline_mode = get_panel_agent_pipeline()
     if pipeline_mode == "planner":
-        selected = [a.action_id for a in state.action_results if a.checked and a.status == "handled"]
-        state.panel_action_intent = PanelActionIntent(
-            note=intent_event.payload.note,
-            instruction=intent_event.payload.panel.instruction,
-            actions=selected,
-            source="panel_agent",
-        )
-        plan_panel_actions(state.panel_action_intent, event_id=intent_event.event_id, trace_id=intent_event.trace_id)
+        triggered_ids = [a.id for a in state.action_results if a.checked and a.status == "triggered"]
+        if triggered_ids:
+            resolved_actions = [action for action in state.actions if action.id in triggered_ids]
+            state.panel_action_intent = PanelActionIntent(
+                note=intent_event.payload.note,
+                instruction=intent_event.payload.panel.instruction,
+                actions=triggered_ids,
+                resolved_actions=resolved_actions,
+                source="panel_agent",
+            )
+            plan_panel_actions(state.panel_action_intent, event_id=intent_event.event_id, trace_id=intent_event.trace_id)
 
     emitted_events = list(state.emitted_events or [])
     _write_outbox_events(resolved_outbox, emitted_events)

@@ -2,7 +2,7 @@ State: SoT v4.10 Reality-MVP (current).
 # Obsidian-first sync
 
 This doc describes how the Obsidian vault PKM-Alpha (Mimer) is synced and mirrored. For how this fits into the overall system, see `docs/HUMAN-FLOWS.md` (Capture & Ingest flow) and the surfaces in `docs/SYSTEM_DESIGN_v4.10.md`.
-Watcher note: This document reflects the current v4.10 baseline assumptions (git watcher primary, filesystem watcher fallback). Planned v5.x watcher work (v5.1–v5.4) keeps the same Obsidian → watcher → ingest/update → outbox → indexer pattern, using the same CLI/service entrypoints; see HUMAN-FLOWS watcher section. The v5.2 CLI polling watcher (`vault-watcher-run`) implements this pattern via snapshot diff + `ingest-vault-paths` + optional `panel run-many`; v5.4 adds dry-run and max-notes safety guards. For a hands-on walkthrough, see `docs/UAT_PANEL_WATCHER.md`.
+Watcher note: This document reflects the current v4.10 baseline assumptions (git watcher primary, filesystem watcher fallback). Planned v5.x watcher work (v5.1–v5.4) keeps the same Obsidian → watcher → ingest/update → outbox → indexer pattern, using the same CLI/service entrypoints; see HUMAN-FLOWS watcher section. The v5.2 CLI polling watcher (`vault-watcher-run`) implements this pattern via snapshot diff + `ingest-vault-paths` + optional `panel run-many`; v5.4 adds dry-run and max-notes safety guards. A Docker-first daemon (`vault-watcher-daemon`) is now available for continuous polling with snapshots outside the vault (e.g., `/state`), with host-service fallback if mounts are flaky. For a hands-on walkthrough, see `docs/UAT_PANEL_WATCHER.md`.
 
 ## Principles
 - Human-first: the system never edits the note body, only agreed frontmatter keys.

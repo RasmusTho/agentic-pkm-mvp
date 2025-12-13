@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x Agentic PKM forward line currently tracked through v5.4 (PanelAgent + Watchers).
+State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x Agentic PKM forward line currently tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration).
 # 6.0 Agentloop (deterministisk)
 
 ## Design principle
@@ -38,7 +38,7 @@ Flow: `query → retrieve (hybrid search) → rerank (ask_score + reranker) → 
 | CitationChecker | Validate citations for ASK answers | ASK | Planned (graph when critique/repair expands) | Outbox ASK events; future A2A | Active |
 | Indexer | Write embeddings to VectorIndex | Capture & Ingest / ASK | No (deterministic pipeline) | Outbox ingest/index events | Active |
 | ASK Agent | Retrieve, rerank, and draft answers | ASK | Yes (LangGraph + AgentState live in `app/agents/ask/graph.py`) | Planner/Orchestrator optional; Outbox for traces | Active |
-| PanelAgent | Translate AI panels into intents/events | Panel Interaction | Yes (LangGraph runtime + PanelActionIntent) | Outbox panel intents; planner pipeline opt-in (`PANEL_AGENT_PIPELINE=planner`) | Active |
+| PanelAgent | Translate AI panels into intents/events | Panel Interaction | Yes (LangGraph runtime + PanelActionIntent) | Outbox panel intents; planner pipeline opt-in (`PANEL_AGENT_PIPELINE=planner`) with CLI-first orchestration | Active |
 | Planner | Build plans from goals/events (including panel action intents) | Multi-agent orchestration | Planned (LLM-backed; panel-mode mapping shipped) | Outbox plan events; feeds Orchestrator | Active |
 | Promotion Agent | Apply promotion/evergreen actions | Review & Promotion | Planned (LangGraph to encode policy/branching) | Outbox promotion events; Orchestrator integration planned | Active |
 | Reviewer | Human-aligned review of objects/promotions | Review & Promotion | Planned (LangGraph critique/approval) | Outbox review events; A2A planned | Active |

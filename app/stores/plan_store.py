@@ -15,6 +15,9 @@ class PlanStore:
     def list_by_event(self, event_id: str) -> List[Plan]:
         raise NotImplementedError
 
+    def list_by_object(self, object_uuid: str) -> List[Plan]:
+        raise NotImplementedError
+
 
 class MemoryPlanStore(PlanStore):
     def __init__(self) -> None:
@@ -36,6 +39,9 @@ class MemoryPlanStore(PlanStore):
     def list_by_event(self, event_id: str) -> List[Plan]:
         ids = self._by_event.get(event_id) or []
         return [self._plans[pid] for pid in ids if pid in self._plans]
+
+    def list_by_object(self, object_uuid: str) -> List[Plan]:
+        return [plan for plan in self._plans.values() if plan.meta.source_object_uuid == object_uuid]
 
 
 _PLAN_STORE: MemoryPlanStore | None = None

@@ -11,10 +11,11 @@ if not HAS_HYPOTHESIS:
     def test_hypothesis_missing() -> None:
         pytest.skip("hypothesis not installed")
 else:
-    from hypothesis import given, strategies as st
+    from hypothesis import HealthCheck, given, settings, strategies as st
 
     from app.agents.normalizer.agent import normalize_file
 
+    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     @given(st.text())
     def test_normalize_file_core_fields(tmp_path: Path, text: str) -> None:
         path = tmp_path / "note.md"
@@ -36,6 +37,7 @@ else:
         assert core6["title"].strip()
         assert core6["review_state"]
 
+    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     @given(st.text())
     def test_normalize_file_deterministic_metadata_shape(tmp_path: Path, text: str) -> None:
         path = tmp_path / "note.md"

@@ -1,4 +1,6 @@
-State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x forward line currently tracked through v5.4 (PanelAgent + Watchers).
+State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x forward line currently tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration).
+Status snapshot now includes SoT baseline + forward-line fields and intent counters (`promote.intent.created` totals and 24h window) for UAT visibility.
+
 # Status — Operational Snapshot
 
 Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and deployment topology for this SoT.
@@ -19,9 +21,13 @@ Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and 
 | v5.2 | Vault Watcher MVP (CLI, polling) | Delivered — snapshot-based CLI watcher (`vault-watcher-run`) polls vault, detects changes, ingests changed notes, optionally runs panel runtime; logs summary/metrics; no auto-panel policy yet | None | Wire into schedulers/ops; prep policy hooks for v5.3 | Manual/background, additive to existing CLI |
 | v5.3 | Auto-panel as explicit policy | Delivered — frontmatter policy (`ai_panel_auto_run` or `ai_panel.auto_run`) gates watcher-triggered `panel run-many`/note-update after ingest; AI logs/events remain; manual CLI unaffected | None | Prepare further policy refinements for v5.4 | Must be opt-in and auditable |
 | v5.4 | Watcher hardening & ergonomics | Delivered — dry-run mode, max-notes guard (with force override), structured watcher summaries; manual/cron ready | None | Prepare further ops polish if needed | Builds on v5.2–v5.3 |
-| v5.5 | PanelAgent 2.0 (LangGraph inner) | In-progress (v5.5A) — `PanelActionIntent` + opt-in planner pipeline (`PANEL_AGENT_PIPELINE=planner`) create plans from panel actions; execution via Orchestrator is next | Wire Orchestrator execution; extend action coverage | Design schema/graph; keep Runtime V1 baseline in place until 2.0 is proven | Bridges to the “LangGraph inner per agent” principle |
+| v5.5 | PanelAgent 2.0 (LangGraph inner) | In-progress (v5.5B) — `PanelActionIntent` + opt-in planner pipeline (`PANEL_AGENT_PIPELINE=planner`) create plans from panel actions; CLI-first execution via Orchestrator now available (promotion tool emits `promote.intent.created`) | Wire watcher auto-exec + extend action coverage; broaden action mapping | Design schema/graph; keep Runtime V1 baseline in place until 2.0 is proven | Bridges to the “LangGraph inner per agent” principle |
 | v5.6 | LangGraph rollout to other agents | Planned — select 1–2 agents (Promotion, Reviewer, Hygiene), add AgentState + LangGraph graphs, move non-trivial decision logic out of pipelines | None | Pick pilot agents and design graphs | Extends LangGraph inner model beyond PanelAgent |
 | v5.x | Symbolic reasoning + reflexive agents | Governance concepts, Agent Memory Graph sketches | RDF/OWL/SHACL enforcement, logic gates | Define policy bundles + knowledge graph API | Dependent on v4.6 telemetry |
+
+Pattern Harvest (Outer/Inner agent architecture) — In progress (docs-first); see docs/research/pattern-harvest-agentic-architecture.md.
+
+Watcher deployment note: `vault-watcher-daemon` offers a Docker-first polling service with snapshot storage outside the vault (e.g., `/state`); host services (launchd/systemd) remain the fallback when mounts are unreliable.
 
 Eval baseline: DeepEval ASK + Ragas RAG suites are available under `@pytest.mark.eval` (seed cases; opt-in, diagnostics only).
 

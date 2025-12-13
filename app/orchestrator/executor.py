@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Mapping, MutableMapping, Protocol
+from typing import Any, Dict, Iterable, Mapping, MutableMapping, Protocol
 
 from app.a2a.events import emit_agent_error_event, send_agent_request
 from app.a2a.schema import new_error
@@ -13,6 +14,8 @@ from app.mcp.vault_tools import VaultToolError, append_note
 from app.planner.schema import PlanMetadata, PlanStep
 from app.planner.tools import get_tool_descriptor
 from app.orchestrator.agents import AgentPermissionError, resolve_agent_config, validate_agent_permissions
+from app.events.schema import OutboxEvent
+from app.store.object_store import ObjectStore
 
 from .events import emit_mcp_tool_call_finished, emit_mcp_tool_call_started
 
@@ -28,6 +31,26 @@ def _flag_enabled(value: Any) -> bool:
     if isinstance(value, (int, float)):
         return value != 0
     return bool(value)
+
+
+def _resolve_outbox_path() -> Path:
+    env_path = os.getenv("INDEX_OUTBOX_PATH")
+    if env_path:
+        return Path(env_path)
+    return Path("logs/index-outbox.jsonl")
+
+
+def _write_outbox_events(outbox_path: Path, events: Iterable[Any]) -> None:
+    outbox_path.parent.mkdir(parents=True, exist_ok=True)
+    with outbox_path.open("a", encoding="utf-8") as handle:
+        for event in events:
+            if hasattr(event, "model_dump"):
+                payload = event.model_dump(mode="json")
+            elif isinstance(event, dict):
+                payload = dict(event)
+            else:
+                continue
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 class StepExecutionError(Exception):
@@ -161,7 +184,46 @@ class MockPlanExecutor(PlanExecutor):
                 return {"status": "ok", "summary": asdict(summary)}
             except Exception as exc:
                 raise StepExecutionError(f"external ingest failed: {exc}", error_type="internal_tool_error") from exc
+        if name == "promotion.emit_intent":
+            return self._emit_promotion_intent(args, context)
         raise StepExecutionError(f"unsupported internal tool '{name}'", error_type="invalid_tool")
+
+    def _emit_promotion_intent(self, args: Mapping[str, Any], context: StepContext) -> Dict[str, Any]:
+        note_uuid = args.get("note_uuid")
+        action_id = args.get("action_id")
+        if not note_uuid or not action_id:
+            raise StepExecutionError("promotion tool requires note_uuid and action_id", error_type="invalid_tool_args")
+
+        store = ObjectStore()
+        obj = store.get_object(str(note_uuid))
+        note_ref: Dict[str, Any] = {"uuid": str(note_uuid), "path": None, "origin": None}
+        if obj:
+            note_ref["path"] = getattr(obj, "source_ref", None)
+            payload = obj.payload or {}
+            note_ref["origin"] = payload.get("origin")
+
+        payload: Dict[str, Any] = {
+            "note": note_ref,
+            "action": {
+                "id": action_id,
+                "label": args.get("action_label") or action_id,
+                "downstream_event": args.get("downstream_event"),
+            },
+            "instruction": args.get("instruction") or "",
+        }
+        maturity = args.get("maturity")
+        if maturity:
+            payload["maturity"] = maturity
+            payload.setdefault("action", {}).setdefault("params", {})["maturity"] = maturity
+
+        trace_val = context.trace_id
+        if trace_val:
+            event = OutboxEvent(event="promote.intent.created", trace_id=trace_val, source="orchestrator.runtime", payload=payload)
+        else:
+            event = OutboxEvent(event="promote.intent.created", source="orchestrator.runtime", payload=payload)
+        outbox_path = _resolve_outbox_path()
+        _write_outbox_events(outbox_path, [event])
+        return {"status": "ok", "event": event.event, "note_uuid": note_uuid, "action_id": action_id}
 
     def _should_use_real_tool(self, tool_name: str, context: StepContext) -> bool:
         if tool_name != "mcp.vault.append_note":

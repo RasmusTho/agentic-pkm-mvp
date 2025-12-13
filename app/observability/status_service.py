@@ -1,17 +1,27 @@
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Iterable
 
+from app.events.types import PROMOTE_INTENT_CREATED
 from app.observability.ingest_meta import get_ingest_status
-from app.observability.status_model import AskStatus, IngestionStatus, StoreStatus, SystemStatus
+from app.observability.status_model import AskStatus, IngestionStatus, IntentStatus, StoreStatus, SystemStatus
+from app.outbox.events import INDEX_OUTBOX_PATH
 from app.stores import get_object_store
-from app.version import SOT_BASELINE, SOT_FORWARD, SOT_LABEL, get_sot_version, get_sot_metadata
+from app.version import SOT_FORWARD, get_sot_version, get_sot_metadata
 
 _ASK_LATENCIES: list[tuple[float, float]] = []
 _ASK_ERRORS: list[float] = []
 _ASK_WINDOW = timedelta(hours=24)
+_INTENT_WINDOW = timedelta(hours=24)
+_ACTIVE_FEATURES = [
+    "PanelAgent runtime (v5.0)",
+    "Watcher snapshot/policy track (v5.1–v5.4)",
+    "Config-driven panel action wiring",
+]
 
 
 def record_ask_query(latency_ms: float) -> None:
@@ -125,17 +135,66 @@ def get_ask_status() -> AskStatus:
     return AskStatus(total_queries_24h=total, avg_latency_ms_24h=avg_ms, error_count_24h=len(_ASK_ERRORS))
 
 
+def _parse_timestamp(value: object) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            iso = value
+            if iso.endswith("Z"):
+                iso = iso[:-1] + "+00:00"
+            return datetime.fromisoformat(iso)
+        except Exception:
+            return None
+    return None
+
+
+def _get_intent_status(outbox_path: Path) -> IntentStatus:
+    total = 0
+    recent = 0
+    source = str(outbox_path) if outbox_path else None
+    cutoff = datetime.now(timezone.utc) - _INTENT_WINDOW
+    try:
+        with outbox_path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except Exception:
+                    continue
+                event = record.get("event") or record.get("event_type") or record.get("topic") or ""
+                if event != PROMOTE_INTENT_CREATED:
+                    continue
+                total += 1
+                ts = _parse_timestamp(record.get("timestamp") or record.get("created_at"))
+                if ts and ts >= cutoff:
+                    recent += 1
+    except FileNotFoundError:
+        return IntentStatus(promote_created_total=0, promote_created_24h=0, source_path=source)
+    except Exception:
+        return IntentStatus(promote_created_total=total, promote_created_24h=recent, source_path=source)
+    return IntentStatus(promote_created_total=total, promote_created_24h=recent, source_path=source)
+
+
 def get_system_status() -> SystemStatus:
     sot_meta = get_sot_metadata()
+    intent_status = _get_intent_status(Path(INDEX_OUTBOX_PATH)) if INDEX_OUTBOX_PATH else IntentStatus()
     return SystemStatus(
         timestamp=datetime.now(timezone.utc),
         sot_version=get_sot_version(),
         sot_baseline_version=sot_meta["baseline"],
         sot_forward_line_version=sot_meta["forward_line"],
         sot_label=sot_meta["label"],
+        feature_line_version=SOT_FORWARD,
+        active_features=list(_ACTIVE_FEATURES),
         stores=get_store_status(),
         ingestion=get_ingestion_status(),
         ask=get_ask_status(),
+        intents=intent_status,
     )
 
 
