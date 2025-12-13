@@ -4,7 +4,7 @@ from typing import List
 
 from pydantic import BaseModel, Field
 
-from app.events.panel import NoteRef
+from app.events.panel import NoteRef, PanelIntentAction
 
 
 class PanelActionIntent(BaseModel):
@@ -14,6 +14,7 @@ class PanelActionIntent(BaseModel):
     instruction: str = ""
     actions: List[str] = Field(default_factory=list)
     source: str = "panel_agent"
+    resolved_actions: List[PanelIntentAction] = Field(default_factory=list)
 
 
 __all__ = ["PanelActionIntent"]

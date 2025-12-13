@@ -1,10 +1,16 @@
+import json
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
 
 from app.observability.ingest_meta import record_ingest_run, reset_ingest_meta
-from app.observability.status_service import get_system_status, record_ask_error, record_ask_query, reset_ask_metrics
+from app.observability.status_service import (
+    get_system_status,
+    record_ask_error,
+    record_ask_query,
+    reset_ask_metrics,
+)
 from app.stores import get_object_store, reset_store_backends
 
 
@@ -51,3 +57,33 @@ def test_get_system_status_includes_ingest_and_ask_metrics():
     assert status.ask.total_queries_24h == 2
     assert status.ask.error_count_24h == 1
     assert status.ask.avg_latency_ms_24h == pytest.approx(100.0)
+
+    assert status.feature_line_version == status.sot_forward_line_version
+    assert status.active_features
+    assert status.intents is not None
+    assert status.intents.promote_created_total == 0
+    assert status.intents.promote_created_24h == 0
+
+
+def test_intent_status_counts_outbox(monkeypatch, tmp_path):
+    reset_store_backends()
+    reset_ingest_meta()
+    reset_ask_metrics()
+
+    outbox = tmp_path / "outbox.jsonl"
+    monkeypatch.setattr("app.observability.status_service.INDEX_OUTBOX_PATH", outbox)
+
+    now = datetime.now(timezone.utc)
+    older = now - timedelta(days=2)
+    records = [
+        {"event": "promote.intent.created", "timestamp": now.isoformat().replace("+00:00", "Z")},
+        {"event": "promote.intent.created", "timestamp": older.isoformat().replace("+00:00", "Z")},
+        {"event": "panel.intent.executed", "timestamp": now.isoformat().replace("+00:00", "Z")},
+    ]
+    outbox.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+
+    status = get_system_status()
+    assert status.intents is not None
+    assert status.intents.promote_created_total == 2
+    assert status.intents.promote_created_24h == 1
+    assert status.intents.source_path == str(outbox)

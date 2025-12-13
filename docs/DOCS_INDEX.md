@@ -1,4 +1,4 @@
-State: SoT v5.x forward line (tracked through v5.4: PanelAgent + Watchers) built on the locked v4.10 Reality-MVP baseline.
+State: SoT v5.x forward line (tracked through v5.5: PanelAgent planner pipeline + CLI-first orchestration) built on the locked v4.10 Reality-MVP baseline.
 # Documentation Review Index — SoT v5.x forward line
 
 Central map of documentation and markdown artifacts in this repo. Review status values:
@@ -14,7 +14,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 ## SoT Notes
 - v4.10 — locked Reality-MVP baseline (foundation only).
 - v5.0 — PanelAgent Runtime V1 baseline on top of v4.10.
-- v5.x — **active SoT forward line** (currently tracked through v5.4: PanelAgent runtime + watcher track) for Satellite Sync, Yggdrasil modules, Orchestrator/Reasoning 2.0.
+- v5.x — **active SoT forward line** (currently tracked through v5.5: PanelAgent planner pipeline + CLI-first orchestration on top of the watcher track) for Satellite Sync, Yggdrasil modules, Orchestrator/Reasoning 2.0.
 
 ## Root and Repo Docs
 | Path | Scope | Review status | Last reviewed | Notes |
@@ -30,26 +30,27 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 ## Core SoT Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-12-13 | Locked v4.10 baseline; explicit “multi-agent outer + LangGraph inner per agent”; forward line tracked through v5.4 (PanelAgent + watcher infra) on top of v5.0 runtime. |
+| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-03-10 | Locked v4.10 baseline; explicit “multi-agent outer + LangGraph inner per agent”; forward line tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration) on top of v5.0 runtime. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
-| docs/STATUS.md | Operational snapshot | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-12-14 | Forward line tracked through v5.4 watcher/agent milestones; v5.5A adds panel→planner planning; v5.6 LangGraph rollout planned; v4.10 baseline noted as locked foundation. |
-| docs/ROADMAP.md | Strategic roadmap | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-12-14 | Forward line tracked through v5.4 watcher track; v5.5A adds planner pipeline for panel actions; v5.5 PanelAgent 2.0 (LangGraph inner) and v5.6 LangGraph rollout rows captured; v4.10 baseline referenced only as foundation. |
+| docs/STATUS.md | Operational snapshot | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-10 | Forward line tracked through v5.5: panel→planner planning (v5.5A) plus CLI-first orchestration of panel plans (v5.5B); v5.6 LangGraph rollout planned; v4.10 baseline noted as locked foundation. |
+| docs/ROADMAP.md | Strategic roadmap | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-10 | Forward line tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration); v5.5A/B captured; v5.6 LangGraph rollout planned; v4.10 baseline referenced only as foundation. |
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP components; v5.x will extend (PanelAgent, sync, richer orchestration). |
-| docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2025-12-14 | Design principle set to LangGraph inner + events/A2A outer; PanelAgent exemplifies the pattern with a catalog-driven decider and planner pipeline opt-in; SoT wording calls out forward line through v5.4 with v4.10 as locked base. |
+| docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2025-03-10 | Design principle set to LangGraph inner + events/A2A outer; PanelAgent exemplifies the pattern with a catalog-driven decider and planner pipeline opt-in plus CLI-first orchestration; SoT wording calls out forward line through v5.5 with v4.10 as locked base. |
 | docs/PLANNER.md | Planner contract | Baseline-only (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline; includes runtime events (`panel.intent.executed`/`panel.action.*`/`panel.log.created`) and promotion fan-out. |
 | docs/DIAGRAMS.md | C4 diagrams | Baseline-only (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
-| docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2025-12-13 | Panel/watcher flow notes keep Runtime V1 mapping as current state; SoT framing now explicit: forward line through v5.4 (PanelAgent + watcher track) on top of locked v4.10; LangGraph/LLM decider planned for v5.5+. |
-| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-12-12 | Lists fast/mock suites, adds PanelAgent LLM E2E commands gated by `PANEL_AGENT_LLM_E2E=1`/`@pytest.mark.panel_llm_e2e`, and documents optional CI job `panel-llm-e2e` (skips when LLM secrets/flag absent). |
-| docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x + planned v5.5 LangGraph) | 2025-12-14 | Runtime V1 fan-out + promotion intent + AI-log documented; catalog-driven decider (`PANEL_AGENT_DECIDER`) covers rule + opt-in LLM; planner pipeline opt-in (`PANEL_AGENT_PIPELINE=planner`) creates plans from panel actions; UAT guide at UAT_PANEL_WATCHER.md. |
+| docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2025-03-10 | Panel/watcher flow notes keep Runtime V1 mapping as current state; SoT framing explicit: forward line through v5.5 (PanelAgent planner pipeline + watcher daemon); LangGraph/LLM decider planned for v5.5+. |
+| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-10 | Lists fast/mock suites; PanelAgent LLM E2E commands gated by `PANEL_AGENT_LLM_E2E=1`/`@pytest.mark.panel_llm_e2e`; optional CI job `panel-llm-e2e`; deterministic planner/orchestrator CLI tests documented. |
+| docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x + planned v5.5 LangGraph) | 2025-03-10 | Runtime V1 fan-out + promotion intent + AI-log documented; catalog-driven decider (`PANEL_AGENT_DECIDER`) covers rule + opt-in LLM; planner pipeline opt-in (`PANEL_AGENT_PIPELINE=planner`) creates plans from panel actions and can be executed via Orchestrator CLI; UAT guide at UAT_PANEL_WATCHER.md. |
 | docs/UAT_PANEL_WATCHER.md | UAT guide (panel + watcher) | Aligned | 2025-12-10 | Human-facing UAT flow for PanelAgent + Vault Watcher (prep notes, targeted ingest, panel run-many, watcher dry-run/run, observations). |
 | docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Baseline-only (v4.10) | 2025-12-07 | High-level module map reviewed; Reality-MVP scope noted. |
+| docs/research/pattern-harvest-agentic-architecture.md | Research synthesis (outer/inner agent architecture) | Aligned (analysis, docs-only) | 2025-03-10 | Pattern harvest of events/A2A/tools/observability/config; backlog + Mermaid diagram; no runtime wiring. |
 
 ## Supporting Docs (Quality, Ops, Flows, Data)
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/CI.md | CI overview | Baseline-only (v4.10) | 2025-12-07 | ci-smoke/fitness gates documented; other workflows noted. |
-| docs/TESTING.md | Testing strategy | Baseline-only (v4.10) | 2025-12-07 | Commands/markers match ci-smoke; eval marked opt-in. |
+| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-10 | Commands/markers match ci-smoke; panel planner/orchestrator CLI tests and LLM-gated panel E2E are documented as opt-in. |
 | docs/QUALITY.md | Quality gates | Baseline-only (v4.10) | 2025-12-07 | Clarified QA agent scope vs /api/ask; CI fitness gates noted. |
 | docs/guardrails.md | Guardrails | Baseline-only (v4.10) | 2025-12-07 | Runtime guardrails + CI fitness gates; removed legacy thresholds. |
 | docs/SECURITY.md | Security | Baseline-only (v4.10) | 2025-12-07 | Single-user/local; auth not wired; key handling guidance. |
@@ -74,11 +75,12 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/SETTINGS.md | Settings | Baseline-only (v4.10) | 2025-12-07 | Core env vars (STORE_BACKEND/LLM/metrics flags) documented. |
 | docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Partially outdated | 2025-12-07 | Planned API key + slowapi; not implemented in Reality-MVP. |
 | docs/ingest.md | Ingest (historical/current) | Baseline-only (v4.10) | 2025-12-07 | Vault-first ingest (CLI, UUID healing, mirror, HybridStore); legacy commands noted. |
-| docs/OBSIDIANSYNC.md | Obsidian sync | Baseline-only (v4.10) | 2025-12-10 | Reality-MVP: git watcher primary, filesystem watcher fallback; describes Obsidian → watcher → ingest/update → outbox → indexer; aligned with v5.x watcher track and the v5.2 snapshot-based Vault Watcher CLI. |
+| docs/OBSIDIANSYNC.md | Obsidian sync | Baseline-only (v4.10) | 2025-03-10 | Reality-MVP: git watcher primary, filesystem watcher fallback; describes Obsidian → watcher → ingest/update → outbox → indexer; notes Docker-first watcher daemon (`vault-watcher-daemon`) with host fallback. |
 | docs/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/AI_DEVELOPMENT.md | AI-assisted development policy | Baseline-only (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
 | docs/DEV_WORKFLOW.md | Developer workflow | Baseline-only (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
 | docs/OPERATIONS.md | Operations playbook | Baseline-only (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
+| docs/OPS_WATCHER.md | Watcher operations (Docker + host) | Aligned (forward line v5.x) | 2025-03-10 | Docker-first watcher daemon with `/state` snapshot storage and host-service fallback; cooldown guidance for iCloud/Obsidian mounts. |
 | docs/INVENTORY.md | Runtime inventory | Baseline-only (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
 | docs/GLOSSARY.md | Glossary | Baseline-only (v4.10) | 2025-12-07 | Updated definitions for hybrid/rerank/outbox/health. |
 | docs/QUALITY.md | Quality | Baseline-only (v4.10) | 2025-12-07 | QA guardrails vs ASK graph clarified; CI fitness gates noted. |

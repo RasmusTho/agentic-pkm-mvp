@@ -1,0 +1,19 @@
+services:
+  watcher:
+    build: .
+    image: workspace-app
+    working_dir: /app
+    command: ["python", "-m", "app.cli", "vault-watcher-daemon", "--vault-root", "/vault", "--poll-seconds", "5", "--cooldown-seconds", "10", "--max-notes", "20"]
+    volumes:
+      - ./:/app
+      - "${VAULT_ROOT:-~/vault}:/vault"
+      - watcher_state:/state
+    environment:
+      STORE_BACKEND: memory
+      LLM_PROVIDER: mock
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+    restart: unless-stopped
+
+volumes:
+  watcher_state:
+    driver: local

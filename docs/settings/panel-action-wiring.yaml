@@ -1,0 +1,5 @@
+actions:
+  - id: promote.evergreen
+    target_event: promote.intent.created
+  - id: promote_evergreen
+    target_event: promote.intent.created

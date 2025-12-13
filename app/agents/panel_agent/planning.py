@@ -3,24 +3,48 @@ from __future__ import annotations
 from typing import List
 
 from app.agents.panel_agent.intent import PanelActionIntent
+from app.events.panel import PanelIntentAction
 from app.events.types import PLANNER_PLAN_CREATED
 from app.planner.schema import Plan, PlanMetadata, PlanStep, PlanTrigger, new_plan_id
 from app.stores.plan_store import get_plan_store
 from app.events.models import new_event
 
 
-def _steps_for_actions(actions: List[str], note_uuid: str) -> List[PlanStep]:
+def _is_promotion(action_id: str, action: PanelIntentAction | None) -> bool:
+    if action and action.mapping and (action.mapping.intent_type or "").lower() == "promotion":
+        return True
+    return action_id in {"promote.evergreen", "promote_evergreen"}
+
+
+def _promotion_tool_args(action_id: str, note_uuid: str, action: PanelIntentAction | None, instruction: str) -> dict:
+    args = {"action_id": action_id, "note_uuid": note_uuid, "instruction": instruction}
+    if action:
+        args["action_label"] = action.label
+        mapping = action.mapping
+        if mapping:
+            args["downstream_event"] = mapping.downstream_event
+            if mapping.params:
+                args.update({k: v for k, v in mapping.params.items() if v is not None})
+    return args
+
+
+def _steps_for_actions(
+    actions: List[str], note_uuid: str, resolved: List[PanelIntentAction] | None, instruction: str
+) -> List[PlanStep]:
     steps: List[PlanStep] = []
+    resolved = resolved or []
     for idx, action_id in enumerate(actions, start=1):
-        if action_id in {"promote.evergreen", "promote_evergreen"}:
+        action = next((candidate for candidate in resolved if candidate.id == action_id), None)
+        if _is_promotion(action_id, action):
             steps.append(
                 PlanStep(
                     id=f"step-{idx}",
                     kind="tool_call",
                     description="Emit promotion intent for evergreen",
                     tool="promotion.emit_intent",
-                    tool_args={"action_id": action_id, "note_uuid": note_uuid},
+                    tool_args=_promotion_tool_args(action_id, note_uuid, action, instruction),
                     reason="Panel requested evergreen promotion",
+                    metadata={"action_id": action_id, "intent_type": "promotion"},
                 )
             )
         else:
@@ -41,11 +65,15 @@ def plan_panel_actions(intent: PanelActionIntent, *, event_id: str | None = None
     trigger = PlanTrigger(event_type="panel.intent.created", event_id=event_id or intent.note.uuid, trace_id=trace_id)
     plan = Plan(
         id=new_plan_id(),
-        meta=PlanMetadata(goal=goal, source_object_uuid=intent.note.uuid, created_by="panel_agent"),
-        steps=_steps_for_actions(intent.actions, intent.note.uuid),
+        meta=PlanMetadata(goal=goal, source_object_uuid=intent.note.uuid, created_by="panel_agent", trace_id=trace_id),
+        steps=_steps_for_actions(intent.actions, intent.note.uuid, intent.resolved_actions, intent.instruction),
         trigger=trigger,
         goal=goal,
-        context={"panel_instruction": intent.instruction, "panel_actions": list(intent.actions), "source": intent.source},
+        context={
+            "panel_instruction": intent.instruction,
+            "panel_actions": list(intent.actions),
+            "source": intent.source,
+        },
         tags=["panel", "panel_agent", "panel:planner"],
     )
     store = get_plan_store()

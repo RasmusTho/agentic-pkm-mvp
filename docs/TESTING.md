@@ -20,6 +20,16 @@ State: SoT v4.10 Reality-MVP (current core).
   - export LLM_PROVIDER=<provider> plus any provider-specific env (e.g., OPENAI_BASE_URL/OPENAI_API_KEY)
   - PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/e2e/test_panel_llm_e2e.py -m "panel_llm_e2e"
   - CI: optional job `panel-llm-e2e` in `ci-smoke.yaml` runs these tests when `PANEL_AGENT_LLM_E2E_CI=true` and LLM secrets are present; otherwise it skips without failing the pipeline.
+- Panel planner/orchestrator (deterministic)
+  - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+  - pytest -q tests/cli/test_panel_orchestrator_cli.py -m "not pg"
+  - Planner pipeline remains opt-in (`PANEL_AGENT_PIPELINE=planner`); CLI execution is available via `panel-orchestrate-plan`.
+- Architecture guardrails
+  - export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+  - pytest -q tests/architecture/test_outer_inner_boundaries.py -m "not pg"
+- Panel action wiring (config-driven)
+  - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+  - pytest -q tests/agents/panel_agent/test_panel_wiring.py -m "not pg"
 
 ## Reality-MVP pipeline sanity
 - Scenario: `tests/e2e/test_reality_mvp_pipeline.py` runs the canonical note → ingest/normalize/classify → store/outbox/index → hybrid search warm-load → `/api/ask` flow against `tests/fixtures/reality_mvp/demo_note.md` (see `docs/scenarios/REALITY_MVP.md`).

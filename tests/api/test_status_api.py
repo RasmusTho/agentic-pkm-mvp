@@ -13,3 +13,7 @@ def test_status_endpoint_returns_snapshot():
     assert body.get("sot_baseline_version")
     assert body.get("sot_forward_line_version")
     assert isinstance(body.get("stores"), list)
+    assert body.get("feature_line_version") == body.get("sot_forward_line_version")
+    assert isinstance(body.get("active_features"), list)
+    intents = body.get("intents") or {}
+    assert "promote_created_total" in intents

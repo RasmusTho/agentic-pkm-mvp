@@ -3,12 +3,7 @@ from __future__ import annotations
 import click
 from pathlib import Path
 
-from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
-from app.cli.panel import run_panels_for_uuids
-from app.watcher.vault_watcher import VaultWatcher
-from app.store.object_store import ObjectStore
-from app.agents.panel_agent.policy import watcher_may_run_panel
-from scripts.yaml_roundtrip import load_frontmatter
+from app.watcher.vault_watcher import run_watcher_daemon, run_watcher_tick
 
 
 def _echo_summary(summary: dict) -> None:
@@ -21,42 +16,6 @@ def _echo_summary(summary: dict) -> None:
         f"skipped_policy={summary['panel_skipped_policy']} skipped_limit={summary['panel_skipped_limit']} "
         f"errors={summary['errors']} dry_run={summary['dry_run']} limit_exceeded={summary['limit_exceeded']}"
     )
-
-
-def _read_frontmatter(note_path: Path) -> dict:
-    try:
-        frontmatter, _ = load_frontmatter(note_path.read_text(encoding="utf-8"))
-        if not isinstance(frontmatter, dict):
-            return {}
-        return frontmatter
-    except Exception:
-        return {}
-
-
-def _note_uuid_from_frontmatter(frontmatter: dict) -> str | None:
-    raw = frontmatter.get("uuid") or ""
-    if isinstance(raw, str):
-        value = raw.strip()
-    else:
-        value = str(raw).strip()
-    if value.startswith("[[") and value.endswith("]]"):
-        value = value[2:-2].strip()
-    return value or None
-
-
-def _hydrate_store_with_markdown(note_uuid: str, note_path: Path) -> None:
-    try:
-        markdown = note_path.read_text(encoding="utf-8")
-    except Exception:
-        return
-    store = ObjectStore()
-    obj = store.get_object(note_uuid)
-    if obj is None:
-        return
-    payload = dict(obj.payload or {})
-    payload["raw_text"] = markdown
-    obj.payload = payload
-    store.save_object(obj, emit_outbox=False, trace_id=None)
 
 
 @click.command(
@@ -107,88 +66,106 @@ def vault_watcher_run(
     if not resolved.exists() or not resolved.is_dir():
         raise click.BadParameter(f"Vault root not found or not a directory: {resolved}")
 
-    watcher = VaultWatcher(resolved, snapshot_path=snapshot_path)
-    result = watcher.run(save=False)
+    summary, messages = run_watcher_tick(
+        vault_root=resolved,
+        snapshot_path=snapshot_path,
+        skip_panel=skip_panel,
+        emit_only=emit_only,
+        dry_run=dry_run,
+        max_notes=max_notes,
+        force=force,
+    )
+    for msg in messages:
+        click.echo(msg)
 
-    summary = {
-        "changed": len(result.changed),
-        "ingest_attempted": 0,
-        "ingested": 0,
-        "panel_candidates": 0,
-        "panel_runs": 0,
-        "panel_promotions": 0,
-        "panel_skipped_policy": 0,
-        "panel_skipped_limit": 0,
-        "errors": 0,
-        "dry_run": dry_run,
-        "limit_exceeded": False,
-    }
-
-    policy_allowed_paths: list[Path] = []
-    for path in result.changed:
-        frontmatter = _read_frontmatter(path)
-        note_uuid = _note_uuid_from_frontmatter(frontmatter)
-        if watcher_may_run_panel(frontmatter):
-            policy_allowed_paths.append(path)
-        else:
-            summary["panel_skipped_policy"] += 1
-
-    summary["panel_candidates"] = len(policy_allowed_paths)
-
-    if summary["changed"] == 0:
-        _echo_summary(summary)
-        if not dry_run:
-            watcher.refresh_snapshot()
-        return
-
-    if not force and summary["changed"] > max_notes:
-        summary["limit_exceeded"] = True
-        summary["panel_skipped_limit"] = summary["changed"]
-        click.echo(
-            f"Changed notes ({summary['changed']}) exceed max-notes={max_notes}; aborting watcher run. "
-            "Use --force to override."
-        )
+    if summary.get("limit_exceeded"):
         _echo_summary(summary)
         raise SystemExit(1)
-
-    if dry_run:
-        _echo_summary(summary)
-        return
-
-    summary["ingest_attempted"] = summary["changed"]
-    ingest_summary = run_vault_alpha_ingest_paths(resolved, result.changed, force=False)
-    summary["ingested"] = ingest_summary.ingested
-    summary["errors"] += ingest_summary.errors
-
-    if not skip_panel and policy_allowed_paths:
-        panel_targets: list[str] = []
-        for note_path in policy_allowed_paths:
-            refreshed_frontmatter = _read_frontmatter(note_path)
-            note_uuid = _note_uuid_from_frontmatter(refreshed_frontmatter)
-            if not note_uuid:
-                click.echo(f"Warning: unable to resolve uuid for {note_path}; skipping panel run.", err=True)
-                summary["errors"] += 1
-                continue
-            _hydrate_store_with_markdown(note_uuid, note_path)
-            panel_targets.append(note_uuid)
-        processed, with_panels, promotions, errors, messages = run_panels_for_uuids(
-            tuple(panel_targets), emit_only=emit_only
-        )
-        for msg in messages:
-            click.echo(msg, err=True)
-        summary["panel_runs"] = with_panels
-        summary["panel_promotions"] = promotions
-        summary["errors"] += errors
-    else:
-        click.echo("Panel runtime skipped (no candidates or --skip-panel set).")
 
     _echo_summary(summary)
-
-    # refresh snapshot after mutations (ingest/panel may update mtimes/frontmatter)
-    watcher.refresh_snapshot()
-
-    if summary["errors"] > 0:
+    if summary.get("errors", 0) > 0:
         raise SystemExit(1)
+
+
+@click.command(
+    name="vault-watcher-daemon",
+    help="Continuous vault watcher: polls for changed notes and runs ingest/panel; designed for Docker/daemon use.",
+)
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Vault root (defaults to VAULT_ROOT or DEFAULT_VAULT_ROOT).",
+)
+@click.option(
+    "--snapshot-path",
+    type=click.Path(path_type=Path),
+    default=Path("/state/vault_watcher_state.json"),
+    help="Snapshot file path (stores path→mtime). Defaults to /state/vault_watcher_state.json in Docker.",
+)
+@click.option("--skip-panel", is_flag=True, help="Skip running PanelAgent runtime.")
+@click.option(
+    "--emit-only",
+    is_flag=True,
+    help="Only emit panel.intent.created for panels (skip runtime) when panel runs are enabled.",
+)
+@click.option(
+    "--poll-seconds",
+    type=int,
+    default=30,
+    show_default=True,
+    help="Delay between polls when no changes are detected.",
+)
+@click.option(
+    "--cooldown-seconds",
+    type=int,
+    default=10,
+    show_default=True,
+    help="Delay after a run with changes to avoid rapid reprocessing on mounted volumes.",
+)
+@click.option(
+    "--max-notes",
+    type=int,
+    default=50,
+    show_default=True,
+    help="Maximum number of changed notes to process; if exceeded, watcher aborts unless --force is set.",
+)
+@click.option("--force", is_flag=True, help="Override max-notes safety guard.")
+def vault_watcher_daemon(
+    vault_root: Path | None,
+    snapshot_path: Path | None,
+    skip_panel: bool,
+    emit_only: bool,
+    poll_seconds: int,
+    cooldown_seconds: int,
+    max_notes: int,
+    force: bool,
+) -> None:
+    from app.cli import _resolve_vault_root_path
+
+    resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=True)
+    if resolved is None:
+        raise click.BadParameter("Vault root could not be resolved.")
+    if not resolved.exists() or not resolved.is_dir():
+        raise click.BadParameter(f"Vault root not found or not a directory: {resolved}")
+
+    def _log(summary: dict, messages: list[str]) -> None:
+        for msg in messages:
+            click.echo(msg)
+        _echo_summary(summary)
+
+    run_watcher_daemon(
+        vault_root=resolved,
+        snapshot_path=snapshot_path,
+        skip_panel=skip_panel,
+        emit_only=emit_only,
+        dry_run=False,
+        max_notes=max_notes,
+        force=force,
+        poll_seconds=poll_seconds,
+        cooldown_seconds=cooldown_seconds,
+        on_tick=_log,
+    )
 
 
 __all__ = ["vault_watcher_run"]

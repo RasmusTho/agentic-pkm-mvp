@@ -53,6 +53,31 @@ MCP_TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
         allowed_args={"root_dir": "string", "limit": "integer"},
         mock_result={"status": "ok", "ingested": 0},
     ),
+    "promotion.emit_intent": ToolDescriptor(
+        name="promotion.emit_intent",
+        kind="internal",
+        schema={
+            "type": "object",
+            "properties": {
+                "note_uuid": {"type": "string", "description": "UUID of the note to promote"},
+                "action_id": {"type": "string", "description": "Canonical panel action id"},
+                "action_label": {"type": "string", "description": "Label of the action"},
+                "downstream_event": {"type": "string", "description": "Downstream event name"},
+                "maturity": {"type": "string", "description": "Desired maturity state"},
+                "instruction": {"type": "string", "description": "Panel instruction context"},
+            },
+            "required": ["note_uuid", "action_id"],
+        },
+        allowed_args={
+            "note_uuid": "string",
+            "action_id": "string",
+            "action_label": "string",
+            "downstream_event": "string",
+            "maturity": "string",
+            "instruction": "string",
+        },
+        mock_result={"status": "ok"},
+    ),
 }
 
 

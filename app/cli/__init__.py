@@ -19,7 +19,7 @@ from app.ingest.vault_alpha import run_vault_alpha_ingest, run_vault_alpha_inges
 from app.ingest.external import ingest_external_folder
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
-from app.cli.watcher import vault_watcher_run
+from app.cli.watcher import vault_watcher_run, vault_watcher_daemon
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
 from app.services.note_update import NoteUpdateResult, process_note_update
@@ -33,6 +33,7 @@ from app.orchestrator.runtime import Orchestrator
 from app.media.transcribe import transcribe_source
 from app.obs.log import with_trace_id
 from app.cli.health import run_health
+from app.stores.plan_store import get_plan_store
 from app.settings.compiler import compile_all
 from app.llm.trace_inspect import (
     build_sequence_for_trace,
@@ -480,6 +481,39 @@ def orchestrate_external(root_dir: Path, limit: int | None) -> None:
 
 
 @cli.command(
+    name="panel-orchestrate-plan",
+    help="Execute a panel-originated plan via the orchestrator runtime.",
+)
+@click.option("--plan-id", "plan_id", type=str, default=None, help="Identifier of the plan to execute.")
+@click.option(
+    "--note-uuid",
+    "note_uuid",
+    type=str,
+    default=None,
+    help="Optional note UUID; executes the latest panel plan for that note when plan-id is omitted.",
+)
+def panel_orchestrate_plan(plan_id: str | None, note_uuid: str | None) -> None:
+    store = get_plan_store()
+    plan = store.get(plan_id) if plan_id else None
+    if plan is None and note_uuid:
+        candidates = store.list_by_object(note_uuid)
+        plan = candidates[-1] if candidates else None
+    if plan is None:
+        click.echo("No matching plan found for execution.", err=True)
+        raise SystemExit(1)
+
+    orchestrator = Orchestrator()
+    results = orchestrator.run_plan(plan)
+    click.echo(f"Executed plan {plan.id} with {len(plan.steps)} step(s)")
+    for entry in results:
+        status = entry.get("status")
+        detail = entry.get("error") or entry.get("result")
+        click.echo(f"  - step={entry.get('step_id')} status={status} detail={detail}")
+    if not results:
+        click.echo("No steps executed.")
+
+
+@cli.command(
     name="alpha-human-flows",
     help=(
         "Run alpha human flows end-to-end (sample ingest, test note, panel, promotion, ASK) "
@@ -881,13 +915,20 @@ def health(as_json: bool, trace_id: Optional[str]) -> None:
 def status() -> None:
     status = get_system_status()
     baseline = getattr(status, "sot_baseline_version", status.sot_version)
-    forward_line = getattr(status, "sot_forward_line_version", None)
+    forward_line = getattr(status, "feature_line_version", None) or getattr(status, "sot_forward_line_version", None)
     label = getattr(status, "sot_label", "")
+    features = getattr(status, "active_features", []) or []
+    intents = getattr(status, "intents", None)
+
     click.echo(f"SoT baseline: {baseline} (Reality-MVP, locked)")
     if forward_line:
         click.echo(f"SoT forward line: {forward_line} (PanelAgent + Watchers)")
     if label:
         click.echo(f"SoT label: {label}")
+    if features:
+        click.echo("Active features:")
+        for feat in features:
+            click.echo(f"  - {feat}")
     click.echo(f"Timestamp: {status.timestamp.isoformat()}Z")
     click.echo("Stores:")
     for store in status.stores:
@@ -926,6 +967,12 @@ def status() -> None:
     click.echo(f"  queries (24h): {status.ask.total_queries_24h}")
     click.echo(f"  errors (24h): {getattr(status.ask, 'error_count_24h', 0)}")
     click.echo(f"  avg latency: {avg_latency}")
+    if intents:
+        click.echo("Intents:")
+        click.echo(f"  promote.intent.created total: {intents.promote_created_total}")
+        click.echo(f"  promote.intent.created (24h): {intents.promote_created_24h}")
+        if getattr(intents, 'source_path', None):
+            click.echo(f"  source: {intents.source_path}")
 
 
 @cli.group(help="Settings commands (Vault-as-GUI).")
@@ -970,6 +1017,7 @@ def settings_watch(watch_path: Path, auto_heal: bool) -> None:
 
 cli.add_command(panel_cli, name="panel")
 cli.add_command(vault_watcher_run)
+cli.add_command(vault_watcher_daemon)
 
 
 if __name__ == "__main__":

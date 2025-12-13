@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (current core) with the active forward line tracked through v5.4 (PanelAgent + Watchers).
+State: SoT v4.10 Reality-MVP (current core) with the active forward line tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration).
 # Roadmap — Strategic Control
 
 ## Reality-MVP (SoT v4.10 — baseline locked)
@@ -40,10 +40,22 @@ State: SoT v4.10 Reality-MVP (current core) with the active forward line tracked
 | v5.2 | Vault Watcher MVP (CLI, polling) | Delivered — snapshot-based CLI watcher (`vault-watcher-run`) polls for changes, triggers ingest, optional panel runtime, reports runs/metrics (no auto-panel policy yet) |
 | v5.3 | Auto-panel as explicit policy | Delivered — watcher-triggered panel runs gated by explicit frontmatter policy (`ai_panel_auto_run`); PanelAgent runtime + note-update remain manual-capable |
 | v5.4 | Watcher hardening & ergonomics | Delivered — dry-run mode, max-notes guard with optional force, structured summaries for watcher runs |
-| v5.5 | PanelAgent 2.0 (LangGraph inner) | Planned — PanelAgentState schema, LangGraph graph (`graph.py`), LLM decision node for actions, Planner/Orchestrator integration via A2A/plan objects |
+| v5.5 | PanelAgent 2.0 (LangGraph inner) | In-progress — PanelActionIntent + planner pipeline shipped (v5.5A); CLI-first plan execution via Orchestrator delivered (v5.5B); LangGraph decider + watcher auto-exec next |
 | v5.6 | LangGraph rollout to other agents | Planned — select 1–2 agents (Promotion, Reviewer, Hygiene), add AgentState + LangGraph graphs, move non-trivial decision logic from pipelines into those graphs |
 
 Current Reality-MVP work supersedes the statuses of the older tracks above; rows remain for SoT history.
+
+### Architecture Hardening: Pattern Harvest (Outer/Inner, A2A, Events, Tools, AgentOps)
+- Event schema & versioning doc (naming/idempotency/DLQ)
+- A2A contract & trace example
+- Tool policy & MCP adapter spec
+- Observability runbooks (panel/watcher/orchestrator)
+- Config validation for panel-actions/watcher
+- CLI-is-tooling statement (not a human UI)
+- Docker friction log (state/permissions/observability)
+- Eval gating guidance (mock/skip/live)
+- Outbox consumer contract (ordering/retry/idempotency)
+- MCP/tool test harness (deterministic adapters)
 
 ## v5.0 — PanelAgent Runtime V1 (SoT v5.x baseline)
 - Sits on top of the locked SoT v4.10 Reality-MVP baseline; does not change v4.10 scope or acceptance.
@@ -61,10 +73,12 @@ Current Reality-MVP work supersedes the statuses of the older tracks above; rows
 - v5.2 — Vault Watcher MVP (CLI, polling): a manual/background CLI watcher polls for changed notes, triggers ingest via existing commands, emits events/status logs, and surfaces basic watcher metrics (runs, changed files, errors); no automatic panel runs yet.
 - v5.3 — Auto-panel as explicit policy: define clear policy/flags for when panel auto-run is allowed; watcher can trigger `panel-run`/note-update after ingest according to that policy; AI log/events make auto-runs explicit.
 - v5.4 — Watcher hardening & ergonomics: adds dry-run mode, max-notes guard (with override), structured summaries for watcher runs; manual/cron friendly while avoiding storms.
+- Deployment note: `vault-watcher-daemon` provides a Docker-first polling service with snapshots stored outside the vault (e.g., `/state`); host service (launchd/systemd) remains a fallback when mounts are unreliable.
 - This track is additive to existing v5.x themes (Satellite Sync, Yggdrasil modules, Orchestrator/Reasoning 2.0); all build on the v5.0 baseline.
 
 ## v5.5 — PanelAgent 2.0 (LangGraph inner)
-- v5.5A (shipped): `PanelActionIntent` + opt-in planner pipeline (`PANEL_AGENT_PIPELINE=planner`) to create plans from panel actions; execution remains on the direct path for now.
+- v5.5A (shipped): `PanelActionIntent` + opt-in planner pipeline (`PANEL_AGENT_PIPELINE=planner`) to create plans from panel actions; direct runtime remains the default.
+- v5.5B (shipped): panel-created plans can be executed via Orchestrator in a CLI-first flow (promotion tool emits `promote.intent.created`); watcher auto-execution remains future work.
 - Define `PanelAgentState` (note reference, panel intent, actions, history, policy) and corresponding schema.
 - Implement LangGraph-driven panel graph (e.g., `graph.py`) with an LLM decision node that selects which actions to run based on panel context.
 - Decider mode is configurable (`PANEL_AGENT_DECIDER=rule|llm`) with `rule` as the default to preserve runtime V1 behaviour; `llm` is opt-in.
