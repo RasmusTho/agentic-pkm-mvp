@@ -64,6 +64,7 @@ Current Reality-MVP work supersedes the statuses of the older tracks above; rows
 - This track is additive to existing v5.x themes (Satellite Sync, Yggdrasil modules, Orchestrator/Reasoning 2.0); all build on the v5.0 baseline.
 
 ## v5.5 — PanelAgent 2.0 (LangGraph inner)
+- v5.5A (shipped): `PanelActionIntent` + opt-in planner pipeline (`PANEL_AGENT_PIPELINE=planner`) to create plans from panel actions; execution remains on the direct path for now.
 - Define `PanelAgentState` (note reference, panel intent, actions, history, policy) and corresponding schema.
 - Implement LangGraph-driven panel graph (e.g., `graph.py`) with an LLM decision node that selects which actions to run based on panel context.
 - Decider mode is configurable (`PANEL_AGENT_DECIDER=rule|llm`) with `rule` as the default to preserve runtime V1 behaviour; `llm` is opt-in.

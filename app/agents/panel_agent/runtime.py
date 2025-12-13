@@ -8,7 +8,9 @@ from typing import Any, Iterable
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.panel_agent.graph import run_panel_graph
-from app.agents.panel_agent.settings import get_panel_agent_decider
+from app.agents.panel_agent.intent import PanelActionIntent
+from app.agents.panel_agent.planning import plan_panel_actions
+from app.agents.panel_agent.settings import get_panel_agent_decider, get_panel_agent_pipeline
 from app.agents.panel_agent.state import PanelAgentState
 from app.components.settings.panel_actions_loader import load_panel_action_catalog
 from app.events.panel import NoteRef, PanelIntentEvent, PanelLogEntry, PanelRuntimeActionResult
@@ -84,6 +86,19 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
     )
     decider_mode = get_panel_agent_decider()
     state = run_panel_graph(initial_state, decider_mode=decider_mode)
+
+    # Build a structured intent for planner-mode consumers (opt-in pipeline); for now we keep
+    # the existing direct runtime path as the default behaviour.
+    pipeline_mode = get_panel_agent_pipeline()
+    if pipeline_mode == "planner":
+        selected = [a.action_id for a in state.action_results if a.checked and a.status == "handled"]
+        state.panel_action_intent = PanelActionIntent(
+            note=intent_event.payload.note,
+            instruction=intent_event.payload.panel.instruction,
+            actions=selected,
+            source="panel_agent",
+        )
+        plan_panel_actions(state.panel_action_intent, event_id=intent_event.event_id, trace_id=intent_event.trace_id)
 
     emitted_events = list(state.emitted_events or [])
     _write_outbox_events(resolved_outbox, emitted_events)

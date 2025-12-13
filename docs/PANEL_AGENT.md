@@ -8,6 +8,7 @@ Purpose: translate human-driven AI panels in vault notes into structured intents
 - Runtime V1 uses a fixed mapping from panel actions to follow-up events (e.g., promotion intents) and mirrors them into `panel_logs` for traceability.
 - This is a simplified bridge/runtime loop, not the final agentic design; it keeps watcher and manual panel flows working while the agent migrates to LangGraph.
 - Internal implementation now runs through a LangGraph-based control flow (`PanelAgentState`), but external behaviour and emitted events remain identical.
+- Planner pipeline (opt-in, `PANEL_AGENT_PIPELINE=planner`): PanelAgent builds a `PanelActionIntent` and asks the Planner to create a plan for the selected actions. Execution is still handled by the existing direct path; orchestration wiring is a follow-up step.
 - Action catalog (`docs/settings/panel-actions.md`) is the canonical list of actions (id, kind, labels/synonyms, description/llm_hint, downstream event, params). Rule-mode matches checkbox labels deterministically; LLM-mode is opt-in and uses the catalog + panel/note context with checkboxes as hints.
 
 ## PanelAgent 2.0 (planned v5.5)
