@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
-from app.events.types import PROMOTE_INTENT_CREATED
+from app.events.types import PROMOTE_INTENT_CREATED, PROMOTE_DONE
 from app.observability.ingest_meta import get_ingest_status
 from app.observability.status_model import AskStatus, EventCounters, IngestionStatus, IntentStatus, StoreStatus, SystemStatus
 from app.outbox.events import INDEX_OUTBOX_PATH
@@ -153,6 +153,7 @@ def _parse_timestamp(value: object) -> datetime | None:
 
 def _count_events(outbox_path: Path) -> EventCounters:
     panel_total = panel_recent = promote_total = promote_recent = watcher_total = watcher_recent = 0
+    promotion_done_total = promotion_done_recent = 0
     source = str(outbox_path) if outbox_path else None
     cutoff = datetime.now(timezone.utc) - _EVENT_WINDOW
     try:
@@ -176,6 +177,10 @@ def _count_events(outbox_path: Path) -> EventCounters:
                     promote_total += 1
                     if is_recent:
                         promote_recent += 1
+                if event == PROMOTE_DONE:
+                    promotion_done_total += 1
+                    if is_recent:
+                        promotion_done_recent += 1
                 if event in {"watcher.run.completed", "watcher.run"}:
                     watcher_total += 1
                     if is_recent:
@@ -188,6 +193,8 @@ def _count_events(outbox_path: Path) -> EventCounters:
             panel_runs_24h=0,
             promote_created_total=0,
             promote_created_24h=0,
+            promotion_executed_total=0,
+            promotion_executed_24h=0,
             ingest_runs_by_plane={},
             source_path=source,
         )
@@ -199,6 +206,8 @@ def _count_events(outbox_path: Path) -> EventCounters:
             panel_runs_24h=panel_recent,
             promote_created_total=promote_total,
             promote_created_24h=promote_recent,
+            promotion_executed_total=promotion_done_total,
+            promotion_executed_24h=promotion_done_recent,
             ingest_runs_by_plane={},
             source_path=source,
         )
@@ -209,6 +218,8 @@ def _count_events(outbox_path: Path) -> EventCounters:
         panel_runs_24h=panel_recent,
         promote_created_total=promote_total,
         promote_created_24h=promote_recent,
+        promotion_executed_total=promotion_done_total,
+        promotion_executed_24h=promotion_done_recent,
         ingest_runs_by_plane={},
         source_path=source,
     )

@@ -16,6 +16,7 @@ Logs are the primary tracing surface; no external APM is required for the curren
   - `panel_runs`: `panel.intent.executed` events (panel runtime actually ran).
   - `promote.intent.created`: promotion intents emitted by panel runtime or orchestrator/panel plans.
   - `ingest_runs_by_plane`: count of ingest runs per plane (vault/external) based on last-run metadata.
+  - `promotion_executed` (promote.done): applied promotion actions after consuming promotion intents.
 - **What should increase when running `vault-watcher-run`**:
   - Dry-run (`--dry-run`): watcher_runs may increase if the watcher emits an event, but ingest/panel/promotion counters should not move because execution short-circuits before side effects.
   - Real run: watcher_runs increases; ingest plane counts increase when changed notes are ingested; panel_runs increases when policy allows panels to run; `promote.intent.created` increases when mapped promotion actions fire.
