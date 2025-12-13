@@ -20,6 +20,14 @@ from app.ingest.external import ingest_external_folder
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
 from app.cli.watcher import vault_watcher_run, vault_watcher_daemon
+from app.cli.uat import (
+    DEFAULT_FOLDER_NAME,
+    DEFAULT_TARGET_SUBDIR,
+    DEFAULT_MAX_NOTES,
+    UATAssertionError,
+    run_vault_test_flow,
+    seed_vault_test_notes,
+)
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
 from app.services.note_update import NoteUpdateResult, process_note_update
@@ -1027,6 +1035,119 @@ def settings_watch(watch_path: Path, auto_heal: bool) -> None:
             last = now
     except KeyboardInterrupt:
         click.echo("stopped watching settings")
+
+
+
+@cli.command(
+    name="uat-seed-vault-test",
+    help="Seed curated watcher/panel UAT notes into a vault Test folder for manual runs.",
+)
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Vault root path (will place notes under <vault_root>/<target-subdir>/<folder>).",
+)
+@click.option(
+    "--target-subdir",
+    type=str,
+    default=DEFAULT_TARGET_SUBDIR,
+    show_default=True,
+    help="Subdirectory under the vault root to place seeds (default Test).",
+)
+@click.option(
+    "--folder",
+    type=str,
+    default=DEFAULT_FOLDER_NAME,
+    show_default=True,
+    help="Folder name created inside target subdir for UAT seeds.",
+)
+@click.option("--overwrite/--no-overwrite", default=False, show_default=True)
+def uat_seed_vault_test(vault_root: Path, target_subdir: str, folder: str, overwrite: bool) -> None:
+    resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=False)
+    if resolved is None:
+        raise click.BadParameter("Vault root could not be resolved.")
+    summary = seed_vault_test_notes(vault_root=resolved, target_subdir=target_subdir, folder=folder, overwrite=overwrite)
+    click.echo(
+        f"Seeded UAT notes to {summary.destination} (written={summary.written} skipped={summary.skipped}, overwrite={overwrite})"
+    )
+
+
+@cli.command(
+    name="uat-run-vault-test",
+    help="Run watcher + panel + promotion consumer against seeded Test notes.",
+)
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Vault root path; watcher scope will be <vault_root>/<target-subdir>.",
+)
+@click.option(
+    "--target-subdir",
+    type=str,
+    default=DEFAULT_TARGET_SUBDIR,
+    show_default=True,
+    help="Subdirectory under vault root to watch (default Test).",
+)
+@click.option(
+    "--folder",
+    type=str,
+    default=DEFAULT_FOLDER_NAME,
+    show_default=True,
+    help="Seed folder name that holds UAT notes.",
+)
+@click.option(
+    "--max-notes",
+    type=int,
+    default=DEFAULT_MAX_NOTES,
+    show_default=True,
+    help="Maximum changed notes allowed before aborting unless --force.",
+)
+@click.option("--force", is_flag=True, help="Override max-notes guard.")
+@click.option("--dry-run", is_flag=True, help="Perform watcher scan without ingest/panel/promotion.")
+@click.option("--run-panels/--no-run-panels", default=True, show_default=True)
+@click.option("--consume-promotions/--no-consume-promotions", default=True, show_default=True)
+@click.option("--assert", "assert_expectations", is_flag=True, help="Fail if expected intents/effects are missing.")
+def uat_run_vault_test(
+    vault_root: Path,
+    target_subdir: str,
+    folder: str,
+    max_notes: int,
+    force: bool,
+    dry_run: bool,
+    run_panels: bool,
+    consume_promotions: bool,
+    assert_expectations: bool,
+) -> None:
+    resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=False)
+    if resolved is None:
+        raise click.BadParameter("Vault root could not be resolved.")
+    try:
+        summary = run_vault_test_flow(
+            vault_root=resolved,
+            target_subdir=target_subdir,
+            folder=folder,
+            max_notes=max_notes,
+            force=force,
+            dry_run=dry_run,
+            run_panels=run_panels,
+            consume_promotions=consume_promotions,
+            assert_expectations=assert_expectations,
+        )
+    except FileNotFoundError as exc:
+        raise click.BadParameter(str(exc))
+    except UATAssertionError as exc:
+        click.echo(str(exc), err=True)
+        raise SystemExit(1)
+
+    for line in summary.to_lines():
+        click.echo(line)
+
+    if summary.watcher.get("limit_exceeded"):
+        raise SystemExit(1)
+    if summary.watcher.get("errors", 0) or summary.promotion.get("errors", 0):
+        raise SystemExit(1)
 
 cli.add_command(panel_cli, name="panel")
 cli.add_command(vault_watcher_run)
