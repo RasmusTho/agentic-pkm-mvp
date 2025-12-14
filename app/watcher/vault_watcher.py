@@ -33,6 +33,19 @@ def _resolve_outbox_path(outbox_path: Path | None) -> Path | None:
     return None
 
 
+class OutboxPathError(ValueError):
+    """Raised when the outbox path cannot be resolved."""
+
+
+def _resolve_outbox_path(outbox_path: Path | None) -> Path | None:
+    if outbox_path is not None:
+        return Path(outbox_path)
+    env_path = os.environ.get("INDEX_OUTBOX_PATH")
+    if env_path:
+        return Path(env_path)
+    return None
+
+
 def _default_snapshot_path(vault_root: Path) -> Path:
     return vault_root / ".agentic-pkm" / "vault_watcher_state.json"
 
