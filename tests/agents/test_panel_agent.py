@@ -30,11 +30,12 @@ def test_panel_agent_removes_completed_action_and_logs():
 
     assert isinstance(result, PanelAgentResult)
     assert [intent.kind for intent in result.intents] == ["action_triggered"]
-    assert result.intents[0].action_text == "Gör denna anteckning evergreen"
+    action_intent = result.intents[0]
+    assert action_intent.action_text == "Gör denna anteckning evergreen"
     assert "- [x] Gör denna anteckning evergreen" not in result.updated_markdown
     assert "- [ ] Arkivera den här anteckningen" in result.updated_markdown
-    assert "## AI-logg" in result.updated_markdown
-    assert '- Action: "Gör denna anteckning evergreen"' in result.updated_markdown
+    assert "> [!info]- AI status" in result.updated_markdown
+    assert "- ✅ Gör denna anteckning evergreen" in result.updated_markdown
     assert result.events == []
 
 

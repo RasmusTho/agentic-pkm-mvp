@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class PanelAction(BaseModel):
     checked: bool = False
     text: str
+    action_id: str | None = None
 
 
 class PanelLogEntry(BaseModel):

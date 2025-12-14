@@ -61,6 +61,8 @@ All emitters must populate the envelope; schema is contract-tested under `tests/
 - Emitter: PanelAgent runtime.
 - When: a checked action is valid but has no runtime handler yet (v5.x placeholder) or is unmapped.
 - Payload: `{note, panel_id, action:{id,label,checked}, reason, mapping?}`.
+- `intent_source`: `panel.note` for all panel-derived events (including downstream `promote.intent.created`).
+- Receipts: runtime writes a receipt into the in-note AI status callout for each handled action (✅ success, ⚠️ failure, ⏳ pending), keeping the last 20; receipts are user-visible, not separate events.
 
 ### `watcher.run`
 - Emitters: Runtime Loop CLI (`python -m app.cli runtime-loop`, every tick) and `vault-watcher-run` when the run executes (non-dry-run, not blocked by the max-notes guard).
@@ -75,7 +77,7 @@ All emitters must populate the envelope; schema is contract-tested under `tests/
 
 ### `promote.intent.created`
 - Emitter: PanelAgent runtime (from panel actions with `intent_type: promotion`).
-- Payload: `{note, panel, action, instruction, maturity?, origin?}` with `source="panel_agent.runtime"`; consumed by promotion flows.
+- Payload: `{note, panel, action, instruction, maturity?, origin?, intent_source}` with `source="panel_agent.runtime"`; consumed by promotion flows.
 
 ### `ingest.object.created`
 

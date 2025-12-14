@@ -70,7 +70,7 @@ def test_process_note_update_happy_path(tmp_path: Path, monkeypatch: pytest.Monk
     assert result.changed is True
     updated = note_path.read_text(encoding="utf-8")
     assert "- [x]" not in updated
-    assert "## AI-logg" in updated
+    assert "> [!info]- AI status" in updated
     snapshot_text = (snapshot_dir / f"{uuid}.md").read_text(encoding="utf-8")
     assert snapshot_text == updated
 

@@ -32,6 +32,8 @@ def panel_intent_to_event(
         {
             "note_id": note_id,
             "action_text": intent.action_text,
+            "action_id": intent.action_id,
+            "intent_source": "panel.note",
         }
     )
     if instruction_text:
