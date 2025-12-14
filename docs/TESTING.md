@@ -17,6 +17,11 @@ State: SoT v4.10 Reality-MVP (current core).
 - **F. Scripted UAT** — CLI harness for runtime-loop + promotion consumer + status assertions; runs on memory backend and real vaults with the golden seed pack.
 
 ## Commands
+- Repo-root deterministic run (memory backend; plugin autoload disabled):
+  - STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"
+- Workspace-root deterministic run (bypass global /Users/rasmus/workspace/pytest.ini):
+  - STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg" -c /dev/null
+- Note: global /Users/rasmus/workspace/pytest.ini can inject timeout args when plugins are disabled; prefer the commands above when running locally.
 - Single test
   - pytest -q tests/agents/test_normalizer.py
 - E2E graph
