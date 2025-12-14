@@ -62,6 +62,12 @@ All emitters must populate the envelope; schema is contract-tested under `tests/
 - When: a checked action is valid but has no runtime handler yet (v5.x placeholder) or is unmapped.
 - Payload: `{note, panel_id, action:{id,label,checked}, reason, mapping?}`.
 
+### `watcher.run`
+- Emitters: Runtime Loop CLI (`python -m app.cli runtime-loop`, every tick) and `vault-watcher-run` when the run executes (non-dry-run, not blocked by the max-notes guard).
+- Envelope: `version="1.0"`, `timestamp`, `trace_id`, `event_id`, `source={component:"watcher", trigger:"runtime_loop"| "vault_watcher_run", sot:"v5.4"}`.
+- Payload: `{changed, ingest_attempted, ingested, panel_candidates, panel_runs, panel_promotions, panel_skipped_policy, panel_skipped_limit, errors, dry_run, limit_exceeded, snapshot_path, vault_root}`.
+- Observability: increments `watcher_runs_total/24h` in status counters; payload mirrors the CLI summary for regressions.
+
 ### `panel.log.created`
 - Emitter: PanelAgent runtime.
 - When: after evaluating a panel, as a minimal AI-log marker for humans and monitoring.

@@ -21,7 +21,7 @@ from app.ingest.external import ingest_external_folder
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
 from app.cli.watcher import vault_watcher_run, vault_watcher_daemon
-from app.runtime.runtime_loop import RuntimeLoopConfig, run_forever, run_once
+from app.runtime.runtime_loop import OutboxPathError, RuntimeLoopConfig, resolve_outbox_path, run_forever, run_once
 from app.cli.uat import (
     DEFAULT_FOLDER_NAME,
     DEFAULT_TARGET_SUBDIR,
@@ -1192,6 +1192,11 @@ def runtime_loop(
     if resolved is None:
         raise click.BadParameter("Vault root could not be resolved.")
 
+    try:
+        resolved_outbox = resolve_outbox_path(outbox_path)
+    except OutboxPathError as exc:
+        raise click.ClickException(str(exc))
+
     cfg = RuntimeLoopConfig(
         snapshot_path=snapshot_path,
         poll_seconds=max(interval, 0) or 30,
@@ -1201,7 +1206,7 @@ def runtime_loop(
         dry_run=dry_run,
         run_panels=run_panels,
         run_promotion_consumer=consume_promotions,
-        outbox_path=outbox_path,
+        outbox_path=resolved_outbox,
     )
 
     if interval and interval > 0:

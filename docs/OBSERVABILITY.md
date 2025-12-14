@@ -13,14 +13,15 @@ Logs are the primary tracing surface; no external APM is required for the curren
 - **SoT baseline vs forward line**: `sot_baseline_version` is the locked Reality-MVP (v4.10). `sot_forward_line_version` / `feature_line_version` represent the active forward line (currently v5.x: PanelAgent + Watchers). `active_features` enumerates which forward-line capabilities are present (PanelAgent runtime, watcher snapshot/policy track, config-driven panel wiring).
 - **Counters surfaced** (total + 24h window):
   - `promotion_executed`: `promote.done` events emitted by the promotion consumer (intent applied).
-  - `watcher_runs`: watcher tick completions (`watcher.run` / `watcher.run.completed`).
+  - `watcher_runs`: watcher tick completions via the versioned `watcher.run` event (runtime-loop always; `vault-watcher-run` when not `--dry-run`/max-notes blocked), with backwards-compat support for `watcher.run.completed`.
   - `panel_runs`: `panel.intent.executed` events (panel runtime actually ran).
   - `promote.intent.created`: promotion intents emitted by panel runtime or orchestrator/panel plans.
   - `ingest_runs_by_plane`: count of ingest runs per plane (vault/external) based on last-run metadata.
 - **What should increase when running `vault-watcher-run` or `uat-run-vault-test`**:
 - Intent vs Done: `promote.intent.created` shows the panel emitted an intent; `promotion_executed` (promote.done) shows the consumer applied it. Runtime Loop V1 runs both when enabled.
-  - Dry-run (`--dry-run`): watcher_runs may increase if the watcher emits an event, but ingest/panel/promotion counters should not move because execution short-circuits before side effects.
+  - Dry-run (`--dry-run`): runtime-loop still emits `watcher.run` and increments `watcher_runs`, but ingest/panel/promotion counters should not move because execution short-circuits before side effects.
   - Real run: watcher_runs increases; ingest plane counts increase when changed notes are ingested; panel_runs increases when policy allows panels to run; `promote.intent.created` increases when mapped promotion actions fire.
+- `watcher.run` payload: `{changed, ingest_attempted, ingested, panel_candidates, panel_runs, panel_promotions, panel_skipped_policy, panel_skipped_limit, errors, dry_run, limit_exceeded, snapshot_path, vault_root}` plus envelope (`event_id`, `trace_id`, `timestamp`, `version`, `source.component=watcher`, `source.trigger=runtime_loop|vault_watcher_run`, `source.sot=v5.4`). The CLI fails fast if `INDEX_OUTBOX_PATH`/`--outbox-path` is empty or points to a directory.
 - **Common interpretations**:
   - Counters increase but the note is unchanged: an intent was emitted (e.g., `promote.intent.created`), but a consumer (Promotion Agent/worker) must run to mutate files.
   - `changed > 0` but `panel_runs = 0`: panel auto-run policy blocked execution or the run was `--dry-run` / max-notes guard triggered.
@@ -74,6 +75,4 @@ Example (QA response):
 ## PII considerations
 See `docs/PRIVACY.md` for masking guidance. Rule of thumb: never log raw user text in `extra`; only record aggregate stats (word counts, segment counts, etc.).
 <!-- SECTION:OBS:END -->
-
-
 
