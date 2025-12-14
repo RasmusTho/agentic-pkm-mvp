@@ -148,7 +148,7 @@ def handle_note_update(
     annotated_markdown = _annotate_action_ids(new_markdown or "")
     old_state = parse_panel(old_markdown or "")
     new_state = parse_panel(annotated_markdown)
-    mappings = action_mappings or {}
+    mappings = dict(action_mappings or {})
 
     store = ObjectStore()
     stored = store.get_object(note_id)
@@ -176,18 +176,70 @@ def handle_note_update(
     # Freeform commands: clear status
     instruction_lower = (new_state.instruction_text or "").lower()
     clear_status = "clear status" in instruction_lower or "clear ai status" in instruction_lower
-    if "promote this" in instruction_lower and "auto-promote" not in executed_ids:
-        executed_now.append("auto-promote")
-        receipts.append("✅ auto-executed: promote")
+
+    def _resolve_promotion_mapping() -> PanelActionMapping | None:
+        for key, mapping in mappings.items():
+            if mapping.event_type == "promote.intent.created" or mapping.event_type.startswith("review.promote"):
+                return mapping
+            if mapping.action_id and mapping.action_id == "promote.evergreen":
+                return mapping
+            if key.lower() in {"gör denna anteckning evergreen", "make this note evergreen"}:
+                return mapping
+        return None
+
+    auto_promote_id = "auto:promote.evergreen"
+    if any(phrase in instruction_lower for phrase in ("promote this", "make evergreen", "make this note evergreen")):
+        if auto_promote_id not in executed_ids:
+            mapping = _resolve_promotion_mapping()
+            if mapping is None:
+                mapping = PanelActionMapping(
+                    text="Make this note evergreen",
+                    event_type="promote.intent.created",
+                    payload_template={"maturity": "evergreen"},
+                    action_id="promote.evergreen",
+                )
+                mappings[mapping.text] = mapping
+            intents.append(
+                PanelIntent(
+                    kind="action_triggered",
+                    action_text=mapping.text or "Make this note evergreen",
+                    action_id=auto_promote_id,
+                    event_type=mapping.event_type,
+                )
+            )
+            receipts.append("✅ auto-executed: promote")
+            executed_now.append(auto_promote_id)
 
     if mappings:
         intents = enrich_panel_intents(intents, mappings)
 
     events: list[OutboxEvent] = []
+    if new_state.spans or new_state.actions or new_state.instruction_text:
+        panel_payload = {
+            "note": {"uuid": note_id},
+            "instruction": new_state.instruction_text,
+            "actions": [
+                {"id": action.action_id, "label": action.text, "checked": action.checked} for action in new_state.actions
+            ],
+        }
+        events.append(OutboxEvent(event="panel.intent.created", source="panel.agent", payload=panel_payload))
+        events.append(OutboxEvent(event="panel.intent.executed", source="panel.agent", payload=panel_payload))
     for intent in intents:
         event = panel_intent_to_event(intent, mappings, note_id=note_id, instruction_text=new_state.instruction_text)
         if event is not None:
             events.append(event)
+            if intent.kind == "action_triggered" and intent.event_type:
+                events.append(
+                    OutboxEvent(
+                        event="panel.action.triggered",
+                        source="panel.agent",
+                        payload={
+                            "note": {"uuid": note_id},
+                            "action": {"id": intent.action_id, "label": intent.action_text},
+                            "target_event": event.event,
+                        },
+                    )
+                )
 
     updated_markdown = annotated_markdown
     ids_to_remove = set(executed_now) | remove_ids

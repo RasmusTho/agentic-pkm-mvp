@@ -80,6 +80,7 @@ def vault_watcher_run(
         dry_run=dry_run,
         max_notes=max_notes,
         force=force,
+        outbox_path=outbox_path,
     )
     for msg in messages:
         click.echo(msg)
@@ -163,6 +164,10 @@ def vault_watcher_daemon(
         raise click.BadParameter("Vault root could not be resolved.")
     if not resolved.exists() or not resolved.is_dir():
         raise click.BadParameter(f"Vault root not found or not a directory: {resolved}")
+    try:
+        outbox_path = resolve_outbox_path(None)
+    except OutboxPathError as exc:
+        raise click.ClickException(str(exc))
 
     def _log(summary: dict, messages: list[str]) -> None:
         for msg in messages:
@@ -180,6 +185,7 @@ def vault_watcher_daemon(
         poll_seconds=poll_seconds,
         cooldown_seconds=cooldown_seconds,
         on_tick=_log,
+        outbox_path=outbox_path,
     )
 
 

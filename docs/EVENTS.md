@@ -63,6 +63,7 @@ All emitters must populate the envelope; schema is contract-tested under `tests/
 - Payload: `{note, panel_id, action:{id,label,checked}, reason, mapping?}`.
 - `intent_source`: `panel.note` for all panel-derived events (including downstream `promote.intent.created`).
 - Receipts: runtime writes a receipt into the in-note AI status callout for each handled action (✅ success, ⚠️ failure, ⏳ pending), keeping the last 20; receipts are user-visible, not separate events.
+- Parsing tolerance: panels accept heading-based (`## AI-instruktion / ## AI-åtgärder`) or label-based (`Instruction:` / `Actions:`) sections; checkboxes are parsed even without an explicit actions heading; freeform high-confidence commands (e.g., “promote this”) emit `panel.action.triggered` + `promote.intent.created` with a stable id (`auto:promote.evergreen`) for idempotence.
 
 ### Runtime Loop Event Chain Contract
 - First run: watcher tick emits `watcher.run` with payload fields populated; panels that are allowed to run emit `panel.intent.created` → `panel.intent.executed`; mapped promotion actions emit exactly one `promote.intent.created` each; promotion consumer emits `promote.done` (or `promote.error` with a reason) per intent.

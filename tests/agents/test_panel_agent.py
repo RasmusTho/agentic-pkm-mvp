@@ -1,6 +1,7 @@
 import textwrap
 
 from app.agents.panel.agent import PanelAgentResult, handle_note_update
+from app.agents.panel.parser import parse_panel
 from app.settings.panel_actions import PanelActionMapping
 
 
@@ -36,7 +37,9 @@ def test_panel_agent_removes_completed_action_and_logs():
     assert "- [ ] Arkivera den här anteckningen" in result.updated_markdown
     assert "> [!info]- AI status" in result.updated_markdown
     assert "- ✅ Gör denna anteckning evergreen" in result.updated_markdown
-    assert result.events == []
+    event_names = [ev.event for ev in result.events]
+    assert "panel.intent.created" in event_names
+    assert "panel.intent.executed" in event_names
 
 
 def test_panel_agent_instruction_updates_passthrough_markdown():
@@ -58,7 +61,9 @@ def test_panel_agent_instruction_updates_passthrough_markdown():
     assert [intent.kind for intent in result.intents] == ["instruction_updated"]
     assert result.intents[0].instruction_text == "Nya instruktionen"
     assert result.updated_markdown.strip() == new_markdown.strip()
-    assert result.events == []
+    event_names = [ev.event for ev in result.events]
+    assert "panel.intent.created" in event_names
+    assert "panel.intent.executed" in event_names
 
 
 def test_panel_agent_emits_events_for_mapped_actions():
@@ -88,8 +93,27 @@ def test_panel_agent_emits_events_for_mapped_actions():
 
     result = handle_note_update("note-3", old_markdown, new_markdown, action_mappings=mappings)
 
-    assert len(result.events) == 1
-    event = result.events[0]
-    assert event.event_type == "review.promote.evergreen"
-    assert event.payload["note_id"] == "note-3"
-    assert event.payload["action_text"] == "Gör denna anteckning evergreen"
+    event_names = {ev.event for ev in result.events}
+    assert "review.promote.evergreen" in event_names
+    assert "panel.intent.created" in event_names
+    assert "panel.intent.executed" in event_names
+    promote_events = [ev for ev in result.events if ev.event == "review.promote.evergreen"]
+    assert promote_events
+    assert promote_events[0].payload["note_id"] == "note-3"
+    assert promote_events[0].payload["action_text"] == "Gör denna anteckning evergreen"
+
+
+def test_panel_parser_accepts_label_sections_and_checkbox_fallback():
+    markdown = textwrap.dedent(
+        """
+        %% AI:Start %%
+        Instruction: Please do the thing
+        - [x] Make this note evergreen
+        %% AI:End %%
+        """
+    )
+
+    state = parse_panel(markdown)
+    assert state.instruction_text.startswith("Please do the thing")
+    assert state.actions
+    assert state.actions[0].text == "Make this note evergreen"

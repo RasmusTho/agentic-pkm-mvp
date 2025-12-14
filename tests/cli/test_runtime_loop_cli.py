@@ -121,3 +121,64 @@ def test_runtime_loop_requires_outbox_path(monkeypatch: pytest.MonkeyPatch, tmp_
 
     assert result.exit_code != 0
     assert "Outbox path is required" in result.output
+
+
+def test_runtime_loop_processes_label_style_panel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    outbox = tmp_path / "outbox.jsonl"
+    snapshot = tmp_path / "snapshot.json"
+    actions_path = tmp_path / "panel-actions.yaml"
+    actions_path.write_text(
+        """---
+mappings:
+  - id: promote.evergreen
+    label: "Make this note evergreen"
+    intent_type: promotion
+    params:
+      maturity: evergreen
+""",
+        encoding="utf-8",
+    )
+    note_body = """---
+uuid: 12345678-1234-1234-1234-123456789abc
+ai_panel_auto_run: watcher
+---
+
+%% AI:Start %%
+Instruction: promote this
+Actions:
+- [x] Make this note evergreen
+%% AI:End %%
+"""
+    _write_note(vault, "Notes/A.md", note_body)
+
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "runtime-loop",
+            "--vault-root",
+            str(vault),
+            "--snapshot-path",
+            str(snapshot),
+            "--interval",
+            "0",
+            "--max-notes",
+            "10",
+            "--outbox-path",
+            str(outbox),
+            "--no-consume-promotions",
+        ],
+        env={
+            "STORE_BACKEND": "memory",
+            "PANEL_ACTIONS_PATH": str(actions_path),
+            "INDEX_OUTBOX_PATH": str(outbox),
+        },
+    )
+
+    assert result.exit_code == 0, result.output
+    records = [json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines() if line.strip()]
+    events = {rec.get("event") for rec in records}
+    assert "panel.action.triggered" in events
+    assert "promote.intent.created" in events
