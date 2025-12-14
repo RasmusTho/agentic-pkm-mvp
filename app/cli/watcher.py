@@ -4,6 +4,8 @@ import click
 from pathlib import Path
 
 from app.watcher.vault_watcher import run_watcher_daemon, run_watcher_tick
+from app.runtime.runtime_loop import OutboxPathError, resolve_outbox_path
+from app.watcher.events import emit_watcher_run_event
 
 
 def _echo_summary(summary: dict) -> None:
@@ -65,6 +67,10 @@ def vault_watcher_run(
         raise click.BadParameter("Vault root could not be resolved.")
     if not resolved.exists() or not resolved.is_dir():
         raise click.BadParameter(f"Vault root not found or not a directory: {resolved}")
+    try:
+        outbox_path = resolve_outbox_path(None)
+    except OutboxPathError as exc:
+        raise click.ClickException(str(exc))
 
     summary, messages = run_watcher_tick(
         vault_root=resolved,
@@ -77,6 +83,15 @@ def vault_watcher_run(
     )
     for msg in messages:
         click.echo(msg)
+
+    if not summary.get("limit_exceeded") and not dry_run:
+        emit_watcher_run_event(
+            summary,
+            vault_root=resolved,
+            snapshot_path=summary.get("snapshot_path") or snapshot_path,
+            outbox_path=outbox_path,
+            trigger="vault_watcher_run",
+        )
 
     if summary.get("limit_exceeded"):
         _echo_summary(summary)

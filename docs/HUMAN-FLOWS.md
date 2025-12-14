@@ -90,6 +90,7 @@ State: SoT v4.10 (Reality-MVP) and v5.0 (PanelAgent Runtime V1) are locked basel
 - Command (once): `python -m app.cli runtime-loop --vault-root "<vault>" --once` (use `--interval N` to loop).
 - Recommended with the UAT seed pack (Test/AgenticPKM-UAT): set `INDEX_OUTBOX_PATH` and `STORE_BACKEND=memory` for dry rehearsals.
 - Expected: changed notes ingested, panel runs for policy-allowed notes, `promote.intent.created` emitted, promotion consumer applies state (`promote.done`).
+- UAT check: after a runtime-loop tick, run `python -m app.cli status` and confirm `watcher_runs` increased (fed by the emitted `watcher.run` event), alongside panel/promotion counters.
 - Observe via `python -m app.cli status` (counters for watcher_runs, panel_runs, promote.intent.created, promotion_executed) and the runtime-loop summary output.
 ### UAT: Watcher + Panel + Promotion on vault/Test
 - Seed curated notes into your vault Test folder:
@@ -100,4 +101,3 @@ State: SoT v4.10 (Reality-MVP) and v5.0 (PanelAgent Runtime V1) are locked basel
 - Verify status: `python -m app.cli status` and confirm counters increased: watcher_runs, ingest_attempted/ingested, panel_runs (`panel.intent.executed`), promote.intent.created, promote.done.
 - Policy gating: only notes with `ai_panel_auto_run: watcher` (or `ai_panel: { auto_run: watcher }`) are auto-run by watcher; manual/never notes are skipped and reported in the summary.
 - Intent vs mutation: panel runtime emits intents (`promote.intent.created`), while `promote.done` comes from the promotion consumer; note mutation requires the consumer to run (included by default in the UAT runner).
-

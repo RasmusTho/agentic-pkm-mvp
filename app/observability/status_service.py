@@ -22,6 +22,7 @@ _ACTIVE_FEATURES = [
     "Watcher snapshot/policy track (v5.1–v5.4)",
     "Config-driven panel action wiring",
 ]
+_WATCHER_EVENT_NAMES = {"watcher.run", "watcher.run.completed"}
 
 
 def record_ask_query(latency_ms: float) -> None:
@@ -181,7 +182,7 @@ def _count_events(outbox_path: Path) -> EventCounters:
                     promotion_done_total += 1
                     if is_recent:
                         promotion_done_recent += 1
-                if event in {"watcher.run.completed", "watcher.run"}:
+                if event in _WATCHER_EVENT_NAMES:
                     watcher_total += 1
                     if is_recent:
                         watcher_recent += 1
