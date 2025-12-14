@@ -125,6 +125,34 @@ def test_runtime_loop_defaults_outbox_path(monkeypatch: pytest.MonkeyPatch, tmp_
     assert any(rec.get("event") == "watcher.run" for rec in payloads)
 
 
+def test_runtime_loop_requires_outbox_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    _write_note(vault, "Notes/A.md")
+
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.delenv("INDEX_OUTBOX_PATH", raising=False)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "runtime-loop",
+            "--vault-root",
+            str(vault),
+            "--snapshot-path",
+            str(tmp_path / "snapshot.json"),
+            "--interval",
+            "0",
+            "--dry-run",
+            "--no-run-panels",
+            "--no-consume-promotions",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Outbox path is required" in result.output
+
+
 def test_runtime_loop_processes_label_style_panel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     outbox = tmp_path / "outbox.jsonl"

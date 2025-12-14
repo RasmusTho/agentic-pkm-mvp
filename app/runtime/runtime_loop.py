@@ -59,6 +59,26 @@ def _emit_runtime_heartbeat(summary: Summary) -> None:
     )
 
 
+class OutboxPathError(ValueError):
+    """Raised when the outbox path cannot be resolved."""
+
+
+def resolve_outbox_path(path: Path | str | None) -> Path:
+    candidate = path
+    if candidate is None:
+        env_value = os.environ.get("INDEX_OUTBOX_PATH", "").strip()
+        if not env_value:
+            raise OutboxPathError("Outbox path is required; set INDEX_OUTBOX_PATH or pass --outbox-path.")
+        candidate = env_value
+
+    resolved = Path(candidate).expanduser()
+    if str(resolved).strip() == "":
+        raise OutboxPathError("Outbox path is required and cannot be empty.")
+    if resolved.exists() and resolved.is_dir():
+        raise OutboxPathError(f"Outbox path points to a directory: {resolved}")
+    return resolved
+
+
 @dataclass
 class RuntimeLoopConfig:
     snapshot_path: Path | None = None
