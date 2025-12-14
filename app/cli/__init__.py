@@ -1207,7 +1207,6 @@ def runtime_loop(
         run_panels=run_panels,
         run_promotion_consumer=consume_promotions,
         outbox_path=resolved_outbox,
-        outbox_path=resolved_outbox,
     )
 
     if interval and interval > 0:
