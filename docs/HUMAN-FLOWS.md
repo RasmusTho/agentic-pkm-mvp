@@ -30,6 +30,10 @@ State: SoT v4.10 Reality-MVP (baseline locked) with v5.x forward line extending 
 - Panels are a conversation space for suggestions/instructions, not part of the knowledge base.
 - Metadata and logging remain inspectable (e.g., in `System/Metadata/...`) but unobtrusive in the writing surface.
 - Stability first: idempotent operations and predictable frontmatter/move policies keep trust high.
+- Panel semantics:
+  - Freeform commands in the panel may execute when confidently mapped to a canonical action; the runtime still writes a receipt so the human sees what happened.
+  - When the agent is uncertain, it should propose explicit checkboxes (human confirmation) rather than guessing; checkboxes are treated as explicit consent.
+  - AI status receipts stay outside the panel to keep the panel a small working set; receipts acknowledge success/failure without adding history inside the panel.
 
 ## 6. Guardrails Against Regressions
 - Human classification changes (type/category/facets) must never be overwritten by AI without explicit reclassification intent.

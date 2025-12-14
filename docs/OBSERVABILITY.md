@@ -28,6 +28,11 @@ Logs are the primary tracing surface; no external APM is required for the curren
   - `ingest_attempted > 0` but `ingested = 0`: ingest errors occurred; check status errors and watcher summary.
   - Watcher runs remain 0: verify `INDEX_OUTBOX_PATH`, vault paths, and snapshot path are writable.
 
+## Observability-as-tests
+- Gates: `watcher_runs`, `panel_runs`, `promote.intent.created`, `promotion_executed`, and status error counts double as fitness gates in CI/UAT; runs fail if expected counters do not move or if re-runs create duplicate intents.
+- Event chain: each runtime-loop tick must emit `watcher.run` with payload fields above; panel runs must emit `panel.intent.executed`; promotion consumer must emit `promote.done` (or `promote.error` with reason) when intents exist.
+- Latency budget: runtime-loop tick (watcher→ingest→panel→promotion) should keep p95 end-to-end latency within a few seconds on the memory backend; outliers must be investigated and recorded in spans.
+
 <!-- SECTION:OBS:BEGIN -->
 ## JSON log and span schema
 `app/obs/log.py:11-58` emits one line per span with:
@@ -75,4 +80,3 @@ Example (QA response):
 ## PII considerations
 See `docs/PRIVACY.md` for masking guidance. Rule of thumb: never log raw user text in `extra`; only record aggregate stats (word counts, segment counts, etc.).
 <!-- SECTION:OBS:END -->
-

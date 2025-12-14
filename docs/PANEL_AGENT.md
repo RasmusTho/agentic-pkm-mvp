@@ -11,6 +11,12 @@ Purpose: translate human-driven AI panels in vault notes into structured intents
 - Planner pipeline (opt-in, `PANEL_AGENT_PIPELINE=planner`): PanelAgent builds a `PanelActionIntent` and asks the Planner to create a plan for the selected actions. Plans can now be executed via the Orchestrator using the CLI (`python -m app.cli panel-orchestrate-plan --plan-id <plan_id>`), while the default direct path remains unchanged.
 - Action catalog (`docs/settings/panel-actions.md`) is the canonical list of actions (id, kind, labels/synonyms, description/llm_hint, downstream event, params). Rule-mode matches checkbox labels deterministically; LLM-mode is opt-in and uses the catalog + panel/note context with checkboxes as hints.
 
+## Human-first semantics
+- Freeform commands may auto-execute when confidently mapped to a canonical action, but the runtime still leaves an explicit receipt in the AI status callout so the human sees what ran.
+- Uncertainty should surface as suggested checkboxes (explicit confirmation) rather than silent execution.
+- Checkboxes are treated as explicit consent; executed items remove their checkbox from the panel working set.
+- Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
+
 ## PanelAgent 2.0 (planned v5.5)
 - Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `graph.py`).
 - LLM-based reasoning decides which panel actions to execute (and in what order) rather than relying on fixed mappings.
