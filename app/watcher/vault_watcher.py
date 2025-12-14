@@ -269,6 +269,7 @@ def run_watcher_tick(
                 old_markdown,
                 current_markdown,
                 action_mappings=action_mappings,
+                note_path=str(note_path),
             )
 
             if panel_result.state.actions or panel_result.intents or panel_result.events:

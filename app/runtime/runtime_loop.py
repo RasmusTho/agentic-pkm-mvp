@@ -67,8 +67,13 @@ def run_once(vault_root: Path, cfg: RuntimeLoopConfig) -> RuntimeRunSummary:
         print(msg)
 
     promotion_summary: Dict[str, object] = {"intents_seen": 0, "applied": 0, "errors": 0, "emitted": 0}
+    cursor_path = None
+    if cfg.snapshot_path is not None:
+        cursor_path = Path(str(cfg.snapshot_path) + ".outbox_cursor.json")
     if cfg.run_promotion_consumer and not cfg.dry_run:
-        promotion_summary = consume_promotion_intents(outbox_path=outbox_path)
+        promotion_summary = consume_promotion_intents(
+            outbox_path=outbox_path, cursor_path=cursor_path, snapshot_path=cfg.snapshot_path
+        )
 
     emit_watcher_run_event(
         watcher_summary,

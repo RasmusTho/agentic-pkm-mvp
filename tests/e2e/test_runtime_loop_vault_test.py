@@ -1,14 +1,17 @@
 import importlib
+import json
 from pathlib import Path
 
 import pytest
 
 from app.cli.uat import DEFAULT_TARGET_SUBDIR, seed_vault_test_notes
 import app.observability.status_service as status_service
+from app.promotion.consumer import consume_promotion_intents
 from app.runtime.runtime_loop import RuntimeLoopConfig, run_once
 from app.store import object_store as object_store_module
 from app.store.object_store import ObjectStore
 import app.outbox.events as outbox_events
+from scripts.yaml_roundtrip import load_frontmatter
 
 PROMOTE_UUID = "11111111-1111-4111-8111-111111111111"
 
@@ -49,6 +52,22 @@ def test_runtime_loop_run_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert summary.watcher.get("panel_promotions", 0) >= 1
     assert summary.watcher.get("panel_skipped_policy", 0) >= 1
     assert summary.promotion.get("applied", 0) >= 1
+
+    note_path = vault_root / DEFAULT_TARGET_SUBDIR / "AgenticPKM-UAT" / "evergreen-strategy.md"
+    frontmatter, _ = load_frontmatter(note_path.read_text(encoding="utf-8"))
+    assert frontmatter.get("review_state") == "evergreen"
+
+    records = [json.loads(line) for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    promote_events = [rec for rec in records if rec.get("event") == "promote.intent.created"]
+    assert promote_events, "expected promote.intent.created in outbox"
+    assert promote_events[0].get("payload", {}).get("note", {}).get("path") == str(note_path)
+
+    cursor_path = Path(str(snapshot_path) + ".outbox_cursor.json")
+    second_summary = consume_promotion_intents(
+        outbox_path=outbox_path, cursor_path=cursor_path, snapshot_path=snapshot_path
+    )
+    assert second_summary["applied"] == 0
+    assert second_summary["errors"] == 0
 
     store = ObjectStore()
     promoted = store.get_object(PROMOTE_UUID)

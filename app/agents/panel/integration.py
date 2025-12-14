@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Dict, Mapping, MutableMapping
 
 from pydantic import BaseModel, Field
@@ -63,10 +64,18 @@ def handle_panel_update(
     new_markdown: str,
     ctx: OrchestratorContext | Mapping[str, Any] | None = None,
     action_mappings: Dict[str, PanelActionMapping] | None = None,
+    note_path: Path | str | None = None,
 ) -> PanelPipelineResult:
     context = _ensure_context(ctx)
     mappings = action_mappings or load_panel_action_mappings()
-    panel_result = handle_note_update(note_id, old_markdown, new_markdown, action_mappings=mappings)
+    resolved_note_path = str(note_path) if note_path is not None else None
+    panel_result = handle_note_update(
+        note_id,
+        old_markdown,
+        new_markdown,
+        action_mappings=mappings,
+        note_path=resolved_note_path,
+    )
     events = list(panel_result.events)
     plans: list[Plan] = []
     if events and panel_events_enabled(context):
