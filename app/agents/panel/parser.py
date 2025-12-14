@@ -11,7 +11,7 @@ _PANEL_SECTION = {
     "logs": "ai-logg",
 }
 
-_ACTION_PATTERN = re.compile(r"^- \[( |x|X)\]\s*(.*)$")
+_ACTION_PATTERN = re.compile(r"^- \[( |x|X)\]\s*(.*?)(?:\s*<!--\s*ai:id=([A-Za-z0-9_-]+)\s*-->)?\s*$")
 
 
 def parse_panel(markdown: str) -> PanelState:
@@ -129,9 +129,10 @@ def _line_to_action(line: str) -> PanelAction | None:
         return None
     checked = match.group(1).lower() == "x"
     text = match.group(2).strip()
+    action_id = match.group(3) or None
     if not text:
         return None
-    return PanelAction(checked=checked, text=text)
+    return PanelAction(checked=checked, text=text, action_id=action_id)
 
 
 def is_ai_fence(line: str) -> bool:

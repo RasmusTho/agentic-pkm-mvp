@@ -8,6 +8,14 @@ State: SoT v4.10 Reality-MVP (current core).
 - LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`)
 - Property-based ingest invariants: `tests/ingest/test_normalize_properties.py` ensures normalize outputs Core-6 fields robustly.
 
+## Evaluation Stack (Runtime Loop / Panel / Promotion)
+- **A. Contract tests** — assert watcher→panel→promotion event envelopes and payload invariants; run via `pytest -q tests/e2e/test_runtime_loop_vault_test.py -m "not pg"` (exact command may move to `tests/fitness`).
+- **B. Golden vault** — seeded vault + snapshots under `docs/examples/vault_test_seed/`; deterministic diff harness to prove no unintended note mutations.
+- **C. Metamorphic runs** — vary `--interval`, `--dry-run`, `--max-notes`, and wiring/policy flags; expect identical receipts/intents where applicable.
+- **D. Cold rebuild** — start from empty Store + existing mirrors/snapshots; prove ingest + panel/promotion chain reconstructs counters/events without dupes.
+- **E. Fitness gates** — status/outbox counters checked post-run (watcher_runs, panel_runs, promote.intent.created/done) with idempotence (no duplicate intents on rerun) enforced in CI (`app/fitness/*`, `ops/quality/baselines.yaml`).
+- **F. Scripted UAT** — CLI harness for runtime-loop + promotion consumer + status assertions; runs on memory backend and real vaults with the golden seed pack.
+
 ## Commands
 - Single test
   - pytest -q tests/agents/test_normalizer.py
@@ -78,5 +86,4 @@ State: SoT v4.10 Reality-MVP (current core).
   - optional vault override: set VAULT_ROOT to a temp vault containing System/Config/panel-action-wiring.yaml
   - env override: PANEL_ACTION_WIRING_PATH points to a temp wiring file
   - run: pytest -q tests/agents/panel_agent/test_panel_wiring.py -m "not pg"
-
 

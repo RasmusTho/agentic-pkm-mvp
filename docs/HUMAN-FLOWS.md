@@ -30,6 +30,10 @@ State: SoT v4.10 Reality-MVP (baseline locked) with v5.x forward line extending 
 - Panels are a conversation space for suggestions/instructions, not part of the knowledge base.
 - Metadata and logging remain inspectable (e.g., in `System/Metadata/...`) but unobtrusive in the writing surface.
 - Stability first: idempotent operations and predictable frontmatter/move policies keep trust high.
+- Panel semantics:
+  - Freeform commands in the panel may execute when confidently mapped to a canonical action; the runtime still writes a receipt so the human sees what happened.
+  - When the agent is uncertain, it should propose explicit checkboxes (human confirmation) rather than guessing; checkboxes are treated as explicit consent.
+  - AI status receipts stay outside the panel to keep the panel a small working set; receipts acknowledge success/failure without adding history inside the panel.
 
 ## 6. Guardrails Against Regressions
 - Human classification changes (type/category/facets) must never be overwritten by AI without explicit reclassification intent.
@@ -77,7 +81,7 @@ State: SoT v4.10 (Reality-MVP) and v5.0 (PanelAgent Runtime V1) are locked basel
 - Forward-looking (v5.5+): PanelAgent 2.0 will use LLM-based reasoning inside a LangGraph graph to decide which actions to trigger, making watcher-driven panels more adaptive without changing current behaviour until proven.
 - PanelAgent now consults a catalog of canonical actions (`docs/settings/panel-actions.md`) and can run in either rule-mode (default, deterministic label→action mapping) or optional LLM-mode, which uses the catalog plus panel/note context; checkbox states are treated as hints rather than hard gates in LLM-mode.
 - Panel action wiring can be overridden per vault via `System/Config/panel-action-wiring.yaml`; resolution order: `PANEL_ACTION_WIRING_PATH` env > vault System/Config > repo default (`docs/settings/panel-action-wiring.yaml`). Invalid configs emit a warning and fall back to the default wiring without changing behaviour.
-- PanelAgent Runtime V1 (SoT v5.0) interprets AI panels, emits `panel.intent.created`, `panel.intent.executed`, `panel.action.*`, emits `promote.intent.created` for mapped promotion actions, and writes AI logs (`panel_logs`) into note payloads.
+- PanelAgent Runtime V1 (SoT v5.0) interprets AI panels, emits `panel.intent.created`, `panel.intent.executed`, `panel.action.*`, emits `promote.intent.created` for mapped promotion actions, and writes receipts into the in-note AI status callout (panel stays as the working set; receipts live outside the panel).
 - Watcher track (v5.1–v5.3) adds automation that calls the same panel pipeline via note-update/PanelAgent runtime based on explicit policy (e.g., a flag on the note/panel). Manual CLI (`panel run` / `panel run-many`) and watcher-triggered runs share the same pipeline; watchers simply automate when to call it.
 - A multi-note CLI (`panel run-many`) runs the same PanelAgent parse/runtime for multiple notes in one invocation (emit-only supported); it is the watcher-ready entrypoint when a batch of notes changed.
 - Vault Watcher MVP (v5.2) ships as a polling CLI (`vault-watcher-run`) that diffs the vault against a snapshot, ingests changed notes via `ingest-vault-paths`, optionally runs `panel run-many` on those notes, prints a summary, refreshes the snapshot, and exits. A long-running wrapper (`vault-watcher-daemon`) reuses the same tick logic with `--poll-seconds`/`--cooldown-seconds` to support Docker/host services.
@@ -89,7 +93,7 @@ State: SoT v4.10 (Reality-MVP) and v5.0 (PanelAgent Runtime V1) are locked basel
 - Purpose: run the watcher → ingest → panel (policy-gated) → promotion consumer sequence once or on an interval for operator rehearsals.
 - Command (once): `python -m app.cli runtime-loop --vault-root "<vault>" --once` (use `--interval N` to loop).
 - Recommended with the UAT seed pack (Test/AgenticPKM-UAT): set `INDEX_OUTBOX_PATH` and `STORE_BACKEND=memory` for dry rehearsals.
-- Expected: changed notes ingested, panel runs for policy-allowed notes, `promote.intent.created` emitted, promotion consumer applies state (`promote.done`).
+- Expected: changed notes ingested, panel runs for policy-allowed notes, `promote.intent.created` emitted, promotion consumer applies state (`promote.done`), and the AI status callout shows receipts for executed panel actions (panel section stays clean).
 - UAT check: after a runtime-loop tick, run `python -m app.cli status` and confirm `watcher_runs` increased (fed by the emitted `watcher.run` event), alongside panel/promotion counters.
 - Observe via `python -m app.cli status` (counters for watcher_runs, panel_runs, promote.intent.created, promotion_executed) and the runtime-loop summary output.
 ### UAT: Watcher + Panel + Promotion on vault/Test

@@ -96,5 +96,5 @@ def test_note_update_cli_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert result.exit_code == 0
     assert "a.md" in result.output
     assert "b.md" in result.output
-    assert "changed: 1" in result.output
+    assert "changed: 2" in result.output
     assert "Processed 2 notes" in result.output

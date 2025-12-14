@@ -1,15 +1,21 @@
-State: v5.0 – PanelAgent runtime V1 (promotion fan-out + AI-log on Reality-MVP base).
+State: v5.0 – PanelAgent runtime V1 (promotion fan-out + in-note receipts on Reality-MVP base).
 # PanelAgent / NoteInteractionAgent (Runtime v5.0)
 
 Purpose: translate human-driven AI panels in vault notes into structured intents/events while keeping the panel simple, optional, and human-first.
 
 ## PanelAgent Runtime V1 (current baseline)
 - SoT v5.0 baseline built on top of the locked v4.10 Reality-MVP.
-- Runtime V1 uses a fixed mapping from panel actions to follow-up events (e.g., promotion intents) and mirrors them into `panel_logs` for traceability.
+- Runtime V1 uses a fixed mapping from panel actions to follow-up events (e.g., promotion intents) and writes receipts into an in-note AI status callout; the panel stays a small working set with no history.
 - This is a simplified bridge/runtime loop, not the final agentic design; it keeps watcher and manual panel flows working while the agent migrates to LangGraph.
 - Internal implementation now runs through a LangGraph-based control flow (`PanelAgentState`), but external behaviour and emitted events remain identical.
 - Planner pipeline (opt-in, `PANEL_AGENT_PIPELINE=planner`): PanelAgent builds a `PanelActionIntent` and asks the Planner to create a plan for the selected actions. Plans can now be executed via the Orchestrator using the CLI (`python -m app.cli panel-orchestrate-plan --plan-id <plan_id>`), while the default direct path remains unchanged.
 - Action catalog (`docs/settings/panel-actions.md`) is the canonical list of actions (id, kind, labels/synonyms, description/llm_hint, downstream event, params). Rule-mode matches checkbox labels deterministically; LLM-mode is opt-in and uses the catalog + panel/note context with checkboxes as hints.
+
+## Human-first semantics
+- Freeform commands may auto-execute when confidently mapped to a canonical action, but the runtime still leaves an explicit receipt in the AI status callout so the human sees what ran.
+- Uncertainty should surface as suggested checkboxes (explicit confirmation) rather than silent execution.
+- Checkboxes are treated as explicit consent; executed items remove their checkbox from the panel working set.
+- Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
 
 ## PanelAgent 2.0 (planned v5.5)
 - Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `graph.py`).
@@ -23,8 +29,8 @@ Purpose: translate human-driven AI panels in vault notes into structured intents
 - Panels are delimited by tolerant AI fences: any `%% ...ai... %%` (case-insensitive) line opens/closes a panel. First fence opens, second closes, third opens the next, etc.
 - Inside a panel:
   - `## AI-instruktion` — free-text instruction from the human.
-  - `## AI-åtgärder` — markdown checkboxes (`- [ ] ...` / `- [x] ...`) for discrete actions.
-  - `## AI-logg` — append-only bullet log of prior system actions.
+  - `## AI-åtgärder` — markdown checkboxes (`- [ ] ...` / `- [x] ...`) for discrete actions; each line carries a hidden `<!--ai:id=...-->` so the runtime can execute deltas idempotently.
+- AI status callout (foldable, outside the panel): `> [!info]- AI status` with receipt lines (`- ✅ ...`, `- ⚠️ ...`, `- ⏳ ...`). The runtime appends receipts for executed/failed actions and trims to the last 20; already-executed IDs remove their checkbox from the panel on re-run.
 - Legacy notes that only use the headings without fences are still parsed; new panels should use fences.
 - Panel content is not indexed or used as knowledge.
 
@@ -36,12 +42,13 @@ Please promote this note after verifying the summary.
 ## AI-åtgärder
 - [ ] Promote this note
 - [x] Re-classify as Concept
-## AI-logg
-- Action: "Re-classify as Concept" (2025-03-01 10:00)
 %% AI:End %%
+
+> [!info]- AI status
+> - ✅ Re-classify as Concept (2025-03-01 10:00)
 ```
 
-## Runtime V1 (fan-out, promotion intent, AI-log)
+## Runtime V1 (fan-out, promotion intent, receipts)
 - Invocation: `python -m app.cli panel run --uuid <note_uuid>` (default runs the runtime loop). Use `--emit-only` to keep legacy “emit-only” behaviour without executing runtime actions.
 - Multi-note invocation: `python -m app.cli panel run-many <uuid> [<uuid> ...]` (default runs runtime; `--emit-only` supported). Used by watcher flows; auto-run policy gates watcher-driven calls.
 - Reads the note from ObjectStore (vault mirror), not directly from the filesystem.
@@ -51,7 +58,7 @@ Please promote this note after verifying the summary.
   - emits `panel.action.triggered` for handled actions,
   - emits `panel.action.logged` for unmapped/unhandled actions (v5.x placeholders),
   - emits `promote.intent.created` when an action has `intent_type: promotion` (e.g. `promote.evergreen` mapping) so Promotion Agent flows can react,
-  - emits `panel.log.created` and mirrors the same human-readable entry into the note’s `panel_logs` payload (AI-log/traceability).
+  - removes executed checkboxes from the panel working set, writes a receipt into the AI status callout, and records the hidden `ai:id` in `executed_action_ids` on the note payload to prevent re-execution.
 - No LangGraph/planner/tool calls; this remains a lightweight runtime loop on top of Reality-MVP.
 - Auto-run policy (SoT v5.3, watcher-facing): watchers only auto-run panels when the note explicitly allows it via frontmatter, e.g.:
   - `ai_panel_auto_run: watcher` (watcher may auto-run panel runtime)
@@ -100,8 +107,7 @@ Please promote this note after verifying the summary.
 - `panel.intent.executed` — payload `{note, panel, actions:[{id,label,checked,status,emitted_events}]}` (source `panel_agent` / trigger `runtime`).
 - `panel.action.triggered` — payload `{note, panel_id, action:{id,label}, target_event}` for handled actions.
 - `panel.action.logged` — payload `{note, panel_id, action:{id,label,checked}, reason, mapping?}` for unmapped/unimplemented actions.
-- `promote.intent.created` — payload includes `{note, panel, action, instruction, maturity}`; emitted when a checked action has `intent_type: promotion`.
-- `panel.log.created` — payload is a human-readable log entry (`summary`, `note`, `panel_id`, `actions`) also mirrored into `panel_logs` on the note object.
+- `promote.intent.created` — payload includes `{note, panel, action, instruction, maturity}` plus `{action_id, intent_source="panel.note"}`; emitted when a checked action has `intent_type: promotion`.
 
 ## Wiring configuration
 - Default wiring: `docs/settings/panel-action-wiring.yaml` (maps canonical action ids to target events).

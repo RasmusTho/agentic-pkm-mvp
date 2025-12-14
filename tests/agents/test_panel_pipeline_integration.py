@@ -49,7 +49,8 @@ def test_handle_panel_update_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.dispatch_count == 0
     assert result.plans == []
     assert "- [x] Gör denna anteckning evergreen" not in result.panel.updated_markdown
-    assert '- Action: "Gör denna anteckning evergreen"' in result.panel.updated_markdown
+    assert "> [!info]- AI status" in result.panel.updated_markdown
+    assert "- ✅ Gör denna anteckning evergreen" in result.panel.updated_markdown
 
 
 def test_handle_panel_update_dispatches_events(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -61,6 +61,19 @@ All emitters must populate the envelope; schema is contract-tested under `tests/
 - Emitter: PanelAgent runtime.
 - When: a checked action is valid but has no runtime handler yet (v5.x placeholder) or is unmapped.
 - Payload: `{note, panel_id, action:{id,label,checked}, reason, mapping?}`.
+- `intent_source`: `panel.note` for all panel-derived events (including downstream `promote.intent.created`).
+- Receipts: runtime writes a receipt into the in-note AI status callout for each handled action (✅ success, ⚠️ failure, ⏳ pending), keeping the last 20; receipts are user-visible, not separate events.
+
+### Runtime Loop Event Chain Contract
+- First run: watcher tick emits `watcher.run` with payload fields populated; panels that are allowed to run emit `panel.intent.created` → `panel.intent.executed`; mapped promotion actions emit exactly one `promote.intent.created` each; promotion consumer emits `promote.done` (or `promote.error` with a reason) per intent.
+- Re-run on unchanged vault/snapshot: no duplicate `watcher.run` payload deltas (changed=0) and **no additional `promote.intent.created`** for already-applied actions; `panel.intent.executed` may still emit with `skipped`/no-op statuses for transparency.
+- Idempotence proof points: downstream consumers must treat `promote.intent.created` as idempotent; counters should only increment on first intent emission per action id/note; cold rebuilds (empty Store + snapshots/mirrors present) should recreate the chain without duplicating intents.
+
+### `watcher.run`
+- Emitters: Runtime Loop CLI (`python -m app.cli runtime-loop`, every tick) and `vault-watcher-run` when the run executes (non-dry-run, not blocked by the max-notes guard).
+- Envelope: `version="1.0"`, `timestamp`, `trace_id`, `event_id`, `source={component:"watcher", trigger:"runtime_loop"| "vault_watcher_run", sot:"v5.4"}`.
+- Payload: `{changed, ingest_attempted, ingested, panel_candidates, panel_runs, panel_promotions, panel_skipped_policy, panel_skipped_limit, errors, dry_run, limit_exceeded, snapshot_path, vault_root}`.
+- Observability: increments `watcher_runs_total/24h` in status counters; payload mirrors the CLI summary for regressions.
 
 ### `watcher.run`
 - Emitters: Runtime Loop CLI (`python -m app.cli runtime-loop`, every tick) and `vault-watcher-run` when the run executes (non-dry-run, not blocked by the max-notes guard).
@@ -75,7 +88,7 @@ All emitters must populate the envelope; schema is contract-tested under `tests/
 
 ### `promote.intent.created`
 - Emitter: PanelAgent runtime (from panel actions with `intent_type: promotion`).
-- Payload: `{note, panel, action, instruction, maturity?, origin?}` with `source="panel_agent.runtime"`; consumed by promotion flows.
+- Payload: `{note, panel, action, instruction, maturity?, origin?, intent_source}` with `source="panel_agent.runtime"`; consumed by promotion flows.
 
 ### `ingest.object.created`
 

@@ -14,17 +14,19 @@ class PanelIntent(BaseModel):
     action_text: str | None = None
     instruction_text: str | None = None
     event_type: str | None = None
+    action_id: str | None = None
 
 
 def diff_panel_states(old: PanelState, new: PanelState) -> list[PanelIntent]:
     intents: list[PanelIntent] = []
 
-    old_actions = {action.text: action for action in old.actions}
+    old_actions = {action.action_id or action.text: action for action in old.actions}
     for action in new.actions:
         if action.checked:
-            previous = old_actions.get(action.text)
+            key = action.action_id or action.text
+            previous = old_actions.get(key)
             if previous is None or not previous.checked:
-                intents.append(PanelIntent(kind="action_triggered", action_text=action.text))
+                intents.append(PanelIntent(kind="action_triggered", action_text=action.text, action_id=action.action_id))
 
     if (old.instruction_text or "").strip() != (new.instruction_text or "").strip():
         intents.append(PanelIntent(kind="instruction_updated", instruction_text=new.instruction_text.strip()))
