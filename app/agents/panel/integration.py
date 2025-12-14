@@ -71,6 +71,8 @@ def handle_panel_update(
     plans: list[Plan] = []
     if events and panel_events_enabled(context):
         for event in events:
+            if event.event in {"panel.intent.created", "panel.intent.executed", "panel.action.triggered"}:
+                continue
             plan = handle_event(event, context)
             plans.append(plan)
     return PanelPipelineResult(panel=panel_result, events=events, plans=plans, dispatch_count=len(plans))

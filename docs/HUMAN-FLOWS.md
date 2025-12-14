@@ -91,7 +91,7 @@ State: SoT v4.10 (Reality-MVP) and v5.0 (PanelAgent Runtime V1) are locked basel
 
 ### Runtime Loop V1 (CLI tool surface)
 - Purpose: run the watcher → ingest → panel (policy-gated) → promotion consumer sequence once or on an interval for operator rehearsals.
-- Command (once): `python -m app.cli runtime-loop --vault-root "<vault>" --once` (use `--interval N` to loop).
+ - Command (once): `python -m app.cli runtime-loop --vault-root "<vault>" --interval 0` (use `--interval N` to loop).
 - Recommended with the UAT seed pack (Test/AgenticPKM-UAT): set `INDEX_OUTBOX_PATH` and `STORE_BACKEND=memory` for dry rehearsals.
 - Expected: changed notes ingested, panel runs for policy-allowed notes, `promote.intent.created` emitted, promotion consumer applies state (`promote.done`), and the AI status callout shows receipts for executed panel actions (panel section stays clean).
 - UAT check: after a runtime-loop tick, run `python -m app.cli status` and confirm `watcher_runs` increased (fed by the emitted `watcher.run` event), alongside panel/promotion counters.

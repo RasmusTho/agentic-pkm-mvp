@@ -41,6 +41,7 @@ content
         dry_run=False,
         max_notes=10,
         force=False,
+        outbox_path=tmp_path / "outbox.jsonl",
     )
 
     assert summary["changed"] == 1
@@ -79,6 +80,7 @@ content
         cooldown_seconds=7,
         max_loops=2,
         sleep_fn=sleeps.append,
+        outbox_path=tmp_path / "outbox.jsonl",
     )
 
     assert len(summaries) == 2

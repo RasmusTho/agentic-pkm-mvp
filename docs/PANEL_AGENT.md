@@ -16,6 +16,7 @@ Purpose: translate human-driven AI panels in vault notes into structured intents
 - Uncertainty should surface as suggested checkboxes (explicit confirmation) rather than silent execution.
 - Checkboxes are treated as explicit consent; executed items remove their checkbox from the panel working set.
 - Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
+- Idempotency keys: each checkbox gets a hidden `ai:id=...`; auto-executed freeform actions use stable ids (e.g., `auto:promote.evergreen`) recorded in `executed_action_ids` to prevent re-runs across ticks.
 
 ## PanelAgent 2.0 (planned v5.5)
 - Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `graph.py`).
@@ -30,6 +31,7 @@ Purpose: translate human-driven AI panels in vault notes into structured intents
 - Inside a panel:
   - `## AI-instruktion` — free-text instruction from the human.
   - `## AI-åtgärder` — markdown checkboxes (`- [ ] ...` / `- [x] ...`) for discrete actions; each line carries a hidden `<!--ai:id=...-->` so the runtime can execute deltas idempotently.
+  - Label-based variants are tolerated: `Instruction:` / `Actions:` / `Log:` also parse, and checkboxes are still detected even without an explicit actions heading.
 - AI status callout (foldable, outside the panel): `> [!info]- AI status` with receipt lines (`- ✅ ...`, `- ⚠️ ...`, `- ⏳ ...`). The runtime appends receipts for executed/failed actions and trims to the last 20; already-executed IDs remove their checkbox from the panel on re-run.
 - Legacy notes that only use the headings without fences are still parsed; new panels should use fences.
 - Panel content is not indexed or used as knowledge.

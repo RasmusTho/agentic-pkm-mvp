@@ -111,3 +111,37 @@ def test_clear_status_removes_receipts(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "> [!info]- AI status" in cleared.updated_markdown
     assert "- ✅" not in cleared.updated_markdown
     assert "- ⚠️" not in cleared.updated_markdown
+
+
+def test_freeform_promote_executes_once_and_adds_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    mapping = {
+        "Make this note evergreen": PanelActionMapping(
+            text="Make this note evergreen",
+            event_type="promote.intent.created",
+            payload_template={"note": {"uuid": "NOTE-1"}, "maturity": "evergreen"},
+            action_id="promote.evergreen",
+        )
+    }
+    monkeypatch.setattr("app.settings.panel_actions.load_panel_action_mappings", lambda: mapping)
+    markdown = textwrap.dedent(
+        """\
+        ---
+        uuid: NOTE-1
+        title: Sample
+        ---
+
+        %% AI:Start %%
+        Instruction: promote this
+        %% AI:End %%
+        """
+    )
+
+    first = handle_note_update("NOTE-1", markdown, markdown, action_mappings=mapping)
+    promote_events = [ev for ev in first.events if ev.event == "promote.intent.created"]
+    assert len(promote_events) == 1
+    assert "auto-executed: promote" in first.updated_markdown
+
+    second = handle_note_update("NOTE-1", first.updated_markdown, first.updated_markdown, action_mappings=mapping)
+    promote_events_again = [ev for ev in second.events if ev.event == "promote.intent.created"]
+    assert not promote_events_again
+    assert second.updated_markdown.count("auto-executed: promote") == 1

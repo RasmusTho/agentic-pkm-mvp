@@ -31,11 +31,14 @@ def panel_intent_to_event(
     payload.update(
         {
             "note_id": note_id,
+            "note": {"uuid": note_id},
             "action_text": intent.action_text,
             "action_id": intent.action_id,
             "intent_source": "panel.note",
         }
     )
+    if mapping and mapping.action_id and not payload.get("action_id"):
+        payload["action_id"] = mapping.action_id
     if instruction_text:
         payload["instruction_text"] = instruction_text
 

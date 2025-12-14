@@ -7,12 +7,16 @@ import pytest
 from app.observability.ingest_meta import record_ingest_run, reset_ingest_meta
 from app.observability.status_service import get_system_status, record_ask_error, record_ask_query, reset_ask_metrics
 from app.stores import get_object_store, reset_store_backends
+import app.observability.status_service as status_service
 
 
-def test_get_system_status_includes_ingest_and_ask_metrics(monkeypatch):
+def test_get_system_status_includes_ingest_and_ask_metrics(monkeypatch, tmp_path):
     reset_store_backends()
     reset_ingest_meta()
     reset_ask_metrics()
+    outbox_path = tmp_path / "status-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    status_service.INDEX_OUTBOX_PATH = outbox_path
     store = get_object_store()
     store.put(uuid4(), kind="note", source_ref="vault/path", payload={"title": "Vault note", "origin": "vault"})
     store.put(

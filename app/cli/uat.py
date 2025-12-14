@@ -92,6 +92,7 @@ def run_vault_test_flow(
 
     snapshot_path = _default_snapshot_path(seeded_folder)
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH", "index-outbox.jsonl"))
 
     watcher_summary, watcher_messages = run_watcher_tick(
         vault_root=scope,
@@ -101,6 +102,7 @@ def run_vault_test_flow(
         dry_run=dry_run,
         max_notes=max_notes,
         force=force,
+        outbox_path=outbox_path,
     )
 
     for msg in watcher_messages:

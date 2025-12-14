@@ -11,6 +11,11 @@ _PANEL_SECTION = {
     "logs": "ai-logg",
 }
 
+_LABEL_PREFIXES = {
+    "instruction": ("instruction", "instruktion"),
+    "actions": ("actions", "åtgärder"),
+    "logs": ("log", "logg"),
+}
 _ACTION_PATTERN = re.compile(r"^- \[( |x|X)\]\s*(.*?)(?:\s*<!--\s*ai:id=([A-Za-z0-9_-]+)\s*-->)?\s*$")
 
 
@@ -19,9 +24,11 @@ def parse_panel(markdown: str) -> PanelState:
     fenced_spans = _find_fenced_spans(lines)
     spans = list(fenced_spans)
     fenced = bool(fenced_spans)
+    has_panel = bool(fenced_spans)
 
+    panel_lines: list[str]
     if fenced_spans:
-        panel_lines: list[str] = []
+        panel_lines = []
         for start, end in fenced_spans:
             content = lines[start + 1 : end] if end > start else []
             panel_lines.extend(content)
@@ -30,8 +37,12 @@ def parse_panel(markdown: str) -> PanelState:
         sections = _collect_panel_sections_from_lines(lines)
         legacy_spans = _legacy_heading_spans(lines)
         spans = legacy_spans
+        panel_lines = lines
+        has_panel = has_panel or bool(legacy_spans)
 
     instruction_text = "\n".join(sections["instruction"]).strip()
+    if not instruction_text and has_panel:
+        instruction_text = _fallback_instruction(panel_lines).strip()
     actions = []
     for line in sections["actions"]:
         action = _line_to_action(line)
@@ -57,11 +68,27 @@ def _collect_panel_sections_from_lines(lines: Iterable[str]) -> dict[str, list[s
         if matched_section:
             current = matched_section
             continue
+        label_match = _match_label_section(stripped)
+        if label_match:
+            current = label_match
+            content = stripped.split(":", 1)[1].strip() if ":" in stripped else ""
+            if content:
+                sections[current].append(content)
+            continue
         if stripped.startswith("## ") and _is_non_panel_heading(lowered):
             current = None
             continue
+        if _ACTION_PATTERN.match(stripped):
+            sections["actions"].append(raw_line.rstrip())
+            continue
         if current:
             sections[current].append(raw_line.rstrip())
+
+    if not sections["actions"]:
+        for raw_line in lines:
+            stripped = raw_line.strip()
+            if _ACTION_PATTERN.match(stripped):
+                sections["actions"].append(raw_line.rstrip())
     return sections
 
 
@@ -114,6 +141,15 @@ def _match_section(line: str) -> Literal["instruction", "actions", "logs"] | Non
     return None
 
 
+def _match_label_section(line: str) -> Literal["instruction", "actions", "logs"] | None:
+    lowered = line.lower()
+    for key, labels in _LABEL_PREFIXES.items():
+        for label in labels:
+            if lowered.startswith(f"{label}:"):
+                return key  # type: ignore[return-value]
+    return None
+
+
 def _is_non_panel_heading(line: str) -> bool:
     if not line.startswith("## "):
         return False
@@ -141,3 +177,23 @@ def is_ai_fence(line: str) -> bool:
         return False
     inner = stripped.strip("%").lower()
     return "ai" in inner
+
+
+def _fallback_instruction(lines: list[str]) -> str:
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped or is_ai_fence(stripped):
+            continue
+        if _match_section(stripped.lower()) or _match_label_section(stripped):
+            # If the label line had inline content it would have been captured; skip the label itself
+            if ":" in stripped:
+                remainder = stripped.split(":", 1)[1].strip()
+                if remainder:
+                    return remainder
+            continue
+        if _ACTION_PATTERN.match(stripped):
+            continue
+        if stripped.startswith("## ") and _is_non_panel_heading(stripped.lower()):
+            continue
+        return stripped
+    return ""

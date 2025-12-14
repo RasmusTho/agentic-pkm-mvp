@@ -60,6 +60,7 @@ def run_once(vault_root: Path, cfg: RuntimeLoopConfig) -> RuntimeRunSummary:
         dry_run=cfg.dry_run,
         max_notes=cfg.max_notes,
         force=cfg.force,
+        outbox_path=outbox_path,
     )
 
     for msg in messages:
