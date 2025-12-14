@@ -16,7 +16,6 @@ _LABEL_PREFIXES = {
     "actions": ("actions", "åtgärder"),
     "logs": ("log", "logg"),
 }
-
 _ACTION_PATTERN = re.compile(r"^- \[( |x|X)\]\s*(.*?)(?:\s*<!--\s*ai:id=([A-Za-z0-9_-]+)\s*-->)?\s*$")
 
 
