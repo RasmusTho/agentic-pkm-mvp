@@ -69,6 +69,9 @@ mappings:
     outbox_path = tmp_path / "index-outbox.jsonl"
     monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    # Force deterministic, non-LLM path regardless of user environment.
+    monkeypatch.setenv("PANEL_AGENT_DECIDER", "rule")
+    monkeypatch.setenv("PANEL_AGENT_PIPELINE", "direct")
     monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
     monkeypatch.setattr("app.observability.status_service.INDEX_OUTBOX_PATH", outbox_path, raising=False)
 
