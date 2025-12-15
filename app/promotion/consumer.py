@@ -83,19 +83,6 @@ def _apply_promotion_to_store(note_uuid: str, desired_state: str, trace_id: str 
     store.save_object(obj, emit_outbox=False, trace_id=trace_id)
 
 
-def _apply_promotion_frontmatter(note_path: Path, note_uuid: str, desired_state: str, title: str | None) -> bool:
-    if not note_path.exists():
-        return False
-    try:
-        markdown = note_path.read_text(encoding="utf-8")
-    except Exception:
-        return False
-    updated = apply_promotion_frontmatter(markdown, note_uuid, desired_state, optional_title=title)
-    if updated != markdown:
-        note_path.write_text(updated, encoding="utf-8")
-    return True
-
-
 def consume_promotion_intents(
     *,
     outbox_path: Path | None = None,
@@ -160,7 +147,7 @@ def consume_promotion_intents(
             continue
 
         note_path = Path(note_path_value)
-        if not _apply_promotion_frontmatter(note_path, note_uuid, desired_state, title):
+        if not apply_promotion_frontmatter(note_path, note_uuid, desired_state, optional_title=title):
             summary["errors"] += 1
             emitted.append(
                 make_outbox_event(

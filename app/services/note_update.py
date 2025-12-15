@@ -24,19 +24,44 @@ class NoteUpdateResult(BaseModel):
 
 
 def apply_promotion_frontmatter(
-    markdown: str,
+    note_path: Path,
     note_uuid: str,
     new_review_state: str,
     optional_title: str | None = None,
-) -> str:
+) -> bool:
+    try:
+        markdown = note_path.read_text(encoding="utf-8")
+    except Exception:
+        return False
+
     frontmatter, body = load_frontmatter(markdown)
     fm = dict(frontmatter or {})
+
+    existing_uuid = fm.get("uuid")
+    if isinstance(existing_uuid, list) and len(existing_uuid) == 1:
+        inner = existing_uuid[0]
+        if isinstance(inner, list) and len(inner) == 1:
+            existing_uuid = str(inner[0])
+        else:
+            existing_uuid = str(inner)
+    if isinstance(existing_uuid, str):
+        cleaned = existing_uuid.strip()
+        if cleaned.startswith("[[") and cleaned.endswith("]]"):
+            cleaned = cleaned[2:-2].strip()
+        if cleaned:
+            fm["uuid"] = cleaned
     if not fm.get("uuid"):
         fm["uuid"] = note_uuid
+
     if optional_title and not fm.get("title"):
         fm["title"] = optional_title
+
     fm["review_state"] = new_review_state
-    return dump_frontmatter(fm, body)
+
+    updated = dump_frontmatter(fm, body)
+    if updated != markdown:
+        note_path.write_text(updated, encoding="utf-8")
+    return True
 
 
 def process_note_update(

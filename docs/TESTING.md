@@ -19,9 +19,9 @@ State: SoT v4.10 Reality-MVP (current core).
 ## Commands
 - Repo-root deterministic run (memory backend; plugin autoload disabled):
   - STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"
-- Workspace-root deterministic run (bypass global /Users/rasmus/workspace/pytest.ini):
+- Workspace-root deterministic run (bypass global a workspace-level pytest.ini):
   - STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg" -c /dev/null
-- Note: global /Users/rasmus/workspace/pytest.ini can inject timeout args when plugins are disabled; prefer the commands above when running locally.
+- Note: global a workspace-level pytest.ini can inject timeout args when plugins are disabled; prefer the commands above when running locally.
 - Single test
   - pytest -q tests/agents/test_normalizer.py
 - E2E graph
@@ -40,6 +40,7 @@ State: SoT v4.10 Reality-MVP (current core).
 - Runtime Loop V1 (deterministic E2E, memory backend):
   - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 INDEX_OUTBOX_PATH=$(mktemp)
   - pytest -q tests/e2e/test_runtime_loop_vault_test.py -m "not pg"
+  - Contract: second tick with unchanged snapshot should report promotion applied=0 and errors=0 (outbox cursor prevents replays).
 - Optional manual run: `python -m app.cli runtime-loop --vault-root "<vault>" --interval 0` with the UAT seed pack.
 - Watcher/Panel UAT CLI pack (deterministic, memory backend)
   - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 INDEX_OUTBOX_PATH=$(mktemp)

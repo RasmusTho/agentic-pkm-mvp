@@ -11,7 +11,7 @@ runtime:
   enable_outbox: true
   enable_tracing: true
 ingest:
-  active_vault_path: /Users/rasmus/workspace/vault
+  active_vault_path: vault
   file_glob:
   - '**/*.md'
   - '**/*.yaml'
