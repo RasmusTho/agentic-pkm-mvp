@@ -101,7 +101,7 @@ def ingest_binary(src: Path, rel: Path) -> IngestResult:
     return IngestResult(src, dst, "imported", "attachment", u)
 
 def main():
-    samples_root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/Users/rasmus/workspace/samples")
+    samples_root = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "samples"
     if not samples_root.exists():
         print(f"Samples path not found: {samples_root}", file=sys.stderr)
         sys.exit(2)

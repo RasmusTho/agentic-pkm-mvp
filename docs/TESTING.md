@@ -19,9 +19,9 @@ State: SoT v4.10 Reality-MVP (current core).
 ## Commands
 - Repo-root deterministic run (memory backend; plugin autoload disabled):
   - STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"
-- Workspace-root deterministic run (bypass global /Users/rasmus/workspace/pytest.ini):
+- Workspace-root deterministic run (bypass global a workspace-level pytest.ini):
   - STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg" -c /dev/null
-- Note: global /Users/rasmus/workspace/pytest.ini can inject timeout args when plugins are disabled; prefer the commands above when running locally.
+- Note: global a workspace-level pytest.ini can inject timeout args when plugins are disabled; prefer the commands above when running locally.
 - Single test
   - pytest -q tests/agents/test_normalizer.py
 - E2E graph
