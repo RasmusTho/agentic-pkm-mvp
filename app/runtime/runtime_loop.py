@@ -9,54 +9,7 @@ from typing import Dict
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.promotion.consumer import consume_promotion_intents
 from app.watcher.events import emit_watcher_run_event
-from app.watcher.heartbeat import resolve_heartbeat_path, write_runtime_heartbeat
 from app.watcher.vault_watcher import VaultWatcher, run_watcher_tick
-
-
-class OutboxPathError(ValueError):
-    """Raised when the outbox path cannot be resolved."""
-
-
-Summary = dict[str, object]
-
-
-def resolve_outbox_path(path: Path | str | None) -> Path:
-    candidate = path
-    if candidate is None:
-        env_value = os.getenv("INDEX_OUTBOX_PATH")
-        candidate = env_value.strip() if env_value and env_value.strip() else INDEX_OUTBOX_PATH
-
-    resolved = Path(candidate).expanduser()
-    if str(resolved).strip() == "":
-        raise OutboxPathError("Outbox path is required and cannot be empty.")
-    if resolved.exists() and resolved.is_dir():
-        raise OutboxPathError(f"Outbox path points to a directory: {resolved}")
-    return resolved
-
-
-def _as_int(value: object | None) -> int:
-    try:
-        return int(value) if value is not None else 0
-    except Exception:
-        return 0
-
-
-_runtime_heartbeat_ticks = 0
-
-
-def _emit_runtime_heartbeat(summary: Summary) -> None:
-    global _runtime_heartbeat_ticks
-    _runtime_heartbeat_ticks += 1
-    try:
-        path = resolve_heartbeat_path()
-    except Exception:
-        return
-    write_runtime_heartbeat(
-        path=path,
-        ticks=_runtime_heartbeat_ticks,
-        changed=_as_int(summary.get("changed")),
-        errors=_as_int(summary.get("errors")),
-    )
 
 
 class OutboxPathError(ValueError):

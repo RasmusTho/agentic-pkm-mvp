@@ -61,7 +61,6 @@ def apply_promotion_frontmatter(
 
     updated = dump_frontmatter(fm, body)
     if updated != markdown:
-        DEFAULT_WRITE_GUARD.assert_writes_allowed("promotion frontmatter")
         note_path.write_text(updated, encoding="utf-8")
     return True
 
