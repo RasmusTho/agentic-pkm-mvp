@@ -8,7 +8,7 @@ from typing import Dict
 
 from app.promotion.consumer import consume_promotion_intents
 from app.watcher.events import emit_watcher_run_event
-from app.watcher.vault_watcher import run_watcher_tick
+from app.watcher.vault_watcher import VaultWatcher, run_watcher_tick
 
 
 class OutboxPathError(ValueError):
@@ -74,6 +74,8 @@ def run_once(vault_root: Path, cfg: RuntimeLoopConfig) -> RuntimeRunSummary:
         promotion_summary = consume_promotion_intents(
             outbox_path=outbox_path, cursor_path=cursor_path, snapshot_path=cfg.snapshot_path
         )
+        if cfg.snapshot_path is not None:
+            VaultWatcher(vault_root, snapshot_path=cfg.snapshot_path).refresh_snapshot()
 
     emit_watcher_run_event(
         watcher_summary,
