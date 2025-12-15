@@ -16,6 +16,7 @@ def panel_intent_to_event(
     *,
     note_id: str,
     instruction_text: str | None = None,
+    note_path: str | None = None,
 ) -> Optional[OutboxEvent]:
     if intent.kind != "action_triggered" or not intent.action_text:
         return None
@@ -28,10 +29,13 @@ def panel_intent_to_event(
     payload = {}
     if mapping and mapping.payload_template:
         payload.update(mapping.payload_template)
+    note_payload = {"uuid": note_id}
+    if note_path:
+        note_payload["path"] = note_path
     payload.update(
         {
             "note_id": note_id,
-            "note": {"uuid": note_id},
+            "note": note_payload,
             "action_text": intent.action_text,
             "action_id": intent.action_id,
             "intent_source": "panel.note",
@@ -43,3 +47,6 @@ def panel_intent_to_event(
         payload["instruction_text"] = instruction_text
 
     return make_outbox_event(event_type, source=_PANEL_EVENT_SOURCE, payload=payload)
+
+
+__all__ = ["panel_intent_to_event"]

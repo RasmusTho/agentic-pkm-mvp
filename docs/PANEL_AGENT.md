@@ -62,6 +62,7 @@ Please promote this note after verifying the summary.
   - emits `promote.intent.created` when an action has `intent_type: promotion` (e.g. `promote.evergreen` mapping) so Promotion Agent flows can react,
   - removes executed checkboxes from the panel working set, writes a receipt into the AI status callout, and records the hidden `ai:id` in `executed_action_ids` on the note payload to prevent re-execution.
 - No LangGraph/planner/tool calls; this remains a lightweight runtime loop on top of Reality-MVP.
+- Markdown mutations (panel cleanup, receipts, promotion frontmatter) flow through the note writer; agents emit intents, and the writer/consumer apply deterministic file updates.
 - Auto-run policy (SoT v5.3, watcher-facing): watchers only auto-run panels when the note explicitly allows it via frontmatter, e.g.:
   - `ai_panel_auto_run: watcher` (watcher may auto-run panel runtime)
   - `ai_panel_auto_run: manual` or missing (default, watcher skips; manual CLI still allowed)
@@ -109,7 +110,7 @@ Please promote this note after verifying the summary.
 - `panel.intent.executed` — payload `{note, panel, actions:[{id,label,checked,status,emitted_events}]}` (source `panel_agent` / trigger `runtime`).
 - `panel.action.triggered` — payload `{note, panel_id, action:{id,label}, target_event}` for handled actions.
 - `panel.action.logged` — payload `{note, panel_id, action:{id,label,checked}, reason, mapping?}` for unmapped/unimplemented actions.
-- `promote.intent.created` — payload includes `{note, panel, action, instruction, maturity}` plus `{action_id, intent_source="panel.note"}`; emitted when a checked action has `intent_type: promotion`.
+- `promote.intent.created` — payload includes `{note, panel, action, instruction, maturity}` plus `{action_id, intent_source="panel.note", note.path}`; emitted when a checked action has `intent_type: promotion`; downstream consumer uses `note.path` to patch the vault note frontmatter (e.g., `review_state: evergreen`).
 
 ## Wiring configuration
 - Default wiring: `docs/settings/panel-action-wiring.yaml` (maps canonical action ids to target events).
@@ -117,4 +118,4 @@ Please promote this note after verifying the summary.
 - Validation: config must define an `actions` list with `id`, `kind` (event|intent, defaults to event), and `event_type`/`target_event` (or `intent_type`). Unknown/invalid configs emit a warning and fall back to the default wiring; runtime behaviour stays unchanged.
 - CLI/Watcher use the same wiring; panel decider (rule/LLM) still selects actions, wiring only controls emitted events.
 
-Promotion intents (`promote.intent.created`) represent intent-only; apply effects by running the promotion consumer (`python -m app.cli promote-consume`), which emits `promote.done` when successful.
+Promotion intents (`promote.intent.created`) represent intent-only; apply effects by running the promotion consumer (`python -m app.cli promote-consume`), which emits `promote.done` when successful and updates the vault note frontmatter via the note writer path (Store updates remain optional).

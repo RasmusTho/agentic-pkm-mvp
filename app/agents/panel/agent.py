@@ -144,6 +144,7 @@ def handle_note_update(
     old_markdown: str,
     new_markdown: str,
     action_mappings: Dict[str, PanelActionMapping] | None = None,
+    note_path: str | None = None,
 ) -> PanelAgentResult:
     annotated_markdown = _annotate_action_ids(new_markdown or "")
     old_state = parse_panel(old_markdown or "")
@@ -213,10 +214,14 @@ def handle_note_update(
     if mappings:
         intents = enrich_panel_intents(intents, mappings)
 
+    note_payload = {"uuid": note_id}
+    if note_path:
+        note_payload["path"] = note_path
+
     events: list[OutboxEvent] = []
     if new_state.spans or new_state.actions or new_state.instruction_text:
         panel_payload = {
-            "note": {"uuid": note_id},
+            "note": note_payload,
             "instruction": new_state.instruction_text,
             "actions": [
                 {"id": action.action_id, "label": action.text, "checked": action.checked} for action in new_state.actions
@@ -225,7 +230,13 @@ def handle_note_update(
         events.append(OutboxEvent(event="panel.intent.created", source="panel.agent", payload=panel_payload))
         events.append(OutboxEvent(event="panel.intent.executed", source="panel.agent", payload=panel_payload))
     for intent in intents:
-        event = panel_intent_to_event(intent, mappings, note_id=note_id, instruction_text=new_state.instruction_text)
+        event = panel_intent_to_event(
+            intent,
+            mappings,
+            note_id=note_id,
+            instruction_text=new_state.instruction_text,
+            note_path=note_path,
+        )
         if event is not None:
             events.append(event)
             if intent.kind == "action_triggered" and intent.event_type:
@@ -234,7 +245,7 @@ def handle_note_update(
                         event="panel.action.triggered",
                         source="panel.agent",
                         payload={
-                            "note": {"uuid": note_id},
+                            "note": note_payload,
                             "action": {"id": intent.action_id, "label": intent.action_text},
                             "target_event": event.event,
                         },
@@ -260,3 +271,6 @@ def handle_note_update(
     _upsert_executed_ids(note_id, executed_now)
 
     return PanelAgentResult(state=new_state, intents=intents, updated_markdown=updated_markdown, events=events)
+
+
+__all__ = ["handle_note_update", "PanelAgentResult"]

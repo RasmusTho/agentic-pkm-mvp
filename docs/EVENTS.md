@@ -68,7 +68,7 @@ All emitters must populate the envelope; schema is contract-tested under `tests/
 ### Runtime Loop Event Chain Contract
 - First run: watcher tick emits `watcher.run` with payload fields populated; panels that are allowed to run emit `panel.intent.created` → `panel.intent.executed`; mapped promotion actions emit exactly one `promote.intent.created` each; promotion consumer emits `promote.done` (or `promote.error` with a reason) per intent.
 - Re-run on unchanged vault/snapshot: no duplicate `watcher.run` payload deltas (changed=0) and **no additional `promote.intent.created`** for already-applied actions; `panel.intent.executed` may still emit with `skipped`/no-op statuses for transparency.
-- Idempotence proof points: downstream consumers must treat `promote.intent.created` as idempotent; counters should only increment on first intent emission per action id/note; cold rebuilds (empty Store + snapshots/mirrors present) should recreate the chain without duplicating intents.
+- Idempotence proof points: downstream consumers must treat `promote.intent.created` as idempotent; counters should only increment on first intent emission per action id/note; cold rebuilds (empty Store + snapshots/mirrors present) should recreate the chain without duplicating intents. Promotion consumer maintains a cursor alongside the snapshot to avoid replaying old intents when the outbox is reused (memory backend safe).
 
 ### `watcher.run`
 - Emitters: Runtime Loop CLI (`python -m app.cli runtime-loop`, every tick) and `vault-watcher-run` when the run executes (non-dry-run, not blocked by the max-notes guard).
@@ -89,7 +89,7 @@ All emitters must populate the envelope; schema is contract-tested under `tests/
 
 ### `promote.intent.created`
 - Emitter: PanelAgent runtime (from panel actions with `intent_type: promotion`).
-- Payload: `{note, panel, action, instruction, maturity?, origin?, intent_source}` with `source="panel_agent.runtime"`; consumed by promotion flows.
+- Payload: `{note, panel, action, instruction, maturity?, origin?, intent_source, note.path}` with `source="panel_agent.runtime"`; consumed by promotion flows and used by the promotion consumer to patch vault frontmatter (e.g., `review_state: evergreen`).
 
 ### `ingest.object.created`
 

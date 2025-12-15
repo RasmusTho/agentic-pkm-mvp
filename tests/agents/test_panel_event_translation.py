@@ -16,13 +16,16 @@ def test_panel_intent_to_event_with_known_mapping():
     mappings = _mapping()
     intent = PanelIntent(kind="action_triggered", action_text="Gör denna anteckning evergreen")
 
-    event = panel_intent_to_event(intent, mappings, note_id="note-123", instruction_text="Behåll fokus")
+    event = panel_intent_to_event(
+        intent, mappings, note_id="note-123", instruction_text="Behåll fokus", note_path="vault/Note.md"
+    )
 
     assert event is not None
     assert event.event_type == "review.promote.evergreen"
     assert event.payload["note_id"] == "note-123"
     assert event.payload["action_text"] == "Gör denna anteckning evergreen"
     assert event.payload["instruction_text"] == "Behåll fokus"
+    assert event.payload["note"]["path"] == "vault/Note.md"
 
 
 def test_panel_intent_to_event_unknown_mapping_returns_none():

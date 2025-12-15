@@ -18,12 +18,14 @@ from app.store.object_store import DomainObject, ObjectStore
 pytestmark = pytest.mark.not_pg
 
 
-def _seed_note(note_uuid: str, markdown: str) -> None:
+def _seed_note(note_uuid: str, markdown: str, note_path: Path) -> None:
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(markdown, encoding="utf-8")
     obj = DomainObject(
         uuid=note_uuid,
         kind="note",
         payload={"raw_text": markdown, "origin": "vault"},
-        source_ref="vault/Note.md",
+        source_ref=str(note_path),
         created_at=datetime.now(timezone.utc),
     )
     ObjectStore().save_object(obj, emit_outbox=False, trace_id="trace-panel-promote")
@@ -50,7 +52,8 @@ def test_panel_promotion_flow_consumes_and_applies(tmp_path: Path, monkeypatch: 
 
     note_uuid = str(uuid4())
     markdown = _panel_markdown("Gör denna anteckning evergreen")
-    _seed_note(note_uuid, markdown)
+    note_path = tmp_path / "vault" / "Note.md"
+    _seed_note(note_uuid, markdown, note_path)
 
     settings_path = tmp_path / "panel-actions.md"
     settings_path.write_text(
@@ -91,6 +94,7 @@ mappings:
     assert obj is not None
     assert obj.payload.get("review_state") == "evergreen"
     assert obj.payload.get("promotion", {}).get("state") == "evergreen"
+    assert note_path.read_text(encoding="utf-8").startswith("---")
 
     records = _read_outbox(outbox_path)
     topics = {rec.get("event") for rec in records}

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from app.agents.panel.integration import handle_panel_update
 from app.orchestrator.handler import OrchestratorContext
 from app.services.note_uuid import ensure_note_uuid
-from scripts.yaml_roundtrip import load_frontmatter
+from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 DEFAULT_SNAPSHOT_DIR = Path("tmp/note_update_snapshots")
 
@@ -21,6 +21,22 @@ class NoteUpdateResult(BaseModel):
     uuid_added: bool = False
     events_count: int = 0
     dispatch_count: int = 0
+
+
+def apply_promotion_frontmatter(
+    markdown: str,
+    note_uuid: str,
+    new_review_state: str,
+    optional_title: str | None = None,
+) -> str:
+    frontmatter, body = load_frontmatter(markdown)
+    fm = dict(frontmatter or {})
+    if not fm.get("uuid"):
+        fm["uuid"] = note_uuid
+    if optional_title and not fm.get("title"):
+        fm["title"] = optional_title
+    fm["review_state"] = new_review_state
+    return dump_frontmatter(fm, body)
 
 
 def process_note_update(
@@ -60,6 +76,7 @@ def process_note_update(
         old_markdown=old_markdown,
         new_markdown=raw_markdown,
         ctx=ctx,
+        note_path=resolved_path,
     )
 
     changed = panel_result.panel.updated_markdown != raw_markdown
@@ -90,4 +107,4 @@ def _snapshot_path(snapshot_dir: Path | None, note_uuid: str, *, ensure_parent: 
     return base / f"{note_uuid}.md"
 
 
-__all__ = ["NoteUpdateResult", "process_note_update", "DEFAULT_SNAPSHOT_DIR"]
+__all__ = ["NoteUpdateResult", "process_note_update", "DEFAULT_SNAPSHOT_DIR", "apply_promotion_frontmatter"]
