@@ -1,3 +1,5 @@
+State: Kernel/Contracts (applies across SoT v4.10 baseline + v5.x forward line; implementation-agnostic).
+
 # PROJECT_KERNEL — agentic-pkm-mvp
 
 ## 1. North Star

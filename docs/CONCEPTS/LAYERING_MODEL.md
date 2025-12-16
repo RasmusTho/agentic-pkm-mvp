@@ -1,3 +1,5 @@
+State: Concept contract (Domain/Plane/Trust/Zone; implementation-agnostic).
+
 # Layering Model — Domain / Plane / Trust / Zone
 
 This document defines the canonical boundary model for the system. The four dimensions below are orthogonal: do not collapse them into one label, and do not use one dimension as a proxy for another.
@@ -37,4 +39,3 @@ A bridge must record, at minimum:
 - Trust constraints (how the bridged material may be used: cite vs suggest vs apply).
 - Who authorized the bridge (human vs automation acting under explicit human intent) and when.
 - Revocation semantics (a bridge can be removed without changing the source artifacts).
-
