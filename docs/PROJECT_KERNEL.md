@@ -37,7 +37,7 @@ Audit should make the system legible: the human can see what happened, why it ha
 
 - **Human-first** — The system assists; it does not replace authorship. The default posture is “propose and explain”, not “decide and overwrite”.
 - **Domain-first (domain separation)** — Every artifact and interaction is scoped to a domain (e.g., work vs creative/RPG vs private). Default retrieval, suggestions, and writes occur within the active domain; crossing domains requires explicit user intent and is recorded as such.
-- **Warm/Cold separation** — Warm notes are human-edited and meant to be read/linked; cold objects are archived sources meant to be searched/cited. Derived artifacts (indexes, summaries, embeddings) are rebuildable and never become the source of truth.
+- **Warm/Cold separation** — Warm notes are human-edited and meant to be read/linked; cold objects are archived sources meant to be searched/cited. Derived artifacts (indexes, summaries, other machine views) are rebuildable and never become the source of truth.
 - **Separation of trust** — Distinguish user-authored content, imported content, and machine-generated content. Lower-trust material can inform suggestions, but higher-impact actions and “claims” require evidence and, when appropriate, human confirmation.
 - **Local-first + cross-platform** — The system works offline and stores user data in portable formats. Core behaviors and contracts must not depend on OS-specific quirks; portability is treated as a product requirement.
 - **Observable by default** — Actions and runs emit structured traces and human-readable receipts. When something fails or surprises, diagnosis should be possible without guesswork.
