@@ -47,6 +47,8 @@ Audit should make the system legible: the human can see what happened, why it ha
 
 Canonical layering story: the system uses four orthogonal dimensions — Domain, Plane, Trust, Zone — to describe boundaries without conflating them. See `docs/CONCEPTS/LAYERING_MODEL.md` for definitions and the cross-domain “bridge” concept.
 
+Cross-platform constraints are defined in `docs/CONCEPTS/PORTABILITY_CONTRACT.md`. Archive exposure and safety (discovery → materialization) are defined in `docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md`.
+
 ## 4. Stability Contracts (what must remain stable over time)
 
 - **Canonical artifacts (portable representations)** — Warm notes and cold objects have stable identities, provenance, domain, trust, and timestamps. Their canonical forms are portable and readable without the system; derived representations are disposable and rebuildable.
@@ -71,8 +73,8 @@ This project supports modern agentic patterns as *architectural families*, not f
 - Planes/zones are discussed widely, but the canonical Domain/Plane/Trust/Zone model now lives in `docs/CONCEPTS/LAYERING_MODEL.md`; follow-up is to reference it consistently where boundaries are explained.
 - Several “human flow” and “components” docs embed implementation details (flags, endpoints, tool names) that the kernel intentionally avoids; we should decide which docs are kernel-level contracts vs implementation manuals.
 - Some documents describe specific agent framework choices by name; the kernel describes framework-agnostic pattern families, so we should later de-framework the top-level architectural phrasing where appropriate.
-- The “archive brain” is currently described mainly as an external plane; the product-level experience (what “good” archive retrieval looks like, and how it is safely exposed) needs a clearer, first-class contract.
-- Cross-platform (macOS + Windows) requirements are not consistently explicit in the docs set; portability constraints should be surfaced where file paths, watchers, and artifacts are defined.
+- Archive exposure safety is now defined in `docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md`; follow-up is to reference it consistently where cold archive behavior is described.
+- Cross-platform portability is now defined in `docs/CONCEPTS/PORTABILITY_CONTRACT.md`; follow-up is to reference it consistently where portable artifacts and path-like references are described.
 - “Separation of trust” exists implicitly (user vs imported vs machine-generated), but the user-facing meaning and gating expectations are not consistently documented across flows.
 - Event/intent schemas are treated as contracts, but versioning and backwards-compatibility expectations are unevenly stated across documents; a single contract statement should anchor them.
 - Configuration is treated as powerful and extensible; we need clearer product constraints on safe defaults, validation behavior, and how config changes are audited and rolled back.

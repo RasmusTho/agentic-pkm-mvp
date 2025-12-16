@@ -32,6 +32,8 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | --- | --- | --- | --- | --- |
 | docs/PROJECT_KERNEL.md | Project kernel (human flows + stability contracts) | Aligned (forward line v5.x) | 2025-12-16 | Canonical product intent and stable contracts; intentionally avoids implementation detail. |
 | docs/CONCEPTS/LAYERING_MODEL.md | Layering model (Domain/Plane/Trust/Zone) | Aligned (forward line v5.x) | 2025-12-16 | Orthogonal boundary model and cross-domain bridge concept; referenced by PROJECT_KERNEL. |
+| docs/CONCEPTS/PORTABILITY_CONTRACT.md | Portability contract (macOS + Windows) | Aligned (forward line v5.x) | 2025-12-16 | Defines portability hazards and rules for portable artifacts and paths; referenced by PROJECT_KERNEL. |
+| docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md | Archive exposure contract (cold brain safety) | Aligned (forward line v5.x) | 2025-12-16 | Defines discovery→citation→preview→materialization exposure modes and receipt requirements; referenced by PROJECT_KERNEL. |
 | docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-03-12 | Locked v4.10 baseline; forward line through v5.5; links to ROADMAP + docs/tracks for plans. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
 | docs/STATUS.md | Operational snapshot | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-11 | Status fields documented (baseline vs forward line, active features, event counters from outbox). |
