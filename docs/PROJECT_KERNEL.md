@@ -43,6 +43,8 @@ Audit should make the system legible: the human can see what happened, why it ha
 - **Observable by default** — Actions and runs emit structured traces and human-readable receipts. When something fails or surprises, diagnosis should be possible without guesswork.
 - **Evolvable / modular** — Components can be swapped without rewriting the product philosophy. The kernel defines boundaries and contracts so the system can improve while remaining stable to the human.
 
+Canonical layering story: the system uses four orthogonal dimensions — Domain, Plane, Trust, Zone — to describe boundaries without conflating them. See `docs/CONCEPTS/LAYERING_MODEL.md` for definitions and the cross-domain “bridge” concept.
+
 ## 4. Stability Contracts (what must remain stable over time)
 
 - **Canonical artifacts (portable representations)** — Warm notes and cold objects have stable identities, provenance, domain, trust, and timestamps. Their canonical forms are portable and readable without the system; derived representations are disposable and rebuildable.
@@ -64,8 +66,7 @@ This project supports modern agentic patterns as *architectural families*, not f
 
 ## 6. Tensions / Follow-ups
 
-- Current docs emphasize planes/zones (vault vs external; active/warm/cold overlays) but do not yet treat *domains* (work/private/creative) as a first-class boundary; we need a consistent layering story: domain vs plane vs zone vs trust.
-- Domain separation implies domain tagging and enforcement across both warm notes and cold objects; the docs set does not yet specify the minimal domain contract or how cross-domain “bridges” should be represented and audited.
+- Planes/zones are discussed widely, but the canonical Domain/Plane/Trust/Zone model now lives in `docs/CONCEPTS/LAYERING_MODEL.md`; follow-up is to reference it consistently where boundaries are explained.
 - Several “human flow” and “components” docs embed implementation details (flags, endpoints, tool names) that the kernel intentionally avoids; we should decide which docs are kernel-level contracts vs implementation manuals.
 - Some documents describe specific agent framework choices by name; the kernel describes framework-agnostic pattern families, so we should later de-framework the top-level architectural phrasing where appropriate.
 - The “archive brain” is currently described mainly as an external plane; the product-level experience (what “good” archive retrieval looks like, and how it is safely exposed) needs a clearer, first-class contract.
@@ -75,7 +76,15 @@ This project supports modern agentic patterns as *architectural families*, not f
 - Configuration is treated as powerful and extensible; we need clearer product constraints on safe defaults, validation behavior, and how config changes are audited and rolled back.
 - Component maturity language is not always consistent (e.g., “planned” vs “baseline/stable” in the same catalog); we should reconcile maturity taxonomy against the kernel’s stability contracts.
 
-## 7. Sources
+## 7. Doc Boundary (Kernel/Contracts vs Implementation Manuals)
+
+Kernel/contract docs define product intent, invariants, and stability contracts. They must avoid operational specifics and remain valid even when components are swapped or upgraded.
+
+Implementation manuals describe current wiring, operations, and “how it works today”. They may change frequently; when they do, they must reference the relevant contract(s) and clearly distinguish what is stable vs merely current.
+
+If a document needs both, split it (or separate “Contract” from “Current Implementation”) so contract statements remain easy to find and hard to accidentally dilute.
+
+## 8. Sources
 
 - docs/ARCHITECTURE.md
 - docs/ROADMAP.md
