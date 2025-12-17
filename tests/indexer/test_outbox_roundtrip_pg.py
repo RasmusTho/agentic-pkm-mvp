@@ -2,20 +2,17 @@ from __future__ import annotations
 
 import importlib
 import os
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import psycopg
 import pytest
 
 from app.db.dsn import resolve_dsn
+from app.components.embeddings import get_embedding_client
 from app.outbox import events
+from app.store.object_store import DomainObject, ObjectStore
 from app.stores import get_vector_index, reset_store_backends
-
-
-def _vec(axis: int, dim: int = 8) -> list[float]:
-    vec = [0.0] * dim
-    vec[axis % dim] = 1.0
-    return vec
 
 
 def _pg_available() -> bool:
@@ -29,43 +26,49 @@ def _pg_available() -> bool:
 
 
 @pytest.mark.pg
-def test_indexer_runner_consumes_outbox_pg(tmp_path, monkeypatch) -> None:
+def test_indexer_runner_consumes_outbox_pg_without_vectors(tmp_path, monkeypatch) -> None:
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
     reset_store_backends()
     monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("EMBED_DIM", "8")
+
     fake_path = tmp_path / "index-outbox.jsonl"
     monkeypatch.setattr(events, "INDEX_OUTBOX_PATH", fake_path, raising=False)
+
+    import app.store.object_store as legacy_object_store
+
+    legacy_object_store._MEMORY_STORE.clear()
 
     import app.indexer.runner as runner
 
     importlib.reload(runner)
 
+    store = ObjectStore()
     for i in range(2):
-        events.emit_index_object_embedded(
-            {
-                "object_id": uuid4(),
-                "kind": "note",
-                "source_ref": f"unit-test:{i}",
-                "payload": {
-                    "text": f"payload-{i}",
-                    "content": f"payload-{i}",
-                    "object_type": "note",
-                    "system_intent": "learn",
-                    "emergent_tags": [],
-                },
-                "embedding": _vec(i),
-                "model": "openai/text-embedding-3-large",
-            }
+        oid = uuid4()
+        store.save_object(
+            DomainObject(
+                uuid=str(oid),
+                kind="note",
+                payload={"text": f"payload-{i}", "content": f"payload-{i}"},
+                source_ref=f"unit-test:{i}",
+                created_at=datetime.now(timezone.utc),
+            ),
+            emit_outbox=False,
+            trace_id="trace-123",
         )
+        events.emit_index_embedding_requested({"object_id": oid, "trace_id": "trace-123", "source": "test"})
 
     runner.main()
 
     idx = get_vector_index()
-    hits = idx.search(_vec(0), k=2)
+    query = get_embedding_client().embed_text("payload-0")
+    hits = idx.search(query, k=2)
 
     assert hits
-    assert hits[0].payload["text"] == "payload-0"
+    assert hits[0].payload.get("text") == "payload-0"
 
     reset_store_backends()

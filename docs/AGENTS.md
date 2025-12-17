@@ -1,5 +1,5 @@
 State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x Agentic PKM forward line currently tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration).
-# 6.0 Agentloop (deterministisk)
+# 6.0 Agent loop (deterministic)
 
 ## Design principle
 - Non-trivial decision logic should move toward “LangGraph inner, events/A2A outer”: each agent owns an explicit `AgentState` and LangGraph graph for internal choices, while coordination between agents happens via Outbox events/A2A envelopes orchestrated by the Orchestrator/Planner.
@@ -14,16 +14,16 @@ State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x Agentic PKM forward
 
 Flow: `query → retrieve (hybrid search) → rerank (ask_score + reranker) → answer (LLM optional)`. The canonical implementation lives in `app/agents/ask/graph.py` and is invoked by `/api/ask`.
 
-## Graf
-`retrieve -> draft -> self-check -> final` (max 2 iterationer)
+## Graph
+`retrieve -> draft -> self-check -> final` (max 2 iterations)
 
-## Promptstruktur
+## Prompt structure
 - Instructions
 - Context (quoted excerpts with source IDs)
 - Question
 - Requirements (format, language, citation requirements)
 
-## Svarskontrakt
+## Answer contract
 - `Summary`
 - `Sources` (list: doc_id + timestamps when relevant)
 

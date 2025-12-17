@@ -43,6 +43,10 @@ def test_ask_answer_relevancy() -> None:
     if cfg.mode == "skip":
         pytest.skip("EVAL_LLM_MODE=skip")
 
+    # DeepEval requires pricing hints for unsupported models
+    os.environ.setdefault("OPENAI_COST_PER_INPUT_TOKEN", "0")
+    os.environ.setdefault("OPENAI_COST_PER_OUTPUT_TOKEN", "0")
+
     client = TestClient(app)
     model_name = os.getenv("EVAL_LLM_MODEL", "llama3")
     try:

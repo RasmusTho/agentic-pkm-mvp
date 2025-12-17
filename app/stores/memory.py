@@ -6,8 +6,10 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Any
+from typing import Any, Iterable, Optional
 from uuid import UUID
+
+from app.embedding_config import assert_embed_dim, coerce_floats, get_embed_dim, l2_normalize
 
 from .base import (
     Decision,
@@ -144,13 +146,17 @@ class MemoryVectorIndex(VectorIndex):
         embedding: list[float],
         model: str,
     ) -> None:
+        embedding_floats = coerce_floats(embedding)
+        assert_embed_dim(embedding_floats, name="embedding")
+        embedding_norm = l2_normalize(embedding_floats)
+
         self._seq += 1
         entry = _VectorEntry(
             object_id=object_id,
             kind=kind,
             source_ref=source_ref,
             payload=dict(payload),
-            embedding=list(embedding),
+            embedding=embedding_norm,
             model=model,
             seq=self._seq,
         )
@@ -160,9 +166,14 @@ class MemoryVectorIndex(VectorIndex):
     def search(self, vector: list[float], *, k: int = 5) -> list:
         if not self._entries:
             return []
+
+        query = coerce_floats(vector)
+        assert_embed_dim(query, name="query embedding")
+        query_norm = l2_normalize(query)
+
         results: list[tuple[float, int, _VectorHit]] = []
         for entry in self._entries.values():
-            score = self._dot(vector, entry.embedding)
+            score = self._dot(query_norm, entry.embedding)
             results.append((score, entry.seq, _VectorHit(entry, score)))
         results.sort(key=lambda item: (-item[0], item[1]))
         return [hit for _, _, hit in results[:k]]
@@ -187,6 +198,7 @@ class MemoryVectorIndex(VectorIndex):
     def _load_from_disk(self) -> None:
         if not self._persist_path or not self._persist_path.exists():
             return
+        expected_dim = get_embed_dim()
         try:
             with self._persist_path.open("r", encoding="utf-8") as fh:
                 for line in fh:
@@ -198,12 +210,17 @@ class MemoryVectorIndex(VectorIndex):
                         obj_id = UUID(str(data["object_id"]))
                     except Exception:
                         continue
+
+                    embedding = list(data.get("embedding") or [])
+                    if len(embedding) != expected_dim:
+                        continue
+
                     entry = _VectorEntry(
                         object_id=obj_id,
                         kind=str(data.get("kind", "")),
                         source_ref=str(data.get("source_ref", "")),
                         payload=data.get("payload") or {},
-                        embedding=list(data.get("embedding") or []),
+                        embedding=l2_normalize(coerce_floats(embedding)),
                         model=str(data.get("model", "")),
                         seq=int(data.get("seq", 0)),
                     )

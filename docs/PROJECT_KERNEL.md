@@ -73,6 +73,7 @@ This project supports modern agentic patterns as *architectural families*, not f
 ## 6. Tensions / Follow-ups
 
 - Planes/zones are discussed widely, but the canonical Domain/Plane/Trust/Zone model now lives in `docs/CONCEPTS/LAYERING_MODEL.md`; follow-up is to reference it consistently where boundaries are explained.
+- We are running an experiment policy: default scope = active domain + global evergreens, with domain excludes (work excludes rpg) and one-shot explicit includes; validate UX before hardening.
 - Several “human flow” and “components” docs embed implementation details (flags, endpoints, tool names) that the kernel intentionally avoids; we should decide which docs are kernel-level contracts vs implementation manuals.
 - Some documents describe specific agent framework choices by name; the kernel describes framework-agnostic pattern families, so we should later de-framework the top-level architectural phrasing where appropriate.
 - Archive exposure safety is now defined in `docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md`; follow-up is to reference it consistently where cold archive behavior is described.

@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from app.outbox.events import emit_index_object_embedded
+from app.outbox.events import emit_index_embedding_requested
 
 
 def _parse_ts(ts: str) -> datetime:
@@ -19,15 +19,13 @@ def test_outbox_event_envelope_has_required_fields(tmp_path: Path, monkeypatch) 
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     monkeypatch.setattr("app.outbox.events.INDEX_OUTBOX_PATH", outbox_path, raising=False)
 
-    emit_index_object_embedded(
+    emit_index_embedding_requested(
         {
             "object_id": "obj-1",
+            "trace_id": "trace-123",
+            "source": "test-ingest",
             "kind": "note",
             "source_ref": "fixtures/demo.md",
-            "payload": {"trace_id": "trace-123", "title": "Demo"},
-            "embedding": [0.1, 0.2],
-            "model": "test-embedding",
-            "source": "test-indexer",
         }
     )
 
@@ -35,9 +33,11 @@ def test_outbox_event_envelope_has_required_fields(tmp_path: Path, monkeypatch) 
     assert lines, "Expected an outbox line to be written"
     record = json.loads(lines[-1])
 
-    assert isinstance(record.get("event"), str) and record["event"], "event must be non-empty string"
+    assert record.get("event") == "index.embedding.requested"
     assert isinstance(record.get("trace_id"), str) and record["trace_id"], "trace_id must be non-empty string"
     assert isinstance(record.get("source"), str) and record["source"], "source must be non-empty string"
     assert isinstance(record.get("payload"), dict), "payload must be a dict"
     assert record["payload"].get("object_id") == "obj-1"
+    assert "embedding" not in record
+    assert "embedding" not in record.get("payload", {})
     _parse_ts(record.get("timestamp", ""))

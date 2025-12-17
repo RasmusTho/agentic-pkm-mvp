@@ -1,27 +1,20 @@
 from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 from uuid import UUID, uuid4
-import json
-import app.search as search
-from app.outbox.events import emit_index_object_embedded
 
-_EMBED_DIM = 1536
+from app.embedding_config import get_embed_dim
+
 try:
     from app.config.agent import settings as _agent_settings  # type: ignore
+
     _EMBED_MODEL = getattr(_agent_settings, "embed_model", "openai/text-embedding-3-large")
 except Exception:
     _EMBED_MODEL = "openai/text-embedding-3-large"
 
 _ALLOWED_TAGS = {"serendipity", "collaboration"}
-
-
-def _embed_text(text: str, dim: int = _EMBED_DIM) -> List[float]:
-    v = [0.0] * dim
-    if not text:
-        return v
-    for i, ch in enumerate(text):
-        v[i % dim] += (ord(ch) % 97) / 97.0
-    return v
 
 
 def normalize_payload(payload: Dict[str, Any], text: str) -> Dict[str, Any]:
@@ -46,9 +39,7 @@ def handle_post_ingest(object_id: UUID, payload: Dict[str, Any], text: str) -> N
             "payload": {k: v for k, v in payload.items() if k != "text"},
             "text": text,
         }
-        (lifecycle.REFLECT_DIR / f"{object_id}.json").write_text(
-            json.dumps(entry, ensure_ascii=False), encoding="utf-8"
-        )
+        (lifecycle.REFLECT_DIR / f"{object_id}.json").write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
 
         lifecycle.REFLECTION_LOG.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -105,7 +96,7 @@ def ingest_object(
     text: str,
 ) -> Tuple[UUID, int]:
     oid = object_id or uuid4()
-    emb = _embed_text(text)
+
     payload_out = dict(payload)
     payload_out.setdefault("title", text)
     payload_out.setdefault("content", text)
@@ -113,24 +104,37 @@ def ingest_object(
     payload_out.setdefault("object_type", kind or "note")
     payload_out.setdefault("system_intent", "learn")
     payload_out.setdefault("emergent_tags", [])
-    idx = search.get_vector_index()
-    idx.upsert(
-        object_id=oid,
-        kind=kind,
-        source_ref=source_ref,
-        payload=payload_out,
-        embedding=emb,
-        model=_EMBED_MODEL,
+
+    # Persist object so the indexer stage can load text by object_id.
+    from app.store.object_store import DomainObject, ObjectStore
+
+    store = ObjectStore()
+    store.save_object(
+        DomainObject(
+            uuid=str(oid),
+            kind=kind or "note",
+            payload=payload_out,
+            source_ref=source_ref,
+            created_at=datetime.now(timezone.utc),
+        ),
+        emit_outbox=False,
+        trace_id=str(payload_out.get("trace_id") or "").strip() or None,
     )
+
     handle_post_ingest(oid, payload_out, text)
-    emit_index_object_embedded(
+
+    # Request embedding/indexing via the index outbox; do not include vectors.
+    from app.outbox.events import emit_index_embedding_requested
+
+    emit_index_embedding_requested(
         {
             "object_id": oid,
             "kind": kind,
             "source_ref": source_ref,
-            "payload": payload_out,
-            "embedding": emb,
             "model": _EMBED_MODEL,
+            "trace_id": payload_out.get("trace_id"),
+            "source": "ingest",
         }
     )
-    return oid, len(emb)
+
+    return oid, get_embed_dim()

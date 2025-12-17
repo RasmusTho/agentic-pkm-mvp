@@ -19,7 +19,9 @@ def test_memory_object_store_roundtrip() -> None:
     assert listing and listing[0]["object_id"] == oid
 
 
-def test_memory_vector_index_search_order() -> None:
+def test_memory_vector_index_search_order(monkeypatch) -> None:
+    monkeypatch.setenv("EMBED_DIM", "4")
+
     idx = MemoryVectorIndex()
     oid_a = uuid4()
     oid_b = uuid4()

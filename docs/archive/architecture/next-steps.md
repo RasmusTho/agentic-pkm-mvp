@@ -1,7 +1,11 @@
-State: Planned / partially implemented. Align carefully with STATUS (SoT v4.10) before applying.
-# SoT 4.3.1–5 Bridge — Next Steps
+State: HISTORICAL (SoT v4.3-era): kept for reference; not authoritative for current SoT.
 
-**Focus:** Kvalitet, observability och robusthet före expansion.
+> HISTORICAL (SoT v4.3-era): kept for reference; not authoritative for current SoT.
+> See `docs/PROJECT_KERNEL.md` and `docs/DOCS_INDEX.md`.
+
+# (HISTORICAL) SoT 4.3.1–5 Bridge — Next Steps
+
+**Focus:** Quality, observability, and robustness before expansion.
 
 ## 4.3.1 Objectives (Status)
 
