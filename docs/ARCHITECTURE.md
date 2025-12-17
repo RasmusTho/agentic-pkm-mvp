@@ -218,8 +218,10 @@ Segments preserve `{speaker, text}` metadata so downstream ingestion can attach 
 The v5 roadmap layers declarative reasoning (RDF/OWL/SHACL constraints) on top of the existing stores, enabling Reviewer and PromotionAgent to validate logic gates instead of bespoke Python checks. The Agent Memory Graph will evolve to persist reflective notes per object, informing future PER plans. Provenance and promotion governance will add policy bundles (who can promote, when to reset cooldowns) so humans stay accountable even as automation deepens.
 ## Settings Architecture — Vault-as-GUI, Code-as-Source
 
-Control surface: `vault/@Settings/**`  
-Runtime source of truth: `runtime/settings/**/*.yaml`
+Control surface (human-facing): `vault/@Settings/**`  
+Effective runtime configuration (compiled): `runtime/settings/**/*.yaml`
+
+The canonical configuration is the vault settings surface; the runtime YAML is a derived/compiled representation.
 
 ### Human → Machine pipeline
 1) Markdown → Loader → Sections  
@@ -236,10 +238,10 @@ Vault only references `${SECRET:NAME}`. Resolution comes from `.env` or SOPS-enc
 ### Hot-reload
 Components subscribe to `settings.changed` and re-read idempotently.
 
-### Markup-regler
+### Markup rules
 - Checkboxes → bool
 - Two-column table → key: value with dot-path
-- ```yaml settings → authoritative section
+- YAML `settings` block → authoritative section
 
 ## Agent Coordination Layer (A2A) — v4.8
 A2A introduces a declarative agent-to-agent messaging fabric layered on Stores + Events + the PER loop. When `A2A_ENABLE=1`, the Outbox registers an additional channel that carries envelopes between agents without bypassing audit or promotion invariants, and every agent can opt into message handling via `handle_agent_message()` while continuing to emit the standard ingest events. The canonical schema (request/response/error) plus audit events (`agent.request.created`, `agent.response.created`, `agent.error.created`) now ship in-tree so tests can exercise protocol hooks while routing/orchestrator wiring remains feature-gated.

@@ -1,144 +1,185 @@
-State: v5.0 – PanelAgent runtime V1 (panel.intent.executed, promotion fan-out; base remains v4.10).
-# EVENTS
+State: v5.x — Outbox JSONL envelope + event catalog (contract-level).
 
-## Outbox contract
+# Events
 
-All events share a minimal envelope:
+This document describes the event artifacts emitted by the system and recorded in the Outbox (JSONL). It defines the **canonical envelope** and documents the meanings of key event types.
 
-- `event` (`string`): event name, e.g. `ingest.object.created`, `index.object.embedded`.
-- `trace_id` (`string`): correlation id for the run/trace.
-- `source` (`string`): emitting component/agent (e.g. `indexer`, `ingest`).
-- `timestamp` (`ISO-8601 string, UTC`): emission time; set automatically.
-- `payload` (`object`): event-specific data (object_id, path, payloads, etc.).
-- `meta` (`object`, optional): free-form metadata (defaults to `{}`).
-- Additional legacy fields may be present alongside the envelope (e.g. `object_id`, `topic`) for backward compatibility.
+Compatibility and evolution are governed by `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`.
 
-See also: `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md` for the canonical contract on event/intent versioning, idempotence expectations, and backward/forward compatibility.
+## Outbox envelope (canonical)
 
-Example (`index.object.embedded` as written by `app.outbox.events.emit_index_object_embedded`):
+All Outbox records MUST include this minimal envelope:
+
+- `event` (`string`): event type, e.g. `ingest.object.created`, `index.object.embedded`.
+- `trace_id` (`string`): correlation id for a run/trace.
+- `source` (`string`): emitting component identity (stable attribution label).
+- `timestamp` (`string`, ISO-8601 UTC): emission time.
+- `payload` (`object`): event-specific content.
+- `meta` (`object`, optional): non-semantic metadata; when omitted it is treated as `{}`.
+
+Notes:
+
+- Producers MAY add additional top-level fields for compatibility or convenience; consumers MUST ignore unknown fields (see `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`).
+- Some older producers emit a richer `source` object (e.g. `{component, trigger, sot}`) instead of a string. That shape is **legacy**; new producers should emit the canonical `source` string. Consumers should degrade safely by extracting a string attribution (typically `source.component`) when present.
+
+### Example (canonical envelope)
+
+```json
+{
+  "event": "ingest.object.created",
+  "trace_id": "c41df3e7b7a94f1fbac93f6bafc8bd52",
+  "source": "ingest",
+  "timestamp": "2025-11-08T12:00:00Z",
+  "payload": {
+    "uuid": "abc-123",
+    "kind": "capture_note",
+    "source_ref": "vault/Notes/Capture.md"
+  },
+  "meta": {}
+}
+```
+
+## Event catalog (selected)
+
+This section documents the meaning and minimal payload shape of commonly used events.
+
+### `watcher.run`
+
+Emitted after a watcher tick completes.
+
+Payload (minimum contract):
+- `vault_root` (`string`)
+- `snapshot_path` (`string`)
+- `changed` (`int`)
+- `ingest_attempted` (`int`), `ingested` (`int`)
+- `panel_candidates` (`int`), `panel_runs` (`int`), `panel_promotions` (`int`)
+- `panel_skipped_policy` (`int`), `panel_skipped_limit` (`int`)
+- `errors` (`int`)
+- `dry_run` (`bool`)
+- `limit_exceeded` (`bool`)
+
+Example:
+
+```json
+{
+  "event": "watcher.run",
+  "trace_id": "8f251f2d9a284f94a9d1f8a0f9a5c0d1",
+  "source": "watcher",
+  "timestamp": "2025-11-08T12:00:00Z",
+  "payload": {
+    "changed": 3,
+    "ingest_attempted": 3,
+    "ingested": 3,
+    "panel_candidates": 2,
+    "panel_runs": 2,
+    "panel_promotions": 1,
+    "panel_skipped_policy": 0,
+    "panel_skipped_limit": 0,
+    "errors": 0,
+    "dry_run": false,
+    "limit_exceeded": false,
+    "snapshot_path": "tmp/snapshot.json",
+    "vault_root": "vault"
+  },
+  "meta": {}
+}
+```
+
+### `panel.intent.created`
+
+Emitted when an AI panel is parsed for a note and actions are mapped.
+
+Payload highlights:
+- `note.uuid` (required), plus optional `note.path` / `note.origin`
+- `panel.panel_id`, `panel.instruction`, optional `panel.raw_block`
+- `actions[]`: `id`, `label`, `checked`, optional `mapping` (`intent_type`, `downstream_event`, `params`)
+
+### `panel.intent.executed`
+
+Emitted after the runtime interprets and handles a parsed panel.
+
+Payload highlights:
+- `note`, `panel`
+- `actions[]`: `id`, `label`, `checked`, `status` (e.g. triggered/logged/skipped), optional `intent_type`, `emitted_events[]`
+
+### `panel.action.triggered`
+
+Emitted when a checked action is handled and turned into a downstream intent.
+
+### `panel.action.logged`
+
+Emitted when an action is valid but has no runtime handler (or is unmapped) and is recorded for visibility.
+
+### `panel.log.created`
+
+Emitted as a minimal human-facing marker summarizing a panel evaluation.
+
+### `promote.intent.created`
+
+Emitted when a panel action triggers promotion work.
+
+Payload typically includes:
+- `note` reference (uuid + optional path)
+- `panel` reference
+- `action` reference
+- `instruction`
+
+### `promote.done` / `promote.error`
+
+Emitted by the promotion consumer when a promotion intent is applied (`promote.done`) or cannot be applied (`promote.error`).
+
+Payload highlights:
+- a stable note reference (e.g. `note_uuid`)
+- outcome fields (e.g. `state` for done; `reason` for error)
+- a reference to the originating intent (e.g. `source_event`)
+
+### `index.object.embedded`
+
+Emitted when an object is embedded and written to the index outbox.
+
+Envelope fields are required. For compatibility, producers may also copy selected payload fields to the top level.
+
+Example:
 
 ```json
 {
   "event": "index.object.embedded",
-  "trace_id": "c41df3e7b7a94f1fbac93f6bafc8bd52",
+  "trace_id": "trace-123",
   "source": "indexer",
   "timestamp": "2025-03-01T12:00:00Z",
   "payload": {
     "object_id": "obj-1",
     "kind": "note",
     "source_ref": "vault/demo.md",
-    "payload": {"trace_id": "c41df3e7b7a94f1fbac93f6bafc8bd52"},
     "embedding": [0.1, 0.2],
     "model": "mock-embedding",
-    "topic": "index.object.embedded",
-    "source": "indexer"
-  }
+    "topic": "index.object.embedded"
+  },
+  "meta": {}
 }
 ```
 
-All emitters must populate the envelope; schema is contract-tested under `tests/architecture/test_events_outbox_contracts.py`.
+## Legacy notes
 
-## Topics in use
+### Legacy structured `source` object
 
-### `panel.intent.created`
-- Emitter: PanelAgent runtime (`app/agents/panel_agent/agent.py`) via CLI `panel run --uuid ...`.
-- When: after scanning a note’s AI panel(s) and mapping actions to panel action settings.
-- Payload highlights:
-  - `note.uuid` (+ optional `path`/`origin` from ObjectStore).
-  - `panel.panel_id`, `panel.instruction`, optional `panel.raw_block`.
-  - `actions[]`: `id` (mapping id or normalized label), `label`, `checked`, `mapping` (intent_type, downstream_event, params) or `null` if unmapped.
-  - Envelope includes `version="1.0"` and `source={component:"panel_agent", trigger:"cli", sot:"v5.0-step1"}`.
+Some older producers emit `source` as an object instead of the canonical string form.
 
-### `panel.intent.executed`
-- Emitter: PanelAgent runtime (post-processing of `panel.intent.created`).
-- When: immediately after interpreting a parsed panel; summarizes action outcomes.
-- Payload: `{note, panel, actions:[{id,label,checked,status,emitted_events,intent_type}]}`; source trigger is `runtime`, sot `v5.0-runtime1`.
+This is legacy because it complicates downstream parsing and makes the envelope less uniform. Consumers should degrade safely by extracting a stable string attribution (typically `source.component`).
 
-### `panel.action.triggered`
-- Emitter: PanelAgent runtime.
-- When: a checked action is handled and turned into a downstream intent (e.g. promotion).
-- Payload: `{note, panel_id, action:{id,label}, target_event}`.
-
-### `panel.action.logged`
-- Emitter: PanelAgent runtime.
-- When: a checked action is valid but has no runtime handler yet (v5.x placeholder) or is unmapped.
-- Payload: `{note, panel_id, action:{id,label,checked}, reason, mapping?}`.
-- `intent_source`: `panel.note` for all panel-derived events (including downstream `promote.intent.created`).
-- Receipts: runtime writes a receipt into the in-note AI status callout for each handled action (✅ success, ⚠️ failure, ⏳ pending), keeping the last 20; receipts are user-visible, not separate events.
-- Parsing tolerance: panels accept heading-based (`## AI-instruktion / ## AI-åtgärder`) or label-based (`Instruction:` / `Actions:`) sections; checkboxes are parsed even without an explicit actions heading; freeform high-confidence commands (e.g., “promote this”) emit `panel.action.triggered` + `promote.intent.created` with a stable id (`auto:promote.evergreen`) for idempotence.
-
-### Runtime Loop Event Chain Contract
-- First run: watcher tick emits `watcher.run` with payload fields populated; panels that are allowed to run emit `panel.intent.created` → `panel.intent.executed`; mapped promotion actions emit exactly one `promote.intent.created` each; promotion consumer emits `promote.done` (or `promote.error` with a reason) per intent.
-- Re-run on unchanged vault/snapshot: no duplicate `watcher.run` payload deltas (changed=0) and **no additional `promote.intent.created`** for already-applied actions; `panel.intent.executed` may still emit with `skipped`/no-op statuses for transparency.
-- Idempotence proof points: downstream consumers must treat `promote.intent.created` as idempotent; counters should only increment on first intent emission per action id/note; cold rebuilds (empty Store + snapshots/mirrors present) should recreate the chain without duplicating intents. Promotion consumer maintains a cursor alongside the snapshot to avoid replaying old intents when the outbox is reused (memory backend safe).
-
-### `watcher.run`
-- Emitters: Runtime Loop CLI (`python -m app.cli runtime-loop`, every tick) and `vault-watcher-run` when the run executes (non-dry-run, not blocked by the max-notes guard).
-- Envelope: `version="1.0"`, `timestamp`, `trace_id`, `event_id`, `source={component:"watcher", trigger:"runtime_loop"| "vault_watcher_run", sot:"v5.4"}`.
-- Payload: `{changed, ingest_attempted, ingested, panel_candidates, panel_runs, panel_promotions, panel_skipped_policy, panel_skipped_limit, errors, dry_run, limit_exceeded, snapshot_path, vault_root}`.
-- Observability: increments `watcher_runs_total/24h` in status counters; payload mirrors the CLI summary for regressions.
-
-### `watcher.run`
-- Emitters: Runtime Loop CLI (`python -m app.cli runtime-loop`, every tick) and `vault-watcher-run` when the run executes (non-dry-run, not blocked by the max-notes guard).
-- Envelope: `version="1.0"`, `timestamp`, `trace_id`, `event_id`, `source={component:"watcher", trigger:"runtime_loop"| "vault_watcher_run", sot:"v5.4"}`.
-- Payload: `{changed, ingest_attempted, ingested, panel_candidates, panel_runs, panel_promotions, panel_skipped_policy, panel_skipped_limit, errors, dry_run, limit_exceeded, snapshot_path, vault_root}`.
-- Observability: increments `watcher_runs_total/24h` in status counters; payload mirrors the CLI summary for regressions.
-
-### `panel.log.created`
-- Emitter: PanelAgent runtime.
-- When: after evaluating a panel, as a minimal AI-log marker for humans and monitoring.
-- Payload: human-readable log entry `{summary, note, panel_id, actions}`; also mirrored into `panel_logs` on the note’s object payload.
-
-### `promote.intent.created`
-- Emitter: PanelAgent runtime (from panel actions with `intent_type: promotion`).
-- Payload: `{note, panel, action, instruction, maturity?, origin?, intent_source, note.path}` with `source="panel_agent.runtime"`; consumed by promotion flows and used by the promotion consumer to patch vault frontmatter (e.g., `review_state: evergreen`).
-
-### `ingest.object.created`
-
-Minimal payload (fields may extend but these are guaranteed):
+Example (legacy):
 
 ```json
 {
-  "event": "ingest.object.created",
-  "uuid": "abc-123",
-  "kind": "capture_note",
-  "trace_id": "trace-1",
-  "instance_id": "home",
-  "ts": "2025-11-08T12:00:00Z"
+  "event": "watcher.run",
+  "trace_id": "8f251f2d9a284f94a9d1f8a0f9a5c0d1",
+  "source": {"component": "watcher", "trigger": "runtime_loop", "sot": "v5.4"},
+  "timestamp": "2025-11-08T12:00:00Z",
+  "payload": {"changed": 0, "ingest_attempted": 0, "ingested": 0, "panel_candidates": 0, "panel_runs": 0, "panel_promotions": 0, "panel_skipped_policy": 0, "panel_skipped_limit": 0, "errors": 0, "dry_run": true, "limit_exceeded": false, "snapshot_path": "tmp/snapshot.json", "vault_root": "vault"},
+  "meta": {}
 }
 ```
 
-`instance_id` is the canonical emitter identity in the envelope and comes from settings (`instance.id`), defaulting to `home`.
+## References
 
-## Ingest
-- ingest.normalize.request
-- ingest.normalize.done
-- ingest.chunk.request
-- ingest.chunk.done
-- ingest.index.request
-- ingest.index.done
-
-## Curation
-- curation.classify.request
-- curation.classify.done
-- curation.dedupe.request
-- curation.dedupe.done
-- curation.citation.request
-- curation.citation.checked
-- curation.review.request
-- curation.review.done
-- curation.set.eval.request
-- curation.set.eval.done
-
-## Projector
-- projector.sync.request
-- projector.sync.done
-
-## Contract
-- Every `.done` carries a minimal contract payload used by downstream steps.
-- All events are mirrored into `audit` with `action` equal to event and `details` containing payload diff.
-### `promote.done`
-Emitted by the promotion consumer when a promotion intent has been applied. Payload includes `note_uuid`, `state`, and `source_event` (the originating `promote.intent.created`).
-
-### `promote.error`
-Emitted by the promotion consumer when a promotion intent cannot be applied (missing uuid or note not found). Payload includes `reason`, optional `note_uuid`, and `source_event`.
+- `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md` (canonical compatibility anchor)
