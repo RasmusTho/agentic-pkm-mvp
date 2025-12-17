@@ -39,7 +39,7 @@ Use one label consistently:
 
 - **Hybrid retrieval** — Combined lexical + semantic retrieval with optional reranking overlays. Maturity: Baseline.
 - **Rerankers** — Optional reranking providers with deterministic fallbacks. Maturity: Baseline.
-- **Embeddings** — Embedding provider entrypoint with deterministic profiles for tests. Maturity: Baseline.
+- **Embeddings** — Embedding provider entrypoint with deterministic profiles for tests. Includes the `python -m app.cli embed_probe` sanity command to inspect provider/model/dimension drift. Maturity: Baseline.
 
 ## ASK / reasoning
 

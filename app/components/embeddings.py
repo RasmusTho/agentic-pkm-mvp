@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Iterable, Iterator, Protocol, Sequence
 
 from app.index import embeddings as _index_embeddings
+from app.llm.embeddings import EMBED_MODEL
 from app.search import embeddings as _deterministic_embeddings
 
 
@@ -65,4 +66,10 @@ def get_embedding_client(profile: str = "default") -> EmbeddingClientProtocol:
     return _DefaultEmbeddingClient()
 
 
-__all__ = ["EmbeddingClientProtocol", "get_embedding_client"]
+def describe_embedding(text: str, *, profile: str = "default") -> tuple[str, int, list[float]]:
+    client = get_embedding_client(profile)
+    vector = client.embed_text(text)
+    return EMBED_MODEL, len(vector), vector
+
+
+__all__ = ["EmbeddingClientProtocol", "get_embedding_client", "describe_embedding", "EMBED_MODEL"]
