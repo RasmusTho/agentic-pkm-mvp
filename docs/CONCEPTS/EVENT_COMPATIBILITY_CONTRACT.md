@@ -4,71 +4,82 @@ State: Concept contract (event/intent versioning + compatibility; implementation
 
 ## Purpose
 
-Events/intents are durable coordination artifacts: they connect components, preserve auditability, and allow the system to evolve over time. This contract exists to keep evolution safe:
+Events and intents are durable coordination artifacts: they connect components, preserve auditability, and allow the system to evolve over time.
+
+This contract keeps evolution safe:
 - **Old artifacts remain usable** (replay, audit, migration, debugging).
 - **New producers do not break old consumers** (forward compatibility).
 - **New consumers can still read old histories** (backward compatibility).
 
-The contract governs **meanings and invariants**, not specific implementations, transports, or libraries.
+The contract governs **meanings and invariants**, not transports, storage engines, or libraries.
 
-## Envelope expectations (conceptual)
+## Outbox envelope invariants (conceptual)
 
-All events/intents must be wrapped in a minimal **envelope** whose semantics are stable over time. The exact field names are non-contractual; the envelope must be able to express:
-- **Type identity**: “what kind of thing this is” (stable semantic category).
-- **Instance identity**: “which instance this is” (stable identifier for de-duplication/idempotence).
-- **Time**: when it was emitted (for audit and ordering heuristics, not as truth).
-- **Source**: who/what emitted it (for attribution and debugging).
-- **Version**: which schema/meaning contract applies (for compatibility decisions).
-- **Payload**: the domain-relevant content of the event/intent.
+All events/intents must be wrapped in a minimal envelope whose semantics are stable over time. Exact field names are non-contractual; the envelope must be able to express:
+- **Type identity**: what kind of artifact this is (stable semantic category).
+- **Schema/meaning version**: which meaning contract applies.
+- **Instance identity**: a stable idempotency key for this specific instance.
+- **Source**: who/what emitted it (attribution).
+- **Time**: when it was emitted (audit aid; not truth).
+- **Payload**: the domain-relevant content.
 - **Optional metadata**: non-semantic context that must not change meaning.
 
 Envelope rules (must hold):
-1) **Stable semantics beat stable shapes.** The envelope’s *meaning* must remain stable even if internal representations change.
-2) **Idempotence is an expectation.** Consumers must assume at-least-once delivery and must not create duplicate durable effects when the same instance is observed again.
-3) **Append-only evolution.** Compatibility is preserved by adding new optional fields or new event types; existing meanings are not silently repurposed.
-4) **Unknown-field tolerance.** Consumers must ignore unknown fields and preserve them when acting as pass-throughs; producers must not assume all consumers understand new fields.
+1) **Stable semantics beat stable shapes.** Meanings remain stable even if internal representations change.
+2) **Append-only evolution.** Compatibility is preserved by adding optional fields or introducing new event types.
+3) **Unknown-field tolerance.** Consumers ignore unknown fields; pass-throughs preserve them.
+4) **Unknown-type tolerance.** Unknown event types must not crash consumers; they must degrade safely (ignore, record, or route to a generic handler).
 5) **Explicitness over inference.** Critical meaning must not depend on field order, implicit defaults, or “magic” interpretation of missing data.
 
-## Compatibility rules (backward + forward)
+## Versioning rules (high level)
+
+Versioning protects meaning.
+
+A semver-ish model is recommended:
+- **Major**: meaning-breaking changes (new interpretation of existing fields, changed idempotency semantics, changed required set).
+- **Minor**: additive changes (new optional fields, additional metadata, clarifications).
+- **Patch**: non-semantic clarifications (docs, formatting, optional metadata).
+
+Rules:
+- **Additive by default.** Prefer new optional fields or new event types.
+- **Never silently reinterpret.** Meaning changes require an explicit major boundary.
+- **Old meaning remains readable.** New consumers must still interpret old versions under their original meaning.
+- **Translations are explicit.** If old → new mapping is needed, it must preserve provenance and be auditable.
+
+## Backward + forward compatibility expectations
 
 ### Backward compatibility (new readers, old artifacts)
-New readers/consumers must be able to interpret older artifacts by:
-- Treating absent optional fields as “unknown” (not as a new meaning).
-- Preserving the original meaning of existing fields and type identities.
-- Using version signals to select safe interpretation rather than guessing.
-
-Breaking changes are allowed only when explicitly versioned as such and paired with a clear migration story (how old histories remain readable and auditable).
+New consumers must read older artifacts by:
+- Treating missing optional fields as **unknown** (not as a new meaning).
+- Preserving the meaning of existing fields and type identities.
+- Using version signals to select a safe interpretation rather than guessing.
 
 ### Forward compatibility (old readers, new artifacts)
-Old readers/consumers must degrade safely when encountering newer artifacts by:
+Old consumers must handle newer artifacts by:
 - Ignoring unknown fields.
-- Treating unknown types as “not applicable” rather than as errors that halt the system.
-- Avoiding side effects when required meaning is missing or unrecognized.
+- Treating unknown types as **not applicable** rather than as fatal.
+- Avoiding durable side effects when required meaning is missing or unrecognized.
 
-Forward compatibility is a safety requirement: evolution must not turn into “upgrade everything or break”.
+Forward compatibility is a safety requirement: evolution must not become “upgrade everything or break”.
 
-## Versioning strategy (high level)
+## Idempotency + dedupe keys (conceptual guidance)
 
-Versioning exists to protect meaning:
-- **Additive changes** (new optional fields, new event types) are the default evolution path.
-- **Deprecation is explicit**: old meanings remain valid for a defined period; replacement types/fields are introduced rather than silently repurposing existing ones.
-- **Major meaning changes** require explicit version boundaries (so old artifacts can still be interpreted under their original meaning).
-- **Bridges/translations** (when needed) must be explicit and auditable: translating old → new must preserve original meaning and provenance.
+Consumers must assume at-least-once delivery and must not create duplicate durable effects.
 
-## What must remain stable
+Guidance:
+- Every event/intent type must define its **idempotency key** (instance identity): what makes two instances “the same”.
+- Prefer an explicit, stable instance id in the envelope.
+- If an event/intent can be re-emitted with the same meaning, it must reuse the same idempotency key.
+- When a type produces durable effects, consumers must dedupe by the idempotency key before applying effects.
 
-The stable surface is the **meaning contract**:
-- What the type identity *means*.
-- What each field *means* (including units, scope, and whether it is authoritative vs advisory).
-- What idempotence *means* for the artifact (what counts as “the same instance”).
-- Which fields are required to act vs required only to display/audit.
+If explicit instance ids are not available, the event contract must define a deterministic dedupe key derived from stable semantic fields (e.g., type identity + subject identity + a stable action identity). Never use volatile data (timestamps, ordering, transient counters) as the dedupe key.
 
-Implementations may change freely (storage, routing, internal pipelines) as long as these meanings and invariants remain intact.
+## Checklist: adding a new event/intent type
 
-## Anti-patterns (contract violations)
-
-- **Breaking semantics under the same version** (e.g., reinterpreting a field without a version boundary).
-- **Silent reinterpretation** (changing meaning without leaving an audit trail of the change).
-- **Repurposing type identity** (“same type name, different concept”).
-- **Non-additive schema changes without compatibility** (removing/renaming fields in a way old consumers can’t tolerate).
-- **Treating unknown as false** (unknown fields/types must not be interpreted as “no” or “safe” by default).
+When introducing a new type, document the contract for it:
+- **Meaning**: what concept this type represents (and what it does not represent).
+- **Required vs optional**: which payload elements are required to act vs only to display/audit.
+- **Idempotency**: the idempotency key definition and re-emission rules.
+- **Compatibility story**: how older consumers will ignore it safely; how newer consumers will read older histories.
+- **Failure semantics**: what “can’t process” means (ignore, defer, record error) without crashing the system.
+- **Boundary posture**: how it respects Domain/Plane/Trust constraints and avoids silent cross-boundary effects.

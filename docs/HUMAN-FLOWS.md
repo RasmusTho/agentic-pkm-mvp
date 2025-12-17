@@ -30,7 +30,7 @@ State: SoT v4.10 Reality-MVP (baseline locked) with v5.x forward line extending 
 - Panels are a conversation space for suggestions/instructions, not part of the knowledge base.
 - Metadata and logging remain inspectable (e.g., in `System/Metadata/...`) but unobtrusive in the writing surface.
 - Stability first: idempotent operations and predictable frontmatter/move policies keep trust high.
-- See also: `docs/CONCEPTS/TRUST_CONTRACT.md` (ASSERT/SUGGEST/APPLY gating + receipt expectations).
+- See also: `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md` (ASSERT/SUGGEST/APPLY gating + receipt expectations).
 - Panel semantics:
   - Freeform commands in the panel may execute when confidently mapped to a canonical action; the runtime still writes a receipt so the human sees what happened.
   - Checkboxes remain explicit confirmation for uncertain actions; if the human is sloppy (missing frontmatter, wikilink uuids), the runtime normalizes/patches frontmatter via the note writer so promotions stay human-first.

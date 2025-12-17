@@ -58,7 +58,7 @@ Cross-platform constraints are defined in `docs/CONCEPTS/PORTABILITY_CONTRACT.md
 - **Config-as-product** — Configuration is user-facing, validated, versioned, and portable. Changes are observable and safe by default; invalid configuration degrades gracefully and predictably.
 - **Evaluation gates (regression protection)** — The system maintains explicit fitness checks for key invariants: source-grounded recall, no cross-domain leakage, idempotent re-runs, rebuildable indexes, and “no silent edits”. Gates exist to protect trust, not to optimize a single metric.
 
-Trust semantics (ASSERT vs SUGGEST vs APPLY) are defined in `docs/CONCEPTS/TRUST_CONTRACT.md`. Event/intent versioning and backward/forward compatibility are defined in `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`.
+Trust semantics (ASSERT vs SUGGEST vs APPLY) are defined in `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`. Event/intent versioning and backward/forward compatibility are defined in `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`. Config-as-product constraints are defined in `docs/CONCEPTS/CONFIG_AS_PRODUCT_CONTRACT.md`.
 
 ## 5. Agentic AI Positioning (cutting-edge, but disciplined)
 
@@ -77,9 +77,9 @@ This project supports modern agentic patterns as *architectural families*, not f
 - Some documents describe specific agent framework choices by name; the kernel describes framework-agnostic pattern families, so we should later de-framework the top-level architectural phrasing where appropriate.
 - Archive exposure safety is now defined in `docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md`; follow-up is to reference it consistently where cold archive behavior is described.
 - Cross-platform portability is now defined in `docs/CONCEPTS/PORTABILITY_CONTRACT.md`; follow-up is to reference it consistently where portable artifacts and path-like references are described.
-- Trust semantics and gating expectations are now anchored in `docs/CONCEPTS/TRUST_CONTRACT.md`; follow-up is to reference it consistently where flows describe assertions, suggestions, and durable changes.
+- Trust semantics and gating expectations are now anchored in `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`; follow-up is to reference it consistently where flows describe assertions, suggestions, and durable changes.
 - Event/intent versioning and backward/forward compatibility are now anchored in `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`; follow-up is to reference it consistently where event/intent contracts are described.
-- Configuration is treated as powerful and extensible; we need clearer product constraints on safe defaults, validation behavior, and how config changes are audited and rolled back.
+- Config-as-product constraints are now anchored in `docs/CONCEPTS/CONFIG_AS_PRODUCT_CONTRACT.md`; follow-up is to reference it consistently where configuration is described.
 - Component maturity language is not always consistent (e.g., “planned” vs “baseline/stable” in the same catalog); we should reconcile maturity taxonomy against the kernel’s stability contracts.
 
 ## 7. Doc Boundary (Kernel/Contracts vs Implementation Manuals)
