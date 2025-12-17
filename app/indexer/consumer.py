@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict
 from uuid import UUID
 
-from app.components.embeddings import EmbeddingIdentity, get_embedding_client, get_embedding_identity
+from app.components.embeddings import get_embedding_client
 from app.embedding_config import coerce_floats
 from app.llm.embeddings import EMBED_MODEL
 from app.outbox import events as outbox_events
@@ -41,7 +41,6 @@ def process_event(evt: Dict[str, Any]) -> None:
         payload = raw_payload.get("payload", raw_payload) if isinstance(raw_payload.get("payload"), dict) else raw_payload
         embedding = coerce_floats(evt.get("embedding") or [])
         model = str(evt.get("model") or EMBED_MODEL)
-        identity = EmbeddingIdentity(provider="legacy-event", model=model, dim=len(embedding))
 
         idx = get_vector_index()
         idx.upsert(
@@ -51,7 +50,6 @@ def process_event(evt: Dict[str, Any]) -> None:
             payload=payload,
             embedding=embedding,
             model=model,
-            identity=identity,
         )
         outbox_events.emit_index_embedding_created(object_id=object_id, trace_id=str(evt.get("trace_id") or "") or None)
         return
@@ -75,7 +73,6 @@ def process_event(evt: Dict[str, Any]) -> None:
 
     embedder = get_embedding_client()
     embedding = embedder.embed_text(text)
-    identity = get_embedding_identity(client=embedder)
 
     idx = get_vector_index()
     idx.upsert(
@@ -84,8 +81,7 @@ def process_event(evt: Dict[str, Any]) -> None:
         source_ref=str(obj.source_ref or ""),
         payload=obj_payload,
         embedding=embedding,
-        model=identity.model,
-        identity=identity,
+        model=EMBED_MODEL,
     )
 
     trace_id = str(evt.get("trace_id") or "").strip() or None

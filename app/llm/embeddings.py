@@ -17,18 +17,13 @@ def _provider() -> str:
     return os.getenv("LLM_PROVIDER", "ollama").lower()
 
 
-def get_embedding_provider() -> str:
-    """Return the configured embedding provider."""
-    return _provider()
-
-
 def _mock_vector(text: str, *, dim: int) -> List[float]:
     digest = hashlib.sha256(text.encode("utf-8")).digest()
     vec: list[float] = []
     for idx in range(dim):
         chunk = digest[idx % len(digest)]
-        vec.append(((chunk / 255.0) * 2) - 1)
-    return vec
+        vec.append(((chunk / 255.0) * 2) - 1)  # range [-1, 1]
+    return l2_normalize(vec)
 
 
 @lru_cache(maxsize=2048)
@@ -49,26 +44,16 @@ def _embed_single(text: str, provider: str, model: str, dim: int) -> tuple[float
         data = resp.json()
         embedding = [float(x) for x in (data.get("embedding") or [])]
         assert_embed_dim(embedding, name="embedding")
-        return tuple(embedding)
+        return tuple(l2_normalize(embedding))
 
     raise ValueError(f"Unsupported embedding provider: {provider}")
 
 
-def embed_text(
-    text: str,
-    *,
-    provider: str | None = None,
-    model: str | None = None,
-    dim: int | None = None,
-    normalize: bool = True,
-) -> List[float]:
-    provider_val = provider or _provider()
-    model_val = model or EMBED_MODEL
-    dim_val = dim or get_embed_dim()
-    vector = list(_embed_single(text, provider_val, model_val, dim_val))
-    if normalize:
-        return l2_normalize(vector)
-    return vector
+def embed_text(text: str) -> List[float]:
+    provider = _provider()
+    model = EMBED_MODEL
+    dim = get_embed_dim()
+    return list(_embed_single(text, provider, model, dim))
 
 
 def embed_texts(
@@ -82,4 +67,4 @@ def embed_texts(
     return [embed_text(text, provider=provider, model=model, dim=dim, normalize=normalize) for text in texts]
 
 
-__all__ = ["embed_text", "embed_texts", "EMBED_MODEL", "get_embedding_provider"]
+__all__ = ["embed_text", "embed_texts", "EMBED_MODEL"]

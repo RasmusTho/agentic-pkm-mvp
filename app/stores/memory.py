@@ -9,8 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 from uuid import UUID
 
-from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
-from app.embedding_config import coerce_floats, get_embed_dim, l2_normalize
+from app.embedding_config import assert_embed_dim, coerce_floats, get_embed_dim, l2_normalize
 
 from .base import (
     Decision,
@@ -152,21 +151,8 @@ class MemoryVectorIndex(VectorIndex):
         identity: EmbeddingIdentity | None = None,
     ) -> None:
         embedding_floats = coerce_floats(embedding)
-        resolved_identity = self._ensure_identity(identity, allow_initialize=True)
-        dim = len(embedding_floats)
-        if resolved_identity.dim != dim:
-            raise ValueError(
-                f"embedding dim mismatch for identity {resolved_identity.model}: expected {resolved_identity.dim}, got {dim}"
-            )
-        if model and model != resolved_identity.model:
-            raise ValueError(
-                f"embedding model mismatch: stored={resolved_identity.model} provided={model}"
-            )
-        model_value = model or resolved_identity.model
-        if resolved_identity.normalize:
-            embedding_norm = l2_normalize(embedding_floats)
-        else:
-            embedding_norm = embedding_floats
+        assert_embed_dim(embedding_floats, name="embedding")
+        embedding_norm = l2_normalize(embedding_floats)
 
         self._seq += 1
         entry = _VectorEntry(
@@ -175,7 +161,7 @@ class MemoryVectorIndex(VectorIndex):
             source_ref=source_ref,
             payload=dict(payload),
             embedding=embedding_norm,
-            model=model_value,
+            model=model,
             seq=self._seq,
             identity=self._identity,
         )
@@ -186,17 +172,9 @@ class MemoryVectorIndex(VectorIndex):
         if not self._entries:
             return []
 
-        resolved_identity = self._ensure_identity(identity, allow_initialize=False)
         query = coerce_floats(vector)
-        dim = len(query)
-        if dim != resolved_identity.dim:
-            raise ValueError(
-                f"query embedding dim mismatch: expected {resolved_identity.dim}, got {dim}"
-            )
-        if resolved_identity.normalize:
-            query_norm = l2_normalize(query)
-        else:
-            query_norm = query
+        assert_embed_dim(query, name="query embedding")
+        query_norm = l2_normalize(query)
 
         results: list[tuple[float, int, _VectorHit]] = []
         for entry in self._entries.values():
@@ -280,55 +258,15 @@ class MemoryVectorIndex(VectorIndex):
                         continue
 
                     embedding = list(data.get("embedding") or [])
-                    if not embedding:
+                    if len(embedding) != expected_dim:
                         continue
-                    dim = len(embedding)
-                    identity_data = data.get("identity") if isinstance(data.get("identity"), dict) else None
-                    loaded_identity = None
-                    if identity_data:
-                        try:
-                            loaded_identity = EmbeddingIdentity(
-                                provider=str(identity_data.get("provider", "")),
-                                model=str(identity_data.get("model", "")),
-                                dim=int(identity_data.get("dim", 0) or 0),
-                                normalize=bool(identity_data.get("normalize", True)),
-                            )
-                        except Exception:
-                            loaded_identity = None
-                    if loaded_identity and loaded_identity.dim and loaded_identity.dim != dim:
-                        continue
-                    if self._identity is None:
-                        if loaded_identity:
-                            self._identity = loaded_identity
-                        else:
-                            self._identity = EmbeddingIdentity(
-                                provider="legacy",
-                                model=str(data.get("model", "")),
-                                dim=dim,
-                                normalize=True,
-                            )
-                    elif loaded_identity and (
-                        loaded_identity.provider != self._identity.provider
-                        or loaded_identity.model != self._identity.model
-                        or (loaded_identity.dim and loaded_identity.dim != self._identity.dim)
-                        or loaded_identity.normalize != self._identity.normalize
-                    ):
-                        continue
-                    if self._identity.dim != dim:
-                        continue
-
-                    embedding_values = coerce_floats(embedding)
-                    if self._identity.normalize:
-                        stored_embedding = l2_normalize(embedding_values)
-                    else:
-                        stored_embedding = embedding_values
 
                     entry = _VectorEntry(
                         object_id=obj_id,
                         kind=str(data.get("kind", "")),
                         source_ref=str(data.get("source_ref", "")),
                         payload=data.get("payload") or {},
-                        embedding=stored_embedding,
+                        embedding=l2_normalize(coerce_floats(embedding)),
                         model=str(data.get("model", "")),
                         seq=int(data.get("seq", 0)),
                         identity=self._identity,

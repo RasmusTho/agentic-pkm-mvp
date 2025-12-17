@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict
 from uuid import UUID
 
 from app.events.schema import make_outbox_event
-from app.outbox.events import INDEX_OUTBOX_PATH
+
+INDEX_OUTBOX_PATH = Path(os.environ.get("INDEX_OUTBOX_PATH", "logs/index-outbox.jsonl"))
 
 
 def emit_index_object_embedded_with_vector(event: Dict[str, Any]) -> None:

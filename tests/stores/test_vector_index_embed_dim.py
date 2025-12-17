@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.components.embeddings import EmbeddingIdentity
 from app.stores.memory import MemoryVectorIndex
-
-IDENTITY = EmbeddingIdentity(provider="test", model="memory-test", dim=4)
 
 
 def test_vector_index_upsert_rejects_dim_mismatch(monkeypatch) -> None:
@@ -18,8 +15,7 @@ def test_vector_index_upsert_rejects_dim_mismatch(monkeypatch) -> None:
             source_ref="unit-test",
             payload={"text": "a"},
             embedding=[1.0, 0.0, 0.0],
-            model=IDENTITY.model,
-            identity=IDENTITY,
+            model="test",
         )
 
 
@@ -33,8 +29,7 @@ def test_vector_index_search_rejects_dim_mismatch(monkeypatch) -> None:
         source_ref="unit-test",
         payload={"text": "a"},
         embedding=[1.0, 0.0, 0.0, 0.0],
-        model=IDENTITY.model,
-        identity=IDENTITY,
+        model="test",
     )
     with pytest.raises(ValueError, match=r"query embedding dim mismatch"):
-        idx.search([1.0, 0.0, 0.0], k=1, identity=IDENTITY)
+        idx.search([1.0, 0.0, 0.0], k=1)
