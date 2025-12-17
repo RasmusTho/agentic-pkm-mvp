@@ -113,11 +113,11 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/DEV_WORKFLOW.md | Dev workflow | Baseline-only (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
 | docs/scenarios/REALITY_MVP.md | Scenario walkthrough | Baseline-only (v4.10) | 2025-12-07 | Matches e2e pipeline test and ASK expectations. |
 
-## Architecture Subdocuments
+## Historical / Archived (Architecture Deep Dives)
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/architecture/next-steps.md | Architecture future/bridge | Legacy (archived) | 2025-12-07 | Historical v4.3 bridge; superseded by STATUS/ROADMAP v4.10. |
-| docs/architecture/obsidian_integration.md | Obsidian integration deep dive | Legacy (archived) | 2025-12-11 | SoT v4.3 watcher-based flow (historical); superseded by v4.10/v5.x docs; watcher → ingest → outbox pattern reused in planned v5.x track. |
+| docs/archive/architecture/next-steps.md | Architecture future/bridge (historical) | Legacy (archived) | 2025-12-17 | SoT v4.3-era addendum; kept for reference with an explicit HISTORICAL banner; not authoritative for current SoT. |
+| docs/archive/architecture/obsidian_integration.md | Obsidian integration deep dive (historical) | Legacy (archived) | 2025-12-17 | SoT v4.3-era deep dive; kept for reference with an explicit HISTORICAL banner; not authoritative for current SoT. |
 | docs/architecture/memory/api.md | Memory API v4.2 | Legacy (archived) | 2025-12-07 | V4.2 agent-memory API; not in Reality-MVP. |
 | docs/architecture/memory/c4-component.md | Memory C4 component | Legacy (archived) | 2025-12-07 | Legacy memory component view; see ARCHITECTURE/DATA_MODEL. |
 | docs/architecture/memory/c4-container.md | Memory C4 container | Legacy (archived) | 2025-12-07 | Legacy container diagram; superseded by SYSTEM_DESIGN_v4.10. |

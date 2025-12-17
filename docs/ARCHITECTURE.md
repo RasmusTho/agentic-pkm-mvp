@@ -219,7 +219,7 @@ The v5 roadmap layers declarative reasoning (RDF/OWL/SHACL constraints) on top o
 ## Settings Architecture — Vault-as-GUI, Code-as-Source
 
 Control surface (human-facing): `vault/@Settings/**`  
-Effective runtime configuration (compiled): `runtime/settings/**/*.yaml`
+Effective runtime configuration (compiled): `runtime/settings/**/*.yaml` (derived; rebuildable)
 
 The canonical configuration is the vault settings surface; the runtime YAML is a derived/compiled representation.
 

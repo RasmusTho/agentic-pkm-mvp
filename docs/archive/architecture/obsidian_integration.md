@@ -1,5 +1,9 @@
-State: Planned / partially implemented. Align carefully with STATUS (SoT v4.10) before applying. This is a SoT v4.3 deep dive (historical); the v5.x watcher/agent track (v5.1–v5.4) reuses the same watcher → ingest → outbox → indexer pattern under the current SoT v4.10/v5.x docs (see HUMAN-FLOWS watcher section).
-# Obsidian Integration & Lifecycle — SoT v4.3 Deep Dive
+State: HISTORICAL (SoT v4.3-era): kept for reference; not authoritative for current SoT.
+
+> HISTORICAL (SoT v4.3-era): kept for reference; not authoritative for current SoT.
+> See `docs/PROJECT_KERNEL.md` and `docs/DOCS_INDEX.md`.
+
+# (HISTORICAL) Obsidian Integration & Lifecycle — SoT v4.3 Deep Dive
 
 This addendum documents how SoT v4.3 connects the ingestion pipeline with an Obsidian vault while preserving the Core-6 data model and promotion governance.
 
