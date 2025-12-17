@@ -10,6 +10,8 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.db.dsn import resolve_dsn
+from app.embedding_config import assert_embed_dim, coerce_floats, l2_normalize
+
 from .base import ObjectStore, RelationIndex, VectorIndex
 
 _TABLES_READY = False
@@ -168,7 +170,9 @@ class PgVectorIndex(VectorIndex):
         model: str,
     ) -> None:
         _ensure_tables()
-        embedding_floats = [float(v) for v in embedding]
+        embedding_floats = coerce_floats(embedding)
+        assert_embed_dim(embedding_floats, name="embedding")
+        embedding_norm = l2_normalize(embedding_floats)
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -185,11 +189,16 @@ class PgVectorIndex(VectorIndex):
                         model = EXCLUDED.model,
                         updated_at = now()
                     """,
-                    (object_id, kind, source_ref, json.dumps(payload), embedding_floats, model),
+                    (object_id, kind, source_ref, json.dumps(payload), embedding_norm, model),
                 )
 
     def search(self, vector: list[float], *, k: int = 5) -> List[_VectorHit]:
         _ensure_tables()
+
+        query = coerce_floats(vector)
+        assert_embed_dim(query, name="query embedding")
+        query_norm = l2_normalize(query)
+
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -201,10 +210,13 @@ class PgVectorIndex(VectorIndex):
                 rows = cur.fetchall()
         if not rows:
             return []
-        scored: List[Tuple[float, any, _VectorHit]] = []
+
+        scored: List[Tuple[float, object, _VectorHit]] = []
         for row in rows:
-            embedding = row["embedding"] or []
-            score = self._dot(vector, embedding)
+            embedding = coerce_floats(row["embedding"] or [])
+            assert_embed_dim(embedding, name="stored embedding")
+            candidate_norm = l2_normalize(embedding)
+            score = self._dot(query_norm, candidate_norm)
             scored.append(
                 (
                     score,
@@ -270,12 +282,3 @@ class PgRelationIndex(RelationIndex):
                 )
                 row = cur.fetchone()
         return bool(row)
-
-
-__all__ = [
-    "PgObjectStore",
-    "PgVectorIndex",
-    "PgRelationIndex",
-    "pg_available",
-    "truncate_pg_tables",
-]

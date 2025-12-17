@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from uuid import uuid4
 
-import pytest
 import psycopg
+import pytest
 
 from app.db.dsn import resolve_dsn
 from app.stores import reset_store_backends, get_object_store, get_vector_index, get_relation_index
@@ -51,6 +51,8 @@ def test_vector_index_search_order(monkeypatch, backend):
     if backend == "pg" and not _pg_available():
         pytest.skip("Postgres backend not available")
     monkeypatch.setenv("STORE_BACKEND", backend)
+    monkeypatch.setenv("EMBED_DIM", "4")
+
     idx = get_vector_index()
     a, b = uuid4(), uuid4()
     idx.upsert(object_id=a, kind="note", source_ref="unit-test", payload={"text": "a"}, embedding=[1, 0, 0, 0], model="test")

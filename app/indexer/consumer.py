@@ -1,40 +1,91 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable
+from typing import Any, Dict
 from uuid import UUID
 
+from app.components.embeddings import get_embedding_client
+from app.embedding_config import coerce_floats
+from app.llm.embeddings import EMBED_MODEL
+from app.outbox import events as outbox_events
+from app.store.object_store import ObjectStore
 from app.stores import get_vector_index
 
-REQUIRED_FIELDS = {"object_id", "kind", "source_ref", "payload", "embedding", "model"}
+
+def _extract_object_id(evt: Dict[str, Any]) -> str | None:
+    payload = evt.get("payload")
+    if isinstance(payload, dict):
+        obj_id = payload.get("object_id")
+        if obj_id:
+            return str(obj_id)
+    obj_id = evt.get("object_id")
+    return str(obj_id) if obj_id else None
 
 
-def _coerce_embedding(values: Iterable[Any]) -> list[float]:
-    return [float(v) for v in values]
+def _extract_text(obj_payload: Dict[str, Any]) -> str:
+    for key in ("content", "text", "raw_text"):
+        val = obj_payload.get(key)
+        if val:
+            return str(val)
+    return ""
 
 
 def process_event(evt: Dict[str, Any]) -> None:
-    missing = sorted(REQUIRED_FIELDS - set(evt.keys()))
-    if missing:
-        raise ValueError(f"index event missing fields: {', '.join(missing)}")
+    event_type = str(evt.get("event") or "").strip()
 
-    object_id = UUID(str(evt["object_id"]))
-    kind = str(evt["kind"])
-    source_ref = str(evt["source_ref"])
-    raw_payload = dict(evt["payload"])
-    # Envelope-compatible: unwrap nested payload if present
-    payload = raw_payload.get("payload", raw_payload) if isinstance(raw_payload.get("payload"), dict) else raw_payload
-    embedding = _coerce_embedding(evt["embedding"])
-    model = str(evt["model"])
+    # Legacy: embedding-in-event records (deprecated).
+    if "embedding" in evt and "object_id" in evt:
+        object_id = UUID(str(evt["object_id"]))
+        kind = str(evt.get("kind") or "")
+        source_ref = str(evt.get("source_ref") or "")
+        raw_payload = dict(evt.get("payload") or {})
+        payload = raw_payload.get("payload", raw_payload) if isinstance(raw_payload.get("payload"), dict) else raw_payload
+        embedding = coerce_floats(evt.get("embedding") or [])
+        model = str(evt.get("model") or EMBED_MODEL)
+
+        idx = get_vector_index()
+        idx.upsert(
+            object_id=object_id,
+            kind=kind,
+            source_ref=source_ref,
+            payload=payload,
+            embedding=embedding,
+            model=model,
+        )
+        outbox_events.emit_index_embedding_created(object_id=object_id, trace_id=str(evt.get("trace_id") or "") or None)
+        return
+
+    # Current: request event triggers embedding computation in the indexer.
+    if event_type != outbox_events.INDEX_EMBEDDING_REQUESTED:
+        return
+
+    object_id_raw = _extract_object_id(evt)
+    if not object_id_raw:
+        raise ValueError("index.embedding.requested missing payload.object_id")
+
+    store = ObjectStore()
+    obj = store.get_object(object_id_raw)
+    if obj is None:
+        raise FileNotFoundError(f"Object not found for embedding request: {object_id_raw}")
+
+    obj_uuid = UUID(str(obj.uuid))
+    obj_payload = dict(obj.payload or {})
+    text = _extract_text(obj_payload)
+
+    embedder = get_embedding_client()
+    embedding = embedder.embed_text(text)
 
     idx = get_vector_index()
     idx.upsert(
-        object_id=object_id,
-        kind=kind,
-        source_ref=source_ref,
-        payload=payload,
+        object_id=obj_uuid,
+        kind=str(obj.kind or "note"),
+        source_ref=str(obj.source_ref or ""),
+        payload=obj_payload,
         embedding=embedding,
-        model=model,
+        model=EMBED_MODEL,
     )
+
+    trace_id = str(evt.get("trace_id") or "").strip() or None
+    outbox_events.emit_index_embedding_created(object_id=obj_uuid, trace_id=trace_id)
 
 
 __all__ = ["process_event"]

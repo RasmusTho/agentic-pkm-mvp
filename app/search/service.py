@@ -274,19 +274,7 @@ def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, 
     payload_out.setdefault("system_intent", "learn")
     payload_out.setdefault("emergent_tags", [])
 
-    # 2) försök delegera till core-ingest (full livscykel)
-    try:
-        from app.ingest import ingest_object as core_ingest  # lazy import för att undvika cirklar
-        return core_ingest(
-            object_id=oid,
-            kind=kind,
-            source_ref=source_ref,
-            payload=payload_out,
-            text=text,
-            **__,
-        )
-    except Exception:
-        pass
+    # 2) skip core-ingest delegation; keep local upsert fallback
 
     # 3) robust lokal fallback: upsert i vector-index
     try:
