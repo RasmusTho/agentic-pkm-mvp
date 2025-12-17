@@ -19,36 +19,40 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 ## Root and Repo Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| README.md | Top-level overview | Aligned (forward line v5.x) | 2025-12-13 | Banner now calls out baseline v4.10 (locked) and forward line v5.4 (PanelAgent + Watchers); links to SoT docs. |
+| README.md | Top-level overview | Aligned (forward line v5.x) | 2025-12-17 | Highlights canonical warm/cold artifacts, rebuildable mirrors, and quickstart details. |
 | CHANGELOG.md | Repo change log (root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/CHANGELOG.md. |
 | .github/ISSUE_TEMPLATE/v4.6-objective.md | Issue template (historical, root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/ISSUE_TEMPLATE_v4.6-objective.md. |
 | .github/pull_request_template.md | PR template (historical, root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/pull_request_template.md. |
 | docs/archive/github-templates/CHANGELOG.md | Repo change log (archived) | Legacy (archived) | 2025-12-07 | Moved from root; superseded by STATUS/ROADMAP v4.10. |
 | docs/archive/github-templates/ISSUE_TEMPLATE_v4.6-objective.md | Issue template (historical) | Legacy (archived) | 2025-12-07 | Moved from .github; v4.6 template kept for history. |
 | docs/archive/github-templates/pull_request_template.md | PR template (historical) | Legacy (archived) | 2025-12-07 | Moved from .github; v4.6 scaffold not current CI expectations. |
+| docs/archive/README.md | Archive index | Legacy (archived) | 2025-12-17 | Index of archived docs; not part of the active doc set. |
 
 ## Core SoT Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/PROJECT_KERNEL.md | Project kernel (human flows + stability contracts) | Aligned (forward line v5.x) | 2025-12-16 | Canonical product intent and stable contracts; intentionally avoids implementation detail. |
+| docs/PROJECT_KERNEL.md | Project kernel (human flows + stability contracts) | Aligned (forward line v5.x) | 2025-12-17 | Canonical intent and stability contracts with trust/event/config anchors. |
 | docs/CONCEPTS/LAYERING_MODEL.md | Layering model (Domain/Plane/Trust/Zone) | Aligned (forward line v5.x) | 2025-12-16 | Orthogonal boundary model and cross-domain bridge concept; referenced by PROJECT_KERNEL. |
+| docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md | Trust semantics contract (assert/suggest/apply) | Aligned (forward line v5.x) | 2025-12-17 | Defines trust tiers, gating rules, write constraints, and receipts. |
+| docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md | Event/intent compatibility contract (versioning) | Aligned (forward line v5.x) | 2025-12-17 | Covers envelope invariants, versioning rules, idempotence, and new-event checklist. |
+| docs/CONCEPTS/CONFIG_AS_PRODUCT_CONTRACT.md | Config-as-product contract | Aligned (forward line v5.x) | 2025-12-17 | Covers precedence, validation, rollback, audit, and portability rules for config. |
 | docs/CONCEPTS/PORTABILITY_CONTRACT.md | Portability contract (macOS + Windows) | Aligned (forward line v5.x) | 2025-12-16 | Defines portability hazards and rules for portable artifacts and paths; referenced by PROJECT_KERNEL. |
 | docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md | Archive exposure contract (cold brain safety) | Aligned (forward line v5.x) | 2025-12-16 | Defines discovery→citation→preview→materialization exposure modes and receipt requirements; referenced by PROJECT_KERNEL. |
-| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-03-12 | Locked v4.10 baseline; forward line through v5.5; links to ROADMAP + docs/tracks for plans. |
+| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-12-17 | Adds a Contracts section pointing to kernel anchors and concept contracts. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
-| docs/STATUS.md | Operational snapshot | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-11 | Status fields documented (baseline vs forward line, active features, event counters from outbox). |
+| docs/STATUS.md | Operational snapshot | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-12-17 | Notes that layering/portability/archive/trust/event/config are anchored by concept contracts. |
 | docs/ROADMAP.md | Strategic roadmap | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-14 | Forward line tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration); Quality Wave (Runtime Loop Evaluation Stack) defined with A–F deliverables, exit criteria, and explicit module map; v5.6 LangGraph rollout planned; v4.10 baseline referenced only as foundation. |
 | docs/tracks/TRACK_WATCHER.md | Watcher track (v5.1–v5.4) | Aligned (forward line v5.x) | 2025-03-12 | Snapshot watcher track details, policy gating, daemon/ergonomics. |
 | docs/tracks/TRACK_PANELAGENT_LANGGRAPH.md | PanelAgent LangGraph track (v5.5) | Aligned (forward line v5.x) | 2025-03-12 | PanelAgent catalog/decider modes, planner/orchestrator pipeline, promotion consumer. |
 | docs/tracks/TRACK_AGENTOPS_A2A_MCP.md | AgentOps / A2A / MCP track | Aligned (analysis) | 2025-03-12 | Pattern harvest themes for events/A2A/tools/ops; A2A/MCP scaffolding. |
 | docs/ROADMAP.md | Strategic roadmap | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-14 | Forward-looking, skimmable; links to history and track docs under docs/tracks/; includes Quality Wave: Runtime Loop Evaluation Stack (A–F deliverables + module list + exit criteria). |
 | docs/ROADMAP.md | Quality Wave (Runtime Loop Evaluation Stack) section | Aligned (forward line v5.x) | 2025-03-14 | Contract tests, golden vault, metamorphic + cold rebuild runs, fitness gates, scripted UAT; modules/files explicitly mapped for upcoming implementation. |
-| docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-02-24 | Reality-MVP components; v5.x will extend (PanelAgent, sync, richer orchestration). |
+| docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-12-17 | Consolidates a single maturity taxonomy across the catalog. |
 | docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2025-03-10 | Design principle set to LangGraph inner + events/A2A outer; PanelAgent exemplifies the pattern with a catalog-driven decider and planner pipeline opt-in plus CLI-first orchestration; SoT wording calls out forward line through v5.5 with v4.10 as locked base. |
 | docs/PLANNER.md | Planner contract | Baseline-only (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (v5.0 – PanelAgent runtime V1) | 2025-03-14 | Panel runtime events plus promotion flow now document promote.done/promote.error and the runtime loop event chain contract (first run vs rerun, no duplicate intents). |
 | docs/DIAGRAMS.md | C4 diagrams | Baseline-only (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
-| docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2025-03-14 | Adds panel semantics: freeform may execute, uncertainty should become checkboxes, checkboxes as explicit consent, receipts kept outside the panel. |
+| docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2025-12-17 | Adds the trust semantics reference while keeping flow guidance. |
 | docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-14 | Adds Evaluation Stack (Runtime Loop / Panel / Promotion) A–F layers (contracts, golden vault, metamorphic, cold rebuild, fitness gates, scripted UAT) with placeholder commands. |
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x + planned v5.5 LangGraph) | 2025-03-14 | Adds human-first semantics (freeform may execute with receipts, uncertainty becomes suggested checkboxes, receipts stay outside panel); intent vs mutation and wiring precedence documented. |
 | docs/UAT_PANEL_WATCHER.md | UAT guide (panel + watcher) | Aligned | 2025-12-10 | Human-facing UAT flow for PanelAgent + Vault Watcher (prep notes, targeted ingest, panel run-many, watcher dry-run/run, observations). |
@@ -74,9 +78,9 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/LLM.md | LLM integration | Baseline-only (v4.10) | 2025-12-07 | Providers/env defaults (mock/Ollama/OpenAI/DeepSeek). |
 | docs/LLM_BACKENDS.md | LLM backends | Baseline-only (v4.10) | 2025-12-07 | Providers mock/ollama/openai/deepseek; timeouts/keys noted. |
 | docs/RETRIEVAL.md | Retrieval | Baseline-only (v4.10) | 2025-12-07 | Hybrid search + optional rerank; ASK graph defaults noted. |
-| docs/FRONTMATTER.md | Frontmatter rules | Baseline-only (v4.10) | 2025-12-07 | Vault frontmatter minimal; UUID healing only. |
+| docs/FRONTMATTER.md | Frontmatter rules | Aligned (forward line v5.x) | 2025-12-17 | Defines the warm-surface write contract and receipt placement. |
 | docs/DATA_MODEL.md | Data model | Baseline-only (v4.10) | 2025-12-07 | Active store_objects/vector_index/relations; legacy tables noted. |
-| docs/DATA_GOVERNANCE.md | Data governance | Baseline-only (v4.10) | 2025-12-07 | Stores + VaultMirror as truth; promotion gating flagged experimental. |
+| docs/DATA_GOVERNANCE.md | Data governance | Aligned (forward line v5.x) | 2025-12-17 | Clarifies canonical vs derived artifacts, trust semantics, and auditable persistence. |
 | docs/DB_SCHEMA.md | DB schema | Partially outdated | 2025-12-07 | Current store_* tables documented; legacy AMG tables retained as historical. |
 | docs/SCORECARDS.md | Scorecards | Partially outdated | 2025-12-07 | Draft targets only; not enforced in Reality-MVP. |
 | docs/PROJECTOR.md | Projector | Baseline-only (v4.10) | 2025-12-07 | Promotion projector emits audit/membership; no filesystem projection. |
@@ -125,7 +129,8 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/architecture/memory/security.md | Memory security | Legacy (archived) | 2025-12-07 | Legacy security for memory store; see SECURITY/PRIVACY. |
 | docs/architecture/memory/sequence-per.md | Memory PER sequence | Legacy (archived) | 2025-12-07 | PER sequence for memory store not in Reality-MVP. |
 | docs/architecture/memory/overview.md | Memory overview | Legacy (archived) | 2025-12-07 | V4.2 memory overview; replaced by ObjectStore/VectorIndex. |
-| docs/uml/README.md | UML overview | Legacy (archived) | 2025-12-07 | Supervisor-era UML; canonical diagrams in DIAGRAMS.md. |
+| README.md | Top-level overview | Aligned (forward line v5.x) | 2025-12-17 | Highlights canonical warm/cold artifacts, rebuildable mirrors, and quickstart details. |
+| docs/uml/README.md | UML index | Legacy (archived) | 2025-12-17 | Legacy UML overview + diagram index; replaced by the architecture docs. |
 | docs/uml/agent_sequence.md | UML sequence | Legacy (archived) | 2025-12-07 | Run_agent supervisor loop; not part of Reality-MVP. |
 | docs/uml/agent_components.md | UML components | Legacy (archived) | 2025-12-11 | Legacy agent service components; watcher block marked removed and superseded by planned v5.x watcher track (see ROADMAP/STATUS/HUMAN-FLOWS). |
 
@@ -168,7 +173,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 ## Legacy and Archive
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/archive/README.md | Archive index | Legacy (archived) | — |  |
+| README.md | Top-level overview | Aligned (forward line v5.x) | 2025-12-17 | Highlights canonical warm/cold artifacts, rebuildable mirrors, and quickstart details. |
 | docs/archive/NEXT-STEPS.md | Archived plan | Legacy (archived) | — |  |
 | docs/archive/transcription.md | Archived transcription doc | Legacy (archived) | — |  |
 | docs/archive/SoT-v4.1.md | Legacy SoT v4.1 | Legacy (archived) | — |  |
@@ -210,7 +215,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | System/Dashboards/conflicts.md | System dashboard | Baseline-only (v4.10) | 2025-12-07 | Minimal vault dashboard for conflicts inbox. |
 | System/Settings/system.md | System settings | Partially outdated | 2025-12-07 | Illustrative sync settings; not enforced in Reality-MVP. |
 | Inbox/System-changes.md | Inbox/system changes | Baseline-only (v4.10) | 2025-12-07 | Log stub for system change notes. |
-| vault/README.md | Vault README | Baseline-only (v4.10, with known debt) | 2025-12-07 | Vault surface overview; ingest via CLI, UUID healing, panels optional. |
+| README.md | Top-level overview | Aligned (forward line v5.x) | 2025-12-17 | Highlights canonical warm/cold artifacts, rebuildable mirrors, and quickstart details. |
 | vault/0_Atlas/Home.md | Vault note | Baseline-only (v4.10, with known debt) | 2025-12-07 | Home navigation; points to settings/inbox/desks; panels optional. |
 | vault/@Desk/galaxy-test.md | Vault note | Example / sandbox | 2025-12-07 | Sample note with UUID; non-authoritative. |
 | vault/@Desk/Test fil 2.md | Vault note | Example / sandbox | 2025-12-07 | Empty example note. |
@@ -218,7 +223,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | vault/Test fil1.md | Vault note | Example / sandbox | 2025-12-07 | Empty example note. |
 | vault/@Inbox/Desicion science for data scientists 2.md | Vault inbox note | Example / sandbox | 2025-12-07 | Sample inbox content; non-authoritative. |
 | vault/settings/Overview.md | Vault settings overview | Example / sandbox | 2025-12-07 | Human-facing overview; runtime config is env + _system YAML. |
-| vault/@Settings/README.md | Vault settings README | Example / sandbox | 2025-12-07 | Explains settings examples; not parsed by runtime. |
+| README.md | Top-level overview | Aligned (forward line v5.x) | 2025-12-17 | Highlights canonical warm/cold artifacts, rebuildable mirrors, and quickstart details. |
 | vault/@Settings/global.md | Vault settings | Example / sandbox | 2025-12-07 | Illustrative global settings; runtime uses env/code defaults. |
 | vault/@Settings/agents/promotion.md | Vault agent settings | Example / sandbox | 2025-12-07 | Promotion settings example; runtime does not ingest. |
 | vault/@Settings/agents/classifier.md | Vault agent settings | Example / sandbox | 2025-12-07 | Classifier settings example; runtime does not ingest. |

@@ -16,6 +16,18 @@ This architecture focuses on the runtime and data model for the Mimer module (th
 - Default when nothing is configured: `id="home"` and `role="master"`, matching the Reality-MVP single-runtime focus.
 - Scope: internal plumbing that informs events/logs and future sync topology; no change to the Obsidian surface or frontmatter.
 
+## Contracts (concept anchors)
+
+Architecture describes how things are wired today; these documents define what must remain stable as implementations evolve:
+
+- `docs/PROJECT_KERNEL.md`
+- `docs/CONCEPTS/LAYERING_MODEL.md`
+- `docs/CONCEPTS/PORTABILITY_CONTRACT.md`
+- `docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md`
+- `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`
+- `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`
+- `docs/CONCEPTS/CONFIG_AS_PRODUCT_CONTRACT.md`
+
 ## Component Catalog
 - See `docs/COMPONENTS.md` for the canonical, human- and machine-readable list of active components (stores, agents, embeddings, rerankers, eval stack, observability). Update it when wiring new component entrypoints under `app/components/*`.
 - The outbox/event system uses a common envelope (`event`, `trace_id`, `source`, `timestamp`, `payload`, `meta`) defined in `app/events/schema.py` and enforced by architecture tests; emitters should write via outbox helpers to preserve the contract.

@@ -13,6 +13,8 @@ All events share a minimal envelope:
 - `meta` (`object`, optional): free-form metadata (defaults to `{}`).
 - Additional legacy fields may be present alongside the envelope (e.g. `object_id`, `topic`) for backward compatibility.
 
+See also: `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md` for the canonical contract on event/intent versioning, idempotence expectations, and backward/forward compatibility.
+
 Example (`index.object.embedded` as written by `app.outbox.events.emit_index_object_embedded`):
 
 ```json

@@ -1,6 +1,8 @@
 State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x forward line currently tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration).
 Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, watcher runs, ingest runs by plane) for UAT visibility.
 
+Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
+
 ## Status fields (baseline vs forward line)
 - `sot_baseline_version`: locked Reality-MVP baseline (v4.10).
 - `sot_forward_line_version` / `feature_line_version`: active forward line (v5.x features on top of v4.10).

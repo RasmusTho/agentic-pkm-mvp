@@ -1,55 +1,71 @@
 State: SoT v4.10 Reality-MVP (baseline locked; v5.x Agentic PKM is the forward line).
-# Components Catalog (Reality-MVP)
+# Components Catalog (Reality-MVP + forward line)
 
-Canonical list of current modular building blocks. Keep this aligned with the codebase; no future placeholders beyond explicit OCR stubs below.
+Canonical list of current modular building blocks.
+
+This document is an implementation catalog (it may mention current entrypoints/config). Kernel-level intent and stability contracts live in `docs/PROJECT_KERNEL.md`.
+
+## Maturity taxonomy
+
+Use one label consistently:
+- **Baseline** — part of the locked Reality-MVP backbone; relied upon for core workflows.
+- **Active** — delivered in the v5.x forward line; used in practice but still evolving.
+- **Experimental** — opt-in and not yet considered stable; safe defaults should keep it off.
+- **Planned** — documented intent or stubs; not shipped as a user-reliable capability.
 
 ## Stores
-| Store abstraction | Backend (v4.10) | Notes |
+
+| Store abstraction | Backend (current) | Notes |
 | --- | --- | --- |
-| ObjectStore | Postgres / in-memory | Core-6 objects and payloads |
-| VectorIndex | pgvector / in-memory | Embeddings from components |
-| RelationIndex | (planned, see ROADMAP) | Future knowledge graph |
-| Outbox | JSONL at `INDEX_OUTBOX_PATH` | Canonical event envelope |
+| ObjectStore | Postgres / in-memory | Durable object records + payloads (operational mirror over canonical artifacts) |
+| VectorIndex | pgvector / in-memory | Embeddings + similarity search (derived, rebuildable) |
+| RelationIndex | in-memory / Postgres (if enabled) | Relations graph (may be present even if not fully exploited in every flow) |
+| Outbox | JSONL | Event/intent emission stream (audit + coordination artifact) |
 
-- **ObjectStore (memory/pg)** — Persists Core-6 envelopes + payloads; `app.stores.*`, access via `app.stores.get_object_store()`. Inputs: `{object_id, kind, source_ref, payload}`. Outputs: persisted record + retrieval via `.get/.list_by_kind`. Config: `STORE_BACKEND` (`memory` default, `pg` optional). Maturity: baseline/stable.
-- **VectorIndex (memory/pg)** — Embedding storage + similarity search; `app.stores.*`. Inputs: `{object_id, kind, source_ref, payload, embedding, model}`. Outputs: hits with scores. Config: `STORE_BACKEND`, `INDEX_PERSIST_PATH/LOAD` (memory snapshot). Maturity: baseline/stable.
-- **RelationIndex/AMG (memory/pg)** — Relation graph storage; `app.stores.*`. Inputs: relation tuples (supports/extends/contradicts/derived_from). Outputs: neighbors/has_any. Config: `STORE_BACKEND`. Maturity: baseline.
+- **ObjectStore (memory/pg)** — Persists object envelopes + payloads; access via store APIs. Maturity: Baseline.
+- **VectorIndex (memory/pg)** — Embedding storage + similarity search. Maturity: Baseline.
+- **RelationIndex (memory/pg)** — Relation graph storage for typed links and provenance edges. Maturity: Baseline.
 
-## Ingest/PER agents
-- **Normalizer** — Reads source markdown, emits Core-6 envelope + payload; `app.agents.normalizer.*`. Inputs: file path. Outputs: `{event=ingest.normalize.done, core6, payload}` saved via ObjectStore. Maturity: baseline.
-- **Classifier** — Tags type/trust/tags; `app.agents.classifier.*`. Inputs: object_id + payload text. Outputs: classification decision recorded in DecisionsStore; env: `LLM_PROVIDER` (mock/default). Maturity: baseline.
-- **Chunker** — Splits text into spans; `app.agents.chunker.*`. Inputs: object_id + text. Outputs: chunk set events. Config: chunk sizes/max tokens. Maturity: baseline.
-- **Deduper** — Heuristic dup detection; `app.agents.deduper.*`. Inputs: list[object_id], payload text. Outputs: duplicate pairs (no DB writes in tests). Maturity: baseline.
-- **CitationChecker** — Checks outbound refs; `app.agents.citation_checker.*`. Inputs: object_id + payload. Outputs: citation report. Maturity: baseline/experimental in CI.
-- **Indexer (agent + services)** — Creates embeddings and writes to VectorIndex; `app.agents.indexer.*`, `app.services.indexer`. Inputs: object_id + payload text. Outputs: index events, `index.object.embedded` outbox. Config: embeddings via component client. Maturity: baseline.
+## Ingest / pipeline agents
+
+- **Normalizer** — Reads source material and emits normalized objects with provenance preserved. Maturity: Baseline.
+- **Classifier** — Proposes classifications (types/tags/etc) under human-first constraints. Maturity: Baseline.
+- **Chunker** — Splits content into spans for indexing/retrieval. Maturity: Baseline.
+- **Deduper** — Detects likely duplicates and records decisions conservatively. Maturity: Baseline.
+- **CitationChecker** — Validates outbound references for ASK outputs and review flows. Maturity: Baseline (with Experimental use in CI).
+- **Indexer (agent + services)** — Creates embeddings and writes to the VectorIndex; emits index-related events. Maturity: Baseline.
 
 ## Retrieval & ranking
-- **Hybrid retrieval** — BM25 + embeddings + optional rerank; `app.retrieval.hybrid`, `app.retrieval.hook_adapter`. Inputs: query string; store documents (doc_id/text/source_ref/payload). Outputs: ranked hit dicts. Config: `RERANK_ENABLE`, `RERANK_TOP_K`. Maturity: baseline.
-- **Rerankers** — Cross-encoder stack with deterministic local/mock fallbacks; `app.components.rerankers` → `app.retrieval.rerank.*`. Inputs: query + `RerankItem` list. Outputs: ordered `RerankResult` ids. Config: `RERANK_PROVIDER` (`none|mock|ce_local|ce_http`). Maturity: baseline.
-- **Embeddings** — Entry via `app.components.embeddings`; defaults to `app.index.embeddings` (LLM-backed) with deterministic profile for tests. Inputs: text sequences. Outputs: embedding vectors. Config: `EMBED_MODEL/OLLAMA_EMBED_MODEL` via `app.llm.embeddings`. Maturity: baseline.
-Model defaults and configuration live in `docs/LLM.md`; deployment/infra context (Ollama, ports) is documented in `docs/SYSTEM_DESIGN_v4.10.md`.
+
+- **Hybrid retrieval** — Combined lexical + semantic retrieval with optional reranking overlays. Maturity: Baseline.
+- **Rerankers** — Optional reranking providers with deterministic fallbacks. Maturity: Baseline.
+- **Embeddings** — Embedding provider entrypoint with deterministic profiles for tests. Maturity: Baseline.
 
 ## ASK / reasoning
-- **ASK API** — `/api/ask` FastAPI route; `app.api.routes.ask`. Inputs: question payload. Outputs: `AskResponse(answer, sources, latency_ms)` using hybrid retrieval, optional reasoning overlay. Config: `REASONING_ENABLE`, `AskSettings` in runtime settings. Maturity: baseline.
-- **Reasoning layer** — Optional modes (claims/review/ranking/ask.answer); `app.reasoning.*`. Inputs: question + context. Outputs: structured reasoning runs. Config: `REASONING_ENABLE`, providers via env/settings. Maturity: experimental/opt-in.
-- **Panel/NoteInteractionAgent** — `app/agents/panel/*`, `app/agents/panel/parser.py`. Inputs: note text with AI panel; outputs: parsed panel state, panel intents, outbox events (`source=panel.agent`), updated log entries. Config: panel action mappings (`vault/_system/panel-actions/*.md` or `docs/settings/panel-actions*`). Maturity: experimental.
+
+- **ASK API** — Question answering endpoint returning answers plus sources/latency. Maturity: Baseline.
+- **Reasoning layer** — Optional structured reasoning overlays (claims/evidence/inference). Maturity: Experimental.
+- **Panel agent** — Panel parsing + intent emission/execution for note interaction. Maturity: Active.
 
 ## Eval stack
-- **DeepEval ASK** — `tests/eval/test_ask_deepeval.py`, cases in `docs/eval/ask_cases.yaml`; uses FastAPI TestClient against `/api/ask`. Config: `EVAL_LLM_MODE`, `LLM_PROVIDER`. Maturity: experimental/opt-in (`@pytest.mark.eval`).
-- **Ragas RAG** — `tests/eval/test_rag_ragas.py`, cases in `docs/eval/rag_cases.yaml`; evaluates answer relevancy/faithfulness. Config: `EVAL_LLM_MODE`, ragas deps. Maturity: experimental/opt-in.
+
+- **DeepEval ASK** — Optional evaluation suite for ASK behaviors. Maturity: Experimental.
+- **Ragas RAG** — Optional RAG evaluation suite. Maturity: Experimental.
 
 ## Infra & observability
-- **Outbox/events** — `app.outbox.events`, `app.index.outbox`, event types in `app.events.types`. Inputs: structured event dicts. Outputs: JSONL (`INDEX_OUTBOX_PATH`) + handlers (indexer consumer). Maturity: baseline.
-- **Status/metrics** — `app.observability.*`, status service, ingest meta, metrics wiring in `app.api.routes.status` and `app.observability.ingest_meta`. Maturity: baseline.
-- **Logging/audit** — Agent audit logs (`app.services.audit`, agents), JSONL traces under `logs/`. Maturity: baseline.
-- **Event schema** — Canonical outbox envelope in `app/events/schema.py` (`event`, `trace_id`, `source`, `timestamp`, `payload`, `meta`); contract-tested in `tests/architecture/test_events_outbox_contracts.py`. Emitters should write via outbox helpers to keep envelope fields present.
+
+- **Outbox/events** — Event emission stream for coordination and audit. Maturity: Baseline.
+- **Status/metrics** — Runtime counters and status snapshots surfaced to humans. Maturity: Baseline.
+- **Logging/audit** — Structured logs and receipts for actions and runs. Maturity: Baseline.
 
 ## Dev-layer helpers & governance
-- **Architecture tests** — `tests/architecture/test_import_rules.py` enforce layering (no psycopg in API, agents server-agnostic, components entrypoints for embeddings/rerankers).
-- **AI development workflow** — `docs/AI_DEVELOPMENT.md`, `docs/DEV_WORKFLOW.md`, `.codex/AGENTS.md` describe coding and review practices.
-- **Frontmatter/data model** — `docs/FRONTMATTER.md`, `docs/DATA_MODEL.md` define Core-6 projections and vault expectations (no changes in this catalog).
-- **Eval docs** — `docs/eval.md` captures evaluation approach and optional suites.
+
+- **Architecture tests** — Layering/contract tests to keep determinism and boundaries intact. Maturity: Baseline.
+- **AI development workflow** — Docs describing coding and review practices. Maturity: Baseline.
+- **Frontmatter/data model docs** — Vault expectations and data model descriptions. Maturity: Baseline.
+- **Eval docs** — Guidance on running optional suites. Maturity: Baseline.
 
 ## OCR extension points (placeholders)
-- **Structured OCR** — Stubbed in `app.components.ocr.get_structured_ocr()`; not wired yet. Maturity: planned.
-- **Compressive OCR** — Stubbed in `app.components.ocr.get_compressive_ocr()`; not wired yet. Maturity: planned.
+
+- **Structured OCR** — Stubbed extension point; not wired as a user-facing feature. Maturity: Planned.
+- **Compressive OCR** — Stubbed extension point; not wired as a user-facing feature. Maturity: Planned.
