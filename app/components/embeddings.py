@@ -7,8 +7,8 @@ from typing import Iterable, Iterator, Protocol, Sequence
 
 from app.embedding_config import get_embed_dim
 from app.index import embeddings as _index_embeddings
-from app.llm.embeddings import EMBED_MODEL, get_embedding_provider
-from app.settings.runtime import get_settings_bundle
+from app.llm.embeddings import EMBED_MODEL
+from app.search import embeddings as _deterministic_embeddings
 
 
 class EmbeddingClientProtocol(Protocol):
@@ -160,38 +160,10 @@ def resolve_embedding_identity(profile: str | None = None, override_model: str |
     return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=True)
 
 
-def get_embedding_client(profile: str = "default", override_model: str | None = None) -> EmbeddingClientProtocol:
-    identity = resolve_embedding_identity(profile=profile, override_model=override_model)
-    if identity.provider == "deterministic":
-        return _DeterministicEmbeddingClient(identity)
-    return _ProfiledEmbeddingClient(identity)
-
-
-def get_embedding_identity(
-    client: EmbeddingClientProtocol | None = None,
-    *,
-    profile: str = "default",
-    override_model: str | None = None,
-) -> EmbeddingIdentity:
-    if client is not None and getattr(client, "identity", None) is not None:
-        return client.identity
-    return resolve_embedding_identity(profile=profile, override_model=override_model)
-
-
-def describe_embedding(text: str, *, profile: str = "default", override_model: str | None = None) -> tuple[EmbeddingIdentity, list[float]]:
-    client = get_embedding_client(profile=profile, override_model=override_model)
+def describe_embedding(text: str, *, profile: str = "default") -> tuple[str, int, list[float]]:
+    client = get_embedding_client(profile)
     vector = client.embed_text(text)
-    identity = client.identity
-    return identity, vector
+    return EMBED_MODEL, len(vector), vector
 
 
-__all__ = [
-    "EmbeddingClientProtocol",
-    "EmbeddingIdentity",
-    "get_embedding_client",
-    "get_embedding_identity",
-    "describe_embedding",
-    "resolve_embedding_identity",
-    "EMBED_MODEL",
-]
-
+__all__ = ["EmbeddingClientProtocol", "get_embedding_client", "describe_embedding", "EMBED_MODEL"]
