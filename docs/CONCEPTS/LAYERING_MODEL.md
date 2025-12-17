@@ -10,7 +10,7 @@ The four dimensions below are **orthogonal**: do not collapse them into one labe
 
 ## The four dimensions (orthogonal)
 
-**Domain** — A human context boundary (e.g., work, private, creative). Domain is the primary scope for retrieval, suggestions, and actions. Domain separation exists to prevent accidental mixing and to keep intent clear.
+**Domain** — A human context boundary (e.g., work, private, rpg). Domain is the primary scope for retrieval, suggestions, and actions. Domain separation exists to prevent accidental mixing and to keep intent clear.
 
 **Plane** — Where an artifact lives and how it is exposed. Planes constrain what is shown or modified by default:
 - **Warm plane**: the human-facing, editable writing surface.
@@ -31,6 +31,31 @@ The four dimensions below are **orthogonal**: do not collapse them into one labe
 6) **Zone is derived, not a gate.** Zone affects prioritization, not permission; it must never override domain, plane, or trust boundaries.
 7) **The stricter boundary wins.** When dimensions conflict or are unknown, default behavior must be conservative: avoid boundary crossings and prefer showing sources over making assertions.
 8) **Every boundary crossing is explainable.** The human should be able to answer: “what crossed, from where to where, why, and under what constraints?”
+
+## Default Scope Policy (Experiment)
+
+This section is a **human-first policy experiment** intended to reduce friction while preserving domain separation. It is non-binding: we will validate the UX and safety posture before hardening it into a permanent rule.
+
+Definitions:
+
+- **Active Domain**: the current working context (e.g., `work`, `private`, `rpg`).
+- **Global Evergreens**: a curated, explicit opt-in set of evergreen knowledge intended to be universally available across `work` and `private` contexts.
+  - Global Evergreens are **not** “all private notes” (nor “everything”); they are a deliberate shared set.
+  - Making something a Global Evergreen is itself an explicit boundary decision and must be auditable.
+- **Default retrieval scope**: `Active Domain` + `Global Evergreens`.
+- **Domain excludes**: additional safety filters applied to the default scope.
+  - When `Active Domain = work`, exclude `rpg` by default.
+
+Boundary posture:
+
+- This experiment does **not** weaken Trust semantics: Trust still constrains whether material can be asserted, suggested, or applied.
+- Global Evergreens are a standing cross-domain allowance (bridge-like in effect), but this document does not hard-commit how they are represented.
+
+One-shot cross-domain include:
+
+- A one-shot include may temporarily widen scope for a single operation.
+- It requires explicit user intent, produces an audit receipt, does not create a persistent bridge, and must not persistently widen default retrieval scope.
+- See “Ephemeral cross-domain include (one-shot)” below.
 
 ## Cross-domain access modes
 

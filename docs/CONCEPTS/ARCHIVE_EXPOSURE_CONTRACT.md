@@ -21,6 +21,13 @@ These are distinct modes with distinct safety requirements; “preview” must n
 
 1) **Cold objects are canonical; indexes are rebuildable.** The archive remains the source of truth; any derived representations are disposable and must not become the only remaining copy of meaning.
 2) **Domain + Trust gate exposure.** Exposure decisions must respect domain boundaries and provenance/trust constraints; default behavior must prevent cross-domain leakage.
+
+   Scope policy note (experiment): Exposure modes must respect the current default scope policy defined in `docs/CONCEPTS/LAYERING_MODEL.md` (“Default Scope Policy (Experiment)”), including:
+   - `Active Domain + Global Evergreens` as the default scope, and
+   - domain excludes (e.g., when `Active Domain = work`, exclude `rpg` by default).
+
+   A one-shot explicit cross-domain include may temporarily widen archive exposure for a single operation, but it must be auditable (receipt) and non-persistent.
+
 3) **Discovery is minimal by default.** Discovery should reveal only what is necessary to decide relevance; deeper exposure requires an explicit user step.
 4) **Citation must preserve provenance.** When archive material supports an output or claim, the system must keep a stable reference back to the original archive source and avoid laundering it into unattributed text.
 5) **Preview is bounded and non-destructive.** Previews are “views”, not copies: they must not silently duplicate sensitive content into the warm surface, logs, or other domains.
@@ -41,4 +48,3 @@ When exposure occurs (in any mode), the system must record enough to reconstruct
 - **Transformations** (summarized, excerpted, redacted, aggregated) without losing traceability to the source.
 - **Outputs affected** (what new artifacts were created or what existing artifacts were modified, conceptually).
 - **Time and revocability** (when it happened, and how the exposure can be withdrawn without mutating the archive source).
-

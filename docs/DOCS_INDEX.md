@@ -31,13 +31,13 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 ## Core SoT Docs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/PROJECT_KERNEL.md | Project kernel (human flows + stability contracts) | Aligned (forward line v5.x) | 2025-12-17 | Canonical intent and stability contracts with trust/event/config anchors. |
-| docs/CONCEPTS/LAYERING_MODEL.md | Layering model (Domain/Plane/Trust/Zone) | Aligned (forward line v5.x) | 2025-12-17 | Orthogonal boundary model; adds one-shot includes, bridge fields, and missing-domain safe degradation. |
+| docs/PROJECT_KERNEL.md | Project kernel (human flows + stability contracts) | Aligned (forward line v5.x) | 2025-12-17 | Canonical intent and stability contracts with trust/event/config anchors; notes default scope experiment under Tensions/Follow-ups. |
+| docs/CONCEPTS/LAYERING_MODEL.md | Layering model (Domain/Plane/Trust/Zone) | Aligned (forward line v5.x) | 2025-12-17 | Orthogonal boundary model; adds the default scope policy experiment, one-shot includes, bridge fields, and missing-domain safe degradation. |
 | docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md | Trust semantics contract (assert/suggest/apply) | Aligned (forward line v5.x) | 2025-12-17 | Defines trust tiers, gating rules, write constraints, and receipts. |
 | docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md | Event/intent compatibility contract (versioning) | Aligned (forward line v5.x) | 2025-12-17 | Covers envelope invariants, versioning rules, idempotence, and new-event checklist. |
 | docs/CONCEPTS/CONFIG_AS_PRODUCT_CONTRACT.md | Config-as-product contract | Aligned (forward line v5.x) | 2025-12-17 | Covers precedence, validation, rollback, audit, and portability rules for config. |
 | docs/CONCEPTS/PORTABILITY_CONTRACT.md | Portability contract (macOS + Windows) | Aligned (forward line v5.x) | 2025-12-16 | Defines portability hazards and rules for portable artifacts and paths; referenced by PROJECT_KERNEL. |
-| docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md | Archive exposure contract (cold brain safety) | Aligned (forward line v5.x) | 2025-12-16 | Defines discovery→citation→preview→materialization exposure modes and receipt requirements; referenced by PROJECT_KERNEL. |
+| docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md | Archive exposure contract (cold brain safety) | Aligned (forward line v5.x) | 2025-12-17 | Defines discovery→citation→preview→materialization modes; notes scope experiment (active domain + global evergreens, with domain excludes + one-shot includes). |
 | docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-12-17 | Adds a Contracts section pointing to kernel anchors and concept contracts. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
 | docs/STATUS.md | Operational snapshot | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-12-17 | Notes that layering/portability/archive/trust/event/config are anchored by concept contracts. |
