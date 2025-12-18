@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 from pathlib import Path
-import yaml
 from typing import Any, Dict, Optional
 
-DEFAULT_PATH = Path("vault/_system/settings/system-settings.yaml")
+import yaml
+
+from app.config.paths import resolve_system_settings_path
+
 
 def load_settings(path: Optional[Path] = None) -> Dict[str, Any]:
-    p = path or DEFAULT_PATH
-    return yaml.safe_load(p.read_text(encoding="utf-8"))
+    resolved = resolve_system_settings_path(explicit=path)
+    return yaml.safe_load(resolved.read_text(encoding="utf-8"))
