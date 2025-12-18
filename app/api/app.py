@@ -73,7 +73,7 @@ async def _run_index_preflight() -> None:
 
 
 @asynccontextmanager
-def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI):
     await _run_index_preflight()
     yield
 
