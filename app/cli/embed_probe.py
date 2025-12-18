@@ -18,10 +18,12 @@ def _probe(texts: Iterable[str], profile: str) -> tuple[str, int]:
     dims: set[int] = set()
     model_name = ""
     for text in texts:
-        model, dim, _ = describe_embedding(text, profile=profile)
-        model_name = model
-        dims.add(dim)
-        click.echo(f"Sample '{text}': model={model} dim={dim}")
+        identity, _ = describe_embedding(text, profile=profile)
+        model_name = identity.model
+        dims.add(identity.dim)
+        click.echo(
+            f"Sample '{text}': provider={identity.provider} model={identity.model} dim={identity.dim}"
+        )
     if len(dims) != 1:
         click.echo(f"Dimension mismatch detected: {sorted(dims)}", err=True)
         raise SystemExit(1)

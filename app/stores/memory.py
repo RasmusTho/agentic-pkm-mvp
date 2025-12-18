@@ -4,12 +4,13 @@ import json
 import os
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Iterable, Optional
 from uuid import UUID
 
-from app.embedding_config import assert_embed_dim, coerce_floats, get_embed_dim, l2_normalize
+from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
+from app.embedding_config import coerce_floats, get_embed_dim, l2_normalize
 
 from .base import (
     Decision,
@@ -110,6 +111,7 @@ class _VectorEntry:
     embedding: list[float]
     model: str
     seq: int
+    identity: EmbeddingIdentity | None = None
 
 
 class _VectorHit:
@@ -127,8 +129,10 @@ class _VectorHit:
 class MemoryVectorIndex(VectorIndex):
     def __init__(self, *, persist_path: str | None = None, load_existing: bool | None = None) -> None:
         self._entries: dict[UUID, _VectorEntry] = {}
+        self._identity: EmbeddingIdentity | None = None
+        self._dim: int | None = None
         self._seq = 0
-        raw_path = (persist_path or os.getenv("INDEX_PERSIST_PATH", "")).strip()
+        raw_path = (persist_path or os.getenv("INDEX_PERSIST_PATH", "").strip())
         self._persist_path = Path(raw_path).expanduser() if raw_path else None
         should_load = bool(self._persist_path) and (
             load_existing if load_existing is not None else _truthy_env("INDEX_PERSIST_LOAD")
@@ -145,9 +149,20 @@ class MemoryVectorIndex(VectorIndex):
         payload: dict,
         embedding: list[float],
         model: str,
+        identity: EmbeddingIdentity | None = None,
     ) -> None:
         embedding_floats = coerce_floats(embedding)
-        assert_embed_dim(embedding_floats, name="embedding")
+        resolved_identity = self._ensure_identity(identity, allow_initialize=True)
+        dim = len(embedding_floats)
+        if resolved_identity.dim != dim:
+            raise ValueError(
+                f"embedding dim mismatch for identity {resolved_identity.model}: expected {resolved_identity.dim}, got {dim}"
+            )
+        if model and model != resolved_identity.model:
+            raise ValueError(
+                f"embedding model mismatch: stored={resolved_identity.model} provided={model}"
+            )
+        model_value = model or resolved_identity.model
         embedding_norm = l2_normalize(embedding_floats)
 
         self._seq += 1
@@ -157,18 +172,24 @@ class MemoryVectorIndex(VectorIndex):
             source_ref=source_ref,
             payload=dict(payload),
             embedding=embedding_norm,
-            model=model,
+            model=model_value,
             seq=self._seq,
+            identity=self._identity,
         )
         self._entries[object_id] = entry
         self._persist_entry(entry)
 
-    def search(self, vector: list[float], *, k: int = 5) -> list:
+    def search(self, vector: list[float], *, k: int = 5, identity: EmbeddingIdentity | None = None) -> list:
         if not self._entries:
             return []
 
+        resolved_identity = self._ensure_identity(identity, allow_initialize=False)
         query = coerce_floats(vector)
-        assert_embed_dim(query, name="query embedding")
+        dim = len(query)
+        if dim != resolved_identity.dim:
+            raise ValueError(
+                f"query embedding dim mismatch: expected {resolved_identity.dim}, got {dim}"
+            )
         query_norm = l2_normalize(query)
 
         results: list[tuple[float, int, _VectorHit]] = []
@@ -177,6 +198,37 @@ class MemoryVectorIndex(VectorIndex):
             results.append((score, entry.seq, _VectorHit(entry, score)))
         results.sort(key=lambda item: (-item[0], item[1]))
         return [hit for _, _, hit in results[:k]]
+
+    def get_identity(self) -> EmbeddingIdentity | None:
+        return self._identity
+
+    def _ensure_identity(self, supplied: EmbeddingIdentity | None, *, allow_initialize: bool) -> EmbeddingIdentity:
+        effective = supplied or get_embedding_identity()
+        stored = self._identity
+        if stored is None:
+            if not allow_initialize:
+                raise ValueError("vector index identity has not been established; insert embeddings first")
+            if effective.dim <= 0:
+                raise ValueError("embedding identity must include a positive dimension")
+            self._identity = EmbeddingIdentity(
+                provider=effective.provider,
+                model=effective.model,
+                dim=effective.dim,
+            )
+            self._dim = effective.dim
+            return self._identity
+        if (
+            stored.provider != effective.provider
+            or stored.model != effective.model
+            or stored.dim != effective.dim
+        ):
+            raise ValueError(
+                "embedding identity mismatch: expected provider={} model={} dim={}; got provider={} model={} dim={}. "
+                "Run 'python -m app.cli index rebuild' to realign the index.".format(
+                    stored.provider, stored.model, stored.dim, effective.provider, effective.model, effective.dim
+                )
+            )
+        return stored
 
     def _persist_entry(self, entry: _VectorEntry) -> None:
         if not self._persist_path:
@@ -190,6 +242,7 @@ class MemoryVectorIndex(VectorIndex):
             "embedding": entry.embedding,
             "model": entry.model,
             "seq": entry.seq,
+            "identity": asdict(self._identity) if self._identity else None,
         }
         with self._persist_path.open("a", encoding="utf-8") as fh:
             json.dump(payload, fh, ensure_ascii=False, default=str)
@@ -212,7 +265,38 @@ class MemoryVectorIndex(VectorIndex):
                         continue
 
                     embedding = list(data.get("embedding") or [])
-                    if len(embedding) != expected_dim:
+                    if not embedding:
+                        continue
+                    dim = len(embedding)
+                    identity_data = data.get("identity") if isinstance(data.get("identity"), dict) else None
+                    loaded_identity = None
+                    if identity_data:
+                        try:
+                            loaded_identity = EmbeddingIdentity(
+                                provider=str(identity_data.get("provider", "")),
+                                model=str(identity_data.get("model", "")),
+                                dim=int(identity_data.get("dim", 0) or 0),
+                            )
+                        except Exception:
+                            loaded_identity = None
+                    if loaded_identity and loaded_identity.dim and loaded_identity.dim != dim:
+                        continue
+                    if self._identity is None:
+                        if loaded_identity:
+                            self._identity = loaded_identity
+                        else:
+                            self._identity = EmbeddingIdentity(
+                                provider="legacy",
+                                model=str(data.get("model", "")),
+                                dim=dim,
+                            )
+                    elif loaded_identity and (
+                        loaded_identity.provider != self._identity.provider
+                        or loaded_identity.model != self._identity.model
+                        or (loaded_identity.dim and loaded_identity.dim != self._identity.dim)
+                    ):
+                        continue
+                    if self._identity.dim != dim:
                         continue
 
                     entry = _VectorEntry(
@@ -223,7 +307,9 @@ class MemoryVectorIndex(VectorIndex):
                         embedding=l2_normalize(coerce_floats(embedding)),
                         model=str(data.get("model", "")),
                         seq=int(data.get("seq", 0)),
+                        identity=self._identity,
                     )
+                    self._dim = self._identity.dim
                     self._entries[obj_id] = entry
                     self._seq = max(self._seq, entry.seq)
         except FileNotFoundError:

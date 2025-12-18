@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from functools import lru_cache
 from typing import Iterable, Iterator, Protocol, Sequence
 
+from app.embedding_config import get_embed_dim
 from app.index import embeddings as _index_embeddings
-from app.llm.embeddings import EMBED_MODEL
-from app.search import embeddings as _deterministic_embeddings
+from app.llm.embeddings import EMBED_MODEL, get_embedding_provider
 
 
 class EmbeddingClientProtocol(Protocol):
@@ -19,6 +21,19 @@ class EmbeddingClientProtocol(Protocol):
     def embed_batches(self, texts: Iterable[str], batch_size: int = 32) -> Iterator[list[list[float]]]:
         ...
 
+
+@dataclass(frozen=True)
+class EmbeddingIdentity:
+    provider: str
+    model: str
+    dim: int
+
+
+
+@lru_cache(maxsize=1)
+def _deterministic_embeddings_module():
+    from app.search import embeddings as deterministic_embeddings
+    return deterministic_embeddings
 
 class _DefaultEmbeddingClient:
     def embed_text(self, text: str) -> list[float]:
@@ -38,10 +53,13 @@ class _DeterministicEmbeddingClient:
     """Deterministic embedding client used for tests and legacy heuristics."""
 
     def embed_text(self, text: str) -> list[float]:
-        return _deterministic_embeddings.embed_text(text)
+        module = _deterministic_embeddings_module()
+        return module.embed_text(text, dimensions=get_embed_dim())
 
     def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
-        return _deterministic_embeddings.embed_many(list(texts))
+        dim = get_embed_dim()
+        module = _deterministic_embeddings_module()
+        return module.embed_many(list(texts), dimensions=dim)
 
     def embed_batches(self, texts: Iterable[str], batch_size: int = 32) -> Iterator[list[list[float]]]:
         batch: list[str] = []
@@ -55,21 +73,42 @@ class _DeterministicEmbeddingClient:
 
 
 def get_embedding_client(profile: str = "default") -> EmbeddingClientProtocol:
-    """
-    Return the embedding client for the given profile.
-    - default: current index embeddings stack (speaker-aware text enrichment + LLM embeddings)
-    - deterministic/test: hashing-based deterministic embeddings used in tests
-    """
+    """Return the embedding client for the given profile."""
+
     spec = (profile or "default").strip().lower()
     if spec in {"deterministic", "test", "offline"}:
         return _DeterministicEmbeddingClient()
     return _DefaultEmbeddingClient()
 
 
-def describe_embedding(text: str, *, profile: str = "default") -> tuple[str, int, list[float]]:
+def get_embedding_identity(
+    client: EmbeddingClientProtocol | None = None,
+    *,
+    profile: str = "default",
+) -> EmbeddingIdentity:
+    """Describe the configured embedding stack for persistence/validation."""
+
+    spec = (profile or "default").strip().lower()
+    if client is None:
+        client = get_embedding_client(profile)
+    dim = get_embed_dim()
+    if isinstance(client, _DeterministicEmbeddingClient) or spec in {"deterministic", "test", "offline"}:
+        return EmbeddingIdentity(provider="deterministic", model="deterministic-hash", dim=dim)
+    return EmbeddingIdentity(provider=get_embedding_provider(), model=EMBED_MODEL, dim=dim)
+
+
+def describe_embedding(text: str, *, profile: str = "default") -> tuple[EmbeddingIdentity, list[float]]:
     client = get_embedding_client(profile)
     vector = client.embed_text(text)
-    return EMBED_MODEL, len(vector), vector
+    identity = get_embedding_identity(client=client, profile=profile)
+    return identity, vector
 
 
-__all__ = ["EmbeddingClientProtocol", "get_embedding_client", "describe_embedding", "EMBED_MODEL"]
+__all__ = [
+    "EmbeddingClientProtocol",
+    "EmbeddingIdentity",
+    "get_embedding_client",
+    "get_embedding_identity",
+    "describe_embedding",
+    "EMBED_MODEL",
+]

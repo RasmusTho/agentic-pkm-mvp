@@ -1,8 +1,16 @@
 from __future__ import annotations
 from uuid import UUID, uuid4
 from typing import Any, Iterable
+import logging
+import os
 
+from app.components.embeddings import EmbeddingIdentity
 from app.agents.panel.filters import strip_ai_panels
+
+logger = logging.getLogger(__name__)
+
+_LEGACY_FALLBACK_WARNED = False
+
 
 # --- Noops om stores/bm25 saknas i minimal miljö -----------------------------
 
@@ -256,6 +264,21 @@ def search(query_text: str, k: int = 5, *_a, **_k) -> list:
 
 # --- Ingest (delegera → fallback) -------------------------------------------
 
+def _legacy_fallback_disabled() -> bool:
+    return os.getenv("VECTOR_INDEX_DISABLE_LEGACY", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _warn_legacy_fallback() -> None:
+    global _LEGACY_FALLBACK_WARNED
+    if _LEGACY_FALLBACK_WARNED:
+        return
+    logger.warning(
+        "Legacy VectorIndex fallback invoked (identity kwarg rejected). This path will be removed soon; update the backend to accept identity=... or set VECTOR_INDEX_DISABLE_LEGACY=1 to fail fast and locate offenders."
+    )
+    _LEGACY_FALLBACK_WARNED = True
+
+
+
 def _fake_embed(text: str, dims: int) -> list[float]:
     # deterministisk, testvänlig "embedding"
     if dims <= 0: return []
@@ -285,6 +308,7 @@ def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, 
 
     embedding = _fake_embed(safe_text, 1536)
     idx = get_vector_index()
+    identity = EmbeddingIdentity(provider="search-service", model=model_name, dim=len(embedding))
     # försök flera upsert-varianter
     try:
         idx.upsert(
@@ -294,15 +318,29 @@ def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, 
             payload=payload_out,
             embedding=embedding,
             model=model_name,
+            identity=identity,
         )
     except TypeError:
+        if _legacy_fallback_disabled():
+            raise
+        _warn_legacy_fallback()
         try:
-            idx.upsert(oid, kind, source_ref, payload_out, embedding, model_name)
+            idx.upsert(
+                object_id=oid,
+                kind=kind,
+                source_ref=source_ref,
+                payload=payload_out,
+                embedding=embedding,
+                model=model_name,
+            )
         except TypeError:
             try:
-                idx.upsert(oid, payload_out, embedding, model_name)
+                idx.upsert(oid, kind, source_ref, payload_out, embedding, model_name)
             except TypeError:
-                idx.upsert(oid, payload_out)
+                try:
+                    idx.upsert(oid, payload_out, embedding, model_name)
+                except TypeError:
+                    idx.upsert(oid, payload_out)
     # reparera ev. fixture-store så tester ser texten
     try:
         st = getattr(idx, "store", None)

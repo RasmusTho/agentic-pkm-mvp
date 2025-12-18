@@ -21,6 +21,8 @@ from app.ingest.external import ingest_external_folder
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
 from app.cli.watcher import vault_watcher_run, vault_watcher_daemon
+from app.cli.index_rebuild import index as index_cli
+from app.cli import index_doctor  # noqa: F401 -- register index doctor command
 from app.runtime.runtime_loop import OutboxPathError, RuntimeLoopConfig, resolve_outbox_path, run_forever, run_once
 from app.cli.uat import (
     DEFAULT_FOLDER_NAME,
@@ -205,6 +207,8 @@ def _extract_note_path(results: list[dict[str, Any]]) -> str | None:
 @click.group(help="Agentic PKM CLI")
 def cli() -> None:
     ...
+
+cli.add_command(index_cli, name="index")
 
 
 @cli.command(name="llm-trace-sequence", help="Render a single trace flow as text or Mermaid sequence diagram.")

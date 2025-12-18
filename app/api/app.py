@@ -1,9 +1,14 @@
+from __future__ import annotations
+
+import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.index.doctor import diagnose_index
 from app.middleware.trace import TraceIdMiddleware
 from app.observability import configure_metrics
 
@@ -33,11 +38,46 @@ except ImportError:
     agent_router = None
 
 static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Agentic PKM API")
 app.add_middleware(TraceIdMiddleware)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 configure_metrics(app)
+
+
+def _truthy_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+@app.on_event("startup")
+async def run_index_preflight() -> None:
+    """Run the embeddings/index doctor in warn mode when enabled."""
+
+    if not _truthy_env("EMBED_INDEX_PREFLIGHT", default=True):
+        return
+    try:
+        result = diagnose_index()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("Embedding index preflight failed: %s", exc)
+        return
+
+    issues = result.get("issues") or []
+    warnings = result.get("warnings") or []
+    if not issues and not warnings:
+        return
+
+    summary = "; ".join(issues or warnings)
+    severity = "issues" if issues else "warnings"
+    logger.warning(
+        "Embedding index preflight detected %s: %s. Run `python -m app.cli index rebuild` to realign embeddings.",
+        severity,
+        summary,
+    )
+
 
 if ingest_router is not None:
     app.include_router(ingest_router)
