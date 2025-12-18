@@ -7,6 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app.obs.redaction import safe_preview
+
 TRACE_ENABLED = os.getenv("LLM_TRACE_ENABLE", "0") == "1"
 TRACE_PATH = Path(os.getenv("LLM_TRACE_PATH", "tmp/llm-trace.jsonl"))
 TRACE_DETAIL = os.getenv("LLM_TRACE_DETAIL", "preview").strip().lower()
@@ -23,29 +25,41 @@ def _trace_path() -> Path:
     return TRACE_PATH
 
 
-def _max_len() -> int:
-    return 1000 if TRACE_DETAIL != "preview" else 300
+def _stringify(obj: Any) -> str:
+    try:
+        if isinstance(obj, (dict, list)):
+            return json.dumps(obj, ensure_ascii=False)
+        return str(obj)
+    except Exception:
+        return ""
 
 
-def _build_response_preview(structured: str | None, response_text: str | None, raw: Any, limit: int) -> str:
-    def _truncate(val: str) -> str:
-        val = val or ""
-        return val[:limit] + ("..." if len(val) > limit else "")
+def _build_prompt_text(messages: List[Dict[str, Any]]) -> str:
+    parts: List[str] = []
+    for msg in messages:
+        role = msg.get("role", "") if isinstance(msg, dict) else ""
+        content = msg.get("content", "") if isinstance(msg, dict) else ""
+        parts.append(f"{role}: {content}")
+    return "\n".join(parts)
 
-    if structured:
-        stripped = structured.strip()
-        if stripped and stripped not in {"{}", "[]"}:
-            return _truncate(stripped)
+
+def _select_response_text(response: Dict[str, Any] | Any, response_text: str | None) -> str:
     if response_text:
-        stripped = response_text.strip()
-        if stripped:
-            return _truncate(stripped)
-    if raw is not None:
-        try:
-            return _truncate(repr(raw))
-        except Exception:
-            pass
-    return "<no-response>"
+        return response_text
+    try:
+        if isinstance(response, dict):
+            choices = response.get("choices") or []
+            if choices:
+                msg = choices[0].get("message") or {}
+                content = msg.get("content") or ""
+                if content:
+                    return str(content)
+            direct = response.get("content") or response.get("response") or ""
+            if direct:
+                return str(direct)
+        return _stringify(response)
+    except Exception:
+        return response_text or ""
 
 
 def log_llm_call(
@@ -72,38 +86,16 @@ def log_llm_call(
         trace_path = _trace_path()
         trace_path.parent.mkdir(parents=True, exist_ok=True)
 
-        def preview(text: str, limit: int = 400) -> str:
-            text = text or ""
-            return text[:limit] + ("..." if len(text) > limit else "")
+        prompt_text = _build_prompt_text(messages)
+        content_text = _select_response_text(response, response_text)
+        raw_repr = _stringify(response)
 
-        prompt_text = "\n".join(f"{m.get('role', '')}: {m.get('content', '')}" for m in messages)
         mode = ""
         if kind.startswith("reasoning."):
             mode = kind.split(".", 1)[1] if "." in kind else ""
-        content = response_text or ""
-        raw_preview = ""
-        try:
-            if isinstance(response, (dict, list)):
-                raw_preview = json.dumps(response, ensure_ascii=False)
-            else:
-                raw_preview = str(response)
-        except Exception:
-            raw_preview = ""
-        try:
-            if not content and isinstance(response, dict):
-                choices = response.get("choices") or []
-                if choices:
-                    msg = choices[0].get("message") or {}
-                    content = msg.get("content") or ""
-                if not content:
-                    content = str(response.get("content") or response.get("response") or "")
-            if not content:
-                content = str(response)
-        except Exception:
-            content = response_text or ""
 
-        preview_text = _build_response_preview(content, response_text, response, _max_len())
-        inferred_status = status or ("ok" if preview_text and preview_text not in {"{}", "<no-response>"} else "failed")
+        response_preview = safe_preview(content_text)
+        inferred_status = status or ("ok" if response_preview.get("chars", 0) > 0 else "failed")
 
         record = {
             "timestamp": time.time(),
@@ -114,10 +106,10 @@ def log_llm_call(
             "kind": kind,
             "mode": mode,
             "status": inferred_status,
-            "prompt_preview": preview(prompt_text, _max_len()),
-            "response_preview": preview(preview_text, _max_len()),
-            "raw_response_preview": preview(raw_preview, _max_len()),
-            "response_text_preview": preview(response_text or "", _max_len()),
+            "prompt_preview": safe_preview(prompt_text),
+            "response_preview": response_preview,
+            "raw_response_preview": safe_preview(raw_repr),
+            "response_text_preview": safe_preview(response_text or ""),
         }
 
         with trace_path.open("a", encoding="utf-8") as handle:

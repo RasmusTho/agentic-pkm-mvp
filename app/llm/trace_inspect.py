@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.llm.trace import TRACE_PATH
 
@@ -17,12 +17,12 @@ class LLMTraceRecord:
     model: str
     agent: str
     kind: str
-    prompt_preview: str = ""
-    response_preview: str = ""
+    prompt_preview: Any = None
+    response_preview: Any = None
     mode: str = ""
     status: str = ""
-    raw_response_preview: str = ""
-    response_text_preview: str = ""
+    raw_response_preview: Any = None
+    response_text_preview: Any = None
 
 
 @dataclass
@@ -31,8 +31,8 @@ class LLMSequenceStep:
     timestamp: float
     agent: str
     kind: str
-    prompt_preview: str = ""
-    response_preview: str = ""
+    prompt_preview: Any = None
+    response_preview: Any = None
     mode: str = ""
     status: str = ""
 
@@ -78,10 +78,10 @@ def load_trace(path: Optional[Path] = None) -> List[LLMTraceRecord]:
                             kind=str(obj.get("kind") or ""),
                             mode=str(obj.get("mode") or ""),
                             status=str(obj.get("status") or ""),
-                            prompt_preview=str(obj.get("prompt_preview") or ""),
-                            response_preview=str(obj.get("response_preview") or ""),
-                            raw_response_preview=str(obj.get("raw_response_preview") or ""),
-                            response_text_preview=str(obj.get("response_text_preview") or ""),
+                            prompt_preview=obj.get("prompt_preview"),
+                            response_preview=obj.get("response_preview"),
+                            raw_response_preview=obj.get("raw_response_preview"),
+                            response_text_preview=obj.get("response_text_preview"),
                         )
                     )
                 except Exception:
