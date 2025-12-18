@@ -83,4 +83,3 @@ def embed_texts(
 
 
 __all__ = ["embed_text", "embed_texts", "EMBED_MODEL", "get_embedding_provider"]
-

@@ -73,7 +73,7 @@ async def _run_index_preflight() -> None:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+def lifespan(app: FastAPI):
     await _run_index_preflight()
     yield
 
@@ -107,3 +107,4 @@ async def index() -> HTMLResponse:
     return HTMLResponse(index_path.read_text(encoding="utf-8"))
 
 
+__all__ = ["app", "_create_app"]
