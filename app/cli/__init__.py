@@ -23,6 +23,9 @@ from app.cli.panel import panel as panel_cli
 from app.cli.watcher import vault_watcher_run, vault_watcher_daemon
 from app.cli.index_rebuild import index as index_cli
 from app.cli import index_doctor  # noqa: F401 -- register index doctor command
+from app.config.paths import resolve_system_settings_path, resolve_vault_root
+from app.services import settings as settings_service
+from app.watcher.vault_watcher import OutboxPathError as WatcherOutboxPathError, run_watcher_tick
 from app.runtime.runtime_loop import OutboxPathError, RuntimeLoopConfig, resolve_outbox_path, run_forever, run_once
 from app.cli.uat import (
     DEFAULT_FOLDER_NAME,
@@ -137,17 +140,27 @@ def _resolve_yggdrasil_root(path_override: Path | None) -> Path:
     return Path.home() / "Yggdrasil"
 
 
-def _truncate_preview(text: str, limit: int) -> str:
-    text = text or ""
-    text = text.replace("\n", "\\n")
-    return text[:limit] + ("..." if len(text) > limit else "")
+def _truncate_preview(text: Any, limit: int) -> str:
+    try:
+        value = "" if text is None else str(text)
+    except Exception:
+        value = ""
+    value = value.replace("\n", "\\n")
+    return value[:limit] + ("..." if len(value) > limit else "")
 
 
 def _response_text(rec) -> str:
-    for candidate in (rec.response_preview, getattr(rec, "response_text_preview", ""), getattr(rec, "raw_response_preview", "")):
-        if candidate and candidate.strip() not in {"", "{}"}:
-            return candidate
-    return rec.response_preview or getattr(rec, "raw_response_preview", "") or ""
+    candidates = (rec.response_preview, getattr(rec, "response_text_preview", ""), getattr(rec, "raw_response_preview", ""))
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            text = str(candidate)
+        except Exception:
+            text = ""
+        if text.strip() not in {"", "{}"}:
+            return text
+    return ""
 
 
 def _render_text_sequence(seq: LLMSequence) -> str:
@@ -1224,6 +1237,78 @@ def runtime_loop(
         + " promotion="
         + json.dumps(summary.promotion, ensure_ascii=False)
     )
+
+@cli.command(name="go-live-check", help="Sanity-check go-live readiness; dry-run watcher by default.")
+@click.option("--vault-root", type=click.Path(path_type=Path), default=None, help="Vault root (VAULT_ROOT or repo default).")
+@click.option("--settings-path", type=click.Path(path_type=Path), default=None, help="Override system-settings.yaml path.")
+@click.option("--outbox-path", type=click.Path(path_type=Path), default=None, help="Override outbox path (defaults to INDEX_OUTBOX_PATH).")
+@click.option("--max-notes", type=int, default=25, show_default=True, help="Maximum notes to process before aborting.")
+@click.option("--apply", "apply_changes", is_flag=True, help="Run without dry-run (applies ingest/panel actions).")
+def go_live_check(
+    vault_root: Path | None,
+    settings_path: Path | None,
+    outbox_path: Path | None,
+    max_notes: int,
+    apply_changes: bool,
+) -> None:
+    resolved_vault = resolve_vault_root(vault_root)
+    resolved_vault = resolved_vault.expanduser()
+    if not resolved_vault.exists() or not resolved_vault.is_dir():
+        raise click.ClickException(f"Vault root not found or not a directory: {resolved_vault}")
+
+    resolved_settings = resolve_system_settings_path(explicit=settings_path, vault_root=resolved_vault)
+    click.echo(f"Vault root: {resolved_vault}")
+    click.echo(f"System settings path: {resolved_settings}")
+    try:
+        settings_data = settings_service.load_settings(force=True, path=resolved_settings)
+    except Exception as exc:
+        raise click.ClickException(f"Failed to load settings from {resolved_settings}: {exc}")
+
+    if settings_data is None:
+        click.echo("Settings not found; proceeding with defaults.")
+    else:
+        click.echo(f"Settings loaded ({len(settings_data)} top-level keys)")
+
+    dry_run = not apply_changes
+    resolved_outbox = Path(outbox_path).expanduser() if outbox_path is not None else None
+    if resolved_outbox is None:
+        env_outbox = os.getenv("INDEX_OUTBOX_PATH", "").strip()
+        resolved_outbox = Path(env_outbox).expanduser() if env_outbox else None
+
+    if resolved_outbox is None and not dry_run:
+        raise click.ClickException("Outbox path is required when applying changes; set INDEX_OUTBOX_PATH or pass --outbox-path.")
+
+    click.echo(f"Outbox path: {resolved_outbox if resolved_outbox is not None else '- (not set; dry-run)'}")
+
+    try:
+        summary, messages = run_watcher_tick(
+            vault_root=resolved_vault,
+            snapshot_path=None,
+            skip_panel=False,
+            emit_only=False,
+            dry_run=dry_run,
+            max_notes=max_notes,
+            force=False,
+            outbox_path=resolved_outbox,
+        )
+    except WatcherOutboxPathError as exc:
+        raise click.ClickException(str(exc))
+
+    for msg in messages:
+        click.echo(msg)
+
+    click.echo(
+        "Watcher summary: "
+        f"changed={summary['changed']} ingest_attempted={summary['ingest_attempted']} ingested={summary['ingested']} "
+        f"panel_candidates={summary['panel_candidates']} panel_runs={summary['panel_runs']} errors={summary['errors']} "
+        f"dry_run={summary['dry_run']} limit_exceeded={summary['limit_exceeded']}"
+    )
+
+    if summary.get("limit_exceeded"):
+        raise SystemExit(1)
+    if summary.get("errors", 0) > 0:
+        raise SystemExit(1)
+
 
 cli.add_command(panel_cli, name="panel")
 cli.add_command(vault_watcher_run)

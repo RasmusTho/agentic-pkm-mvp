@@ -39,7 +39,8 @@ Use one label consistently:
 
 - **Hybrid retrieval** — Combined lexical + semantic retrieval with optional reranking overlays. Maturity: Baseline.
 - **Rerankers** — Optional reranking providers with deterministic fallbacks. Maturity: Baseline.
-- **Embeddings** — Embedding provider entrypoint with deterministic profiles for tests. Operational guardrails: `python -m app.cli embed_probe` (inspect provider/model/dimension drift), `python -m app.cli index doctor` (check runtime vs stored identity/dims), and `python -m app.cli index rebuild` (regenerate derived embeddings). Maturity: Baseline.
+- **Embeddings** — Embedding provider entrypoint with deterministic profiles for tests. Embedding profiles (vault settings) define provider/model/dim/normalization flags so cosine similarity stays consistent. Operational guardrails: `python -m app.cli embed_probe --profile <name>` (inspect provider/model/dim + normalization), `python -m app.cli index doctor --warn/--strict` (check identity drift), and `python -m app.cli index rebuild --profile <name>` (regenerate derived embeddings after changes). Maturity: Baseline.
+Changing embedding profiles safely: 1) sanity-check with `python -m app.cli embed_probe --profile <name>`, 2) verify index health via `python -m app.cli index doctor --warn` (or `--strict` before rollout), 3) rebuild via `python -m app.cli index rebuild --profile <name>` to refresh derived vectors.
 
 ## ASK / reasoning
 
@@ -69,3 +70,5 @@ Use one label consistently:
 
 - **Structured OCR** — Stubbed extension point; not wired as a user-facing feature. Maturity: Planned.
 - **Compressive OCR** — Stubbed extension point; not wired as a user-facing feature. Maturity: Planned.
+
+

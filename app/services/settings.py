@@ -7,7 +7,8 @@ from typing import Any
 import yaml
 from jsonschema import validate
 
-SETTINGS_PATH = Path("vault/_system/settings/system-settings.yaml")
+from app.config.paths import resolve_system_settings_path
+
 SCHEMA_PATH = Path("schemas/system-settings.schema.json")
 
 _cached_path: Path | None = None
@@ -31,25 +32,19 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 def load_settings(force: bool = False, path: Path | None = None) -> dict[str, Any] | None:
     global _cached, _mtime, _cached_path
-    if path is None:
-        path = SETTINGS_PATH
-    if not path.exists():
-        return _cached if (_cached is not None and _cached_path == path) else None
-    stat = path.stat().st_mtime
-    if (
-        not force
-        and _cached is not None
-        and _mtime == stat
-        and _cached_path == path
-    ):
+    resolved = resolve_system_settings_path(explicit=path)
+    if resolved is None or not resolved.exists():
+        return _cached if (_cached is not None and _cached_path == resolved) else None
+    stat = resolved.stat().st_mtime
+    if not force and _cached is not None and _mtime == stat and _cached_path == resolved:
         return _cached
-    data = _load_yaml(path)
+    data = _load_yaml(resolved)
     schema = _load_schema()
     if schema:
         validate(instance=data, schema=schema)
     _cached = data
     _mtime = stat
-    _cached_path = path
+    _cached_path = resolved
     return _cached
 
 

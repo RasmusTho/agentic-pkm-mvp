@@ -17,6 +17,7 @@ from .models import (
     QaSettings,
     ReviewerSettings,
     SettingsBundle,
+    EmbeddingProfiles,
     YggdrasilPaths,
 )
 from .hotreload import init_hot_reload
@@ -46,6 +47,7 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
 def _build_bundle() -> SettingsBundle:
     global_yaml = _read_yaml(RUNTIME / "global.yaml")
     providers_yaml = _read_yaml(RUNTIME / "providers.yaml")
+    embeddings_yaml = _read_yaml(RUNTIME / "embeddings.yaml")
     instance_yaml = _read_yaml(RUNTIME / "instance.yaml")
     yggdrasil_yaml = _read_yaml(RUNTIME / "yggdrasil.yaml")
     agents_dir = RUNTIME / "agents"
@@ -58,6 +60,13 @@ def _build_bundle() -> SettingsBundle:
                 agents[file.stem] = model_cls(**agent_data)
             else:
                 agents[file.stem] = agent_data
+    
+    embedding_profiles = EmbeddingProfiles()
+    if embeddings_yaml:
+        try:
+            embedding_profiles = EmbeddingProfiles(**embeddings_yaml)
+        except Exception:
+            embedding_profiles = EmbeddingProfiles()
     yggdrasil_paths = None
     if yggdrasil_yaml:
         try:
@@ -73,6 +82,7 @@ def _build_bundle() -> SettingsBundle:
     bundle = SettingsBundle(
         global_=GlobalSettings(**global_yaml),
         providers=Providers(**providers_yaml),
+        embedding_profiles=embedding_profiles,
         agents=agents,
         yggdrasil_paths=yggdrasil_paths,
         instance=instance_settings,
@@ -117,3 +127,4 @@ def _handle_hot_reload(_payload: Dict[str, Any]) -> None:
 
 
 init_hot_reload(_handle_hot_reload)
+

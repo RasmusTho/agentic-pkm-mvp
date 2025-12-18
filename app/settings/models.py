@@ -102,6 +102,22 @@ class QaLLMSettings(BaseModel):
     max_tokens: int = Field(default=512, description="Maximum tokens per response.")
 
 
+
+class EmbeddingProfile(BaseModel):
+    provider: str = Field(default="mock", description="Embedding provider identifier (mock|ollama|http).")
+    model: str = Field(default="nomic-embed-text:latest", description="Embedding model identifier.")
+    dim: int = Field(default=1536, description="Embedding dimension for this profile.")
+    normalize: bool = Field(default=True, description="Apply L2 normalization when true.")
+
+
+class EmbeddingProfiles(BaseModel):
+    default_profile: str = Field(default="default", description="Profile name to use when unspecified.")
+    profiles: Dict[str, EmbeddingProfile] = Field(
+        default_factory=dict,
+        description="Named embedding profiles keyed by profile name.",
+    )
+
+
 class QaSettings(AgentBase):
     search_k: int = Field(default=8, description="Documents retrieved before filtering.")
     context_docs: int = Field(default=5, description="Documents kept in the final answer context.")
@@ -158,6 +174,8 @@ class InstanceSettings(BaseModel):
 class SettingsBundle(BaseModel):
     global_: GlobalSettings = Field(default_factory=GlobalSettings)
     providers: Providers = Field(default_factory=Providers)
+    embedding_profiles: EmbeddingProfiles = Field(default_factory=EmbeddingProfiles)
     agents: Dict[str, Any] = Field(default_factory=dict)
     yggdrasil_paths: Optional[YggdrasilPaths] = None
     instance: InstanceSettings = Field(default_factory=InstanceSettings)
+

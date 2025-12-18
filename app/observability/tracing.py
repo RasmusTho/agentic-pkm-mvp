@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import Iterator, Optional
 
+from app.config.paths import resolve_system_settings_path
+
 try:
     from opentelemetry import trace
     from opentelemetry.sdk.resources import Resource
@@ -17,15 +19,21 @@ except Exception:  # pragma: no cover - best effort optional dependency
     _OTEL_AVAILABLE = False
     trace = None  # type: ignore
 
-_SETTINGS = Path("vault/_system/settings/system-settings.yaml")
+
+def _settings_path() -> Optional[Path]:
+    try:
+        return resolve_system_settings_path()
+    except Exception:
+        return None
 
 
 def _read_settings() -> dict:
     try:
         import yaml  # local import keeps dependency optional
 
-        if _SETTINGS.exists():
-            return yaml.safe_load(_SETTINGS.read_text(encoding="utf-8")) or {}
+        path = _settings_path()
+        if path and path.exists():
+            return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception:
         pass
     return {}

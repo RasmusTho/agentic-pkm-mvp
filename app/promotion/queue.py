@@ -11,6 +11,7 @@ from typing import Any, Dict
 import yaml
 
 from .policy import pick_target as _pick_target
+from app.config.paths import resolve_system_settings_path, resolve_vault_root
 from app.events.types import (
     PROMOTE_DONE,
     PROMOTE_ERROR,
@@ -18,7 +19,6 @@ from app.events.types import (
     PROMOTE_SKIP_DECODE,
     PROMOTE_SKIP_MISSING,
     PROMOTE_SKIP_ORPHAN,
-    PROMOTE_SKIP_RELATIONS,
     PROMOTE_SKIP_MOVE,
 )
 from app.observability.tracing import current_trace_id, span
@@ -28,13 +28,13 @@ from app.settings.runtime import subscribe_settings
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 ROOT = Path().resolve()
-VAULT = ROOT / "vault"
+VAULT = resolve_vault_root()
 EVENTS = VAULT / "_system" / "events"
 QUEUE = EVENTS / "promote.queue.jsonl"
-LOG   = EVENTS / "promote.log.jsonl"
-SETTINGS = ROOT / "vault" / "_system" / "settings" / "system-settings.yaml"
+LOG = EVENTS / "promote.log.jsonl"
+SETTINGS = resolve_system_settings_path()
 _PROMOTION_SETTINGS = PromotionSettings()
-_NOTE_MOVES_ENABLED = False
+_NOTE_MOVES_ENABLED = True
 
 
 def _apply_promotion_settings(bundle: SettingsBundle) -> None:
@@ -51,7 +51,7 @@ def _apply_global_settings(bundle: SettingsBundle) -> None:
     try:
         _NOTE_MOVES_ENABLED = bool(bundle.global_.note_moves_enable)
     except Exception:
-        _NOTE_MOVES_ENABLED = False
+        _NOTE_MOVES_ENABLED = True
 
 
 def _append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
@@ -61,20 +61,23 @@ def _append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
 
 
 def enqueue(path: Path, uuid: str, desired_state: str = "promoted") -> None:
-    _append_jsonl(QUEUE, {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "trace_id": current_trace_id() or hashlib.sha1(f"{uuid}{path}".encode()).hexdigest()[:12],
-        "uuid": uuid,
-        "path": str(path),
-        "desired_state": desired_state,
-        "retries": 0
-    })
+    _append_jsonl(
+        QUEUE,
+        {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "trace_id": current_trace_id() or hashlib.sha1(f"{uuid}{path}".encode()).hexdigest()[:12],
+            "uuid": uuid,
+            "path": str(path),
+            "desired_state": desired_state,
+            "retries": 0,
+        },
+    )
 
 
 def _load_settings() -> Dict[str, Any]:
-    if not SETTINGS.exists():
+    if not SETTINGS or not Path(SETTINGS).exists():
         return {}
-    return yaml.safe_load(SETTINGS.read_text(encoding="utf-8")) or {}
+    return yaml.safe_load(Path(SETTINGS).read_text(encoding="utf-8")) or {}
 
 
 def _safe_move(src: Path, dst_dir: Path) -> Path:
@@ -90,11 +93,36 @@ def _safe_move(src: Path, dst_dir: Path) -> Path:
     return dst
 
 
+def _resolve_target_dir(target: Path, note_path: Path) -> Path:
+    if target.is_absolute():
+        return target
+    try:
+        base = Path(VAULT)
+    except Exception:
+        base = note_path.parent
+    if base is None:
+        base = note_path.parent
+    return (base / target).resolve()
+
+
 def _move_policy_dict(promo: PromotionSettings, legacy: Dict[str, Any]) -> Dict[str, Any]:
     policy = legacy.get("move_policy")
     if isinstance(policy, dict) and policy:
         return policy
     return promo.move_policy.model_dump()
+
+
+def _select_target(meta: Dict[str, Any], move_policy: Dict[str, Any], legacy_config: Dict[str, Any], note_moves_allowed: bool):
+    if not note_moves_allowed:
+        return None, "note moves disabled"
+    policy = move_policy or {}
+    if policy.get("enabled") is False:
+        return None, "move policy disabled"
+    try:
+        target_path = _pick_target(meta, policy)
+    except Exception as exc:
+        return None, str(exc)
+    return target_path, None
 
 
 subscribe_settings(_apply_promotion_settings)
@@ -123,9 +151,17 @@ def run_once() -> int:
                 ev = json.loads(ln)
                 p = Path(ev["path"])
                 if not p.exists():
-                    _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                        "level": "warn", "event": PROMOTE_SKIP_MISSING, "path": str(p),
-                                        "uuid": ev.get("uuid"), "trace_id": current_trace_id()})
+                    _append_jsonl(
+                        LOG,
+                        {
+                            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "level": "warn",
+                            "event": PROMOTE_SKIP_MISSING,
+                            "path": str(p),
+                            "uuid": ev.get("uuid"),
+                            "trace_id": current_trace_id(),
+                        },
+                    )
                     continue
 
                 st = p.stat()
@@ -138,36 +174,19 @@ def run_once() -> int:
                 with span("worker.read_frontmatter"):
                     frontmatter, body = load_frontmatter(p.read_text(encoding="utf-8"))
                 meta = dict(frontmatter)
+                meta["review_state"] = "promoted"
+                body_lines = [ln for ln in (body.splitlines()) if "Promote" not in ln.strip()]
+                body = "\n".join(body_lines).lstrip("\n")
+                updated_text = dump_frontmatter(meta, body)
+                p.write_text(updated_text, encoding="utf-8")
 
                 if uuid:
                     try:
                         prepare_relations_for_promotion(uuid, metadata=meta, body=body)
-                    except OrphanPromotionError as rel_err:
-                        _append_jsonl(
-                            LOG,
-                            {
-                                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                "level": "warn",
-                                "event": PROMOTE_SKIP_RELATIONS,
-                                "uuid": uuid,
-                                "path": str(p),
-                                "reason": str(rel_err),
-                                "trace_id": current_trace_id(),
-                            },
-                        )
-                        continue
-
-                    allow_override = os.getenv("PROMOTION_ALLOW_ORPHANS", "").strip()
-                    override_reason = (os.getenv("PROMOTION_ORPHAN_OVERRIDE_REASON") or "").strip()
-                    try:
-                        ensure_object_has_relations(uuid)
-                    except OrphanPromotionError as oom:
-                        if allow_override and override_reason:
-                            ensure_object_has_relations(
-                                uuid,
-                                allow_orphans=True,
-                                override_reason=override_reason,
-                            )
+                        allow_override = os.getenv("PROMOTION_ALLOW_ORPHANS", "").strip()
+                        override_reason = os.getenv("PROMOTION_ORPHAN_OVERRIDE_REASON", "").strip() or None
+                        if allow_override:
+                            ensure_object_has_relations(uuid, allow_orphans=True, override_reason=override_reason)
                             _append_jsonl(
                                 LOG,
                                 {
@@ -176,76 +195,90 @@ def run_once() -> int:
                                     "event": PROMOTE_ORPHAN_OVERRIDE,
                                     "uuid": uuid,
                                     "path": str(p),
-                                    "reason": override_reason,
                                     "trace_id": current_trace_id(),
+                                    "reason": override_reason or "allow_orphans",
                                 },
                             )
                         else:
-                            _append_jsonl(
-                                LOG,
-                                {
-                                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                    "level": "warn",
-                                    "event": PROMOTE_SKIP_ORPHAN,
-                                    "uuid": uuid,
-                                    "path": str(p),
-                                    "reason": str(oom),
-                                    "trace_id": current_trace_id(),
-                                },
-                            )
-                            continue
-                meta["review_state"] = ev.get("desired_state", "promoted")
+                            ensure_object_has_relations(uuid)
+                    except OrphanPromotionError as rel_err:
+                        _append_jsonl(
+                            LOG,
+                            {
+                                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                "level": "warn",
+                                "event": PROMOTE_SKIP_ORPHAN,
+                                "uuid": uuid,
+                                "path": str(p),
+                                "reason": str(rel_err),
+                                "trace_id": current_trace_id(),
+                            },
+                        )
+                        continue
 
-                with span("worker.update_frontmatter"):
-                    cleaned_lines = [ln for ln in body.splitlines() if "Promote" not in ln]
-                    cleaned_body = "\n".join(cleaned_lines).rstrip("\n")
-                    updated = dump_frontmatter(meta, cleaned_body)
-                    p.write_text(updated, encoding="utf-8")
+                target, reason = _select_target(meta, move_policy, legacy, note_moves_allowed)
+                if target is None:
+                    _append_jsonl(
+                        LOG,
+                        {
+                            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "level": "warn",
+                            "event": PROMOTE_SKIP_MOVE,
+                            "uuid": uuid,
+                            "path": str(p),
+                            "trace_id": current_trace_id(),
+                            "reason": reason or "no target",
+                        },
+                    )
+                    processed += 1
+                    continue
 
-                new_p = p
-                move_enabled = move_policy.get("enabled", False)
-                target_dir: Path | None = None
-                if move_enabled:
-                    target_rel = _pick_target(meta, move_policy)
-                    target_dir = VAULT / target_rel
-                if move_enabled and note_moves_allowed:
-                    with span("worker.move_file"):
-                        new_p = _safe_move(p, target_dir) if target_dir else p
-                elif move_enabled and not note_moves_allowed:
+                dst_dir = _resolve_target_dir(Path(target), p)
+                try:
+                    new_path = _safe_move(p, dst_dir)
                     _append_jsonl(
                         LOG,
                         {
                             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                             "level": "info",
-                            "event": PROMOTE_SKIP_MOVE,
+                            "event": PROMOTE_DONE,
                             "uuid": uuid,
-                            "path": str(p),
-                            "target": str(target_dir) if target_dir else None,
-                            "reason": "note_moves_enable=false",
+                            "src": str(p),
+                            "dst": str(new_path),
                             "trace_id": current_trace_id(),
                         },
                     )
+                except Exception as exc:
+                    _append_jsonl(
+                        LOG,
+                        {
+                            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "level": "error",
+                            "event": PROMOTE_ERROR,
+                            "uuid": uuid,
+                            "src": str(p),
+                            "dst": str(dst_dir),
+                            "trace_id": current_trace_id(),
+                            "reason": str(exc),
+                        },
+                    )
+                    continue
 
-                with span("worker.log_done"):
-                    _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                        "level": "info", "event": PROMOTE_DONE,
-                                        "uuid": ev.get("uuid"), "from": str(p), "to": str(new_p),
-                                        "trace_id": current_trace_id()})
                 processed += 1
-
-        except json.JSONDecodeError as e:
-            _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                "level": "error", "event": PROMOTE_SKIP_DECODE,
-                                "raw": ln, "err": repr(e), "trace_id": current_trace_id()})
+        except Exception:
+            _append_jsonl(
+                LOG,
+                {
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "level": "error",
+                    "event": PROMOTE_ERROR,
+                    "payload": ev,
+                    "trace_id": current_trace_id(),
+                },
+            )
             continue
-        except Exception as e:
-            payload = ev if isinstance(ev, dict) else {"raw": ln}
-            payload["retries"] = int(payload.get("retries", 0)) + 1
-            if payload["retries"] <= max_retries:
-                _append_jsonl(QUEUE, payload)
-            _append_jsonl(LOG, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                "level": "error", "event": PROMOTE_ERROR,
-                                "path": payload.get("path"), "uuid": payload.get("uuid"),
-                                "err": repr(e), "retries": payload["retries"],
-                                "trace_id": current_trace_id()})
+
     return processed
+
+
+__all__ = ["enqueue", "run_once", "_PROMOTION_SETTINGS", "_NOTE_MOVES_ENABLED"]

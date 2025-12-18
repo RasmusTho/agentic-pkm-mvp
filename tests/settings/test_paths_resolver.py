@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from app.config.paths import (
+    ResolvedPaths,
+    resolve_flow_settings_path,
+    resolve_paths,
+    resolve_system_settings_path,
+    resolve_vault_root,
+)
+
+
+def test_resolve_vault_root_prefers_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env_root = tmp_path / "env_vault"
+    monkeypatch.setenv("VAULT_ROOT", str(env_root))
+    cli_root = tmp_path / "cli_vault"
+    result = resolve_vault_root(cli_override=cli_root)
+    assert result == cli_root
+
+
+def test_system_settings_explicit_beats_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    explicit = tmp_path / "explicit.yaml"
+    explicit.write_text("foo: 1\n", encoding="utf-8")
+    env_path = tmp_path / "env.yaml"
+    env_path.write_text("bar: 2\n", encoding="utf-8")
+    monkeypatch.setenv("SETTINGS_PATH", str(env_path))
+    resolved = resolve_system_settings_path(explicit=explicit)
+    assert resolved == explicit
+
+
+def test_system_settings_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env_path = tmp_path / "env.yaml"
+    env_path.write_text("foo: env\n", encoding="utf-8")
+    monkeypatch.setenv("SETTINGS_PATH", str(env_path))
+    resolved = resolve_system_settings_path()
+    assert resolved == env_path
+
+
+def test_system_settings_prefers_existing_vault_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("SETTINGS_PATH", raising=False)
+    vault_root = tmp_path / "vault"
+    target = vault_root / "_system" / "settings" / "system-settings.yaml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("foo: vault\n", encoding="utf-8")
+    resolved = resolve_system_settings_path(vault_root=vault_root)
+    assert resolved == target
+
+
+def test_system_settings_falls_back_to_yggdrasil(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("SETTINGS_PATH", raising=False)
+    vault_root = tmp_path / "vault"
+    ygg_root = tmp_path / "Yggdrasil"
+    mimer_settings = ygg_root / "Mimer" / "@Settings" / "system-settings.yaml"
+    mimer_settings.parent.mkdir(parents=True, exist_ok=True)
+    mimer_settings.write_text("foo: ygg\n", encoding="utf-8")
+    resolved = resolve_system_settings_path(vault_root=vault_root, yggdrasil_root=ygg_root)
+    assert resolved == mimer_settings
+
+
+def test_system_settings_default_path_when_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("SETTINGS_PATH", raising=False)
+    vault_root = tmp_path / "vault"
+    resolved = resolve_system_settings_path(vault_root=vault_root)
+    assert resolved == vault_root / "_system" / "settings" / "system-settings.yaml"
+
+
+def test_flow_settings_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env_path = tmp_path / "flows.yaml"
+    env_path.write_text("flows: {}\n", encoding="utf-8")
+    monkeypatch.setenv("FLOW_SETTINGS_PATH", str(env_path))
+    resolved = resolve_flow_settings_path()
+    assert resolved == env_path
+
+
+def test_flow_settings_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("FLOW_SETTINGS_PATH", raising=False)
+    vault_root = tmp_path / "vault"
+    default_flow = vault_root / "_system" / "settings" / "flows.settings.yaml"
+    default_flow.parent.mkdir(parents=True, exist_ok=True)
+    default_flow.write_text("flows: {}\n", encoding="utf-8")
+    resolved = resolve_flow_settings_path(vault_root=vault_root)
+    assert resolved == default_flow
+
+
+def test_resolve_paths_combines(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    vault_root = tmp_path / "vault"
+    settings_path = tmp_path / "custom" / "settings.yaml"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text("foo: bar\n", encoding="utf-8")
+    result = resolve_paths(vault_root=vault_root, settings_path=settings_path)
+    assert isinstance(result, ResolvedPaths)
+    assert result.vault_root == vault_root
+    assert result.system_settings_path == settings_path

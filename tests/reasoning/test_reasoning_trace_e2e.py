@@ -68,8 +68,7 @@ def test_reasoning_single_note_trace_has_non_empty_response_preview(monkeypatch:
     assert reasoning_records, "Expected reasoning trace records"
     assert any("reasoning.claims" in r.kind for r in reasoning_records)
     previews = [r.response_preview for r in reasoning_records]
-    assert any("claims" in p or "evidence" in p for p in previews), previews
-    assert not all(p.strip() == "{}" for p in previews), "All reasoning previews are {}"
+    assert any(isinstance(p, dict) and p.get("chars", 0) > 0 for p in previews), previews
 
 
 def test_set_evaluator_trace_has_non_empty_response_preview(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -92,5 +91,4 @@ def test_set_evaluator_trace_has_non_empty_response_preview(monkeypatch: pytest.
     assert set_eval_records, "Expected set_evaluator trace records"
     assert any("reasoning.ranking" in r.kind or "set_eval" in r.kind for r in set_eval_records)
     previews = [r.response_preview for r in set_eval_records]
-    assert not all(p.strip() == "{}" for p in previews), "All set_evaluator previews are {}"
-    assert any(p.strip() for p in previews), previews
+    assert any(isinstance(p, dict) and p.get("chars", 0) > 0 for p in previews), previews

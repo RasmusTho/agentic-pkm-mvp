@@ -76,7 +76,7 @@ def test_build_sequence_no_records_raises() -> None:
         build_sequence_for_trace([], "missing")
 
 
-def test_log_llm_call_uses_response_text(tmp_path, monkeypatch) -> None:
+def test_log_llm_call_redacts_content(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("LLM_TRACE_ENABLE", "1")
     monkeypatch.setenv("LLM_TRACE_PATH", str(tmp_path / "trace.jsonl"))
 
@@ -84,13 +84,14 @@ def test_log_llm_call_uses_response_text(tmp_path, monkeypatch) -> None:
     import app.llm.trace as trace_module
 
     trace = importlib.reload(trace_module)
+    secret = "very-secret-text"
     trace.log_llm_call(
         provider="p",
         model="m",
         agent="reasoning",
         kind="reasoning.single_note",
-        messages=[{"role": "user", "content": "hi"}],
-        response={},
+        messages=[{"role": "user", "content": f"hi {secret}"}],
+        response={"content": f"response {secret}"},
         response_text='{"claims": [{"id": "c1"}]}',
         trace_id="T-log",
     )
@@ -98,6 +99,10 @@ def test_log_llm_call_uses_response_text(tmp_path, monkeypatch) -> None:
     trace_path = tmp_path / "trace.jsonl"
     with trace_path.open("r", encoding="utf-8") as handle:
         line = handle.readline()
+    assert secret not in line
+
     record = json.loads(line)
     assert record["trace_id"] == "T-log"
-    assert '"claims"' in record["response_preview"]
+    assert isinstance(record["response_preview"], dict)
+    assert record["response_preview"]["chars"] > 0
+    assert "sha256" in record["prompt_preview"]

@@ -1,10 +1,13 @@
 from pathlib import Path
 import sys
 import yaml
+
+from app.config.paths import resolve_system_settings_path
 from app.index.build import build_index_from_settings, query
 
 def main():
-    settings = yaml.safe_load(Path("vault/_system/settings/system-settings.yaml").read_text(encoding="utf-8"))
+    settings_path = resolve_system_settings_path()
+    settings = yaml.safe_load(Path(settings_path).read_text(encoding="utf-8")) if settings_path else {}
     idx = build_index_from_settings(settings)
     term = " ".join(sys.argv[1:]) if len(sys.argv) > 0 else ""
     for p, s in query(idx, term):

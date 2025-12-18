@@ -23,6 +23,7 @@ from .models import (
     ReviewerSettings,
     SettingsBundle,
     YggdrasilPaths,
+    EmbeddingProfiles,
 )
 from .parsers import parse_section
 from .writeback import writeback_settings_block
@@ -193,6 +194,16 @@ def compile_all(*, auto_heal: bool | None = None) -> SettingsBundle:
     if "providers" in file_paths:
         _update_reference(file_paths["providers"], "Providers", bundle.providers, auto_heal_enabled)
 
+    embedding_payload = _merge_sections(file_sections.get("embeddings", {}))
+    embeddings_model, embeddings_canonical, embeddings_fixed = _hydrate_model(
+        payload=embedding_payload, model_cls=EmbeddingProfiles
+    )
+    bundle.embedding_profiles = embeddings_model
+    if auto_heal_enabled and embeddings_fixed and "embeddings" in file_paths:
+        writeback_settings_block(file_paths["embeddings"], embeddings_canonical)
+    if "embeddings" in file_paths:
+        _update_reference(file_paths["embeddings"], "Embeddings", bundle.embedding_profiles, auto_heal_enabled)
+
     yggdrasil_payload = _merge_sections(file_sections.get("yggdrasil", {}))
     if yggdrasil_payload:
         ygg_model, ygg_canonical, ygg_fixed = _hydrate_model(
@@ -256,3 +267,4 @@ def compile_all(*, auto_heal: bool | None = None) -> SettingsBundle:
     ).hexdigest()[:12]
     emit("settings.changed", {"sha": fingerprint, "ts": time.time()})
     return bundle
+

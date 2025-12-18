@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import math
 import pytest
 
 from app.components.embeddings import EmbeddingIdentity
@@ -163,3 +164,52 @@ def test_memory_vector_index_identity_mismatch_on_search(monkeypatch) -> None:
     with pytest.raises(ValueError):
         bad_identity = EmbeddingIdentity(provider="beta", model="memory-test", dim=4)
         idx.search([1.0, 0.0, 0.0, 0.0], k=1, identity=bad_identity)
+
+
+def test_memory_vector_index_unit_norm_when_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("EMBED_DIM", "3")
+    idx = MemoryVectorIndex()
+    identity = EmbeddingIdentity(provider="unit", model="memory-test", dim=3, normalize=True)
+    oid = uuid4()
+    idx.upsert(
+        object_id=oid,
+        kind="note",
+        source_ref="unit-test",
+        payload={"text": "alpha"},
+        embedding=[3.0, 0.0, 0.0],
+        model=identity.model,
+        identity=identity,
+    )
+    entry = idx._entries[oid]
+    norm = math.sqrt(sum((float(v) * float(v)) for v in entry.embedding))
+    assert math.isclose(norm, 1.0, rel_tol=1e-6)
+
+
+def test_memory_vector_index_preserves_magnitude_when_not_normalized(monkeypatch) -> None:
+    monkeypatch.setenv("EMBED_DIM", "2")
+    idx = MemoryVectorIndex()
+    identity = EmbeddingIdentity(provider="raw", model="memory-test", dim=2, normalize=False)
+    strong = uuid4()
+    idx.upsert(
+        object_id=strong,
+        kind="note",
+        source_ref="unit-test",
+        payload={"text": "strong"},
+        embedding=[2.0, 0.0],
+        model=identity.model,
+        identity=identity,
+    )
+    weak = uuid4()
+    idx.upsert(
+        object_id=weak,
+        kind="note",
+        source_ref="unit-test",
+        payload={"text": "weak"},
+        embedding=[1.0, 0.0],
+        model=identity.model,
+        identity=identity,
+    )
+    hits = idx.search([1.0, 0.0], k=2, identity=identity)
+    assert [hit.object_id for hit in hits] == [strong, weak]
+
+

@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Iterable, List
+from typing import List
 from uuid import UUID
 
 import click
 
-from app.components.embeddings import get_embedding_client, get_embedding_identity
+from app.components.embeddings import get_embedding_client
 from app.store import object_store as legacy_store
 from app.stores import get_vector_index
 
@@ -84,28 +84,22 @@ def index() -> None:
 
 
 @index.command("rebuild", help="Rebuild vector index embeddings from stored objects.")
-@click.option("--profile", default="default", show_default=True, help="Embedding profile (default or deterministic/test)")
+@click.option("--profile", default="default", show_default=True, help="Embedding profile to use (default or deterministic/test)")
 @click.option("--model", "override_model", default=None, help="Override embedding model for this run")
 @click.option("--limit", type=int, default=None, help="Maximum number of objects to process")
 @click.option("--dry-run", is_flag=True, default=False, help="Report counts without embedding")
 def rebuild(profile: str, override_model: str | None, limit: int | None, dry_run: bool) -> None:
     os.environ.setdefault("LLM_PROVIDER", "mock")
-    if override_model:
-        os.environ["EMBED_MODEL"] = override_model
-        # Update the in-memory constant used by the embeddings module.
-        import app.llm.embeddings as llm_embeddings
-
-        llm_embeddings.EMBED_MODEL = override_model
 
     objects = _load_objects(limit)
     if not objects:
         click.echo("No objects available for indexing.")
         return
 
-    client = get_embedding_client(profile)
-    identity = get_embedding_identity(client=client, profile=profile)
+    client = get_embedding_client(profile=profile, override_model=override_model)
+    identity = client.identity
     click.echo(
-        f"Embedding {len(objects)} objects (provider={identity.provider} model={identity.model} dim={identity.dim})"
+        f"Embedding {len(objects)} objects (provider={identity.provider} model={identity.model} dim={identity.dim} normalize={identity.normalize})"
     )
 
     if dry_run:
@@ -135,3 +129,5 @@ def rebuild(profile: str, override_model: str | None, limit: int | None, dry_run
 
     duration = time.perf_counter() - start
     click.echo(f"Rebuilt embeddings for {processed} objects in {duration:.2f}s")
+
+

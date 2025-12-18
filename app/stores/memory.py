@@ -163,7 +163,10 @@ class MemoryVectorIndex(VectorIndex):
                 f"embedding model mismatch: stored={resolved_identity.model} provided={model}"
             )
         model_value = model or resolved_identity.model
-        embedding_norm = l2_normalize(embedding_floats)
+        if resolved_identity.normalize:
+            embedding_norm = l2_normalize(embedding_floats)
+        else:
+            embedding_norm = embedding_floats
 
         self._seq += 1
         entry = _VectorEntry(
@@ -190,7 +193,10 @@ class MemoryVectorIndex(VectorIndex):
             raise ValueError(
                 f"query embedding dim mismatch: expected {resolved_identity.dim}, got {dim}"
             )
-        query_norm = l2_normalize(query)
+        if resolved_identity.normalize:
+            query_norm = l2_normalize(query)
+        else:
+            query_norm = query
 
         results: list[tuple[float, int, _VectorHit]] = []
         for entry in self._entries.values():
@@ -214,6 +220,7 @@ class MemoryVectorIndex(VectorIndex):
                 provider=effective.provider,
                 model=effective.model,
                 dim=effective.dim,
+                normalize=effective.normalize,
             )
             self._dim = effective.dim
             return self._identity
@@ -221,11 +228,19 @@ class MemoryVectorIndex(VectorIndex):
             stored.provider != effective.provider
             or stored.model != effective.model
             or stored.dim != effective.dim
+            or stored.normalize != effective.normalize
         ):
             raise ValueError(
-                "embedding identity mismatch: expected provider={} model={} dim={}; got provider={} model={} dim={}. "
+                "embedding identity mismatch: expected provider={} model={} dim={} normalize={}; got provider={} model={} dim={} normalize={}. "
                 "Run 'python -m app.cli index rebuild' to realign the index.".format(
-                    stored.provider, stored.model, stored.dim, effective.provider, effective.model, effective.dim
+                    stored.provider,
+                    stored.model,
+                    stored.dim,
+                    stored.normalize,
+                    effective.provider,
+                    effective.model,
+                    effective.dim,
+                    effective.normalize,
                 )
             )
         return stored
@@ -276,6 +291,7 @@ class MemoryVectorIndex(VectorIndex):
                                 provider=str(identity_data.get("provider", "")),
                                 model=str(identity_data.get("model", "")),
                                 dim=int(identity_data.get("dim", 0) or 0),
+                                normalize=bool(identity_data.get("normalize", True)),
                             )
                         except Exception:
                             loaded_identity = None
@@ -289,22 +305,30 @@ class MemoryVectorIndex(VectorIndex):
                                 provider="legacy",
                                 model=str(data.get("model", "")),
                                 dim=dim,
+                                normalize=True,
                             )
                     elif loaded_identity and (
                         loaded_identity.provider != self._identity.provider
                         or loaded_identity.model != self._identity.model
                         or (loaded_identity.dim and loaded_identity.dim != self._identity.dim)
+                        or loaded_identity.normalize != self._identity.normalize
                     ):
                         continue
                     if self._identity.dim != dim:
                         continue
+
+                    embedding_values = coerce_floats(embedding)
+                    if self._identity.normalize:
+                        stored_embedding = l2_normalize(embedding_values)
+                    else:
+                        stored_embedding = embedding_values
 
                     entry = _VectorEntry(
                         object_id=obj_id,
                         kind=str(data.get("kind", "")),
                         source_ref=str(data.get("source_ref", "")),
                         payload=data.get("payload") or {},
-                        embedding=l2_normalize(coerce_floats(embedding)),
+                        embedding=stored_embedding,
                         model=str(data.get("model", "")),
                         seq=int(data.get("seq", 0)),
                         identity=self._identity,
@@ -353,3 +377,6 @@ class MemoryRelationIndex(RelationIndex):
                     if entry["dst"] == src:
                         return True
         return False
+
+
+
