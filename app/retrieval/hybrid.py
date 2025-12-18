@@ -8,7 +8,7 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 from rapidfuzz import process
 
-from app.components.embeddings import get_embedding_client
+from app.components.embeddings import get_embedding_client, resolve_embedding_identity
 from app.retrieval.hook_adapter import maybe_rerank
 
 
@@ -122,17 +122,27 @@ class MemoryHybridStore:
 
 
 _STORE = MemoryHybridStore()
-_EMBED_CLIENT = get_embedding_client()
+_EMBED_CLIENT = None
+_EMBED_IDENTITY = None
+
+
+def _get_embed_client():
+    global _EMBED_CLIENT, _EMBED_IDENTITY
+    current = resolve_embedding_identity()
+    if _EMBED_CLIENT is None or _EMBED_IDENTITY != current:
+        _EMBED_CLIENT = get_embedding_client()
+        _EMBED_IDENTITY = _EMBED_CLIENT.identity
+    return _EMBED_CLIENT
 
 
 def embed_text(text: str, language: Optional[str] = None) -> list[float]:
     """Backwards-compatible embedding helper for tests that patch this symbol."""
-    return _EMBED_CLIENT.embed_text(text)
+    return _get_embed_client().embed_text(text)
 
 
 def embed_batches(texts: Iterable[str], batch_size: int = 32) -> Iterator[list[list[float]]]:
     """Backwards-compatible batch embedding helper for tests that patch this symbol."""
-    yield from _EMBED_CLIENT.embed_batches(texts, batch_size=batch_size)
+    yield from _get_embed_client().embed_batches(texts, batch_size=batch_size)
 
 
 def get_store() -> MemoryHybridStore:
@@ -221,3 +231,4 @@ def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None) -> 
 
 
 __all__ = ["hybrid_search", "get_store", "MemoryHybridStore", "Document"]
+
