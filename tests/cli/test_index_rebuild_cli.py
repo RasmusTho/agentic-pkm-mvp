@@ -85,52 +85,6 @@ def test_index_rebuild_populates_index(monkeypatch) -> None:
     legacy_store._MEMORY_STORE.clear()
 
 
-def test_index_rebuild_json_summary(monkeypatch) -> None:
-    reset_store_backends()
-    legacy_store._MEMORY_STORE.clear()
-    monkeypatch.setenv("STORE_BACKEND", "memory")
-    monkeypatch.setenv("LLM_PROVIDER", "mock")
-    monkeypatch.setenv("EMBED_DIM", "8")
-
-    _seed_object("json summary object")
-
-    runner = CliRunner()
-    result = runner.invoke(cli, ["index", "rebuild", "--json"])
-
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert data["processed"] == 1
-    assert data["errors"] == []
-
-    legacy_store._MEMORY_STORE.clear()
-
-
-def test_index_rebuild_strict_fails_on_error(monkeypatch) -> None:
-    reset_store_backends()
-    legacy_store._MEMORY_STORE.clear()
-    monkeypatch.setenv("STORE_BACKEND", "memory")
-    monkeypatch.setenv("LLM_PROVIDER", "mock")
-    monkeypatch.setenv("EMBED_DIM", "8")
-
-    _seed_object("will fail")
-
-    idx = get_vector_index()
-    original_upsert = idx.upsert
-
-    def _failing_upsert(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise ValueError("boom")
-
-    idx.upsert = _failing_upsert  # type: ignore[assignment]
-
-    runner = CliRunner()
-    result = runner.invoke(cli, ["index", "rebuild", "--strict"])
-
-    idx.upsert = original_upsert  # restore
-
-    assert result.exit_code != 0
-    legacy_store._MEMORY_STORE.clear()
-
-
 @pytest.mark.pg
 def test_index_rebuild_sets_pg_meta(monkeypatch) -> None:
     try:

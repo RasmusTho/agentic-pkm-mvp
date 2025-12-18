@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 import os
 import time
-from pathlib import Path
-from typing import Dict, List
+from typing import Iterable, List
 from uuid import UUID
 
 import click
 
-from app.components.embeddings import get_embedding_client
+from app.components.embeddings import get_embedding_client, get_embedding_identity
 from app.store import object_store as legacy_store
 from app.stores import get_vector_index
 
@@ -85,108 +84,54 @@ def index() -> None:
 
 
 @index.command("rebuild", help="Rebuild vector index embeddings from stored objects.")
-@click.option("--backend", type=click.Choice(["memory", "pg"]), default=None, help="Override STORE_BACKEND for this run")
-@click.option("--outbox", "outbox_path", type=click.Path(path_type=Path), default=None, help="Override INDEX_OUTBOX_PATH")
-@click.option("--profile", default="default", show_default=True, help="Embedding profile to use (default or deterministic/test)")
+@click.option("--profile", default="default", show_default=True, help="Embedding profile (default or deterministic/test)")
 @click.option("--model", "override_model", default=None, help="Override embedding model for this run")
 @click.option("--limit", type=int, default=None, help="Maximum number of objects to process")
 @click.option("--dry-run", is_flag=True, default=False, help="Report counts without embedding")
-@click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON summary")
-@click.option("--strict/--no-strict", default=False, help="Exit non-zero when errors occur")
-def rebuild(
-    backend: str | None,
-    outbox_path: Path | None,
-    profile: str,
-    override_model: str | None,
-    limit: int | None,
-    dry_run: bool,
-    as_json: bool,
-    strict: bool,
-) -> None:
-    if backend:
-        os.environ["STORE_BACKEND"] = backend
-    if outbox_path:
-        os.environ["INDEX_OUTBOX_PATH"] = str(outbox_path)
-
+def rebuild(profile: str, override_model: str | None, limit: int | None, dry_run: bool) -> None:
     os.environ.setdefault("LLM_PROVIDER", "mock")
+    if override_model:
+        os.environ["EMBED_MODEL"] = override_model
+        # Update the in-memory constant used by the embeddings module.
+        import app.llm.embeddings as llm_embeddings
+
+        llm_embeddings.EMBED_MODEL = override_model
 
     objects = _load_objects(limit)
-    summary: Dict[str, object] = {
-        "total_objects": len(objects),
-        "processed": 0,
-        "skipped": 0,
-        "errors": [],
-    }
-
     if not objects:
-        summary["message"] = "No objects available for indexing."
-        _emit_summary(summary, as_json)
+        click.echo("No objects available for indexing.")
         return
 
-    client = get_embedding_client(profile=profile, override_model=override_model)
-    identity = client.identity
-    summary["identity"] = {
-        "provider": identity.provider,
-        "model": identity.model,
-        "dim": identity.dim,
-        "normalize": identity.normalize,
-    }
-
-    if not as_json:
-        click.echo(
-            f"Embedding {len(objects)} objects (provider={identity.provider} model={identity.model} dim={identity.dim} normalize={identity.normalize})"
-        )
+    client = get_embedding_client(profile)
+    identity = get_embedding_identity(client=client, profile=profile)
+    click.echo(
+        f"Embedding {len(objects)} objects (provider={identity.provider} model={identity.model} dim={identity.dim})"
+    )
 
     if dry_run:
-        summary["message"] = "Dry run complete; no embeddings written."
-        _emit_summary(summary, as_json)
+        click.echo("Dry run complete; no embeddings written.")
         return
 
     index_store = get_vector_index()
+    processed = 0
     start = time.perf_counter()
-
     for domain_obj in objects:
         text = _extract_text(domain_obj.payload)
         if not text:
-            summary["skipped"] = int(summary["skipped"]) + 1
             continue
-        try:
-            embedding = client.embed_text(text)
-            index_store.upsert(
-                object_id=UUID(str(domain_obj.uuid)),
-                kind=str(domain_obj.kind or "note"),
-                source_ref=str(domain_obj.source_ref or ""),
-                payload=dict(domain_obj.payload or {}),
-                embedding=embedding,
-                model=identity.model,
-                identity=identity,
-            )
-            summary["processed"] = int(summary["processed"]) + 1
-        except Exception as exc:  # pragma: no cover - error path
-            summary.setdefault("errors", []).append(str(exc))
+        embedding = client.embed_text(text)
+        index_store.upsert(
+            object_id=UUID(str(domain_obj.uuid)),
+            kind=str(domain_obj.kind or "note"),
+            source_ref=str(domain_obj.source_ref or ""),
+            payload=dict(domain_obj.payload or {}),
+            embedding=embedding,
+            model=identity.model,
+            identity=identity,
+        )
+        processed += 1
+        if processed % 25 == 0:
+            click.echo(f"Indexed {processed}/{len(objects)} objects...")
 
     duration = time.perf_counter() - start
-    summary["duration_seconds"] = round(duration, 2)
-
-    if not as_json:
-        if summary.get("errors"):
-            click.echo(f"Completed with {len(summary['errors'])} error(s) after {duration:.2f}s")
-        else:
-            click.echo(
-                f"Rebuilt embeddings for {summary['processed']} objects in {duration:.2f}s"
-            )
-
-    _emit_summary(summary, as_json)
-    if strict and summary.get("errors"):
-        raise SystemExit(2)
-
-
-def _emit_summary(summary: Dict[str, object], as_json: bool) -> None:
-    if as_json:
-        click.echo(json.dumps(summary, ensure_ascii=False, indent=2))
-    else:
-        if summary.get("message"):
-            click.echo(str(summary["message"]))
-        click.echo(
-            f"total={summary.get('total_objects', 0)} processed={summary.get('processed', 0)} skipped={summary.get('skipped', 0)} errors={len(summary.get('errors', []))}"
-        )
+    click.echo(f"Rebuilt embeddings for {processed} objects in {duration:.2f}s")

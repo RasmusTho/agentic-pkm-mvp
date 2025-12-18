@@ -25,7 +25,6 @@ def _identity_to_dict(identity: EmbeddingIdentity | None) -> Dict[str, Any] | No
         "provider": identity.provider,
         "model": identity.model,
         "dim": identity.dim,
-        "normalize": identity.normalize,
     }
 
 
@@ -47,7 +46,7 @@ def diagnose_index() -> Dict[str, Any]:
     if stored_identity is None:
         warnings.append("VectorIndex has no recorded embedding identity (empty index or legacy backend).")
     else:
-        for field in ("provider", "model", "dim", "normalize"):
+        for field in ("provider", "model", "dim"):
             expected_val = getattr(expected_identity, field)
             stored_val = getattr(stored_identity, field)
             if expected_val != stored_val:

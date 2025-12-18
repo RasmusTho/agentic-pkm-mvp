@@ -17,6 +17,11 @@ def _provider() -> str:
     return os.getenv("LLM_PROVIDER", "ollama").lower()
 
 
+def get_embedding_provider() -> str:
+    """Return the configured embedding provider."""
+    return _provider()
+
+
 def _mock_vector(text: str, *, dim: int) -> List[float]:
     digest = hashlib.sha256(text.encode("utf-8")).digest()
     vec: list[float] = []
@@ -67,4 +72,4 @@ def embed_texts(
     return [embed_text(text, provider=provider, model=model, dim=dim, normalize=normalize) for text in texts]
 
 
-__all__ = ["embed_text", "embed_texts", "EMBED_MODEL"]
+__all__ = ["embed_text", "embed_texts", "EMBED_MODEL", "get_embedding_provider"]

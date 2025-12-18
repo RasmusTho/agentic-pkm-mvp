@@ -11,7 +11,7 @@ from psycopg.rows import dict_row
 
 from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
 from app.db.dsn import resolve_dsn
-from app.embedding_config import assert_embed_dim, coerce_floats, l2_normalize
+from app.embedding_config import coerce_floats, l2_normalize
 
 from .base import ObjectStore, RelationIndex, VectorIndex
 
@@ -102,10 +102,9 @@ def _load_index_identity(cur) -> EmbeddingIdentity | None:
         provider = str(data.get("provider") or "").strip()
         model = str(data.get("model") or "").strip()
         dim = int(data.get("dim") or 0)
-        normalize = bool(data.get("normalize", True))
         if not provider or not model or dim <= 0:
             return None
-        return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=normalize)
+        return EmbeddingIdentity(provider=provider, model=model, dim=dim)
     except Exception:
         return None
 
@@ -129,11 +128,10 @@ def _ensure_index_identity(cur, requested: EmbeddingIdentity, *, allow_create: b
         stored.provider != requested.provider
         or stored.model != requested.model
         or stored.dim != requested.dim
-        or stored.normalize != requested.normalize
     ):
         raise RuntimeError(
-            f"Embedding identity mismatch (stored provider={stored.provider} model={stored.model} dim={stored.dim} normalize={stored.normalize}; "
-            f"requested provider={requested.provider} model={requested.model} dim={requested.dim} normalize={requested.normalize}). {_IDENTITY_REBUILD_HINT}"
+            f"Embedding identity mismatch (stored provider={stored.provider} model={stored.model} dim={stored.dim}; "
+            f"requested provider={requested.provider} model={requested.model} dim={requested.dim}). {_IDENTITY_REBUILD_HINT}"
         )
     return stored
 
@@ -241,16 +239,21 @@ class PgVectorIndex(VectorIndex):
     ) -> None:
         _ensure_tables()
         embedding_floats = coerce_floats(embedding)
-        assert_embed_dim(embedding_floats, name="embedding")
+        resolved_identity = identity or get_embedding_identity()
+        if len(embedding_floats) != resolved_identity.dim:
+            raise ValueError(
+                f"embedding dim mismatch for identity {resolved_identity.model}: expected {resolved_identity.dim}, got {len(embedding_floats)}"
+            )
+        if model and model != resolved_identity.model:
+            raise ValueError(
+                f"embedding model mismatch: stored={resolved_identity.model} provided={model}"
+            )
         embedding_norm = l2_normalize(embedding_floats)
+        model_value = model or resolved_identity.model
         with _connect() as conn:
             with conn.cursor() as cur:
                 stored_identity = _ensure_index_identity(cur, resolved_identity, allow_create=True)
                 dim = stored_identity.dim
-                if stored_identity.normalize:
-                    embedding_values = l2_normalize(embedding_floats)
-                else:
-                    embedding_values = embedding_floats
                 cur.execute(
                     """
                     INSERT INTO store_vector_index (
@@ -266,24 +269,19 @@ class PgVectorIndex(VectorIndex):
                         model = EXCLUDED.model,
                         updated_at = now()
                     """,
-                    (object_id, kind, source_ref, json.dumps(payload), embedding_norm, model),
+                    (object_id, kind, source_ref, json.dumps(payload), embedding_norm, dim, model_value),
                 )
 
     def search(self, vector: list[float], *, k: int = 5, identity: EmbeddingIdentity | None = None) -> List[_VectorHit]:
         _ensure_tables()
 
         query = coerce_floats(vector)
-        assert_embed_dim(query, name="query embedding")
         query_norm = l2_normalize(query)
 
         with _connect() as conn:
             with conn.cursor() as cur:
                 requested_identity = identity or get_embedding_identity()
                 stored_identity = _ensure_index_identity(cur, requested_identity, allow_create=False)
-                if stored_identity.normalize:
-                    query_norm = l2_normalize(query)
-                else:
-                    query_norm = query
                 index_dim = stored_identity.dim
                 if len(query_norm) != index_dim:
                     raise ValueError(f"query embedding dim mismatch: expected {index_dim}, got {len(query_norm)}")
@@ -314,7 +312,8 @@ class PgVectorIndex(VectorIndex):
         scored: List[Tuple[float, object, _VectorHit]] = []
         for row in rows:
             embedding = coerce_floats(row["embedding"] or [])
-            assert_embed_dim(embedding, name="stored embedding")
+            if len(embedding) != index_dim:
+                raise ValueError("stored embedding dim mismatch")
             candidate_norm = l2_normalize(embedding)
             score = self._dot(query_norm, candidate_norm)
             scored.append(
@@ -382,3 +381,31 @@ class PgRelationIndex(RelationIndex):
                 )
                 row = cur.fetchone()
         return bool(row)
+
+
+def inspect_pg_index_state() -> dict:
+    """Return diagnostics for the Postgres vector index (identity + dims)."""
+    _ensure_tables()
+    state: dict[str, object] = {}
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            identity = _load_index_identity(cur)
+            state["identity"] = identity
+            state["identity_present"] = identity is not None
+            cur.execute("SELECT DISTINCT dim FROM store_vector_index WHERE dim IS NOT NULL")
+            dims = [row["dim"] for row in cur.fetchall()]
+            state["dims"] = dims
+            cur.execute("SELECT COUNT(*) AS total FROM store_vector_index")
+            total_rows = cur.fetchone().get("total") if cur else 0
+            state["rows"] = total_rows
+            if identity is not None:
+                cur.execute(
+                    "SELECT COUNT(*) AS drift FROM store_vector_index WHERE array_length(embedding, 1) <> %s",
+                    (identity.dim,),
+                )
+                drift_row = cur.fetchone() or {"drift": 0}
+                state["rows_wrong_dim"] = drift_row.get("drift", 0)
+            else:
+                state["rows_wrong_dim"] = None
+    return state
+

@@ -23,20 +23,18 @@ def doctor(as_json: bool, strict: bool, warn: bool) -> None:
         stored = result.get("stored_identity") or {}
         click.echo(f"VectorIndex backend: {result['backend']}")
         click.echo(
-            "Expected identity: provider={provider} model={model} dim={dim} normalize={normalize}".format(
+            "Expected identity: provider={provider} model={model} dim={dim}".format(
                 provider=expected.get("provider"),
                 model=expected.get("model"),
                 dim=expected.get("dim"),
-                normalize=expected.get("normalize"),
             )
         )
         if stored:
             click.echo(
-                "Stored identity: provider={provider} model={model} dim={dim} normalize={normalize}".format(
+                "Stored identity: provider={provider} model={model} dim={dim}".format(
                     provider=stored.get("provider"),
                     model=stored.get("model"),
                     dim=stored.get("dim"),
-                    normalize=stored.get("normalize"),
                 )
             )
         else:
@@ -55,5 +53,3 @@ def doctor(as_json: bool, strict: bool, warn: bool) -> None:
     if strict and result.get("issues"):
         exit_code = 2
     raise SystemExit(exit_code)
-
-

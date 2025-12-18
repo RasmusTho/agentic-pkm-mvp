@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 from uuid import UUID
 
-from app.embedding_config import assert_embed_dim, coerce_floats, get_embed_dim, l2_normalize
+from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
+from app.embedding_config import coerce_floats, get_embed_dim, l2_normalize
 
 from .base import (
     Decision,
@@ -151,7 +152,17 @@ class MemoryVectorIndex(VectorIndex):
         identity: EmbeddingIdentity | None = None,
     ) -> None:
         embedding_floats = coerce_floats(embedding)
-        assert_embed_dim(embedding_floats, name="embedding")
+        resolved_identity = self._ensure_identity(identity, allow_initialize=True)
+        dim = len(embedding_floats)
+        if resolved_identity.dim != dim:
+            raise ValueError(
+                f"embedding dim mismatch for identity {resolved_identity.model}: expected {resolved_identity.dim}, got {dim}"
+            )
+        if model and model != resolved_identity.model:
+            raise ValueError(
+                f"embedding model mismatch: stored={resolved_identity.model} provided={model}"
+            )
+        model_value = model or resolved_identity.model
         embedding_norm = l2_normalize(embedding_floats)
 
         self._seq += 1
@@ -161,7 +172,7 @@ class MemoryVectorIndex(VectorIndex):
             source_ref=source_ref,
             payload=dict(payload),
             embedding=embedding_norm,
-            model=model,
+            model=model_value,
             seq=self._seq,
             identity=self._identity,
         )
@@ -172,8 +183,13 @@ class MemoryVectorIndex(VectorIndex):
         if not self._entries:
             return []
 
+        resolved_identity = self._ensure_identity(identity, allow_initialize=False)
         query = coerce_floats(vector)
-        assert_embed_dim(query, name="query embedding")
+        dim = len(query)
+        if dim != resolved_identity.dim:
+            raise ValueError(
+                f"query embedding dim mismatch: expected {resolved_identity.dim}, got {dim}"
+            )
         query_norm = l2_normalize(query)
 
         results: list[tuple[float, int, _VectorHit]] = []
@@ -198,7 +214,6 @@ class MemoryVectorIndex(VectorIndex):
                 provider=effective.provider,
                 model=effective.model,
                 dim=effective.dim,
-                normalize=effective.normalize,
             )
             self._dim = effective.dim
             return self._identity
@@ -206,19 +221,11 @@ class MemoryVectorIndex(VectorIndex):
             stored.provider != effective.provider
             or stored.model != effective.model
             or stored.dim != effective.dim
-            or stored.normalize != effective.normalize
         ):
             raise ValueError(
-                "embedding identity mismatch: expected provider={} model={} dim={} normalize={}; got provider={} model={} dim={} normalize={}. "
+                "embedding identity mismatch: expected provider={} model={} dim={}; got provider={} model={} dim={}. "
                 "Run 'python -m app.cli index rebuild' to realign the index.".format(
-                    stored.provider,
-                    stored.model,
-                    stored.dim,
-                    stored.normalize,
-                    effective.provider,
-                    effective.model,
-                    effective.dim,
-                    effective.normalize,
+                    stored.provider, stored.model, stored.dim, effective.provider, effective.model, effective.dim
                 )
             )
         return stored
@@ -258,7 +265,38 @@ class MemoryVectorIndex(VectorIndex):
                         continue
 
                     embedding = list(data.get("embedding") or [])
-                    if len(embedding) != expected_dim:
+                    if not embedding:
+                        continue
+                    dim = len(embedding)
+                    identity_data = data.get("identity") if isinstance(data.get("identity"), dict) else None
+                    loaded_identity = None
+                    if identity_data:
+                        try:
+                            loaded_identity = EmbeddingIdentity(
+                                provider=str(identity_data.get("provider", "")),
+                                model=str(identity_data.get("model", "")),
+                                dim=int(identity_data.get("dim", 0) or 0),
+                            )
+                        except Exception:
+                            loaded_identity = None
+                    if loaded_identity and loaded_identity.dim and loaded_identity.dim != dim:
+                        continue
+                    if self._identity is None:
+                        if loaded_identity:
+                            self._identity = loaded_identity
+                        else:
+                            self._identity = EmbeddingIdentity(
+                                provider="legacy",
+                                model=str(data.get("model", "")),
+                                dim=dim,
+                            )
+                    elif loaded_identity and (
+                        loaded_identity.provider != self._identity.provider
+                        or loaded_identity.model != self._identity.model
+                        or (loaded_identity.dim and loaded_identity.dim != self._identity.dim)
+                    ):
+                        continue
+                    if self._identity.dim != dim:
                         continue
 
                     entry = _VectorEntry(
