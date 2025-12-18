@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Iterable, Iterator, List, Optional
 
 import numpy as np
 from rank_bm25 import BM25Okapi
@@ -105,6 +105,13 @@ class MemoryHybridStore:
         self._ensure_indexes()
         if self._embeddings is None or self._emb_norms is None or not self._docs:
             return np.zeros(len(self._docs))
+        if query_vector.ndim != 1:
+            raise ValueError("query embedding must be 1D")
+        expected_dim = self._embeddings.shape[1] if self._embeddings.ndim == 2 else 0
+        if expected_dim and query_vector.shape[0] != expected_dim:
+            raise ValueError(
+                f"hybrid query embedding dim mismatch: expected {expected_dim}, got {query_vector.shape[0]}"
+            )
         q_norm = np.linalg.norm(query_vector)
         if q_norm == 0:
             return np.zeros(len(self._docs))
@@ -177,14 +184,8 @@ def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None) -> 
     bm25_raw = _STORE.bm25_scores(tokens)
     emb_vector_raw = embed_text(query)
     emb_vector = np.array(emb_vector_raw, dtype=np.float32)
-    if emb_vector.ndim == 1 and emb_vector.shape[0] and hasattr(emb_vector, "__len__"):
-        # Ensure embedding matches store dimension; pad/truncate deterministically for patched tests.
-        if self_dim := (_STORE._embeddings.shape[1] if getattr(_STORE, "_embeddings", None) is not None else None):
-            if emb_vector.shape[0] < self_dim:
-                padding = np.zeros(self_dim - emb_vector.shape[0], dtype=np.float32)
-                emb_vector = np.concatenate([emb_vector, padding])
-            elif emb_vector.shape[0] > self_dim:
-                emb_vector = emb_vector[:self_dim]
+    if emb_vector.ndim != 1 or not emb_vector.shape[0]:
+        raise ValueError("embedding client returned invalid vector shape")
     emb_raw = _STORE.embedding_scores(emb_vector)
 
     bm25_norm = _normalize(bm25_raw)

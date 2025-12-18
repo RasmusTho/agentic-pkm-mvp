@@ -6,8 +6,11 @@ from uuid import uuid4
 import psycopg
 import pytest
 
+from app.components.embeddings import EmbeddingIdentity
 from app.db.dsn import resolve_dsn
 from app.stores import reset_store_backends, get_object_store, get_vector_index, get_relation_index
+
+TEST_PG_IDENTITY = EmbeddingIdentity(provider="test", model="pg-test", dim=4)
 
 BACKENDS = [
     pytest.param("memory", id="memory"),
@@ -55,9 +58,9 @@ def test_vector_index_search_order(monkeypatch, backend):
 
     idx = get_vector_index()
     a, b = uuid4(), uuid4()
-    idx.upsert(object_id=a, kind="note", source_ref="unit-test", payload={"text": "a"}, embedding=[1, 0, 0, 0], model="test")
-    idx.upsert(object_id=b, kind="note", source_ref="unit-test", payload={"text": "b"}, embedding=[0.5, 0.5, 0, 0], model="test")
-    hits = idx.search([1, 0, 0, 0], k=2)
+    idx.upsert(object_id=a, kind="note", source_ref="unit-test", payload={"text": "a"}, embedding=[1, 0, 0, 0], model=TEST_PG_IDENTITY.model, identity=TEST_PG_IDENTITY)
+    idx.upsert(object_id=b, kind="note", source_ref="unit-test", payload={"text": "b"}, embedding=[0.5, 0.5, 0, 0], model=TEST_PG_IDENTITY.model, identity=TEST_PG_IDENTITY)
+    hits = idx.search([1, 0, 0, 0], k=2, identity=TEST_PG_IDENTITY)
     assert [h.object_id for h in hits] == [a, b]
 
 
@@ -74,3 +77,66 @@ def test_relation_neighbors_unique_order(monkeypatch, backend):
     rel.link(src, b, rel="related_to")
     rel.link(src, a, rel="related_to")
     assert rel.neighbors(src, rel="related_to") == [a, b]
+
+
+def test_pg_vector_index_query_dim_mismatch(monkeypatch):
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setenv("EMBED_DIM", "4")
+    idx = get_vector_index()
+    oid = uuid4()
+    idx.upsert(object_id=oid, kind="note", source_ref="unit-test", payload={"text": "alpha"}, embedding=[1, 0, 0, 0], model=TEST_PG_IDENTITY.model, identity=TEST_PG_IDENTITY)
+    monkeypatch.setenv("EMBED_DIM", "3")
+    with pytest.raises(ValueError, match="dim mismatch"):
+        idx.search([0.5, 0.5, 0.5], k=1, identity=TEST_PG_IDENTITY)
+
+
+def test_pg_vector_index_detects_mixed_dims(monkeypatch):
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setenv("EMBED_DIM", "4")
+    idx = get_vector_index()
+    primary = uuid4()
+    secondary = uuid4()
+    idx.upsert(object_id=primary, kind="note", source_ref="unit-test", payload={"text": "alpha"}, embedding=[1, 0, 0, 0], model=TEST_PG_IDENTITY.model, identity=TEST_PG_IDENTITY)
+    idx.upsert(object_id=secondary, kind="note", source_ref="unit-test", payload={"text": "beta"}, embedding=[0.5, 0.5, 0, 0], model=TEST_PG_IDENTITY.model, identity=TEST_PG_IDENTITY)
+    url = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    with psycopg.connect(url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE store_vector_index SET dim = %s WHERE object_id = %s", (8, secondary))
+    with pytest.raises(RuntimeError, match="mixed embedding dimensions"):
+        idx.search([1, 0, 0, 0], k=1, identity=TEST_PG_IDENTITY)
+
+
+def test_pg_vector_index_identity_mismatch(monkeypatch):
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    idx = get_vector_index()
+    primary = uuid4()
+    identity_a = EmbeddingIdentity(provider="provider-a", model="model-a", dim=4)
+    idx.upsert(
+        object_id=primary,
+        kind="note",
+        source_ref="unit-test",
+        payload={"text": "alpha"},
+        embedding=[1, 0, 0, 0],
+        model=identity_a.model,
+        identity=identity_a,
+    )
+    with pytest.raises(RuntimeError):
+        identity_b = EmbeddingIdentity(provider="provider-b", model="model-b", dim=4)
+        idx.upsert(
+            object_id=uuid4(),
+            kind="note",
+            source_ref="unit-test",
+            payload={"text": "beta"},
+            embedding=[0.5, 0.5, 0, 0],
+            model=identity_b.model,
+            identity=identity_b,
+        )
+    with pytest.raises(RuntimeError):
+        identity_c = EmbeddingIdentity(provider="provider-b", model="model-b", dim=4)
+        idx.search([1, 0, 0, 0], k=1, identity=identity_c)

@@ -2,6 +2,8 @@ from __future__ import annotations
 from typing import Iterable, Protocol, TypedDict, Optional
 from uuid import UUID
 
+from app.components.embeddings import EmbeddingIdentity
+
 
 class Decision(TypedDict):
     id: str
@@ -37,9 +39,12 @@ class VectorIndex(Protocol):
         payload: dict,
         embedding: list[float],
         model: str,
+        identity: EmbeddingIdentity | None = None,
     ) -> None: ...
 
-    def search(self, vector: list[float], *, k: int = 5) -> list: ...
+    def search(self, vector: list[float], *, k: int = 5, identity: EmbeddingIdentity | None = None) -> list: ...
+
+    def get_identity(self) -> EmbeddingIdentity | None: ...
 
 
 class RelationIndex(Protocol):
