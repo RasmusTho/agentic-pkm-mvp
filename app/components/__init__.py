@@ -3,6 +3,7 @@ from .embeddings import (
     EmbeddingIdentity,
     get_embedding_client,
     get_embedding_identity,
+    resolve_embedding_identity,
 )
 from .ocr import get_structured_ocr, get_compressive_ocr
 
@@ -18,6 +19,7 @@ __all__ = [
     "EmbeddingIdentity",
     "get_embedding_client",
     "get_embedding_identity",
+    "resolve_embedding_identity",
     "get_reranker",
     "get_structured_ocr",
     "get_compressive_ocr",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -61,7 +62,6 @@ static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
 logger = logging.getLogger(__name__)
 
 
-
 def _truthy_env(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -69,10 +69,7 @@ def _truthy_env(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-@app.on_event("startup")
-async def run_index_preflight() -> None:
-    """Run the embeddings/index doctor in warn mode when enabled."""
-
+async def _run_index_preflight() -> None:
     if not _truthy_env("EMBED_INDEX_PREFLIGHT", default=True):
         return
     try:
@@ -95,16 +92,32 @@ async def run_index_preflight() -> None:
     )
 
 
-if ingest_router is not None:
-    app.include_router(ingest_router)
-if search_router is not None:
-    app.include_router(search_router)
-if status_router is not None:
-    app.include_router(status_router, prefix="/api")
-if ask_router is not None:
-    app.include_router(ask_router, prefix="/api")
-if agent_router is not None:
-    app.include_router(agent_router)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await _run_index_preflight()
+    yield
+
+
+def _create_app() -> FastAPI:
+    application = FastAPI(title="Agentic PKM API", lifespan=lifespan)
+    application.add_middleware(TraceIdMiddleware)
+    application.mount("/static", StaticFiles(directory=static_dir), name="static")
+    configure_metrics(application)
+
+    if ingest_router is not None:
+        application.include_router(ingest_router)
+    if search_router is not None:
+        application.include_router(search_router)
+    if status_router is not None:
+        application.include_router(status_router, prefix="/api")
+    if ask_router is not None:
+        application.include_router(ask_router, prefix="/api")
+    if agent_router is not None:
+        application.include_router(agent_router)
+    return application
+
+
+app = _create_app()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -114,4 +127,3 @@ async def index() -> HTMLResponse:
     return HTMLResponse(index_path.read_text(encoding="utf-8"))
 
 
-__all__ = ["app", "_create_app"]
