@@ -111,6 +111,9 @@ def doctor(outbox_path: Optional[Path], trace_id: str, latest: bool, as_json: bo
         raise SystemExit(2)
 
     story = _build_story(rows, picked)
+    if story.get("count", 0) == 0:
+        raise SystemExit(2)
+
     if as_json:
         click.echo(json.dumps(story, ensure_ascii=False))
         raise SystemExit(0)
@@ -124,3 +127,6 @@ def doctor(outbox_path: Optional[Path], trace_id: str, latest: bool, as_json: bo
         src = ev.get("source") or ""
         click.echo(f"{idx:02d}. {ts} {ev['event']} (stage={ev['stage']} source={src})")
     raise SystemExit(0)
+
+
+__all__ = ["events"]
