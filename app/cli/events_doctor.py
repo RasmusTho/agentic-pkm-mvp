@@ -3,72 +3,124 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import click
 
-DEFAULT_OUTBOX = Path(os.environ.get("INDEX_OUTBOX_PATH", "./tmp/index-outbox.jsonl")).expanduser()
+
+def _default_outbox_path() -> Path:
+    env = os.getenv("INDEX_OUTBOX_PATH")
+    if env:
+        return Path(env).expanduser()
+    return Path("logs/index-outbox.jsonl")
 
 
-def _load_records(path: Path) -> List[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
+def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
     if not path.exists():
-        return records
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
+        return []
+    rows: List[Dict[str, Any]] = []
+    for ln in path.read_text(encoding="utf-8").splitlines():
+        ln = ln.strip()
+        if not ln:
             continue
         try:
-            records.append(json.loads(line))
+            obj = json.loads(ln)
         except Exception:
             continue
-    return records
+        if isinstance(obj, dict):
+            rows.append(obj)
+    return rows
 
 
-def _trace_id_for_record(rec: dict[str, Any]) -> str:
-    raw = rec.get("trace_id") or rec.get("traceId") or ""
-    return str(raw) if raw is not None else ""
+def _event_name(rec: Dict[str, Any]) -> str:
+    return str(rec.get("event") or rec.get("event_type") or "").strip()
 
 
-@click.command(name="events-doctor", help="Render a simple trace story from the index outbox JSONL.")
-@click.option("--path", "path", type=click.Path(path_type=Path), default=None, help="Outbox JSONL path (defaults to INDEX_OUTBOX_PATH)")
-@click.option("--trace-id", "trace_id", default=None, help="Trace ID to render (defaults to latest trace in file)")
-def events_doctor(path: Path | None, trace_id: str | None) -> None:
-    resolved = path.expanduser() if path is not None else DEFAULT_OUTBOX
-    if not resolved.exists():
-        raise click.ClickException(f"Outbox path not found: {resolved}")
-
-    records = _load_records(resolved)
-    if not records:
-        click.echo("No events found.")
-        return
-
-    target_trace = trace_id
-    if not target_trace:
-        for rec in reversed(records):
-            candidate = _trace_id_for_record(rec)
-            if candidate:
-                target_trace = candidate
-                break
-
-    filtered = records if not target_trace else [rec for rec in records if _trace_id_for_record(rec) == target_trace]
-    if not filtered:
-        click.echo(f"No events found for trace_id={target_trace or '<none>'}")
-        return
-
-    filtered.sort(key=lambda rec: rec.get("timestamp") or "")
-
-    click.echo(f"Trace {target_trace or '<unknown>'}: {len(filtered)} event(s)")
-    for rec in filtered:
-        ts = rec.get("timestamp") or ""
-        ev = rec.get("event") or rec.get("event_type") or rec.get("kind") or "unknown"
-        source = rec.get("source") or "-"
-        payload = rec.get("payload") or {}
-        obj = payload.get("object_id") or payload.get("uuid") or rec.get("uuid")
-        line = f"{ts} | {source} | {ev}"
-        if obj:
-            line += f" | object={obj}"
-        click.echo(line)
+def _trace_id(rec: Dict[str, Any]) -> str:
+    return str(rec.get("trace_id") or "").strip()
 
 
-__all__ = ["events_doctor"]
+def _timestamp(rec: Dict[str, Any]) -> str:
+    return str(rec.get("timestamp") or rec.get("created_at") or "").strip()
+
+
+def _stage(event: str) -> str:
+    if not event:
+        return "unknown"
+    return event.split(".", 1)[0]
+
+
+def _pick_trace_id(rows: List[Dict[str, Any]], trace_id: str, latest: bool) -> str:
+    if trace_id:
+        return trace_id
+    if not latest:
+        return ""
+    for rec in reversed(rows):
+        tid = _trace_id(rec)
+        if tid:
+            return tid
+    return ""
+
+
+def _build_story(rows: List[Dict[str, Any]], trace_id: str) -> Dict[str, Any]:
+    filtered = [r for r in rows if _trace_id(r) == trace_id] if trace_id else []
+    # Keep file order (append order) as canonical; timestamps may be missing.
+    events: List[Dict[str, Any]] = []
+    stages: List[str] = []
+    for r in filtered:
+        ev = _event_name(r)
+        st = _stage(ev)
+        if st not in stages:
+            stages.append(st)
+        events.append(
+            {
+                "event": ev,
+                "timestamp": _timestamp(r),
+                "source": r.get("source"),
+                "event_id": r.get("event_id"),
+                "stage": st,
+            }
+        )
+    first_ts = events[0]["timestamp"] if events else ""
+    last_ts = events[-1]["timestamp"] if events else ""
+    return {
+        "trace_id": trace_id,
+        "count": len(events),
+        "stages": stages,
+        "first_timestamp": first_ts,
+        "last_timestamp": last_ts,
+        "events": events,
+    }
+
+
+@click.group(help="Event inspection utilities.")
+def events() -> None:
+    ...
+
+
+@events.command("doctor", help="Summarize a single trace_id flow from the outbox JSONL.")
+@click.option("--outbox", "outbox_path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+@click.option("--trace-id", "trace_id", default="", help="Trace ID to inspect.")
+@click.option("--latest", is_flag=True, default=False, help="Use the latest trace_id in the outbox when none is provided.")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON.")
+def doctor(outbox_path: Optional[Path], trace_id: str, latest: bool, as_json: bool) -> None:
+    path = (outbox_path or _default_outbox_path()).expanduser()
+    rows = _read_jsonl(path)
+    picked = _pick_trace_id(rows, trace_id=trace_id, latest=latest)
+    if not picked:
+        raise SystemExit(2)
+
+    story = _build_story(rows, picked)
+    if as_json:
+        click.echo(json.dumps(story, ensure_ascii=False))
+        raise SystemExit(0)
+
+    click.echo(f"Trace: {story['trace_id']}")
+    click.echo(f"Events: {story['count']}")
+    click.echo(f"Stages: {', '.join(story['stages']) if story['stages'] else '(none)'}")
+    click.echo("")
+    for idx, ev in enumerate(story["events"], start=1):
+        ts = ev.get("timestamp") or ""
+        src = ev.get("source") or ""
+        click.echo(f"{idx:02d}. {ts} {ev['event']} (stage={ev['stage']} source={src})")
+    raise SystemExit(0)

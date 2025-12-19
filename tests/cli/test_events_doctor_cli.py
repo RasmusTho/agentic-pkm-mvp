@@ -30,9 +30,9 @@ def test_events_doctor_renders_story(tmp_path: Path) -> None:
     outbox.write_text("\n".join(json.dumps(ev) for ev in events) + "\n", encoding="utf-8")
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["events-doctor", "--path", str(outbox), "--trace-id", "T-story"])
+    result = runner.invoke(cli, ["events", "doctor", "--outbox", str(outbox), "--trace-id", "T-story"])
 
     assert result.exit_code == 0
-    assert "Trace T-story" in result.output
+    assert "Trace: T-story" in result.output
     assert "ask.query.received" in result.output
     assert "index.embedding.created" in result.output
