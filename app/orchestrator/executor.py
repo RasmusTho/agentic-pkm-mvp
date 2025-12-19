@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import os
 import json
+import os
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, MutableMapping, Protocol
@@ -11,11 +12,13 @@ from app.a2a.schema import new_error
 from app.agents.base.loop import Agent
 from app.mcp.vault_tools import VaultToolError, append_note
 
-from app.planner.schema import PlanMetadata, PlanStep
+from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
 from app.planner.tools import get_tool_descriptor
 from app.orchestrator.agents import AgentPermissionError, resolve_agent_config, validate_agent_permissions
 from app.events.schema import OutboxEvent
 from app.store.object_store import ObjectStore
+
+from app.quality import timeout_wrapper
 
 from .events import emit_mcp_tool_call_finished, emit_mcp_tool_call_started
 
@@ -24,10 +27,10 @@ def _flag_enabled(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-            normalized = value.strip().lower()
-            if not normalized:
-                return False
-            return normalized in {"1", "true", "yes", "on"}
+        normalized = value.strip().lower()
+        if not normalized:
+            return False
+        return normalized in {"1", "true", "yes", "on"}
     if isinstance(value, (int, float)):
         return value != 0
     return bool(value)
@@ -71,6 +74,7 @@ class StepContext:
     flow_id: str | None = None
     event_type: str | None = None
     tool_settings: Mapping[str, Any] | None = None
+    budget_state: MutableMapping[str, int] | None = None
 
 
 class PlanExecutor(Protocol):
@@ -158,12 +162,28 @@ class MockPlanExecutor(PlanExecutor):
             object_id=context.object_id,
             trace_id=context.trace_id,
         )
-        if descriptor.kind == "internal":
-            result_payload = self._run_internal_tool(descriptor.name, args, context)
-        elif self._should_use_real_tool(descriptor.name, context):
-            result_payload = self._run_vault_append(args, context)
-        else:
-            result_payload = dict(descriptor.mock_result or {"status": "ok"})
+        budget = context.budget_state if context.budget_state is not None else {}
+        settings = context.tool_settings or {}
+        max_tool_calls = None
+        if "max_tool_calls" in settings:
+            try:
+                max_tool_calls = int(settings["max_tool_calls"])
+            except Exception:
+                max_tool_calls = None
+        tool_calls = int(budget.get("tool_calls", 0))
+        if max_tool_calls is not None and tool_calls >= max_tool_calls:
+            raise StepExecutionError("tool call budget exhausted", error_type="budget_exhausted")
+        budget["tool_calls"] = tool_calls + 1
+        timeout_value = None
+        if "tool_timeout_seconds" in settings:
+            try:
+                timeout_value = float(settings["tool_timeout_seconds"])
+            except Exception:
+                timeout_value = None
+        try:
+            result_payload = self._invoke_tool(descriptor, args, context, timeout_value)
+        except (FutureTimeoutError, TimeoutError) as exc:
+            raise StepExecutionError("tool call timed out", error_type="tool_timeout") from exc
         emit_mcp_tool_call_finished(
             plan_id=context.plan_id,
             step_id=step.id,
@@ -173,6 +193,20 @@ class MockPlanExecutor(PlanExecutor):
             trace_id=context.trace_id,
         )
         return {"tool": descriptor.name, "result": result_payload}
+
+    def _invoke_tool(
+        self, descriptor: ToolDescriptor, args: Mapping[str, Any], context: StepContext, timeout_secs: float | None
+    ) -> Dict[str, Any]:
+        def call() -> Dict[str, Any]:
+            if descriptor.kind == "internal":
+                return self._run_internal_tool(descriptor.name, args, context)
+            if self._should_use_real_tool(descriptor.name, context):
+                return self._run_vault_append(args, context)
+            return dict(descriptor.mock_result or {"status": "ok"})
+
+        if timeout_secs is not None:
+            return timeout_wrapper(call, timeout_secs)
+        return call()
 
     def _run_internal_tool(self, name: str, args: Mapping[str, Any], context: StepContext) -> Dict[str, Any]:
         if name == "internal.ingest_external":
