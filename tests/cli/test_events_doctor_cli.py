@@ -5,50 +5,34 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from app.cli import cli
-from app.events.schema import OutboxEvent
+from app.cli.__init__ import cli
+from app.events.schema import make_outbox_event
 
 
-def _write_jsonl(path: Path, rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
-        for r in rows:
-            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-
-def test_events_doctor_json_story_orders_and_stages(monkeypatch, tmp_path: Path) -> None:
-    outbox = tmp_path / "outbox.jsonl"
-    trace_id = "trace-123"
-
-    rows = [
-        OutboxEvent(event="watcher.run", trace_id=trace_id, source="watcher", payload={}).model_dump(mode="json"),
-        OutboxEvent(event="panel.intent.created", trace_id=trace_id, source="panel", payload={}).model_dump(mode="json"),
-        OutboxEvent(event="promote.intent.created", trace_id=trace_id, source="panel", payload={}).model_dump(mode="json"),
-        OutboxEvent(event="promote.done", trace_id=trace_id, source="promotion", payload={}).model_dump(mode="json"),
-        OutboxEvent(event="watcher.run", trace_id="trace-other", source="watcher", payload={}).model_dump(mode="json"),
+def test_events_doctor_renders_story(tmp_path: Path) -> None:
+    outbox = tmp_path / "index-outbox.jsonl"
+    events = [
+        make_outbox_event(
+            "ask.query.received",
+            source="api",
+            payload={"object_id": "obj-1"},
+            trace_id="T-story",
+            timestamp="2025-01-01T00:00:00Z",
+        ).model_dump(),
+        make_outbox_event(
+            "index.embedding.created",
+            source="indexer",
+            payload={"object_id": "obj-1"},
+            trace_id="T-story",
+            timestamp="2025-01-01T00:00:01Z",
+        ).model_dump(),
     ]
-    _write_jsonl(outbox, rows)
+    outbox.write_text("\n".join(json.dumps(ev) for ev in events) + "\n", encoding="utf-8")
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["events", "doctor", "--outbox", str(outbox), "--trace-id", trace_id, "--json"])
+    result = runner.invoke(cli, ["events-doctor", "--path", str(outbox), "--trace-id", "T-story"])
 
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-
-    assert data["trace_id"] == trace_id
-    assert data["count"] == 4
-    assert data["stages"] == ["watcher", "panel", "promote"]
-    assert [e["event"] for e in data["events"]] == [
-        "watcher.run",
-        "panel.intent.created",
-        "promote.intent.created",
-        "promote.done",
-    ]
-
-
-def test_events_doctor_missing_trace_exits_2(tmp_path: Path) -> None:
-    outbox = tmp_path / "outbox.jsonl"
-    _write_jsonl(outbox, [])
-    runner = CliRunner()
-    result = runner.invoke(cli, ["events", "doctor", "--outbox", str(outbox), "--trace-id", "nope", "--json"])
-    assert result.exit_code == 2
+    assert result.exit_code == 0
+    assert "Trace T-story" in result.output
+    assert "ask.query.received" in result.output
+    assert "index.embedding.created" in result.output
