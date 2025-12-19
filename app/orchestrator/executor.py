@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -12,6 +11,9 @@ from app.a2a.events import emit_agent_error_event, send_agent_request
 from app.a2a.schema import new_error
 from app.agents.base.loop import Agent
 from app.mcp.vault_tools import VaultToolError, append_note
+
+from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
+from app.planner.tools import get_tool_descriptor
 from app.orchestrator.agents import AgentPermissionError, resolve_agent_config, validate_agent_permissions
 from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
 from app.planner.tools import get_tool_descriptor
@@ -20,6 +22,8 @@ from app.quality import timeout_wrapper
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.store.object_store import ObjectStore
 from app.events.schema import OutboxEvent
+
+from app.quality import timeout_wrapper
 
 from .events import emit_mcp_tool_call_finished, emit_mcp_tool_call_started
 
@@ -73,7 +77,6 @@ class StepContext:
     event_type: str | None = None
     tool_settings: Mapping[str, Any] | None = None
     budget_state: MutableMapping[str, int] | None = None
-    agent_id: str | None = None
 
 
 class PlanExecutor(Protocol):
