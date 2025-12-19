@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Set
+from typing import Any, Dict, List, Mapping, MutableMapping, Set
 
 from app.planner.schema import Plan, PlanStep
 
 from .events import emit_step_error, emit_step_finished, emit_step_started
 from .executor import MockPlanExecutor, PlanExecutor, StepContext, StepExecutionError
+
+
+def _coerce_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except Exception:
+        return None
 
 
 class OrchestratorError(Exception):
@@ -27,6 +34,22 @@ class Orchestrator:
         plan_results: Dict[str, Dict[str, Any]] = {}
         object_id = plan.meta.source_object_uuid or None
         trace_id = plan.meta.trace_id
+
+        plan_tool_settings = None
+        if plan.context and isinstance(plan.context.get("tool_settings"), Mapping):
+            plan_tool_settings = dict(plan.context.get("tool_settings") or {})
+        context_tool_settings = self._tool_settings
+        if plan_tool_settings:
+            if context_tool_settings:
+                merged = dict(context_tool_settings)
+                merged.update(plan_tool_settings)
+                context_tool_settings = merged
+            else:
+                context_tool_settings = plan_tool_settings
+
+        budget_state: MutableMapping[str, int] = {"steps": 0, "tool_calls": 0}
+        max_steps = _coerce_int(context_tool_settings.get("max_steps")) if context_tool_settings else None
+
         for step in plan.steps:
             emit_step_started(plan_id=plan.id, step=step, object_id=object_id, trace_id=trace_id)
             plan_flow_id = None
@@ -41,17 +64,18 @@ class Orchestrator:
                 legacy_flows = plan.context.get("flows") or []
                 if isinstance(legacy_flows, list) and legacy_flows:
                     plan_flow_id = legacy_flows[0]
-            plan_tool_settings = None
-            if plan.context and isinstance(plan.context.get('tool_settings'), Mapping):
-                plan_tool_settings = dict(plan.context.get('tool_settings') or {})
-            context_tool_settings = self._tool_settings
-            if plan_tool_settings:
-                if context_tool_settings:
-                    merged = dict(context_tool_settings)
-                    merged.update(plan_tool_settings)
-                    context_tool_settings = merged
-                else:
-                    context_tool_settings = plan_tool_settings
+
+            if max_steps is not None and budget_state.get("steps", 0) >= max_steps:
+                results.append({
+                    "step_id": step.id,
+                    "status": "error",
+                    "error": "step budget exhausted",
+                    "error_type": "budget_exhausted",
+                })
+                break
+
+            budget_state["steps"] = budget_state.get("steps", 0) + 1
+
             context = StepContext(
                 plan_id=plan.id,
                 object_id=object_id,
@@ -61,12 +85,13 @@ class Orchestrator:
                 flow_id=plan_flow_id,
                 event_type=plan.trigger.event_type if plan.trigger else None,
                 tool_settings=context_tool_settings,
+                budget_state=budget_state,
             )
             try:
                 output = self._executor.execute_step(step, context)
             except StepExecutionError as exc:
                 error_message = str(exc)
-                error_type = getattr(exc, 'error_type', None)
+                error_type = getattr(exc, "error_type", None)
                 emit_step_error(
                     plan_id=plan.id,
                     step=step,
