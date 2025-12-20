@@ -1,5 +1,5 @@
 <!--
-  Interim Reality-MVP dashboard: minimal status + ASK UI.
+  Interim Reality-MVP dashboard: minimal status + ASK UI + operator health.
   This is intentionally simple; a richer UI can replace it later without changing the APIs.
 -->
 <!doctype html>
@@ -133,6 +133,51 @@
       </div>
     </section>
 
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Health</h2>
+        <span class="label">/api/health</span>
+      </div>
+      <div id="health-error" class="banner error hidden"></div>
+      <div class="stat-row"><span>Overall</span><span id="health-ok" class="pill">pending</span></div>
+      <table>
+        <thead><tr><th>Check</th><th>Result</th></tr></thead>
+        <tbody id="health-checks"><tr><td colspan="2" class="muted">Loading...</td></tr></tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Settings validation</h2>
+        <span class="label">/api/settings/validate</span>
+      </div>
+      <div id="settings-error" class="banner error hidden"></div>
+      <div class="stat-row"><span>Status</span><span id="settings-ok" class="pill">pending</span></div>
+      <div id="settings-issues" class="muted">Loading...</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Recent events</h2>
+        <span class="label">/api/events/tail</span>
+      </div>
+      <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+        <div>
+          <label class="label" for="events-prefix">Event prefix filter</label>
+          <input type="text" id="events-prefix" placeholder="e.g. watcher" style="min-height: 36px;" />
+        </div>
+        <div>
+          <label class="label" for="events-limit">Limit</label>
+          <input type="text" id="events-limit" value="50" style="min-height: 36px;" />
+        </div>
+      </div>
+      <div id="events-error" class="banner error hidden"></div>
+      <table>
+        <thead><tr><th>Timestamp</th><th>Event</th><th>Trace</th></tr></thead>
+        <tbody id="events-list"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
+      </table>
+    </section>
+
     <section id="ask-panel" class="panel">
       <div class="panel-header">
         <h2>Ask</h2>
@@ -174,6 +219,25 @@
       ingestion: document.getElementById("ingestion-summary"),
       ask: document.getElementById("ask-summary"),
       error: document.getElementById("status-error"),
+    };
+
+    const healthEls = {
+      ok: document.getElementById("health-ok"),
+      checks: document.getElementById("health-checks"),
+      error: document.getElementById("health-error"),
+    };
+
+    const settingsEls = {
+      ok: document.getElementById("settings-ok"),
+      issues: document.getElementById("settings-issues"),
+      error: document.getElementById("settings-error"),
+    };
+
+    const eventsEls = {
+      prefix: document.getElementById("events-prefix"),
+      limit: document.getElementById("events-limit"),
+      list: document.getElementById("events-list"),
+      error: document.getElementById("events-error"),
     };
 
     const askEls = {
@@ -239,105 +303,169 @@
       statusEls.ingestion.innerHTML = `
         <div class="stat-row"><span>Last run</span><span>${formatDate(ingestion?.last_run_at)}</span></div>
         <div class="stat-row"><span>Result</span><span>${statusPill}</span></div>
-        <div class="stat-row"><span>Last error</span><span>${ingestion?.last_error_message || "N/A"}</span></div>
+        <div class="stat-row"><span>Last error</span><span>${formatDate(ingestion?.last_error_at)}</span></div>
       `;
     }
 
     function renderAskSummary(ask) {
-      const total = ask?.total_queries_24h ?? 0;
-      const avg = ask?.avg_latency_ms_24h;
-      const latency = avg === null || avg === undefined ? "N/A" : `${avg.toFixed(1)} ms`;
       statusEls.ask.innerHTML = `
-        <div class="stat-row"><span>Total queries</span><span>${total}</span></div>
-        <div class="stat-row"><span>Avg latency</span><span>${latency}</span></div>
+        <div class="stat-row"><span>Total queries</span><span>${ask?.total_queries_24h ?? 0}</span></div>
+        <div class="stat-row"><span>Avg latency</span><span>${ask?.avg_latency_ms_24h ? `${Math.round(ask.avg_latency_ms_24h)} ms` : "N/A"}</span></div>
+        <div class="stat-row"><span>Errors (24h)</span><span>${ask?.error_count_24h ?? 0}</span></div>
       `;
     }
 
-    async function fetchStatus() {
-      statusEls.updated.textContent = "Refreshing...";
+    async function loadStatus() {
       try {
-        const res = await fetch("/api/status");
-        if (!res.ok) throw new Error(`Status request failed (${res.status})`);
-        const data = await res.json();
-        clearBanner(statusEls.error);
-        statusEls.version.textContent = data.sot_version ?? "N/A";
+        const resp = await fetch("/api/status");
+        if (!resp.ok) throw new Error(`status ${resp.status}`);
+        const data = await resp.json();
+        statusEls.version.textContent = data.sot_version || "N/A";
         statusEls.timestamp.textContent = formatDate(data.timestamp);
         statusEls.updated.textContent = `Updated ${new Date().toLocaleTimeString()}`;
         renderStores(data.stores || []);
-        renderIngestion(data.ingestion || {});
-        renderAskSummary(data.ask || {});
+        renderIngestion(data.ingestion);
+        renderAskSummary(data.ask);
+        clearBanner(statusEls.error);
       } catch (err) {
-        console.error(err);
-        statusEls.updated.textContent = "Error";
-        showBanner(statusEls.error, err?.message || "Failed to load status");
+        showBanner(statusEls.error, `Status failed: ${err}`);
       }
     }
 
-    function renderSources(sources) {
-      askEls.sources.innerHTML = "";
-      if (!sources || sources.length === 0) {
-        askEls.sources.innerHTML = '<tr><td colspan="4" class="muted">No sources returned.</td></tr>';
-        return;
-      }
-      sources.forEach((src) => {
-        const tr = document.createElement("tr");
-        const zone = src.zone || "N/A";
-        const path = src.path || "N/A";
-        tr.innerHTML = `
-          <td>${src.title || "(untitled)"}</td>
-          <td>${src.origin || "N/A"}</td>
-          <td>${zone}</td>
-          <td>${path}</td>
-        `;
-        askEls.sources.appendChild(tr);
-      });
-    }
-
-    async function ask() {
-      clearBanner(askEls.error);
-      const question = askEls.question.value.trim();
-      if (!question) {
-        showBanner(askEls.error, "Please enter a question.");
-        return;
-      }
-      askEls.button.disabled = true;
-      askEls.button.textContent = "Asking...";
-      askEls.answer.textContent = "Waiting for response...";
+    async function loadHealth() {
       try {
-        const res = await fetch("/api/ask", {
+        const resp = await fetch("/api/health");
+        if (!resp.ok) throw new Error(`status ${resp.status}`);
+        const data = await resp.json();
+        const ok = !!data.ok;
+        healthEls.ok.textContent = ok ? "ok" : "fail";
+        healthEls.ok.className = ok ? "pill ok" : "pill warn";
+        const checks = data.checks || {};
+        healthEls.checks.innerHTML = "";
+        if (Object.keys(checks).length === 0) {
+            healthEls.checks.innerHTML = '<tr><td colspan="2" class="muted">No checks reported.</td></tr>';
+        } else {
+            Object.entries(checks).forEach(([name, detail]) => {
+              const row = document.createElement("tr");
+              const okCheck = detail && detail.ok !== false;
+              row.innerHTML = `<td>${name}</td><td>${okCheck ? '<span class="pill ok">ok</span>' : '<span class="pill warn">fail</span>'} ${detail?.detail || ""}</td>`;
+              healthEls.checks.appendChild(row);
+            });
+        }
+        clearBanner(healthEls.error);
+      } catch (err) {
+        showBanner(healthEls.error, `Health failed: ${err}`);
+      }
+    }
+
+    async function loadSettingsValidation() {
+      try {
+        const resp = await fetch("/api/settings/validate");
+        if (!resp.ok) throw new Error(`status ${resp.status}`);
+        const data = await resp.json();
+        const ok = !!data.ok;
+        settingsEls.ok.textContent = ok ? "ok" : "issues";
+        settingsEls.ok.className = ok ? "pill ok" : "pill warn";
+        const issues = data.issues || [];
+        if (!issues.length) {
+          settingsEls.issues.textContent = "No issues.";
+        } else {
+          const list = issues.map((i) => `${i.code}: ${i.message}`).join("\n");
+          settingsEls.issues.textContent = list;
+        }
+        clearBanner(settingsEls.error);
+      } catch (err) {
+        showBanner(settingsEls.error, `Settings validate failed: ${err}`);
+      }
+    }
+
+    function truncateTrace(trace) {
+      if (!trace) return "";
+      const t = String(trace);
+      return t.length > 10 ? `${t.slice(0, 10)}…` : t;
+    }
+
+    async function loadEvents() {
+      try {
+        const params = new URLSearchParams();
+        const prefix = eventsEls.prefix.value.trim();
+        const limitRaw = parseInt(eventsEls.limit.value || "50", 10);
+        const limit = isNaN(limitRaw) ? 50 : limitRaw;
+        params.set("limit", Math.min(Math.max(limit, 1), 500));
+        if (prefix) params.set("event_prefix", prefix);
+        const resp = await fetch(`/api/events/tail?${params.toString()}`);
+        if (!resp.ok) throw new Error(`status ${resp.status}`);
+        const data = await resp.json();
+        const events = data.events || [];
+        eventsEls.list.innerHTML = "";
+        if (events.length === 0) {
+          eventsEls.list.innerHTML = '<tr><td colspan="3" class="muted">No events.</td></tr>';
+        } else {
+          events.forEach((ev) => {
+            const row = document.createElement("tr");
+            const ts = ev.timestamp || ev.created_at || "";
+            const trace = ev.trace_id || "";
+            row.innerHTML = `<td>${formatDate(ts)}</td><td>${ev.event || ev.event_type || ev.topic || ""}</td><td>${truncateTrace(trace)}</td>`;
+            eventsEls.list.appendChild(row);
+          });
+        }
+        clearBanner(eventsEls.error);
+      } catch (err) {
+        showBanner(eventsEls.error, `Events fetch failed: ${err}`);
+      }
+    }
+
+    async function doAsk() {
+      clearBanner(askEls.error);
+      askEls.button.disabled = true;
+      askEls.answer.textContent = "Running...";
+      askEls.sources.innerHTML = '<tr><td colspan="4" class="muted">Loading...</td></tr>';
+      const payload = { question: askEls.question.value || "" };
+      const start = performance.now();
+      try {
+        const resp = await fetch("/api/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question, zone_strategy: "default" }),
+          body: JSON.stringify(payload),
         });
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(text || `Ask failed (${res.status})`);
+        if (!resp.ok) throw new Error(`status ${resp.status}`);
+        const data = await resp.json();
+        askEls.latency.textContent = `${Math.round(performance.now() - start)} ms`;
+        askEls.answer.textContent = data.answer || "No answer found.";
+        const sources = data.sources || [];
+        askEls.sources.innerHTML = "";
+        if (sources.length === 0) {
+          askEls.sources.innerHTML = '<tr><td colspan="4" class="muted">No sources.</td></tr>';
+        } else {
+          sources.forEach((src) => {
+            const row = document.createElement("tr");
+            row.innerHTML = `<td>${src.title || ""}</td><td>${src.origin || ""}</td><td>${src.zone || ""}</td><td>${src.path || ""}</td>`;
+            askEls.sources.appendChild(row);
+          });
         }
-        const data = await res.json();
-        askEls.answer.textContent = data.answer || "(no answer returned)";
-        askEls.latency.textContent = data.latency_ms != null ? `${data.latency_ms} ms` : "N/A";
-        renderSources(data.sources || []);
       } catch (err) {
-        console.error(err);
-        showBanner(askEls.error, err?.message || "Failed to submit question");
+        showBanner(askEls.error, `ASK failed: ${err}`);
         askEls.answer.textContent = "N/A";
-        askEls.latency.textContent = "N/A";
-        askEls.sources.innerHTML = '<tr><td colspan="4" class="muted">No sources available.</td></tr>';
       } finally {
         askEls.button.disabled = false;
-        askEls.button.textContent = "Ask";
       }
     }
 
-    askEls.button.addEventListener("click", ask);
-    askEls.question.addEventListener("keydown", (evt) => {
-      if ((evt.metaKey || evt.ctrlKey) && evt.key === "Enter") {
-        ask();
-      }
+    document.addEventListener("DOMContentLoaded", () => {
+      loadStatus();
+      loadHealth();
+      loadSettingsValidation();
+      loadEvents();
+      setInterval(loadStatus, 10000);
+      setInterval(loadHealth, 15000);
+      setInterval(loadSettingsValidation, 30000);
+      setInterval(loadEvents, 8000);
+      askEls.button.addEventListener("click", doAsk);
+      eventsEls.prefix.addEventListener("input", () => {
+        clearBanner(eventsEls.error);
+        loadEvents();
+      });
     });
-
-    fetchStatus();
-    setInterval(fetchStatus, 60000);
   </script>
 </body>
 </html>

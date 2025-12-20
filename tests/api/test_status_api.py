@@ -1,6 +1,10 @@
+import json
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.observability import status_service
 
 
 def test_status_endpoint_returns_snapshot():
@@ -22,3 +26,19 @@ def test_status_endpoint_returns_snapshot():
     assert "watcher_runs_total" in events
     assert "promotion_executed_total" in events
     assert isinstance(events.get("ingest_runs_by_plane", {}), dict)
+
+
+def test_status_counts_watcher_runs(tmp_path: Path, monkeypatch) -> None:
+    outbox = tmp_path / "outbox.jsonl"
+    watcher_event = {"event": "watcher.run", "timestamp": "2024-01-01T00:00:00Z"}
+    outbox.write_text(json.dumps(watcher_event) + "\n", encoding="utf-8")
+
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    status_service.INDEX_OUTBOX_PATH = str(outbox)
+
+    client = TestClient(app)
+    resp = client.get("/api/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    events = data.get("events") or {}
+    assert events.get("watcher_runs_total", 0) >= 1

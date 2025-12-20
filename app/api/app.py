@@ -34,6 +34,21 @@ except ImportError:
     ask_router = None
 
 try:
+    from app.api.routes.health import router as health_router
+except ImportError:
+    health_router = None
+
+try:
+    from app.api.routes.settings_validate import router as settings_validate_router
+except ImportError:
+    settings_validate_router = None
+
+try:
+    from app.api.routes.events_tail import router as events_tail_router
+except ImportError:
+    events_tail_router = None
+
+try:
     from app.api.routers.agent import router as agent_router
 except ImportError:
     agent_router = None
@@ -66,7 +81,10 @@ async def _run_index_preflight() -> None:
     summary = "; ".join(issues or warnings)
     severity = "issues" if issues else "warnings"
     logger.warning(
-        "Embedding index preflight detected %s: %s. Run `python -m app.cli index rebuild` to realign embeddings.",
+        (
+            "Embedding index preflight detected %s: %s. "
+            "Run `python -m app.cli index rebuild` to realign embeddings."
+        ),
         severity,
         summary,
     )
@@ -92,6 +110,12 @@ def _create_app() -> FastAPI:
         application.include_router(status_router, prefix="/api")
     if ask_router is not None:
         application.include_router(ask_router, prefix="/api")
+    if health_router is not None:
+        application.include_router(health_router, prefix="/api")
+    if settings_validate_router is not None:
+        application.include_router(settings_validate_router, prefix="/api")
+    if events_tail_router is not None:
+        application.include_router(events_tail_router, prefix="/api")
     if agent_router is not None:
         application.include_router(agent_router)
     return application
