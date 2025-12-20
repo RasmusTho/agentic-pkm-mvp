@@ -1,0 +1,6 @@
+id: mock.chat
+status: active
+kind: chat
+provider: mock
+model: mock-chat
+notes: Deterministic CI chat model.

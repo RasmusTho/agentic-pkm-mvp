@@ -1,0 +1,7 @@
+id: mock.embed
+status: active
+kind: embedding
+provider: mock
+model: mock-embed
+dims: 8
+notes: Deterministic CI embedding model; dims fixed for tests.

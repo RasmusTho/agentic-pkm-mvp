@@ -1,0 +1,8 @@
+version: 1
+tools:
+  - id: vault.read_note.v1
+    path: docs/settings/tools/vault.read_note.v1.yaml
+    status: active
+  - id: vault.write_note.v1
+    path: docs/settings/tools/vault.write_note.v1.yaml
+    status: active

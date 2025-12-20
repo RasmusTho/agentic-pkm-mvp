@@ -46,3 +46,39 @@ To keep architectural contracts explicit and reviewable, we maintain a “standa
 
 This lists adopted standards and the canonical repo references implementing each standard
 (e.g. MCP tools, A2A schemas, OpenAPI, AsyncAPI, JSON Schema).
+
+## Tool Registry (MCP tools)
+
+Tools live under docs/settings/tools/; the registry keeps the list deterministic and CI-validated:
+
+- Manifest: `docs/settings/tools/registry.yaml`
+- Tool descriptors: `docs/settings/tools/*.yaml`
+
+Descriptors describe `allowed_args` and optional `mock_result` for deterministic testing.
+
+## Agent Registry
+
+Agents live as settings artifacts:
+
+- Manifest: `docs/settings/agents/registry.yaml`
+- Agent descriptors: `docs/settings/agents/*.yaml`
+
+Descriptors declare entrypoints, pipelines/events, allowed tools/stores, and settings references for validation.
+
+## Graph Registry
+
+Graphs/workflows are settings artifacts:
+
+- Manifest: `docs/settings/graphs/registry.yaml`
+- Graph descriptors: `docs/settings/graphs/*.yaml`
+
+Descriptors reference agents (`agent_id`), entrypoints/state schemas, and I/O events.
+
+## Model Registry
+
+Models are settings-backed artifacts:
+
+- Manifest: `docs/settings/models/registry.yaml`
+- Model descriptors: `docs/settings/models/*.yaml`
+
+The registry introduces stable model IDs; other registries (prompts, charts) should reference these IDs rather than raw provider names.

@@ -1,0 +1,14 @@
+version: 1
+models:
+  - id: ollama.chat.llama3_1_8b
+    path: docs/settings/models/ollama.chat.llama3_1_8b.yaml
+    status: active
+  - id: ollama.embed.nomic_embed_text
+    path: docs/settings/models/ollama.embed.nomic_embed_text.yaml
+    status: active
+  - id: mock.chat
+    path: docs/settings/models/mock.chat.yaml
+    status: active
+  - id: mock.embed
+    path: docs/settings/models/mock.embed.yaml
+    status: active

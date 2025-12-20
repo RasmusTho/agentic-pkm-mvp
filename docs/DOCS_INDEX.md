@@ -69,6 +69,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/SECURITY.md | Security | Baseline-only (v4.10) | 2025-12-07 | Single-user/local; auth not wired; key handling guidance. |
 | docs/PRIVACY.md | Privacy | Baseline-only (v4.10) | 2025-12-07 | Local-first, outbound only on optional remote LLMs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
+| docs/PYTHON_VERSION_POLICY.md | Python version policy | Baseline-only (v4.10) | 2025-12-18 | Local dev targets 3.14, CI smoke floor 3.12 with Docker tripwires and scripts. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-14 | Adds observability-as-tests gates (counters/events as fitness), runtime tick latency budget (p95), and clarifies watcher/panel/promotion counters. |
 | docs/OBSERVABILITY_STACK.md | Local observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/OPERATIONS.md | Operations playbook | Baseline-only (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
@@ -107,6 +108,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/INVENTORY.md | Inventory | Baseline-only (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
 | docs/OVERVIEW_WS.md | Overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
+| docs/PYTHON_VERSION_POLICY.md | Python version policy | Baseline-only (v4.10) | 2025-12-18 | Local dev targets 3.14, CI smoke floor 3.12 with Docker tripwires and scripts. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-14 | Adds observability-as-tests gates (counters/events as fitness), runtime tick latency budget (p95), and clarifies watcher/panel/promotion counters. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development policy | Baseline-only (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
@@ -199,6 +201,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/INFRASTRUCTURE.md | Infrastructure | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
 | docs/OVERVIEW_WS.md | Overview workspace | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
+| docs/PYTHON_VERSION_POLICY.md | Python version policy | Baseline-only (v4.10) | 2025-12-18 | Local dev targets 3.14, CI smoke floor 3.12 with Docker tripwires and scripts. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-14 | Adds observability-as-tests gates (counters/events as fitness), runtime tick latency budget (p95), and clarifies watcher/panel/promotion counters. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development | Baseline-only (v4.10) | 2025-12-07 | Current dev-layer AI policy (docs-first, mocks/defaults). |
@@ -283,3 +286,15 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/examples/vault_test_seed/summary-request.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Summary-only scenario aligned with panel wiring. |
 | docs/examples/vault_test_seed/unknown-action.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Unknown action should log but not promote. |
 | docs/examples/vault_test_seed/manual-policy.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Manual policy example; watcher should skip panel. |
+
+- docs/settings/tools/registry.yaml (Tool Registry manifest)
+- docs/settings/tools/*.yaml (Tool descriptors and allowed args)
+
+- docs/settings/agents/registry.yaml (Agent Registry manifest)
+- docs/settings/agents/*.yaml (Agent descriptors)
+
+- docs/settings/graphs/registry.yaml (Graph Registry manifest)
+- docs/settings/graphs/*.yaml (Graph descriptors)
+
+- docs/settings/models/registry.yaml (Model Registry manifest)
+- docs/settings/models/*.yaml (Model descriptors)

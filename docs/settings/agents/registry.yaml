@@ -1,0 +1,8 @@
+version: 1
+agents:
+  - id: ask.v1
+    path: docs/settings/agents/ask.v1.yaml
+    status: active
+  - id: panel_agent.v5
+    path: docs/settings/agents/panel_agent.v5.yaml
+    status: active
