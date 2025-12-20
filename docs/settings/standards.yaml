@@ -1,0 +1,56 @@
+version: 1
+standards:
+  - id: json_schema
+    name: JSON Schema (Draft 2020-12)
+    status: adopted
+    scope: "All settings contracts: prompts, tools, events payloads, agent I/O."
+    canonical_refs:
+      - app/schemas/
+      - app/planner/schema.py
+
+  - id: openapi
+    name: OpenAPI
+    status: adopted
+    scope: "HTTP API surface contracts."
+    canonical_refs:
+      - api/openapi.yaml
+
+  - id: asyncapi
+    name: AsyncAPI
+    status: adopted
+    scope: "Event schema contracts and choreography."
+    canonical_refs:
+      - events/asyncapi.yaml
+
+  - id: mcp
+    name: Model Context Protocol (MCP)
+    status: adopted
+    scope: "Tool interface standard for orchestrator → tool calls (vault tools etc)."
+    canonical_refs:
+      - app/planner/tools.py
+      - app/mcp/vault_tools.py
+      - tests/orchestrator/test_orchestrator_mcp_validation.py
+
+  - id: a2a
+    name: Agent-to-Agent (A2A) messaging
+    status: adopted
+    scope: "Agent requests/responses and error propagation between agents."
+    canonical_refs:
+      - app/a2a/schema.py
+      - app/a2a/events.py
+      - tests/a2a/
+
+  - id: langgraph
+    name: LangGraph
+    status: adopted
+    scope: "Internal agent state machines (PER-loop graphs)."
+    canonical_refs:
+      - app/agents/
+      - docs/AGENTS.md
+
+  - id: otel
+    name: OpenTelemetry
+    status: adopted
+    scope: "Observability: traces/metrics/log correlation via trace_id."
+    canonical_refs:
+      - docs/OBSERVABILITY.md

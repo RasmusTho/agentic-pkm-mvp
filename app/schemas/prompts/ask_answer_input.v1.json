@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ask_answer_input.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "question": { "type": "string" },
+    "context": { "type": "string" }
+  },
+  "required": ["question", "context"]
+}
