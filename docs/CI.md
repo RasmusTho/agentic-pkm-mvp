@@ -21,8 +21,29 @@ Deterministic runtime smoke with POLICY_ENFORCE=1, memory store, vault writes, o
 - `scripts/reality_smoke.sh` (runs settings validate, smoke CLI `--runs 2`, verifier) writes to `tmp/vault_smoke` and `tmp/index-outbox.smoke.jsonl`.
 - Manual run:
   - `python -m app.cli settings validate`
-  - `POLICY_ENFORCE=1 STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 INDEX_OUTBOX_PATH=tmp/index-outbox.smoke.jsonl PANEL_AGENT_PIPELINE=planner python -m app.cli smoke reality --vault tmp/vault_smoke --outbox tmp/index-outbox.smoke.jsonl --runs 2`
-  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory POLICY_ENFORCE=1 PANEL_AGENT_PIPELINE=planner python scripts/verify_reality_smoke.py --vault tmp/vault_smoke --outbox tmp/index-outbox.smoke.jsonl`
+  - `POLICY_ENFORCE=1 STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 INDEX_OUTBOX_PATH=tmp/index-outbox.smoke.jsonl PANEL_AGENT_PIPELINE=planner LLM_PROVIDER=mock EMBED_DIM=1536 python -m app.cli smoke reality --vault tmp/vault_smoke --outbox tmp/index-outbox.smoke.jsonl --runs 2`
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory POLICY_ENFORCE=1 PANEL_AGENT_PIPELINE=planner LLM_PROVIDER=mock EMBED_DIM=1536 python scripts/verify_reality_smoke.py --vault tmp/vault_smoke --outbox tmp/index-outbox.smoke.jsonl`
+
+## ASK smoke (local)
+Deterministic ASK slice with POLICY_ENFORCE=1, seeded corpus, ASK graph run, and vault append with provenance:
+- `scripts/ask_smoke.sh` seeds a tiny corpus into memory, runs `python -m app.cli smoke ask`, appends an ASK Answer section to the vault, and verifies provenance with `scripts/verify_ask_smoke.py`.
+- Manual run:
+  - `python -m app.cli settings validate`
+  - `POLICY_ENFORCE=1 STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PANEL_AGENT_PIPELINE=planner LLM_PROVIDER=mock EMBED_DIM=1536 INDEX_OUTBOX_PATH=tmp/index-outbox.smoke.jsonl python -m app.cli smoke ask --vault tmp/vault_smoke --outbox tmp/index-outbox.smoke.jsonl --json`
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory POLICY_ENFORCE=1 PANEL_AGENT_PIPELINE=planner LLM_PROVIDER=mock EMBED_DIM=1536 python scripts/verify_ask_smoke.py --vault tmp/vault_smoke --outbox tmp/index-outbox.smoke.jsonl`
+
+## Live watcher (local)
+Guardrailed continuous watcher for real vaults with kill switch, scope, and rate limiting:
+- Feature flags (defaults in parentheses):
+  - `WATCHER_ENABLE` (0), `WATCHER_VAULT_PATH` (required when enabled), `WATCHER_SCOPE_GLOB` (@Inbox/**)
+  - `WATCHER_DEBOUNCE_MS` (1500), `WATCHER_RATE_LIMIT_PER_MIN` (30), `WATCHER_BACKOFF_SECONDS` (10)
+  - Kill switch: `tmp/WATCHER_STOP` (or override via `WATCHER_STOP_FILE`) pauses the loop with a once-per-minute warning.
+- Script: `VAULT=/path/to/vault scripts/run_live_watcher.sh` (sets POLICY_ENFORCE=1, WATCHER_ENABLE=1, and prints outbox/stopfile locations).
+- Manual run:
+  - `python -m app.cli settings validate`
+  - `POLICY_ENFORCE=1 WATCHER_ENABLE=1 WATCHER_VAULT_PATH=/path/to/vault WATCHER_SCOPE_GLOB="@Inbox/**" WATCHER_DEBOUNCE_MS=1500 WATCHER_RATE_LIMIT_PER_MIN=30 WATCHER_BACKOFF_SECONDS=10 INDEX_OUTBOX_PATH=tmp/index-outbox.live.jsonl python -m app.cli watcher run`
+  - Single tick for debugging: same env + `python -m app.cli watcher once`
+- State is auto-migrated to drop legacy monotonic timestamps; delete `tmp/watcher_state.json` to fully reset watcher memory when troubleshooting.
 
 ## Conventions
 - All migrations must apply cleanly to an empty DB.

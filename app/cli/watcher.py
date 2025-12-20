@@ -1,28 +1,113 @@
 from __future__ import annotations
 
-import click
+import json
 from pathlib import Path
 
-from app.watcher.vault_watcher import run_watcher_daemon, run_watcher_tick
+import click
+
 from app.runtime.runtime_loop import OutboxPathError, resolve_outbox_path
+from app.settings.validate import validate_settings
+from app.watcher.config import WatcherConfig
 from app.watcher.events import emit_watcher_run_event
+from app.watcher.state import WatcherState
+from app.watcher.vault_watcher import run_watcher_daemon, run_watcher_tick
+from app.watcher.watcher import run_forever as watcher_run_forever
+from app.watcher.watcher import run_once as watcher_run_once
 
 
 def _echo_summary(summary: dict) -> None:
+    parts = [
+        f"changed={summary['changed']}",
+        f"ingest_attempted={summary['ingest_attempted']}",
+        f"ingested={summary['ingested']}",
+        f"panel_candidates={summary['panel_candidates']}",
+        f"panel_runs={summary['panel_runs']}",
+        f"panel_promotions={summary['panel_promotions']}",
+        f"skipped_policy={summary['panel_skipped_policy']}",
+        f"skipped_limit={summary['panel_skipped_limit']}",
+        f"errors={summary['errors']}",
+        f"dry_run={summary['dry_run']}",
+        f"limit_exceeded={summary['limit_exceeded']}",
+    ]
+    click.echo("Watcher summary: " + " ".join(parts))
+
+
+def _validate_settings_or_exit() -> None:
+    issues = validate_settings()
+    if issues:
+        raise click.ClickException(f"settings validate failed: {len(issues)} issue(s)")
+
+
+@click.group(name="watcher", help="Live watcher controls with scope, kill switch, and rate limits.")
+def watcher_group() -> None:
+    ...
+
+
+@watcher_group.command(
+    name="once",
+    help="Run a single watcher scan respecting scope, debounce, and rate limits.",
+)
+def watcher_once() -> None:
+    _validate_settings_or_exit()
+    try:
+        cfg = WatcherConfig.from_env()
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if not cfg.enable:
+        raise click.ClickException("WATCHER_ENABLE=1 required; export env and try again.")
+
+    summary = watcher_run_once(cfg)
+    click.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+    if summary.get("kill_switch") or summary.get("backoff_active") or summary.get("errors"):
+        raise SystemExit(1)
+
+
+@watcher_group.command(
+    name="run",
+    help="Run the watcher loop continuously with operator summaries.",
+)
+@click.option(
+    "--max-ticks",
+    type=int,
+    default=None,
+    help="Optional safety: stop after N ticks (defaults to run forever).",
+)
+def watcher_run(max_ticks: int | None) -> None:
+    _validate_settings_or_exit()
+    try:
+        cfg = WatcherConfig.from_env()
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if not cfg.enable:
+        raise click.ClickException("WATCHER_ENABLE=1 required; export env and try again.")
+
     click.echo(
-        "Watcher summary: "
-        f"changed={summary['changed']} "
-        f"ingest_attempted={summary['ingest_attempted']} ingested={summary['ingested']} "
-        f"panel_candidates={summary['panel_candidates']} panel_runs={summary['panel_runs']} "
-        f"panel_promotions={summary['panel_promotions']} "
-        f"skipped_policy={summary['panel_skipped_policy']} skipped_limit={summary['panel_skipped_limit']} "
-        f"errors={summary['errors']} dry_run={summary['dry_run']} limit_exceeded={summary['limit_exceeded']}"
+        "watcher: "
+        f"vault={cfg.vault_path} scope={cfg.scope_glob} "
+        f"debounce={cfg.debounce_ms}ms rate={cfg.rate_limit_per_min}/min "
+        f"backoff={cfg.backoff_seconds}s stop_file={cfg.stop_file}"
     )
+
+    tick_limit = max_ticks if max_ticks is not None and max_ticks > 0 else None
+    try:
+        if tick_limit is None:
+            watcher_run_forever(cfg)
+        else:
+            state = WatcherState.load(cfg.state_path)
+            for _ in range(tick_limit):
+                watcher_run_once(cfg, state=state)
+    except KeyboardInterrupt:
+        click.echo("watcher: stopped via keyboard interrupt")
 
 
 @click.command(
     name="vault-watcher-run",
-    help="Single-shot vault watcher: detects changed notes via snapshot, ingests them, and optionally runs PanelAgent runtime.",
+    help=(
+        "Single-shot vault watcher: detects changed notes via snapshot, ingests them, "
+        "and optionally runs PanelAgent runtime."
+    ),
 )
 @click.option(
     "--vault-root",
@@ -34,7 +119,10 @@ def _echo_summary(summary: dict) -> None:
     "--snapshot-path",
     type=click.Path(path_type=Path),
     default=None,
-    help="Snapshot file path (stores path→mtime). Defaults to <vault>/.agentic-pkm/vault_watcher_state.json.",
+    help=(
+        "Snapshot file path (stores path→mtime). "
+        "Defaults to <vault>/.agentic-pkm/vault_watcher_state.json."
+    ),
 )
 @click.option("--skip-panel", is_flag=True, help="Skip running PanelAgent runtime.")
 @click.option(
@@ -42,13 +130,20 @@ def _echo_summary(summary: dict) -> None:
     is_flag=True,
     help="Only emit panel.intent.created for panels (skip runtime) when panel runs are enabled.",
 )
-@click.option("--dry-run", is_flag=True, help="Preview changed notes without running ingest or panel runtime.")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Preview changed notes without running ingest or panel runtime.",
+)
 @click.option(
     "--max-notes",
     type=int,
     default=50,
     show_default=True,
-    help="Maximum number of changed notes to process; if exceeded, watcher aborts unless --force is set.",
+    help=(
+        "Maximum number of changed notes to process; if exceeded, "
+        "watcher aborts unless --force is set."
+    ),
 )
 @click.option("--force", is_flag=True, help="Override max-notes safety guard.")
 def vault_watcher_run(
@@ -70,7 +165,7 @@ def vault_watcher_run(
     try:
         outbox_path = resolve_outbox_path(None)
     except OutboxPathError as exc:
-        raise click.ClickException(str(exc))
+        raise click.ClickException(str(exc)) from exc
 
     summary, messages = run_watcher_tick(
         vault_root=resolved,
@@ -105,7 +200,10 @@ def vault_watcher_run(
 
 @click.command(
     name="vault-watcher-daemon",
-    help="Continuous vault watcher: polls for changed notes and runs ingest/panel; designed for Docker/daemon use.",
+    help=(
+        "Continuous vault watcher: polls for changed notes and runs ingest/panel; "
+        "designed for Docker/daemon use."
+    ),
 )
 @click.option(
     "--vault-root",
@@ -117,7 +215,10 @@ def vault_watcher_run(
     "--snapshot-path",
     type=click.Path(path_type=Path),
     default=Path("/state/vault_watcher_state.json"),
-    help="Snapshot file path (stores path→mtime). Defaults to /state/vault_watcher_state.json in Docker.",
+    help=(
+        "Snapshot file path (stores path→mtime). "
+        "Defaults to /state/vault_watcher_state.json in Docker."
+    ),
 )
 @click.option("--skip-panel", is_flag=True, help="Skip running PanelAgent runtime.")
 @click.option(
@@ -144,7 +245,10 @@ def vault_watcher_run(
     type=int,
     default=50,
     show_default=True,
-    help="Maximum number of changed notes to process; if exceeded, watcher aborts unless --force is set.",
+    help=(
+        "Maximum number of changed notes to process; if exceeded, "
+        "watcher aborts unless --force is set."
+    ),
 )
 @click.option("--force", is_flag=True, help="Override max-notes safety guard.")
 def vault_watcher_daemon(
@@ -167,7 +271,7 @@ def vault_watcher_daemon(
     try:
         outbox_path = resolve_outbox_path(None)
     except OutboxPathError as exc:
-        raise click.ClickException(str(exc))
+        raise click.ClickException(str(exc)) from exc
 
     def _log(summary: dict, messages: list[str]) -> None:
         for msg in messages:
@@ -189,4 +293,4 @@ def vault_watcher_daemon(
     )
 
 
-__all__ = ["vault_watcher_run"]
+__all__ = ["vault_watcher_run", "vault_watcher_daemon", "watcher_group"]

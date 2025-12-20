@@ -20,7 +20,7 @@ from app.ingest.vault_alpha import run_vault_alpha_ingest, run_vault_alpha_inges
 from app.ingest.external import ingest_external_folder
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
-from app.cli.watcher import vault_watcher_run, vault_watcher_daemon
+from app.cli.watcher import vault_watcher_run, vault_watcher_daemon, watcher_group
 from app.cli.index_rebuild import index as index_cli
 from app.cli import index_doctor  # noqa: F401 -- register index doctor command
 from app.cli.events_doctor import events as events_cli
@@ -1314,6 +1314,7 @@ def go_live_check(
 
 
 cli.add_command(panel_cli, name="panel")
+cli.add_command(watcher_group, name="watcher")
 cli.add_command(vault_watcher_run)
 cli.add_command(vault_watcher_daemon)
 
