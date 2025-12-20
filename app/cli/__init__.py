@@ -24,6 +24,8 @@ from app.cli.watcher import vault_watcher_run, vault_watcher_daemon
 from app.cli.index_rebuild import index as index_cli
 from app.cli import index_doctor  # noqa: F401 -- register index doctor command
 from app.cli.events_doctor import events_doctor
+from app.cli.settings_validate import run_settings_validate
+
 from app.config.paths import resolve_system_settings_path, resolve_vault_root
 from app.services import settings as settings_service
 from app.watcher.vault_watcher import OutboxPathError as WatcherOutboxPathError, run_watcher_tick

@@ -10,7 +10,6 @@ from app.components.settings.tools_loader import load_tools
 from app.components.settings.agents_loader import load_agents
 from app.components.settings.graphs_loader import load_graphs
 from app.components.settings.models_loader import load_models
-from app.components.settings.events_loader import load_events
 
 
 @dataclass(frozen=True)
@@ -56,12 +55,6 @@ def validate_settings() -> List[ValidationIssue]:
     except Exception as exc:
         issues.append(ValidationIssue(code="models.load_failed", message=str(exc)))
         models = {}
-
-    try:
-        events = load_events()
-    except Exception as exc:
-        issues.append(ValidationIssue(code="events.load_failed", message=str(exc)))
-        events = {}
 
     model_ids = set(models.keys())
     for pid, p in prompts.items():
@@ -113,7 +106,6 @@ def validate_settings() -> List[ValidationIssue]:
                 )
 
     agent_ids = set(agents.keys())
-    event_ids = set(events.keys())
     for gid, g in graphs.items():
         if g.agent_id not in agent_ids:
             issues.append(
@@ -123,15 +115,6 @@ def validate_settings() -> List[ValidationIssue]:
                     ref=f"graph:{gid}",
                 )
             )
-        for ev in g.input_events + g.output_events:
-            if ev not in event_ids:
-                issues.append(
-                    ValidationIssue(
-                        code="graphs.unknown_event",
-                        message=f"Graph {gid} references unknown event id: {ev}",
-                        ref=f"graph:{gid}",
-                    )
-                )
 
     return issues
 
