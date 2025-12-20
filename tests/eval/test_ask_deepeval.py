@@ -47,8 +47,6 @@ def test_ask_answer_relevancy() -> None:
     os.environ.setdefault("OPENAI_COST_PER_INPUT_TOKEN", "0")
     os.environ.setdefault("OPENAI_COST_PER_OUTPUT_TOKEN", "0")
 
-    client = TestClient(app)
-    model_name = os.getenv("EVAL_LLM_MODEL", "llama3")
     try:
         model = build_deepeval_model(cfg)
     except (ImportError, RuntimeError) as exc:
