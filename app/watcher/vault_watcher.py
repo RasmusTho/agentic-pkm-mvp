@@ -13,24 +13,10 @@ from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.store.object_store import ObjectStore
 from app.watcher.events import emit_watcher_run_event
-from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from scripts.yaml_roundtrip import load_frontmatter
 
 Snapshot = dict[str, float]
 Summary = dict[str, object]
-
-
-class OutboxPathError(ValueError):
-    """Raised when the outbox path cannot be resolved."""
-
-
-def _resolve_outbox_path(outbox_path: Path | None) -> Path | None:
-    if outbox_path is not None:
-        return Path(outbox_path)
-    env_path = os.environ.get("INDEX_OUTBOX_PATH")
-    if env_path:
-        return Path(env_path)
-    return None
 
 
 class OutboxPathError(ValueError):
