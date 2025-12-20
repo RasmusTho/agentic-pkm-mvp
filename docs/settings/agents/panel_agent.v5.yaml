@@ -1,0 +1,18 @@
+id: panel_agent.v5
+status: active
+kind: langgraph
+description: Parses AI panel actions from a note and emits panel.intent.created (minimal runtime loop).
+entrypoint: app/agents/panel_agent/graph.py:build_graph
+state_schema: app/agents/panel_agent/state.py:PanelAgentState
+input_events:
+  - panel.scan.requested
+output_events:
+  - panel.intent.created
+allowed_tools:
+  - vault.read_note.v1
+  - vault.write_note.v1
+allowed_stores:
+  - ObjectStore
+settings_refs:
+  - docs/settings/panel-actions.md
+  - docs/settings/standards.yaml

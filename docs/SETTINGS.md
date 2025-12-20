@@ -55,3 +55,12 @@ Tools live under docs/settings/tools/; the registry keeps the list deterministic
 - Tool descriptors: `docs/settings/tools/*.yaml`
 
 Descriptors describe `allowed_args` and optional `mock_result` for deterministic testing.
+
+## Agent Registry
+
+Agents live as settings artifacts:
+
+- Manifest: `docs/settings/agents/registry.yaml`
+- Agent descriptors: `docs/settings/agents/*.yaml`
+
+Descriptors declare entrypoints, pipelines/events, allowed tools/stores, and settings references for validation.
