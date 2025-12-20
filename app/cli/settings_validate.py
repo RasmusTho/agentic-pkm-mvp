@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from typing import Sequence
 
 from app.settings.validate import issues_to_json, validate_settings
 
