@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VAULT_PATH=${1:-tmp/vault_smoke}
+OUTBOX_PATH=${2:-tmp/index-outbox.smoke.jsonl}
+
+python -m app.cli settings validate
+POLICY_ENFORCE=1 STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PANEL_AGENT_PIPELINE=planner LLM_PROVIDER=mock EMBED_DIM=1536 INDEX_OUTBOX_PATH="$OUTBOX_PATH" \
+  python -m app.cli smoke ask --vault "$VAULT_PATH" --outbox "$OUTBOX_PATH" --json
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory POLICY_ENFORCE=1 PANEL_AGENT_PIPELINE=planner LLM_PROVIDER=mock EMBED_DIM=1536 \
+  python scripts/verify_ask_smoke.py --vault "$VAULT_PATH" --outbox "$OUTBOX_PATH"
