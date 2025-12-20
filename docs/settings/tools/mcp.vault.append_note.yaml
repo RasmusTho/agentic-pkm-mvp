@@ -1,0 +1,25 @@
+id: mcp.vault.append_note
+status: active
+protocol: mcp
+server: vault
+description: Append or create a note in the vault via MCP.
+allowed_args:
+  type: object
+  additionalProperties: false
+  properties:
+    title:
+      type: string
+      description: Note title
+    body:
+      type: string
+      description: Markdown body
+    tags:
+      type: array
+      items:
+        type: string
+    metadata:
+      type: object
+  required: [title, body]
+mock_result:
+  status: ok
+  note_path: vault/_mcp/mock-note.md

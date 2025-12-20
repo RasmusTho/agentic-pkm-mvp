@@ -1,0 +1,24 @@
+id: promotion.emit_intent
+status: active
+protocol: internal
+server: orchestrator
+description: Emit a promote.intent.created event for panel actions.
+allowed_args:
+  type: object
+  additionalProperties: false
+  properties:
+    note_uuid:
+      type: string
+    action_id:
+      type: string
+    action_label:
+      type: string
+    downstream_event:
+      type: string
+    maturity:
+      type: string
+    instruction:
+      type: string
+  required: [note_uuid, action_id]
+mock_result:
+  status: ok

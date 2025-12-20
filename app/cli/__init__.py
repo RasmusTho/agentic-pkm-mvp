@@ -24,6 +24,7 @@ from app.cli.watcher import vault_watcher_run, vault_watcher_daemon
 from app.cli.index_rebuild import index as index_cli
 from app.cli import index_doctor  # noqa: F401 -- register index doctor command
 from app.cli.events_doctor import events as events_cli
+from app.cli.smoke import smoke as smoke_cli
 from app.cli.settings_validate import run_settings_validate
 from app.config.paths import resolve_system_settings_path, resolve_vault_root
 from app.services import settings as settings_service
@@ -225,6 +226,7 @@ def cli() -> None:
 
 cli.add_command(index_cli, name="index")
 cli.add_command(events_cli, name="events")
+cli.add_command(smoke_cli, name="smoke")
 
 
 @cli.command(name="llm-trace-sequence", help="Render a single trace flow as text or Mermaid sequence diagram.")

@@ -9,3 +9,9 @@ tools:
   - id: mcp.search.objects
     path: docs/settings/tools/mcp.search.objects.yaml
     status: active
+  - id: mcp.vault.append_note
+    path: docs/settings/tools/mcp.vault.append_note.yaml
+    status: active
+  - id: promotion.emit_intent
+    path: docs/settings/tools/promotion.emit_intent.yaml
+    status: active
