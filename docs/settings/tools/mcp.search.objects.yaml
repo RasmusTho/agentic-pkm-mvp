@@ -1,0 +1,17 @@
+id: mcp.search.objects
+status: active
+protocol: mcp
+server: search
+description: Search indexed objects by query.
+allowed_args:
+  type: object
+  additionalProperties: false
+  properties:
+    query:
+      type: string
+    k:
+      type: integer
+  required: [query]
+mock_result:
+  status: ok
+  results: []
