@@ -82,3 +82,12 @@ Models are settings-backed artifacts:
 - Model descriptors: `docs/settings/models/*.yaml`
 
 The registry introduces stable model IDs; other registries (prompts, charts) should reference these IDs rather than raw provider names.
+
+## Event Registry
+
+Events are settings-backed artifacts:
+
+- Manifest: `docs/settings/events/registry.yaml`
+- Event descriptors: `docs/settings/events/*.yaml`
+
+The registry lists canonical event IDs, producers/consumers, and optional schema refs. Other registries (e.g., graphs) must reference these IDs.

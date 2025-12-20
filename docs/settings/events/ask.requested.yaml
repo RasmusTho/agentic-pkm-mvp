@@ -1,0 +1,9 @@
+id: ask.requested
+status: active
+version: 1
+description: Request to run the ASK graph for a query.
+schema_ref: null
+producers:
+  - api.ask
+consumers:
+  - ask.v1

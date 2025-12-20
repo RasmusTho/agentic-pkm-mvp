@@ -1,0 +1,9 @@
+id: panel.scan.requested
+status: active
+version: 1
+description: Request to scan a note for panel actions.
+schema_ref: null
+producers:
+  - runtime.watcher
+consumers:
+  - panel_agent.v5

@@ -1,0 +1,9 @@
+id: ask.answered
+status: active
+version: 1
+description: Result emitted by the ASK graph.
+schema_ref: null
+producers:
+  - ask.v1
+consumers:
+  - api.ask
