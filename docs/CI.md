@@ -17,12 +17,12 @@ mypy app
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not eval"
 
 ## Reality smoke (local)
-Deterministic runtime smoke with POLICY_ENFORCE=1, memory store, vault writes, and outbox events:
-- `scripts/reality_smoke.sh` (runs settings validate, smoke CLI, verifier) writes to `tmp/vault_smoke` and `tmp/index-outbox.smoke.jsonl`.
+Deterministic runtime smoke with POLICY_ENFORCE=1, memory store, vault writes, outbox events, and a run2 no-op check:
+- `scripts/reality_smoke.sh` (runs settings validate, smoke CLI `--runs 2`, verifier) writes to `tmp/vault_smoke` and `tmp/index-outbox.smoke.jsonl`.
 - Manual run:
   - `python -m app.cli settings validate`
-  - `POLICY_ENFORCE=1 STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 INDEX_OUTBOX_PATH=tmp/index-outbox.smoke.jsonl python -m app.cli smoke reality --vault tmp/vault_smoke --outbox tmp/index-outbox.smoke.jsonl`
-  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory POLICY_ENFORCE=1 python scripts/verify_reality_smoke.py --vault tmp/vault_smoke --outbox tmp/index-outbox.smoke.jsonl`
+  - `POLICY_ENFORCE=1 STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 INDEX_OUTBOX_PATH=tmp/index-outbox.smoke.jsonl PANEL_AGENT_PIPELINE=planner python -m app.cli smoke reality --vault tmp/vault_smoke --outbox tmp/index-outbox.smoke.jsonl --runs 2`
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory POLICY_ENFORCE=1 PANEL_AGENT_PIPELINE=planner python scripts/verify_reality_smoke.py --vault tmp/vault_smoke --outbox tmp/index-outbox.smoke.jsonl`
 
 ## Conventions
 - All migrations must apply cleanly to an empty DB.
