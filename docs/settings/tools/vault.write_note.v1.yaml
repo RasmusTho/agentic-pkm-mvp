@@ -1,0 +1,16 @@
+id: vault.write_note.v1
+status: active
+protocol: mcp
+server: vault
+description: Write/replace a note by path in the vault.
+allowed_args:
+  type: object
+  additionalProperties: false
+  properties:
+    path:
+      type: string
+    content:
+      type: string
+  required: [path, content]
+mock_result:
+  ok: true

@@ -286,3 +286,6 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/examples/vault_test_seed/summary-request.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Summary-only scenario aligned with panel wiring. |
 | docs/examples/vault_test_seed/unknown-action.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Unknown action should log but not promote. |
 | docs/examples/vault_test_seed/manual-policy.md | UAT seed note | Aligned (UAT seeds) | 2025-03-12 | Manual policy example; watcher should skip panel. |
+
+- docs/settings/tools/registry.yaml (Tool Registry manifest)
+- docs/settings/tools/*.yaml (Tool descriptors and allowed args)

@@ -1,0 +1,15 @@
+id: vault.read_note.v1
+status: active
+protocol: mcp
+server: vault
+description: Read a note by path from the vault.
+allowed_args:
+  type: object
+  additionalProperties: false
+  properties:
+    path:
+      type: string
+  required: [path]
+mock_result:
+  ok: true
+  content: ""

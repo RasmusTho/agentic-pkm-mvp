@@ -46,3 +46,12 @@ To keep architectural contracts explicit and reviewable, we maintain a “standa
 
 This lists adopted standards and the canonical repo references implementing each standard
 (e.g. MCP tools, A2A schemas, OpenAPI, AsyncAPI, JSON Schema).
+
+## Tool Registry (MCP tools)
+
+Tools live under docs/settings/tools/; the registry keeps the list deterministic and CI-validated:
+
+- Manifest: `docs/settings/tools/registry.yaml`
+- Tool descriptors: `docs/settings/tools/*.yaml`
+
+Descriptors describe `allowed_args` and optional `mock_result` for deterministic testing.
