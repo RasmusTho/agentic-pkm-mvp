@@ -1,0 +1,8 @@
+version: 1
+graphs:
+  - id: ask.graph.v1
+    path: docs/settings/graphs/ask.graph.v1.yaml
+    status: active
+  - id: panel.graph.v5
+    path: docs/settings/graphs/panel.graph.v5.yaml
+    status: active

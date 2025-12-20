@@ -1,0 +1,11 @@
+id: ask.graph.v1
+status: active
+agent_id: ask.v1
+kind: langgraph
+description: ASK retrieve → rerank → answer graph.
+entrypoint: app/agents/ask/graph.py:build_graph
+state_schema: app/agents/ask/state.py:AskState
+input_events:
+  - ask.requested
+output_events:
+  - ask.answered

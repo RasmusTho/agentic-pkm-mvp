@@ -1,0 +1,11 @@
+id: panel.graph.v5
+status: active
+agent_id: panel_agent.v5
+kind: langgraph
+description: PanelAgent v5 minimal runtime loop graph.
+entrypoint: app/agents/panel_agent/graph.py:build_graph
+state_schema: app/agents/panel_agent/state.py:PanelAgentState
+input_events:
+  - panel.scan.requested
+output_events:
+  - panel.intent.created

@@ -64,3 +64,12 @@ Agents live as settings artifacts:
 - Agent descriptors: `docs/settings/agents/*.yaml`
 
 Descriptors declare entrypoints, pipelines/events, allowed tools/stores, and settings references for validation.
+
+## Graph Registry
+
+Graphs/workflows are settings artifacts:
+
+- Manifest: `docs/settings/graphs/registry.yaml`
+- Graph descriptors: `docs/settings/graphs/*.yaml`
+
+Descriptors reference agents (`agent_id`), entrypoints/state schemas, and I/O events.

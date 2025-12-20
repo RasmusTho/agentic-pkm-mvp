@@ -292,3 +292,6 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 
 - docs/settings/agents/registry.yaml (Agent Registry manifest)
 - docs/settings/agents/*.yaml (Agent descriptors)
+
+- docs/settings/graphs/registry.yaml (Graph Registry manifest)
+- docs/settings/graphs/*.yaml (Graph descriptors)
