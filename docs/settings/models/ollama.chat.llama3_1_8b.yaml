@@ -1,0 +1,6 @@
+id: ollama.chat.llama3_1_8b
+status: active
+kind: chat
+provider: ollama
+model: llama3.1:8b
+notes: Local default chat model (OpenAI-compatible endpoint).

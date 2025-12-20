@@ -1,0 +1,7 @@
+id: ollama.embed.nomic_embed_text
+status: active
+kind: embedding
+provider: ollama
+model: nomic-embed-text
+dims: null
+notes: Local default embedding model; dims may vary by backend.

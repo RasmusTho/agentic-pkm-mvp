@@ -295,3 +295,6 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 
 - docs/settings/graphs/registry.yaml (Graph Registry manifest)
 - docs/settings/graphs/*.yaml (Graph descriptors)
+
+- docs/settings/models/registry.yaml (Model Registry manifest)
+- docs/settings/models/*.yaml (Model descriptors)

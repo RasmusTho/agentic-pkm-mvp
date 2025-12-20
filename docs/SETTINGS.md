@@ -73,3 +73,12 @@ Graphs/workflows are settings artifacts:
 - Graph descriptors: `docs/settings/graphs/*.yaml`
 
 Descriptors reference agents (`agent_id`), entrypoints/state schemas, and I/O events.
+
+## Model Registry
+
+Models are settings-backed artifacts:
+
+- Manifest: `docs/settings/models/registry.yaml`
+- Model descriptors: `docs/settings/models/*.yaml`
+
+The registry introduces stable model IDs; other registries (prompts, charts) should reference these IDs rather than raw provider names.
