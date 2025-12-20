@@ -43,6 +43,7 @@ Guardrailed continuous watcher for real vaults with kill switch, scope, and rate
   - `python -m app.cli settings validate`
   - `POLICY_ENFORCE=1 WATCHER_ENABLE=1 WATCHER_VAULT_PATH=/path/to/vault WATCHER_SCOPE_GLOB="@Inbox/**" WATCHER_DEBOUNCE_MS=1500 WATCHER_RATE_LIMIT_PER_MIN=30 WATCHER_BACKOFF_SECONDS=10 INDEX_OUTBOX_PATH=tmp/index-outbox.live.jsonl python -m app.cli watcher run`
   - Single tick for debugging: same env + `python -m app.cli watcher once`
+- State is auto-migrated to drop legacy monotonic timestamps; delete `tmp/watcher_state.json` to fully reset watcher memory when troubleshooting.
 
 ## Conventions
 - All migrations must apply cleanly to an empty DB.

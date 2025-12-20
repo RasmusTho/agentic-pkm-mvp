@@ -100,7 +100,7 @@ def run_tick(
     *,
     now: float | None = None,
 ) -> dict[str, object]:
-    now = now if now is not None else time.monotonic()
+    now = now if now is not None else time.time()
     state.ticks_run += 1
 
     summary: dict[str, object] = {
@@ -198,7 +198,7 @@ def run_tick(
 def run_forever(cfg: WatcherConfig, state: WatcherState | None = None) -> None:
     state = state or WatcherState.load(cfg.state_path)
     while True:
-        now = time.monotonic()
+        now = time.time()
         summary = run_tick(cfg, state, now=now)
         _maybe_log_summary(cfg, state, summary, now=now)
         time.sleep(cfg.tick_sleep_seconds)
@@ -206,7 +206,7 @@ def run_forever(cfg: WatcherConfig, state: WatcherState | None = None) -> None:
 
 def run_once(cfg: WatcherConfig, state: WatcherState | None = None) -> dict[str, object]:
     state = state or WatcherState.load(cfg.state_path)
-    now = time.monotonic()
+    now = time.time()
     summary = run_tick(cfg, state, now=now)
     _maybe_log_summary(cfg, state, summary, now=now)
     return summary
