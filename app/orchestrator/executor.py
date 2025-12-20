@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -11,14 +12,13 @@ from app.a2a.events import emit_agent_error_event, send_agent_request
 from app.a2a.schema import new_error
 from app.agents.base.loop import Agent
 from app.mcp.vault_tools import VaultToolError, append_note
-
+from app.orchestrator.agents import AgentPermissionError, resolve_agent_config, validate_agent_permissions
 from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
 from app.planner.tools import get_tool_descriptor
-from app.orchestrator.agents import AgentPermissionError, resolve_agent_config, validate_agent_permissions
-from app.events.schema import OutboxEvent
-from app.store.object_store import ObjectStore
-
+from app.policy.enforce import assert_tool_allowed, is_policy_enforced
 from app.quality import timeout_wrapper
+from app.store.object_store import ObjectStore
+from app.events.schema import OutboxEvent
 
 from .events import emit_mcp_tool_call_finished, emit_mcp_tool_call_started
 
@@ -75,6 +75,7 @@ class StepContext:
     event_type: str | None = None
     tool_settings: Mapping[str, Any] | None = None
     budget_state: MutableMapping[str, int] | None = None
+    agent_id: str | None = None
 
 
 class PlanExecutor(Protocol):
@@ -150,6 +151,13 @@ class MockPlanExecutor(PlanExecutor):
         descriptor = get_tool_descriptor(step.tool)
         if descriptor is None:
             raise StepExecutionError(f"unknown MCP tool '{step.tool}'", error_type="invalid_tool")
+        agent_id = context.agent_id
+        if is_policy_enforced() and not agent_id:
+            raise StepExecutionError("policy: missing agent_id in StepContext", error_type="policy_denied")
+        try:
+            assert_tool_allowed(agent_id, descriptor.name)
+        except PermissionError as exc:
+            raise StepExecutionError(str(exc), error_type="policy_denied") from exc
         args = dict(step.tool_args or {})
         if "content" in args and "body" not in args:
             args["body"] = args["content"]
@@ -219,99 +227,106 @@ class MockPlanExecutor(PlanExecutor):
             except Exception as exc:
                 raise StepExecutionError(f"external ingest failed: {exc}", error_type="internal_tool_error") from exc
         if name == "promotion.emit_intent":
-            return self._emit_promotion_intent(args, context)
+            try:
+                return _run_promotion_intent(args, context)
+            except Exception as exc:
+                raise StepExecutionError(f"promotion intent failed: {exc}", error_type="internal_tool_error") from exc
         raise StepExecutionError(f"unsupported internal tool '{name}'", error_type="invalid_tool")
 
-    def _emit_promotion_intent(self, args: Mapping[str, Any], context: StepContext) -> Dict[str, Any]:
-        note_uuid = args.get("note_uuid")
-        action_id = args.get("action_id")
-        if not note_uuid or not action_id:
-            raise StepExecutionError("promotion tool requires note_uuid and action_id", error_type="invalid_tool_args")
+    def _validate_tool_args(self, args: Mapping[str, Any], allowed_args: Mapping[str, str]) -> None:
+        for arg_name, arg_type in allowed_args.items():
+            if arg_name not in args:
+                continue
+            expected_types = self._TYPE_MAP.get(arg_type, tuple())
+            if not isinstance(args[arg_name], expected_types):
+                raise StepExecutionError(
+                    f"argument '{arg_name}' must be of type {arg_type}", error_type="invalid_tool_args"
+                )
 
-        store = ObjectStore()
-        obj = store.get_object(str(note_uuid))
-        note_ref: Dict[str, Any] = {"uuid": str(note_uuid), "path": None, "origin": None}
-        if obj:
-            note_ref["path"] = getattr(obj, "source_ref", None)
-            payload = obj.payload or {}
-            note_ref["origin"] = payload.get("origin")
-
-        payload: Dict[str, Any] = {
-            "note": note_ref,
-            "action": {
-                "id": action_id,
-                "label": args.get("action_label") or action_id,
-                "downstream_event": args.get("downstream_event"),
-            },
-            "instruction": args.get("instruction") or "",
-        }
-        maturity = args.get("maturity")
-        if maturity:
-            payload["maturity"] = maturity
-            payload.setdefault("action", {}).setdefault("params", {})["maturity"] = maturity
-
-        trace_val = context.trace_id
-        if trace_val:
-            event = OutboxEvent(event="promote.intent.created", trace_id=trace_val, source="orchestrator.runtime", payload=payload)
-        else:
-            event = OutboxEvent(event="promote.intent.created", source="orchestrator.runtime", payload=payload)
-        outbox_path = _resolve_outbox_path()
-        _write_outbox_events(outbox_path, [event])
-        return {"status": "ok", "event": event.event, "note_uuid": note_uuid, "action_id": action_id}
+    def _validate_required_args(self, args: Mapping[str, Any], required_args: Iterable[str]) -> None:
+        for arg in required_args:
+            if arg not in args:
+                raise StepExecutionError(f"missing required argument '{arg}'", error_type="invalid_tool_args")
 
     def _should_use_real_tool(self, tool_name: str, context: StepContext) -> bool:
         if tool_name != "mcp.vault.append_note":
             return False
         settings = context.tool_settings or {}
-        if "mcp_vault_enable" in settings:
-            return _flag_enabled(settings["mcp_vault_enable"])
-        env_value = os.getenv("MCP_VAULT_ENABLE")
-        if env_value is not None:
-            return _flag_enabled(env_value)
-        return False
+        allowlist = settings.get("allowed_mcp_tools")
+        enable_flag = settings.get("mcp_vault_enable")
+        if enable_flag is None:
+            enable_flag = settings.get("mcp.enable")
+        if allowlist is None:
+            return _flag_enabled(enable_flag)
+        try:
+            return tool_name in allowlist and _flag_enabled(enable_flag)
+        except Exception:
+            return False
 
     def _run_vault_append(self, args: Mapping[str, Any], context: StepContext) -> Dict[str, Any]:
-        settings = context.tool_settings or {}
-        relative_dir = settings.get("vault_relative_dir") or "_mcp"
         try:
+            vault_root = context.tool_settings.get("vault_root") if context.tool_settings else None
             note_path = append_note(
-                title=args["title"],
-                body=args["body"],
-                tags=args.get("tags"),
-                metadata=args.get("metadata"),
-                vault_root=settings.get("vault_root"),
-                settings=settings,
-                relative_dir=str(relative_dir),
+                title=str(args.get("title") or ""),
+                body=str(args.get("body") or ""),
+                tags=args.get("tags") or [],
+                metadata=args.get("metadata") or {},
+                vault_root=vault_root,
             )
+            event_kwargs = {
+                "event": "mcp.vault.append_note",
+                "source": "orchestrator.runtime",
+                "payload": {"note_path": str(note_path)},
+            }
+            if context.trace_id:
+                event_kwargs["trace_id"] = context.trace_id
+            mcp_event = OutboxEvent(**event_kwargs)
+            _write_outbox_events(_resolve_outbox_path(), [mcp_event])
+            return {"status": "ok", "note_path": str(note_path)}
         except VaultToolError as exc:
-            raise StepExecutionError(f"vault tool failed: {exc}", error_type="vault_tool_error") from exc
-        return {"status": "ok", "note_path": str(note_path)}
-
-    def _validate_tool_args(self, args: Mapping[str, Any], allowed_args: Mapping[str, str]) -> None:
-        allowed_keys = set(allowed_args.keys())
-        unknown = set(args.keys()) - allowed_keys
-        if unknown:
-            raise StepExecutionError(
-                f"unexpected arguments for tool: {sorted(unknown)}",
-                error_type="invalid_tool_args",
-            )
-        for key, type_name in allowed_args.items():
-            if key not in args:
-                continue
-            expected = self._TYPE_MAP.get(type_name, (object,))
-            if not isinstance(args[key], expected):
-                raise StepExecutionError(
-                    f"argument '{key}' must be of type {type_name}",
-                    error_type="invalid_tool_args",
-                )
-
-    def _validate_required_args(self, args: Mapping[str, Any], required: list[str]) -> None:
-        for key in required:
-            if key not in args:
-                raise StepExecutionError(
-                    f"missing required argument '{key}'",
-                    error_type="invalid_tool_args",
-                )
+            raise StepExecutionError(f"vault append failed: {exc}", error_type="mcp_tool_error") from exc
 
 
-__all__ = ["StepExecutionError", "StepContext", "PlanExecutor", "MockPlanExecutor"]
+def _run_promotion_intent(args: Mapping[str, Any], context: StepContext) -> Dict[str, Any]:
+    note_uuid = str(args.get("note_uuid") or "")
+    note_info: Dict[str, Any] = {"uuid": note_uuid}
+    try:
+        obj = ObjectStore().get_object(note_uuid)
+    except Exception:
+        obj = None
+    if obj:
+        if getattr(obj, "source_ref", None):
+            note_info["path"] = str(obj.source_ref)
+        if isinstance(getattr(obj, "payload", None), dict):
+            origin = obj.payload.get("origin")
+            if origin:
+                note_info["origin"] = origin
+
+    action_id = str(args.get("action_id") or "")
+    payload: Dict[str, Any] = {
+        "note": note_info,
+        "action": {"id": action_id, "label": str(args.get("action_label") or action_id or "")},
+    }
+    downstream_event = args.get("downstream_event")
+    if downstream_event:
+        payload["action"]["downstream_event"] = str(downstream_event)
+    instruction = args.get("instruction")
+    if instruction:
+        payload["instruction"] = str(instruction)
+    maturity = args.get("maturity")
+    if maturity:
+        payload["maturity"] = str(maturity)
+
+    event_kwargs = {
+        "event": "promote.intent.created",
+        "source": "orchestrator.runtime",
+        "payload": payload,
+    }
+    if context.trace_id:
+        event_kwargs["trace_id"] = context.trace_id
+    promote_event = OutboxEvent(**event_kwargs)
+    _write_outbox_events(_resolve_outbox_path(), [promote_event])
+    return {"status": "ok", "event": promote_event.model_dump(mode="json")}
+
+
+__all__ = ["PlanExecutor", "StepContext", "StepExecutionError", "MockPlanExecutor"]

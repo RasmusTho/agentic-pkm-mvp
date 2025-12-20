@@ -9,7 +9,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from app.api.app import app
-from app.eval.llm_client import configure_eval_openai_env
+from app.eval.llm_client import build_deepeval_model, configure_eval_openai_env
 
 CASES_PATH = Path("docs/eval/ask_cases.yaml")
 CASES_BILINGUAL_PATH = Path("docs/eval/ask_cases_bilingual.yaml")
@@ -47,11 +47,15 @@ def test_ask_answer_relevancy() -> None:
     os.environ.setdefault("OPENAI_COST_PER_INPUT_TOKEN", "0")
     os.environ.setdefault("OPENAI_COST_PER_OUTPUT_TOKEN", "0")
 
-    client = TestClient(app)
-    model_name = os.getenv("EVAL_LLM_MODEL", "llama3")
     try:
-        metric = AnswerRelevancyMetric(model=model_name, threshold=0.5)
-    except ValueError as exc:
+        model = build_deepeval_model(cfg)
+    except (ImportError, RuntimeError) as exc:
+        pytest.skip(str(exc))
+
+    client = TestClient(app)
+    try:
+        metric = AnswerRelevancyMetric(model=model, threshold=0.5)
+    except Exception as exc:
         pytest.skip(f"Eval model not supported by deepeval: {exc}")
 
     test_cases: list[LLMTestCase] = []

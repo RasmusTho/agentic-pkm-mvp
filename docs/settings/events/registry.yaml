@@ -1,0 +1,14 @@
+version: 1
+events:
+  - id: ask.requested
+    path: docs/settings/events/ask.requested.yaml
+    status: active
+  - id: ask.answered
+    path: docs/settings/events/ask.answered.yaml
+    status: active
+  - id: panel.scan.requested
+    path: docs/settings/events/panel.scan.requested.yaml
+    status: active
+  - id: panel.intent.created
+    path: docs/settings/events/panel.intent.created.yaml
+    status: active

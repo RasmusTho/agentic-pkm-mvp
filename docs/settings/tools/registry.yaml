@@ -6,3 +6,6 @@ tools:
   - id: vault.write_note.v1
     path: docs/settings/tools/vault.write_note.v1.yaml
     status: active
+  - id: mcp.search.objects
+    path: docs/settings/tools/mcp.search.objects.yaml
+    status: active

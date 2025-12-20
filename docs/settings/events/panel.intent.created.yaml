@@ -1,0 +1,9 @@
+id: panel.intent.created
+status: active
+version: 1
+description: Intent produced by PanelAgent based on note panel actions.
+schema_ref: null
+producers:
+  - panel_agent.v5
+consumers:
+  - orchestrator
