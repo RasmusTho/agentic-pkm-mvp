@@ -5,6 +5,60 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+_MIN_VALID_TS = 1_000_000_000
+
+
+def _sanitize_ts(value: float | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        ts = float(value)
+    except Exception:
+        return None
+    if ts < _MIN_VALID_TS:
+        return None
+    return ts
+
+
+def _sanitize_files(raw: dict[str, dict[str, Any]] | Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return {}
+    cleaned: dict[str, dict[str, Any]] = {}
+    for rel, entry in raw.items():
+        if not isinstance(entry, dict):
+            continue
+        new_entry: dict[str, Any] = {}
+        if "mtime" in entry:
+            try:
+                new_entry["mtime"] = float(entry["mtime"])
+            except Exception:
+                pass
+        if "hash" in entry:
+            try:
+                new_entry["hash"] = str(entry["hash"])
+            except Exception:
+                pass
+        seen = _sanitize_ts(entry.get("last_seen"))
+        emitted = _sanitize_ts(entry.get("last_emitted"))
+        if seen is not None:
+            new_entry["last_seen"] = seen
+        if emitted is not None:
+            new_entry["last_emitted"] = emitted
+        if new_entry:
+            cleaned[rel] = new_entry
+    return cleaned
+
+
+def _sanitize_rate_window(raw: list[float] | Any) -> list[float]:
+    if not isinstance(raw, list):
+        return []
+    cleaned: list[float] = []
+    for ts in raw:
+        valid = _sanitize_ts(ts)
+        if valid is not None:
+            cleaned.append(valid)
+    return cleaned
+
 
 @dataclass
 class WatcherState:
@@ -29,16 +83,16 @@ class WatcherState:
         except Exception:
             return cls()
         return cls(
-            files=dict(data.get("files") or {}),
+            files=_sanitize_files(data.get("files")),
             changed_detected=int(data.get("changed_detected") or 0),
             intents_emitted=int(data.get("intents_emitted") or 0),
             ticks_run=int(data.get("ticks_run") or 0),
             errors=int(data.get("errors") or 0),
             rate_limited=int(data.get("rate_limited") or 0),
-            backoff_until=data.get("backoff_until"),
-            last_summary_at=data.get("last_summary_at"),
-            last_stop_warning=data.get("last_stop_warning"),
-            rate_window=list(data.get("rate_window") or []),
+            backoff_until=_sanitize_ts(data.get("backoff_until")),
+            last_summary_at=_sanitize_ts(data.get("last_summary_at")),
+            last_stop_warning=_sanitize_ts(data.get("last_stop_warning")),
+            rate_window=_sanitize_rate_window(data.get("rate_window")),
             last_trace_id=data.get("last_trace_id"),
         )
 

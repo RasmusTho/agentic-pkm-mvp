@@ -110,3 +110,39 @@ def test_kill_switch_pauses_without_emitting(tmp_path: Path) -> None:
     assert summary["kill_switch"] is True
     assert summary["emitted_in_tick"] == 0
     assert not cfg.outbox_path.exists() or cfg.outbox_path.read_text(encoding="utf-8").strip() == ""
+
+
+def test_restart_sanitizes_monotonic_state(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    cfg.vault_path.mkdir(parents=True, exist_ok=True)
+    note = (cfg.vault_path / "@Inbox").joinpath("restart.md")
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("v1", encoding="utf-8")
+
+    rel = str(Path("@Inbox") / note.name)
+    state_payload = {
+        "files": {rel: {"last_seen": 123.45, "last_emitted": 234.56, "hash": "old", "mtime": 1.0}},
+        "backoff_until": 456.78,
+        "rate_window": [111.0, 222.0],
+        "changed_detected": 5,
+        "intents_emitted": 2,
+    }
+    cfg.state_path.write_text(json.dumps(state_payload), encoding="utf-8")
+
+    state = WatcherState.load(cfg.state_path)
+    now1 = note.stat().st_mtime + 10
+    summary1 = run_tick(cfg, state, now=now1)
+    assert summary1["emitted_in_tick"] == 1
+    assert summary1["backoff_active"] is False
+
+    entries1 = _read_outbox(cfg.outbox_path)
+    assert len(entries1) == 1
+
+    new_state = WatcherState.load(cfg.state_path)
+    note.write_text("v2", encoding="utf-8")
+    now2 = now1 + 20
+    os.utime(note, (now2, now2))
+    summary2 = run_tick(cfg, new_state, now=now2)
+    assert summary2["emitted_in_tick"] == 1
+    entries2 = _read_outbox(cfg.outbox_path)
+    assert len(entries2) == 2
