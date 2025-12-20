@@ -1,31 +1,48 @@
 State: SoT v4.10 (current; details may lag ARCHITECTURE).
-# SETTINGS
+# Settings
 
-Runtime env vars (STORE_BACKEND, INDEX_OUTBOX_PATH, METRICS_ENABLED, etc.) are captured in `docs/SYSTEM_DESIGN_v4.10.md`; this file focuses on settings schema/flags.
+This repo uses a **settings-as-artifacts** approach. “Settings” are not only runtime knobs; they are also
+versioned contracts for how the system behaves (agents, flows, panel wiring, prompts, and standards).
 
-## Required
-- DATABASE_URL: SQLAlchemy/psycopg URL. Example: postgresql+psycopg://app:app@127.0.0.1:15432/app
-- SOT_VERSION: Current Source-of-Truth schema version. Example: 4.10
+## Runtime settings (compiled)
 
-## LLM
-- LLM_PROVIDER: ollama|openai|azureopenai|anthropic
-- LLM_MODEL: default chat/model for non-reasoning prompts
-- LLM_REASONING_MODEL: advanced model for deliberate reasoning
-- OLLAMA_HOST: base URL to local server, default http://127.0.0.1:11434
-- LLM_TIMEOUT_SECONDS: default 120
+Runtime settings are compiled from vault-backed Markdown settings into `runtime/settings/`.
 
-## Retrieval
-- VECTOR_BACKEND: pgvector
-- EMBED_MODEL: identifier string for embeddings (e.g. openai/text-embedding-3-large). Tests use a deterministic hashing-based embedding in code.
-- BM25_BACKEND: bm25_lite
+Primary source folder:
+- `vault/@Settings/`
 
-## Operational flags
-- LOG_LEVEL: INFO|DEBUG
-- FEATURE_REVIEW_AUTOPROMOTE: true|false (default true)
-- FEATURE_REASONING_ON_REVIEW: true|false (default true)
-- MAX_CHUNK_TOKENS: default 800
-- CHUNK_OVERLAP_TOKENS: default 120
+Compiler:
+- `python -m app.cli settings compile`
 
-## Conventions
-- All services read from environment first, then fall back to sensible defaults in app/settings.py and agent modules.
-- Never check secrets into the repo. Use .env for local dev only.
+## Repo settings artifacts (non-compiled)
+
+Some settings live as **repository artifacts** because they are:
+- shared, stable, and reviewed (docs-as-code)
+- validated in CI
+- referenced by multiple subsystems (PanelAgent, Orchestrator, tooling)
+
+Current artifacts:
+- Panel action wiring: `docs/settings/panel-actions.md`
+- Flow settings: `docs/settings/flows.settings.yaml`
+
+## Prompt Registry (settings-backed)
+
+Prompts live as files in settings, with a small registry manifest for discovery and validation:
+
+- Registry manifest: `docs/settings/prompts/registry.yaml`
+- Prompt files: `docs/settings/prompts/*.md` (Markdown + frontmatter + body)
+
+The registry enables:
+- deterministic discovery (no implicit globbing)
+- strict validation (frontmatter id match, required fields)
+- future governance (deprecation, allowed models, eval suite binding)
+- linkage to architectural standards (MCP/A2A/JSON Schema/etc)
+
+## Standards Registry (MCP, A2A, OpenAPI, AsyncAPI, ...)
+
+To keep architectural contracts explicit and reviewable, we maintain a “standards registry”:
+
+- `docs/settings/standards.yaml`
+
+This lists adopted standards and the canonical repo references implementing each standard
+(e.g. MCP tools, A2A schemas, OpenAPI, AsyncAPI, JSON Schema).

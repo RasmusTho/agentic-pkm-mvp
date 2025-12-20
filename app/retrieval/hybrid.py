@@ -6,7 +6,10 @@ from typing import Any, Iterable, Iterator, List, Optional
 
 import numpy as np
 from rank_bm25 import BM25Okapi
-from rapidfuzz import process
+try:
+    from rapidfuzz import process
+except ImportError:
+    process = None
 
 from app.components.embeddings import get_embedding_client, resolve_embedding_identity
 from app.retrieval.hook_adapter import maybe_rerank
@@ -169,7 +172,7 @@ def _snippet(text: str, query: str, size: int = 300) -> str:
     lowered = text.lower()
     target = query.lower().strip()
     idx = lowered.find(target) if target else -1
-    if idx < 0 and target:
+    if idx < 0 and target and process is not None:
         best = process.extractOne(target, [lowered])
         if best and best[1] > 60:
             idx = lowered.find(best[0])

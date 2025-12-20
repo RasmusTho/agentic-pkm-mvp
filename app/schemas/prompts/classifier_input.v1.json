@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "classifier_input.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summary": { "type": "string" },
+    "text": { "type": "string" }
+  },
+  "required": ["summary", "text"]
+}

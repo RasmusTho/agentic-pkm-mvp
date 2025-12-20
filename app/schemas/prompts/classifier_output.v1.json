@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "classifier_output.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "type": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "trust": { "type": "string" },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+  },
+  "required": ["type", "tags", "trust", "confidence"]
+}

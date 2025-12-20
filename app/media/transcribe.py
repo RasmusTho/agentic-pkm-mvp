@@ -11,7 +11,10 @@ try:
     from faster_whisper import WhisperModel  # type: ignore
 except Exception:  # pragma: no cover
     WhisperModel = None  # type: ignore
-from yt_dlp import YoutubeDL
+try:
+    from yt_dlp import YoutubeDL  # type: ignore
+except ImportError:  # pragma: no cover
+    YoutubeDL = None  # type: ignore
 
 from app.diarization.hook import apply_diarization
 from app.index.outbox import append_jsonl
@@ -26,6 +29,8 @@ def download_audio(source: str) -> Path:
     Returns the local path to the downloaded file.
     """
     if source.startswith(("http://", "https://")):
+        if YoutubeDL is None:
+            raise RuntimeError("yt-dlp är inte installerat; installera yt_dlp eller använd lokala filer.")
         out_dir = Path(os.getenv("TRANSCRIBE_CACHE_DIR", "./tmp/audio"))
         out_dir.mkdir(parents=True, exist_ok=True)
         ydl_opts = {

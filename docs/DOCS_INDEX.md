@@ -143,6 +143,8 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/settings/sample-agents/planner.md | Sample agent config | Partially outdated | 2025-12-07 | Planner config template for v5.x; unused in Reality-MVP. |
 | docs/settings/sample-agents/normalizer.md | Sample agent config | Partially outdated | 2025-12-07 | Normalizer config template; runtime uses direct agents, not these YAMLs. |
 | docs/settings/panel-actions.md | Panel action mappings | Aligned (v5.0 – PanelAgent runtime V1) | 2025-12-10 | Aligned with v5.0 PanelAgent Runtime V1 baseline; fallback mappings include promotion intent and runtime logging for unmapped actions. |
+| docs/settings/prompts/classifier.v1.md | Prompt definition (classifier) | Baseline (v4.10) | 2025-12-18 | Settings-backed registry prompt for classifier.v1; frontmatter + schema enforced. |
+| docs/settings/prompts/ask.answer.v1.md | Prompt definition (ask answer) | Baseline (v4.10) | 2025-12-18 | Settings-backed registry prompt for ask.answer.v1; references JSON Schema + standards. |
 | docs/examples/ai-panel-example.md | AI panel example note | Baseline-only (v4.10, with known debt) | 2025-12-07 | Panel fences + Swedish headings; dispatch optional. |
 
 ## Eval and Quality
