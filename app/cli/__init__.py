@@ -24,6 +24,7 @@ from app.cli.watcher import vault_watcher_run, vault_watcher_daemon
 from app.cli.index_rebuild import index as index_cli
 from app.cli import index_doctor  # noqa: F401 -- register index doctor command
 from app.cli.events_doctor import events as events_cli
+from app.cli.settings_validate import run_settings_validate
 from app.config.paths import resolve_system_settings_path, resolve_vault_root
 from app.services import settings as settings_service
 from app.watcher.vault_watcher import OutboxPathError as WatcherOutboxPathError, run_watcher_tick
@@ -1041,13 +1042,11 @@ def settings_compile(auto_heal: bool) -> None:
     click.echo(f"compiled {len(bundle.agents)} agents")
 
 
-@settings.command("validate", help="Compile and print a short summary.")
-@click.option("--auto-heal/--no-auto-heal", default=False, help="Rewrite YAML blocks when invalid values are healed.")
-def settings_validate(auto_heal: bool) -> None:
-    bundle = compile_all(auto_heal=auto_heal)
-    click.echo(
-        f"global enable={bundle.global_.enable} providers={len(bundle.providers.llm)} agents={len(bundle.agents)}"
-    )
+@settings.command("validate", help="Validate settings registries and cross-references.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON output.")
+def settings_validate(as_json: bool) -> None:
+    exit_code = run_settings_validate(as_json=as_json)
+    raise SystemExit(exit_code)
 
 
 @settings.command("watch", help="Watch vault settings markdown and recompile deterministically.")
