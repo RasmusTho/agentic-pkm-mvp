@@ -10,6 +10,9 @@ from app.stores.plan_store import get_plan_store
 from app.events.models import new_event
 
 
+_PANEL_AGENT_ID = "panel_agent.v5"
+
+
 def _is_promotion(action_id: str, action: PanelIntentAction | None) -> bool:
     if action and action.mapping and (action.mapping.intent_type or "").lower() == "promotion":
         return True
@@ -45,6 +48,7 @@ def _steps_for_actions(
                     tool_args=_promotion_tool_args(action_id, note_uuid, action, instruction),
                     reason="Panel requested evergreen promotion",
                     metadata={"action_id": action_id, "intent_type": "promotion"},
+                    agent_id=_PANEL_AGENT_ID,
                 )
             )
         else:
