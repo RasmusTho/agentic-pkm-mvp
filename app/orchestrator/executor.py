@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -11,19 +12,13 @@ from app.a2a.events import emit_agent_error_event, send_agent_request
 from app.a2a.schema import new_error
 from app.agents.base.loop import Agent
 from app.mcp.vault_tools import VaultToolError, append_note
-
-from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
-from app.planner.tools import get_tool_descriptor
 from app.orchestrator.agents import AgentPermissionError, resolve_agent_config, validate_agent_permissions
 from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
 from app.planner.tools import get_tool_descriptor
-from app.policy.enforce import assert_tool_allowed, is_policy_enforced
+from app.policy.enforce import assert_tool_allowed
 from app.quality import timeout_wrapper
-from app.outbox.events import INDEX_OUTBOX_PATH
 from app.store.object_store import ObjectStore
 from app.events.schema import OutboxEvent
-
-from app.quality import timeout_wrapper
 
 from .events import emit_mcp_tool_call_finished, emit_mcp_tool_call_started
 
@@ -77,6 +72,7 @@ class StepContext:
     event_type: str | None = None
     tool_settings: Mapping[str, Any] | None = None
     budget_state: MutableMapping[str, int] | None = None
+    agent_id: str | None = None
 
 
 class PlanExecutor(Protocol):
@@ -152,9 +148,7 @@ class MockPlanExecutor(PlanExecutor):
         descriptor = get_tool_descriptor(step.tool)
         if descriptor is None:
             raise StepExecutionError(f"unknown MCP tool '{step.tool}'", error_type="invalid_tool")
-        agent_id = context.agent_id
-        if is_policy_enforced() and not agent_id:
-            raise StepExecutionError("policy: missing agent_id in StepContext", error_type="policy_denied")
+        agent_id = context.agent_id or context.metadata.created_by
         try:
             assert_tool_allowed(agent_id, descriptor.name)
         except PermissionError as exc:

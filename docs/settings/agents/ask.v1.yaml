@@ -9,7 +9,7 @@ input_events:
 output_events:
   - ask.answered
 allowed_tools:
-  - vault.read_note.v1
+  - mcp.search.objects
 allowed_stores:
   - ObjectStore
   - VectorIndex
