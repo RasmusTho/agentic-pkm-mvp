@@ -11,6 +11,8 @@ output_events:
 allowed_tools:
   - vault.read_note.v1
   - vault.write_note.v1
+  - promotion.emit_intent
+  - mcp.vault.append_note
 allowed_stores:
   - ObjectStore
 settings_refs:

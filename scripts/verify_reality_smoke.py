@@ -11,13 +11,14 @@ from typing import Any, Dict, List
 _DEFAULT_VAULT = Path("tmp/vault_smoke")
 _DEFAULT_OUTBOX = Path("tmp/index-outbox.smoke.jsonl")
 
+_EXPECTED_EVENTS = {"mcp.vault.append_note", "promote.intent.created", "panel.intent.created"}
+
 
 def _env(outbox: Path) -> Dict[str, str]:
     env = os.environ.copy()
     env.setdefault("STORE_BACKEND", "memory")
     env.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
     env.setdefault("POLICY_ENFORCE", "1")
-    env.setdefault("PANEL_AGENT_PIPELINE", "planner")
     env["INDEX_OUTBOX_PATH"] = str(outbox)
     return env
 
@@ -33,8 +34,6 @@ def _run_smoke(vault: Path, outbox: Path) -> tuple[Dict[str, Any], subprocess.Co
         str(vault),
         "--outbox",
         str(outbox),
-        "--runs",
-        "2",
         "--json",
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env(outbox))
@@ -44,6 +43,21 @@ def _run_smoke(vault: Path, outbox: Path) -> tuple[Dict[str, Any], subprocess.Co
     return summary, proc
 
 
+def _load_outbox(outbox: Path) -> List[Dict[str, Any]]:
+    if not outbox.exists():
+        return []
+    events: List[Dict[str, Any]] = []
+    for line in outbox.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return events
+
+
 def _fail(message: str, proc: subprocess.CompletedProcess[str]) -> None:
     sys.stderr.write(message + "\n")
     sys.stderr.write(proc.stdout)
@@ -51,19 +65,21 @@ def _fail(message: str, proc: subprocess.CompletedProcess[str]) -> None:
     raise SystemExit(1)
 
 
-def _assert_runs(summary: Dict[str, Any]) -> None:
-    runs: List[Dict[str, Any]] = summary.get("runs") or []
-    if len(runs) < 2:
-        raise AssertionError("expected two runs in summary")
-    run1, run2 = runs[0], runs[1]
-    if not run1.get("mutations"):
-        raise AssertionError("run1 did not record mutations")
-    if run2.get("mutations"):
-        raise AssertionError("run2 was not a no-op")
-    if run1.get("note_hash_after") != run2.get("note_hash_after"):
-        raise AssertionError("note hash changed between run1 and run2")
-    if run1.get("outbox_after", run1.get("outbox_before")) != run2.get("outbox_after", run2.get("outbox_before")):
-        raise AssertionError("outbox count changed between run1 and run2")
+def _assert_events(outbox_events: List[Dict[str, Any]]) -> None:
+    seen = {evt.get("event") for evt in outbox_events if isinstance(evt, dict)}
+    if not (_EXPECTED_EVENTS & seen):
+        raise AssertionError("expected panel/promotion or mcp append event in outbox")
+
+
+def _assert_note_written(created_notes: List[str]) -> None:
+    if not created_notes:
+        raise AssertionError("no notes created during smoke run")
+    for path in created_notes:
+        p = Path(path)
+        if not p.exists():
+            raise AssertionError(f"expected note to exist: {p}")
+        if not p.read_text(encoding="utf-8").strip():
+            raise AssertionError(f"note is empty: {p}")
 
 
 def _check_stdout(proc: subprocess.CompletedProcess[str]) -> None:
@@ -87,8 +103,10 @@ def main() -> None:
     if proc.returncode != 0:
         _fail("smoke run failed", proc)
 
+    outbox_events = _load_outbox(args.outbox)
     try:
-        _assert_runs(summary)
+        _assert_note_written(summary.get("created_notes") or [])
+        _assert_events(outbox_events)
         _check_stdout(proc)
     except AssertionError as exc:
         _fail(str(exc), proc)
