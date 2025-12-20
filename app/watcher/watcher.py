@@ -10,7 +10,6 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.watcher.config import WatcherConfig
-from app.watcher.heartbeat import write_heartbeat
 from app.watcher.state import WatcherState
 
 
@@ -101,7 +100,7 @@ def run_tick(
     *,
     now: float | None = None,
 ) -> dict[str, object]:
-    now = now if now is not None else time.time()
+    now = now if now is not None else time.monotonic()
     state.ticks_run += 1
 
     summary: dict[str, object] = {
@@ -139,7 +138,10 @@ def run_tick(
 
     changed_entries: list[tuple[Path, float, str | None]] = []
     for rel, mtime, path in _scan_markdown(cfg.vault_path, cfg.scope_glob):
+        previous_mtime = state.last_mtime(str(rel))
         previous_hash = state.last_hash(str(rel))
+        if previous_mtime is not None and abs(previous_mtime - mtime) < 1e-9:
+            continue
         digest = _hash_file(path)
         if digest is None:
             continue
@@ -196,18 +198,16 @@ def run_tick(
 def run_forever(cfg: WatcherConfig, state: WatcherState | None = None) -> None:
     state = state or WatcherState.load(cfg.state_path)
     while True:
-        now = time.time()
+        now = time.monotonic()
         summary = run_tick(cfg, state, now=now)
-        _write_heartbeat(cfg, state, now=now)
         _maybe_log_summary(cfg, state, summary, now=now)
         time.sleep(cfg.tick_sleep_seconds)
 
 
 def run_once(cfg: WatcherConfig, state: WatcherState | None = None) -> dict[str, object]:
     state = state or WatcherState.load(cfg.state_path)
-    now = time.time()
+    now = time.monotonic()
     summary = run_tick(cfg, state, now=now)
-    _write_heartbeat(cfg, state, now=now)
     _maybe_log_summary(cfg, state, summary, now=now)
     return summary
 
@@ -224,20 +224,6 @@ def _maybe_log_summary(
         print(_summary_line(state, backoff_active=bool(summary.get("backoff_active"))))
         state.last_summary_at = now
         state.save(cfg.state_path)
-
-
-def _write_heartbeat(cfg: WatcherConfig, state: WatcherState, *, now: float) -> None:
-    paused = cfg.stop_file.exists()
-    write_heartbeat(
-        path=cfg.heartbeat_path,
-        vault_path=cfg.vault_path,
-        scope_glob=cfg.scope_glob,
-        outbox_path=cfg.outbox_path,
-        ticks_total=state.ticks_run,
-        errors_total=state.errors,
-        paused=paused,
-        now=now,
-    )
 
 
 __all__ = ["run_forever", "run_once", "run_tick"]
