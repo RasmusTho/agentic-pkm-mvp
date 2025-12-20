@@ -24,6 +24,7 @@ class PlanStep(BaseModel):
     kind: Literal["agent_call", "tool_call", "decision", "note"]
     description: str
     agent: Optional[str] = None
+    agent_id: Optional[str] = None
     intent: Optional[str] = None
     reason: Optional[str] = None
     explanation: Optional[str] = None

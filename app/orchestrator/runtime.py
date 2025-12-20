@@ -15,6 +15,34 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
+def _default_agent_id_for_flow(flow_id: str | None) -> str | None:
+    if not flow_id:
+        return None
+    normalized = str(flow_id).strip().lower()
+    if normalized in {"ask", "qa", "ask.graph.v1"}:
+        return "ask.v1"
+    return None
+
+
+def _resolve_step_agent_id(step: PlanStep, flow_id: str | None, plan_context: Mapping[str, Any] | None) -> str | None:
+    if getattr(step, "agent_id", None):
+        return step.agent_id
+    metadata = None
+    try:
+        metadata = step.metadata
+    except Exception:
+        metadata = None
+    if isinstance(metadata, Mapping):
+        meta_agent = metadata.get("agent_id")
+        if isinstance(meta_agent, str) and meta_agent.strip():
+            return meta_agent.strip()
+    if plan_context and isinstance(plan_context, Mapping):
+        ctx_agent = plan_context.get("agent_id")
+        if isinstance(ctx_agent, str) and ctx_agent.strip():
+            return ctx_agent.strip()
+    return _default_agent_id_for_flow(flow_id)
+
+
 class OrchestratorError(Exception):
     """Base error for orchestrator failures."""
 
@@ -76,6 +104,7 @@ class Orchestrator:
 
             budget_state["steps"] = budget_state.get("steps", 0) + 1
 
+            agent_id = _resolve_step_agent_id(step, plan_flow_id, plan.context)
             context = StepContext(
                 plan_id=plan.id,
                 object_id=object_id,
@@ -86,6 +115,7 @@ class Orchestrator:
                 event_type=plan.trigger.event_type if plan.trigger else None,
                 tool_settings=context_tool_settings,
                 budget_state=budget_state,
+                agent_id=agent_id,
             )
             try:
                 output = self._executor.execute_step(step, context)
