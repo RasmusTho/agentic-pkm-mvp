@@ -137,3 +137,32 @@ incident_log_path: "{log_path}"
     for key in required:
         assert key in tail_entry
     assert tail_entry["state"] == entry["state"]
+
+
+def test_health_incidents_tail_no_file(monkeypatch, tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    settings_path = vault / "@System" / "Settings" / "health.md"
+    missing_log = tmp_path / "missing-incidents.jsonl"
+    _write_health_markdown(
+        settings_path,
+        f"""
+thresholds:
+  outbox_degrade_oldest_age_s: 15.0
+  outbox_recover_oldest_age_s: 5.0
+  degrade_samples: 1
+  recover_samples: 10
+incident_capture:
+  enabled: true
+  transition_history: true
+policy:
+  env_overrides: false
+incident_log_path: "{missing_log}"
+""",
+    )
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    runner = CliRunner()
+    result = runner.invoke(health, ["incidents", "tail", "--n", "1"])
+    assert result.exit_code == 0
+    lines = [line for line in result.output.strip().splitlines() if line]
+    assert lines[0] == f"No incidents yet (path: {missing_log})"
+    assert "Trigger degraded/safe_mode" in lines[1]

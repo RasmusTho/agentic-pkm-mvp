@@ -60,7 +60,8 @@ def emit_health_contract_incidents_tail(count: int) -> None:
     settings = load_health_settings()
     log_path: Path = settings.settings.incident_log_path
     if not log_path.exists():
-        click.echo(f"incident log not found: {log_path}")
+        click.echo(f"No incidents yet (path: {log_path})")
+        click.echo("Trigger degraded/safe_mode to generate an incident snapshot.")
         return
     try:
         lines = log_path.read_text(encoding="utf-8").splitlines()
