@@ -17,6 +17,7 @@ from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
 from app.planner.tools import get_tool_descriptor
 from app.policy.enforce import assert_tool_allowed, is_policy_enforced
 from app.quality import timeout_wrapper
+from app.outbox.events import INDEX_OUTBOX_PATH
 from app.store.object_store import ObjectStore
 from app.events.schema import OutboxEvent
 
