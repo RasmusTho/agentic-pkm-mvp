@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/llm/adapter.py
+# hypothesis_version: 6.148.7
+
+['/api/chat', '120', '60', 'Authorization', 'Content-Type', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE', 'LLM_MOCK_RESPONSE', 'LLM_MODEL', 'LLM_PROVIDER', 'LLM_REASONING_MODEL', 'LLM_TIMEOUT', 'OLLAMA_HOST', 'OPENAI_API_KEY', 'OPENAI_BASE', 'UNSURE', 'application/json', 'choices', 'content', 'deepseek', 'llama3.1:8b', 'llm', 'message', 'messages', 'mock', 'model', 'ollama', 'openai', 'stream', 'unknown', 'unsupported provider']

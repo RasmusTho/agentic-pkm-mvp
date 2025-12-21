@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/eval/golden.py
+# hypothesis_version: 6.148.7
+
+[0.0, '1', 'RERANK_ENABLE', 'RERANK_PROVIDER', 'aggregate', 'baseline', 'candidate', 'corpus.jsonl', 'data', 'doc_id', 'evaluate_golden_set', 'evaluate_vs_baseline', 'golden', 'judgments.json', 'language', 'ndcg@k', 'ndcg_at_k', 'payload', 'precision@k', 'precision_at_k', 'queries', 'query', 'r', 'relevance', 'source_ref', 'text', 'utf-8']

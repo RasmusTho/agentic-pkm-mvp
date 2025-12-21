@@ -95,12 +95,13 @@ def test_runtime_loop_rejects_directory_outbox(monkeypatch: pytest.MonkeyPatch, 
     assert "Outbox path points to a directory" in result.output
 
 
-def test_runtime_loop_requires_outbox_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_runtime_loop_defaults_outbox_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     _write_note(vault, "Notes/A.md")
+    outbox = tmp_path / "fallback-outbox.jsonl"
 
     monkeypatch.setenv("STORE_BACKEND", "memory")
-    monkeypatch.delenv("INDEX_OUTBOX_PATH", raising=False)
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
 
     runner = CliRunner()
     result = runner.invoke(
@@ -119,8 +120,9 @@ def test_runtime_loop_requires_outbox_path(monkeypatch: pytest.MonkeyPatch, tmp_
         ],
     )
 
-    assert result.exit_code != 0
-    assert "Outbox path is required" in result.output
+    assert result.exit_code == 0, result.output
+    payloads = [json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(rec.get("event") == "watcher.run" for rec in payloads)
 
 
 def test_runtime_loop_processes_label_style_panel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -132,7 +134,7 @@ def test_runtime_loop_processes_label_style_panel(monkeypatch: pytest.MonkeyPatc
         """---
 mappings:
   - id: promote.evergreen
-    label: "Make this note evergreen"
+    label: \"Make this note evergreen\"
     intent_type: promotion
     params:
       maturity: evergreen

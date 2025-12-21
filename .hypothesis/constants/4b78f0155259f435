@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/cli/embed_probe.py
+# hypothesis_version: 6.148.7
+
+[0.001, 1.0, '--model', '--profile', 'Agentic PKM system', 'Hello world', 'LLM_PROVIDER', '__main__', 'default', 'mock', 'override_model']

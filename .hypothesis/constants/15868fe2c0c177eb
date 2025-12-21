@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/version.py
+# hypothesis_version: 6.148.7
+
+['SOT_BASELINE', 'SOT_FORWARD', 'SOT_LABEL', 'SOT_VERSION', 'baseline', 'forward_line', 'get_sot_metadata', 'get_sot_version', 'label', 'v4.10', 'v5.4']

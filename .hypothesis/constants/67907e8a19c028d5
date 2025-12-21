@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agent/plan.py
+# hypothesis_version: 6.148.7
+
+['k', 'query', 'retriever', 'text', 'write_note']

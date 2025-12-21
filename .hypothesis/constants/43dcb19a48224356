@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/merge_resolver/agent.py
+# hypothesis_version: 6.148.7
+
+[0.0, 0.85, 2.0, '---', ':', '; ', 'ASK', '[', '\\[[^\\]]+\\]\\([^)]+\\)', '\\w+', 'a', 'b', 'base', 'carried links', 'concise', 'conflict', 'decision', 'decisions', 'loci', 'merge completed', 'prefer concise', 'prompted', 'reason', 'resolved', 'status', 'uuid:']

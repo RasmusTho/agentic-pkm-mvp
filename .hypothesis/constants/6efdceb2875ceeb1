@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/reviewer/graph.py
+# hypothesis_version: 6.148.7
+
+[0.75, 'act_result', 'allow', 'emit', 'input', 'memory_context', 'normalized', 'normalizer', 'object_id', 'object_snapshots', 'ok', 'output', 'plan', 'recent_reviews', 'reflection', 'review', 'threshold', 'trace_id']

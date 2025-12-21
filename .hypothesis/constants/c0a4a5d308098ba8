@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/services/note_watcher.py
+# hypothesis_version: 6.148.7
+
+['*.md', 'NoteWatcherService', 'checked', 'errors', 'note unchanged: %s', 'processed', 'skipped', 'utf-8', 'uuid']

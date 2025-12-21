@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/classifier/graph.py
+# hypothesis_version: 6.148.7
+
+['act_result', 'classified', 'classifier', 'classify_note', 'decisions', 'emit', 'event', 'input', 'memory_context', 'object_id', 'ok', 'output', 'plan', 'reflection', 'trace_id']

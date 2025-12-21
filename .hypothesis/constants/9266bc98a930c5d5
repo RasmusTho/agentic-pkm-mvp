@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/ingest/__init__.py
+# hypothesis_version: 6.148.7
+
+['handle_post_ingest', 'ingest_object', 'normalize_payload', 'text']

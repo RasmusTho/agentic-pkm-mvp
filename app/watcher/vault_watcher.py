@@ -3,20 +3,21 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Tuple
 
-from app.agents.panel_agent.policy import watcher_may_run_panel
 from app.agents.panel.agent import handle_note_update
-from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
+from app.agents.panel_agent.policy import watcher_may_run_panel
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
+from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.store.object_store import ObjectStore
+from app.watcher.events import emit_watcher_run_event
+from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from scripts.yaml_roundtrip import load_frontmatter
 
-
-Snapshot = Dict[str, float]
-Summary = Dict[str, object]
+Snapshot = dict[str, float]
+Summary = dict[str, object]
 
 
 class OutboxPathError(ValueError):
@@ -50,17 +51,19 @@ def save_snapshot(path: Path, snapshot: Snapshot) -> None:
     path.write_text(json.dumps(snapshot, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _scan_md_files(vault_root: Path) -> Dict[str, float]:
-    current: Dict[str, float] = {}
+def _scan_md_files(vault_root: Path) -> dict[str, float]:
+    current: dict[str, float] = {}
     for path in sorted(vault_root.rglob("*.md")):
         try:
             rel = path.relative_to(vault_root)
         except Exception:
             continue
-        # Skip metadata mirrors to avoid re-ingesting mirror files
         if rel.parts and rel.parts[0] == "System" and rel.parts[1:2] == ("Metadata",):
             continue
-        current[str(rel)] = path.stat().st_mtime
+        try:
+            current[str(rel)] = path.stat().st_mtime
+        except Exception:
+            continue
     return current
 
 
@@ -114,10 +117,10 @@ def _write_outbox_events(outbox_path: Path | None, events: Iterable) -> int:
 
 def compute_changes(
     vault_root: Path, snapshot: Snapshot
-) -> Tuple[List[Path], List[Path], Snapshot]:
+) -> tuple[list[Path], list[Path], Snapshot]:
     current = _scan_md_files(vault_root)
-    changed: List[Path] = []
-    deleted: List[Path] = []
+    changed: list[Path] = []
+    deleted: list[Path] = []
 
     for rel_str, mtime in current.items():
         prev = snapshot.get(rel_str)
@@ -131,10 +134,29 @@ def compute_changes(
     return changed, deleted, current
 
 
+def _emit_run_event(
+    summary: Summary,
+    *,
+    vault_root: Path,
+    snapshot_path: Path | None,
+    outbox_path: Path | None,
+    trigger: str,
+) -> None:
+    if outbox_path is None:
+        return
+    emit_watcher_run_event(
+        summary,
+        vault_root=vault_root,
+        snapshot_path=snapshot_path,
+        outbox_path=outbox_path,
+        trigger=trigger,
+    )
+
+
 @dataclass
 class VaultWatcherResult:
-    changed: List[Path]
-    deleted: List[Path]
+    changed: list[Path]
+    deleted: list[Path]
     snapshot: Snapshot
 
 
@@ -166,7 +188,7 @@ def run_watcher_tick(
     max_notes: int,
     force: bool,
     outbox_path: Path | None = None,
-) -> Tuple[Summary, list[str]]:
+) -> tuple[Summary, list[str]]:
     try:
         import app.agents.panel.agent as panel_agent
 
@@ -177,7 +199,9 @@ def run_watcher_tick(
     result = watcher.run(save=False)
     resolved_outbox = _resolve_outbox_path(outbox_path)
     if resolved_outbox is None and not dry_run:
-        raise OutboxPathError("Outbox path is required for watcher runs; set INDEX_OUTBOX_PATH or pass --outbox-path.")
+        raise OutboxPathError(
+            "Outbox path is required for watcher runs; set INDEX_OUTBOX_PATH or pass --outbox-path."
+        )
     action_mappings = load_panel_action_mappings()
     if not action_mappings:
         fallback_mapping = PanelActionMapping(
@@ -221,18 +245,41 @@ def run_watcher_tick(
     if summary["changed"] == 0:
         if not dry_run:
             watcher.refresh_snapshot()
+        _emit_run_event(
+            summary,
+            vault_root=vault_root,
+            snapshot_path=watcher.snapshot_path,
+            outbox_path=resolved_outbox,
+            trigger="vault_watcher_run",
+        )
         return summary, messages
 
     if not force and summary["changed"] > max_notes:
         summary["limit_exceeded"] = True
         summary["panel_skipped_limit"] = summary["changed"]
         messages.append(
-            f"Changed notes ({summary['changed']}) exceed max-notes={max_notes}; aborting watcher run. "
+            "Changed notes ("
+            f"{summary['changed']}"
+            f") exceed max-notes={max_notes}; aborting watcher run. "
             "Use --force to override."
+        )
+        _emit_run_event(
+            summary,
+            vault_root=vault_root,
+            snapshot_path=watcher.snapshot_path,
+            outbox_path=resolved_outbox,
+            trigger="vault_watcher_run",
         )
         return summary, messages
 
     if dry_run:
+        _emit_run_event(
+            summary,
+            vault_root=vault_root,
+            snapshot_path=watcher.snapshot_path,
+            outbox_path=resolved_outbox,
+            trigger="vault_watcher_run",
+        )
         return summary, messages
 
     summary["ingest_attempted"] = summary["changed"]
@@ -246,7 +293,10 @@ def run_watcher_tick(
             refreshed_frontmatter = _read_frontmatter(note_path)
             note_uuid = _note_uuid_from_frontmatter(refreshed_frontmatter)
             if not note_uuid:
-                messages.append(f"Warning: unable to resolve uuid for {note_path}; skipping panel run.")
+                messages.append(
+                    "Warning: unable to resolve uuid for "
+                    f"{note_path}; skipping panel run."
+                )
                 summary["errors"] += 1
                 continue
 
@@ -255,7 +305,9 @@ def run_watcher_tick(
             try:
                 current_markdown = note_path.read_text(encoding="utf-8")
             except Exception:
-                messages.append(f"Warning: unable to read {note_path}; skipping panel run.")
+                messages.append(
+                    f"Warning: unable to read {note_path}; skipping panel run."
+                )
                 summary["errors"] += 1
                 continue
 
@@ -286,8 +338,11 @@ def run_watcher_tick(
 
             if not emit_only and panel_result.updated_markdown != current_markdown:
                 try:
+                    DEFAULT_WRITE_GUARD.assert_writes_allowed("vault watcher panel write")
                     note_path.write_text(panel_result.updated_markdown, encoding="utf-8")
                     _hydrate_store_with_markdown(note_uuid, note_path)
+                except WritesBlockedError:
+                    raise
                 except Exception:
                     messages.append(f"Warning: failed to write updates to {note_path}")
                     summary["errors"] += 1
@@ -297,6 +352,13 @@ def run_watcher_tick(
         messages.append("Panel runtime skipped (no candidates or --skip-panel set).")
 
     watcher.refresh_snapshot()
+    _emit_run_event(
+        summary,
+        vault_root=vault_root,
+        snapshot_path=watcher.snapshot_path,
+        outbox_path=resolved_outbox,
+        trigger="vault_watcher_run",
+    )
     return summary, messages
 
 

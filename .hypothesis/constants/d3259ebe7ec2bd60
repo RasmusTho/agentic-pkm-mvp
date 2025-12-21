@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/stores/postgres.py
+# hypothesis_version: 6.148.7
+
+['+psycopg', 'DATABASE_URL', 'id']

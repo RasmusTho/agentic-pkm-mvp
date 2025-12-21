@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/qa/agent.py
+# hypothesis_version: 6.148.7
+
+[0.0, 0.15, 0.3, 1.0, '/', 'LLM_MAX_TOKENS', 'LLM_MOCK_RESPONSE', 'LLM_PROVIDER', 'LLM_TIMEOUT', 'Mock response [#1]', 'OLLAMA_HOST', 'OLLAMA_MODEL', 'agent.answer', 'agent.draft', 'agent.finalize', 'agent.self_check', 'answer', 'checks', 'content', 'doc_id', 'draft_answer', 'finalize', 'issues', 'llm', 'message', 'messages', 'missing_references', 'mock', 'model', 'needs_more_context', 'num_predict', 'ollama', 'options', 'qa', 'qa.draft', 'quality', 'quality_score', 'response', 'role', 'score', 'self_check', 'snippet', 'source_ref', 'sources', 'stream', 'system', 'too_short', 'trace_id', 'user', 'word_count', 'x-trace-id']

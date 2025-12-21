@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/panel_agent/graph.py
+# hypothesis_version: 6.148.7
+
+[' | ', ', ', 'Checkbox hints:', 'You are PanelAgent.', 'action', 'action_id', 'actions', 'build_panel_graph', 'checked', 'chosen_actions', 'decide_actions', 'downstream_event', 'emit_events', 'id', 'instruction', 'intent_type', 'json', 'label', 'llm', 'load_context', 'logged', 'mapping', 'maturity', 'no actions affected', 'note', 'panel', 'panel.decider', 'panel_agent', 'panel_agent.decider', 'panel_agent.runtime', 'panel_id', 'params', 'promotion', 'reason', 'rule', 'run_panel_graph', 'runtime', 'skipped', 'system', 'target_event', 'triggered', 'unchecked', 'unhandled_action', 'unmapped_action', 'user', 'v5.0-runtime1', 'why', '{}']

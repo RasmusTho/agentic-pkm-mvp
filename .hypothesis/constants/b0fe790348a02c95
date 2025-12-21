@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/normalize.py
+# hypothesis_version: 6.148.7
+
+['normalize_run', 'object_id', 'run', 'trace_id']

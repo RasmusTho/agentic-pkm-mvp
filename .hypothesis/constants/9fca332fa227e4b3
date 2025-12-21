@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/retrieval/hybrid.py
+# hypothesis_version: 6.148.7
+
+[0.0, 1e-09, 0.1, 0.4, 0.5, 1.0, 300, 'Document', 'MemoryHybridStore', 'doc_id', 'get_store', 'hybrid_search', 'id', 'language', 'payload', 'score', 'snippet', 'source_ref', 'text']

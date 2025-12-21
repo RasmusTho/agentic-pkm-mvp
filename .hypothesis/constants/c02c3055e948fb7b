@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/services/events.py
+# hypothesis_version: 6.148.7
+
+['EVENT_LOG', 'a', 'emit', 'events.jsonl', 'utf-8']

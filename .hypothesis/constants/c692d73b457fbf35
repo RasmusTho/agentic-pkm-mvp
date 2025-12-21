@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/reasoning/models.py
+# hypothesis_version: 6.148.7
+
+['ask_answer', 'assistant', 'claims', 'failed', 'ok', 'planning', 'ranking', 'review', 'system', 'user']

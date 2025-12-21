@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agent/interestingness.py
+# hypothesis_version: 6.148.7
+
+[65535, 'anomaly', 'big', 'novelty', 'object_id', 'payload', 'retriever', 'title', 'uncertainty', 'value']

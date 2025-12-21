@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/observability/tracer.py
+# hypothesis_version: 6.148.7
+
+['_current_trace_id', 'attrs', 'name', 'trace_id']

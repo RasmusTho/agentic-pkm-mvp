@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/panel_agent/runtime.py
+# hypothesis_version: 6.148.7
+
+['INDEX_OUTBOX_PATH', 'PanelRuntimeResult', 'a', 'checked', 'execute_panel_intent', 'id', 'json', 'label', 'model_dump', 'panel_agent', 'panel_logs', 'planner', 'raw_text', 'text', 'triggered', 'utf-8']

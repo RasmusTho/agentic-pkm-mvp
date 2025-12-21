@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/normalizer/graph.py
+# hypothesis_version: 6.148.7
+
+['act_result', 'core6', 'created', 'emit', 'event', 'id', 'input', 'memory_context', 'normalize_core6', 'normalized', 'normalizer', 'object_id', 'ok', 'origin', 'output', 'path', 'plan', 'reflection', 'title', 'trace_id', 'type', 'updated']

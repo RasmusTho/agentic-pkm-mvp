@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/settings/models.py
+# hypothesis_version: 6.148.7
+
+[0.5, 0.75, 120.0, 100, 512, 1536, 8000, 16000, '02:00-03:00', '100-120000', '100-60000', '2_Cards/Concepts', 'DEBUG', 'ERROR', 'Enable this agent.', 'INFO', 'WARNING', 'allowed', 'audit', 'default', 'detailed', 'home', 'http', 'lean', 'llama3.1:8b-instruct', 'master', 'mock', 'ollama', 'satellite']

@@ -1,9 +1,8 @@
-from __future__ import annotations
-
+import json
 import time
 from pathlib import Path
 
-from app.watcher.vault_watcher import VaultWatcher, compute_changes, load_snapshot, save_snapshot
+from app.watcher.vault_watcher import VaultWatcher, compute_changes, load_snapshot, run_watcher_tick, save_snapshot
 
 
 def _write_note(base: Path, rel: str, content: str = "Body") -> Path:
@@ -59,3 +58,25 @@ def test_detects_new_and_deleted_files(tmp_path: Path) -> None:
     assert set(p.relative_to(vault) for p in deleted) == set()
     assert "Concepts/A.md" in current
     assert "Concepts/B.md" in current
+
+
+def test_run_watcher_tick_emits_event_when_no_changes(tmp_path: Path, monkeypatch) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "events.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+
+    summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=vault / ".state.json",
+        skip_panel=True,
+        emit_only=True,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=None,
+    )
+
+    assert summary["changed"] == 0
+    payloads = [json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(ev.get("event") == "watcher.run" for ev in payloads)

@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/cli/uat.py
+# hypothesis_version: 6.148.7
+
+['*.md', '.agentic-pkm', '; ', 'AgenticPKM-UAT', 'DEFAULT_FOLDER_NAME', 'INDEX_OUTBOX_PATH', 'SEED_SOURCE', 'SeedSummary', 'Test', 'UATAssertionError', 'UATSummary', 'applied', 'docs', 'emitted', 'errors', 'examples', 'index-outbox.jsonl', 'intents_seen', 'panel_promotions', 'panel_skipped_policy', 'run_vault_test_flow', 'vault_test_seed']

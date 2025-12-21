@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/ingest/api.py
+# hypothesis_version: 6.148.7
+
+['a', 'clarity_score', 'collaboration', 'content', 'embed_model', 'emergent_tags', 'ingest', 'kind', 'learn', 'model', 'note', 'object_id', 'object_type', 'payload', 'reflect', 'related_claim_ids', 'related_claims', 'serendipity', 'source', 'source_object_id', 'source_ref', 'synthesis_id', 'synthesis_note', 'synthesizes', 'system_intent', 'text', 'title', 'trace_id', 'type', 'unknown', 'utf-8']

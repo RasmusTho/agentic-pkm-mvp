@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/fitness/relations.py
+# hypothesis_version: 6.148.7
+
+[0.0, 100.0, 'RELATIONS_PATH', 'contradicts', 'coverage', 'data', 'derived_from', 'extends', 'golden', 'id', 'promoted', 'rel', 'relation_metrics', 'relations', 'relations.json', 'supports', 'target', 'total_objects', 'total_relations', 'type', 'utf-8', 'validity']

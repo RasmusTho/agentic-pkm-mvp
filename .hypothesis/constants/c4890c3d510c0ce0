@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/ingest/vault_alpha.py
+# hypothesis_version: 6.148.7
+
+[200, '#', '*.md', '---', '.md', '.obsidian', 'Alpha-HumanFlows.md', 'Concepts', 'System', 'Templates', 'Test', 'VaultAlphaSummary', '[[', ']]', '_objects', 'classify', 'core6', 'count', 'event', 'id', 'ingest errors', 'ingest.normalize', 'ingest_fingerprint', 'kind', 'maturity', 'mtime_ns', 'normalize', 'note', 'object_id', 'origin', 'payload', 'pipeline', 'provisional', 'raw_text', 'rel_path', 'review_state', 'source', 'source_path', 'source_ref', 'text', 'text_sha256', 'title', 'trace_id', 'utf-8', 'uuid', 'vault']

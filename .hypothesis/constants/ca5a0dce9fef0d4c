@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/promotion/queue.py
+# hypothesis_version: 6.148.7
+
+['%Y-%m-%dT%H:%M:%SZ', 'Promote', '_NOTE_MOVES_ENABLED', '_PROMOTION_SETTINGS', '_system', 'a', 'allow_orphans', 'cooldown_seconds', 'desired_state', 'dst', 'enabled', 'enqueue', 'error', 'event', 'events', 'info', 'level', 'max_retries', 'move policy disabled', 'move_policy', 'no target', 'note moves disabled', 'path', 'payload', 'promote.log.jsonl', 'promote.queue.jsonl', 'promoted', 'promotion', 'reason', 'require_idle_seconds', 'retries', 'review_state', 'run_once', 'src', 'trace_id', 'ts', 'utf-8', 'uuid', 'warn', 'worker.process_event']

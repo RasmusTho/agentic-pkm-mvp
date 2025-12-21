@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/panel/intents.py
+# hypothesis_version: 6.148.7
+
+['action_triggered', 'event_type', 'instruction_updated']

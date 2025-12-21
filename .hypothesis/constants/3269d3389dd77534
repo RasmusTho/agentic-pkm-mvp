@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/runtime/runtime_loop.py
+# hypothesis_version: 6.148.7
+
+['.outbox_cursor.json', 'INDEX_OUTBOX_PATH', 'OutboxPathError', 'RuntimeLoopConfig', 'RuntimeRunSummary', 'applied', 'changed', 'emitted', 'errors', 'intents_seen', 'resolve_outbox_path', 'run_forever', 'run_once', 'runtime_loop', 'snapshot_path']

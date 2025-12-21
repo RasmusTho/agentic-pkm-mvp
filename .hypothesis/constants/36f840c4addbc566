@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/a2a/events.py
+# hypothesis_version: 6.148.7
+
+['a2a_action', 'a2a_message_id', 'correlation_id', 'created_at', 'error_message', 'error_type', 'intent', 'kind', 'message_id', 'payload_size', 'recipient', 'send_agent_request', 'sender', 'status', 'trace_id']

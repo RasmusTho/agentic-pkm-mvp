@@ -41,6 +41,24 @@ Do work
 """
 
 
+def _read_events(outbox_path: Path) -> list[str]:
+    if not outbox_path.exists():
+        return []
+    return [
+        json.loads(line).get("event")
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _set_outbox(monkeypatch, outbox_path: Path) -> None:
+    monkeypatch.setattr(
+        "app.agents.panel_agent.agent.INDEX_OUTBOX_PATH",
+        outbox_path,
+        raising=False,
+    )
+
+
 def test_vault_watcher_cli_no_changes_after_snapshot(tmp_path: Path, monkeypatch) -> None:
     reset_store_backends()
     vault = tmp_path / "vault"
@@ -59,7 +77,7 @@ mappings:
         encoding="utf-8",
     )
     outbox_path = tmp_path / "outbox.jsonl"
-    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+    _set_outbox(monkeypatch, outbox_path)
     _write_note(vault, "Concepts/A.md", _panel_note("A"))
     snapshot = tmp_path / "state.json"
 
@@ -102,7 +120,7 @@ mappings:
         encoding="utf-8",
     )
     outbox_path = tmp_path / "outbox.jsonl"
-    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+    _set_outbox(monkeypatch, outbox_path)
     _write_note(vault, "Concepts/A.md", _panel_note("A", auto="watcher"))
     _write_note(vault, "Concepts/B.md", _panel_note("B", auto="watcher"))
     snapshot = tmp_path / "state.json"
@@ -117,8 +135,7 @@ mappings:
     )
 
     assert result.exit_code == 0, result.output
-    events = [json.loads(line).get("event") for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    events = [e for e in events if e]
+    events = [e for e in _read_events(outbox_path) if e]
     assert "panel.intent.created" in events
     assert "panel.intent.executed" in events
     assert "promote.intent.created" in events
@@ -144,7 +161,7 @@ mappings:
         encoding="utf-8",
     )
     outbox_path = tmp_path / "outbox.jsonl"
-    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+    _set_outbox(monkeypatch, outbox_path)
     _write_note(vault, "Concepts/A.md", _panel_note("A"))  # default manual
     snapshot = tmp_path / "state.json"
 
@@ -158,8 +175,7 @@ mappings:
     )
 
     assert result.exit_code == 0, result.output
-    events = [json.loads(line).get("event") for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    events = [e for e in events if e]
+    events = [e for e in _read_events(outbox_path) if e]
     assert "panel.intent.created" not in events
     assert "panel.intent.executed" not in events
     assert "Watcher summary:" in result.output
@@ -191,7 +207,7 @@ mappings:
         encoding="utf-8",
     )
     outbox_path = tmp_path / "outbox.jsonl"
-    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+    _set_outbox(monkeypatch, outbox_path)
     _write_note(vault, "Concepts/A.md", _panel_note("A", auto="watcher"))
     _write_note(vault, "Concepts/B.md", _panel_note("B", auto="watcher"))
     snapshot = tmp_path / "state.json"
@@ -201,13 +217,22 @@ mappings:
 
     result = runner.invoke(
         cli,
-        ["vault-watcher-run", "--vault-root", str(vault), "--snapshot-path", str(snapshot), "--dry-run"],
+        [
+            "vault-watcher-run",
+            "--vault-root",
+            str(vault),
+            "--snapshot-path",
+            str(snapshot),
+            "--dry-run",
+        ],
         env=env,
     )
 
     assert result.exit_code == 0, result.output
     assert "dry_run=True" in result.output
-    assert not outbox_path.exists() or outbox_path.read_text(encoding="utf-8").strip() == ""
+    events = [e for e in _read_events(outbox_path) if e]
+    assert "watcher.run" in events
+    assert set(events) == {"watcher.run"}
 
 
 def test_vault_watcher_cli_max_notes_blocks_without_force(tmp_path: Path, monkeypatch) -> None:
@@ -228,7 +253,7 @@ mappings:
         encoding="utf-8",
     )
     outbox_path = tmp_path / "outbox.jsonl"
-    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+    _set_outbox(monkeypatch, outbox_path)
     for idx in range(3):
         _write_note(vault, f"Concepts/N{idx}.md", _panel_note(f"N{idx}", auto="watcher"))
     snapshot = tmp_path / "state.json"
@@ -253,4 +278,6 @@ mappings:
     assert result.exit_code != 0
     assert "max-notes=1" in result.output
     assert "limit_exceeded=True" in result.output
-    assert not outbox_path.exists() or outbox_path.read_text(encoding="utf-8").strip() == ""
+    events = [e for e in _read_events(outbox_path) if e]
+    assert "watcher.run" in events
+    assert set(events) == {"watcher.run"}

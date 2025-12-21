@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/base/audit.py
+# hypothesis_version: 6.148.7
+
+[1024, 'AUDIT_LOG_PATH', '_audit_ring_snapshot', 'a', 'agent', 'audit_log', 'details', 'object_id', 'utf-8']

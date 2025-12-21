@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/services/audit.py
+# hypothesis_version: 6.148.7
+
+['agent', 'event', 'extra', 'object_id']

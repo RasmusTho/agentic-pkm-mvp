@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/panel/events.py
+# hypothesis_version: 6.148.7
+
+['action_id', 'action_text', 'action_triggered', 'instruction_text', 'intent_source', 'note', 'note_id', 'panel.agent', 'panel.note', 'path', 'uuid']

@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/ingest/vault_root.py
+# hypothesis_version: 6.148.7
+
+['.', '.md', 'classify', 'core6', 'ingest_vault_root', 'kind', 'normalize', 'note', 'object_id', 'origin', 'payload', 'pipeline', 'raw_text', 'source', 'source_ref', 'text', 'title', 'utf-8', 'uuid', 'vault']

@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/config/agent.py
+# hypothesis_version: 6.148.7
+
+[0.0, 0.25, 0.6, 1.0, 300, 'agent-config-watch', 'agent.yaml', 'anomaly', 'background-agent', 'config', 'enabled', 'novelty', 'uncertainty', 'utf-8', 'value']

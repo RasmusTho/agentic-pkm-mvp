@@ -15,9 +15,16 @@ def test_interim_gui_loads() -> None:
     html = resp.text
     assert "Reality-MVP Dashboard" in html
     assert "Status" in html
-    assert "Ask" in html
+    assert "Health" in html
+    assert "Settings" in html
+    assert "Recent events" in html
     assert "/api/status" in html
     assert "/api/ask" in html
+    assert "/api/health" in html
+    assert "/api/settings/validate" in html
+    assert "/api/events/tail" in html
+    assert "Returned:" in html
+    assert 'value="watcher."' in html
 
 
 def test_interim_gui_refs_status_snapshot_data() -> None:
@@ -25,7 +32,12 @@ def test_interim_gui_refs_status_snapshot_data() -> None:
     reset_ingest_meta()
     reset_ask_metrics()
     store = get_object_store()
-    store.put(uuid4(), kind="note", source_ref="vault/path", payload={"title": "Vault note", "origin": "vault"})
+    store.put(
+        uuid4(),
+        kind="note",
+        source_ref="vault/path",
+        payload={"title": "Vault note", "origin": "vault"},
+    )
     store.put(
         uuid4(),
         kind="note",
@@ -44,7 +56,9 @@ def test_interim_gui_refs_status_snapshot_data() -> None:
     page = client.get("/")
     assert page.status_code == 200
     html = page.text
-    # The interim GUI page should at least surface the section headers and labels for status fields.
     assert "Stores" in html
     assert "Ingestion" in html
     assert "ASK (24h)" in html
+    assert "Health" in html
+    assert "Settings validation" in html
+    assert "Recent events" in html

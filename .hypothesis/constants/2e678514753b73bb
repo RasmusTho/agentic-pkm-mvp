@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/ingest/chunk_policy.py
+# hypothesis_version: 6.148.7
+
+[0.0, 0.5, 50.0, 3000, 'build_chunks', 'end', 'segment_end', 'segment_index', 'segment_start', 'speaker', 'speaker_aware_chunks', 'speaker_segments', 'split_into_chunks', 'start', 'text']

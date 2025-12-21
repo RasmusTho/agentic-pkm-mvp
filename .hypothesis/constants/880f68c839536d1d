@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/planner/provider.py
+# hypothesis_version: 6.148.7
+
+['1', ':', 'BasePlanner', 'CI', 'LLMPlanner', 'LLM_PROVIDER', 'MockPlanner', 'PLANNER_PROVIDER', 'PlannerInput', 'PlannerRelation', 'agent', 'agent_call', 'args', 'body', 'decision', 'description', 'explanation', 'flow', 'flow_id', 'flow_profiles', 'get_planner', 'golden', 'ingest-agent', 'ingest-summary', 'intent', 'llm', 'mcp', 'metadata', 'mock', 'note', 'pattern', 'planner', 'planner-agent', 'planner-auto', 'planner.llm', 'planner.mock', 'planner.plan', 'planner_mode', 'profile_selection', 'prompt_profile', 'prompt_profiles', 'rationale', 'reason', 'selected_pattern', 'step-1', 'step-2', 'step-3', 'steps', 'suggested_patterns', 'summarize', 'system', 'tags', 'target', 'title', 'tool', 'tool_call', 'trace_id', 'user']

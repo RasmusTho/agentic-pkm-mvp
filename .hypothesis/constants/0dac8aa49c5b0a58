@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/obs/log.py
+# hypothesis_version: 6.148.7
+
+[1000, '_span_extra', '_token_in', '_token_out', 'error', 'extra', 'json_log', 'latency_ms', 'node', 'ok', 'span', 'status', 'token_in', 'token_out', 'trace_id', 'with_trace_id']

@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/llm/trace.py
+# hypothesis_version: 6.148.7
+
+['.', '0', '1', 'LLM_TRACE_DETAIL', 'LLM_TRACE_ENABLE', 'LLM_TRACE_PATH', 'TRACE_DETAIL', 'TRACE_ENABLED', 'TRACE_PATH', 'a', 'agent', 'chars', 'choices', 'content', 'failed', 'kind', 'log_llm_call', 'message', 'mode', 'model', 'ok', 'preview', 'prompt_preview', 'provider', 'raw_response_preview', 'reasoning.', 'response', 'response_preview', 'role', 'status', 'timestamp', 'tmp/llm-trace.jsonl', 'trace_id', 'utf-8']

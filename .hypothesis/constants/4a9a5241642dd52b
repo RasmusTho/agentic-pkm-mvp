@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/cli/health.py
+# hypothesis_version: 6.148.7
+
+['/', '5', 'INDEX_OUTBOX_PATH', 'LLM_PROVIDER', 'LLM_TIMEOUT', 'OLLAMA_HOST', 'OLLAMA_URL', 'a', 'checks', 'data', 'detail', 'ffmpeg', 'ffmpeg saknas i PATH', 'health.check', 'index_outbox', 'models', 'name', 'ok', 'ollama', 'run_health', 'skipped', 'trace_id', 'utf-8', 'yt_dlp']

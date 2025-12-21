@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/outbox/events.py
+# hypothesis_version: 6.148.7
+
+['1.0', 'INDEX_OUTBOX_PATH', 'a', 'dim', 'embedding', 'event', 'indexer', 'ingest', 'markdown.semantic', 'metrics', 'model', 'object_id', 'provenance', 'source', 'trace_id', 'utf-8', 'uuid', 'vectors', 'version', 'view']

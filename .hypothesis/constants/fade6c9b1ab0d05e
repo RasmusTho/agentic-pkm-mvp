@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/panel_agent/parser.py
+# hypothesis_version: 6.148.7
+
+['##', '###', 'PanelBlock', 'ParsedAction', 'ParsedPanel', 'actions', 'ai-instruktion', 'ai-logg', 'ai-åtgärder', 'find_panels', 'instruction', 'log', 'panel-1', 'parse_panel', 'x']
