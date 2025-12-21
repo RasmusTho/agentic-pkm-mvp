@@ -40,3 +40,5 @@ def test_health_status_cli_json(monkeypatch, tmp_path: Path) -> None:
     assert payload["settings_status"] in {"ok", "missing", "fail"}
     assert payload["thresholds"]["outbox_degrade_oldest_age_s"] > 0
     assert payload["settings_source"]["path"].endswith("health.md")
+    assert payload["writes_allowed"] is True
+    assert payload["write_guard_reason"] is None
