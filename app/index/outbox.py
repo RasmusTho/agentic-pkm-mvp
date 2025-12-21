@@ -9,9 +9,9 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - fallback for environments without orjson
     import json as _json  # type: ignore
 
-# Default path complies with spec (tmp/index-outbox.jsonl)
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTBOX_PATH = Path(
-    os.environ.get("INDEX_OUTBOX_PATH", "./tmp/index-outbox.jsonl")
+    os.environ.get("INDEX_OUTBOX_PATH", str(REPO_ROOT / "tmp" / "index-outbox.jsonl"))
 ).expanduser()
 os.environ.setdefault("INDEX_OUTBOX_PATH", str(DEFAULT_OUTBOX_PATH))
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.watcher.heartbeat import resolve_heartbeat_path
 
 
 def _write_heartbeat(path: Path, *, ts: float, paused: bool = False) -> None:
@@ -24,9 +25,18 @@ def _write_heartbeat(path: Path, *, ts: float, paused: bool = False) -> None:
     path.write_text(json.dumps(heartbeat, ensure_ascii=False), encoding="utf-8")
 
 
-def _health_client(monkeypatch, tmp_path) -> TestClient:
-    heartbeat = tmp_path / "watcher-heartbeat.json"
-    monkeypatch.setenv("WATCHER_HEARTBEAT_PATH", str(heartbeat))
+def _clear_default_heartbeat(monkeypatch) -> Path:
+    monkeypatch.delenv("WATCHER_HEARTBEAT_PATH", raising=False)
+    path = resolve_heartbeat_path()
+    path.unlink(missing_ok=True)
+    return path
+
+
+def _health_client(monkeypatch, tmp_path, heartbeat_path: Path | None = None) -> TestClient:
+    if heartbeat_path is not None:
+        monkeypatch.setenv("WATCHER_HEARTBEAT_PATH", str(heartbeat_path))
+    else:
+        monkeypatch.delenv("WATCHER_HEARTBEAT_PATH", raising=False)
     monkeypatch.setenv("WATCHER_HEARTBEAT_STALE_SECONDS", "60")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -38,8 +48,7 @@ def _health_client(monkeypatch, tmp_path) -> TestClient:
 def test_health_endpoint_returns_runtime_checks(monkeypatch, tmp_path) -> None:
     heartbeat = tmp_path / "watcher-heartbeat.json"
     _write_heartbeat(heartbeat, ts=time.time())
-    monkeypatch.setenv("WATCHER_HEARTBEAT_PATH", str(heartbeat))
-    client = _health_client(monkeypatch, tmp_path)
+    client = _health_client(monkeypatch, tmp_path, heartbeat_path=heartbeat)
     resp = client.get("/api/health")
     assert resp.status_code == 200
     data = resp.json()
@@ -55,9 +64,8 @@ def test_health_endpoint_returns_runtime_checks(monkeypatch, tmp_path) -> None:
 def test_health_runtime_detects_stale_watchers(monkeypatch, tmp_path) -> None:
     heartbeat = tmp_path / "watcher-heartbeat.json"
     _write_heartbeat(heartbeat, ts=time.time() - 120)
-    monkeypatch.setenv("WATCHER_HEARTBEAT_PATH", str(heartbeat))
     monkeypatch.setenv("WATCHER_HEARTBEAT_STALE_SECONDS", "5")
-    client = _health_client(monkeypatch, tmp_path)
+    client = _health_client(monkeypatch, tmp_path, heartbeat_path=heartbeat)
     resp = client.get("/api/health")
     assert resp.status_code == 200
     watcher = resp.json()["runtime"]["watcher"]
@@ -66,8 +74,7 @@ def test_health_runtime_detects_stale_watchers(monkeypatch, tmp_path) -> None:
 
 
 def test_health_ok_without_watcher(monkeypatch, tmp_path) -> None:
-    heartbeat = tmp_path / "watcher-heartbeat.json"
-    heartbeat.unlink(missing_ok=True)
+    _clear_default_heartbeat(monkeypatch)
     client = _health_client(monkeypatch, tmp_path)
     resp = client.get("/api/health")
     assert resp.status_code == 200
@@ -77,10 +84,21 @@ def test_health_ok_without_watcher(monkeypatch, tmp_path) -> None:
 
 
 def test_health_requires_watcher_when_flagged(monkeypatch, tmp_path) -> None:
+    _clear_default_heartbeat(monkeypatch)
     monkeypatch.setenv("WATCHER_HEARTBEAT_REQUIRED", "1")
-    heartbeat = tmp_path / "watcher-heartbeat.json"
-    heartbeat.unlink(missing_ok=True)
     client = _health_client(monkeypatch, tmp_path)
     resp = client.get("/api/health")
     assert resp.status_code == 200
     assert resp.json().get("ok") is False
+
+
+def test_health_reads_repo_heartbeat(monkeypatch, tmp_path) -> None:
+    default_path = _clear_default_heartbeat(monkeypatch)
+    try:
+        _write_heartbeat(default_path, ts=time.time())
+        client = _health_client(monkeypatch, tmp_path)
+        resp = client.get("/api/health")
+        assert resp.status_code == 200
+        assert resp.json()["runtime"]["watcher"]["ok"] is True
+    finally:
+        default_path.unlink(missing_ok=True)
