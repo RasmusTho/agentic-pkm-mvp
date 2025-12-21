@@ -22,3 +22,9 @@ State: SoT v4.10 Reality-MVP (work branch prep).
 - `health status` returns `state` running (or transient catch_up) with `writes_allowed` true and doctor statuses at `pass`. `suggested_actions` can be empty when stable.
 - Incidents tail either prints recent JSON lines or explicitly says `No incidents yet (path: …)` (this indicates a clean slate).
 - After ingesticing a vault snapshot, the `health explain` summary is readable, and any new incident lines appear within `tmp/health-incidents.jsonl` or the configured path.
+
+## 5. Host-based PG ingest fallback
+1. When `scripts/ingest_alpha_inbox_pg.sh` reports `Errno 35`/`Resource deadlock` while reading the iCloud vault inside Docker, the mounted filesystem cannot be accessed reliably by the container; Docker/Colima deadlocks on macOS because the host lock is held by iCloud sync.
+2. Run `scripts/ingest_alpha_inbox_pg_host.sh` instead: it reads the PKM - Alpha vault directly on the host and pushes events into PostgreSQL on `localhost:15432`, avoiding the Docker mount.
+3. After the host script finishes, rerun `scripts/run_alpha_stack.sh` (or `docker compose up -d --build api worker`) and verify `http://127.0.0.1:18000/api/status` plus `/api/ask` return sources.
+4. Keep this script handy in ops guides whenever macOS + iCloud mounts are part of the stack; it mirrors the container-side ingest but always succeeds when Errno 35 would otherwise block progress.
