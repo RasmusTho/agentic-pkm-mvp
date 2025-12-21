@@ -14,6 +14,8 @@ from app.obs.log import span, with_trace_id
 from app.stores.db_health import ping_postgres, resolve_dsn
 from app.watcher.heartbeat import resolve_heartbeat_path
 
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+
 
 def _result(ok: bool, detail: str, *, data: Dict[str, Any] | None = None) -> Dict[str, Any]:
     out: Dict[str, Any] = {"ok": ok, "detail": detail}
@@ -30,6 +32,13 @@ def _env_float(name: str, fallback: float) -> float:
         return float(raw)
     except Exception:
         return fallback
+
+
+def _watcher_required() -> bool:
+    raw = os.getenv("WATCHER_HEARTBEAT_REQUIRED")
+    if not raw:
+        return False
+    return raw.strip().lower() in _TRUE_VALUES
 
 
 def _check_ffmpeg() -> Dict[str, Any]:
@@ -161,6 +170,13 @@ def _llm_runtime_status(check_result: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _runtime_ok(runtime: dict[str, dict[str, Any]]) -> bool:
+    base_ok = bool(runtime.get("db", {}).get("ok") and runtime.get("llm", {}).get("ok"))
+    if _watcher_required():
+        return base_ok and bool(runtime.get("watcher", {}).get("ok"))
+    return base_ok
+
+
 @span("health.check")
 def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     trace_id = with_trace_id(trace_id)
@@ -176,7 +192,7 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
         "llm": _llm_runtime_status(checks["ollama"]),
     }
     checks_ok = all(item.get("ok") for item in checks.values())
-    runtime_ok = all(item.get("ok") for item in runtime.values())
+    runtime_ok = _runtime_ok(runtime)
     ok = bool(checks_ok and runtime_ok)
     return {"ok": ok, "checks": checks, "runtime": runtime, "trace_id": trace_id}
 
