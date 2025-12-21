@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Callable
 
 _DEFAULT_ENV = "WATCHER_HEARTBEAT_PATH"
-DEFAULT_HEARTBEAT_PATH = Path("tmp/watcher_heartbeat.json")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_HEARTBEAT_PATH = REPO_ROOT / "tmp" / "watcher_heartbeat.json"
 
 
 def resolve_heartbeat_path(env_get: Callable[[str], str | None] | None = None) -> Path:
