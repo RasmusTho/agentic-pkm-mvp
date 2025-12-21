@@ -21,6 +21,7 @@ def test_events_tail_returns_last_events(tmp_path: Path, monkeypatch) -> None:
     resp = client.get("/api/events/tail", params={"limit": 2})
     assert resp.status_code == 200
     data = resp.json()
+    assert data.get("source_path") == str(outbox)
     returned = data.get("events") or []
     assert len(returned) == 2
     # Newest-first
@@ -32,3 +33,8 @@ def test_events_tail_returns_last_events(tmp_path: Path, monkeypatch) -> None:
     filtered = resp_filtered.json().get("events") or []
     assert len(filtered) == 1
     assert filtered[0]["event"].startswith("panel")
+
+    resp_trace = client.get("/api/events/tail", params={"trace_id": "t2"})
+    assert resp_trace.status_code == 200
+    traces = [ev.get("trace_id") for ev in resp_trace.json().get("events") or []]
+    assert traces == ["t2"]
