@@ -23,6 +23,8 @@ def test_interim_gui_loads() -> None:
     assert "/api/health" in html
     assert "/api/settings/validate" in html
     assert "/api/events/tail" in html
+    assert "Returned:" in html
+    assert 'value="watcher."' in html
 
 
 def test_interim_gui_refs_status_snapshot_data() -> None:
