@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from app.cli.events_doctor import event_name, latest_trace_story, normalize_timestamp, read_outbox
 from app.config.paths import resolve_vault_root
+from app.events.outbox import event_name, latest_trace_story, normalize_timestamp, read_outbox
 from app.index.doctor import diagnose_index
 from app.settings.health_settings import HealthThresholds, load_health_settings
 

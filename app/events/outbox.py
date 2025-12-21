@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
-from app.outbox.events import INDEX_OUTBOX_PATH
-
 
 def default_outbox_path() -> Path:
-    return Path(INDEX_OUTBOX_PATH)
+    env = os.getenv("INDEX_OUTBOX_PATH")
+    if env:
+        return Path(env).expanduser()
+    return Path("logs/index-outbox.jsonl")
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
