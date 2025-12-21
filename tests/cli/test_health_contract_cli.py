@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from click.testing import CliRunner
 
-from app.cli.health_contract import health
+from app.cli import health
 from app.health_contract import reset_state_machine
 
 
@@ -18,6 +18,7 @@ def test_health_status_cli_json(monkeypatch, tmp_path: Path) -> None:
     ]
     outbox.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "vault"))
     monkeypatch.setattr(
         "app.health_contract.diagnose_index",
         lambda: {
@@ -36,3 +37,6 @@ def test_health_status_cli_json(monkeypatch, tmp_path: Path) -> None:
     assert payload["index_doctor_status"] == "pass"
     assert payload["events_doctor_status"] == "pass"
     assert payload["errors_last_10m"] >= 0
+    assert payload["settings_status"] in {"ok", "missing", "fail"}
+    assert payload["thresholds"]["outbox_degrade_oldest_age_s"] > 0
+    assert payload["settings_source"]["path"].endswith("health.md")

@@ -2,37 +2,46 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from app.cli.events_doctor import event_name, latest_trace_story, normalize_timestamp, read_outbox
+from app.config.paths import resolve_vault_root
 from app.index.doctor import diagnose_index
+from app.settings.health_settings import HealthThresholds, load_health_settings
 
 
 @dataclass
 class HealthStateMachine:
     state: str = "boot"
     reason: str = "initializing"
-    since: datetime = field(default_factory=lambda: datetime.now(timezone.utc))  # noqa: UP017
+    since: datetime = field(default_factory=lambda: datetime.now(UTC))  # noqa: UP017
     bad_counter: int = 0
     good_counter: int = 0
 
     def reset(self) -> None:
         self.state = "boot"
         self.reason = "initializing"
-        self.since = datetime.now(timezone.utc)  # noqa: UP017
+        self.since = datetime.now(UTC)  # noqa: UP017
         self.bad_counter = 0
         self.good_counter = 0
 
-    def update(self, age: float, *, now: datetime | None = None) -> tuple[str, str, str]:
-        now = now or datetime.now(timezone.utc)  # noqa: UP017
+    def update(
+        self,
+        age: float,
+        thresholds: HealthThresholds,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[str, str, str]:
+        now = now or datetime.now(UTC)  # noqa: UP017
         prev_state = self.state
         next_state = self.state
         reason = self.reason
-        degrade_limit = 15.0
-        degrade_samples = 3
-        recover_limit = 5.0
-        recover_samples = 10
+        degrade_limit = thresholds.outbox_degrade_oldest_age_s
+        recover_limit = thresholds.outbox_recover_oldest_age_s
+        degrade_samples = thresholds.degrade_samples
+        recover_samples = thresholds.recover_samples
 
         if age > degrade_limit:
             self.bad_counter += 1
@@ -75,17 +84,25 @@ class HealthContract:
         *,
         state_machine: HealthStateMachine | None = None,
         now_fn: Callable[[], datetime] | None = None,
+        vault_root_fn: Callable[[], Path] | None = None,
     ):
         self.state_machine = state_machine or HealthStateMachine()
-        self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))  # noqa: UP017
+        self.now_fn = now_fn or (lambda: datetime.now(UTC))  # noqa: UP017
+        self.vault_root_fn = vault_root_fn or resolve_vault_root
 
     def evaluate(self) -> dict[str, Any]:
         now = self.now_fn()
+        vault_root = self.vault_root_fn()
+        settings_result = load_health_settings(vault_root=vault_root)
         records = read_outbox()
         outbox_count = len(records)
         oldest_ts = self._earliest_timestamp(records)
         age = self._compute_age(oldest_ts, now)
-        state, reason, since_ts = self.state_machine.update(age, now=now)
+        state, reason, since_ts = self.state_machine.update(
+            age,
+            settings_result.settings.thresholds,
+            now=now,
+        )
         index_result = diagnose_index()
         index_status = self._summary_status(
             index_result.get("issues"), index_result.get("warnings")
@@ -106,6 +123,10 @@ class HealthContract:
             "index_doctor_status": index_status,
             "events_doctor_status": events_status,
             "errors_last_10m": errors,
+            "settings_status": settings_result.status,
+            "settings_source": settings_result.source.to_payload(),
+            "settings_errors": settings_result.errors,
+            "thresholds": settings_result.settings.thresholds.to_payload(),
         }
 
     def _earliest_timestamp(self, records: Iterable[dict[str, Any]]) -> datetime | None:

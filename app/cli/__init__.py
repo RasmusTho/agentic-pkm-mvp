@@ -20,6 +20,7 @@ from app.ingest.vault_alpha import run_vault_alpha_ingest, run_vault_alpha_inges
 from app.ingest.external import ingest_external_folder
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
+from app.cli.health_contract import emit_health_contract_status
 from app.cli.watcher import vault_watcher_run, vault_watcher_daemon, watcher_group
 from app.cli.index_rebuild import index as index_cli
 from app.cli import index_doctor  # noqa: F401 -- register index doctor command
@@ -930,17 +931,27 @@ def note_scan(target: Path, pattern: str) -> None:
         raise SystemExit(1)
 
 
-@cli.command(
-    help="Kör funktionskontroller för lokala beroenden (ffmpeg, yt-dlp, index-outbox, Ollama)."
+@cli.group(
+    help="Kör funktionskontroller för lokala beroenden (ffmpeg, yt-dlp, index-outbox, Ollama).",
+    invoke_without_command=True,
 )
 @click.option("--json", "as_json", is_flag=True, help="Print JSON result to stdout.")
 @click.option("--trace-id", default=None, help="Attach a trace id to the run.")
-def health(as_json: bool, trace_id: Optional[str]) -> None:
+@click.pass_context
+def health(ctx, as_json: bool, trace_id: Optional[str]) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
     trace_id = with_trace_id(trace_id)
     result = run_health(trace_id=trace_id)
     _dump(result, as_json)
     if not result.get("ok"):
         raise SystemExit(1)
+
+
+@health.command("status", help="Emit the health contract snapshot (JSON or text).")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON payload.")
+def health_status(as_json: bool) -> None:
+    emit_health_contract_status(as_json)
 
 
 @cli.command(help="Print a system status snapshot (Reality-MVP observability).")
