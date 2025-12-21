@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/planner/tools.py
+# hypothesis_version: 6.148.7
+
+['Label of the action', 'MCP_TOOL_DESCRIPTORS', 'Markdown body', 'Note title', 'Optional metadata', 'Optional tags', 'action_id', 'action_label', 'array', 'body', 'content', 'description', 'downstream_event', 'get_tool_descriptor', 'ingested', 'instruction', 'integer', 'internal', 'items', 'k', 'limit', 'maturity', 'maximum', 'mcp', 'mcp.search.objects', 'metadata', 'minimum', 'note_path', 'note_uuid', 'object', 'ok', 'properties', 'query', 'required', 'results', 'root_dir', 'status', 'string', 'tags', 'title', 'type']

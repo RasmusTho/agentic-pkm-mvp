@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/search/service.py
+# hypothesis_version: 6.148.7
+
+[0.0, 1.0, 1536, '0', '1', '_Item', '_NoopBm25Index', '_NoopVectorIndex', 'bm25_search', 'content', 'embedding', 'embeddings', 'emergent_tags', 'get_bm25_index', 'get_vector_index', 'hybrid_search', 'id', 'ingest_object', 'items', 'k', 'kind', 'knn', 'learn', 'model', 'n', 'noop', 'note', 'object_id', 'object_type', 'on', 'payload', 'query', 'score', 'search', 'search-service', 'search_hybrid', 'search_vector', 'source_ref', 'store', 'system_intent', 'test', 'text', 'top_k', 'topk', 'true', 'vec', 'vector', 'vector_search', 'yes']

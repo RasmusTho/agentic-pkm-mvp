@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/fitness/__init__.py
+# hypothesis_version: 6.148.7
+
+['diarization_metrics', 'reasoning_metrics', 'relation_metrics']

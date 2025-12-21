@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/watcher/watcher.py
+# hypothesis_version: 6.148.7
+
+[1e-09, 1000, '*.md', '+00:00', 'Z', 'a', 'backoff_active', 'changed_detected', 'changed_in_tick', 'disabled', 'emitted_in_tick', 'errors', 'event', 'event_id', 'hash', 'intents_emitted', 'kill_switch', 'mtime', 'panel.scan.requested', 'payload', 'rate_limited', 'rate_limited_in_tick', 'relative_path', 'run_forever', 'run_once', 'run_tick', 'source', 'ticks_run', 'timestamp', 'trace_id', 'utf-8', 'vault_path', 'watcher', 'watcher summary: ']

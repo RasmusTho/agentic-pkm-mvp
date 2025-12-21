@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/set_evaluator/agent.py
+# hypothesis_version: 6.148.7
+
+[0.0, 0.05, 0.8, 1.0, 160, 'agent', 'allow', 'content', 'evaluate', 'event', 'object_id', 'object_uuid', 'ok', 'payload', 'promote', 'ranking', 'reason', 'reasoning.ranking', 'reasons', 'review', 'review_allow', 'review_reasons', 'score', 'set_evaluator', 'text', 'trace_id', 'ts', 'value']

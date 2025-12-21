@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/note_hygiene/agent.py
+# hypothesis_version: 6.148.7
+
+[160, '! ', '#', '# ', '- ', '---', '. ', '? ', 'Note', '\\[[^\\]]+\\]\\([^)]+\\)', 'action', 'archive', 'body', 'fix_structure', 'fm', 'keep', 'path', 'title', 'utf-8', 'uuid', 'w']

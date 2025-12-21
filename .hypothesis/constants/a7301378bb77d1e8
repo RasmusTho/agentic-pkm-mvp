@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/cli/panel.py
+# hypothesis_version: 6.148.7
+
+['--uuid', 'emit_only', 'event', 'note_uuid', 'note_uuids', 'panel', 'run', 'run-many', 'run_panels_for_uuids']

@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/index/embeddings.py
+# hypothesis_version: 6.148.7
+
+['embed_batches', 'embed_text', 'embed_texts']

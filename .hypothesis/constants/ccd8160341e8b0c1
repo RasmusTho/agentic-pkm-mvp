@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/fitness/chunks.py
+# hypothesis_version: 6.148.7
+
+[0.0, 100.0, 3000, 'DATASET_PATH', 'chunk_p95', 'data', 'diarization_metrics', 'flag', 'golden', 'max_chars', 'off', 'on', 'r', 'segments', 'speaker', 'speaker_avg', 'speaker_std', 'text', 'utf-8']

@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/promotion/consumer.py
+# hypothesis_version: 6.148.7
+
+['+00:00', '.cursor.json', '.outbox_cursor.json', 'Z', 'a', 'action', 'applied', 'applied_at', 'emitted', 'errors', 'event', 'event_id', 'id', 'intents_seen', 'json', 'line_index', 'maturity', 'missing_note_path', 'missing_uuid', 'note', 'note_path', 'note_uuid', 'outbox_path', 'path', 'path_not_found', 'payload', 'promoted', 'promotion', 'promotion.consumer', 'reason', 'review_state', 'source_event', 'state', 'title', 'trace_id', 'utf-8', 'uuid']

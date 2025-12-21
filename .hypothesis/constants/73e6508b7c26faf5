@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/settings/flows.py
+# hypothesis_version: 6.148.7
+
+['FlowConfig', 'FlowsSettings', 'flows', 'get_active_flows', 'get_flows_for_event', 'load_flow_settings', 'utf-8']

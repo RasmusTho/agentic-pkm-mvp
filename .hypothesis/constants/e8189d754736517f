@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/stores/pg.py
+# hypothesis_version: 6.148.7
+
+[0.0, 100, 'DATABASE_URL', 'SELECT 1', 'dim', 'dims', 'drift', 'dst_id', 'embedding', 'identity', 'identity_json', 'identity_present', 'model', 'normalize', 'object_id', 'payload', 'postgresql://', 'provider', 'rows', 'rows_wrong_dim', 'total', 'updated_at']

@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/quality/guardrails.py
+# hypothesis_version: 6.148.7
+
+[800, 'CircuitBreaker', 'DEFAULT_BREAKER', 'enforce_quality', 'forbidden_content', 'insufficient_sources', 'issues', 'ok', 'timeout_wrapper', 'token_count', 'too_long']

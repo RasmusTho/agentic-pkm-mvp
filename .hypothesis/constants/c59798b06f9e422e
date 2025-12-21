@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/policy/__init__.py
+# hypothesis_version: 6.148.7
+
+['assert_tool_allowed', 'is_policy_enforced']

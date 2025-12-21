@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/retrieval/hybrid_rerank_hook.py
+# hypothesis_version: 6.148.7
+
+['1', 'RERANK_ENABLE', 'RERANK_TOP_K', 'id', 'on', 'text', 'true', 'vec', 'yes']

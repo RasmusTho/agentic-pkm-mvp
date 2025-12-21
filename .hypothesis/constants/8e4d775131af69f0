@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/components/settings/tools_loader.py
+# hypothesis_version: 6.148.7
+
+['TOOL_REGISTRY_PATH', 'active', 'forbid', 'utf-8']

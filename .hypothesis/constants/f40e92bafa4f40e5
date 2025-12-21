@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/reasoning/provider.py
+# hypothesis_version: 6.148.7
+
+[0.0, 0.05, 1.0, 120, 160, '...', '1', 'Add sources', 'BaseReasoner', 'CI', 'Candidates:', 'Clarify objectives', 'LLM_PROVIDER', 'MockReasoner', 'OllamaReasoner', 'REASONING_MODEL', 'REASONING_PROVIDER', 'ReasoningMode', 'ReasoningRun', 'Sources:', 'agent', 'answer', 'ask', 'ask.answer', 'claims', 'content', 'data', 'empty answer', 'empty review result', 'evidence', 'failed', 'fake', 'get_reasoner', 'golden', 'inferences', 'issues', 'kind', 'llama3.1:8b', 'llm', 'mock', 'no ranking produced', 'object_uuid', 'ok', 'ollama', 'payload', 'r', 'ranking', 'reason', 'reasoning', 'reasoning.claims', 'reasoning_kind', 'run_reasoning', 'score', 'suggestions', 'summary', 'system', 'text', 'trace_id', 'user', 'utf-8']

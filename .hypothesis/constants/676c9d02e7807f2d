@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/cli/merge_driver.py
+# hypothesis_version: 6.148.7
+
+['---', '^uuid:\\s*(.+)$', '__main__', 'conflict', 'reason', 'resolved', 'status', 'unknown', 'utf-8', 'uuid mismatch']

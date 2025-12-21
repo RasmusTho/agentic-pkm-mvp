@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/embedding_config.py
+# hypothesis_version: 6.148.7
+
+[0.0, 1536, 'EMBED_DIM', 'embed_dim', 'embedding']

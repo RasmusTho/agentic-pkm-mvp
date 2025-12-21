@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/services/outbox.py
+# hypothesis_version: 6.148.7
+
+['DATABASE_URL', 'DATABASE_URL not set', 'ack_outbox', 'agent', 'bootstrap', 'conn', 'cursor', 'event', 'event_type', 'execute', 'fetchone', 'id', 'msg_id', 'object_id', 'payload', 'poll_outbox_one', 'postgresql://', 'topic', 'trace_id', 'write_outbox_event']

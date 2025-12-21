@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/planner/schema.py
+# hypothesis_version: 6.148.7
+
+['Plan', 'PlanMetadata', 'PlanStep', 'PlanTrigger', 'ToolDescriptor', 'agent_call', 'analyze', 'cli', 'decision', 'internal', 'make_simple_plan', 'mcp', 'new_plan_id', 'note', 'planner.mock', 'review-agent', 'schema', 'step-1', 'step-2', 'tool_call']

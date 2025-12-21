@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/store/object_store.py
+# hypothesis_version: 6.148.7
+
+['created_at', 'event', 'id', 'kind', 'payload', 'source_ref', 'trace_id', 'ts', 'uuid']

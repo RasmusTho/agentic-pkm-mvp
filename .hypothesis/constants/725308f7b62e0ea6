@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/watcher/vault_watcher.py
+# hypothesis_version: 6.148.7
+
+['*.md', '.agentic-pkm', 'INDEX_OUTBOX_PATH', 'Metadata', 'OutboxPathError', 'System', 'VaultWatcher', 'VaultWatcherResult', '[[', ']]', 'a', 'changed', 'compute_changes', 'dry_run', 'errors', 'event', 'event_type', 'evergreen', 'ingest_attempted', 'ingested', 'json', 'limit_exceeded', 'load_snapshot', 'maturity', 'model_dump', 'panel_candidates', 'panel_promotions', 'panel_runs', 'panel_skipped_limit', 'panel_skipped_policy', 'promote.evergreen', 'raw_text', 'run_watcher_daemon', 'run_watcher_tick', 'save_snapshot', 'snapshot_path', 'utf-8', 'uuid', 'vault_watcher_run']

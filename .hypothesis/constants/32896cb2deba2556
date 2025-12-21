@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/components/rerankers.py
+# hypothesis_version: 6.148.7
+
+['ScoredHit', 'balanced', 'get_reranker', 'heuristic']

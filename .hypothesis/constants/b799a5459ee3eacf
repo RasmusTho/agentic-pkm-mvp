@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/indexer/consumer.py
+# hypothesis_version: 6.148.7
+
+['content', 'embedding', 'event', 'kind', 'legacy-event', 'model', 'note', 'object_id', 'payload', 'process_event', 'raw_text', 'source_ref', 'text', 'trace_id']

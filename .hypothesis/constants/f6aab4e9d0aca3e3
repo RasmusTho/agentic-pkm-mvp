@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/ports/pg_sink.py
+# hypothesis_version: 6.148.7
+
+['PgSink']

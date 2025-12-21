@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/stores/provider.py
+# hypothesis_version: 6.148.7
+
+['+psycopg', 'DATABASE_URL', 'STORE_BACKEND', 'memory', 'pg']

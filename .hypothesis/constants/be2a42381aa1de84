@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/settings/runtime.py
+# hypothesis_version: 6.148.7
+
+['*.yaml', 'agents', 'ask', 'classifier', 'embeddings.yaml', 'global.yaml', 'instance.yaml', 'promotion', 'providers.yaml', 'qa', 'reviewer', 'utf-8', 'yggdrasil.yaml']

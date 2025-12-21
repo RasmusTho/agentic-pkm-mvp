@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agent/service.py
+# hypothesis_version: 6.148.7
+
+['agent-service-loop', 'completed', 'error', 'failed', 'idle', 'running']

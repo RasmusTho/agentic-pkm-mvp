@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/stores/__init__.py
+# hypothesis_version: 6.148.7
+
+['STORE_BACKEND', 'memory', 'pg', 'store_backend']

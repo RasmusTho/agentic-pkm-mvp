@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/base/loop.py
+# hypothesis_version: 6.148.7
+
+['act', 'agent', 'done', 'goal', 'not_implemented', 'ok', 'outcome', 'plan', 'reflection', 'result', 'trace_id']

@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/cli/watcher.py
+# hypothesis_version: 6.148.7
+
+['--cooldown-seconds', '--dry-run', '--emit-only', '--force', '--max-notes', '--max-ticks', '--poll-seconds', '--skip-panel', '--snapshot-path', '--vault-root', 'Watcher summary: ', 'backoff_active', 'errors', 'kill_switch', 'limit_exceeded', 'once', 'run', 'snapshot_path', 'vault-watcher-daemon', 'vault-watcher-run', 'vault_watcher_daemon', 'vault_watcher_run', 'watcher', 'watcher_group']

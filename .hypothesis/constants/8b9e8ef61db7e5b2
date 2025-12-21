@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/projector/agent.py
+# hypothesis_version: 6.148.7
+
+['allow', 'evaluate', 'event', 'object_id', 'projector', 'promote', 'set_name', 'trace_id', 'ts', 'value']

@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/api/routes/events_tail.py
+# hypothesis_version: 6.148.7
+
+[500, '/events/tail', 'INDEX_OUTBOX_PATH', 'count', 'event', 'event_type', 'events', 'limit', 'router', 'source_path', 'topic', 'trace_id', 'utf-8']

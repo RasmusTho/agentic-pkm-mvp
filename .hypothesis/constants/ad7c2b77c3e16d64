@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/cli/events_doctor.py
+# hypothesis_version: 6.148.7
+
+['--json', '--latest', '--outbox', '--trace-id', '.', 'INDEX_OUTBOX_PATH', 'Trace ID to inspect.', 'as_json', 'count', 'created_at', 'doctor', 'event', 'event_id', 'event_type', 'events', 'first_timestamp', 'last_timestamp', 'outbox_path', 'source', 'stage', 'stages', 'timestamp', 'trace_id', 'unknown', 'utf-8']

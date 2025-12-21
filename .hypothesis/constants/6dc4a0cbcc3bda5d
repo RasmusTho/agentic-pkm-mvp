@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/api/routes/search.py
+# hypothesis_version: 6.148.7
+
+[',', '/search', '[]{}()', 'api.search', 'path', 'q', 'results', 'score', 'title', 'trace_id', 'utf-8', 'uuid', 'x-trace-id']

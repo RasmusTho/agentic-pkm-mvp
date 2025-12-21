@@ -7,12 +7,16 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
+from app.outbox.events import INDEX_OUTBOX_PATH
+
 router = APIRouter()
 
 
 def _resolve_outbox_path() -> Path:
-    raw = os.getenv("INDEX_OUTBOX_PATH", "./tmp/index-outbox.jsonl")
-    return Path(raw).expanduser()
+    raw = os.getenv("INDEX_OUTBOX_PATH")
+    if raw:
+        return Path(raw).expanduser()
+    return Path(INDEX_OUTBOX_PATH).expanduser()
 
 
 def _load_events(path: Path) -> list[dict[str, Any]]:

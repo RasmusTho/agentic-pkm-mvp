@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/ingest/config.py
+# hypothesis_version: 6.148.7
+
+['DEFAULT_VAULT_ROOT']

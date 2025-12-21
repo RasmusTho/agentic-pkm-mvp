@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/merge_resolver/graph.py
+# hypothesis_version: 6.148.7
+
+['---', 'B', 'HYBRID', 'base_body', 'base_yaml', 'body', 'body_a', 'body_b', 'decision', 'hybrid', 'kind', 'merged_text', 'yaml', 'yaml_a', 'yaml_b']

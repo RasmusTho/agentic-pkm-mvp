@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/a2a/schema.py
+# hypothesis_version: 6.148.7
+
+['AgentError', 'AgentMessageBase', 'AgentRequest', 'AgentResponse', 'error', 'new_error', 'new_request', 'new_response', 'ok', 'partial', 'request', 'response']

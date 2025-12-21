@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/jobs/backfill.py
+# hypothesis_version: 6.148.7
+
+[100, '--dry-run', '--limit', '--set-name', '--trace-id', 'DATABASE_URL', '__main__', 'backfill summary:', 'chunked', 'evaluated', 'indexed', 'postgresql://', 'projected', 'published', 'reviewed', 'store_true']

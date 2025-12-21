@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict
 
+from app.outbox.events import INDEX_OUTBOX_PATH
 from app.promotion.consumer import consume_promotion_intents
 from app.watcher.events import emit_watcher_run_event
 from app.watcher.vault_watcher import VaultWatcher, run_watcher_tick
@@ -18,10 +19,8 @@ class OutboxPathError(ValueError):
 def resolve_outbox_path(path: Path | str | None) -> Path:
     candidate = path
     if candidate is None:
-        env_value = os.environ.get("INDEX_OUTBOX_PATH", "").strip()
-        if not env_value:
-            raise OutboxPathError("Outbox path is required; set INDEX_OUTBOX_PATH or pass --outbox-path.")
-        candidate = env_value
+        env_value = os.getenv("INDEX_OUTBOX_PATH")
+        candidate = env_value.strip() if env_value and env_value.strip() else INDEX_OUTBOX_PATH
 
     resolved = Path(candidate).expanduser()
     if str(resolved).strip() == "":

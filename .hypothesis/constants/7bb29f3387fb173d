@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/chunker/agent.py
+# hypothesis_version: 6.148.7
+
+['chunker', 'chunks', 'event', 'fallback_single', 'heading_first', 'max_tokens', 'meta', 'num_chunks', 'object_id', 'overlap', 'raw_text', 'strategy', 'text', 'trace_id', 'ts']

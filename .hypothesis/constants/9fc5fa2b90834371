@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/pipeline.py
+# hypothesis_version: 6.148.7
+
+['1', 'DIARIZE_ENABLE', 'ORCHESTRATOR_ENABLE', 'PLANNER_ENABLE', 'REASONING_ENABLE', 'chunk', 'chunks', 'claims', 'contradicts', 'derived_from', 'duplicate', 'end', 'error', 'evidence', 'extends', 'frontmatter', 'index', 'inferences', 'ingest-pipeline', 'kind', 'metadata', 'on', 'plan_id', 'planner-agent', 'segments', 'speaker', 'speaker_count', 'speaker_segments', 'start', 'steps', 'supports', 'text', 'trace_id', 'true', 'uuid', 'yes']

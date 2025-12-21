@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/capture/writer.py
+# hypothesis_version: 6.148.7
+
+[' (', '# Capture Summary', '## Decisions', '## Entities', '## Raw', '## Tasks', ')', ', ', '---', 'areas', 'body', 'capture', 'capture_id', 'deadline', 'decisions', 'entities', 'entity_type', 'frontmatter', 'inbox', 'kind', 'name', 'notes', 'owner', 'raw', 'review_state', 'signal_quality', 'slug', 'summary', 'tasks', 'text', 'unknown', 'uuid']

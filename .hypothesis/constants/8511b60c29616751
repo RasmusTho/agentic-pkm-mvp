@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/panel/integration.py
+# hypothesis_version: 6.148.7
+
+['1', 'PANEL_EVENTS_ENABLE', 'PanelPipelineResult', 'handle_panel_update', 'on', 'panel.intent.created', 'panel_events_enable', 'panel_events_enabled', 'true', 'yes']

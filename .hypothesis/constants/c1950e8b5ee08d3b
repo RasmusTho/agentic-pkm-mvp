@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/settings/parsers.py
+# hypothesis_version: 6.148.7
+
+['.', 'false', 'k', 'key', 'on', 'true', 'v', 'x', '|- ']

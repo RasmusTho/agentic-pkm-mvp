@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/panel/agent.py
+# hypothesis_version: 6.148.7
+
+['- ', '>', '> [!info]- AI status', 'PanelAgentResult', 'action', 'action_triggered', 'actions', 'checked', 'clear ai status', 'clear status', 'evergreen', 'executed_action_ids', 'handle_note_update', 'id', 'instruction', 'instruction_updated', 'label', 'make evergreen', 'maturity', 'note', 'panel.agent', 'panel.intent.created', 'path', 'promote this', 'promote.evergreen', 'review.promote', 'target_event', 'utf-8', 'uuid']

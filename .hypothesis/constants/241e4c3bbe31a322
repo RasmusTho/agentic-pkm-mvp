@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/memory/store.py
+# hypothesis_version: 6.148.7
+
+[200, '0', 'DATABASE_URL', 'MEMORY_ENABLED', 'agent', 'false', 'kind', 'no', 'object_id', 'off', 'payload', 'postgresql://', 'short_term', 'trace_id', 'true']

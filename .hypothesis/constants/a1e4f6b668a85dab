@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/agents/panel_agent/policy.py
+# hypothesis_version: 6.148.7
+
+['ai_panel', 'ai_panel_auto_run', 'auto_run', 'get_auto_run_mode', 'manual', 'never', 'watcher']

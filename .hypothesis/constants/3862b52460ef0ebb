@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/components/ocr.py
+# hypothesis_version: 6.148.7
+
+['get_compressive_ocr', 'get_structured_ocr']

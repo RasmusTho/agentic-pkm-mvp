@@ -1,0 +1,4 @@
+# file: /Users/rasmus/workspace/app/api/routes/settings_validate.py
+# hypothesis_version: 6.148.7
+
+['/settings/validate', 'router']
