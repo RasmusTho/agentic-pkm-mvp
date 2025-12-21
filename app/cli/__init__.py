@@ -20,6 +20,7 @@ from app.ingest.vault_alpha import run_vault_alpha_ingest, run_vault_alpha_inges
 from app.ingest.external import ingest_external_folder
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
+from app.cli.health_contract import emit_health_contract_status
 from app.cli.watcher import vault_watcher_run, vault_watcher_daemon, watcher_group
 from app.cli.index_rebuild import index as index_cli
 from app.cli import index_doctor  # noqa: F401 -- register index doctor command
@@ -954,20 +955,6 @@ def health(ctx, as_json: bool, trace_id: Optional[str]) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON payload.")
 def health_status(as_json: bool) -> None:
     emit_health_contract_status(as_json)
-
-
-@health.command("explain", help="Explain the health contract snapshot for operators.")
-def health_explain() -> None:
-    emit_health_contract_explain()
-
-@health.group("incidents", help="Inspect health incident snapshots.")
-def health_incidents() -> None:
-    pass
-
-@health_incidents.command("tail", help="Tail health incident logs.")
-@click.option("--n", "count", type=int, default=20, help="Number of entries to emit.")
-def health_incidents_tail(count: int) -> None:
-    emit_health_contract_incidents_tail(count)
 
 
 @cli.command(help="Print a system status snapshot (Reality-MVP observability).")

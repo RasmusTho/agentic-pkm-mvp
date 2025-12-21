@@ -70,7 +70,6 @@ class HealthSettingsV1:
     thresholds: HealthThresholds
     incident_capture: IncidentCaptureSettings
     policy: HealthPolicy
-    incident_log_path: Path
 
     @staticmethod
     def defaults() -> HealthSettingsV1:
@@ -78,7 +77,6 @@ class HealthSettingsV1:
             thresholds=HealthThresholds.defaults(),
             incident_capture=IncidentCaptureSettings(),
             policy=HealthPolicy(),
-            incident_log_path=_default_incident_log_path(),
         )
 
 
@@ -131,7 +129,6 @@ def load_health_settings(
     thresholds_candidate = _parse_thresholds(raw, errors)
     incident_capture = _parse_incident_capture(raw, errors)
     policy = _parse_policy(raw, errors)
-    incident_log_path = _parse_incident_log_path(raw, errors)
     env_getter = env_getter or os.getenv
 
     if thresholds_candidate is None or errors:
@@ -149,7 +146,6 @@ def load_health_settings(
                 thresholds=overrides,
                 incident_capture=incident_capture,
                 policy=policy,
-                incident_log_path=incident_log_path,
             )
 
     return HealthSettingsLoadResult(
@@ -262,27 +258,6 @@ def _coerce_bool(value: Any) -> tuple[bool, bool]:
             return False, False
     return False, True
 
-
-def _default_incident_log_path() -> Path:
-    repo_root = Path(__file__).resolve().parents[2]
-    return repo_root / "tmp" / "health-incidents.jsonl"
-
-
-def _parse_incident_log_path(data: dict[str, Any], errors: list[str]) -> Path:
-    raw = data.get("incident_log_path")
-    if raw is None:
-        return _default_incident_log_path()
-    if not isinstance(raw, str):
-        errors.append("incident_log_path must be a string")
-        return _default_incident_log_path()
-    value = raw.strip()
-    if not value:
-        errors.append("incident_log_path must be a non-empty string")
-        return _default_incident_log_path()
-    candidate = Path(value)
-    if not candidate.is_absolute():
-        candidate = Path(__file__).resolve().parents[2] / candidate
-    return candidate.expanduser()
 
 def _apply_env_overrides(
     thresholds: HealthThresholds,

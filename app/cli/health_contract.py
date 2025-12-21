@@ -7,14 +7,7 @@ import click
 from app.health_contract import DEFAULT_CONTRACT
 
 
-@click.group(help="Health contract tooling built atop existing doctor assets.")
-def health() -> None:
-    ...
-
-
-@health.command("status", help="Emit the health contract snapshot (JSON or text).")
-@click.option("--json", "as_json", is_flag=True, help="Emit JSON payload.")
-def status(as_json: bool) -> None:
+def emit_health_contract_status(as_json: bool) -> None:
     payload = DEFAULT_CONTRACT.evaluate()
     if as_json:
         click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -28,3 +21,6 @@ def status(as_json: bool) -> None:
     click.echo(f"events_doctor_status: {payload['events_doctor_status']}")
     errors = payload.get("errors_last_10m")
     click.echo(f"errors_last_10m: {errors if errors is not None else 'n/a'}")
+
+
+__all__ = ["emit_health_contract_status"]
