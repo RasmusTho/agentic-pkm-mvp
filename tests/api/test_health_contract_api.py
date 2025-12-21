@@ -18,24 +18,6 @@ def _mock_snapshot(state: str, reason: str) -> dict[str, object]:
         "index_doctor_status": "pass",
         "events_doctor_status": "pass",
         "errors_last_10m": 0,
-        "settings_status": "ok",
-        "settings_source": {
-            "path": "/fake/vault/@System/Settings/health.md",
-            "mtime": "2025-01-01T00:00:00+00:00",
-            "sha256": "deadbeef",
-        },
-        "settings_errors": [],
-        "thresholds": {
-            "outbox_degrade_oldest_age_s": 15.0,
-            "outbox_recover_oldest_age_s": 5.0,
-            "degrade_samples": 3,
-            "recover_samples": 10,
-        },
-        "writes_allowed": True,
-        "write_guard_reason": None,
-        "catch_up_progress": None,
-        "suggested_actions": [],
-        "recent_transition_history": None,
     }
 
 
@@ -55,14 +37,7 @@ def test_health_endpoints_ready(monkeypatch) -> None:
 
     resp_status = client.get("/status")
     assert resp_status.status_code == 200
-    payload = resp_status.json()
-    assert payload["state"] == "running"
-    assert payload["settings_status"] == "ok"
-    assert payload["writes_allowed"] is True
-    assert payload["write_guard_reason"] is None
-    assert payload["catch_up_progress"] is None
-    assert payload["recent_transition_history"] is None
-    assert isinstance(payload["suggested_actions"], list)
+    assert resp_status.json()["state"] == "running"
 
 
 def test_readyz_unhealthy(monkeypatch) -> None:

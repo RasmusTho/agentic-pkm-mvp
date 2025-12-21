@@ -1,56 +1,38 @@
 from __future__ import annotations
 
-import json
-from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.config.paths import resolve_vault_root
-from app.events.outbox import event_name, latest_trace_story, normalize_timestamp, read_outbox
+from app.cli.events_doctor import event_name, latest_trace_story, normalize_timestamp, read_outbox
 from app.index.doctor import diagnose_index
-from app.settings.health_settings import HealthThresholds, load_health_settings
-
-WRITE_BLOCKED_STATES = {"safe_mode", "unhealthy"}
-CATCH_UP_STATES = {"catch_up", "degraded", "recovery"}
-PROCESSING_MODE_IDLE = "idle"
-PROCESSING_MODE_REPLAY = "replay"
-PROCESSING_MODE_STALLED = "stalled"
-INCIDENT_STATES = {"degraded", "safe_mode", "unhealthy"}
 
 
 @dataclass
 class HealthStateMachine:
     state: str = "boot"
     reason: str = "initializing"
-    since: datetime = field(default_factory=lambda: datetime.now(UTC))  # noqa: UP017
+    since: datetime = field(default_factory=lambda: datetime.now(timezone.utc))  # noqa: UP017
     bad_counter: int = 0
     good_counter: int = 0
 
     def reset(self) -> None:
         self.state = "boot"
         self.reason = "initializing"
-        self.since = datetime.now(UTC)  # noqa: UP017
+        self.since = datetime.now(timezone.utc)  # noqa: UP017
         self.bad_counter = 0
         self.good_counter = 0
 
-    def update(
-        self,
-        age: float,
-        thresholds: HealthThresholds,
-        *,
-        now: datetime | None = None,
-    ) -> tuple[str, str, str]:
-        now = now or datetime.now(UTC)  # noqa: UP017
+    def update(self, age: float, *, now: datetime | None = None) -> tuple[str, str, str]:
+        now = now or datetime.now(timezone.utc)  # noqa: UP017
         prev_state = self.state
         next_state = self.state
         reason = self.reason
-        degrade_limit = thresholds.outbox_degrade_oldest_age_s
-        recover_limit = thresholds.outbox_recover_oldest_age_s
-        degrade_samples = thresholds.degrade_samples
-        recover_samples = thresholds.recover_samples
+        degrade_limit = 15.0
+        degrade_samples = 3
+        recover_limit = 5.0
+        recover_samples = 10
 
         if age > degrade_limit:
             self.bad_counter += 1
@@ -93,78 +75,24 @@ class HealthContract:
         *,
         state_machine: HealthStateMachine | None = None,
         now_fn: Callable[[], datetime] | None = None,
-        vault_root_fn: Callable[[], Path] | None = None,
-        history_limit: int = 32,
     ):
         self.state_machine = state_machine or HealthStateMachine()
-        self.now_fn = now_fn or (lambda: datetime.now(UTC))  # noqa: UP017
-        self.vault_root_fn = vault_root_fn or resolve_vault_root
-        self._transition_history: deque[dict[str, str]] = deque(maxlen=history_limit)
+        self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))  # noqa: UP017
 
     def evaluate(self) -> dict[str, Any]:
         now = self.now_fn()
-        vault_root = self.vault_root_fn()
-        settings_result = load_health_settings(vault_root=vault_root)
         records = read_outbox()
         outbox_count = len(records)
         oldest_ts = self._earliest_timestamp(records)
         age = self._compute_age(oldest_ts, now)
-        prev_state = self.state_machine.state
-        prev_reason = self.state_machine.reason
-        state, reason, since_ts = self.state_machine.update(
-            age,
-            settings_result.settings.thresholds,
-            now=now,
-        )
-        if state != prev_state or reason != prev_reason:
-            self._transition_history.append(
-                {"state": state, "reason": reason, "since_ts": since_ts}
-            )
+        state, reason, since_ts = self.state_machine.update(age, now=now)
         index_result = diagnose_index()
         index_status = self._summary_status(
             index_result.get("issues"), index_result.get("warnings")
         )
         events_status = self._events_status(records)
         errors = self._count_errors(records, now)
-        writes_allowed = state not in WRITE_BLOCKED_STATES
-        write_guard_reason = None if writes_allowed else reason
-        catch_up_progress = self._build_catch_up_progress(
-            state,
-            outbox_count,
-            age,
-            writes_allowed,
-        )
-        suggested_actions = self._build_suggested_actions(
-            age,
-            settings_result.settings.thresholds,
-            writes_allowed,
-            index_status,
-        )
-        history_payload = (
-            list(self._transition_history)
-            if settings_result.settings.incident_capture.transition_history
-            and self._transition_history
-            else None
-        )
-        entered_incident_state = state in INCIDENT_STATES and prev_state != state
-        self._maybe_log_incident(
-            now,
-            entered_incident_state,
-            state,
-            reason,
-            since_ts,
-            settings_result,
-            outbox_count,
-            age,
-            index_status,
-            events_status,
-            writes_allowed,
-            write_guard_reason,
-            catch_up_progress,
-            suggested_actions,
-            history_payload,
-        )
-        payload: dict[str, Any] = {
+        return {
             "state": state,
             "reason": reason,
             "since_ts": since_ts,
@@ -178,64 +106,7 @@ class HealthContract:
             "index_doctor_status": index_status,
             "events_doctor_status": events_status,
             "errors_last_10m": errors,
-            "settings_status": settings_result.status,
-            "settings_source": settings_result.source.to_payload(),
-            "settings_errors": settings_result.errors,
-            "thresholds": settings_result.settings.thresholds.to_payload(),
-            "writes_allowed": writes_allowed,
-            "write_guard_reason": write_guard_reason,
-            "catch_up_progress": catch_up_progress,
-            "suggested_actions": suggested_actions,
-            "recent_transition_history": history_payload,
         }
-        return payload
-
-    def _maybe_log_incident(
-        self,
-        now: datetime,
-        entered_incident_state: bool,
-        state: str,
-        reason: str,
-        since_ts: str,
-        settings_result: Any,
-        outbox_count: int,
-        age: float,
-        index_status: str,
-        events_status: str,
-        writes_allowed: bool,
-        write_guard_reason: str | None,
-        catch_up_progress: dict[str, Any] | None,
-        suggested_actions: list[str],
-        history_payload: list[dict[str, str]] | None,
-    ) -> None:
-        settings = settings_result.settings
-        if not entered_incident_state or not settings.incident_capture.enabled:
-            return
-        entry: dict[str, Any] = {
-            "ts": now.isoformat(),
-            "state": state,
-            "reason": reason,
-            "since_ts": since_ts,
-            "settings_source": settings_result.source.to_payload(),
-            "outbox_count": outbox_count,
-            "outbox_oldest_age_s": age,
-            "index_doctor_status": index_status,
-            "events_doctor_status": events_status,
-            "writes_allowed": writes_allowed,
-            "write_guard_reason": write_guard_reason,
-            "suggested_actions": suggested_actions,
-        }
-        if catch_up_progress is not None:
-            entry["catch_up_progress"] = catch_up_progress
-        if history_payload is not None:
-            entry["recent_transition_history"] = history_payload
-        log_path = settings.incident_log_path
-        try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            with log_path.open("a", encoding="utf-8") as out:
-                out.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except Exception:
-            return
 
     def _earliest_timestamp(self, records: Iterable[dict[str, Any]]) -> datetime | None:
         earliest: datetime | None = None
@@ -296,46 +167,6 @@ class HealthContract:
             if "error" in name:
                 errors += 1
         return errors if seen else None
-
-    def _build_catch_up_progress(
-        self,
-        state: str,
-        outbox_count: int,
-        age: float,
-        writes_allowed: bool,
-    ) -> dict[str, Any] | None:
-        if state not in CATCH_UP_STATES:
-            return None
-        return {
-            "outbox_count": outbox_count,
-            "outbox_oldest_age_s": age,
-            "processing_mode": self._processing_mode(state, writes_allowed),
-        }
-
-    def _processing_mode(self, state: str, writes_allowed: bool) -> str:
-        if not writes_allowed:
-            return PROCESSING_MODE_STALLED
-        if state in CATCH_UP_STATES:
-            return PROCESSING_MODE_REPLAY
-        return PROCESSING_MODE_IDLE
-
-    def _build_suggested_actions(
-        self,
-        age: float,
-        thresholds: HealthThresholds,
-        writes_allowed: bool,
-        index_status: str,
-    ) -> list[str]:
-        actions: list[str] = []
-        if age > thresholds.outbox_degrade_oldest_age_s:
-            actions.append("python -m app.cli events doctor --json")
-        if index_status in {"warn", "fail"}:
-            actions.append("python -m app.cli index doctor --json")
-        if not writes_allowed:
-            actions.append(
-                "python -m app.cli health explain (resolve write guard reason before retrying writes)"
-            )
-        return actions
 
 
 GLOBAL_STATE_MACHINE = HealthStateMachine()
