@@ -49,6 +49,11 @@ except ImportError:
     events_tail_router = None
 
 try:
+    from app.api.routes.health_contract import router as health_contract_router
+except ImportError:
+    health_contract_router = None
+
+try:
     from app.api.routers.agent import router as agent_router
 except ImportError:
     agent_router = None
@@ -116,6 +121,8 @@ def _create_app() -> FastAPI:
         application.include_router(settings_validate_router, prefix="/api")
     if events_tail_router is not None:
         application.include_router(events_tail_router, prefix="/api")
+    if health_contract_router is not None:
+        application.include_router(health_contract_router)
     if agent_router is not None:
         application.include_router(agent_router)
     return application
