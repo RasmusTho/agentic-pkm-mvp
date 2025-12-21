@@ -12,6 +12,15 @@ from app.index.doctor import diagnose_index
 from app.settings.health_settings import HealthThresholds, load_health_settings
 
 WRITE_BLOCKED_STATES = {"safe_mode", "unhealthy"}
+CATCH_UP_STATES = {"catch_up", "degraded", "recovery"}
+PROCESSING_MODE_IDLE = "idle"
+PROCESSING_MODE_REPLAY = "replay"
+PROCESSING_MODE_STALLED = "stalled"
+EVENTS_DOCTOR_ACTION = "python -m app.cli events doctor --json"
+INDEX_DOCTOR_ACTION = "python -m app.cli index doctor --json"
+HEALTH_EXPLAIN_ACTION = (
+    "python -m app.cli health explain (resolve write guard reason before retrying writes)"
+)
 
 
 @dataclass
@@ -113,6 +122,18 @@ class HealthContract:
         errors = self._count_errors(records, now)
         writes_allowed = state not in WRITE_BLOCKED_STATES
         write_guard_reason = None if writes_allowed else reason
+        catch_up_progress = self._build_catch_up_progress(
+            state,
+            outbox_count,
+            age,
+            writes_allowed,
+        )
+        suggested_actions = self._build_suggested_actions(
+            age,
+            settings_result.settings.thresholds,
+            writes_allowed,
+            index_status,
+        )
         return {
             "state": state,
             "reason": reason,
@@ -133,6 +154,8 @@ class HealthContract:
             "thresholds": settings_result.settings.thresholds.to_payload(),
             "writes_allowed": writes_allowed,
             "write_guard_reason": write_guard_reason,
+            "catch_up_progress": catch_up_progress,
+            "suggested_actions": suggested_actions,
         }
 
     def _earliest_timestamp(self, records: Iterable[dict[str, Any]]) -> datetime | None:
@@ -194,6 +217,44 @@ class HealthContract:
             if "error" in name:
                 errors += 1
         return errors if seen else None
+
+    def _build_catch_up_progress(
+        self,
+        state: str,
+        outbox_count: int,
+        age: float,
+        writes_allowed: bool,
+    ) -> dict[str, Any] | None:
+        if state not in CATCH_UP_STATES:
+            return None
+        return {
+            "outbox_count": outbox_count,
+            "outbox_oldest_age_s": age,
+            "processing_mode": self._processing_mode(state, writes_allowed),
+        }
+
+    def _processing_mode(self, state: str, writes_allowed: bool) -> str:
+        if not writes_allowed:
+            return PROCESSING_MODE_STALLED
+        if state in CATCH_UP_STATES:
+            return PROCESSING_MODE_REPLAY
+        return PROCESSING_MODE_IDLE
+
+    def _build_suggested_actions(
+        self,
+        age: float,
+        thresholds: HealthThresholds,
+        writes_allowed: bool,
+        index_status: str,
+    ) -> list[str]:
+        actions: list[str] = []
+        if age > thresholds.outbox_degrade_oldest_age_s:
+            actions.append(EVENTS_DOCTOR_ACTION)
+        if index_status in {"warn", "fail"}:
+            actions.append(INDEX_DOCTOR_ACTION)
+        if not writes_allowed:
+            actions.append(HEALTH_EXPLAIN_ACTION)
+        return actions
 
 
 GLOBAL_STATE_MACHINE = HealthStateMachine()
