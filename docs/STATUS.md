@@ -3,6 +3,9 @@ Status snapshot now includes SoT baseline + forward-line fields and intent/event
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
 
+## Health spine
+- HealthContract + WriteGuard + incident logging now form the deterministic spine for startup readiness; this snapshot is the baseline for initial go-live visibility.
+
 ## Status fields (baseline vs forward line)
 - `sot_baseline_version`: locked Reality-MVP baseline (v4.10).
 - `sot_forward_line_version` / `feature_line_version`: active forward line (v5.x features on top of v4.10).

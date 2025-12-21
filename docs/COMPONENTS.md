@@ -58,6 +58,7 @@ Changing embedding profiles safely: 1) sanity-check with `python -m app.cli embe
 - **Outbox/events** — Event emission stream for coordination and audit. Maturity: Baseline.
 - **Status/metrics** — Runtime counters and status snapshots surfaced to humans. Maturity: Baseline.
 - **Logging/audit** — Structured logs and receipts for actions and runs. Maturity: Baseline.
+- **HealthContract + WriteGuard + incident snapshots** — Health state machine + write guard ensures safe transitions, emits `state/reason/since` snapshots, and logs incident JSONL entries (`tmp/health-incidents.jsonl` or vault overrides). Sidecar CLI surface: `python -m app.cli health status --json`, `python -m app.cli health explain`, `python -m app.cli health incidents tail --n N` plus index/events doctor commands (baseline readiness checks). Maturity: Baseline.
 
 ## Dev-layer helpers & governance
 
