@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.index.outbox import DEFAULT_OUTBOX_PATH
+from app.watcher.heartbeat import DEFAULT_HEARTBEAT_PATH, resolve_heartbeat_path
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
@@ -20,6 +21,7 @@ class WatcherConfig:
     state_path: Path = Path("tmp/watcher_state.json")
     stop_file: Path = Path("tmp/WATCHER_STOP")
     outbox_path: Path = DEFAULT_OUTBOX_PATH
+    heartbeat_path: Path = DEFAULT_HEARTBEAT_PATH
     summary_interval: int = 60
     tick_sleep_seconds: float = 1.0
 
@@ -38,6 +40,7 @@ class WatcherConfig:
         outbox_env = os.getenv("INDEX_OUTBOX_PATH") or str(DEFAULT_OUTBOX_PATH)
         state_path = Path(os.getenv("WATCHER_STATE_PATH", "tmp/watcher_state.json"))
         stop_file = Path(os.getenv("WATCHER_STOP_FILE", "tmp/WATCHER_STOP"))
+        heartbeat_path = resolve_heartbeat_path()
 
         return cls(
             enable=enable,
@@ -49,6 +52,7 @@ class WatcherConfig:
             state_path=state_path.expanduser(),
             stop_file=stop_file.expanduser(),
             outbox_path=Path(outbox_env).expanduser(),
+            heartbeat_path=heartbeat_path,
         )
 
 
