@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import click
 
 from app.health_contract import DEFAULT_CONTRACT
+from app.settings.health_settings import load_health_settings
 
 
 def emit_health_contract_status(as_json: bool) -> None:
@@ -52,4 +54,26 @@ def emit_health_contract_explain() -> None:
         click.echo("  - none")
 
 
-__all__ = ["emit_health_contract_status", "emit_health_contract_explain"]
+def emit_health_contract_incidents_tail(count: int) -> None:
+    if count <= 0:
+        return
+    settings = load_health_settings()
+    log_path: Path = settings.settings.incident_log_path
+    if not log_path.exists():
+        click.echo(f"incident log not found: {log_path}")
+        return
+    try:
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+    except Exception as exc:  # pragma: no cover - best effort
+        click.echo(f"failed to read incident log: {exc}")
+        return
+    tail = lines[-count:]
+    for line in tail:
+        click.echo(line)
+
+
+__all__ = [
+    "emit_health_contract_status",
+    "emit_health_contract_explain",
+    "emit_health_contract_incidents_tail",
+]

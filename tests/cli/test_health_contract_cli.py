@@ -8,6 +8,11 @@ from app.cli import health
 from app.health_contract import reset_state_machine
 
 
+def _write_health_markdown(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"---\n{body}---\n", encoding="utf-8")
+
+
 def test_health_status_cli_json(monkeypatch, tmp_path: Path) -> None:
     reset_state_machine()
     outbox = tmp_path / "outbox.jsonl"
@@ -43,6 +48,7 @@ def test_health_status_cli_json(monkeypatch, tmp_path: Path) -> None:
     assert payload["writes_allowed"] is True
     assert payload["write_guard_reason"] is None
     assert "catch_up_progress" in payload
+    assert payload["recent_transition_history"] is None
     assert isinstance(payload["suggested_actions"], list)
 
 
@@ -78,3 +84,33 @@ def test_health_explain_cli(monkeypatch, tmp_path: Path) -> None:
     assert "Suggested actions:" in output
     assert "- python -m app.cli events doctor --json" in output
     assert "- python -m app.cli index doctor --json" in output
+
+
+def test_health_incidents_tail_cli(monkeypatch, tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    log_path = tmp_path / "incidents.log"
+    lines = ["{\"id\": 1}", "{\"id\": 2}", "{\"id\": 3}"]
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    settings_path = vault / "@System" / "Settings" / "health.md"
+    _write_health_markdown(
+        settings_path,
+        f"""
+thresholds:
+  outbox_degrade_oldest_age_s: 15.0
+  outbox_recover_oldest_age_s: 5.0
+  degrade_samples: 3
+  recover_samples: 10
+incident_capture:
+  enabled: false
+  transition_history: false
+policy:
+  env_overrides: false
+incident_log_path: "{log_path}"
+""",
+    )
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+
+    result = CliRunner().invoke(health, ["incidents", "tail", "--n", "2"])
+    assert result.exit_code == 0
+    assert result.output.strip().splitlines() == lines[-2:]
