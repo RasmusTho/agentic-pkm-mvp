@@ -11,6 +11,8 @@ from app.config.paths import resolve_vault_root
 from app.index.doctor import diagnose_index
 from app.settings.health_settings import HealthThresholds, load_health_settings
 
+WRITE_BLOCKED_STATES = {"safe_mode", "unhealthy"}
+
 
 @dataclass
 class HealthStateMachine:
@@ -109,6 +111,8 @@ class HealthContract:
         )
         events_status = self._events_status(records)
         errors = self._count_errors(records, now)
+        writes_allowed = state not in WRITE_BLOCKED_STATES
+        write_guard_reason = None if writes_allowed else reason
         return {
             "state": state,
             "reason": reason,
@@ -127,6 +131,8 @@ class HealthContract:
             "settings_source": settings_result.source.to_payload(),
             "settings_errors": settings_result.errors,
             "thresholds": settings_result.settings.thresholds.to_payload(),
+            "writes_allowed": writes_allowed,
+            "write_guard_reason": write_guard_reason,
         }
 
     def _earliest_timestamp(self, records: Iterable[dict[str, Any]]) -> datetime | None:

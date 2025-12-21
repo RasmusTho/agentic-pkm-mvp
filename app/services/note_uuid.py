@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
 import uuid
+from pathlib import Path
 
+from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 
@@ -16,6 +17,7 @@ def ensure_note_uuid(path: Path) -> str:
 
     new_uuid = str(uuid.uuid4())
     frontmatter["uuid"] = new_uuid
+    DEFAULT_WRITE_GUARD.assert_writes_allowed("ensure uuid")
     resolved.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
     return new_uuid
 

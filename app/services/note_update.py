@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 from pydantic import BaseModel
 
 from app.agents.panel.integration import handle_panel_update
 from app.orchestrator.handler import OrchestratorContext
 from app.services.note_uuid import ensure_note_uuid
+from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 DEFAULT_SNAPSHOT_DIR = Path("tmp/note_update_snapshots")
@@ -60,6 +61,7 @@ def apply_promotion_frontmatter(
 
     updated = dump_frontmatter(fm, body)
     if updated != markdown:
+        DEFAULT_WRITE_GUARD.assert_writes_allowed("promotion frontmatter")
         note_path.write_text(updated, encoding="utf-8")
     return True
 
@@ -106,6 +108,7 @@ def process_note_update(
 
     changed = panel_result.panel.updated_markdown != raw_markdown
     if changed:
+        DEFAULT_WRITE_GUARD.assert_writes_allowed("panel runtimes")
         resolved_path.write_text(panel_result.panel.updated_markdown, encoding="utf-8")
 
     snapshot_path = _snapshot_path(snapshot_dir, note_uuid, ensure_parent=True)
@@ -123,7 +126,9 @@ def process_note_update(
     )
 
 
-def _snapshot_path(snapshot_dir: Path | None, note_uuid: str, *, ensure_parent: bool) -> Path | None:
+def _snapshot_path(
+    snapshot_dir: Path | None, note_uuid: str, *, ensure_parent: bool
+) -> Path | None:
     base = snapshot_dir or DEFAULT_SNAPSHOT_DIR
     if ensure_parent:
         base.mkdir(parents=True, exist_ok=True)
@@ -132,4 +137,9 @@ def _snapshot_path(snapshot_dir: Path | None, note_uuid: str, *, ensure_parent: 
     return base / f"{note_uuid}.md"
 
 
-__all__ = ["NoteUpdateResult", "process_note_update", "DEFAULT_SNAPSHOT_DIR", "apply_promotion_frontmatter"]
+__all__ = [
+    "NoteUpdateResult",
+    "process_note_update",
+    "DEFAULT_SNAPSHOT_DIR",
+    "apply_promotion_frontmatter",
+]

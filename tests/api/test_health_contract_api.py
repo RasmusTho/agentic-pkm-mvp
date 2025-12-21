@@ -31,6 +31,8 @@ def _mock_snapshot(state: str, reason: str) -> dict[str, object]:
             "degrade_samples": 3,
             "recover_samples": 10,
         },
+        "writes_allowed": True,
+        "write_guard_reason": None,
     }
 
 
@@ -50,8 +52,10 @@ def test_health_endpoints_ready(monkeypatch) -> None:
 
     resp_status = client.get("/status")
     assert resp_status.status_code == 200
-    assert resp_status.json()["state"] == "running"
-    assert resp_status.json()["settings_status"] == "ok"
+    payload = resp_status.json()
+    assert payload["state"] == "running"
+    assert payload["settings_status"] == "ok"
+    assert payload["writes_allowed"] is True
 
 
 def test_readyz_unhealthy(monkeypatch) -> None:

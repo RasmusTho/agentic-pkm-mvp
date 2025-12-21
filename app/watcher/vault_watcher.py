@@ -13,6 +13,7 @@ from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.store.object_store import ObjectStore
 from app.watcher.events import emit_watcher_run_event
+from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from scripts.yaml_roundtrip import load_frontmatter
 
 Snapshot = dict[str, float]
@@ -337,8 +338,11 @@ def run_watcher_tick(
 
             if not emit_only and panel_result.updated_markdown != current_markdown:
                 try:
+                    DEFAULT_WRITE_GUARD.assert_writes_allowed("vault watcher panel write")
                     note_path.write_text(panel_result.updated_markdown, encoding="utf-8")
                     _hydrate_store_with_markdown(note_uuid, note_path)
+                except WritesBlockedError:
+                    raise
                 except Exception:
                     messages.append(f"Warning: failed to write updates to {note_path}")
                     summary["errors"] += 1
