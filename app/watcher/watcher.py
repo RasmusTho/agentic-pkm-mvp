@@ -139,10 +139,7 @@ def run_tick(
 
     changed_entries: list[tuple[Path, float, str | None]] = []
     for rel, mtime, path in _scan_markdown(cfg.vault_path, cfg.scope_glob):
-        previous_mtime = state.last_mtime(str(rel))
         previous_hash = state.last_hash(str(rel))
-        if previous_mtime is not None and abs(previous_mtime - mtime) < 1e-9:
-            continue
         digest = _hash_file(path)
         if digest is None:
             continue

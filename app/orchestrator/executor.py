@@ -17,6 +17,7 @@ from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
 from app.planner.tools import get_tool_descriptor
 from app.policy.enforce import assert_tool_allowed, is_policy_enforced
 from app.quality import timeout_wrapper
+from app.outbox.events import INDEX_OUTBOX_PATH
 from app.store.object_store import ObjectStore
 from app.events.schema import OutboxEvent
 
@@ -37,10 +38,7 @@ def _flag_enabled(value: Any) -> bool:
 
 
 def _resolve_outbox_path() -> Path:
-    env_path = os.getenv("INDEX_OUTBOX_PATH")
-    if env_path:
-        return Path(env_path)
-    return Path("logs/index-outbox.jsonl")
+    return Path(INDEX_OUTBOX_PATH)
 
 
 def _write_outbox_events(outbox_path: Path, events: Iterable[Any]) -> None:
