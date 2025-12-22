@@ -7,6 +7,12 @@ services:
       POSTGRES_DB: app
     ports:
       - "15432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport psycopg, os, sys\ndsn = os.environ.get('POSTGRES_DB') or 'app'\nuser = os.environ.get('POSTGRES_USER') or 'app'\npassword = os.environ.get('POSTGRES_PASSWORD') or 'app'\nhost = '127.0.0.1'\nport = 5432\ntry:\n    with psycopg.connect(f'postgresql://{user}:{password}@{host}:{port}/{dsn}', connect_timeout=1) as conn:\n        with conn.cursor() as cur:\n            cur.execute('SELECT 1')\n    sys.exit(0)\nexcept Exception:\n    sys.exit(1)\nPY"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
 
   api:
     build: .
@@ -26,6 +32,12 @@ services:
       - "18000:8000"
     depends_on:
       - db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request, sys\ntry:\n    urllib.request.urlopen('http://127.0.0.1:8000/api/status', timeout=2)\n    sys.exit(0)\nexcept Exception:\n    sys.exit(1)\nPY"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   worker:
     build: .
@@ -43,3 +55,9 @@ services:
       INDEX_OUTBOX_PATH: /app/tmp/index-outbox.jsonl
     depends_on:
       - db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport app, os, sys\ntry:\n    path = os.environ.get('INDEX_OUTBOX_PATH', '/app/tmp/index-outbox.jsonl')\n    os.makedirs(os.path.dirname(path), exist_ok=True)\n    sys.exit(0)\nexcept Exception:\n    sys.exit(1)\nPY"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
