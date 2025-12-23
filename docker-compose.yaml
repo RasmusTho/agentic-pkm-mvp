@@ -7,6 +7,13 @@ services:
       POSTGRES_DB: app
     ports:
       - "15432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app -h 127.0.0.1 -p 5432"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
 
   api:
     build: .
@@ -14,16 +21,24 @@ services:
     working_dir: /app
     volumes:
       - ./:/app
-    command: ["/bin/bash", "/app/scripts/start_api.sh"]
+    command: ["/bin/bash", "-c", "mkdir -p /app/tmp && bash /app/scripts/start_api.sh"]
     environment:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
       LLM_PROVIDER: mock
+      WATCHER_HEARTBEAT_PATH: /app/tmp/watcher_heartbeat.json
+      INDEX_OUTBOX_PATH: /app/tmp/index-outbox.jsonl
     ports:
       - "18000:8000"
     depends_on:
       - db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request, sys\ntry:\n    urllib.request.urlopen('http://127.0.0.1:8000/api/status', timeout=2)\n    sys.exit(0)\nexcept Exception:\n    sys.exit(1)\nPY"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   worker:
     build: .
@@ -31,11 +46,47 @@ services:
     working_dir: /app
     volumes:
       - ./:/app
-    command: ["python", "-m", "app.workers.outbox_worker"]
+    command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.workers.outbox_worker"]
     environment:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
       LLM_PROVIDER: mock
+      WATCHER_HEARTBEAT_PATH: /app/tmp/watcher_heartbeat.json
+      INDEX_OUTBOX_PATH: /app/tmp/index-outbox.jsonl
     depends_on:
       - db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport app, os, sys\ntry:\n    path = os.environ.get('INDEX_OUTBOX_PATH', '/app/tmp/index-outbox.jsonl')\n    os.makedirs(os.path.dirname(path), exist_ok=True)\n    sys.exit(0)\nexcept Exception:\n    sys.exit(1)\nPY"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+
+  watcher:
+    build: .
+    image: workspace-app
+    working_dir: /app
+    volumes:
+      - ./:/app
+    command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.cli watcher run"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
+      DB_DSN: postgresql+psycopg://app:app@db:5432/app
+      STORE_BACKEND: pg
+      LLM_PROVIDER: mock
+      WATCHER_ENABLE: "1"
+      WATCHER_SCOPE_GLOB: "@Inbox/**"
+      WATCHER_VAULT_PATH: /app/vault
+      WATCHER_HEARTBEAT_PATH: /app/tmp/watcher_heartbeat.json
+      WATCHER_STATE_PATH: /app/tmp/watcher_state.json
+      WATCHER_STOP_FILE: /app/tmp/WATCHER_STOP
+      INDEX_OUTBOX_PATH: /app/tmp/index-outbox.jsonl
+    depends_on:
+      - db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /app/tmp/watcher_heartbeat.json"]
+      interval: 5s
+      timeout: 2s
+      retries: 10

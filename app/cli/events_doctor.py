@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import click
 
+from app.outbox.events import INDEX_OUTBOX_PATH
 
-def _default_outbox_path() -> Path:
-    env = os.getenv("INDEX_OUTBOX_PATH")
-    if env:
-        return Path(env).expanduser()
-    return Path("logs/index-outbox.jsonl")
+
+DEFAULT_OUTBOX_PATH = Path(INDEX_OUTBOX_PATH)
 
 
 def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -64,7 +61,6 @@ def _pick_trace_id(rows: List[Dict[str, Any]], trace_id: str, latest: bool) -> s
 
 def _build_story(rows: List[Dict[str, Any]], trace_id: str) -> Dict[str, Any]:
     filtered = [r for r in rows if _trace_id(r) == trace_id] if trace_id else []
-    # Keep file order (append order) as canonical; timestamps may be missing.
     events: List[Dict[str, Any]] = []
     stages: List[str] = []
     for r in filtered:
@@ -104,7 +100,7 @@ def events() -> None:
 @click.option("--latest", is_flag=True, default=False, help="Use the latest trace_id in the outbox when none is provided.")
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON.")
 def doctor(outbox_path: Optional[Path], trace_id: str, latest: bool, as_json: bool) -> None:
-    path = (outbox_path or _default_outbox_path()).expanduser()
+    path = (outbox_path or DEFAULT_OUTBOX_PATH).expanduser()
     rows = _read_jsonl(path)
     picked = _pick_trace_id(rows, trace_id=trace_id, latest=latest)
     if not picked:

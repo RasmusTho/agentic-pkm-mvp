@@ -144,6 +144,11 @@
         <thead><tr><th>Check</th><th>Result</th></tr></thead>
         <tbody id="health-checks"><tr><td colspan="2" class="muted">Loading...</td></tr></tbody>
       </table>
+      <div class="label" style="margin-top:12px;">Runtime services</div>
+      <table style="margin-top:8px;">
+        <thead><tr><th>Service</th><th>Result</th><th>Details</th></tr></thead>
+        <tbody id="health-runtime"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
+      </table>
     </section>
 
     <section class="panel">
@@ -230,6 +235,10 @@
       checks: document.getElementById("health-checks"),
       error: document.getElementById("health-error"),
     };
+    const runtimeEls = {
+      list: document.getElementById("health-runtime"),
+    };
+
 
     const settingsEls = {
       ok: document.getElementById("settings-ok"),
@@ -359,8 +368,10 @@
             });
         }
         clearBanner(healthEls.error);
+        renderRuntimeStatuses(data.runtime);
       } catch (err) {
         showBanner(healthEls.error, `Health failed: ${err}`);
+        renderRuntimeStatuses(null);
       }
     }
 
@@ -399,6 +410,70 @@
         return value;
       }
       return `…${value.slice(-maxLen)}`;
+    }
+
+    function renderRuntimeStatuses(runtime) {
+      if (!(runtimeEls && runtimeEls.list)) {
+        return;
+      }
+      runtimeEls.list.innerHTML = "";
+      const services = [
+        { key: "watcher", label: "Watcher" },
+        { key: "db", label: "Database" },
+        { key: "llm", label: "LLM" },
+      ];
+      let rendered = false;
+      services.forEach(({ key, label }) => {
+        const payload = runtime?.[key];
+        if (!payload) return;
+        rendered = true;
+        const row = document.createElement("tr");
+        const nameCell = document.createElement("td");
+        nameCell.textContent = label;
+        const resultCell = document.createElement("td");
+        const ok = payload.ok !== false;
+        const pill = document.createElement("span");
+        pill.className = `pill ${ok ? "ok" : "warn"}`;
+        pill.textContent = ok ? "ok" : "fail";
+        resultCell.appendChild(pill);
+        if (payload.detail) {
+          resultCell.appendChild(document.createTextNode(` ${payload.detail}`));
+        }
+        const detailCell = document.createElement("td");
+        const extras = [];
+        if (key === "watcher") {
+          if (typeof payload.freshness_seconds === "number") {
+            extras.push(`fresh ${payload.freshness_seconds.toFixed(1)}s`);
+          }
+          extras.push(payload.paused ? "paused" : "running");
+          if (payload.path) {
+            extras.push(`path=${truncatePath(payload.path, 60)}`);
+          }
+        } else if (key === "db") {
+          if (payload.status) {
+            extras.push(payload.status);
+          }
+          if (payload.dsn) {
+            extras.push(truncatePath(payload.dsn, 64));
+          }
+        } else if (key === "llm") {
+          extras.push(`provider=${payload.provider || "unknown"}`);
+          if (payload.base_url) {
+            extras.push(truncatePath(payload.base_url, 64));
+          }
+          if (payload.status) {
+            extras.push(payload.status);
+          }
+        }
+        detailCell.textContent = extras.filter(Boolean).join(" • ");
+        row.appendChild(nameCell);
+        row.appendChild(resultCell);
+        row.appendChild(detailCell);
+        runtimeEls.list.appendChild(row);
+      });
+      if (!rendered) {
+        runtimeEls.list.innerHTML = '<tr><td colspan="3" class="muted">No runtime data yet.</td></tr>';
+      }
     }
 
     function updateEventsDiag(data) {

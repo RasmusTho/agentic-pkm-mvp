@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VAULT_DEFAULT="/Users/rasmus/Library/Mobile Documents/iCloud~md~obsidian/Documents/PKM - Alpha"
 VAULT="${VAULT:-${1:-$VAULT_DEFAULT}}"
 
@@ -15,13 +16,15 @@ export WATCHER_BACKOFF_SECONDS="${WATCHER_BACKOFF_SECONDS:-10}"
 
 export STORE_BACKEND="${STORE_BACKEND:-memory}"
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD="${PYTEST_DISABLE_PLUGIN_AUTOLOAD:-1}"
+export WATCHER_HEARTBEAT_PATH="${WATCHER_HEARTBEAT_PATH:-$ROOT/tmp/watcher_heartbeat.json}"
+export INDEX_OUTBOX_PATH="${INDEX_OUTBOX_PATH:-$ROOT/tmp/index-outbox.jsonl}"
 
-mkdir -p tmp
+mkdir -p "$ROOT/tmp"
 
 echo "Vault: $WATCHER_VAULT_PATH"
 echo "Scope: $WATCHER_SCOPE_GLOB"
 echo "Policy: POLICY_ENFORCE=$POLICY_ENFORCE"
-echo "Stop:   touch tmp/WATCHER_STOP   (resume: rm tmp/WATCHER_STOP)"
+echo "Stop:   touch $ROOT/tmp/WATCHER_STOP   (resume: rm $ROOT/tmp/WATCHER_STOP)"
 echo
 
 python -m app.cli settings validate

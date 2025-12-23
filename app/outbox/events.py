@@ -10,10 +10,71 @@ from app.embedding_config import get_embed_dim
 from app.events.schema import make_outbox_event
 from app.llm.embeddings import EMBED_MODEL
 
-INDEX_OUTBOX_PATH = Path(os.environ.get("INDEX_OUTBOX_PATH", "logs/index-outbox.jsonl"))
 
+_DEFAULT_LOGS_OUTBOX = Path("logs/index-outbox.jsonl")
+_DEFAULT_TMP_OUTBOX = Path("tmp/index-outbox.jsonl")
+
+
+def _try_writable_path(path: Path) -> bool:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    try:
+        with path.open("a", encoding="utf-8"):
+            pass
+        return True
+    except OSError:
+        return False
+
+
+def _build_candidate_list(env_value: str | None) -> list[Path]:
+    values: list[Path] = []
+    if env_value and env_value.strip():
+        values.append(Path(env_value).expanduser())
+    values.append(_DEFAULT_LOGS_OUTBOX)
+    values.append(_DEFAULT_TMP_OUTBOX)
+    return values
+
+
+class _DynamicIndexOutboxPath:
+    def __init__(self) -> None:
+        self._cache_env: str | None = None
+        self._cache_path: Path | None = None
+
+    def _resolve(self, env_value: str | None) -> Path:
+        for candidate in _build_candidate_list(env_value):
+            if _try_writable_path(candidate):
+                return candidate
+        raise RuntimeError("Could not resolve a writable INDEX_OUTBOX_PATH")
+
+    def current(self) -> Path:
+        env_value = os.environ.get("INDEX_OUTBOX_PATH")
+        env_key = env_value.strip() if env_value else ""
+        if env_key == self._cache_env and self._cache_path is not None:
+            return self._cache_path
+        path = self._resolve(env_value)
+        self._cache_env = env_key
+        self._cache_path = path
+        return path
+
+    def __getattr__(self, name: str):
+        return getattr(self.current(), name)
+
+    def __fspath__(self) -> str:
+        return str(self.current())
+
+    def __str__(self) -> str:
+        return str(self.current())
+
+
+INDEX_OUTBOX_PATH = _DynamicIndexOutboxPath()
 INDEX_EMBEDDING_REQUESTED = "index.embedding.requested"
 INDEX_EMBEDDING_CREATED = "index.embedding.created"
+
+
+def get_index_outbox_path() -> Path:
+    return Path(INDEX_OUTBOX_PATH)
 
 
 def _coerce_uuid(value: object) -> str:
@@ -97,4 +158,5 @@ __all__ = [
     "INDEX_OUTBOX_PATH",
     "INDEX_EMBEDDING_REQUESTED",
     "INDEX_EMBEDDING_CREATED",
+    "get_index_outbox_path",
 ]
