@@ -57,7 +57,7 @@ wait_for_worker_ingest() {
   max_attempts=15
   attempts=0
   while [ $attempts -lt $max_attempts ]; do
-    read -r current_count current_ts <<'EOT'
+    read -r current_count current_ts <<EOT
 $(worker_ingest_status)
 EOT
     if [ "$current_count" -gt "$initial_count" ]; then
@@ -83,7 +83,7 @@ PY
   return 1
 }
 
-read -r baseline_count baseline_ts <<'EOT'
+read -r baseline_count baseline_ts <<EOT
 $(worker_ingest_status)
 EOT
 info "worker ingest baseline: count=$baseline_count ts=$baseline_ts"
