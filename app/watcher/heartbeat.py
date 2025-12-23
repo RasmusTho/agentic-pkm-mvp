@@ -19,6 +19,14 @@ def resolve_heartbeat_path(env_get: Callable[[str], str | None] | None = None) -
     return DEFAULT_HEARTBEAT_PATH
 
 
+def _write_payload(path: Path, payload: dict[str, object]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        return
+
+
 def write_heartbeat(
     *,
     path: Path,
@@ -41,11 +49,35 @@ def write_heartbeat(
         "ticks_total": ticks_total,
         "errors_total": errors_total,
     }
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        return
+    _write_payload(path, payload)
 
 
-__all__ = ["DEFAULT_HEARTBEAT_PATH", "resolve_heartbeat_path", "write_heartbeat"]
+def write_runtime_heartbeat(
+    *,
+    path: Path | None = None,
+    ticks: int,
+    changed: int,
+    errors: int,
+    status: str = "running",
+    now: float | None = None,
+) -> Path:
+    resolved = path or resolve_heartbeat_path()
+    timestamp = now if now is not None else time.time()
+    payload = {
+        "ts": timestamp,
+        "pid": os.getpid(),
+        "status": status,
+        "ticks": ticks,
+        "changed": changed,
+        "errors": errors,
+    }
+    _write_payload(resolved, payload)
+    return resolved
+
+
+__all__ = [
+    "DEFAULT_HEARTBEAT_PATH",
+    "resolve_heartbeat_path",
+    "write_heartbeat",
+    "write_runtime_heartbeat",
+]
