@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Any, Dict
@@ -8,6 +9,8 @@ from app.observability.tracer import start_span
 from app.services.embedding import deterministic_embedding
 from app.store.object_store import DomainObject, ObjectStore
 from app.store.vector_store import VectorIndex
+
+logger = logging.getLogger(__name__)
 
 
 def _is_valid_uuid(value: str | None) -> bool:
@@ -18,6 +21,7 @@ def _is_valid_uuid(value: str | None) -> bool:
     except Exception:
         return False
     return True
+
 
 def handle_ingest_object_created(obj: Dict[str, Any]) -> None:
     """
@@ -31,11 +35,14 @@ def handle_ingest_object_created(obj: Dict[str, Any]) -> None:
     content = obj.get("content") or ""
     embedding = deterministic_embedding(content)
 
+    obj_payload = obj.get("payload") or {}
     payload = {
         "title": obj.get("title"),
         "review_state": obj.get("review_state"),
         "content": content,
         "source_uuid": incoming_uuid,
+        "raw_text": obj_payload.get("raw_text"),
+        "text": content,
     }
     trace_id = obj.get("trace_id")
     store = ObjectStore()
@@ -63,4 +70,7 @@ def handle_ingest_object_created(obj: Dict[str, Any]) -> None:
         store.save_object(domain, emit_outbox=False, trace_id=trace_id)
 
     with start_span("indexer.upsert", trace_id, {"kind": "note"}):
-        VectorIndex().upsert_embedding(object_uuid, embedding)
+        try:
+            VectorIndex().upsert_embedding(object_uuid, embedding)
+        except Exception:
+            logger.exception("Vector index ingest failed for %s", object_uuid)
