@@ -9,6 +9,11 @@ Ensures the watcher → outbox → worker → index → /api/ask path stays heal
 
 ## How to run
 
+1. Start the full system first:
+```
+scripts/start_full_system.sh
+```
+2. Then run the gap test:
 ```
 scripts/gap_test_alpha.sh
 ```

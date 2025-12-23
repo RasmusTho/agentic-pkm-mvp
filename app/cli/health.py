@@ -11,6 +11,7 @@ from typing import Any, Dict
 import httpx
 
 from app.obs.log import span, with_trace_id
+from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.stores.db_health import ping_postgres, resolve_dsn
 from app.watcher.heartbeat import resolve_heartbeat_path
 
@@ -32,6 +33,13 @@ def _env_float(name: str, fallback: float) -> float:
         return float(raw)
     except Exception:
         return fallback
+
+
+def _is_enabled(env_name: str, default: bool = True) -> bool:
+    raw = os.getenv(env_name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in _TRUE_VALUES
 
 
 def _watcher_required() -> bool:
@@ -90,23 +98,30 @@ def _check_ollama() -> Dict[str, Any]:
     return result
 
 
-def _watcher_runtime_status(now: float | None = None) -> Dict[str, Any]:
-    now = now if now is not None else time.time()
-    heartbeat_path = resolve_heartbeat_path()
-    stale_seconds = _env_float("WATCHER_HEARTBEAT_STALE_SECONDS", 60.0)
-    if not heartbeat_path.exists():
+def _heartbeat_status(
+    *,
+    name: str,
+    path: Path,
+    stale_seconds: float,
+    now: float,
+    skip: bool = False,
+) -> Dict[str, Any]:
+    if skip:
+        return {"ok": True, "detail": "skipped (disabled)", "status": "skipped"}
+
+    if not path.exists():
         return {
             "ok": False,
-            "detail": "watcher not running (no heartbeat)",
-            "path": str(heartbeat_path),
+            "detail": f"{name} not running (no heartbeat)",
+            "path": str(path),
         }
     try:
-        raw = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         return {
             "ok": False,
-            "detail": f"watcher heartbeat unreadable ({exc})",
-            "path": str(heartbeat_path),
+            "detail": f"{name} heartbeat unreadable ({exc})",
+            "path": str(path),
         }
     ts_raw = raw.get("ts")
     try:
@@ -114,27 +129,63 @@ def _watcher_runtime_status(now: float | None = None) -> Dict[str, Any]:
     except Exception:
         return {
             "ok": False,
-            "detail": "watcher heartbeat missing timestamp",
-            "path": str(heartbeat_path),
+            "detail": f"{name} heartbeat missing timestamp",
+            "path": str(path),
         }
     freshness = max(0.0, now - ts_value)
-    paused = bool(raw.get("paused"))
     ok = freshness <= stale_seconds
-    if ok:
-        detail = f"watcher running (fresh {freshness:.1f}s, paused={paused})"
-    else:
-        detail = f"watcher stale (last seen {freshness:.1f}s ago)"
+    paused_value = bool(raw.get("paused", False))
+    detail = (
+        f"{name} running (fresh {freshness:.1f}s, paused={paused_value})"
+        if ok
+        else f"{name} stale (last seen {freshness:.1f}s ago)"
+    )
     payload: Dict[str, Any] = {
         "ok": ok,
         "detail": detail,
-        "path": str(heartbeat_path),
+        "path": str(path),
         "freshness_seconds": freshness,
-        "paused": paused,
+        "paused": paused_value,
     }
-    for key in ("pid", "scope_glob", "ticks_total", "errors_total", "vault_path", "outbox_path"):
+    for key in (
+        "pid",
+        "scope_glob",
+        "ticks_total",
+        "errors_total",
+        "vault_path",
+        "outbox_path",
+        "processed_total",
+        "status",
+    ):
         if key in raw:
             payload[key] = raw[key]
     return payload
+
+
+def _watcher_runtime_status(now: float | None = None) -> Dict[str, Any]:
+    now = now if now is not None else time.time()
+    heartbeat_path = resolve_heartbeat_path()
+    stale_seconds = _env_float("WATCHER_HEARTBEAT_STALE_SECONDS", 60.0)
+    return _heartbeat_status(
+        name="watcher",
+        path=heartbeat_path,
+        stale_seconds=stale_seconds,
+        now=now,
+    )
+
+
+def _worker_runtime_status(now: float | None = None) -> Dict[str, Any]:
+    skip = not _is_enabled("WORKER_ENABLE", default=True)
+    now = now if now is not None else time.time()
+    heartbeat_path = resolve_worker_heartbeat_path()
+    stale_seconds = _env_float("WORKER_HEARTBEAT_STALE_SECONDS", 60.0)
+    return _heartbeat_status(
+        name="worker",
+        path=heartbeat_path,
+        stale_seconds=stale_seconds,
+        now=now,
+        skip=skip,
+    )
 
 
 def _db_runtime_status() -> Dict[str, Any]:
@@ -171,7 +222,11 @@ def _llm_runtime_status(check_result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _runtime_ok(runtime: dict[str, dict[str, Any]]) -> bool:
-    base_ok = bool(runtime.get("db", {}).get("ok") and runtime.get("llm", {}).get("ok"))
+    base_ok = bool(
+        runtime.get("db", {}).get("ok")
+        and runtime.get("llm", {}).get("ok")
+        and runtime.get("worker", {}).get("ok")
+    )
     if _watcher_required():
         return base_ok and bool(runtime.get("watcher", {}).get("ok"))
     return base_ok
@@ -188,6 +243,7 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     }
     runtime = {
         "watcher": _watcher_runtime_status(),
+        "worker": _worker_runtime_status(),
         "db": _db_runtime_status(),
         "llm": _llm_runtime_status(checks["ollama"]),
     }
