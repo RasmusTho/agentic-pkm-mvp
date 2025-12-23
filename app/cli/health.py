@@ -175,7 +175,9 @@ def _watcher_runtime_status(now: float | None = None) -> Dict[str, Any]:
 
 
 def _worker_runtime_status(now: float | None = None) -> Dict[str, Any]:
-    skip = not _is_enabled("WORKER_ENABLE", default=True)
+    backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
+    enabled_default = backend != "memory"
+    skip = not _is_enabled("WORKER_ENABLE", default=enabled_default)
     now = now if now is not None else time.time()
     heartbeat_path = resolve_worker_heartbeat_path()
     stale_seconds = _env_float("WORKER_HEARTBEAT_STALE_SECONDS", 60.0)

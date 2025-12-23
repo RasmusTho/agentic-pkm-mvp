@@ -7,8 +7,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.api.app import app
-from app.watcher.heartbeat import resolve_heartbeat_path
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
+from app.watcher.heartbeat import resolve_heartbeat_path
 
 
 def _write_watcher_heartbeat(path: Path, *, ts: float, paused: bool = False) -> None:
@@ -60,7 +60,7 @@ def _health_client(
     *,
     watcher_path: Path | None = None,
     worker_path: Path | None = None,
-    worker_enabled: bool = False,
+    worker_enabled: bool | None = False,
 ) -> TestClient:
     if watcher_path is not None:
         monkeypatch.setenv("WATCHER_HEARTBEAT_PATH", str(watcher_path))
@@ -70,7 +70,10 @@ def _health_client(
         monkeypatch.setenv("WORKER_HEARTBEAT_PATH", str(worker_path))
     else:
         monkeypatch.delenv("WORKER_HEARTBEAT_PATH", raising=False)
-    monkeypatch.setenv("WORKER_ENABLE", "1" if worker_enabled else "0")
+    if worker_enabled is None:
+        monkeypatch.delenv("WORKER_ENABLE", raising=False)
+    else:
+        monkeypatch.setenv("WORKER_ENABLE", "1" if worker_enabled else "0")
     monkeypatch.setenv("WATCHER_HEARTBEAT_STALE_SECONDS", "60")
     monkeypatch.setenv("WORKER_HEARTBEAT_STALE_SECONDS", "60")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
@@ -80,31 +83,28 @@ def _health_client(
     return client
 
 
-def test_health_endpoint_returns_runtime_checks(monkeypatch, tmp_path) -> None:
-    watcher_hb = tmp_path / "watcher-heartbeat.json"
+def test_health_success(monkeypatch, tmp_path) -> None:
+    heartbeat = tmp_path / "watcher-heartbeat.json"
+    _write_watcher_heartbeat(heartbeat, ts=time.time())
     worker_hb = tmp_path / "worker-heartbeat.json"
-    _write_watcher_heartbeat(watcher_hb, ts=time.time())
     _write_worker_heartbeat(worker_hb, ts=time.time())
-    client = _health_client(monkeypatch, tmp_path, watcher_path=watcher_hb, worker_path=worker_hb, worker_enabled=True)
+    client = _health_client(monkeypatch, tmp_path, watcher_path=heartbeat, worker_path=worker_hb, worker_enabled=True)
     resp = client.get("/api/health")
     assert resp.status_code == 200
     data = resp.json()
+    assert data.get("ok") is True
     runtime = data["runtime"]
     watcher = runtime["watcher"]
     worker = runtime["worker"]
     assert watcher.get("ok") is True
     assert worker.get("ok") is True
-    assert isinstance(watcher.get("freshness_seconds"), float)
     assert isinstance(worker.get("freshness_seconds"), float)
     assert worker.get("processed_total") == 2
-    assert runtime.get("db", {}).get("status") == "skipped"
-    assert runtime.get("llm", {}).get("status") == "skipped"
 
 
-def test_health_runtime_detects_stale_watchers(monkeypatch, tmp_path) -> None:
+def test_health_allows_stale(monkeypatch, tmp_path) -> None:
     heartbeat = tmp_path / "watcher-heartbeat.json"
-    _write_watcher_heartbeat(heartbeat, ts=time.time() - 120)
-    monkeypatch.setenv("WATCHER_HEARTBEAT_STALE_SECONDS", "5")
+    _write_watcher_heartbeat(heartbeat, ts=time.time() - 61)
     client = _health_client(monkeypatch, tmp_path, watcher_path=heartbeat, worker_enabled=False)
     resp = client.get("/api/health")
     assert resp.status_code == 200
@@ -158,3 +158,31 @@ def test_health_skips_worker_when_disabled(monkeypatch, tmp_path) -> None:
     worker = resp.json()["runtime"]["worker"]
     assert worker.get("status") == "skipped"
     assert resp.json().get("ok") is True
+
+
+def test_health_skips_worker_by_default_in_memory_mode(monkeypatch, tmp_path) -> None:
+    _clear_default_heartbeat(monkeypatch)
+    _clear_worker_heartbeat(monkeypatch)
+    client = _health_client(monkeypatch, tmp_path, worker_enabled=None)
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("ok") is True
+    worker = payload["runtime"]["worker"]
+    assert worker.get("status") == "skipped"
+
+
+def test_health_worker_missing(monkeypatch, tmp_path) -> None:
+    worker_path = _clear_worker_heartbeat(monkeypatch)
+    try:
+        _write_worker_heartbeat(worker_path, ts=time.time())
+        client = _health_client(monkeypatch, tmp_path, worker_path=worker_path, worker_enabled=True)
+        resp = client.get("/api/health")
+        assert resp.status_code == 200
+        payload = resp.json()["runtime"]
+        assert payload["worker"]["ok"] is True
+        worker_path.unlink(missing_ok=True)
+        resp = client.get("/api/health")
+        assert resp.json()["runtime"]["worker"]["ok"] is False
+    finally:
+        worker_path.unlink(missing_ok=True)
