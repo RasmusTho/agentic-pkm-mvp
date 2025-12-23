@@ -7,6 +7,7 @@ NOTE_REL="${1:-@Inbox/_gap_test.md}"
 NOTE_PATH="$VAULT_PATH/$NOTE_REL"
 OUTBOX_PATH="${OUTBOX_PATH:-/app/tmp/index-outbox.jsonl}"
 WATCHER_HEARTBEAT_PATH="${WATCHER_HEARTBEAT_PATH:-/app/tmp/watcher_heartbeat.json}"
+WORKER_HEARTBEAT_PATH="${WORKER_HEARTBEAT_PATH:-/app/tmp/worker_heartbeat.json}"
 WATCHER_CONTAINER="${WATCHER_CONTAINER:-workspace-watcher-1}"
 WORKER_CONTAINER="${WORKER_CONTAINER:-workspace-worker-1}"
 API_URL="${API_URL:-http://127.0.0.1:18000}"
@@ -18,6 +19,74 @@ printf '[gap test] uname=%s\n' "$(uname -a)"
 info() {
   printf '[gap test] %s\n' "$1"
 }
+
+worker_ingest_status() {
+  docker exec "$WORKER_CONTAINER" bash -lc "cat '$WORKER_HEARTBEAT_PATH' 2>/dev/null || true" | python - <<'PY'
+import json
+import sys
+raw = sys.stdin.read().strip()
+if not raw:
+    print("0 0")
+    sys.exit(0)
+try:
+    data = json.loads(raw)
+except Exception:
+    print("0 0")
+    sys.exit(0)
+by_event = data.get("processed_by_event") or {}
+last_map = data.get("last_processed") or {}
+count = 0
+if isinstance(by_event, dict):
+    try:
+        count = int(by_event.get("ingest.vault.changed") or 0)
+    except Exception:
+        count = 0
+last_ts = 0.0
+if isinstance(last_map, dict):
+    try:
+        last_ts = float(last_map.get("ingest.vault.changed") or 0.0)
+    except Exception:
+        last_ts = 0.0
+print(f"{count} {last_ts}")
+PY
+}
+
+wait_for_worker_ingest() {
+  initial_count="$1"
+  initial_ts="$2"
+  max_attempts=15
+  attempts=0
+  while [ $attempts -lt $max_attempts ]; do
+    read -r current_count current_ts <<'EOT'
+$(worker_ingest_status)
+EOT
+    if [ "$current_count" -gt "$initial_count" ]; then
+      return 0
+    fi
+    if python - "$initial_ts" "$current_ts" <<'PY'
+import sys
+try:
+    initial = float(sys.argv[1])
+    current = float(sys.argv[2])
+except Exception:
+    sys.exit(1)
+if current > initial and current > 0:
+    sys.exit(0)
+sys.exit(1)
+PY
+    then
+      return 0
+    fi
+    attempts=$((attempts + 1))
+    sleep 2
+  done
+  return 1
+}
+
+read -r baseline_count baseline_ts <<'EOT'
+$(worker_ingest_status)
+EOT
+info "worker ingest baseline: count=$baseline_count ts=$baseline_ts"
 
 NONCE="$(python - <<'PY'
 import secrets
@@ -37,20 +106,29 @@ info "wrote marker to $NOTE_PATH"
 info "marker = $MARKER"
 
 capture_tail() {
-  docker exec "$WATCHER_CONTAINER" bash -lc "tail -n 20 '$OUTBOX_PATH' 2>/dev/null || true"
+  docker exec "$WATCHER_CONTAINER" bash -lc "tail -n 40 '$OUTBOX_PATH' 2>/dev/null || true"
 }
 
 before_tail="$(capture_tail)"
 sleep 3
 after_tail="$(capture_tail)"
-if ! printf '%s' "$after_tail" | grep -q 'watcher\.' && ! printf '%s' "$after_tail" | grep -qF "$NOTE_REL"; then
-  printf 'FAIL: watcher outbox did not register the marker.\n' >&2
-  docker exec "$WATCHER_CONTAINER" bash -lc "tail -n 20 '$OUTBOX_PATH' || true"
+if ! printf '%s' "$after_tail" | grep -q 'ingest.vault.changed' && ! printf '%s' "$after_tail" | grep -qF "$NOTE_REL"; then
+  printf 'FAIL: watcher outbox did not register ingest.vault.changed for the marker.\n' >&2
+  docker exec "$WATCHER_CONTAINER" bash -lc "tail -n 40 '$OUTBOX_PATH' || true"
   docker exec "$WATCHER_CONTAINER" bash -lc "cat '$WATCHER_HEARTBEAT_PATH' || echo 'no heartbeat found'"
   exit 1
 fi
 info "outbox tail before:\n$before_tail"
 info "outbox tail after:\n$after_tail"
+
+info "waiting for worker to process ingest.vault.changed"
+if ! wait_for_worker_ingest "$baseline_count" "$baseline_ts"; then
+  printf 'FAIL: worker did not process ingest.vault.changed within timeout.\n' >&2
+  docker exec "$WORKER_CONTAINER" bash -lc "cat '$WORKER_HEARTBEAT_PATH' || echo 'no worker heartbeat'"
+  docker logs --tail 200 "$WORKER_CONTAINER" || true
+  docker logs --tail 200 "$WATCHER_CONTAINER" || true
+  exit 1
+fi
 
 stat_snapshot() {
   docker exec "$WORKER_CONTAINER" bash -lc "stat -c '%s %Y %n' '$OUTBOX_PATH' 2>/dev/null || echo 'missing $OUTBOX_PATH'"
@@ -129,6 +207,7 @@ if [ $ask_ok -ne 1 ]; then
   printf 'api status payload:\n%s\n' "$status_payload"
   docker exec "$WATCHER_CONTAINER" bash -lc "grep -nF '$MARKER' '$OUTBOX_PATH' || true"
   docker exec "$WORKER_CONTAINER" bash -lc "grep -nF '$MARKER' '$OUTBOX_PATH' || true"
+  docker exec "$WORKER_CONTAINER" bash -lc "cat '$WORKER_HEARTBEAT_PATH' || echo 'no worker heartbeat'"
   docker logs --tail 200 "$WORKER_CONTAINER" || true
   docker logs --tail 200 "$WATCHER_CONTAINER" || true
   printf 'ask response final:\n%s\n' "$ask_response"

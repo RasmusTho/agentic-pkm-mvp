@@ -1,10 +1,10 @@
 State: SoT v5.x forward line (runtime gap test ready)
 # Runtime Gap Test
 
-Ensures the watcher → outbox → worker → index → /api/ask path stays healthy after compose or workflow changes.
+Ensures the watcher registry → outbox → worker ingest → index → /api/ask path stays healthy after compose or workflow changes.
 
 ## When to run
-- After editing `docker-compose.yaml`, watcher, worker, or API logic that touches the outbox/heartbeat paths.
+- After editing `docker-compose.yaml`, watcher registry config, worker ingest logic, or API routes touching outbox/heartbeat paths.
 - Before merging ops/infra PRs that touch connectors (DB, watcher, index rebuild, CLI endpoints).
 
 ## How to run
@@ -23,16 +23,17 @@ Optional arguments:
 
 ## Expected output
 1. The script writes `GAP_TEST_MARKER: ...` into the target note and prints its absolute path.
-2. The watcher container shows new outbox entries containing `watcher.` events or the marker note path.
-3. Worker stats show the index-outbox file changing, and the script prints the last 120 worker log lines.
-4. API `/api/health` and `/api/status` payloads are emitted, and `curl` to `/api/ask` returns at least one source referencing the vault note (or at least one entry from the sources array).
+2. The watcher outbox tail shows `ingest.vault.changed` and/or the marker note path.
+3. Worker heartbeat counters advance for `ingest.vault.changed` and the script prints recent worker logs.
+4. API `/api/health` and `/api/status` payloads are emitted, and `curl` to `/api/ask` returns at least one source referencing the vault note.
 
 If an embedding/index rebuild was required, the script performs `python -m app.cli index rebuild --backend pg` inside the API container and reruns the ask check.
 
 ## Common failure modes
-- `watcher` heartbeat missing or outbox tail remains unchanged: check `workspace-watcher-1` logs and ensure the heartbeat path (`/app/tmp/watcher_heartbeat.json`) is writable.
-- Worker stats/logs do not update: the worker may be stuck waiting on Kafka/outbox or `worker` service might be unhealthy.
-- `/api/ask` returns zero sources: embeddings/index may need rebuild, or the index service might not yet have processed the test note.
+- `watcher` heartbeat missing or outbox tail unchanged: check `workspace-watcher-1` logs and ensure `/app/tmp/watcher_heartbeat.json` is writable.
+- `ingest.vault.changed` never appears: confirm `configs/watchers.yaml` includes the ingest watcher spec and the watcher service is running.
+- Worker heartbeat counters not advancing: check `workspace-worker-1` logs and `WORKER_HEARTBEAT_PATH`.
+- `/api/ask` returns zero sources: embeddings/index may need rebuild, or the index service has not yet processed the test note.
 - The container stack cannot reach `http://127.0.0.1:18000`: confirm all services are running via `docker compose ps` and restart the stack if necessary.
 
 ## Compatibility

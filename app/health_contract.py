@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -12,6 +13,15 @@ from app.index.doctor import diagnose_index
 from app.settings.health_settings import HealthThresholds, load_health_settings
 
 WRITE_BLOCKED_STATES = {"safe_mode", "unhealthy"}
+INCIDENT_STATES = {"degraded", "unhealthy", "safe_mode"}
+
+
+def _transition_entry(state: str, reason: str, since: datetime) -> dict[str, str]:
+    return {
+        "state": state,
+        "reason": reason,
+        "since_ts": since.isoformat(),
+    }
 
 
 @dataclass
@@ -21,6 +31,7 @@ class HealthStateMachine:
     since: datetime = field(default_factory=lambda: datetime.now(UTC))  # noqa: UP017
     bad_counter: int = 0
     good_counter: int = 0
+    transition_history: list[dict[str, str]] = field(default_factory=list)
 
     def reset(self) -> None:
         self.state = "boot"
@@ -28,6 +39,7 @@ class HealthStateMachine:
         self.since = datetime.now(UTC)  # noqa: UP017
         self.bad_counter = 0
         self.good_counter = 0
+        self.transition_history = []
 
     def update(
         self,
@@ -73,11 +85,18 @@ class HealthStateMachine:
             next_state = "running"
             reason = "normal"
 
-        if next_state != prev_state or reason != self.reason:
+        if next_state != prev_state:
             self.state = next_state
             self.reason = reason
             self.since = now
+            self._record_transition()
         return self.state, self.reason, self.since.isoformat()
+
+    def _record_transition(self) -> None:
+        entry = _transition_entry(self.state, self.reason, self.since)
+        self.transition_history.insert(0, entry)
+        if len(self.transition_history) > 20:
+            self.transition_history = self.transition_history[:20]
 
 
 class HealthContract:
@@ -100,20 +119,51 @@ class HealthContract:
         outbox_count = len(records)
         oldest_ts = self._earliest_timestamp(records)
         age = self._compute_age(oldest_ts, now)
+        prev_state = self.state_machine.state
         state, reason, since_ts = self.state_machine.update(
             age,
             settings_result.settings.thresholds,
             now=now,
         )
+        catch_up_progress = self._catch_up_progress(
+            outbox_count,
+            age,
+            settings_result.settings.thresholds,
+        )
         index_result = diagnose_index()
         index_status = self._summary_status(
-            index_result.get("issues"), index_result.get("warnings")
+            index_result.get("issues"),
+            index_result.get("warnings"),
         )
         events_status = self._events_status(records)
         errors = self._count_errors(records, now)
         writes_allowed = state not in WRITE_BLOCKED_STATES
         write_guard_reason = None if writes_allowed else reason
-        return {
+        suggested_actions = self._suggested_actions(age, index_status, writes_allowed)
+
+        if settings_result.settings.incident_capture.enabled:
+            transitioned = state != prev_state
+            if transitioned and state in INCIDENT_STATES:
+                self._append_incident_log(
+                    path=settings_result.settings.incident_log_path,
+                    entry=self._incident_entry(
+                        now=now,
+                        state=state,
+                        reason=reason,
+                        since_ts=since_ts,
+                        settings_result=settings_result,
+                        outbox_count=outbox_count,
+                        outbox_oldest_age_s=age,
+                        index_status=index_status,
+                        events_status=events_status,
+                        writes_allowed=writes_allowed,
+                        write_guard_reason=write_guard_reason,
+                        catch_up_progress=catch_up_progress,
+                        suggested_actions=suggested_actions,
+                    ),
+                )
+
+        result = {
             "state": state,
             "reason": reason,
             "since_ts": since_ts,
@@ -133,7 +183,12 @@ class HealthContract:
             "thresholds": settings_result.settings.thresholds.to_payload(),
             "writes_allowed": writes_allowed,
             "write_guard_reason": write_guard_reason,
+            "catch_up_progress": catch_up_progress,
+            "suggested_actions": suggested_actions,
         }
+        if settings_result.settings.incident_capture.transition_history:
+            result["recent_transition_history"] = list(self.state_machine.transition_history)
+        return result
 
     def _earliest_timestamp(self, records: Iterable[dict[str, Any]]) -> datetime | None:
         earliest: datetime | None = None
@@ -194,6 +249,81 @@ class HealthContract:
             if "error" in name:
                 errors += 1
         return errors if seen else None
+
+    def _catch_up_progress(
+        self,
+        outbox_count: int,
+        outbox_oldest_age_s: float,
+        thresholds: HealthThresholds,
+    ) -> dict[str, Any] | None:
+        if outbox_count <= 0:
+            mode = "idle"
+        elif outbox_oldest_age_s > thresholds.outbox_degrade_oldest_age_s:
+            mode = "replay"
+        elif outbox_oldest_age_s > thresholds.outbox_recover_oldest_age_s:
+            mode = "stalled"
+        else:
+            mode = "idle"
+        return {
+            "outbox_count": outbox_count,
+            "outbox_oldest_age_s": outbox_oldest_age_s,
+            "processing_mode": mode,
+        }
+
+    def _suggested_actions(self, age: float, index_status: str, writes_allowed: bool) -> list[str]:
+        actions: list[str] = []
+        if age > 0:
+            actions.append("python -m app.cli events-doctor --path $INDEX_OUTBOX_PATH")
+        if index_status in {"warn", "fail"}:
+            actions.append("python -m app.cli index doctor --json")
+        if not writes_allowed:
+            actions.append("python -m app.cli health status --json")
+        return actions
+
+    def _incident_entry(
+        self,
+        *,
+        now: datetime,
+        state: str,
+        reason: str,
+        since_ts: str,
+        settings_result: Any,
+        outbox_count: int,
+        outbox_oldest_age_s: float,
+        index_status: str,
+        events_status: str,
+        writes_allowed: bool,
+        write_guard_reason: str | None,
+        catch_up_progress: dict[str, Any] | None,
+        suggested_actions: list[str],
+    ) -> dict[str, Any]:
+        entry: dict[str, Any] = {
+            "ts": now.isoformat(),
+            "state": state,
+            "reason": reason,
+            "since_ts": since_ts,
+            "settings_source": settings_result.source.to_payload(),
+            "outbox_count": outbox_count,
+            "outbox_oldest_age_s": outbox_oldest_age_s,
+            "index_doctor_status": index_status,
+            "events_doctor_status": events_status,
+            "writes_allowed": writes_allowed,
+            "write_guard_reason": write_guard_reason,
+            "catch_up_progress": catch_up_progress,
+            "suggested_actions": suggested_actions,
+        }
+        if settings_result.settings.incident_capture.transition_history:
+            entry["recent_transition_history"] = list(self.state_machine.transition_history)
+        return entry
+
+    def _append_incident_log(self, *, path: Path, entry: dict[str, Any]) -> None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False))
+                handle.write("\n")
+        except Exception:
+            return
 
 
 GLOBAL_STATE_MACHINE = HealthStateMachine()
