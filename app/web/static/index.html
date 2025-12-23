@@ -144,11 +144,6 @@
         <thead><tr><th>Check</th><th>Result</th></tr></thead>
         <tbody id="health-checks"><tr><td colspan="2" class="muted">Loading...</td></tr></tbody>
       </table>
-      <div class="label" style="margin-top:12px;">Runtime services</div>
-      <table style="margin-top:8px;">
-        <thead><tr><th>Service</th><th>Result</th><th>Details</th></tr></thead>
-        <tbody id="health-runtime"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
-      </table>
     </section>
 
     <section class="panel">
@@ -166,21 +161,17 @@
         <h2>Recent events</h2>
         <span class="label">/api/events/tail</span>
       </div>
-      <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); align-items: flex-end; gap: 16px;">
+      <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
         <div>
           <label class="label" for="events-prefix">Event prefix filter</label>
-          <input type="text" id="events-prefix" placeholder="e.g. watcher" value="watcher." style="min-height: 36px;" />
+          <input type="text" id="events-prefix" placeholder="e.g. watcher" style="min-height: 36px;" />
         </div>
         <div>
           <label class="label" for="events-limit">Limit</label>
           <input type="text" id="events-limit" value="50" style="min-height: 36px;" />
         </div>
-        <div style="display: flex; align-items: flex-end;">
-          <button id="events-refresh" type="button" style="width: 100%; max-width: 160px;">Refresh</button>
-        </div>
       </div>
       <div id="events-error" class="banner error hidden"></div>
-      <div id="events-diag" class="muted" style="font-size: 13px; margin: 10px 0;">Returned: 0 | Parse errors: 0 | Dropped: 0 | Source: N/A</div>
       <table>
         <thead><tr><th>Timestamp</th><th>Event</th><th>Trace</th></tr></thead>
         <tbody id="events-list"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
@@ -235,10 +226,6 @@
       checks: document.getElementById("health-checks"),
       error: document.getElementById("health-error"),
     };
-    const runtimeEls = {
-      list: document.getElementById("health-runtime"),
-    };
-
 
     const settingsEls = {
       ok: document.getElementById("settings-ok"),
@@ -251,8 +238,6 @@
       limit: document.getElementById("events-limit"),
       list: document.getElementById("events-list"),
       error: document.getElementById("events-error"),
-      diag: document.getElementById("events-diag"),
-      refresh: document.getElementById("events-refresh"),
     };
 
     const askEls = {
@@ -368,10 +353,8 @@
             });
         }
         clearBanner(healthEls.error);
-        renderRuntimeStatuses(data.runtime);
       } catch (err) {
         showBanner(healthEls.error, `Health failed: ${err}`);
-        renderRuntimeStatuses(null);
       }
     }
 
@@ -402,90 +385,6 @@
       return t.length > 10 ? `${t.slice(0, 10)}…` : t;
     }
 
-    function truncatePath(value, maxLen = 64) {
-      if (!value) {
-        return "N/A";
-      }
-      if (value.length <= maxLen) {
-        return value;
-      }
-      return `…${value.slice(-maxLen)}`;
-    }
-
-    function renderRuntimeStatuses(runtime) {
-      if (!(runtimeEls && runtimeEls.list)) {
-        return;
-      }
-      runtimeEls.list.innerHTML = "";
-      const services = [
-        { key: "watcher", label: "Watcher" },
-        { key: "db", label: "Database" },
-        { key: "llm", label: "LLM" },
-      ];
-      let rendered = false;
-      services.forEach(({ key, label }) => {
-        const payload = runtime?.[key];
-        if (!payload) return;
-        rendered = true;
-        const row = document.createElement("tr");
-        const nameCell = document.createElement("td");
-        nameCell.textContent = label;
-        const resultCell = document.createElement("td");
-        const ok = payload.ok !== false;
-        const pill = document.createElement("span");
-        pill.className = `pill ${ok ? "ok" : "warn"}`;
-        pill.textContent = ok ? "ok" : "fail";
-        resultCell.appendChild(pill);
-        if (payload.detail) {
-          resultCell.appendChild(document.createTextNode(` ${payload.detail}`));
-        }
-        const detailCell = document.createElement("td");
-        const extras = [];
-        if (key === "watcher") {
-          if (typeof payload.freshness_seconds === "number") {
-            extras.push(`fresh ${payload.freshness_seconds.toFixed(1)}s`);
-          }
-          extras.push(payload.paused ? "paused" : "running");
-          if (payload.path) {
-            extras.push(`path=${truncatePath(payload.path, 60)}`);
-          }
-        } else if (key === "db") {
-          if (payload.status) {
-            extras.push(payload.status);
-          }
-          if (payload.dsn) {
-            extras.push(truncatePath(payload.dsn, 64));
-          }
-        } else if (key === "llm") {
-          extras.push(`provider=${payload.provider || "unknown"}`);
-          if (payload.base_url) {
-            extras.push(truncatePath(payload.base_url, 64));
-          }
-          if (payload.status) {
-            extras.push(payload.status);
-          }
-        }
-        detailCell.textContent = extras.filter(Boolean).join(" • ");
-        row.appendChild(nameCell);
-        row.appendChild(resultCell);
-        row.appendChild(detailCell);
-        runtimeEls.list.appendChild(row);
-      });
-      if (!rendered) {
-        runtimeEls.list.innerHTML = '<tr><td colspan="3" class="muted">No runtime data yet.</td></tr>';
-      }
-    }
-
-    function updateEventsDiag(data) {
-      const returned = typeof data?.returned === "number" ? data.returned : 0;
-      const parseErrors = typeof data?.parse_errors === "number" ? data.parse_errors : 0;
-      const dropped = typeof data?.dropped_missing_fields === "number" ? data.dropped_missing_fields : 0;
-      const source = data?.source_path || "";
-      if (eventsEls?.diag) {
-        eventsEls.diag.textContent = `Returned: ${returned} | Parse errors: ${parseErrors} | Dropped: ${dropped} | Source: ${truncatePath(source)}`;
-      }
-    }
-
     async function loadEvents() {
       try {
         const params = new URLSearchParams();
@@ -506,15 +405,13 @@
             const row = document.createElement("tr");
             const ts = ev.timestamp || ev.created_at || "";
             const trace = ev.trace_id || "";
-            row.innerHTML = `<td>${formatDate(ts)}</td><td>${ev.event || ""}</td><td>${truncateTrace(trace)}</td>`;
+            row.innerHTML = `<td>${formatDate(ts)}</td><td>${ev.event || ev.event_type || ev.topic || ""}</td><td>${truncateTrace(trace)}</td>`;
             eventsEls.list.appendChild(row);
           });
         }
-        updateEventsDiag(data);
         clearBanner(eventsEls.error);
       } catch (err) {
         showBanner(eventsEls.error, `Events fetch failed: ${err}`);
-        updateEventsDiag({});
       }
     }
 
@@ -565,10 +462,6 @@
       setInterval(loadEvents, 8000);
       askEls.button.addEventListener("click", doAsk);
       eventsEls.prefix.addEventListener("input", () => {
-        clearBanner(eventsEls.error);
-        loadEvents();
-      });
-      eventsEls.refresh.addEventListener("click", () => {
         clearBanner(eventsEls.error);
         loadEvents();
       });

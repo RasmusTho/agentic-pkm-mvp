@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import click
 
 from app.health_contract import DEFAULT_CONTRACT
-from app.settings.health_settings import load_health_settings
 
 
 def emit_health_contract_status(as_json: bool) -> None:
@@ -25,56 +23,4 @@ def emit_health_contract_status(as_json: bool) -> None:
     click.echo(f"errors_last_10m: {errors if errors is not None else 'n/a'}")
 
 
-def emit_health_contract_explain() -> None:
-    payload = DEFAULT_CONTRACT.evaluate()
-    writes_allowed = payload.get("writes_allowed", True)
-    guard_reason = payload.get("write_guard_reason")
-    click.echo(f"State: {payload['state']} (since {payload['since_ts']})")
-    click.echo(f"Reason: {payload['reason']}")
-    click.echo(f"Writes allowed: {'yes' if writes_allowed else 'no'}")
-    click.echo(f"Write guard reason: {guard_reason if guard_reason else 'n/a'}")
-    click.echo(f"Outbox count: {payload['outbox_count']}")
-    click.echo(f"Outbox oldest age: {payload['outbox_oldest_age_s']:.1f}s")
-    click.echo(f"Index doctor: {payload.get('index_doctor_status', 'unknown')}")
-    click.echo(f"Events doctor: {payload.get('events_doctor_status', 'unknown')}")
-    progress = payload.get("catch_up_progress")
-    if progress:
-        click.echo(
-            "Catch-up progress: "
-            f"mode={progress.get('processing_mode')} "
-            f"entries={progress.get('outbox_count')} "
-            f"age={progress.get('outbox_oldest_age_s'):.1f}s"
-        )
-    actions = payload.get("suggested_actions") or []
-    click.echo("Suggested actions:")
-    if actions:
-        for action in actions:
-            click.echo(f"  - {action}")
-    else:
-        click.echo("  - none")
-
-
-def emit_health_contract_incidents_tail(count: int) -> None:
-    if count <= 0:
-        return
-    settings = load_health_settings()
-    log_path: Path = settings.settings.incident_log_path
-    if not log_path.exists():
-        click.echo(f"No incidents yet (path: {log_path})")
-        click.echo("Trigger degraded/safe_mode to generate an incident snapshot.")
-        return
-    try:
-        lines = log_path.read_text(encoding="utf-8").splitlines()
-    except Exception as exc:  # pragma: no cover - best effort
-        click.echo(f"failed to read incident log: {exc}")
-        return
-    tail = lines[-count:]
-    for line in tail:
-        click.echo(line)
-
-
-__all__ = [
-    "emit_health_contract_status",
-    "emit_health_contract_explain",
-    "emit_health_contract_incidents_tail",
-]
+__all__ = ["emit_health_contract_status"]

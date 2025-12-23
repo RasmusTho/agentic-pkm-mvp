@@ -1,0 +1,12 @@
+version: 1
+watchers:
+  - name: panel
+    scope_glob: "@Inbox/**"
+    debounce_ms: 1500
+    rate_limit_per_min: 30
+    emit_event: "panel.scan.requested"
+  - name: ingest
+    scope_glob: "@Inbox/**"
+    debounce_ms: 1500
+    rate_limit_per_min: 30
+    emit_event: "ingest.vault.changed"

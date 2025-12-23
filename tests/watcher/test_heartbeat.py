@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.watcher.heartbeat import write_runtime_heartbeat
+from app.watcher.heartbeat import write_registry_heartbeat, write_runtime_heartbeat
 
 
 def test_runtime_heartbeat_writes_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -23,4 +23,39 @@ def test_runtime_heartbeat_writes_json(tmp_path: Path, monkeypatch: pytest.Monke
     assert payload.get("errors") == 0
     assert payload.get("status") == "running"
     assert "ts" in payload
+    assert "pid" in payload
+
+
+def test_registry_heartbeat_includes_watchers(tmp_path: Path) -> None:
+    target = tmp_path / "watcher_registry.json"
+    watchers = {
+        "panel": {
+            "ticks_total": 4,
+            "changed_total": 2,
+            "emitted_total": 1,
+            "errors_total": 0,
+            "scope_glob": "@Inbox/**",
+        },
+        "ingest": {
+            "ticks_total": 3,
+            "changed_total": 1,
+            "emitted_total": 1,
+            "errors_total": 0,
+            "scope_glob": "@Inbox/**",
+        },
+    }
+
+    write_registry_heartbeat(
+        path=target,
+        status="running",
+        watchers=watchers,
+        outbox_path=tmp_path / "index-outbox.jsonl",
+        now=123.0,
+    )
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["ts"] == 123.0
+    assert payload["status"] == "running"
+    assert payload["watchers"]["panel"]["scope_glob"] == "@Inbox/**"
+    assert payload["watchers"]["ingest"]["emitted_total"] == 1
     assert "pid" in payload

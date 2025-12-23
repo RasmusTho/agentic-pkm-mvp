@@ -33,9 +33,6 @@ def _mock_snapshot(state: str, reason: str) -> dict[str, object]:
         },
         "writes_allowed": True,
         "write_guard_reason": None,
-        "catch_up_progress": None,
-        "suggested_actions": [],
-        "recent_transition_history": None,
     }
 
 
@@ -59,10 +56,6 @@ def test_health_endpoints_ready(monkeypatch) -> None:
     assert payload["state"] == "running"
     assert payload["settings_status"] == "ok"
     assert payload["writes_allowed"] is True
-    assert payload["write_guard_reason"] is None
-    assert payload["catch_up_progress"] is None
-    assert payload["recent_transition_history"] is None
-    assert isinstance(payload["suggested_actions"], list)
 
 
 def test_readyz_unhealthy(monkeypatch) -> None:

@@ -9,9 +9,8 @@ from app.runtime.runtime_loop import OutboxPathError, resolve_outbox_path
 from app.settings.validate import validate_settings
 from app.watcher.config import WatcherConfig
 from app.watcher.events import emit_watcher_run_event
-from app.watcher.state import WatcherState
+from app.watcher.registry import load_registry_config, run_registry_forever
 from app.watcher.vault_watcher import run_watcher_daemon, run_watcher_tick
-from app.watcher.watcher import run_forever as watcher_run_forever
 from app.watcher.watcher import run_once as watcher_run_once
 
 
@@ -31,17 +30,14 @@ def _echo_summary(summary: dict) -> None:
     ]
     click.echo("Watcher summary: " + " ".join(parts))
 
-
 def _validate_settings_or_exit() -> None:
     issues = validate_settings()
     if issues:
         raise click.ClickException(f"settings validate failed: {len(issues)} issue(s)")
 
-
 @click.group(name="watcher", help="Live watcher controls with scope, kill switch, and rate limits.")
 def watcher_group() -> None:
     ...
-
 
 @watcher_group.command(
     name="once",
@@ -62,10 +58,16 @@ def watcher_once() -> None:
     if summary.get("kill_switch") or summary.get("backoff_active") or summary.get("errors"):
         raise SystemExit(1)
 
-
 @watcher_group.command(
     name="run",
-    help="Run the watcher loop continuously with operator summaries.",
+    help="Run the watcher registry loop continuously with operator summaries.",
+)
+@click.option(
+    "--config",
+    type=click.Path(path_type=Path),
+    default=Path("configs/watchers.yaml"),
+    show_default=True,
+    help="Watcher registry config file.",
 )
 @click.option(
     "--max-ticks",
@@ -73,34 +75,27 @@ def watcher_once() -> None:
     default=None,
     help="Optional safety: stop after N ticks (defaults to run forever).",
 )
-def watcher_run(max_ticks: int | None) -> None:
+def watcher_run(config: Path, max_ticks: int | None) -> None:
     _validate_settings_or_exit()
     try:
-        cfg = WatcherConfig.from_env()
-    except ValueError as exc:
+        cfg = load_registry_config(config)
+    except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
     if not cfg.enable:
         raise click.ClickException("WATCHER_ENABLE=1 required; export env and try again.")
 
+    watcher_names = ", ".join(spec.name for spec in cfg.specs)
     click.echo(
-        "watcher: "
-        f"vault={cfg.vault_path} scope={cfg.scope_glob} "
-        f"debounce={cfg.debounce_ms}ms rate={cfg.rate_limit_per_min}/min "
-        f"backoff={cfg.backoff_seconds}s stop_file={cfg.stop_file}"
+        "watcher registry: "
+        f"config={cfg.config_path} vault={cfg.vault_path} outbox={cfg.outbox_path} "
+        f"watchers=[{watcher_names}] stop_file={cfg.stop_file}"
     )
 
-    tick_limit = max_ticks if max_ticks is not None and max_ticks > 0 else None
     try:
-        if tick_limit is None:
-            watcher_run_forever(cfg)
-        else:
-            state = WatcherState.load(cfg.state_path)
-            for _ in range(tick_limit):
-                watcher_run_once(cfg, state=state)
+        run_registry_forever(cfg.config_path, max_ticks=max_ticks)
     except KeyboardInterrupt:
         click.echo("watcher: stopped via keyboard interrupt")
-
 
 @click.command(
     name="vault-watcher-run",
@@ -197,7 +192,6 @@ def vault_watcher_run(
     if summary.get("errors", 0) > 0:
         raise SystemExit(1)
 
-
 @click.command(
     name="vault-watcher-daemon",
     help=(
@@ -291,6 +285,5 @@ def vault_watcher_daemon(
         on_tick=_log,
         outbox_path=outbox_path,
     )
-
 
 __all__ = ["vault_watcher_run", "vault_watcher_daemon", "watcher_group"]

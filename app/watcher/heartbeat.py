@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Callable
 
 _DEFAULT_ENV = "WATCHER_HEARTBEAT_PATH"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -75,9 +75,39 @@ def write_runtime_heartbeat(
     return resolved
 
 
+def write_registry_heartbeat(
+    *,
+    path: Path,
+    status: str,
+    watchers: Mapping[str, Mapping[str, object]],
+    outbox_path: Path | None = None,
+    vault_path: Path | None = None,
+    config_path: Path | None = None,
+    paused: bool | None = None,
+    now: float | None = None,
+) -> None:
+    timestamp = now if now is not None else time.time()
+    payload: dict[str, object] = {
+        "ts": timestamp,
+        "pid": os.getpid(),
+        "status": status,
+        "watchers": {name: dict(stats) for name, stats in watchers.items()},
+    }
+    if outbox_path is not None:
+        payload["outbox_path"] = str(outbox_path)
+    if vault_path is not None:
+        payload["vault_path"] = str(vault_path)
+    if config_path is not None:
+        payload["config_path"] = str(config_path)
+    if paused is not None:
+        payload["paused"] = paused
+    _write_payload(path, payload)
+
+
 __all__ = [
     "DEFAULT_HEARTBEAT_PATH",
     "resolve_heartbeat_path",
     "write_heartbeat",
     "write_runtime_heartbeat",
+    "write_registry_heartbeat",
 ]

@@ -4,7 +4,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 _DEFAULT_ENV = "WORKER_HEARTBEAT_PATH"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +34,8 @@ def write_worker_heartbeat(
     errors_total: int,
     outbox_path: Path,
     processed_total: int | None = None,
+    processed_by_event: Mapping[str, int] | None = None,
+    last_processed: Mapping[str, float] | None = None,
     status: str = "running",
     now: float | None = None,
 ) -> None:
@@ -48,6 +50,10 @@ def write_worker_heartbeat(
     }
     if processed_total is not None:
         payload["processed_total"] = processed_total
+    if processed_by_event:
+        payload["processed_by_event"] = {k: int(v) for k, v in processed_by_event.items()}
+    if last_processed:
+        payload["last_processed"] = {k: float(v) for k, v in last_processed.items()}
     _write_payload(path, payload)
 
 
