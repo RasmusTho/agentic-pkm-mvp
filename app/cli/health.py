@@ -6,11 +6,10 @@ import os
 import shutil
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict
 
 import httpx
 
-from app.events.types import INGEST_VAULT_CHANGED
 from app.obs.log import span, with_trace_id
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.stores.db_health import ping_postgres, resolve_dsn
@@ -19,8 +18,8 @@ from app.watcher.heartbeat import resolve_heartbeat_path
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
-def _result(ok: bool, detail: str, *, data: dict[str, Any] | None = None) -> dict[str, Any]:
-    out: dict[str, Any] = {"ok": ok, "detail": detail}
+def _result(ok: bool, detail: str, *, data: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"ok": ok, "detail": detail}
     if data:
         out["data"] = data
     return out
@@ -36,20 +35,27 @@ def _env_float(name: str, fallback: float) -> float:
         return fallback
 
 
-def _env_bool(name: str, *, fallback: bool = False) -> bool:
-    raw = os.getenv(name)
+def _is_enabled(env_name: str, default: bool = True) -> bool:
+    raw = os.getenv(env_name)
     if raw is None:
-        return fallback
+        return default
     return raw.strip().lower() in _TRUE_VALUES
 
 
-def _check_ffmpeg() -> dict[str, Any]:
+def _watcher_required() -> bool:
+    raw = os.getenv("WATCHER_HEARTBEAT_REQUIRED")
+    if not raw:
+        return False
+    return raw.strip().lower() in _TRUE_VALUES
+
+
+def _check_ffmpeg() -> Dict[str, Any]:
     ok = shutil.which("ffmpeg") is not None
     detail = "ffmpeg hittades i PATH" if ok else "ffmpeg saknas i PATH"
     return _result(ok, detail)
 
 
-def _check_yt_dlp() -> dict[str, Any]:
+def _check_yt_dlp() -> Dict[str, Any]:
     try:
         importlib.import_module("yt_dlp")
         return _result(True, "yt-dlp kan importeras")
@@ -57,7 +63,7 @@ def _check_yt_dlp() -> dict[str, Any]:
         return _result(False, f"yt-dlp import misslyckades: {exc!s}")
 
 
-def _check_outbox_path() -> dict[str, Any]:
+def _check_outbox_path() -> Dict[str, Any]:
     path = Path(os.environ.get("INDEX_OUTBOX_PATH", "./tmp/index-outbox.jsonl")).expanduser()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,18 +74,11 @@ def _check_outbox_path() -> dict[str, Any]:
         return _result(False, f"Kan inte skriva till {path}: {exc!s}")
 
 
-def _check_ollama() -> dict[str, Any]:
+def _check_ollama() -> Dict[str, Any]:
     provider = os.environ.get("LLM_PROVIDER", "ollama").lower()
-    base = os.environ.get(
-        "OLLAMA_URL",
-        os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"),
-    ).rstrip("/")
+    base = os.environ.get("OLLAMA_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
     if provider != "ollama":
-        result = _result(
-            True,
-            "Hoppar över Ollama-koll (LLM_PROVIDER != ollama)",
-            data={"skipped": True},
-        )
+        result = _result(True, "Hoppar över Ollama-koll (LLM_PROVIDER != ollama)", data={"skipped": True})
         result["provider"] = provider
         result["base_url"] = base
         return result
@@ -87,10 +86,11 @@ def _check_ollama() -> dict[str, Any]:
         resp = httpx.get(f"{base}/api/tags", timeout=float(os.environ.get("LLM_TIMEOUT", "5")))
         resp.raise_for_status()
         data = resp.json()
-        models = None
-        if isinstance(data, dict):
-            models = [m.get("name") for m in data.get("models", [])]
-        result = _result(True, f"Ollama nåddes ({base})", data={"models": models})
+        result = _result(
+            True,
+            f"Ollama nåddes ({base})",
+            data={"models": [m.get("name") for m in data.get("models", [])] if isinstance(data, dict) else None},
+        )
     except Exception as exc:
         result = _result(False, f"Ollama svarade inte ({base}): {exc!s}")
     result["provider"] = provider
@@ -98,23 +98,30 @@ def _check_ollama() -> dict[str, Any]:
     return result
 
 
-def _watcher_runtime_status(now: float | None = None) -> dict[str, Any]:
-    now = now if now is not None else time.time()
-    heartbeat_path = resolve_heartbeat_path()
-    stale_seconds = _env_float("WATCHER_HEARTBEAT_STALE_SECONDS", 60.0)
-    if not heartbeat_path.exists():
+def _heartbeat_status(
+    *,
+    name: str,
+    path: Path,
+    stale_seconds: float,
+    now: float,
+    skip: bool = False,
+) -> Dict[str, Any]:
+    if skip:
+        return {"ok": True, "detail": "skipped (disabled)", "status": "skipped"}
+
+    if not path.exists():
         return {
             "ok": False,
-            "detail": "watcher not running (no heartbeat)",
-            "path": str(heartbeat_path),
+            "detail": f"{name} not running (no heartbeat)",
+            "path": str(path),
         }
     try:
-        raw = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         return {
             "ok": False,
-            "detail": f"watcher heartbeat unreadable ({exc})",
-            "path": str(heartbeat_path),
+            "detail": f"{name} heartbeat unreadable ({exc})",
+            "path": str(path),
         }
     ts_raw = raw.get("ts")
     try:
@@ -122,139 +129,79 @@ def _watcher_runtime_status(now: float | None = None) -> dict[str, Any]:
     except Exception:
         return {
             "ok": False,
-            "detail": "watcher heartbeat missing timestamp",
-            "path": str(heartbeat_path),
+            "detail": f"{name} heartbeat missing timestamp",
+            "path": str(path),
         }
     freshness = max(0.0, now - ts_value)
-    paused = bool(raw.get("paused"))
     ok = freshness <= stale_seconds
-    if ok:
-        detail = f"watcher running (fresh {freshness:.1f}s, paused={paused})"
-    else:
-        detail = f"watcher stale (last seen {freshness:.1f}s ago)"
-    payload: dict[str, Any] = {
+    paused_value = bool(raw.get("paused", False))
+    detail = (
+        f"{name} running (fresh {freshness:.1f}s, paused={paused_value})"
+        if ok
+        else f"{name} stale (last seen {freshness:.1f}s ago)"
+    )
+    payload: Dict[str, Any] = {
         "ok": ok,
         "detail": detail,
-        "path": str(heartbeat_path),
+        "path": str(path),
         "freshness_seconds": freshness,
-        "paused": paused,
+        "paused": paused_value,
     }
-    keys = (
+    for key in (
         "pid",
         "scope_glob",
         "ticks_total",
         "errors_total",
         "vault_path",
         "outbox_path",
+        "processed_total",
         "status",
-    )
-    for key in keys:
+    ):
         if key in raw:
             payload[key] = raw[key]
-    watchers = raw.get("watchers") if isinstance(raw, dict) else None
-    if isinstance(watchers, dict):
-        payload["watchers"] = sorted(watchers.keys())
     return payload
 
 
-def _worker_runtime_status(now: float | None = None) -> dict[str, Any]:
-    backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
-    worker_raw = os.getenv("WORKER_ENABLE")
-    if worker_raw is None and backend != "pg":
-        return {"ok": True, "detail": "skipped (memory mode)", "status": "skipped"}
-    if worker_raw is not None and not _env_bool("WORKER_ENABLE", fallback=False):
-        return {"ok": True, "detail": "skipped (WORKER_ENABLE=0)", "status": "skipped"}
+def _watcher_runtime_status(now: float | None = None) -> Dict[str, Any]:
+    now = now if now is not None else time.time()
+    heartbeat_path = resolve_heartbeat_path()
+    stale_seconds = _env_float("WATCHER_HEARTBEAT_STALE_SECONDS", 60.0)
+    return _heartbeat_status(
+        name="watcher",
+        path=heartbeat_path,
+        stale_seconds=stale_seconds,
+        now=now,
+    )
 
+
+def _worker_runtime_status(now: float | None = None) -> Dict[str, Any]:
+    backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
+    enabled_default = backend != "memory"
+    skip = not _is_enabled("WORKER_ENABLE", default=enabled_default)
     now = now if now is not None else time.time()
     heartbeat_path = resolve_worker_heartbeat_path()
     stale_seconds = _env_float("WORKER_HEARTBEAT_STALE_SECONDS", 60.0)
-    if not heartbeat_path.exists():
-        return {
-            "ok": False,
-            "detail": "worker not running (no heartbeat)",
-            "path": str(heartbeat_path),
-        }
-    try:
-        raw = json.loads(heartbeat_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return {
-            "ok": False,
-            "detail": f"worker heartbeat unreadable ({exc})",
-            "path": str(heartbeat_path),
-        }
-    ts_raw = raw.get("ts")
-    try:
-        ts_value = float(ts_raw)
-    except Exception:
-        return {
-            "ok": False,
-            "detail": "worker heartbeat missing timestamp",
-            "path": str(heartbeat_path),
-        }
-    freshness = max(0.0, now - ts_value)
-    ok = freshness <= stale_seconds
-    if ok:
-        detail = f"worker running (fresh {freshness:.1f}s)"
-    else:
-        detail = f"worker stale (last seen {freshness:.1f}s ago)"
-
-    payload: dict[str, Any] = {
-        "ok": ok,
-        "detail": detail,
-        "path": str(heartbeat_path),
-        "freshness_seconds": freshness,
-    }
-    keys = (
-        "pid",
-        "status",
-        "ticks_total",
-        "errors_total",
-        "processed_total",
-        "processed_by_event",
-        "last_processed",
-        "outbox_path",
+    return _heartbeat_status(
+        name="worker",
+        path=heartbeat_path,
+        stale_seconds=stale_seconds,
+        now=now,
+        skip=skip,
     )
-    for key in keys:
-        if key in raw:
-            payload[key] = raw[key]
-
-    require_ingest = _env_bool("HEALTH_REQUIRE_INGEST_WORKER", fallback=False)
-    if require_ingest:
-        ingest_stale = _env_float("INGEST_WORKER_STALE_SECONDS", 300.0)
-        last_processed_raw = raw.get("last_processed")
-        last_processed_map = last_processed_raw if isinstance(last_processed_raw, dict) else {}
-        last_seen = last_processed_map.get(INGEST_VAULT_CHANGED)
-        try:
-            last_seen_val = float(last_seen) if last_seen is not None else None
-        except Exception:
-            last_seen_val = None
-        if last_seen_val is None:
-            payload["ok"] = False
-            payload["detail"] = f"{INGEST_VAULT_CHANGED} not processed yet"
-        else:
-            age = max(0.0, now - last_seen_val)
-            if age > ingest_stale:
-                payload["ok"] = False
-                payload["detail"] = f"{INGEST_VAULT_CHANGED} stale (last seen {age:.1f}s ago)"
-    return payload
 
 
-def _db_runtime_status() -> dict[str, Any]:
+def _db_runtime_status() -> Dict[str, Any]:
     backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
     dsn_value = resolve_dsn()
     if backend != "pg" and not dsn_value:
         return {"ok": True, "detail": "skipped (memory mode)", "status": "skipped"}
     if not dsn_value:
-        return {
-            "ok": False,
-            "detail": "DATABASE_URL missing for postgres backend",
-            "status": "missing",
-        }
+        return {"ok": False, "detail": "DATABASE_URL missing for postgres backend", "status": "missing"}
     ok, detail = ping_postgres(timeout=1.0)
     return {"ok": ok, "detail": detail, "dsn": dsn_value}
 
 
-def _llm_runtime_status(check_result: dict[str, Any]) -> dict[str, Any]:
+def _llm_runtime_status(check_result: Dict[str, Any]) -> Dict[str, Any]:
     provider = check_result.get("provider") or os.getenv("LLM_PROVIDER", "ollama")
     base_url = check_result.get("base_url")
     detail = check_result.get("detail", "")
@@ -276,8 +223,19 @@ def _llm_runtime_status(check_result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _runtime_ok(runtime: dict[str, dict[str, Any]]) -> bool:
+    base_ok = bool(
+        runtime.get("db", {}).get("ok")
+        and runtime.get("llm", {}).get("ok")
+        and runtime.get("worker", {}).get("ok")
+    )
+    if _watcher_required():
+        return base_ok and bool(runtime.get("watcher", {}).get("ok"))
+    return base_ok
+
+
 @span("health.check")
-def run_health(*, trace_id: str | None = None, **kwargs: Any) -> dict[str, Any]:
+def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     trace_id = with_trace_id(trace_id)
     checks = {
         "ffmpeg": _check_ffmpeg(),
@@ -292,7 +250,7 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> dict[str, Any]:
         "llm": _llm_runtime_status(checks["ollama"]),
     }
     checks_ok = all(item.get("ok") for item in checks.values())
-    runtime_ok = all(item.get("ok") for item in runtime.values())
+    runtime_ok = _runtime_ok(runtime)
     ok = bool(checks_ok and runtime_ok)
     return {"ok": ok, "checks": checks, "runtime": runtime, "trace_id": trace_id}
 

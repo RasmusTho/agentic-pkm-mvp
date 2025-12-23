@@ -3,11 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.runtime.worker_heartbeat import (
-    DEFAULT_WORKER_HEARTBEAT_PATH,
-    resolve_worker_heartbeat_path,
-    write_worker_heartbeat,
-)
+from app.runtime.worker_heartbeat import DEFAULT_WORKER_HEARTBEAT_PATH, resolve_worker_heartbeat_path, write_worker_heartbeat
 
 
 def test_resolve_worker_heartbeat_path_override(monkeypatch, tmp_path: Path) -> None:
@@ -24,8 +20,6 @@ def test_write_worker_heartbeat(monkeypatch, tmp_path: Path) -> None:
         ticks_total=5,
         errors_total=1,
         processed_total=3,
-        processed_by_event={"ingest.vault.changed": 2},
-        last_processed={"ingest.vault.changed": 120.0},
         outbox_path=tmp_path / "index-outbox.jsonl",
         status="running",
         now=123.0,
@@ -36,8 +30,6 @@ def test_write_worker_heartbeat(monkeypatch, tmp_path: Path) -> None:
     assert payload["errors_total"] == 1
     assert payload["processed_total"] == 3
     assert payload["status"] == "running"
-    assert payload["processed_by_event"]["ingest.vault.changed"] == 2
-    assert payload["last_processed"]["ingest.vault.changed"] == 120.0
     assert str(tmp_path / "index-outbox.jsonl") in payload["outbox_path"]
 
 
