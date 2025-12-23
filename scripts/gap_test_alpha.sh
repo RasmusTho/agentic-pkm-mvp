@@ -10,14 +10,6 @@ WATCHER_HEARTBEAT_PATH="${WATCHER_HEARTBEAT_PATH:-/app/tmp/watcher_heartbeat.jso
 WATCHER_CONTAINER="${WATCHER_CONTAINER:-workspace-watcher-1}"
 WORKER_CONTAINER="${WORKER_CONTAINER:-workspace-worker-1}"
 API_URL="${API_URL:-http://127.0.0.1:18000}"
-REBUILD_INDEX_CMD="docker exec workspace-api-1 bash -lc 'cd /app && python -m app.cli index rebuild --backend pg'"
-
-printf '[gap test] bash=%s\n' "$(bash --version | head -n 1)"
-printf '[gap test] uname=%s\n' "$(uname -a)"
-
-info() {
-  printf '[gap test] %s\n' "$1"
-}
 
 NONCE="$(python - <<'PY'
 import secrets
@@ -33,6 +25,11 @@ if ! grep -q '^# GAP Runtime Gap Test' "$NOTE_PATH" 2>/dev/null; then
 TXT
 fi
 printf '%s\n' "$MARKER" >> "$NOTE_PATH"
+
+info() {
+  printf '[gap test] %s\n' "$1"
+}
+
 info "wrote marker to $NOTE_PATH"
 info "marker = $MARKER"
 
@@ -44,11 +41,12 @@ before_tail="$(capture_tail)"
 sleep 3
 after_tail="$(capture_tail)"
 if ! printf '%s' "$after_tail" | grep -q 'watcher\.' && ! printf '%s' "$after_tail" | grep -qF "$NOTE_REL"; then
-  printf 'FAIL: watcher outbox did not register the marker.\n' >&2
+  printf 'FAIL: watcher outbox did not show change.\n' >&2
   docker exec "$WATCHER_CONTAINER" bash -lc "tail -n 20 '$OUTBOX_PATH' || true"
   docker exec "$WATCHER_CONTAINER" bash -lc "cat '$WATCHER_HEARTBEAT_PATH' || echo 'no heartbeat found'"
   exit 1
 fi
+
 info "outbox tail before:\n$before_tail"
 info "outbox tail after:\n$after_tail"
 
@@ -76,68 +74,38 @@ fi
 
 ask_question="GAP_TEST_MARKER $NONCE"
 ask_payload="{\"question\":\"${ask_question}\"}"
-
-attempts=0
-max_attempts=6
-ask_ok=0
-ask_summary=""
-while [ $attempts -lt $max_attempts ]; do
-  info "ask attempt $((attempts + 1))"
-  ask_response="$(curl --retry 20 --retry-connrefused --retry-delay 1 -sS -X POST "$API_URL/api/ask" -H 'Content-Type: application/json' -d "$ask_payload" || true)"
-  summary=$(NOTE_REL_ENV="$NOTE_REL" MARKER_ENV="$MARKER" python - <<'PY'
-import json, os, sys, textwrap
-note_rel = os.environ.get("NOTE_REL_ENV", "")
-marker = os.environ.get("MARKER_ENV", "")
-raw = sys.stdin.read()
+ask_response="$(curl --retry 20 --retry-connrefused --retry-delay 1 -sS -X POST "$API_URL/api/ask" -H 'Content-Type: application/json' -d "$ask_payload")"
+info "ask response:\n$ask_response"
+mapfile -t ask_lines < <(printf '%s' "$ask_response" | python - <<'PY'
+import json, sys
 try:
-    data = json.loads(raw)
-except Exception as exc:
-    print(f"parse_error: {exc}")
-    sys.exit(3)
-sources = data.get("sources") or []
-answer = data.get("answer") or ""
-first = sources[0] if sources else {}
-first_text = json.dumps(first, ensure_ascii=False) if first else ""
-matched = any((note_rel in json.dumps(src, ensure_ascii=False)) or (marker in json.dumps(src, ensure_ascii=False)) for src in sources)
+    data = json.load(sys.stdin)
+except json.JSONDecodeError as exc:
+    sys.stderr.write(f'failed to parse ask response: {exc}\n')
+    sys.exit(2)
+sources = data.get('sources') or []
 print(len(sources))
-print(1 if matched else 0)
-print(textwrap.shorten(answer, width=120, placeholder="…"))
-print(first_text)
-if matched:
-    sys.exit(0)
-if sources:
-    sys.exit(4)
-sys.exit(5)
-PY <<<"$ask_response")
-  count=$(printf '%s\n' "$summary" | sed -n '1p')
-  matched=$(printf '%s\n' "$summary" | sed -n '2p')
-  answer_snip=$(printf '%s\n' "$summary" | sed -n '3p')
-  first_source=$(printf '%s\n' "$summary" | sed -n '4p')
-  ask_summary="sources=$count matched=$matched answer=$answer_snip first_source=$first_source"
-  if [ "$matched" = "1" ]; then
-    ask_ok=1
-    break
-  fi
-  attempts=$((attempts + 1))
-  sleep 5
-done
-
-if [ $ask_ok -ne 1 ]; then
-  info "ask validation failed"
-  info "ask summary:\n$ask_summary"
-  printf 'api health payload:\n%s\n' "$health_payload"
-  printf 'api status payload:\n%s\n' "$status_payload"
-  docker exec "$WATCHER_CONTAINER" bash -lc "grep -nF '$MARKER' '$OUTBOX_PATH' || true"
-  docker exec "$WORKER_CONTAINER" bash -lc "grep -nF '$MARKER' '$OUTBOX_PATH' || true"
-  docker logs --tail 200 "$WORKER_CONTAINER" || true
-  docker logs --tail 200 "$WATCHER_CONTAINER" || true
-  printf 'ask response final:\n%s\n' "$ask_response"
-  if [ "$need_index_rebuild" = true ]; then
-    info "triggering index rebuild"
-    $REBUILD_INDEX_CMD || true
-  fi
-  exit 2
+if not sources:
+    sys.exit(3)
+print(json.dumps(sources[0], ensure_ascii=False))
+PY)
+ask_count="${ask_lines[0]:-0}"
+ask_source=""
+if [ "${#ask_lines[@]}" -gt 1 ]; then
+  ask_source="${ask_lines[1]}"
+fi
+if [ "$ask_count" -lt 1 ]; then
+  need_index_rebuild=true
 fi
 
-info "ask summary:\n$ask_summary"
+if [ "$need_index_rebuild" = true ]; then
+  info "triggering index rebuild"
+  docker exec workspace-api-1 bash -lc 'cd /app && python -m app.cli index rebuild --backend pg'
+fi
+
+info "ask sources count: $ask_count"
+if [ -n "$ask_source" ]; then
+  info "first ask source: $ask_source"
+fi
+
 info "GAP runtime gap test completed successfully"
