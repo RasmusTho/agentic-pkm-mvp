@@ -29,3 +29,12 @@ If an embedding/index rebuild was required, the script performs `python -m app.c
 - Worker stats/logs do not update: the worker may be stuck waiting on Kafka/outbox or `worker` service might be unhealthy.
 - `/api/ask` returns zero sources: embeddings/index may need rebuild, or the index service might not yet have processed the test note.
 - The container stack cannot reach `http://127.0.0.1:18000`: confirm all services are running via `docker compose ps` and restart the stack if necessary.
+
+## Compatibility
+- Designed to run on macOS default Bash 3.2 / sh-compatible environments; JSON parsing and matching happens in Python to avoid Bash 4+ features like `mapfile`.
+- Uses Docker/compose and the `curl` + `python` toolchain already expected in the Reality-MVP stack.
+
+## Exit codes
+- `0` — success and `/api/ask` returned at least one source that mentions the gap marker or the vault note path.
+- `1` — hard failure (watcher/outbox/containers failed to progress or JSON parsing raised an unexpected error); inspect the printed diagnostics.
+- `2` — `/api/ask` produced zero sources or none contained the marker path after the retry loop; rerun after ensuring the watcher/worker/index chain is healthy or rebuild the index via the script’s built-in `python -m app.cli index rebuild --backend pg` command (already part of the run). Corner cases report the diagnostics bundle printed before exit.
