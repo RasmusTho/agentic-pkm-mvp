@@ -12,16 +12,19 @@ WORKER_CONTAINER="${WORKER_CONTAINER:-workspace-worker-1}"
 API_URL="${API_URL:-http://127.0.0.1:18000}"
 REBUILD_INDEX_CMD="docker exec workspace-api-1 bash -lc 'cd /app && python -m app.cli index rebuild --backend pg'"
 
+printf '[gap test] bash=%s\n' "$(bash --version | head -n 1)"
+printf '[gap test] uname=%s\n' "$(uname -a)"
+
+info() {
+  printf '[gap test] %s\n' "$1"
+}
+
 NONCE="$(python - <<'PY'
 import secrets
 print(secrets.token_hex(4))
 PY)"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 MARKER="GAP_TEST_MARKER: $TIMESTAMP $NONCE"
-
-info() {
-  printf '[gap test] %s\n' "$1"
-}
 
 mkdir -p "$(dirname "$NOTE_PATH")"
 if ! grep -q '^# GAP Runtime Gap Test' "$NOTE_PATH" 2>/dev/null; then
@@ -71,81 +74,57 @@ if printf '%s' "$status_payload" | grep -q 'vector_index_meta' && printf '%s' "$
   need_index_rebuild=true
 fi
 
-if [ "$need_index_rebuild" = true ]; then
-  info "triggering index rebuild"
-  $REBUILD_INDEX_CMD
-fi
-
 ask_question="GAP_TEST_MARKER $NONCE"
 ask_payload="{\"question\":\"${ask_question}\"}"
 
 attempts=0
 max_attempts=6
-ask_count=0
-matched=0
-ask_source=""
-reason=""
+ask_ok=0
+ask_summary=""
 while [ $attempts -lt $max_attempts ]; do
   info "ask attempt $((attempts + 1))"
-  ask_response="$(curl --retry 20 --retry-connrefused --retry-delay 1 -sS -X POST "$API_URL/api/ask" -H 'Content-Type: application/json' -d "$ask_payload")"
-  info "ask response:\n$ask_response"
-  parse=$(printf '%s' "$ask_response" | python - <<'PY'
-import json, sys
-needle = sys.argv[1]
-marker = sys.argv[2]
+  ask_response="$(curl --retry 20 --retry-connrefused --retry-delay 1 -sS -X POST "$API_URL/api/ask" -H 'Content-Type: application/json' -d "$ask_payload" || true)"
+  summary=$(NOTE_REL_ENV="$NOTE_REL" MARKER_ENV="$MARKER" python - <<'PY'
+import json, os, sys, textwrap
+note_rel = os.environ.get("NOTE_REL_ENV", "")
+marker = os.environ.get("MARKER_ENV", "")
+raw = sys.stdin.read()
 try:
-    data = json.load(sys.stdin)
-except json.JSONDecodeError as exc:
-    sys.stderr.write(f'ask response decode failed: {exc}\n')
-    sys.exit(1)
-sources = data.get('sources') or []
-if not sources:
-    print(0)
-    print(0)
-    print('')
+    data = json.loads(raw)
+except Exception as exc:
+    print(f"parse_error: {exc}")
     sys.exit(3)
-found = 0
-best = ''
-for src in sources:
-    text = json.dumps(src, ensure_ascii=False)
-    if not best:
-        best = text
-    if needle in text or marker in text:
-        found = 1
-        best = text
-        break
+sources = data.get("sources") or []
+answer = data.get("answer") or ""
+first = sources[0] if sources else {}
+first_text = json.dumps(first, ensure_ascii=False) if first else ""
+matched = any((note_rel in json.dumps(src, ensure_ascii=False)) or (marker in json.dumps(src, ensure_ascii=False)) for src in sources)
 print(len(sources))
-print(found)
-print(best.replace('\n', ' ').replace('\r', ' '))
-if not found:
+print(1 if matched else 0)
+print(textwrap.shorten(answer, width=120, placeholder="…"))
+print(first_text)
+if matched:
+    sys.exit(0)
+if sources:
     sys.exit(4)
-PY "$NOTE_REL" "GAP_TEST_MARKER"
-  parse_exit=$?
-  IFS=$'\n'
-  read -r ask_count matched ask_source <<< "$parse"
-  ask_count=${ask_count:-0}
-  matched=${matched:-0}
-  if [ $parse_exit -eq 0 ] && [ "$matched" -eq 1 ]; then
-    info "ask returned $ask_count sources and matched the test marker"
+sys.exit(5)
+PY <<<"$ask_response")
+  count=$(printf '%s\n' "$summary" | sed -n '1p')
+  matched=$(printf '%s\n' "$summary" | sed -n '2p')
+  answer_snip=$(printf '%s\n' "$summary" | sed -n '3p')
+  first_source=$(printf '%s\n' "$summary" | sed -n '4p')
+  ask_summary="sources=$count matched=$matched answer=$answer_snip first_source=$first_source"
+  if [ "$matched" = "1" ]; then
+    ask_ok=1
     break
   fi
-  if [ $parse_exit -eq 3 ]; then
-    reason="ask returned no sources"
-  elif [ $parse_exit -eq 4 ]; then
-    reason="ask returned sources but none referenced the gap marker"
-  else
-    reason="ask response parsing error"
-  fi
   attempts=$((attempts + 1))
-  if [ $attempts -lt $max_attempts ]; then
-    sleep 5
-  fi
+  sleep 5
 done
 
-if [ "$matched" -ne 1 ]; then
-  info "final ask count: $ask_count"
-  info "final ask source detail: $ask_source"
-  printf 'FAIL: /api/ask did not return a source linked to %s (%s)\n' "$NOTE_REL" "$reason" >&2
+if [ $ask_ok -ne 1 ]; then
+  info "ask validation failed"
+  info "ask summary:\n$ask_summary"
   printf 'api health payload:\n%s\n' "$health_payload"
   printf 'api status payload:\n%s\n' "$status_payload"
   docker exec "$WATCHER_CONTAINER" bash -lc "grep -nF '$MARKER' '$OUTBOX_PATH' || true"
@@ -153,12 +132,12 @@ if [ "$matched" -ne 1 ]; then
   docker logs --tail 200 "$WORKER_CONTAINER" || true
   docker logs --tail 200 "$WATCHER_CONTAINER" || true
   printf 'ask response final:\n%s\n' "$ask_response"
+  if [ "$need_index_rebuild" = true ]; then
+    info "triggering index rebuild"
+    $REBUILD_INDEX_CMD || true
+  fi
   exit 2
 fi
 
-info "ask sources count: $ask_count"
-if [ -n "$ask_source" ]; then
-  info "first matching ask source: $ask_source"
-fi
-
+info "ask summary:\n$ask_summary"
 info "GAP runtime gap test completed successfully"

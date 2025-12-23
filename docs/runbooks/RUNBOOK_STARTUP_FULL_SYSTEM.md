@@ -10,7 +10,8 @@ scripts/start_full_system.sh
 ```
 2. The script:
    - `docker compose up -d --build db api worker watcher`
-   - waits for `/api/status` then `/api/health` to report `ok=true` (timeout 60s)
+   - waits for `/api/status` then `/api/health` to report runtime `db`/`worker`/`watcher` as ok (timeout 60s)
+   - optional checks like `ffmpeg` are ignored by default via `STARTUP_IGNORE_CHECKS=ffmpeg` (set to `""` for strict mode)
    - on failure, prints `docker compose ps`, tails api/worker/watcher logs, and dumps `/api/health`.
 
 ## Interpreting /api/health (runtime)
