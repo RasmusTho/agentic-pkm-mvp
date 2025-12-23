@@ -9,10 +9,11 @@ services:
       - "15432:5432"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "python - <<'PY'\nimport psycopg, os, sys\ndsn = os.environ.get('POSTGRES_DB') or 'app'\nuser = os.environ.get('POSTGRES_USER') or 'app'\npassword = os.environ.get('POSTGRES_PASSWORD') or 'app'\nhost = '127.0.0.1'\nport = 5432\ntry:\n    with psycopg.connect(f'postgresql://{user}:{password}@{host}:{port}/{dsn}', connect_timeout=1) as conn:\n        with conn.cursor() as cur:\n            cur.execute('SELECT 1')\n    sys.exit(0)\nexcept Exception:\n    sys.exit(1)\nPY"]
-      interval: 15s
+      test: ["CMD-SHELL", "pg_isready -U app -d app -h 127.0.0.1 -p 5432"]
+      interval: 5s
       timeout: 3s
-      retries: 3
+      retries: 20
+      start_period: 10s
 
   api:
     build: .
