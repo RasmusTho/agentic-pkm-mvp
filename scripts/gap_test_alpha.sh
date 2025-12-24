@@ -23,19 +23,19 @@ if ! command -v "$JSON_TOOL_PYTHON" >/dev/null 2>&1; then
   JSON_TOOL_PYTHON="python"
 fi
 
-pretty_json() {
-  "$JSON_TOOL_PYTHON" -m json.tool
-}
+pretty_json() { "$JSON_TOOL_PYTHON" -m json.tool; }
 
 has_docker=0
 if command -v docker >/dev/null 2>&1; then
   has_docker=1
 fi
 
+printf '[gap test] bash=%s\n' "$(bash --version | head -n 1 || true)"
+printf '[gap test] uname=%s\n' "$(uname -a || true)"
 echo "[gap test] API_BASE_URL=$API_BASE_URL"
+echo "[gap test] OUTBOX_PATH=$OUTBOX_PATH"
 echo "[gap test] NOTE_REL=$NOTE_REL"
 echo "[gap test] NOTE_PATH=$NOTE_PATH"
-echo "[gap test] OUTBOX_PATH=$OUTBOX_PATH"
 
 note_dir="$(dirname "$NOTE_PATH")"
 mkdir -p "$note_dir"
@@ -56,57 +56,50 @@ review_state: inbox
 $marker
 NOTE
 
-printf '[gap test] marker note written: %s\n' "$NOTE_PATH"
-printf '[gap test] marker line: %s\n' "$marker"
+echo "[gap test] wrote marker to $NOTE_PATH"
+echo "[gap test] marker = $marker"
 
-tail_topic() {
-  curl -sS "$API_BASE_URL/api/events/tail?topic=$1&limit=$2" 2>/dev/null || true
-}
-
-tail_path() {
-  curl -sS "$API_BASE_URL/api/events/tail?path=$1&n=$2" 2>/dev/null || true
-}
+tail_topic() { curl -sS "$API_BASE_URL/api/events/tail?topic=$1&limit=$2" 2>/dev/null || true; }
+tail_path()  { curl -sS "$API_BASE_URL/api/events/tail?path=$1&n=$2" 2>/dev/null || true; }
 
 seen_scan_event() {
   NOTE_REL_ENV="$NOTE_REL" TAIL_JSON="$1" "$JSON_TOOL_PYTHON" - <<'PY'
 import json, os, sys
-
-note_rel = os.environ.get("NOTE_REL_ENV", "")
-raw = os.environ.get("TAIL_JSON", "") or ""
+note_rel = os.environ.get("NOTE_REL_ENV","")
+raw = os.environ.get("TAIL_JSON","") or ""
 if not raw.strip():
-    sys.exit(1)
-
+  sys.exit(1)
 try:
-    data = json.loads(raw)
+  data = json.loads(raw)
 except Exception:
-    sys.exit(1)
+  sys.exit(1)
 
 def walk(x):
-    if isinstance(x, dict):
-        yield x
-        for v in x.values():
-            for y in walk(v):
-                yield y
-    elif isinstance(x, list):
-        for i in x:
-            for y in walk(i):
-                yield y
+  if isinstance(x, dict):
+    yield x
+    for v in x.values():
+      for y in walk(v):
+        yield y
+  elif isinstance(x, list):
+    for i in x:
+      for y in walk(i):
+        yield y
 
 def relpath(entry):
-    if not isinstance(entry, dict):
-        return ""
-    payload = entry.get("payload")
-    if isinstance(payload, dict):
-        return payload.get("relative_path") or payload.get("path") or ""
-    return entry.get("relative_path") or entry.get("path") or ""
+  if not isinstance(entry, dict):
+    return ""
+  payload = entry.get("payload")
+  if isinstance(payload, dict):
+    return payload.get("relative_path") or payload.get("path") or ""
+  return entry.get("relative_path") or entry.get("path") or ""
 
 for entry in walk(data):
-    if not isinstance(entry, dict):
-        continue
-    ev = entry.get("event") or entry.get("name") or ""
-    rp = relpath(entry)
-    if ev == "panel.scan.requested" and rp == note_rel:
-        sys.exit(0)
+  if not isinstance(entry, dict):
+    continue
+  ev = entry.get("event") or entry.get("name") or ""
+  rp = relpath(entry)
+  if ev == "panel.scan.requested" and rp == note_rel:
+    sys.exit(0)
 
 sys.exit(1)
 PY
@@ -151,42 +144,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   fi
 
   payload2="$(tail_path "$OUTBOX_PATH" 200)"
-  if NOTE_REL_ENV="$NOTE_REL" TAIL_JSON="$payload2" "$JSON_TOOL_PYTHON" - <<'PY'
-import json, os, sys
-note_rel = os.environ.get("NOTE_REL_ENV","")
-raw = os.environ.get("TAIL_JSON","") or ""
-if not raw.strip():
-    sys.exit(1)
-try:
-    data = json.loads(raw)
-except Exception:
-    sys.exit(1)
-
-def walk(x):
-    if isinstance(x, dict):
-        yield x
-        for v in x.values():
-            for y in walk(v):
-                yield y
-    elif isinstance(x, list):
-        for i in x:
-            for y in walk(i):
-                yield y
-
-for entry in walk(data):
-    if not isinstance(entry, dict):
-        continue
-    ev = entry.get("event") or entry.get("name") or ""
-    payload = entry.get("payload") or {}
-    rp = ""
-    if isinstance(payload, dict):
-        rp = payload.get("relative_path") or payload.get("path") or ""
-    rp = rp or entry.get("relative_path") or entry.get("path") or ""
-    if ev == "panel.scan.requested" and rp == note_rel:
-        sys.exit(0)
-sys.exit(1)
-PY
-  then
+  if seen_scan_event "$payload2"; then
     panel_seen=1
     break
   fi
@@ -200,13 +158,11 @@ if [ "$panel_seen" -ne 1 ]; then
   exit 1
 fi
 
+question='Return exactly the line that starts with "GAP_TEST_MARKER:" from the latest gap test note. Reply with only that line.'
 ask_response=""
-parse_ok=0
-note_present=0
+note_ok=0
 marker_ok=0
 sources_len=0
-
-question='Return exactly the line that starts with "GAP_TEST_MARKER:" from the latest gap test note. Reply with only that line.'
 
 for i in $(seq 1 "$ASK_RETRIES"); do
   ask_payload="$("$JSON_TOOL_PYTHON" - <<PY
@@ -218,37 +174,29 @@ PY
 
   parsed="$(NOTE_REL_ENV="$NOTE_REL" MARKER_ENV="$marker" ASK_RESPONSE_JSON="$ask_response" "$JSON_TOOL_PYTHON" - <<'PY'
 import json, os, sys
-raw = os.environ.get('ASK_RESPONSE_JSON', '') or ''
-out = {"parse_ok": 0, "note_ok": 0, "marker_ok": 0, "sources_len": 0, "answer": ""}
-
-if not raw.strip():
-    print("parse_ok=0")
-    sys.exit(0)
-
+raw = os.environ.get("ASK_RESPONSE_JSON","") or ""
 try:
-    data = json.loads(raw)
+  data = json.loads(raw) if raw.strip() else {}
 except Exception:
-    print("parse_ok=0")
-    sys.exit(0)
+  data = {}
 
-answer = (data.get("answer") or "").replace("\n", " ").strip()
 sources = data.get("sources") or []
+answer = (data.get("answer") or "").replace("\n"," ").strip()
 
-note_rel = os.environ.get("NOTE_REL_ENV", "")
-marker = os.environ.get("MARKER_ENV", "")
+note_rel = os.environ.get("NOTE_REL_ENV","")
+marker = os.environ.get("MARKER_ENV","")
 
 note_ok = 0
 for s in sources:
-    if isinstance(s, dict):
-        p = s.get("relative_path") or s.get("path") or ""
-    else:
-        p = str(s)
-    if note_rel and note_rel in str(p):
-        note_ok = 1
+  if isinstance(s, dict):
+    p = s.get("relative_path") or s.get("path") or ""
+  else:
+    p = str(s)
+  if note_rel and note_rel in str(p):
+    note_ok = 1
 
 marker_ok = 1 if (marker and marker in answer) else 0
 
-print("parse_ok=1")
 print(f"note_ok={note_ok}")
 print(f"marker_ok={marker_ok}")
 print(f"sources_len={len(sources)}")
@@ -256,12 +204,11 @@ print("answer=" + answer)
 PY
   )"
 
-  parse_ok="$(printf '%s\n' "$parsed" | sed -n 's/^parse_ok=//p' | tail -n 1)"
-  note_present="$(printf '%s\n' "$parsed" | sed -n 's/^note_ok=//p' | tail -n 1)"
+  note_ok="$(printf '%s\n' "$parsed" | sed -n 's/^note_ok=//p' | tail -n 1)"
   marker_ok="$(printf '%s\n' "$parsed" | sed -n 's/^marker_ok=//p' | tail -n 1)"
   sources_len="$(printf '%s\n' "$parsed" | sed -n 's/^sources_len=//p' | tail -n 1)"
 
-  if [ "${parse_ok:-0}" = "1" ] && [ "${note_present:-0}" = "1" ] && [ "${marker_ok:-0}" = "1" ]; then
+  if [ "${note_ok:-0}" = "1" ] && [ "${marker_ok:-0}" = "1" ]; then
     break
   fi
 
@@ -270,15 +217,9 @@ done
 
 echo "[gap test] /api/ask response:"
 echo "$ask_response"
-echo "[gap test] note_present=$note_present marker_ok=$marker_ok sources_len=$sources_len"
+echo "[gap test] note_ok=$note_ok marker_ok=$marker_ok sources_len=$sources_len"
 
-if [ "${parse_ok:-0}" != "1" ]; then
-  echo "[gap test] /api/ask response could not be parsed"
-  diagnostics
-  exit 1
-fi
-
-if [ "${note_present:-0}" != "1" ] || [ "${marker_ok:-0}" != "1" ]; then
+if [ "${note_ok:-0}" != "1" ] || [ "${marker_ok:-0}" != "1" ]; then
   echo "[gap test] /api/ask validation failed"
   diagnostics
   exit 2
