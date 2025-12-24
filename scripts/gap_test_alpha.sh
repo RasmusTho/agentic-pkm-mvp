@@ -2,194 +2,194 @@
 set -euo pipefail
 
 API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"
-OUTBOX_PATH="${OUTBOX_PATH:-/app/tmp/index-outbox.jsonl}"
-WATCHER_HEARTBEAT_PATH="${WATCHER_HEARTBEAT_PATH:-/app/tmp/watcher_heartbeat.json}"
-WORKER_HEARTBEAT_PATH="${WORKER_HEARTBEAT_PATH:-/app/tmp/worker_heartbeat.json}"
-
-WATCHER_CONTAINER="${WATCHER_CONTAINER:-workspace-watcher-1}"
-WORKER_CONTAINER="${WORKER_CONTAINER:-workspace-worker-1}"
-
-VAULT_ROOT="${VAULT_ROOT:-$(pwd)/vault}"
 NOTE_REL="${NOTE_REL:-@Inbox/_gap_test.md}"
+VAULT_ROOT="${VAULT_ROOT:-$(pwd)/vault}"
 NOTE_PATH="${NOTE_PATH:-$VAULT_ROOT/$NOTE_REL}"
-
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-60}"
 ASK_RETRIES="${ASK_RETRIES:-6}"
 ASK_RETRY_SLEEP="${ASK_RETRY_SLEEP:-1}"
 
-printf '[gap test] bash=%s\n' "$(bash --version | head -n 1 || true)"
-printf '[gap test] uname=%s\n' "$(uname -a || true)"
-echo "[gap test] API_BASE_URL=$API_BASE_URL"
-echo "[gap test] OUTBOX_PATH=$OUTBOX_PATH"
-echo "[gap test] NOTE_REL=$NOTE_REL"
-echo "[gap test] NOTE_PATH=$NOTE_PATH"
+JSON_TOOL_PYTHON="python3"
+if ! command -v "$JSON_TOOL_PYTHON" >/dev/null 2>&1; then
+  JSON_TOOL_PYTHON="python"
+fi
+
+pretty_json() {
+  "$JSON_TOOL_PYTHON" -m json.tool
+}
 
 note_dir="$(dirname "$NOTE_PATH")"
 mkdir -p "$note_dir"
 
-nonce="$(python -c 'import secrets; print(secrets.token_hex(4))')"
-marker="GAP_TEST_MARKER: $(date -u +%Y%m%dT%H%M%SZ) $nonce"
+uuid="$(python - <<'PY'
+import uuid
+print(uuid.uuid4())
+PY
+)"
+marker="GAP_TEST_MARKER: $(date -u +%Y%m%dT%H%M%SZ) $uuid"
 
 cat > "$NOTE_PATH" <<NOTE
 ---
-uuid: "SET-BY-SYSTEM"
-title: "Gap Test"
-review_state: "processed"
-origin: "local"
-trust: "own"
-source_ref: "vault://$NOTE_REL"
+uuid: [[${uuid}]]
+title: _gap_test
+review_state: inbox
 ---
-
 $marker
-
-This note is used by scripts/gap_test_alpha.sh to validate:
-- watcher sees vault change
-- worker ingests change and emits pipeline/index events
-- /api/ask can retrieve the note with sources
 NOTE
 
-echo "[gap test] wrote marker to $NOTE_PATH"
-echo "[gap test] marker = $marker"
-
-echo "[gap test] outbox tail before:"
-curl -sS "$API_BASE_URL/api/events/tail?path=$OUTBOX_PATH&n=30" || true
-echo
+printf '[gap test] marker note written: %s\n' "$NOTE_PATH"
+printf '[gap test] marker line: %s\n' "$marker"
 
 deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
+panel_seen=0
 
-echo "[gap test] waiting for watcher to emit panel.scan.requested for $NOTE_REL ..."
-found_scan=0
 while [ "$(date +%s)" -lt "$deadline" ]; do
-  tail_payload="$(curl -sS "$API_BASE_URL/api/events/tail?path=$OUTBOX_PATH&n=200" || true)"
-  if printf '%s' "$tail_payload" | grep -q '"event"[[:space:]]*:[[:space:]]*"panel.scan.requested"' \
-     && printf '%s' "$tail_payload" | grep -qF "$NOTE_REL"; then
-    found_scan=1
+  panel_payload="$(curl -sS "$API_BASE_URL/api/events/tail?topic=panel.scan.requested&limit=50" || true)"
+  if NOTE_REL_ENV="$NOTE_REL" PANEL_PAYLOAD_JSON="$panel_payload" python - <<'PY'
+import json, os, sys
+raw = os.environ.get('PANEL_PAYLOAD_JSON', '')
+if not raw:
+    sys.exit(1)
+try:
+    data = json.loads(raw)
+except Exception:
+    sys.exit(1)
+
+def collect(node):
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from collect(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from collect(item)
+
+def relative_path(entry):
+    if not isinstance(entry, dict):
+        return ''
+    payload = entry.get('payload') or {}
+    if isinstance(payload, dict):
+        rel = payload.get('relative_path') or payload.get('path') or ''
+    else:
+        rel = ''
+    rel = rel or entry.get('relative_path') or entry.get('path') or ''
+    return rel
+note_rel = os.environ.get('NOTE_REL_ENV', '')
+for entry in collect(data):
+    if not isinstance(entry, dict):
+        continue
+    event = entry.get('event') or entry.get('name') or ''
+    rel = relative_path(entry)
+    if event == 'panel.scan.requested' and rel == note_rel:
+        sys.exit(0)
+sys.exit(1)
+PY
+  then
+    panel_seen=1
     break
   fi
-  sleep 0.5
+  sleep 1
 done
 
-if [ "$found_scan" -ne 1 ]; then
-  echo "[gap test] did not observe panel.scan.requested within timeout"
-  echo "[gap test] diagnostics: outbox tail after:"
-  curl -sS "$API_BASE_URL/api/events/tail?path=$OUTBOX_PATH&n=120" || true
-  echo
-  echo "[gap test] watcher heartbeat:"
-  docker exec "$WATCHER_CONTAINER" bash -lc "cat '$WATCHER_HEARTBEAT_PATH' 2>/dev/null || true" || true
-  echo
-  docker logs --tail 200 "$WATCHER_CONTAINER" || true
+if [ "$panel_seen" -ne 1 ]; then
+  echo '[gap test] panel.scan.requested timeout'
+  echo '[gap test] diagnostics: /api/status'
+  curl -sS "$API_BASE_URL/api/status" | pretty_json || true
+  echo '[gap test] diagnostics: /api/health'
+  curl -sS "$API_BASE_URL/api/health" | pretty_json || true
+  echo '[gap test] diagnostics: panel.scan.requested events tail'
+  curl -sS "$API_BASE_URL/api/events/tail?topic=panel.scan.requested&limit=50" | pretty_json || true
+  echo '[gap test] diagnostics: index.object.embedded events tail'
+  curl -sS "$API_BASE_URL/api/events/tail?topic=index.object.embedded&limit=50" | pretty_json || true
   exit 1
 fi
 
-echo "[gap test] worker stat:"
-docker exec "$WORKER_CONTAINER" bash -lc "stat -f '%z %m %N' '$OUTBOX_PATH' || stat '$OUTBOX_PATH' || true" || true
-
-echo "[gap test] worker logs (tail 120):"
-docker logs --tail 120 "$WORKER_CONTAINER" || true
-
-echo "[gap test] api health payload:"
-curl -sS "$API_BASE_URL/api/health" || true
-echo
-
-echo "[gap test] api status payload:"
-curl -sS "$API_BASE_URL/api/status" || true
-echo
-
-question='Return exactly the line that starts with "GAP_TEST_MARKER:" from the latest gap test note. Reply with only that line.'
-ask_has_sources=0
-ask_answer=""
-ask_sources_len=0
 ask_response=""
+parse_ok=0
+note_present=0
+marker_ok=0
+sources_len=0
 
 for i in $(seq 1 "$ASK_RETRIES"); do
-  ask_payload="$(ASK_QUESTION="$question" python - <<'PY'
-import json, os
-print(json.dumps({"question": os.environ.get("ASK_QUESTION", "")}))
+  ask_payload="$(python - <<'PY'
+import json
+print(json.dumps({"question": "What is the GAP_TEST_MARKER line from the latest gap test note?"}))
 PY
   )"
   ask_response="$(curl -sS "$API_BASE_URL/api/ask" -H 'Content-Type: application/json' -d "$ask_payload" || true)"
-
-  parsed="$(printf '%s' "$ask_response" | NOTE_REL_ENV="$NOTE_REL" NONCE_ENV="$nonce" python - <<'PY'
+  parsed="$(NOTE_REL_ENV="$NOTE_REL" MARKER_ENV="$marker" ASK_RESPONSE_JSON="$ask_response" python - <<'PY'
 import json, os, sys
-
-note_rel = os.environ.get("NOTE_REL_ENV", "")
-nonce = os.environ.get("NONCE_ENV", "")
-raw = sys.stdin.read().strip()
-
-data = {}
-if raw:
-  try:
+raw = os.environ.get('ASK_RESPONSE_JSON', '')
+if not raw:
+    print('parse_ok=0')
+    sys.exit(0)
+try:
     data = json.loads(raw)
-  except Exception:
-    data = {}
-
-sources = data.get("sources") or []
-answer = (data.get("answer") or "").replace("\n", " ").strip()
-
-has_sources = 1 if len(sources) > 0 else 0
-marker_ok = 1 if (nonce and nonce in answer) else 0
+except Exception:
+    print('parse_ok=0')
+    sys.exit(0)
+answer = (data.get('answer') or '').replace('\n', ' ').strip()
+sources = data.get('sources') or []
+note_rel = os.environ.get('NOTE_REL_ENV', '')
+marker = os.environ.get('MARKER_ENV', '')
 note_ok = 0
-for s in sources:
-  if isinstance(s, dict):
-    path = s.get("relative_path") or s.get("path") or ""
-    if note_rel and note_rel in str(path):
-      note_ok = 1
-  elif note_rel and note_rel in str(s):
-    note_ok = 1
-
-print(f"has_sources={has_sources}")
-print(f"sources_len={len(sources)}")
-print(f"marker_ok={marker_ok}")
-print(f"note_ok={note_ok}")
-print("answer=" + answer)
+for entry in sources:
+    if isinstance(entry, dict):
+        path_val = entry.get('relative_path') or entry.get('path') or ''
+    else:
+        path_val = str(entry)
+    if note_rel and note_rel in path_val:
+        note_ok = 1
+marker_ok = 1 if marker and marker in answer else 0
+print(f'parse_ok=1')
+print(f'note_ok={note_ok}')
+print(f'marker_ok={marker_ok}')
+print(f'sources_len={len(sources)}')
+print(f'answer={answer}')
 PY
   )"
-
-  ask_has_sources="$(printf '%s\n' "$parsed" | sed -n 's/^has_sources=//p' | tail -n 1)"
-  ask_sources_len="$(printf '%s\n' "$parsed" | sed -n 's/^sources_len=//p' | tail -n 1)"
+  parse_ok="$(printf '%s\n' "$parsed" | sed -n 's/^parse_ok=//p' | tail -n 1)"
+  note_present="$(printf '%s\n' "$parsed" | sed -n 's/^note_ok=//p' | tail -n 1)"
   marker_ok="$(printf '%s\n' "$parsed" | sed -n 's/^marker_ok=//p' | tail -n 1)"
-  note_ok="$(printf '%s\n' "$parsed" | sed -n 's/^note_ok=//p' | tail -n 1)"
-  ask_answer="$(printf '%s\n' "$parsed" | sed -n 's/^answer=//p' | tail -n 1)"
-
-  if [ "${ask_has_sources:-0}" = "1" ] && [ "${marker_ok:-0}" = "1" ] && [ "${note_ok:-0}" = "1" ]; then
+  sources_len="$(printf '%s\n' "$parsed" | sed -n 's/^sources_len=//p' | tail -n 1)"
+  if [ "${parse_ok:-0}" != "1" ]; then
+    echo '[gap test] /api/ask response could not be parsed'
     break
   fi
-
+  if [ "${note_present:-0}" = "1" ] && [ "${marker_ok:-0}" = "1" ]; then
+    break
+  fi
   sleep "$ASK_RETRY_SLEEP"
 done
 
-echo "[gap test] ask response:"
+echo '[gap test] /api/ask response:'
 echo "$ask_response"
-echo
 
-if [ "${ask_has_sources:-0}" != "1" ] || [ "${marker_ok:-0}" != "1" ] || [ "${note_ok:-0}" != "1" ]; then
-  echo "[gap test] /api/ask validation failed: has_sources=${ask_has_sources:-0} marker_ok=${marker_ok:-0} note_ok=${note_ok:-0} (sources_len=${ask_sources_len:-0})"
-  echo "[gap test] diagnostics:"
-  echo "[gap test] outbox tail after:"
-  curl -sS "$API_BASE_URL/api/events/tail?path=$OUTBOX_PATH&n=120" || true
-  echo
+echo '[gap test] note_present' "$note_present" '[marker_ok]' "$marker_ok" '[sources_len]' "$sources_len"
 
-  echo "[gap test] grep marker in outbox (watcher container):"
-  docker exec "$WATCHER_CONTAINER" bash -lc "grep -nF '$marker' '$OUTBOX_PATH' || true" || true
-  echo
+echo '[gap test] api status payload:'
+curl -sS "$API_BASE_URL/api/status" | pretty_json || true
 
-  echo "[gap test] grep marker in outbox (worker container):"
-  docker exec "$WORKER_CONTAINER" bash -lc "grep -nF '$marker' '$OUTBOX_PATH' || true" || true
-  echo
+echo '[gap test] api health payload:'
+curl -sS "$API_BASE_URL/api/health" | pretty_json || true
 
-  echo "[gap test] watcher heartbeat:"
-  docker exec "$WATCHER_CONTAINER" bash -lc "cat '$WATCHER_HEARTBEAT_PATH' 2>/dev/null || true" || true
-  echo
+echo '[gap test] events tail (panel.scan.requested):'
+curl -sS "$API_BASE_URL/api/events/tail?topic=panel.scan.requested&limit=50" | pretty_json || true
 
-  echo "[gap test] worker heartbeat:"
-  docker exec "$WORKER_CONTAINER" bash -lc "cat '$WORKER_HEARTBEAT_PATH' 2>/dev/null || true" || true
-  echo
+echo '[gap test] events tail (index.object.embedded):'
+curl -sS "$API_BASE_URL/api/events/tail?topic=index.object.embedded&limit=50" | pretty_json || true
 
-  docker logs --tail 200 "$WORKER_CONTAINER" || true
-  docker logs --tail 200 "$WATCHER_CONTAINER" || true
+if [ "${parse_ok:-0}" != "1" ]; then
+  exit 1
+fi
+if [ "${note_present:-0}" != "1" ]; then
+  echo '[gap test] /api/ask did not report the marker note as a source'
+  exit 2
+fi
+if [ "${marker_ok:-0}" != "1" ]; then
+  echo '[gap test] /api/ask did not echo the marker line in the answer'
   exit 2
 fi
 
-echo "[gap test] OK: /api/ask returned sources and marker (sources_len=${ask_sources_len:-0})"
-echo "[gap test] answer: $ask_answer"
+printf '[gap test] success: sources=%s\n' "${sources_len:-0}"
 exit 0
