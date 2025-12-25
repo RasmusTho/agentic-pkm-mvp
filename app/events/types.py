@@ -8,6 +8,7 @@ INGEST_CHUNK_DONE = "ingest.chunk.done"
 INGEST_INDEX_DONE = "ingest.index.done"
 INGEST_VAULT_CHANGED = "ingest.vault.changed"
 INDEX_OBJECT_EMBEDDED = "index.object.embedded"
+INDEX_EMBEDDING_FAILED = "index.embedding.failed"
 TEXT_CHUNK_CREATED = "text.chunk.created"
 CLEANUP_DONE = "cleanup.done"
 
@@ -70,6 +71,7 @@ __all__ = [
     "INGEST_INDEX_DONE",
     "INGEST_VAULT_CHANGED",
     "INDEX_OBJECT_EMBEDDED",
+    "INDEX_EMBEDDING_FAILED",
     "TEXT_CHUNK_CREATED",
     "CLEANUP_DONE",
     "REASONING_VALIDATION_ERROR",

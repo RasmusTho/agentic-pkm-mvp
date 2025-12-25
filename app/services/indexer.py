@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 import uuid as _uuid
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Dict
 
 from app.components.embeddings import get_embedding_identity
 from app.observability.tracer import start_span
-from app.outbox.events import emit_index_object_embedded
+from app.outbox.events import emit_index_embedding_failed, emit_index_object_embedded
 from app.services.embedding import deterministic_embedding
 from app.store.object_store import DomainObject, ObjectStore
 from app.stores import get_vector_index
@@ -25,12 +25,13 @@ def _is_valid_uuid(value: str | None) -> bool:
     return True
 
 
-def handle_ingest_object_created(obj: Dict[str, Any]) -> None:
+def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     incoming_uuid = obj.get("uuid")
     object_uuid = incoming_uuid if _is_valid_uuid(incoming_uuid) else str(_uuid.uuid4())
 
     content = obj.get("content") or ""
     embedding = deterministic_embedding(content)
+    actual_dim = len(embedding)
 
     obj_payload = obj.get("payload") or {}
     payload = {
@@ -82,11 +83,22 @@ def handle_ingest_object_created(obj: Dict[str, Any]) -> None:
                 identity=identity,
             )
             emit_index_object_embedded(
-                {
-                    "object_id": object_uuid,
-                    "trace_id": trace_id,
-                    "source_ref": domain.source_ref,
-                }
+                object_id=object_uuid,
+                trace_id=trace_id,
+                source_ref=domain.source_ref,
+                provider=identity.provider,
+                model=model_name,
+                dim=actual_dim,
             )
-        except Exception:
+        except Exception as exc:  # pragma: no cover - best-effort logging path
             logger.exception("Vector index ingest failed for %s", object_uuid)
+            emit_index_embedding_failed(
+                object_id=object_uuid,
+                trace_id=trace_id,
+                source_ref=domain.source_ref,
+                provider=identity.provider,
+                model=model_name,
+                expected_dim=identity.dim,
+                actual_dim=actual_dim,
+                error=str(exc),
+            )

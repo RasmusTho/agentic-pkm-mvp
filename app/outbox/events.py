@@ -8,12 +8,15 @@ from uuid import UUID
 
 from app.embedding_config import get_embed_dim
 from app.events.schema import make_outbox_event
+from app.events.types import INDEX_EMBEDDING_FAILED, INDEX_OBJECT_EMBEDDED
 from app.llm.embeddings import EMBED_MODEL
 
 
 _DEFAULT_LOGS_OUTBOX = Path("logs/index-outbox.jsonl")
 _DEFAULT_TMP_OUTBOX = Path("tmp/index-outbox.jsonl")
 
+
+# default paths may be overridden by INDEX_OUTBOX_PATH
 
 def _try_writable_path(path: Path) -> bool:
     try:
@@ -71,6 +74,8 @@ class _DynamicIndexOutboxPath:
 INDEX_OUTBOX_PATH = _DynamicIndexOutboxPath()
 INDEX_EMBEDDING_REQUESTED = "index.embedding.requested"
 INDEX_EMBEDDING_CREATED = "index.embedding.created"
+INDEX_EMBEDDING_FAILED = "index.embedding.failed"
+INDEX_OBJECT_EMBEDDED = "index.object.embedded"
 
 
 def get_index_outbox_path() -> Path:
@@ -90,13 +95,6 @@ def _append_record(record: Dict[str, Any]) -> None:
 
 
 def emit_index_embedding_requested(event: Dict[str, Any]) -> None:
-    """Request that the indexer compute and upsert an embedding for an object.
-
-    Contract:
-    - MUST include `object_id`.
-    - MUST NOT include an embedding vector.
-    """
-
     if "object_id" not in event:
         raise ValueError("index.embedding.requested missing field: object_id")
 
@@ -117,9 +115,23 @@ def emit_index_embedding_requested(event: Dict[str, Any]) -> None:
     _append_record(record)
 
 
-def emit_index_embedding_created(*, object_id: UUID, trace_id: str | None = None, source: str = "indexer") -> None:
-    """Emit an index.embedding.created record without embedding vectors."""
+def _build_index_record(
+    envelope: Any,
+    *,
+    object_id: str,
+    metrics: Dict[str, Any] | None = None,
+    provenance: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    record: Dict[str, Any] = dict(envelope.model_dump())
+    record["uuid"] = object_id
+    if metrics is not None:
+        record["metrics"] = metrics
+    if provenance is not None:
+        record["provenance"] = provenance
+    return record
 
+
+def emit_index_embedding_created(*, object_id: UUID, trace_id: str | None = None, source: str = "indexer") -> None:
     envelope = make_outbox_event(
         INDEX_EMBEDDING_CREATED,
         source=source,
@@ -128,35 +140,92 @@ def emit_index_embedding_created(*, object_id: UUID, trace_id: str | None = None
         meta={},
     )
 
-    record: Dict[str, Any] = {
-        "event": INDEX_EMBEDDING_CREATED,
-        "trace_id": envelope.trace_id,
-        "uuid": str(object_id),
-        "metrics": {"vectors": 1, "dim": get_embed_dim(), "view": "markdown.semantic"},
-        "provenance": {"model": EMBED_MODEL, "version": "1.0"},
-    }
-    record.update(envelope.model_dump())
+    metrics = {"vectors": 1, "dim": get_embed_dim(), "view": "markdown.semantic"}
+    provenance = {"model": EMBED_MODEL, "version": "1.0"}
+    record = _build_index_record(envelope, object_id=str(object_id), metrics=metrics, provenance=provenance)
     _append_record(record)
 
 
-def emit_index_object_embedded(event: Dict[str, Any]) -> None:
-    """Deprecated compatibility shim.
+def emit_index_object_embedded(
+    *,
+    object_id: UUID | str,
+    trace_id: str | None = None,
+    source: str = "indexer",
+    source_ref: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    dim: int | None = None,
+    view: str = "markdown.semantic",
+    meta: Dict[str, Any] | None = None,
+) -> None:
+    envelope = make_outbox_event(
+        INDEX_OBJECT_EMBEDDED,
+        source=source,
+        trace_id=trace_id,
+        payload={"object_id": _coerce_uuid(object_id)},
+        meta=meta or {},
+    )
 
-    Historically this event carried an embedding vector (legacy). The embeddings pipeline
-    is now indexer-computed, and outbox records must not carry vectors.
+    metrics = {"vectors": 1, "dim": dim or get_embed_dim(), "view": view}
+    provenance = {"model": model or EMBED_MODEL, "provider": provider or "indexer"}
+    record = _build_index_record(
+        envelope,
+        object_id=_coerce_uuid(object_id),
+        metrics=metrics,
+        provenance=provenance,
+    )
+    if source_ref is not None:
+        record.setdefault("meta", {})["source_ref"] = source_ref
+    _append_record(record)
 
-    Use `emit_index_embedding_requested` instead.
-    """
 
-    emit_index_embedding_requested(event)
+def emit_index_embedding_failed(
+    *,
+    object_id: UUID | str,
+    trace_id: str | None = None,
+    source: str = "indexer",
+    source_ref: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    expected_dim: int | None = None,
+    actual_dim: int | None = None,
+    error: str | None = None,
+) -> None:
+    meta: Dict[str, Any] = {k: v for k, v in {
+        "provider": provider,
+        "model": model,
+        "expected_dim": expected_dim,
+        "actual_dim": actual_dim,
+        "error": error,
+        "source_ref": source_ref,
+    }.items() if v is not None}
+
+    envelope = make_outbox_event(
+        INDEX_EMBEDDING_FAILED,
+        source=source,
+        trace_id=trace_id,
+        payload={"object_id": _coerce_uuid(object_id)},
+        meta=meta,
+    )
+
+    record = _build_index_record(
+        envelope,
+        object_id=_coerce_uuid(object_id),
+        metrics={"vectors": 0, "dim": expected_dim if expected_dim is not None else actual_dim or get_embed_dim(), "view": "markdown.semantic"},
+        provenance={"model": model or EMBED_MODEL, "provider": provider or "indexer"},
+    )
+    _append_record(record)
 
 
 __all__ = [
     "emit_index_embedding_requested",
     "emit_index_embedding_created",
     "emit_index_object_embedded",
+    "emit_index_embedding_failed",
     "INDEX_OUTBOX_PATH",
     "INDEX_EMBEDDING_REQUESTED",
     "INDEX_EMBEDDING_CREATED",
+    "INDEX_EMBEDDING_FAILED",
+    "INDEX_OBJECT_EMBEDDED",
     "get_index_outbox_path",
 ]

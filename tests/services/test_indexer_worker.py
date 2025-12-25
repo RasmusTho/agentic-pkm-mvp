@@ -30,33 +30,38 @@ def test_handle_ingest_object_created_uses_shared_vector_index(monkeypatch):
                 "source_ref": source_ref,
                 "payload": payload,
                 "model": model,
+                "identity": identity,
             })
 
     events: list[dict] = []
+    failures: list[dict] = []
     monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: DummyIndex())
-    monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda event: events.append(event))
+    monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: events.append(kwargs))
+    monkeypatch.setattr("app.services.indexer.emit_index_embedding_failed", lambda **kwargs: failures.append(kwargs))
 
     handle_ingest_object_created(_make_event())
 
     assert calls
-    assert any(isinstance(call["object_id"], UUID) for call in calls)
     assert events
+    assert not failures
+    assert any(isinstance(call["object_id"], UUID) for call in calls)
 
 
-def test_handle_ingest_object_created_logs_on_failure(monkeypatch):
-    class FailingDummy:
+def test_handle_ingest_object_created_emits_failure_event(monkeypatch):
+    class FailingIndex:
         def upsert(self, *args, **kwargs):
             raise RuntimeError("boom")
 
-    logged: list[str] = []
-    class DummyLogger:
-        def exception(self, msg, oid):
-            logged.append(f"{msg} {oid}")
-
-    monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: FailingDummy())
-    monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda event: None)
-    monkeypatch.setattr("app.services.indexer.logger", DummyLogger())
+    fired: list[dict] = []
+    failure_events: list[dict] = []
+    monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: FailingIndex())
+    monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: fired.append(kwargs))
+    monkeypatch.setattr("app.services.indexer.emit_index_embedding_failed", lambda **kwargs: failure_events.append(kwargs))
 
     handle_ingest_object_created(_make_event())
 
-    assert logged
+    assert not fired
+    assert failure_events
+    assert failure_events[0].get("error", "")
+    assert failure_events[0].get("actual_dim")
+    assert failure_events[0].get("expected_dim")
