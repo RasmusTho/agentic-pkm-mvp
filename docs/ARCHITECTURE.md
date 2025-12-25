@@ -428,3 +428,8 @@ Two commands exist on purpose: `panel-update` runs the AI panel in isolation for
 ## Runtime & Infrastructure
 - Compose/ports/startup details live in docs/INFRASTRUCTURE.md.
 - The compose stack runs db (pgvector), api (FastAPI on 8000 mapped to 18000), and worker (outbox consumer) on Colima-backed Docker.
+
+## Health & heartbeats
+- `/api/health` now surfaces watcher heartbeats, worker heartbeats, and DB/LLM readiness checks so the Status service can report liveliness with deterministic probes.
+- The Outbox now publishes `index.object.embedded` and `index.embedding.failed` events; dashboards, gap tests, and fitness gates read those events to confirm the embedding pipeline is working end to end.
+- Operator scripts (`scripts/start_full_system.sh`, `scripts/gap_test_alpha.sh`) wrap the watcher→worker→index→/api/ask loop, log diagnostics, and guard against missing sources so the architecture is observable without manual digging.
