@@ -5,10 +5,12 @@ import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Any, Dict
 
+from app.components.embeddings import get_embedding_identity
 from app.observability.tracer import start_span
+from app.outbox.events import emit_index_object_embedded
 from app.services.embedding import deterministic_embedding
 from app.store.object_store import DomainObject, ObjectStore
-from app.store.vector_store import VectorIndex
+from app.stores import get_vector_index
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +26,7 @@ def _is_valid_uuid(value: str | None) -> bool:
 
 
 def handle_ingest_object_created(obj: Dict[str, Any]) -> None:
-    """
-    Called by capture_indexer after we wrote the capture note to vault.
-    We push a structured payload into Postgres for search / recall.
-    """
     incoming_uuid = obj.get("uuid")
-    # pick stable id if caller gave one, otherwise generate one
     object_uuid = incoming_uuid if _is_valid_uuid(incoming_uuid) else str(_uuid.uuid4())
 
     content = obj.get("content") or ""
@@ -69,8 +66,27 @@ def handle_ingest_object_created(obj: Dict[str, Any]) -> None:
         )
         store.save_object(domain, emit_outbox=False, trace_id=trace_id)
 
-    with start_span("indexer.upsert", trace_id, {"kind": "note"}):
+    vector_index = get_vector_index()
+    identity = get_embedding_identity()
+    model_name = identity.model
+
+    with start_span("indexer.upsert", trace_id, {"kind": obj.get("kind") or "note"}):
         try:
-            VectorIndex().upsert_embedding(object_uuid, embedding)
+            vector_index.upsert(
+                _uuid.UUID(object_uuid),
+                kind=domain.kind,
+                source_ref=domain.source_ref or "",
+                payload=domain.payload,
+                embedding=embedding,
+                model=model_name,
+                identity=identity,
+            )
+            emit_index_object_embedded(
+                {
+                    "object_id": object_uuid,
+                    "trace_id": trace_id,
+                    "source_ref": domain.source_ref,
+                }
+            )
         except Exception:
             logger.exception("Vector index ingest failed for %s", object_uuid)
