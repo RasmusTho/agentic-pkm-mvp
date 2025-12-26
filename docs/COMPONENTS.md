@@ -23,7 +23,7 @@ Use one label consistently:
 | Outbox | JSONL | Event/intent emission stream (audit + coordination artifact) |
 
 - **ObjectStore (memory/pg)** — Persists object envelopes + payloads; access via store APIs. Maturity: Baseline.
-- **VectorIndex (memory/pg)** — Embedding storage + similarity search. Maturity: Baseline.
+- **VectorIndex (memory/pg)** — Embedding storage + similarity search. Maturity: Baseline. See `docs/EMBEDDINGS.md` for the embedding contract.
 - **RelationIndex (memory/pg)** — Relation graph storage for typed links and provenance edges. Maturity: Baseline.
 
 ## Ingest / pipeline agents
