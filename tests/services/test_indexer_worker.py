@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 from app.services.indexer import handle_ingest_object_created
@@ -35,7 +34,12 @@ def test_handle_ingest_object_created_uses_shared_vector_index(monkeypatch):
                 "identity": identity,
             })
 
-    identity = SimpleNamespace(provider="test", model="test-model", dim=4)
+    identity = SimpleNamespace(
+        provider="ollama",
+        model="nomic-embed-text:latest",
+        dim=768,
+        normalize=True,
+    )
 
     events: list[dict] = []
     failures: list[dict] = []
@@ -49,10 +53,11 @@ def test_handle_ingest_object_created_uses_shared_vector_index(monkeypatch):
         m_embed.return_value = [0.0] * identity.dim
         handle_ingest_object_created(event)
         m_embed.assert_called_once_with(
-            event["content"],
+            text=event["content"],
             provider=identity.provider,
             model=identity.model,
             dim=identity.dim,
+            normalize=identity.normalize,
         )
 
     assert calls
@@ -62,25 +67,29 @@ def test_handle_ingest_object_created_uses_shared_vector_index(monkeypatch):
 
 
 def test_handle_ingest_object_created_emits_failure_event(monkeypatch):
-    class FailingIndex:
-        def upsert(self, *args, **kwargs):
-            raise RuntimeError("boom")
+    emitted: list[dict] = []
+    failures: list[dict] = []
 
-    fired: list[dict] = []
-    failure_events: list[dict] = []
-    monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: FailingIndex())
-    monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: fired.append(kwargs))
-    monkeypatch.setattr("app.services.indexer.emit_index_embedding_failed", lambda **kwargs: failure_events.append(kwargs))
+    vector_index = MagicMock()
+    monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: vector_index)
+    monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: emitted.append(kwargs))
+    monkeypatch.setattr("app.services.indexer.emit_index_embedding_failed", lambda **kwargs: failures.append(kwargs))
 
-    identity = SimpleNamespace(provider="test", model="test-model", dim=4)
+    identity = SimpleNamespace(
+        provider="ollama",
+        model="nomic-embed-text:latest",
+        dim=768,
+        normalize=True,
+    )
     monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: identity)
 
-    with patch("app.services.indexer.llm_embed_text") as m_embed:
-        m_embed.return_value = [0.0] * identity.dim
+    with patch("app.services.indexer.llm_embed_text", side_effect=ValueError("expected 768 got 1536")):
         handle_ingest_object_created(_make_event())
 
-    assert not fired
-    assert failure_events
-    assert failure_events[0].get("error", "")
-    assert failure_events[0].get("actual_dim")
-    assert failure_events[0].get("expected_dim")
+    assert not emitted
+    assert vector_index.upsert.call_count == 0
+    assert failures
+    assert failures[0].get("expected_dim") == identity.dim
+    assert failures[0].get("actual_dim") == 1536
+    assert failures[0].get("provider") == identity.provider
+    assert failures[0].get("error")

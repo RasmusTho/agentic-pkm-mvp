@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Dict
 
 from app.components.embeddings import get_embedding_identity
-from app.llm.embeddings import embed_text as llm_embed_text
+from app.index.embeddings import llm_embed_text
 from app.observability.tracer import start_span
 from app.outbox.events import emit_index_embedding_failed, emit_index_object_embedded
 from app.store.object_store import DomainObject, ObjectStore
@@ -25,20 +26,19 @@ def _is_valid_uuid(value: str | None) -> bool:
     return True
 
 
+def _infer_dim_from_error(exc: Exception) -> int | None:
+    text = str(exc)
+    match = re.search(r"got\s+(\d+)", text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     incoming_uuid = obj.get("uuid")
     object_uuid = incoming_uuid if _is_valid_uuid(incoming_uuid) else str(_uuid.uuid4())
 
     content = obj.get("content") or ""
-    identity = get_embedding_identity()
-    embedding = llm_embed_text(
-        content,
-        provider=identity.provider,
-        model=identity.model,
-        dim=identity.dim,
-    )
-    actual_dim = len(embedding)
-
     obj_payload = obj.get("payload") or {}
     payload = {
         "title": obj.get("title"),
@@ -60,7 +60,6 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
             source_ref=obj.get("source_ref"),
             created_at=datetime.now(timezone.utc),
         )
-        store.save_object(domain, emit_outbox=False, trace_id=trace_id)
     else:
         updated_payload = dict(existing.payload or {})
         updated_payload.update({k: v for k, v in payload.items() if v is not None})
@@ -71,7 +70,34 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
             source_ref=existing.source_ref,
             created_at=existing.created_at,
         )
-        store.save_object(domain, emit_outbox=False, trace_id=trace_id)
+    store.save_object(domain, emit_outbox=False, trace_id=trace_id)
+
+    identity = get_embedding_identity()
+    embedding: list[float] | None = None
+    actual_dim: int | None = None
+
+    try:
+        embedding = llm_embed_text(
+            text=content,
+            provider=identity.provider,
+            model=identity.model,
+            dim=identity.dim,
+            normalize=identity.normalize,
+        )
+        actual_dim = len(embedding)
+    except Exception as exc:
+        actual_dim = _infer_dim_from_error(exc)
+        emit_index_embedding_failed(
+            object_id=object_uuid,
+            trace_id=trace_id,
+            source_ref=domain.source_ref,
+            provider=identity.provider,
+            model=identity.model,
+            expected_dim=identity.dim,
+            actual_dim=actual_dim,
+            error=str(exc),
+        )
+        return
 
     vector_index = get_vector_index()
     model_name = identity.model

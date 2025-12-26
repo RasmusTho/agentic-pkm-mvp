@@ -33,6 +33,7 @@ Embeddings configuration is separate from chat;
 - Default local plan:
   - `EMBED_MODEL=nomic-embed-text:latest`
   - `EMBED_DIM=768`
+  - `EMBED_NORMALIZE=1` (normalized vectors by default)
 - `EMBED_MODEL`
   - Example: `nomic-embed-text:latest`
 - `EMBED_DIM`
@@ -52,7 +53,7 @@ Optional:
 
 - `/api/health` should confirm ollama is reachable and lists models.
 - If you see `index.embedding.failed` with a dim mismatch, validate:
-  - `EMBED_MODEL` is pointing at `nomic-embed-text:latest` or the intended model
-  - `EMBED_DIM` is set to 768 (for the default) or the provider’s actual output
-  - you are calling the intended `OLLAMA_HOST` instance
+  - `EMBED_MODEL` is pointing at `nomic-embed-text:latest` (or the chosen model)
+  - `EMBED_DIM` matches the provider output (768 for the default model)
+  - You are calling the intended `OLLAMA_HOST` instance
 

@@ -87,5 +87,6 @@ def embed_batches(
             yield embed_texts(batch, provider=provider, model=model, dim=dim, normalize=normalize)
 
 
-__all__ = ["embed_text", "embed_texts", "embed_batches"]
+llm_embed_text = embed_text
 
+__all__ = ["embed_text", "embed_texts", "embed_batches", "llm_embed_text"]
