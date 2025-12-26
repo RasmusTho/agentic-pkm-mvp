@@ -28,3 +28,12 @@ Use this checklist to validate a deployment before enabling full ingest + panel 
 ## 6) Post-go-live hygiene
 - Keep `LLM_TRACE_ENABLE=1` only when troubleshooting; traces are now hashed (no raw prompts/responses).
 - Document any environment-specific overrides in the settings surface (vault `_system/settings/system-settings.yaml`).
+
+## Stage 0 (Ollama OpenAI-compatible embeddings)
+During Stage 0 we run the worker against the Ollama OpenAI-compatible `/v1/embeddings` path.  Add a `docker-compose.override.yml` that overrides the worker's environment so every embedding request is routed through the OpenAI-style client:
+- `OPENAI_BASE_URL=http://host.docker.internal:11434/v1`
+- `OPENAI_API_KEY=sk-local`
+- `EMBED_MODEL=nomic-embed-text:latest`
+- `EMBED_DIM=768`
+- `EMBED_NORMALIZE=1`
+This keeps `OLLAMA_HOST` available for chat while ensuring the embeddings helper targets `/v1/embeddings` via the OpenAI-compatible interface.
