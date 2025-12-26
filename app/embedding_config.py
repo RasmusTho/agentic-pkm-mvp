@@ -33,9 +33,12 @@ def l2_normalize(values: Sequence[float]) -> list[float]:
     return [v / norm for v in vec]
 
 
-def assert_embed_dim(values: Sequence[float], *, name: str = "embedding") -> None:
-    expected = get_embed_dim()
+def assert_embed_dim(
+    values: Sequence[float], *, expected: int | None = None, name: str = "embedding"
+) -> None:
     actual = len(values)
+    if expected is None:
+        expected = get_embed_dim()
     if actual != expected:
         raise ValueError(f"{name} dim mismatch: expected {expected}, got {actual}")
 

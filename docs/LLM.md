@@ -39,6 +39,7 @@ Embeddings configuration is separate from chat;
 - `EMBED_DIM`
   - Example: `768`
   - Must match the provider’s actual output dimension. If this changes, the embedding identity changes and the VectorIndex must be rebuilt.
+- When `LLM_PROVIDER=ollama`, the runtime posts to the Ollama-native `/api/embed` endpoint with `{model, input, dimensions, truncate: true}`; the OpenAI-compatible `/api/embeddings` path is only used when that compatibility layer is explicitly enabled on the daemon.
 
 Optional:
 - `EMBED_NORMALIZE`
@@ -56,4 +57,3 @@ Optional:
   - `EMBED_MODEL` is pointing at `nomic-embed-text:latest` (or the chosen model)
   - `EMBED_DIM` matches the provider output (768 for the default model)
   - You are calling the intended `OLLAMA_HOST` instance
-

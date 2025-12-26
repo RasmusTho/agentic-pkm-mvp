@@ -115,6 +115,8 @@ Normative call path:
 - `app.index.embeddings.llm_embed_text(...)` routes to the provider-aware embedding implementation in `app.llm.embeddings.embed_text(...)`
 - Provider logic uses `LLM_PROVIDER` and `OLLAMA_HOST` to decide how to call the backend.
 
+> **Note:** When `LLM_PROVIDER=ollama`, the runtime calls Ollama’s native `/api/embed` endpoint with `{model, input, dimensions, truncate: true}`. We only fall back to the OpenAI-compatible `/api/embeddings` mode when that compatibility layer is explicitly enabled on the Ollama daemon.
+
 Indexer MUST NOT call deterministic/test-only helpers in production paths.
 
 ## Indexing behavior and invariants

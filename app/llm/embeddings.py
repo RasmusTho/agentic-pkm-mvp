@@ -40,16 +40,35 @@ def _embed_single(text: str, provider: str, model: str, dim: int) -> tuple[float
         return tuple(_mock_vector(text, dim=dim))
 
     if provider == "ollama":
-        resp = httpx.post(
-            f"{OLLAMA_URL}/api/embeddings",
-            json={"model": model, "prompt": text},
-            timeout=float(os.getenv("LLM_TIMEOUT", "60")),
-        )
-        resp.raise_for_status()
+        timeout = float(os.getenv("LLM_TIMEOUT", "60"))
+        payload = {"model": model, "input": text, "truncate": True}
+        if dim is not None:
+            payload["dimensions"] = dim
+        try:
+            resp = httpx.post(f"{OLLAMA_URL}/api/embed", json=payload, timeout=timeout)
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"Ollama embedding request failed (provider={provider}, model={model}, expected_dim={dim}): {exc}"
+            ) from exc
         data = resp.json()
-        embedding = [float(x) for x in (data.get("embedding") or [])]
-        assert_embed_dim(embedding, name="embedding")
-        return tuple(embedding)
+        embeddings = data.get("embeddings")
+        if embeddings is None:
+            fallback = data.get("embedding")
+            if fallback is not None:
+                embeddings = [fallback]
+        if not embeddings:
+            raise ValueError(
+                f"Ollama embedding response missing vectors (provider={provider}, model={model}, expected_dim={dim})"
+            )
+        vector = [float(x) for x in embeddings[0]]
+        try:
+            assert_embed_dim(vector, expected=dim, name="embedding")
+        except ValueError as exc:
+            raise ValueError(
+                f"Ollama embedding dim mismatch (provider={provider}, model={model}, expected_dim={dim}, actual_dim={len(vector)}): {exc}"
+            ) from exc
+        return tuple(vector)
 
     raise ValueError(f"Unsupported embedding provider: {provider}")
 
@@ -83,4 +102,3 @@ def embed_texts(
 
 
 __all__ = ["embed_text", "embed_texts", "EMBED_MODEL", "get_embedding_provider"]
-
