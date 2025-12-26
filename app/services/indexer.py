@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 from typing import Dict
 
 from app.components.embeddings import get_embedding_identity
+from app.llm.embeddings import embed_text as llm_embed_text
 from app.observability.tracer import start_span
 from app.outbox.events import emit_index_embedding_failed, emit_index_object_embedded
-from app.services.embedding import deterministic_embedding
 from app.store.object_store import DomainObject, ObjectStore
 from app.stores import get_vector_index
 
@@ -30,7 +30,13 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     object_uuid = incoming_uuid if _is_valid_uuid(incoming_uuid) else str(_uuid.uuid4())
 
     content = obj.get("content") or ""
-    embedding = deterministic_embedding(content)
+    identity = get_embedding_identity()
+    embedding = llm_embed_text(
+        content,
+        provider=identity.provider,
+        model=identity.model,
+        dim=identity.dim,
+    )
     actual_dim = len(embedding)
 
     obj_payload = obj.get("payload") or {}
@@ -68,7 +74,6 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
         store.save_object(domain, emit_outbox=False, trace_id=trace_id)
 
     vector_index = get_vector_index()
-    identity = get_embedding_identity()
     model_name = identity.model
 
     with start_span("indexer.upsert", trace_id, {"kind": obj.get("kind") or "note"}):

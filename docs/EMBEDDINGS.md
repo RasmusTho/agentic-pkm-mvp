@@ -1,5 +1,6 @@
-State: Active (current).
 # Embeddings
+
+State: Active (current).
 
 This document is the **normative specification** for how embeddings are produced, validated, recorded, and stored in the system.
 
@@ -13,8 +14,9 @@ Embeddings are **derived artifacts** (rebuildable). The canonical source of trut
   - `EMBED_MODEL`
   - `EMBED_DIM`
   - `EMBED_NORMALIZE` (if present; defaults to normalized vectors)
-- A stable **embedding identity** that is recorded alongside vectors so we can detect drift.
+- A stable **embedding identity** recorded alongside vectors so we can detect drift.
 - Clear operational behavior for dimension mismatch, model swaps, and rebuilds.
+- **Steering doc alignment**: any embedding-identity change MUST be reflected in steering docs (see Change Policy).
 
 ## High-level flow
 
@@ -25,6 +27,7 @@ Embeddings are **derived artifacts** (rebuildable). The canonical source of trut
    - model name
    - expected dimension (guardrail)
    - normalize flag
+   - (optional) query/document mode formatting when required by the model family
 4. The returned vector is validated (dimension + optional normalization expectations).
 5. Vectors are **upserted** into `VectorIndex`.
 6. Indexer emits index events to outbox (success/failure) with provenance.
@@ -38,25 +41,55 @@ Embeddings are **derived artifacts** (rebuildable). The canonical source of trut
 - `OLLAMA_HOST`
   - Example: `http://host.docker.internal:11434`
 - `EMBED_MODEL`
-  - Example: `nomic-embed-text:latest`
+  - Example (default local): `nomic-embed-text:latest`
 - `EMBED_DIM`
-  - Example: `768`
+  - Example for `nomic-embed-text:latest`: `768`
   - Used as a **guardrail**. If provider returns a different dim, indexing fails for that object and an error event is emitted.
 
 ### Optional env vars
 
 - `EMBED_NORMALIZE`
-  - If set/used by the embedding helper; default behavior is to return **normalized** vectors.
+  - Default behavior is to return **normalized** vectors unless explicitly disabled.
   - Changing normalization changes the embedding identity and requires rebuilding the vector index.
+
+## Query vs Document embeddings (RAG invariant)
+
+The system MUST use the same embedding **identity** for:
+- document/chunk embeddings at index time
+- query embeddings at retrieval time (ASK)
+
+If identity differs, similarity scores become meaningless and retrieval quality collapses.
+
+The ASK/retrieval path MUST call the same `llm_embed_text` helper (or a shared wrapper) and record/verify the identity via doctor/preflight.
+
+## Model-specific formatting (query/passage prefixes)
+
+Some embedding model families require input formatting such as:
+- `query: ...`
+- `passage: ...`
+
+If/when such a model is used, the embedding layer MUST apply the correct formatting based on a `mode` (query vs document) parameter.
+
+Default for `nomic-embed-text` is “no special prefix”.
+
+## Distance metric and normalization
+
+We standardize on **cosine-style semantic similarity**.
+
+- If vectors are normalized, cosine similarity is equivalent to inner-product ordering.
+- If vectors are not normalized, cosine distance must be computed directly.
+
+VectorIndex and the Postgres/pgvector schema MUST be configured consistently with this choice (operator class / metric). Any change here is an identity change and requires rebuild.
 
 ## Embedding identity
 
-The system maintains a stable identity string/record for embeddings. It is resolved by `get_embedding_identity()` and should include (at minimum):
+The system maintains a stable identity record resolved by `get_embedding_identity()` and should include (at minimum):
 
 - provider (e.g., `ollama`)
 - model (e.g., `nomic-embed-text:latest`)
 - expected dimension (e.g., `768`)
 - normalize flag (e.g., `true`)
+- (optional) formatting mode policy version (if query/passage rules apply)
 
 This identity must be:
 - resolved **before** embedding,
@@ -70,6 +103,7 @@ If you change:
 - model
 - dimension
 - normalization
+- formatting policy (query/passage rules)
 
 …then previously stored vectors are not comparable. The correct operation is to **rebuild** the vector index under the new identity.
 
@@ -81,27 +115,28 @@ Normative call path:
 - `app.index.embeddings.llm_embed_text(...)` routes to the provider-aware embedding implementation in `app.llm.embeddings.embed_text(...)`
 - Provider logic uses `LLM_PROVIDER` and `OLLAMA_HOST` to decide how to call the backend.
 
-Indexer must **not** call deterministic/test-only helpers in production paths.
+Indexer MUST NOT call deterministic/test-only helpers in production paths.
 
 ## Indexing behavior and invariants
 
-### Expected behavior
+### Success
 
-- For each object:
-  - produce one or more vectors (depending on chunking/view)
-  - upsert vectors into VectorIndex
-  - emit `index.object.embedded` with:
-    - object id
-    - counts (vectors)
-    - provenance (provider/model/identity)
-    - view (e.g., `markdown.semantic`)
+For each object:
+- produce one or more vectors (depending on chunking/view)
+- upsert vectors into VectorIndex
+- emit `index.object.embedded` with:
+  - object id
+  - counts (vectors)
+  - provenance (provider/model/identity)
+  - view (e.g., `markdown.semantic`)
+  - actual_dim (record what we got back)
 
-### Failure behavior
+### Failure
 
 If embedding fails (provider error, timeout, or dimension mismatch):
 
-- Do not upsert vectors for that object
-- Emit `index.embedding.failed` with:
+- do not upsert vectors for that object
+- emit `index.embedding.failed` with:
   - `expected_dim`
   - `actual_dim` (when known)
   - provider/model
@@ -113,54 +148,36 @@ This event is the canonical signal to operators that the embedding chain is misc
 ## Storage: VectorIndex
 
 VectorIndex stores embeddings as derived data:
-
 - keyed by object UUID + view + chunk identifier (implementation detail)
 - includes recorded embedding identity/provenance
 - supports similarity search
 
-VectorIndex must be treated as rebuildable cache: if identity changes, vectors are invalid until rebuilt.
+VectorIndex is rebuildable cache: if identity changes, vectors are invalid until rebuilt.
 
 ## Operational guardrails
 
-Recommended operational checks:
-
-- `/api/health` should confirm:
-  - ollama reachable
-  - configured models visible
-- Index preflight (if enabled) should warn on:
+Recommended checks:
+- `/api/health` confirms backend reachable and models visible
+- Index preflight warns on:
   - identity drift
-  - missing or inconsistent dims
-- `index doctor` should detect:
+  - missing/inconsistent dims
+- `index doctor` detects:
   - runtime identity != stored identity
   - mismatched vector dimensions in storage
 
-## Troubleshooting: dimension mismatch
+## Rebuild playbook (when identity changes)
 
-If you see errors like:
+1) Update configuration (`EMBED_MODEL`, `EMBED_DIM`, `EMBED_NORMALIZE`) and steering docs.
+2) Run doctor/preflight to confirm runtime identity is stable.
+3) Rebuild VectorIndex (clear + re-embed) using the project’s supported CLI/tooling.
+4) Verify:
+   - no `index.embedding.failed`
+   - stored identity matches runtime identity
+   - retrieval/ASK uses the same identity
 
-- `expected_dim: 768`
-- `actual_dim: 1536`
-- `embedding dim mismatch ...`
+## Change policy (steering docs)
 
-Do the following:
-
-1. Confirm what the provider actually returns for the configured model:
-   - run a single embedding probe using the same backend + model name.
-2. Ensure runtime config matches that reality:
-   - set `EMBED_DIM` to the provider’s real output dimension
-   - confirm `EMBED_MODEL` is the intended model
-3. Rebuild the vector index if identity changed:
-   - embeddings are not forward-compatible across identity changes.
-
-Common causes:
-- `EMBED_MODEL` points to a different model than intended
-- the model version/tag changed upstream
-- mixed environments (host vs container) calling different ollama instances
-
-## Change policy
-
-- Any change to the embedding identity must be:
-  - explicitly recorded in docs/steering,
-  - verified via doctor/preflight,
-  - followed by a vector-index rebuild (or a controlled migration).
-
+Any change to the embedding identity MUST:
+- be recorded in steering docs (at minimum `docs/LLM.md` and this document),
+- be verified via doctor/preflight,
+- be followed by a VectorIndex rebuild (or a controlled migration).

@@ -17,6 +17,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 - v5.x — **active SoT forward line** (currently tracked through v5.5: PanelAgent planner pipeline + CLI-first orchestration on top of the watcher track) for Satellite Sync, Yggdrasil modules, Orchestrator/Reasoning 2.0.
 
 ## Root and Repo Docs
+- `docs/EMBEDDINGS.md` — Normative embeddings spec (identity, guardrails, rebuild policy).
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | README.md | Top-level overview | Aligned (forward line v5.x) | 2025-12-17 | Highlights canonical warm/cold artifacts, rebuildable mirrors, and quickstart details. |

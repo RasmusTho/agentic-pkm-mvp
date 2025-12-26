@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import UUID
 
 from app.services.indexer import handle_ingest_object_created
@@ -33,13 +35,25 @@ def test_handle_ingest_object_created_uses_shared_vector_index(monkeypatch):
                 "identity": identity,
             })
 
+    identity = SimpleNamespace(provider="test", model="test-model", dim=4)
+
     events: list[dict] = []
     failures: list[dict] = []
     monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: DummyIndex())
     monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: events.append(kwargs))
     monkeypatch.setattr("app.services.indexer.emit_index_embedding_failed", lambda **kwargs: failures.append(kwargs))
+    monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: identity)
 
-    handle_ingest_object_created(_make_event())
+    event = _make_event()
+    with patch("app.services.indexer.llm_embed_text") as m_embed:
+        m_embed.return_value = [0.0] * identity.dim
+        handle_ingest_object_created(event)
+        m_embed.assert_called_once_with(
+            event["content"],
+            provider=identity.provider,
+            model=identity.model,
+            dim=identity.dim,
+        )
 
     assert calls
     assert events
@@ -58,7 +72,12 @@ def test_handle_ingest_object_created_emits_failure_event(monkeypatch):
     monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: fired.append(kwargs))
     monkeypatch.setattr("app.services.indexer.emit_index_embedding_failed", lambda **kwargs: failure_events.append(kwargs))
 
-    handle_ingest_object_created(_make_event())
+    identity = SimpleNamespace(provider="test", model="test-model", dim=4)
+    monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: identity)
+
+    with patch("app.services.indexer.llm_embed_text") as m_embed:
+        m_embed.return_value = [0.0] * identity.dim
+        handle_ingest_object_created(_make_event())
 
     assert not fired
     assert failure_events

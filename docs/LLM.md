@@ -29,18 +29,19 @@ Supported `LLM_PROVIDER` values:
 
 ### Embeddings
 
-Embeddings configuration is separate from chat:
-
+Embeddings configuration is separate from chat;
+- Default local plan:
+  - `EMBED_MODEL=nomic-embed-text:latest`
+  - `EMBED_DIM=768`
 - `EMBED_MODEL`
   - Example: `nomic-embed-text:latest`
 - `EMBED_DIM`
   - Example: `768`
-  - Must match the provider’s actual output dimension.
-  - If this changes, the embedding identity changes and the vector index must be rebuilt.
+  - Must match the provider’s actual output dimension. If this changes, the embedding identity changes and the VectorIndex must be rebuilt.
 
 Optional:
-- `EMBED_NORMALIZE` (if used)
-  - Default behavior is normalized vectors.
+- `EMBED_NORMALIZE`
+  - Default behavior is normalized vectors; disabling it changes the embedding identity.
 
 ## Runtime contract
 
@@ -51,7 +52,7 @@ Optional:
 
 - `/api/health` should confirm ollama is reachable and lists models.
 - If you see `index.embedding.failed` with a dim mismatch, validate:
-  - `EMBED_MODEL` is correct
-  - `EMBED_DIM` matches the provider output
+  - `EMBED_MODEL` is pointing at `nomic-embed-text:latest` or the intended model
+  - `EMBED_DIM` is set to 768 (for the default) or the provider’s actual output
   - you are calling the intended `OLLAMA_HOST` instance
 
