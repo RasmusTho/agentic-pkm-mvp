@@ -38,6 +38,10 @@ def _store_instances() -> Tuple[ObjectStore, VectorIndex, RelationIndex]:
     raise RuntimeError(f"Store backend '{backend}' is not supported yet")
 
 
+def resolve_store_backend() -> str:
+    return _resolve_backend()
+
+
 def get_object_store() -> ObjectStore:
     return _store_instances()[0]
 

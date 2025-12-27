@@ -41,6 +41,7 @@ from app.cli.uat import (
     run_vault_test_flow,
     seed_vault_test_notes,
 )
+from app.stores import get_object_store, get_vector_index, resolve_store_backend
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
 from app.services.note_update import NoteUpdateResult, process_note_update
@@ -93,7 +94,6 @@ def _dump(data: dict, as_json: bool) -> None:
         click.echo(json.dumps(data, ensure_ascii=False))
     else:
         click.echo(json.dumps(data, ensure_ascii=False, indent=2))
-
 
 def _should_transcribe(source: str) -> bool:
     path = Path(source)
@@ -231,6 +231,21 @@ cli.add_command(index_cli, name="index")
 cli.add_command(events_doctor)
 cli.add_command(smoke_cli, name="smoke")
 
+
+@cli.command(help="Report store and vector index counts for diagnostics.")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Print the result as JSON.")
+def store_stats(as_json: bool) -> None:
+    backend = resolve_store_backend()
+    store = get_object_store()
+    vector_idx = get_vector_index()
+    result = {
+        "backend": backend,
+        "objects": store.count_objects(),
+    }
+    vector_counter = getattr(vector_idx, "count_vectors", None)
+    if callable(vector_counter):
+        result["vectors"] = vector_counter()
+    _dump(result, as_json)
 
 
 @cli.command(name="llm-trace-sequence", help="Render a single trace flow as text or Mermaid sequence diagram.")
