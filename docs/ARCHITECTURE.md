@@ -47,7 +47,7 @@ Architecture describes how things are wired today; these documents define what m
 - Primary focus: make ingestion of the real Obsidian vault stable, add a minimal external ingest path, expose a reliable ASK API, and ship observability plus an interim GUI so the system is usable end to end.
 - Zoned cognition overlay (Active/ Warm/ Cold) applied on top of the knowledge base; zones are derived from signals (usage, recency, trust) rather than folder names.
 - Two planes: Obsidian vault as the human graph (LYT + PARA) with minimal human frontmatter, and an external corpus plane (newsletters/emails/PDFs) that is indexed and retrievable but never rendered as Obsidian notes.
-- Metadata backbone lives in Stores + SetDB/AMG: Core-6 frontmatter remains a projection for humans, while system metadata (signals, relations, usage counts, agent reflections) sits in the data layer.
+- Metadata backbone lives in Stores + SetDB/AMG: Core-6 frontmatter remains a projection for humans (see `docs/CORE6_CONTRACT.md`), while system metadata (signals, relations, usage counts, agent reflections) sits in the data layer.
 - Collaboration/multi-user stays out of scope for Reality-MVP; the current work is single-user, vault-first reliability.
 
 ## Zoned Cognition Overlay
@@ -57,10 +57,16 @@ Architecture describes how things are wired today; these documents define what m
 - Zones are orthogonal to lifecycle (inbox → processed/staging → evergreen → archived) and to temporal value (ephemeral vs normal vs evergreen longevity). A note can be evergreen and Cold, or ephemeral and Active.
 - Zones are derived overlays driven by system metadata (recency, relations, usage), not mandatory folder/tag names; they can be projected into ASK responses and GUI status but do not dictate file layout.
 
+## Core Contract, State Axes, and Overlays (vNext)
+- Core contract: Core-6 is the minimal semantic projection (uuid, title, origin, source_ref, trust, review_state). Fields may be explicit or derived; see `docs/CORE6_CONTRACT.md`.
+- State axes: orthogonal and policy-driven via vault settings; policies define which axes are enabled, locked, or forced. `kind` is a policy-routing field, not a state axis or schema definition.
+- Derived overlays: system-owned overlays such as `zone`, recency, or salience are computed from signals and remain outside the core contract.
+- Agent reasoning operates on Core-6 + active state axes + policy profiles (see `docs/NOTE_KIND_POLICIES.md`) and may consult derived overlays for prioritization.
+
 ## Planes and Metadata Surfaces
 - Vault plane (Obsidian): the human graph of linkable notes; minimal human frontmatter is allowed/encouraged, but the system does not require heavy YAML. Notes belong here when the user might want to read or link them directly.
 - External corpus plane: imported newsletters/emails/PDFs/raw docs that should be searchable and usable for answers but should not appear as notes. These objects live only in Stores/AMG with origins such as `origin: external_newsletter` and review states like `external_raw`.
-- Human frontmatter vs system metadata: frontmatter is for user-facing fields (uuid, title, type/status/area); system metadata (signals, zone inference inputs, relations, promotions, usage counts) remains in SetDB/AMG and Stores. Core-6 remains a projection ({uuid, title, origin, review_state, trust, source_ref}) and is not the full truth.
+- Human frontmatter vs system metadata: frontmatter is for user-facing fields (Core-6 plus optional policy axes like kind/status/priority); system metadata (signals, zone inference inputs, relations, promotions, usage counts) remains in SetDB/AMG and Stores. Core-6 remains a projection ({uuid, title, origin, source_ref, trust, review_state}) and is not the full truth.
 
 ### Note Log in the metadata mirror
 - For each object/uuid in the vault there is a matching `uuid.md` in the metadata mirror (`System/Metadata/VaultMirror/<vault-relative path>/`).
@@ -73,7 +79,7 @@ Architecture describes how things are wired today; these documents define what m
    - Panel/runtime watcher entrypoint: `panel run-many` runs the same PanelAgent parse/runtime for multiple notes (emit-only supported) and will be the panel-side hook for Vault Watcher batches; watcher auto-run is gated by frontmatter policy (`ai_panel_auto_run`).
    - Vault Watcher CLI: `vault-watcher-run` (v5.2) performs snapshot-based change detection, calls `ingest-vault-paths` for changed notes, optionally runs `panel run-many`, then refreshes the snapshot for polling/scheduler use; v5.4 adds dry-run and max-notes guard plus structured summaries.
 2) **External corpus ingest (minimal)** — a small drop folder/pipeline for real external documents ingested as `external_raw` objects, stored in ObjectStore and indexed without surfacing as vault notes (txt/md drop-folder CLI implemented; newsletters/PDFs can extend the same path).
-3) **ASK API** — FastAPI endpoint returning answer text plus sources `{uuid, title, origin (vault/external), zone if known, path/source_ref}` and latency; uses hybrid retrieval over both planes with an in-process HybridStore warmed from `store_objects` on first use. Zone overlays are planned but not yet populated in responses.
+3) **ASK API** — FastAPI endpoint returning answer text plus sources `{uuid, title, origin (vault/external), zone overlay if known, path/source_ref}` and latency; uses hybrid retrieval over both planes with an in-process HybridStore warmed from `store_objects` on first use. Zone overlays are planned but not yet populated in responses.
 4) **Observability backend** — status service that aggregates per-store object counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency; exposed via CLI and interim GUI.
 5) **Interim GUI** — simple FastAPI-served page (root `/`) that shows status (object counts, last ingest, ASK stats) and an ASK input with answers + visible sources; explicitly a temporary observability/interaction surface.
 All Reality-MVP components run on the existing PER-loop agents (Normalizer, Classifier, Chunker, CitationChecker, Indexer, Reviewer, Promotion Agent) and Store abstraction (ObjectStore, VectorIndex, RelationIndex) with Outbox-driven events and Projector/Planner/Reasoning layers kept as additive overlays.
@@ -85,7 +91,7 @@ The sections below retain the v4.5A Canon details as a historical baseline; inva
 ## Purpose & Principles
 - Human-first and agentic PKM: agents stay assistive, preserve author context, and only advance maturity when a reviewer signs off.
 - Observability-first to drive transparency: every agent emits structured audit spans plus deterministic fixtures so regressions reproduce in CI.
-- Core-6 frontmatter & UUID identity: each object carries the Core-6 envelope (id, type, title, created, updated, origin) and a stable UUID threaded through stores and events.
+- Core-6 contract & UUID identity: each object carries the Core-6 envelope (uuid, title, origin, source_ref, trust, review_state), whether explicit or derived, and a stable UUID threaded through stores and events.
 - Store abstraction & Outbox events: ObjectStore, VectorIndex, and RelationIndex share a Store interface, while the Outbox broadcasts change events for asynchronous consumers.
 - Separation of trust and audit: trust levels gate promotion; audit trails remain append-only so reviewers can replay any decision independently.
 

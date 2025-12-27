@@ -47,8 +47,13 @@ When generating or modifying code:
   - Use Stores/Outbox/Index abstractions for data access. Do not introduce new direct
     DB access paths; reuse existing DB helpers only where documented.
 - **Do not redesign Core-6.**
-  - Do not change the semantics of Core-6 frontmatter (`uuid`, `origin`, `kind`, `trust`,
-    `review_state`, `zone`) without an explicit architecture update.
+  - Do not change the semantics of Core-6 frontmatter (`uuid`, `title`, `origin`,
+    `source_ref`, `trust`, `review_state`) without an explicit architecture update.
+  - Core-6 is a semantic contract and may be implicit or derived; see `docs/CORE6_CONTRACT.md`.
+  - `kind` is a policy-routing field, and `zone` is a derived overlay; neither is Core-6.
+- **Treat trust, review_state, and origin as guardrails.**
+  - Agents must not mutate reviewed content without explicit intent.
+  - Writes must honor policy permissions defined in vault settings.
 - **Do not invent new global categories on the fly.**
   - New zones, kinds, event names, or top-level settings must first be reflected in
     `docs/ARCHITECTURE.md` and/or `docs/EVENTS.md` / `docs/schema/*` before being used in code.
