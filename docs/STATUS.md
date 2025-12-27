@@ -6,6 +6,11 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 ## Health spine
 - HealthContract + WriteGuard + incident logging now form the deterministic spine for startup readiness; this snapshot is the baseline for initial go-live visibility.
 
+## Runtime verification
+- `/api/health` now reports watcher and worker heartbeat freshness plus the runtime DB/LLM probes so operators see deterministic health signals.
+- `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the watcher→worker→index→/api/ask chain, emit `index.object.embedded` / `index.embedding.failed`, and log diagnostics when sources are missing.
+- The interim GUI and Status service consume these heartbeats/events so the dashboard shows ingest health, counts, and incidents in one place.
+
 ## Status fields (baseline vs forward line)
 - `sot_baseline_version`: locked Reality-MVP baseline (v4.10).
 - `sot_forward_line_version` / `feature_line_version`: active forward line (v5.x features on top of v4.10).

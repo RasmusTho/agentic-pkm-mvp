@@ -28,3 +28,25 @@ Use this checklist to validate a deployment before enabling full ingest + panel 
 ## 6) Post-go-live hygiene
 - Keep `LLM_TRACE_ENABLE=1` only when troubleshooting; traces are now hashed (no raw prompts/responses).
 - Document any environment-specific overrides in the settings surface (vault `_system/settings/system-settings.yaml`).
+
+## HTTP endpoints
+
+All FastAPI routes listen on `http://127.0.0.1:18000` (docker compose maps host `18000` → container `8000`). Operators should expect:
+
+- `GET /healthz` – liveness probe returning plain `ok`. Example: `curl -sS http://127.0.0.1:18000/healthz`.
+- `GET /readyz` – readiness probe gated by migrations and startup checks. Example: `curl -sS http://127.0.0.1:18000/readyz`.
+- `GET /api/health` – structured health contract with watcher/worker/db/LLM statuses. Example: `curl -sS http://127.0.0.1:18000/api/health`.
+- `GET /api/status` – status/SOT payload that drives dashboards. Example: `curl -sS http://127.0.0.1:18000/api/status`.
+- `GET /search?q=...&k=...` – realtime hybrid search. Example: `curl -sS "http://127.0.0.1:18000/search?q=warm%20content&k=3"`.
+- `POST /api/ask` – question endpoint returning answer + sources. Example: `curl -sS http://127.0.0.1:18000/api/ask -H "Content-Type: application/json" -d '{"question":"warm content"}'`.
+
+There is no `/health` route in the Reality-MVP API; use `/healthz` for simple liveness and `/api/health` for the full contract. Swagger UI lives at `http://127.0.0.1:18000/docs` and the OpenAPI document is the source of truth (`/openapi.json`). If you are unsure which paths exist, run `curl -sS http://127.0.0.1:18000/openapi.json | python -c 'import sys,json; j=json.load(sys.stdin); print(\"\\n\".join(sorted(j[\"paths\"].keys())))'`.
+
+## Stage 0 (Ollama OpenAI-compatible embeddings)
+During Stage 0 we run the worker against the Ollama OpenAI-compatible `/v1/embeddings` path.  Add a `docker-compose.override.yml` that overrides the worker's environment so every embedding request is routed through the OpenAI-style client:
+- `OPENAI_BASE_URL=http://host.docker.internal:11434/v1`
+- `OPENAI_API_KEY=sk-local`
+- `EMBED_MODEL=nomic-embed-text:latest`
+- `EMBED_DIM=768`
+- `EMBED_NORMALIZE=1`
+This keeps `OLLAMA_HOST` available for chat while ensuring the embeddings helper targets `/v1/embeddings` via the OpenAI-compatible interface.

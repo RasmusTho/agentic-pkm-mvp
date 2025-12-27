@@ -182,6 +182,13 @@ class MemoryVectorIndex(VectorIndex):
         self._entries[object_id] = entry
         self._persist_entry(entry)
 
+    def purge_vectors(self, object_id: UUID, *, view: str) -> int:
+        del view
+        if object_id in self._entries:
+            del self._entries[object_id]
+            return 1
+        return 0
+
     def search(self, vector: list[float], *, k: int = 5, identity: EmbeddingIdentity | None = None) -> list:
         if not self._entries:
             return []
@@ -377,6 +384,4 @@ class MemoryRelationIndex(RelationIndex):
                     if entry["dst"] == src:
                         return True
         return False
-
-
 

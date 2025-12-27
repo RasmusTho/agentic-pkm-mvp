@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid as _uuid
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Dict
 
+from app.components.embeddings import get_embedding_identity
+from app.index.embeddings import llm_embed_text
 from app.observability.tracer import start_span
-from app.services.embedding import deterministic_embedding
+from app.outbox.events import DEFAULT_EMBEDDING_VIEW, emit_index_embedding_failed, emit_index_object_embedded
 from app.store.object_store import DomainObject, ObjectStore
-from app.store.vector_store import VectorIndex
+from app.stores import get_vector_index
 
 logger = logging.getLogger(__name__)
 
@@ -23,18 +26,19 @@ def _is_valid_uuid(value: str | None) -> bool:
     return True
 
 
-def handle_ingest_object_created(obj: Dict[str, Any]) -> None:
-    """
-    Called by capture_indexer after we wrote the capture note to vault.
-    We push a structured payload into Postgres for search / recall.
-    """
+def _infer_dim_from_error(exc: Exception) -> int | None:
+    text = str(exc)
+    match = re.search(r"got\s+(\d+)", text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     incoming_uuid = obj.get("uuid")
-    # pick stable id if caller gave one, otherwise generate one
     object_uuid = incoming_uuid if _is_valid_uuid(incoming_uuid) else str(_uuid.uuid4())
 
     content = obj.get("content") or ""
-    embedding = deterministic_embedding(content)
-
     obj_payload = obj.get("payload") or {}
     payload = {
         "title": obj.get("title"),
@@ -56,7 +60,6 @@ def handle_ingest_object_created(obj: Dict[str, Any]) -> None:
             source_ref=obj.get("source_ref"),
             created_at=datetime.now(timezone.utc),
         )
-        store.save_object(domain, emit_outbox=False, trace_id=trace_id)
     else:
         updated_payload = dict(existing.payload or {})
         updated_payload.update({k: v for k, v in payload.items() if v is not None})
@@ -67,10 +70,68 @@ def handle_ingest_object_created(obj: Dict[str, Any]) -> None:
             source_ref=existing.source_ref,
             created_at=existing.created_at,
         )
-        store.save_object(domain, emit_outbox=False, trace_id=trace_id)
+    store.save_object(domain, emit_outbox=False, trace_id=trace_id)
 
-    with start_span("indexer.upsert", trace_id, {"kind": "note"}):
+    identity = get_embedding_identity()
+    embedding: list[float] | None = None
+    actual_dim: int | None = None
+
+    try:
+        embedding = llm_embed_text(
+            text=content,
+            provider=identity.provider,
+            model=identity.model,
+            dim=identity.dim,
+            normalize=identity.normalize,
+        )
+        actual_dim = len(embedding)
+    except Exception as exc:
+        actual_dim = _infer_dim_from_error(exc)
+        emit_index_embedding_failed(
+            object_id=object_uuid,
+            trace_id=trace_id,
+            source_ref=domain.source_ref,
+            provider=identity.provider,
+            model=identity.model,
+            expected_dim=identity.dim,
+            actual_dim=actual_dim,
+            error=str(exc),
+        )
+        return
+
+    vector_index = get_vector_index()
+    model_name = identity.model
+
+    object_uuid_val = _uuid.UUID(object_uuid)
+    with start_span("indexer.upsert", trace_id, {"kind": obj.get("kind") or "note"}):
         try:
-            VectorIndex().upsert_embedding(object_uuid, embedding)
-        except Exception:
+            vector_index.purge_vectors(object_uuid_val, view=DEFAULT_EMBEDDING_VIEW)
+            vector_index.upsert(
+                object_uuid_val,
+                kind=domain.kind,
+                source_ref=domain.source_ref or "",
+                payload=domain.payload,
+                embedding=embedding,
+                model=model_name,
+                identity=identity,
+            )
+            emit_index_object_embedded(
+                object_id=object_uuid,
+                trace_id=trace_id,
+                source_ref=domain.source_ref,
+                provider=identity.provider,
+                model=model_name,
+                dim=actual_dim,
+            )
+        except Exception as exc:  # pragma: no cover - best-effort logging path
             logger.exception("Vector index ingest failed for %s", object_uuid)
+            emit_index_embedding_failed(
+                object_id=object_uuid,
+                trace_id=trace_id,
+                source_ref=domain.source_ref,
+                provider=identity.provider,
+                model=model_name,
+                expected_dim=identity.dim,
+                actual_dim=actual_dim,
+                error=str(exc),
+            )

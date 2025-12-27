@@ -342,6 +342,20 @@ class PgVectorIndex(VectorIndex):
         length = min(len(query), len(candidate))
         return sum((query[i] or 0.0) * (candidate[i] or 0.0) for i in range(length))
 
+    def purge_vectors(self, object_id: UUID, *, view: str) -> int:
+        del view
+        _ensure_tables()
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM store_vector_index
+                    WHERE object_id = %s
+                    """,
+                    (object_id,),
+                )
+                return cur.rowcount or 0
+
 
 class PgRelationIndex(RelationIndex):
     def __init__(self) -> None:
@@ -419,7 +433,6 @@ def inspect_pg_index_state() -> dict:
             else:
                 state["rows_wrong_dim"] = None
     return state
-
 
 
 

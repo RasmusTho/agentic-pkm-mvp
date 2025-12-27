@@ -50,7 +50,8 @@ API and worker share the same Python image built from the repo.
    - Polls the outbox and triggers the indexer for ingest events.
 
 ## Observability
-- Health endpoints: `/agent/health` (legacy agent surface) and `/api/status` (Reality-MVP status) on port `18000`.
+- Health endpoints: Reality-MVP operators should hit `http://127.0.0.1:18000/healthz` (liveness), `/readyz` (readiness), `/api/health` (structured contract), and `/api/status` (SOT/status payload). Search and ask live at `/search` and `/api/ask` on the same host port. Docker Compose maps host `18000` ↔ container `8000`, so use the host port when invoking curl from the host. The legacy `/agent/health` surface lives under `app.legacy_http`, but go-live checks should rely on `/healthz` (simple OK) and `/api/health` (contract) instead.
+- Route truth: Swagger UI at `/docs` and the OpenAPI JSON at `/openapi.json` describe every available path; consult `docs/runbooks/RUNBOOK_GO_LIVE.md` for command examples and the `curl -sS http://127.0.0.1:18000/openapi.json` tip from that runbook when you are unsure.
 - Prometheus instrumentation is available via `prometheus-fastapi-instrumentator` (metrics exposure is gated by settings).
 
 ## Relation to Alpha Vault & Ingest

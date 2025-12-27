@@ -6,10 +6,10 @@ from typing import Iterable, Sequence
 import psycopg
 from fastapi import APIRouter, Query, Request
 
+from app.components.embeddings import get_embedding_client
 from app.db.dsn import resolve_dsn
 from app.observability.tracer import start_span
 from app.search.cosine import cosine
-from app.services.embedding import deterministic_embedding
 
 router = APIRouter()
 
@@ -70,7 +70,8 @@ async def search(request: Request, q: str = Query(...)) -> dict[str, object]:
     results: list[dict[str, object]] = []
     with span_cm:
         try:
-            query_vector = deterministic_embedding(q)
+            client = get_embedding_client()
+            query_vector = client.embed_text(q)
         except Exception:
             return {"results": _recent_objects()}
 

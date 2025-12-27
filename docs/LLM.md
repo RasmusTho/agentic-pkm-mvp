@@ -1,50 +1,59 @@
-State: SoT v4.10 (current; details may lag ARCHITECTURE).
+State: Active (current).
+# LLM
 
-# LLM Integration
+This doc describes how the system selects and configures the LLM provider(s) used for **chat/completions** and **embeddings**.
 
-This doc aligns with `docs/SYSTEM_DESIGN_v4.10.md` for model choices and deployment topology.
+For the detailed, end-to-end embedding contract (identity, dimensions, failure events, rebuild rules), see:
+- `docs/EMBEDDINGS.md`
 
-## Provider abstraction
+## Providers
 
-All calls go through `app.llm.adapter.generate(messages, reasoning=False)`. Configure via environment variables:
+Supported `LLM_PROVIDER` values:
 
-| Var | Meaning | Example |
-|---|---|---|
-| LLM_PROVIDER | ollama, openai, azureopenai, anthropic, mock | ollama |
-| LLM_MODEL | default chat model | llama3.1:8b |
-| LLM_REASONING_MODEL | reasoning/analysis model | deepseek-r1:8b |
+- `ollama` (default in local/dev): uses `OLLAMA_HOST`
+- `mock`: deterministic mock behavior for tests/CI
 
-`reasoning=True` selects `LLM_REASONING_MODEL`.
+## Core configuration
 
-## Model matrix (Reality-MVP)
+### Common
 
-| Use case | Component | Default (local Ollama) | Notes |
-| --- | --- | --- | --- |
-| ASK answering/drafting | ASK Agent | `LLM_MODEL=llama3.1:8b` | Switch via `LLM_PROVIDER`/`LLM_MODEL`; remote providers optional |
-| Embeddings | Indexer | `EMBED_MODEL=nomic-embed-text` + `EMBED_DIM=1536` | Embedding vectors are computed in the indexer stage and are not carried in Outbox events |
-| Rerank/self-check | ASK Agent | `RERANK_MODEL=llama3.1:8b` | Can reuse chat model |
-| Panel suggestions | PanelAgent | `LLM_MODEL` | Lightweight prompts; panel text is not indexed |
-| Eval/QA mocks | Eval stack | `LLM_PROVIDER=mock` | Keeps CI deterministic; no external calls |
+- `LLM_PROVIDER`
+  - Example: `ollama`
 
-## Ollama (local)
+### Ollama
 
-Base URL `http://127.0.0.1:11434`. Load models with `ollama pull`. Run one model at a time to conserve RAM.
+- `OLLAMA_HOST`
+  - Example: `http://host.docker.internal:11434`
+- `LLM_MODEL` (chat)
+  - Example: `llama3.1:8b`
 
-## Remote providers
+### Embeddings
 
-Set `LLM_PROVIDER=openai` and `OPENAI_API_KEY`. Timeout 120 s.
+Embeddings configuration is separate from chat;
+- Default local plan:
+  - `EMBED_MODEL=nomic-embed-text:latest`
+  - `EMBED_DIM=768`
+  - `EMBED_NORMALIZE=1` (normalized vectors by default)
+- `EMBED_MODEL`
+  - Example: `nomic-embed-text:latest`
+- `EMBED_DIM`
+  - Example: `768`
+  - Must match the provider’s actual output dimension. If this changes, the embedding identity changes and the VectorIndex must be rebuilt.
+- When `LLM_PROVIDER=ollama`, the runtime posts to the Ollama-native `/api/embed` endpoint with `{model, input, dimensions, truncate: true}`; the OpenAI-compatible `/api/embeddings` path is only used when that compatibility layer is explicitly enabled on the daemon.
 
-## Configuration and environment
+Optional:
+- `EMBED_NORMALIZE`
+  - Default behavior is normalized vectors; disabling it changes the embedding identity.
 
-- Control models via `LLM_PROVIDER`, `LLM_MODEL`, `LLM_REASONING_MODEL`, `EMBED_MODEL`, `RERANK_MODEL`.
-- Embedding dimension is controlled via `EMBED_DIM` (default: 1536). The configured dimension must match the embedding provider output.
-- `OPENAI_BASE_URL`/`OPENAI_API_KEY` are only required for remote providers; Reality-MVP runs locally via Ollama by default.
-- CI/mock: `LLM_PROVIDER=mock` + fixtures for deterministic runs.
+## Runtime contract
 
-## Prompting
+- Chat calls should go through the LLM adapter layer.
+- Embedding calls must go through the provider-aware embedding helper (see `docs/EMBEDDINGS.md`).
 
-Agents use short, task-bound prompts. Reasoning is logged only as output.
+## Quick sanity checks
 
-## Logging
-
-When `LOG_LEVEL=DEBUG`, `{provider, model, tokens_in, tokens_out, duration}` is logged to audit.
+- `/api/health` should confirm ollama is reachable and lists models.
+- If you see `index.embedding.failed` with a dim mismatch, validate:
+  - `EMBED_MODEL` is pointing at `nomic-embed-text:latest` (or the chosen model)
+  - `EMBED_DIM` matches the provider output (768 for the default model)
+  - You are calling the intended `OLLAMA_HOST` instance
