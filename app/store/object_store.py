@@ -171,6 +171,8 @@ class ObjectStore:
             return
         with _conn_rw() as conn:
             with conn.cursor() as cur:
+                # P1: route inserts through choose_object_table() when store_objects is active
+                # Writes must target the active table so readers see newly ingested objects across processes.
                 cur.execute(
                     """
                     insert into objects (
