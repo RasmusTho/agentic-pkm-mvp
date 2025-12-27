@@ -10,12 +10,12 @@ trust separation, and idempotent automation. Core-6 is intentionally stable and 
 - Keep automation deterministic by grounding it in a tiny, durable contract.
 
 ## Core-6 fields
-- `uuid` — Stable object identity.
-- `title` — Human-readable label for the object.
-- `origin` — Provenance source (e.g., vault, external, capture pipeline).
-- `source_ref` — Stable locator for the object (vault path, external URI, or system handle).
-- `trust` — Trust/ownership level used for guardrails and promotion gating.
-- `review_state` — Review gate used to protect reviewed content from unintended mutation.
+- `uuid` - Stable object identity.
+- `title` - Human-readable label for the object.
+- `origin` - Provenance source (e.g., vault, external, capture pipeline).
+- `source_ref` - Stable locator for the object (vault path, external URI, or system handle).
+- `trust` - Trust/ownership level used for guardrails and promotion gating.
+- `review_state` - Review gate used to protect reviewed content from unintended mutation.
 
 ## Projection rules
 - Core-6 is a semantic contract, not a literal YAML requirement.
