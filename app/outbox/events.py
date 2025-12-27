@@ -76,6 +76,7 @@ INDEX_EMBEDDING_REQUESTED = "index.embedding.requested"
 INDEX_EMBEDDING_CREATED = "index.embedding.created"
 INDEX_EMBEDDING_FAILED = "index.embedding.failed"
 INDEX_OBJECT_EMBEDDED = "index.object.embedded"
+DEFAULT_EMBEDDING_VIEW = "markdown.semantic"
 
 
 def get_index_outbox_path() -> Path:
@@ -140,7 +141,7 @@ def emit_index_embedding_created(*, object_id: UUID, trace_id: str | None = None
         meta={},
     )
 
-    metrics = {"vectors": 1, "dim": get_embed_dim(), "view": "markdown.semantic"}
+    metrics = {"vectors": 1, "dim": get_embed_dim(), "view": DEFAULT_EMBEDDING_VIEW}
     provenance = {"model": EMBED_MODEL, "version": "1.0"}
     record = _build_index_record(envelope, object_id=str(object_id), metrics=metrics, provenance=provenance)
     _append_record(record)
@@ -155,7 +156,7 @@ def emit_index_object_embedded(
     provider: str | None = None,
     model: str | None = None,
     dim: int | None = None,
-    view: str = "markdown.semantic",
+    view: str = DEFAULT_EMBEDDING_VIEW,
     meta: Dict[str, Any] | None = None,
 ) -> None:
     envelope = make_outbox_event(
@@ -211,7 +212,7 @@ def emit_index_embedding_failed(
     record = _build_index_record(
         envelope,
         object_id=_coerce_uuid(object_id),
-        metrics={"vectors": 0, "dim": expected_dim if expected_dim is not None else actual_dim or get_embed_dim(), "view": "markdown.semantic"},
+        metrics={"vectors": 0, "dim": expected_dim if expected_dim is not None else actual_dim or get_embed_dim(), "view": DEFAULT_EMBEDDING_VIEW},
         provenance={"model": model or EMBED_MODEL, "provider": provider or "indexer"},
     )
     _append_record(record)

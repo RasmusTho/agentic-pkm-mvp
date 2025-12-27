@@ -9,7 +9,7 @@ from typing import Dict
 from app.components.embeddings import get_embedding_identity
 from app.index.embeddings import llm_embed_text
 from app.observability.tracer import start_span
-from app.outbox.events import emit_index_embedding_failed, emit_index_object_embedded
+from app.outbox.events import DEFAULT_EMBEDDING_VIEW, emit_index_embedding_failed, emit_index_object_embedded
 from app.store.object_store import DomainObject, ObjectStore
 from app.stores import get_vector_index
 
@@ -102,10 +102,12 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     vector_index = get_vector_index()
     model_name = identity.model
 
+    object_uuid_val = _uuid.UUID(object_uuid)
     with start_span("indexer.upsert", trace_id, {"kind": obj.get("kind") or "note"}):
         try:
+            vector_index.purge_vectors(object_uuid_val, view=DEFAULT_EMBEDDING_VIEW)
             vector_index.upsert(
-                _uuid.UUID(object_uuid),
+                object_uuid_val,
                 kind=domain.kind,
                 source_ref=domain.source_ref or "",
                 payload=domain.payload,

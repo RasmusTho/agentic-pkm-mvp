@@ -3,14 +3,21 @@ from __future__ import annotations
 import hashlib
 import os
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 
 import httpx
 
 from app.embedding_config import assert_embed_dim, get_embed_dim, l2_normalize
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
-EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", os.getenv("EMBED_MODEL", "nomic-embed-text:latest"))
+
+
+def get_embed_model() -> str:
+    """Return the currently configured embedding model name."""
+    return os.getenv("OLLAMA_EMBED_MODEL", os.getenv("EMBED_MODEL", "nomic-embed-text:latest"))
+
+
+EMBED_MODEL = get_embed_model()
 
 
 def _provider() -> str:
@@ -32,7 +39,10 @@ def _mock_vector(text: str, *, dim: int) -> List[float]:
 
 
 @lru_cache(maxsize=2048)
-def _embed_single(text: str, provider: str, model: str, dim: int) -> tuple[float, ...]:
+def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> tuple[float, ...]:
+    if dim is None:
+        dim = get_embed_dim()
+
     if not text:
         return tuple(0.0 for _ in range(dim))
 
@@ -41,9 +51,7 @@ def _embed_single(text: str, provider: str, model: str, dim: int) -> tuple[float
 
     if provider == "ollama":
         timeout = float(os.getenv("LLM_TIMEOUT", "60"))
-        payload = {"model": model, "input": text, "truncate": True}
-        if dim is not None:
-            payload["dimensions"] = dim
+        payload = {"model": model, "input": text, "truncate": True, "dimensions": dim}
         try:
             resp = httpx.post(f"{OLLAMA_URL}/api/embed", json=payload, timeout=timeout)
             resp.raise_for_status()
@@ -82,7 +90,7 @@ def embed_text(
     normalize: bool = True,
 ) -> List[float]:
     provider_val = provider or _provider()
-    model_val = model or EMBED_MODEL
+    model_val = model or get_embed_model()
     dim_val = dim or get_embed_dim()
     vector = list(_embed_single(text, provider_val, model_val, dim_val))
     if normalize:
@@ -101,4 +109,4 @@ def embed_texts(
     return [embed_text(text, provider=provider, model=model, dim=dim, normalize=normalize) for text in texts]
 
 
-__all__ = ["embed_text", "embed_texts", "EMBED_MODEL", "get_embedding_provider"]
+__all__ = ["embed_text", "embed_texts", "EMBED_MODEL", "get_embedding_provider", "get_embed_model"]

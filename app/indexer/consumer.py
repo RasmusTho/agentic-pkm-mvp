@@ -29,6 +29,16 @@ def _extract_text(obj_payload: Dict[str, Any]) -> str:
     return ""
 
 
+def _purge_vectors(idx: object, object_id: UUID) -> int:
+    purge = getattr(idx, "purge_vectors", None)
+    if purge is None:
+        return 0
+    try:
+        return purge(object_id, view=outbox_events.DEFAULT_EMBEDDING_VIEW)
+    except Exception:
+        return 0
+
+
 def process_event(evt: Dict[str, Any]) -> None:
     event_type = str(evt.get("event") or "").strip()
 
@@ -44,6 +54,7 @@ def process_event(evt: Dict[str, Any]) -> None:
         identity = EmbeddingIdentity(provider="legacy-event", model=model, dim=len(embedding))
 
         idx = get_vector_index()
+        _purge_vectors(idx, object_id)
         idx.upsert(
             object_id=object_id,
             kind=kind,
@@ -78,6 +89,7 @@ def process_event(evt: Dict[str, Any]) -> None:
     identity = get_embedding_identity(client=embedder)
 
     idx = get_vector_index()
+    _purge_vectors(idx, obj_uuid)
     idx.upsert(
         object_id=obj_uuid,
         kind=str(obj.kind or "note"),

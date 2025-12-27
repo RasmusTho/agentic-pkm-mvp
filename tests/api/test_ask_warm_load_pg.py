@@ -18,6 +18,8 @@ def test_ask_warm_loads_pg_store(monkeypatch) -> None:
         pytest.skip("Postgres backend not available")
 
     monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("EMBED_DIM", "8")
     reset_store_backends()
     hybrid_store = get_hybrid_store()
     hybrid_store.set_documents([])

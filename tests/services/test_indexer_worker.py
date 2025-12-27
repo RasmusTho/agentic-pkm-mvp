@@ -34,6 +34,9 @@ def test_handle_ingest_object_created_uses_shared_vector_index(monkeypatch):
                 "identity": identity,
             })
 
+        def purge_vectors(self, object_id, *, view):
+            return 0
+
     identity = SimpleNamespace(
         provider="ollama",
         model="nomic-embed-text:latest",
@@ -72,6 +75,7 @@ def test_handle_ingest_object_created_emits_failure_event(monkeypatch):
 
     vector_index = MagicMock()
     monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: vector_index)
+    vector_index.purge_vectors.return_value = 0
     monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: emitted.append(kwargs))
     monkeypatch.setattr("app.services.indexer.emit_index_embedding_failed", lambda **kwargs: failures.append(kwargs))
 
@@ -93,3 +97,52 @@ def test_handle_ingest_object_created_emits_failure_event(monkeypatch):
     assert failures[0].get("actual_dim") == 1536
     assert failures[0].get("provider") == identity.provider
     assert failures[0].get("error")
+
+
+def test_handle_ingest_object_created_replaces_vectors_on_update(monkeypatch):
+    from types import SimpleNamespace
+    from uuid import UUID
+
+    from app.stores import get_vector_index, reset_store_backends
+    from app.stores.memory import MemoryVectorIndex
+
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("EMBED_DIM", "4")
+    reset_store_backends()
+    identity = SimpleNamespace(provider="test", model="test-model", dim=4, normalize=True)
+    monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: identity)
+
+    embed_vectors = [[1, 0, 0, 0], [0, 1, 0, 0]]
+
+    def fake_embed(**kwargs):
+        return embed_vectors.pop(0)
+
+    monkeypatch.setattr("app.services.indexer.llm_embed_text", fake_embed)
+    monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **_: None)
+    monkeypatch.setattr("app.services.indexer.emit_index_embedding_failed", lambda **_: None)
+
+    purge_calls: list[tuple[UUID, str, int]] = []
+    original_purge = MemoryVectorIndex.purge_vectors
+
+    def track_purge(self, object_id: UUID, *, view: str) -> int:
+        result = original_purge(self, object_id, view=view)
+        purge_calls.append((object_id, view, result))
+        return result
+
+    monkeypatch.setattr(MemoryVectorIndex, "purge_vectors", track_purge)
+
+    note_uuid = str(UUID(int=1))
+    event = _make_event()
+    event["uuid"] = note_uuid
+    handle_ingest_object_created(event)
+
+    updated_event = _make_event()
+    updated_event["uuid"] = note_uuid
+    updated_event["content"] = "updated content"
+    handle_ingest_object_created(updated_event)
+
+    assert len(purge_calls) == 2
+    assert purge_calls[0][2] == 0
+    assert purge_calls[1][2] == 1
+    store = get_vector_index()
+    assert len(store._entries) == 1

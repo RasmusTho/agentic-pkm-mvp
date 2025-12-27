@@ -169,10 +169,7 @@ class ObjectStore:
         _MEMORY_STORE[obj.uuid] = obj
         if not _pg_available():
             return
-        conn = _db_connect()
-        if conn is None:
-            return
-        with conn:
+        with _conn_rw() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
