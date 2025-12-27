@@ -161,8 +161,14 @@ def truncate_pg_tables() -> None:
 
 
 class PgObjectStore(ObjectStore):
+    _OBJECTS_TABLE = "store_objects"
+
     def __init__(self) -> None:
         _ensure_tables()
+
+    def _active_table(self, conn) -> str:
+        del conn
+        return self._OBJECTS_TABLE
 
     def get(self, object_id: UUID) -> dict | None:
         with _connect() as conn:
