@@ -97,7 +97,7 @@ Centralized reference for HTTP apps and ports during local development and docke
 #### HTTP Apps
 | Module | Variable | Purpose | Primary Routes / Notes | How to Run |
 | --- | --- | --- | --- | --- |
-| `app.main` | `app` | Reality-MVP PKM HTTP API (status + ASK + interim GUI) | `/api/status`, `/api/ask`, optional `/api/ingest`, `/api/search`, `/` serves static dashboard | `uvicorn app.main:app --reload --port 18000` (docker-compose maps container `8000` → host `18000`) |
+| `app.main` | `app` | Reality-MVP PKM HTTP API (status + ASK + interim GUI) | `/healthz`, `/readyz`, `/api/health`, `/api/status`, `/search`, `/api/ask`, `/docs`, `/openapi.json` (and `/` serves static dashboard; `/api/ingest` still optional for internal tooling) | `uvicorn app.main:app --reload --port 18000` (docker-compose maps container `8000` → host `18000`) |
 | `app.legacy_http` | `app` | Legacy agent/interesting/demo endpoints | `/agent/health`, `/interesting`, `/dashboard`; uses stub repo in lifespan | `uvicorn app.legacy_http:app --reload --port 18001` (dev-only) |
 | `app._legacy.main` | `app` | Deprecated pre-Reality API with rate limits/metrics | `/`, `/health`, `/version`, `/context`, `/items`, `/ingest`, `/search`, agent/ui routes; requires DB + settings | `uvicorn app._legacy.main:app --reload` (not recommended for new runs) |
 | `api.app` | `app` | WS golden-data demo API | `/query` returns mock answer + citations from `golden/` | `uvicorn api.app:app --reload --port 8001` when needed |

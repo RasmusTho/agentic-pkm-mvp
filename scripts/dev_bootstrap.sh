@@ -20,13 +20,13 @@ cd "$ROOT"
 docker compose up -d
 
 for attempt in $(seq 1 30); do
-  if curl -sf http://127.0.0.1:18000/agent/health >/dev/null 2>&1; then
+  if curl -sf http://127.0.0.1:18000/healthz >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
 
-if ! curl -sf http://127.0.0.1:18000/agent/health > /tmp/dev_bootstrap_health.json 2>/dev/null; then
+if ! curl -sf http://127.0.0.1:18000/healthz > /tmp/dev_bootstrap_health.json 2>/dev/null; then
   echo "API did not become healthy on port 18000"
   exit 1
 fi
