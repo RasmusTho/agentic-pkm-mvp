@@ -42,6 +42,15 @@ All FastAPI routes listen on `http://127.0.0.1:18000` (docker compose maps host 
 
 There is no `/health` route in the Reality-MVP API; use `/healthz` for simple liveness and `/api/health` for the full contract. Swagger UI lives at `http://127.0.0.1:18000/docs` and the OpenAPI document is the source of truth (`/openapi.json`). If you are unsure which paths exist, run `curl -sS http://127.0.0.1:18000/openapi.json | python -c 'import sys,json; j=json.load(sys.stdin); print(\"\\n\".join(sorted(j[\"paths\"].keys())))'`.
 
+Note: `/api/health` may report `ok=false` when optional tools (for example, `ffmpeg`) are missing. Treat this as a degraded feature signal, not a full system outage, if `/healthz`, `/readyz`, search, and ask are healthy.
+
+## CLI sanity (store stats)
+
+- Memory mode: `STORE_BACKEND=memory python -m app.cli store stats --json`
+- PG mode: `STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@127.0.0.1:15432/app python -m app.cli store stats --json`
+- Compose exec: `docker compose exec -T api sh -lc 'python -m app.cli store stats --json'`
+
+
 ## First index / bootstrap ingest
 
 Use `scripts/start_full_system.sh` to bring the full stack up, check that `/app/vault` is mounted inside the api container, and perform the deterministic baseline ingest when the store is empty. Watchers run incrementally and do not sweep the whole vault, so this script explicitly drives the first job, runs the bootstrap `vault-alpha-ingest`, and verifies `/search` plus `/api/ask` before handing off to the live watcher. Re-run it only when you need a fresh baseline, then rely on watcher/worker increments for day-to-day updates.

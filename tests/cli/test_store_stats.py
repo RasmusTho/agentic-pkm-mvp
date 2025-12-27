@@ -12,7 +12,7 @@ def test_store_stats_memory(monkeypatch) -> None:
     monkeypatch.setenv("STORE_BACKEND", "memory")
     reset_store_backends()
     runner = CliRunner()
-    result = runner.invoke(cli, ["store-stats", "--json"])
+    result = runner.invoke(cli, ["store", "stats", "--json"])
     assert result.exit_code == 0
     data = json.loads(result.output.strip())
     assert data.get("backend") == "memory"

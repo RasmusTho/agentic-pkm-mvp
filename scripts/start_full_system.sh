@@ -18,18 +18,71 @@ if ! curl -sf "$HEALTH_ENDPOINT" >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! docker compose exec api sh -c '[ -d /app/vault ]' >/dev/null 2>&1; then
+ready_payload=$(curl -sS http://127.0.0.1:18000/readyz || true)
+readiness_state=$(READY_JSON="$ready_payload" python - <<'PY'
+import json, os
+raw = os.environ.get("READY_JSON", "")
+try:
+    data = json.loads(raw)
+except Exception:
+    print("unknown")
+    raise SystemExit(0)
+state = data.get("state") or "unknown"
+reason = data.get("reason") or ""
+if reason:
+    print(f"{state} ({reason})")
+else:
+    print(state)
+PY
+)
+
+api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
+api_health_ok=$(API_HEALTH_JSON="$api_health_payload" python - <<'PY'
+import json, os
+raw = os.environ.get("API_HEALTH_JSON", "")
+try:
+    data = json.loads(raw)
+except Exception:
+    print("unknown")
+    raise SystemExit(0)
+value = data.get("ok")
+print("true" if value else "false")
+PY
+)
+api_health_failed=$(API_HEALTH_JSON="$api_health_payload" python - <<'PY'
+import json, os
+raw = os.environ.get("API_HEALTH_JSON", "")
+try:
+    data = json.loads(raw)
+except Exception:
+    print("")
+    raise SystemExit(0)
+checks = data.get("checks") or {}
+items = []
+for key, val in checks.items():
+    if isinstance(val, dict) and not val.get("ok", True):
+        detail = val.get("detail")
+        if detail:
+            items.append(f"{key}: {detail}")
+        else:
+            items.append(key)
+print(", ".join(items))
+PY
+)
+api_health_failed=${api_health_failed:-none}
+
+if ! docker compose exec -T api sh -c '[ -d /app/vault ]' >/dev/null 2>&1; then
   echo "ERROR: /app/vault mount is missing inside the api container" >&2
   exit 1
 fi
-vault_note_count=$(docker compose exec api sh -c 'find /app/vault -name "*.md" | wc -l' | tr -d '[:space:]')
+vault_note_count=$(docker compose exec -T api sh -c 'find /app/vault -name "*.md" | wc -l' | tr -d '[:space:]')
 vault_note_count=${vault_note_count:-0}
 if [ "$vault_note_count" -le 0 ]; then
   echo "ERROR: /app/vault contains no markdown files for the watcher scope" >&2
   exit 1
 fi
 
-store_stats_json=$(docker compose exec api python -m app.cli store-stats --json)
+store_stats_json=$(docker compose exec -T api python -m app.cli store stats --json)
 extract_stat() {
   local key="$1"
   STAT_KEY="$key" STORE_STATS_JSON="$store_stats_json" python - <<'PY'
@@ -46,8 +99,8 @@ object_count="$objects_before"
 vector_count="$vectors_before"
 if [ "$objects_before" -le 0 ]; then
   ingest_run="yes"
-  docker compose exec api env STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@db:5432/app python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force
-  store_stats_json=$(docker compose exec api python -m app.cli store-stats --json)
+  docker compose exec -T api env STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@db:5432/app python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force
+  store_stats_json=$(docker compose exec -T api python -m app.cli store stats --json)
   objects_after=$(extract_stat objects)
   vectors_after=$(extract_stat vectors)
   object_count="$objects_after"
@@ -75,10 +128,14 @@ PY
 cat <<SUMMARY
 SUMMARY:
   healthz OK
+  readyz: $readiness_state
+  api health ok: $api_health_ok
+  api health failed: $api_health_failed
   vault notes: $vault_note_count
   store objects: $object_count
   vector entries: $vector_count
   ingest run: $ingest_run
   search results: $search_results
+  note: /api/health ok=false can be expected when optional tools (e.g., ffmpeg) are missing; Stage0 ingest/search/ask can still work.
   next: curl -sS http://127.0.0.1:18000/search?q=test&k=3
 SUMMARY

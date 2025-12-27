@@ -232,9 +232,7 @@ cli.add_command(events_doctor)
 cli.add_command(smoke_cli, name="smoke")
 
 
-@cli.command(help="Report store and vector index counts for diagnostics.")
-@click.option("--json", "as_json", is_flag=True, default=False, help="Print the result as JSON.")
-def store_stats(as_json: bool) -> None:
+def _store_stats_payload() -> dict:
     backend = resolve_store_backend()
     store = get_object_store()
     vector_idx = get_vector_index()
@@ -245,7 +243,24 @@ def store_stats(as_json: bool) -> None:
     vector_counter = getattr(vector_idx, "count_vectors", None)
     if callable(vector_counter):
         result["vectors"] = vector_counter()
-    _dump(result, as_json)
+    return result
+
+
+@cli.group(name="store", help="Store utilities.")
+def store_cli() -> None:
+    ...
+
+
+@store_cli.command(name="stats", help="Report store and vector index counts for diagnostics.")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Print the result as JSON.")
+def store_stats(as_json: bool) -> None:
+    _dump(_store_stats_payload(), as_json)
+
+
+@cli.command(name="store-stats", help="Report store and vector index counts for diagnostics (deprecated; use 'store stats').")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Print the result as JSON.")
+def store_stats_legacy(as_json: bool) -> None:
+    _dump(_store_stats_payload(), as_json)
 
 
 @cli.command(name="llm-trace-sequence", help="Render a single trace flow as text or Mermaid sequence diagram.")
