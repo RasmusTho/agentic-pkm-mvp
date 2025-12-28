@@ -75,14 +75,21 @@ def _derive_title(body: str, path: Path) -> str:
     return path.stem
 
 
-def _normalize_uuid(raw: str | None) -> str:
+def _coerce_to_str(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)) and len(value) == 1:
+        return _coerce_to_str(value[0])
+    return None
+
+
+def _normalize_uuid(raw: object | None) -> str:
     if raw is None:
         return ""
-    if isinstance(raw, (list, tuple)):
-        if not raw:
-            return ""
-        return _normalize_uuid(raw[0])
-    value = str(raw).strip()
+    value = _coerce_to_str(raw)
+    if value is None:
+        return ""
+    value = value.strip()
     if value.startswith("[[") and value.endswith("]]"):
         value = value[2:-2].strip()
     return value
