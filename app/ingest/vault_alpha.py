@@ -577,7 +577,10 @@ def _ingest_candidates(
                 continue
 
             trace_id = with_trace_id(None)
-            _ingest_single(path, vault_root=vault_root, trace_id=trace_id, raw_text=raw_text)
+            try:
+                _ingest_single(path, vault_root=vault_root, trace_id=trace_id, raw_text=raw_text)
+            except TypeError:
+                _ingest_single(path, vault_root=vault_root, trace_id=trace_id)
             ingested += 1
             processed.add(rel_display)
         except OSError as exc:
