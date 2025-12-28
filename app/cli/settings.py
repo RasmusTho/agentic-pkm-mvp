@@ -33,6 +33,8 @@ def _emit(output: Any, as_json: bool) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     default_path = resolve_system_settings_path()
+    if default_path is None or not default_path.exists():
+        default_path = resolve_system_settings_path(vault_root=Path("vault"))
     parser = argparse.ArgumentParser(description="Inspect canonical system settings (SoT v4.3.1).")
     parser.add_argument("--path", type=Path, default=default_path, help="Path to canonical system-settings.yaml")
     parser.add_argument("--section", help="Dot path into the settings map, e.g. 'index.rules'")
