@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import fnmatch
 import uuid
 import os
 from dataclasses import dataclass, field
@@ -36,11 +37,21 @@ class VaultAlphaSummary:
     errors: int = 0
     error_notes: List[str] = field(default_factory=list)
     processed_notes: List[str] = field(default_factory=list)
+    skipped_locked: int = 0
+    locked_examples: List[str] = field(default_factory=list)
 
 
 _EXCLUDED_TOP = {"System", "Templates", ".obsidian"}
 _ALLOWED_TOP = {"Concepts"}
 _TEST_NOTE_REL = Path("Test") / "Alpha-HumanFlows.md"
+
+
+def _is_locked_error(exc: Exception) -> bool:
+    return isinstance(exc, OSError) and getattr(exc, 'errno', None) == 35
+
+
+def _is_ignored(rel_path: str, ignore_glob: Sequence[str]) -> bool:
+    return any(fnmatch.fnmatch(rel_path, pattern) for pattern in ignore_glob)
 
 
 def _compute_ingest_fingerprint(stripped_text: str, path: Path) -> dict[str, int | str]:
@@ -206,6 +217,7 @@ def _select_candidates(
     vault_root: Path,
     *,
     include_folders: Sequence[str],
+    ignore_glob: Sequence[str],
     include_test_note: bool,
     max_notes: int,
 ) -> Tuple[List[Path], List[str]]:
@@ -233,12 +245,18 @@ def _select_candidates(
                 included_folders.append("Test")
     for root in roots:
         if root.is_file() and root.suffix.lower() == ".md":
+            rel = str(root.relative_to(vault_root))
+            if _is_ignored(rel, ignore_glob):
+                continue
             candidates.append(root)
             continue
         for path in sorted(root.rglob("*.md")):
             rel = path.relative_to(vault_root)
+            rel_str = str(rel)
             top = rel.parts[0] if rel.parts else ""
             if top in _EXCLUDED_TOP:
+                continue
+            if _is_ignored(rel_str, ignore_glob):
                 continue
             candidates.append(path)
             if max_notes > 0 and len(candidates) >= max_notes:
@@ -271,9 +289,10 @@ def _store_object_count(store: ObjectStore) -> int:
     return 0
 
 
-def _ingest_single(path: Path, *, vault_root: Path, trace_id: str) -> str:
+def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str | None = None) -> str:
     rel_path = path.relative_to(vault_root)
-    raw_text = path.read_text(encoding="utf-8")
+    if raw_text is None:
+        raw_text = path.read_text(encoding="utf-8")
     frontmatter, body, _ = _load_frontmatter_with_reporting(raw_text, path)
     mirror_path, mirror_frontmatter, mirror_body = _load_mirror_frontmatter(vault_root, rel_path)
     frontmatter_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
@@ -433,6 +452,7 @@ def run_vault_alpha_ingest(
     candidates, included_folders = _select_candidates(
         vault_root,
         include_folders=ingest_config.include_folders,
+        ignore_glob=ingest_config.ignore_glob,
         include_test_note=include_test_note,
         max_notes=max_notes,
     )
@@ -499,15 +519,31 @@ def _ingest_candidates(
     malformed: List[str] = []
     errors: List[str] = []
     processed: Set[str] = set(resume_from or [])
+    skipped_locked = 0
+    locked_examples: List[str] = []
+
+    def _record_locked(rel_display: str) -> None:
+        nonlocal skipped_locked
+        skipped_locked += 1
+        if len(locked_examples) < 3:
+            locked_examples.append(rel_display)
+
     for path in candidates:
         try:
             rel_path = path.relative_to(vault_root)
-            if str(rel_path) in processed:
+            rel_display = str(rel_path)
+            if rel_display in processed:
                 continue
-            raw_text = path.read_text(encoding="utf-8")
+            try:
+                raw_text = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                if _is_locked_error(exc):
+                    _record_locked(rel_display)
+                    continue
+                raise
             frontmatter, body, fm_error = _load_frontmatter_with_reporting(raw_text, path)
             if fm_error:
-                malformed.append(str(rel_path))
+                malformed.append(rel_display)
                 continue
             frontmatter_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
             mirror_path, mirror_frontmatter, _ = _load_mirror_frontmatter(vault_root, rel_path)
@@ -534,9 +570,17 @@ def _ingest_candidates(
                 continue
 
             trace_id = with_trace_id(None)
-            _ingest_single(path, vault_root=vault_root, trace_id=trace_id)
+            _ingest_single(path, vault_root=vault_root, trace_id=trace_id, raw_text=raw_text)
             ingested += 1
-            processed.add(str(rel_path))
+            processed.add(rel_display)
+        except OSError as exc:
+            rel_display = str(rel_path) if "rel_path" in locals() else str(path)
+            if _is_locked_error(exc):
+                _record_locked(rel_display)
+                continue
+            errors.append(rel_display)
+            click.echo(f"Error ingesting {rel_display}: {exc}", err=True)
+            continue
         except Exception as exc:
             rel_display = str(rel_path) if "rel_path" in locals() else str(path)
             errors.append(rel_display)
@@ -552,7 +596,12 @@ def _ingest_candidates(
         errors=len(errors),
         error_notes=errors,
         processed_notes=sorted(processed),
+        skipped_locked=skipped_locked,
+        locked_examples=locked_examples,
     )
+    if skipped_locked > 0:
+        example = locked_examples[0] if locked_examples else "-"
+        click.echo(f"Skipped {skipped_locked} locked files (errno=35). Example: {example}")
     try:
         record_ingest_run(
             "vault",
