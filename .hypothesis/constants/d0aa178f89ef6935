@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/cli/index_rebuild.py
-# hypothesis_version: 6.148.7
-
-[' LIMIT %s', '--backend', '--dry-run', '--json', '--limit', '--model', '--outbox', '--profile', '--strict/--no-strict', 'INDEX_OUTBOX_PATH', 'LLM_PROVIDER', 'STORE_BACKEND', 'as_json', 'content', 'default', 'dim', 'duration_seconds', 'errors', 'identity', 'memory', 'message', 'mock', 'model', 'normalize', 'note', 'outbox_path', 'override_model', 'pg', 'processed', 'provider', 'raw_text', 'rebuild', 'skipped', 'text', 'total_objects']

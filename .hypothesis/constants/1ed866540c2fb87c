@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/events/panel.py
-# hypothesis_version: 6.148.7
-
-['+00:00', '1.0', 'NoteRef', 'PanelActionMapping', 'PanelEventSource', 'PanelInfo', 'PanelIntentAction', 'PanelIntentEvent', 'PanelIntentPayload', 'PanelLogEntry', 'PanelLogEvent', 'Z', 'cli', 'logged', 'panel.action.logged', 'panel.intent.created', 'panel.log.created', 'panel_agent', 'runtime', 'skipped', 'triggered', 'v5.0-runtime1', 'v5.0-step1']

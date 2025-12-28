@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/stores/relation_index.py
-# hypothesis_version: 6.148.7
-
-[':', 'RelationCandidate', '[;,]', 'body.contradicts', 'body.derived_from', 'body.extends', 'body.see_also', 'contradicts', 'derived_from', 'doc_id', 'dst', 'evidence', 'extends', 'frontmatter.tags', 'id', 'keywords', 'object_id', 'promotion-gate', 'rel', 'related', 'relation.added', 'relation.missing', 'relations', 'see_also', 'source', 'supports', 'tags', 'target', 'targets']

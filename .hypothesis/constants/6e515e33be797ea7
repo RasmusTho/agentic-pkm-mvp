@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/watcher/config.py
-# hypothesis_version: 6.148.7
-
-[1.0, 1500, '.', '0', '1', '@Inbox/**', 'INDEX_OUTBOX_PATH', 'WATCHER_DEBOUNCE_MS', 'WATCHER_ENABLE', 'WATCHER_SCOPE_GLOB', 'WATCHER_STATE_PATH', 'WATCHER_STOP_FILE', 'WATCHER_VAULT_PATH', 'WatcherConfig', 'on', 'tmp/WATCHER_STOP', 'true', 'yes']

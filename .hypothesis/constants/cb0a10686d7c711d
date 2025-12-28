@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/observability/ingest_meta.py
-# hypothesis_version: 6.148.7
-
-['INGEST_STATUS_PATH', 'errors', 'get_ingest_meta', 'get_ingest_status', 'ingested', 'last_error_message', 'last_run_at', 'last_run_ok', 'malformed', 'record_ingest_run', 'reset_ingest_meta', 'runs', 'scanned', 'utf-8', 'vault']

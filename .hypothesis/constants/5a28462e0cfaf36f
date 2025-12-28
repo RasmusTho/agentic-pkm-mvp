@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/deps.py
-# hypothesis_version: 6.148.7
-
-['SessionLocal', 'agent_repository', 'app', 'close', 'items', 'status', 'unknown']

@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/domain/plan.py
-# hypothesis_version: 6.148.7
-
-['Plan', 'PlanStatus', 'PlanStep', 'PlanStepKind', 'PlanStepState', 'action', 'args', 'composite', 'created', 'depth', 'done', 'executed_steps', 'failed', 'frontmatter', 'goal', 'id', 'in_progress', 'kind', 'max_replans', 'max_steps', 'origin', 'parent_plan', 'payload', 'pending', 'plan', 'planned', 'planner', 'primitive', 'replans_used', 'state', 'status', 'steps', 'target', 'type', 'updated', 'uuid']

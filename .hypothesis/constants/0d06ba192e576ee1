@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/settings/flow_profiles.py
-# hypothesis_version: 6.148.7
-
-['*.md', 'FLOW_PROFILES_ROOT', 'FlowProfile', 'PatternStep', 'PlannerMode', 'PromptProfile', 'SuggestedPattern', 'advisory', 'balanced', 'flow_id', 'get_flow', 'get_flows_for_event', 'load_flow_profiles', 'steps', 'strict', 'suggested_patterns', 'target', 'vault/_system/flows']

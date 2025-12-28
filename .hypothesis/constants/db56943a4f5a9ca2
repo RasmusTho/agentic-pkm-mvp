@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/settings/agents.py
-# hypothesis_version: 6.148.7
-
-[0.0, 1024, '*.md', 'AGENT_CONFIGS_ROOT', 'AgentConfig', 'ModelConfig', 'agent_id', 'get_agent_config', 'get_agents_for_flow', 'load_agent_configs', 'vault/_system/agents']

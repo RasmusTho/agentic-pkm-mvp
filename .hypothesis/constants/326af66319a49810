@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/ingest/external.py
-# hypothesis_version: 6.148.7
-
-['*', '.md', '.txt', 'SUPPORTED_EXTENSIONS', 'content', 'external', 'external_raw', 'origin', 'plane', 'source_ref', 'text', 'title', 'utf-8']

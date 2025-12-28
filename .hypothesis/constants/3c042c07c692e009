@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/orchestrator/events.py
-# hypothesis_version: 6.148.7
-
-['ORCHESTRATOR_AGENT', 'depends_on', 'description', 'emit_step_error', 'emit_step_finished', 'emit_step_started', 'error', 'error_type', 'orchestrator.runtime', 'plan_id', 'result', 'step_id', 'step_kind', 'tool']

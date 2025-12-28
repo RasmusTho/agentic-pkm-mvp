@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/events/schema.py
-# hypothesis_version: 6.148.7
-
-['+00:00', 'OutboxEvent', 'Z', 'make_outbox_event']

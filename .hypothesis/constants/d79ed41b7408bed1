@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/components/__init__.py
-# hypothesis_version: 6.148.7
-
-['EmbeddingIdentity', 'balanced', 'get_compressive_ocr', 'get_embedding_client', 'get_reranker', 'get_structured_ocr']

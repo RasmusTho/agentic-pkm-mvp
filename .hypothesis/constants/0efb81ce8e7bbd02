@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/services/note_uuid.py
-# hypothesis_version: 6.148.7
-
-['ensure_note_uuid', 'utf-8', 'uuid']

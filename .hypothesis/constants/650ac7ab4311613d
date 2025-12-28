@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/panel/parser.py
-# hypothesis_version: 6.148.7
-
-['## ', '%', '%%', '-', ':', 'actions', 'ai', 'ai-instruktion', 'ai-logg', 'ai-åtgärder', 'instruction', 'instruktion', 'log', 'logg', 'logs', 'x', 'åtgärder']

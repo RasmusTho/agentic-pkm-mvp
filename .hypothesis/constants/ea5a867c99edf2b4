@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/cli/settings.py
-# hypothesis_version: 6.148.7
-
-['--json', '--path', '--policy', '--reload', '--section', '.', '__main__', 'store_true', 'utf-8']

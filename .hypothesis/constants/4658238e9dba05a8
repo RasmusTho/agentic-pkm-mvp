@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/settings/panel_actions.py
-# hypothesis_version: 6.148.7
-
-['*.md', 'PANEL_ACTIONS_ROOT', 'PanelActionMapping', '_system', 'docs', 'downstream_event', 'event_type', 'id', 'intent', 'intent_type', 'label', 'labels', 'mappings', 'name', 'panel-actions', 'panel-actions.md', 'params', 'payload_template', 'promotion', 'settings', 'text', 'vault']

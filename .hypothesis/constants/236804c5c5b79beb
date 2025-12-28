@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/ingest/lifecycle.py
-# hypothesis_version: 6.148.7
-
-[0.6, 120, 'Untitled', 'a', 'chunk', 'claim', 'claim_ids', 'clarity_score', 'collaboration', 'communicate', 'concept', 'content', 'emergent_tags', 'exploration', 'learn', 'logs', 'low_clarity', 'new_insight', 'note', 'object_id', 'object_type', 'payload', 'queued', 'queued_at', 'reason', 'reflect', 'reflection.json', 'related_claim_ids', 'related_claims', 'relations.jsonl', 'serendipity', 'source', 'source_object_id', 'status', 'storage/reflect', 'synthesis_id', 'synthesis_note', 'synthesize', 'synthesizes', 'system_intent', 'table', 'text', 'timestamp', 'title', 'type', 'updated_at', 'utf-8']

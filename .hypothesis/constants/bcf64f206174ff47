@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/services/vault_sync.py
-# hypothesis_version: 6.148.7
-
-[',', '---', ':', 'active_edit', 'body_hash', 'content', 'deferred', 'fm_hash', 'frontmatter', 'handle_rename', 'id', 'inactive_grace_s', 'inbox', 'mtime', 'note', 'ok', 'path', 'reembed_on_body_diff', 'reembedded', 'review_state', 'status', 'sync_markdown', 'title', 'update_path', 'updated', 'utf-8', 'uuid']

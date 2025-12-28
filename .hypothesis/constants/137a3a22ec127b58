@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/stores/memory.py
-# hypothesis_version: 6.148.7
-
-[0.0, 100, '1', 'INDEX_PERSIST_LOAD', 'INDEX_PERSIST_PATH', 'a', 'agent', 'created_at', 'dim', 'dst', 'embedding', 'id', 'identity', 'key', 'kind', 'legacy', 'model', 'normalize', 'object_id', 'on', 'path', 'payload', 'provider', 'r', 'score', 'seq', 'source_ref', 'true', 'updated_at', 'utf-8', 'value', 'yes']

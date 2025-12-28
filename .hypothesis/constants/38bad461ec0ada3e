@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/eval/llm_client.py
-# hypothesis_version: 6.148.7
-
-['EVAL_LLM_API_KEY', 'EVAL_LLM_BASE_URL', 'EVAL_LLM_MODE', 'EVAL_LLM_MODEL', 'EvalLLMConfig', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_MODEL', 'build_deepeval_model', 'llama3.1:8b', 'sk-local', 'skip']

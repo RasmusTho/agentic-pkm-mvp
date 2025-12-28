@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/settings/validate.py
-# hypothesis_version: 6.148.7
-
-['agents.load_failed', 'agents.unknown_tool', 'code', 'events.load_failed', 'graphs.load_failed', 'graphs.unknown_agent', 'graphs.unknown_event', 'issues', 'message', 'models.load_failed', 'ok', 'prompts.load_failed', 'ref', 'tools.load_failed']

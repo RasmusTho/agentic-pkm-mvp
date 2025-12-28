@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/_legacy/settings.py
-# hypothesis_version: 6.148.7
-
-[120, 800, 1536, '.env', '0.1.0', '60/minute', '@Inbox', 'config/agent.yaml', 'ignore', 'memory', 'pgvector', 'utf-8']

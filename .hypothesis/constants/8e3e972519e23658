@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/panel_agent/planning.py
-# hypothesis_version: 6.148.7
-
-['action_id', 'action_label', 'downstream_event', 'instruction', 'intent_type', 'note', 'note_uuid', 'panel', 'panel.intent.created', 'panel:planner', 'panel_actions', 'panel_agent', 'panel_agent.v5', 'panel_instruction', 'plan_id', 'plan_panel_actions', 'promote.evergreen', 'promote_evergreen', 'promotion', 'source', 'tool_call']

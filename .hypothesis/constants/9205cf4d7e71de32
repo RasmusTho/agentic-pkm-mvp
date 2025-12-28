@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/api/routes/ask.py
-# hypothesis_version: 6.148.7
-
-[1000, '/ask', 'AskRequest', 'AskResponse', 'No results found.', '_objects', 'content', 'default', 'doc_id', 'id', 'model_dump', 'object_id', 'origin', 'path', 'payload', 'plane', 'query', 'question', 'router', 'source_ref', 'text', 'title', 'uuid', 'vault', 'zone']

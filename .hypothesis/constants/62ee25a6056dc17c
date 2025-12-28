@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/settings/compiler.py
-# hypothesis_version: 6.148.7
-
-[100, 1000, 3600, 8000, 86400, 120000, '${SECRET:', '*.md', '*.yaml', '1', 'DEBUG', 'ERROR', 'Embeddings', 'Global', 'INFO', 'Providers', 'SETTINGS_AUTO_HEAL', 'WARNING', 'Yggdrasil', 'agents', 'batch_size', 'classifier', 'context_docs', 'cooldown_seconds', 'dry_run', 'embeddings', 'enable', 'global', 'global.yaml', 'instance', 'instance.yaml', 'log_level', 'max_retries', 'model_dump', 'on', 'promotion', 'providers', 'providers.yaml', 'qa', 'require_idle_seconds', 'reviewer', 'runtime/settings', 'search_k', 'settings.changed', 'sha', 'timeout_ms', 'true', 'ts', 'utf-8', 'vault/@Settings', 'w', 'yes', 'yggdrasil', 'yggdrasil.yaml', '}']

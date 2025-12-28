@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/note_hygiene/fs.py
-# hypothesis_version: 6.148.7
-
-['%Y-%m', '-', '.', 'Archive', 'NFKD', 'Trash', '[^a-zA-Z0-9_-]+', 'ascii', 'ignore', 'note']

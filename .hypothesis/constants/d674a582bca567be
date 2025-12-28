@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/services/settings.py
-# hypothesis_version: 6.148.7
-
-[1200, 'agents', 'debounce_ms', 'inactive_grace_s', 'reembed_on_body_diff', 'sync', 'utf-8']

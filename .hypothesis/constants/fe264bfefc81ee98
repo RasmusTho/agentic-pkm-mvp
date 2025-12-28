@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/settings/constraints.py
-# hypothesis_version: 6.148.7
-
-['${SECRET:', '0', '1', 'false', 'no', 'off', 'on', 'true', 'x', 'yes', '}']

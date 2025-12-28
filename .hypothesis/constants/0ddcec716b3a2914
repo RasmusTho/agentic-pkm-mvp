@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/search/__init__.py
-# hypothesis_version: 6.148.7
-
-['bm25_search', 'get_bm25_index', 'get_vector_index', 'hybrid_search', 'ingest_object', 'search', 'search_hybrid', 'search_vector', 'vector_search']

@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/citation_checker/agent.py
-# hypothesis_version: 6.148.7
-
-['blocked', 'body', 'citation_check', 'citation_checker', 'classification', 'event', 'external', 'http://', 'https://', 'imported', 'object_id', 'ok', 'ok_or_internal', 'other', 'own', 'reason', 'status', 'trace_id', 'trust', 'ts', 'value', 'web']

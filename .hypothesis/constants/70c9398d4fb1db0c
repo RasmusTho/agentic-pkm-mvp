@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/api/routers/agent.py
-# hypothesis_version: 6.148.7
-
-['/agent/health', 'get_last_heartbeat', 'heartbeat', 'status', 'unknown']

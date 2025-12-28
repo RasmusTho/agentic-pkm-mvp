@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/components/settings/panel_actions_loader.py
-# hypothesis_version: 6.148.7
-
-['PANEL_ACTIONS_FILE', 'PANEL_ACTIONS_PATH', 'PanelActionCatalog', 'aliases', 'category', 'description', 'dict', 'downstream_event', 'event_type', 'hint', 'id', 'ignore', 'intent', 'intent_type', 'kind', 'label', 'labels', 'llm_hint', 'manual_only', 'mappings', 'model_dump', 'normalize_label', 'params', 'payload_template', 'synonyms', 'text', 'watcher_allowed']

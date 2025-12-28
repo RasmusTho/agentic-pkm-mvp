@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/guardrails/__init__.py
-# hypothesis_version: 6.148.7
-
-['GuardrailDecision', 'GuardrailStatus', 'allow', 'block', 'fail', 'modify', 'run_post_guardrails', 'run_pre_guardrails']

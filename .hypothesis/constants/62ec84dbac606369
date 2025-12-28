@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/cli/index_doctor.py
-# hypothesis_version: 6.148.7
-
-['--json', '--strict', '--warn/--no-warn', 'Issues:', 'Warnings:', 'as_json', 'dim', 'doctor', 'expected_identity', 'issues', 'model', 'normalize', 'provider', 'stored_identity', 'warnings']

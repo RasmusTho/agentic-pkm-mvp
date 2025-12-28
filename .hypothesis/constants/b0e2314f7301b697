@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/index/outbox.py
-# hypothesis_version: 6.148.7
-
-['DEFAULT_OUTBOX_PATH', 'INDEX_OUTBOX_PATH', 'a', 'append_jsonl', 'content', 'kind', 'language', 'object_id', 'payload', 'source_ref', 'text', 'utf-8']

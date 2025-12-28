@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/index/build.py
-# hypothesis_version: 6.148.7
-
-[1.0, '*.md', '/9_Extras/Archive/', '/@Inbox/', '9_Extras/Archive/', '@Inbox/', 'active_vault_path', 'archived', 'body', 'ignore_glob', 'inbox', 'index', 'ingest', 'meta', 'path', 'processed', 'review_state', 'rules', 'weight']

@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/orchestrator/runtime.py
-# hypothesis_version: 6.148.7
-
-['Orchestrator', 'OrchestratorError', 'PlanValidationError', 'agent_call', 'agent_id', 'ask', 'ask.graph.v1', 'ask.v1', 'budget_exhausted', 'error', 'error_type', 'flow_id', 'flow_ids', 'flows', 'max_steps', 'ok', 'profile_selection', 'qa', 'result', 'status', 'step_id', 'steps', 'tool_call', 'tool_calls', 'tool_settings']

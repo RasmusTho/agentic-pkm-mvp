@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/watcher/state.py
-# hypothesis_version: 6.148.7
-
-[1000000000, 'WatcherState', 'backoff_until', 'changed_detected', 'errors', 'files', 'hash', 'intents_emitted', 'last_emitted', 'last_seen', 'last_stop_warning', 'last_summary_at', 'last_trace_id', 'mtime', 'rate_limited', 'rate_window', 'ticks_run', 'utf-8']

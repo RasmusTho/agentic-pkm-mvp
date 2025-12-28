@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/merge_resolver/llm.py
-# hypothesis_version: 6.148.7
-
-[0.0, 0.9, 'a', 'a_yaml', 'b', 'b_yaml', 'base', 'base_yaml', 'concept', 'draft', 'promoted', 'reviewed', 'system', 'user', 'utf-8', 'uuid']

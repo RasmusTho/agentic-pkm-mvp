@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/set_evaluator/graph.py
-# hypothesis_version: 6.148.7
-
-[0.8, 'act_result', 'embedding_stats', 'emit', 'evaluate_promotion', 'evaluation', 'indexer', 'indexer_stats', 'input', 'memory_context', 'object_id', 'ok', 'output', 'plan', 'recent_evaluations', 'recent_reviews', 'reflection', 'review', 'reviewer', 'score', 'threshold', 'trace_id']
