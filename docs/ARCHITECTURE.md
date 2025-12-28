@@ -47,7 +47,7 @@ Architecture describes how things are wired today; these documents define what m
 - Primary focus: make ingestion of the real Obsidian vault stable, add a minimal external ingest path, expose a reliable ASK API, and ship observability plus an interim GUI so the system is usable end to end.
 - Zoned cognition overlay (Active/ Warm/ Cold) applied on top of the knowledge base; zones are derived from signals (usage, recency, trust) rather than folder names.
 - Two planes: Obsidian vault as the human graph (LYT + PARA) with minimal human frontmatter, and an external corpus plane (newsletters/emails/PDFs) that is indexed and retrievable but never rendered as Obsidian notes.
-- Metadata backbone lives in Stores + SetDB/AMG: Core-6 frontmatter remains a projection for humans (see `docs/CORE6_CONTRACT.md`), while system metadata (signals, relations, usage counts, agent reflections) sits in the data layer.
+- Metadata backbone lives in Stores + SetDB/AMG: Core-6 frontmatter remains a projection for humans (see `docs/CORE_CONTRACT.md`), while system metadata (signals, relations, usage counts, agent reflections) sits in the data layer.
 - Collaboration/multi-user stays out of scope for Reality-MVP; the current work is single-user, vault-first reliability.
 
 ## Zoned Cognition Overlay
@@ -58,10 +58,16 @@ Architecture describes how things are wired today; these documents define what m
 - Zones are derived overlays driven by system metadata (recency, relations, usage), not mandatory folder/tag names; they can be projected into ASK responses and GUI status but do not dictate file layout.
 
 ## Core Contract, State Axes, and Overlays (vNext)
-- Core contract: Core-6 is the minimal semantic projection (uuid, title, origin, source_ref, trust, review_state). Fields may be explicit or derived; see `docs/CORE6_CONTRACT.md`.
-- State axes: orthogonal and policy-driven via vault settings; policies define which axes are enabled, locked, or forced. `kind` is a policy-routing field, not a state axis or schema definition.
-- Derived overlays: system-owned overlays such as `zone`, recency, or salience are computed from signals and remain outside the core contract.
-- Agent reasoning operates on Core-6 + active state axes + policy profiles (see `docs/NOTE_KIND_POLICIES.md`) and may consult derived overlays for prioritization.
+- Core contract: Core-6 is the minimal semantic projection (uuid, title, origin, source_ref, trust, review_state). Fields may be explicit or derived; see `docs/CORE_CONTRACT.md`.
+- State axes: orthogonal and policy-driven via vault settings; policies define which axes are enabled, locked, or forced.
+- Derived / overlay metadata: system-owned overlays such as `zone`, recency, or salience are computed from signals and remain outside the core contract.
+- Agent reasoning operates on Core-6 + state axes + policy profiles (see `docs/NOTE_KIND_POLICIES.md`) + derived overlays.
+
+## Note Kind Policies (policy profiles)
+- Note kinds are policy profiles, not schemas. `kind` routes policy and does not define structure.
+- State axes are orthogonal and selectively enabled by policy per kind.
+- Policies can lock axis values and gate agent read/write permissions; defaults live in vault settings (vault-as-GUI).
+- See `docs/NOTE_KIND_POLICIES.md` for policy profile examples.
 
 ## Planes and Metadata Surfaces
 - Vault plane (Obsidian): the human graph of linkable notes; minimal human frontmatter is allowed/encouraged, but the system does not require heavy YAML. Notes belong here when the user might want to read or link them directly.

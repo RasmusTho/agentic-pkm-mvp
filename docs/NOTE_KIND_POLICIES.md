@@ -1,46 +1,45 @@
 State: SoT v4.10 Reality-MVP (vNext policy model).
 # Note Kind Policies (vNext)
 
-A note may declare a `kind` field (e.g., `task`, `knowledge`, `reference`, `log`).
-The `kind` does not define schema. It selects a policy profile that constrains which
-state axes are active and what agents are allowed to read or write.
+The `kind` field is a policy-routing signal for notes and objects. It does not define a schema.
+Instead, it selects which state axes are enabled, locked, or ignored by policy.
 
-Policies are defined in vault settings (vault-as-GUI) and compiled into runtime policy
-bundles. The policies are explicit and do not imply inheritance or hard-coded hierarchies.
+Policies are defined via vault-as-GUI settings and compiled into runtime policy bundles.
 
 ## Policy model
-- `kind` is a policy-routing field, not a state axis.
-- State axes are orthogonal and enabled or constrained by policy.
-- Policies can lock or force axis values, and gate agent read/write permissions.
-- Derived overlays (like `zone`) remain system-owned and never become core axes.
+- `kind` routes policy; it does not define structure or schema.
+- State axes are orthogonal and selectively enabled by policy.
+- Policies can lock or force axis values and gate agent read/write permissions.
+- Derived overlays (e.g., `zone`, recency, salience) remain system-owned and never become core axes.
 
-## Example policies
+## Example policy profiles
+
 ### task
-- Enabled axes: status/lifecycle, priority, temporal planning (due_date, scheduled_at).
+- Meaningful fields: status/lifecycle, priority, due_date, scheduled_at, checklist items.
+- Agent reads: task state, dates, priority, provenance, review/trust guardrails.
+- Agent writes: status, priority, dates, checklist items when explicitly authorized; must not
+  alter reviewed content without explicit intent.
 - Locked/forced: origin=vault; review_state defaults to `draft` until explicitly reviewed.
-- Agent permissions: may update status, priority, dates, and checklist items; may not
-  rewrite reviewed content without explicit intent.
 
 ### knowledge
-- Enabled axes: maturity (draft/reviewed/evergreen), salience (policy-scored), trust gates.
-- Locked/forced: origin=vault; review_state gates any mutation of reviewed content.
-- Agent permissions: may propose edits, summaries, or links; write actions require explicit
-  intent when review_state is `reviewed` or higher.
+- Meaningful fields: maturity (draft/reviewed/evergreen), salience, trust, review_state.
+- Agent reads: body, relations, maturity, salience signals, trust/review gates.
+- Agent writes: proposals, summaries, links; edits require explicit intent when reviewed.
+- Locked/forced: origin=vault; review_state gates mutation of reviewed content.
 
 ### reference
-- Enabled axes: trust, provenance, and citation tracking; optional temporal freshness.
+- Meaningful fields: provenance, citations, trust, optional freshness markers.
+- Agent reads: source metadata, citations, trust/review gates.
+- Agent writes: citations, summaries, source metadata; avoid rewriting reviewed excerpts
+  without explicit intent.
 - Locked/forced: origin=external unless explicitly captured from the vault.
-- Agent permissions: may append citations, summaries, or source metadata; avoid rewriting
-  reviewed excerpts without explicit intent.
 
 ### log
-- Enabled axes: temporal ordering, append-only integrity, optional trust gates.
+- Meaningful fields: timestamped entries, append-only integrity, optional trust/review gates.
+- Agent reads: chronological entries, provenance, review/trust guards.
+- Agent writes: append entries and metadata; never rewrite prior entries without explicit intent.
 - Locked/forced: origin=vault; review_state may be locked to `logged` or `reviewed`.
-- Agent permissions: may append entries and metadata; never rewrite prior entries without
-  explicit intent.
 
-## Future code touchpoints (descriptive)
-- Frontmatter validation: ensure Core-6 projection plus policy-selected axes are coherent.
-- Agent write guards: enforce review_state and policy permissions before mutating content.
-- Settings compiler: compile vault policy definitions into runtime-readable bundles.
-- Index projection: project Core-6 + active axes + policy overlays into retrieval indices.
+## Policy ownership
+Policies are configured in vault settings (vault-as-GUI) and are the authoritative source for
+which axes are enabled, locked, or ignored for a given `kind`.

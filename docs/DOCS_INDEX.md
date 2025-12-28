@@ -39,9 +39,10 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/CONCEPTS/CONFIG_AS_PRODUCT_CONTRACT.md | Config-as-product contract | Aligned (forward line v5.x) | 2025-12-17 | Covers precedence, validation, rollback, audit, and portability rules for config. |
 | docs/CONCEPTS/PORTABILITY_CONTRACT.md | Portability contract (macOS + Windows) | Aligned (forward line v5.x) | 2025-12-16 | Defines portability hazards and rules for portable artifacts and paths; referenced by PROJECT_KERNEL. |
 | docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md | Archive exposure contract (cold brain safety) | Aligned (forward line v5.x) | 2025-12-17 | Defines discovery→citation→preview→materialization modes; notes scope experiment (active domain + global evergreens, with domain excludes + one-shot includes). |
-| docs/CORE6_CONTRACT.md | Core6 contract | Unreviewed | — |  |
-| docs/NOTE_KIND_POLICIES.md | Note kind policies | Unreviewed | — |  |
-| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-12-17 | Adds a Contracts section pointing to kernel anchors and concept contracts; now also documents watcher/worker heartbeats + the health/story pipelines. |
+| docs/CORE_CONTRACT.md | Core-6 contract (canonical) | Aligned (forward line v5.x) | 2025-12-28 | Canonical Core-6 semantic contract, ownership, and projection rules. |
+| docs/CORE6_CONTRACT.md | Core-6 contract (compat alias) | Deprecated | 2025-12-28 | Superseded by `docs/CORE_CONTRACT.md`. |
+| docs/NOTE_KIND_POLICIES.md | Note kind policies | Aligned (forward line v5.x) | 2025-12-28 | Policy profiles for kind routing and state-axis enablement. |
+| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-12-28 | Clarifies Core-6 contract, state axes, note kind policies, and derived overlays. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
 | docs/STATUS.md | Operational snapshot | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-12-17 | Notes that layering/portability/archive/trust/event/config are anchored by concept contracts and highlights the heartbeat-driven health spine plus gap-test verification scripts. |
 | docs/ROADMAP.md | Strategic roadmap | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-14 | Forward line tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration); Quality Wave (Runtime Loop Evaluation Stack) defined with A–F deliverables, exit criteria, and explicit module map; v5.6 LangGraph rollout planned; v4.10 baseline referenced only as foundation. |
@@ -83,8 +84,8 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/LLM.md | LLM integration | Baseline-only (v4.10) | 2025-12-07 | Providers/env defaults (mock/Ollama/OpenAI/DeepSeek). |
 | docs/LLM_BACKENDS.md | LLM backends | Baseline-only (v4.10) | 2025-12-07 | Providers mock/ollama/openai/deepseek; timeouts/keys noted. |
 | docs/RETRIEVAL.md | Retrieval | Baseline-only (v4.10) | 2025-12-07 | Hybrid search + optional rerank; ASK graph defaults noted. |
-| docs/FRONTMATTER.md | Frontmatter rules | Aligned (forward line v5.x) | 2025-12-17 | Defines the warm-surface write contract and receipt placement. |
-| docs/DATA_MODEL.md | Data model | Baseline-only (v4.10) | 2025-12-07 | Active store_objects/vector_index/relations; legacy tables noted. |
+| docs/FRONTMATTER.md | Frontmatter rules | Aligned (forward line v5.x) | 2025-12-28 | Defines metadata layers, ownership, and the warm-surface write contract. |
+| docs/DATA_MODEL.md | Data model | Aligned (forward line v5.x) | 2025-12-28 | DB mirror of the Core-6 contract; derived overlays are rebuildable. |
 | docs/DATA_GOVERNANCE.md | Data governance | Aligned (forward line v5.x) | 2025-12-17 | Clarifies canonical vs derived artifacts, trust semantics, and auditable persistence. |
 | docs/DB_SCHEMA.md | DB schema | Partially outdated | 2025-12-07 | Current store_* tables documented; legacy AMG tables retained as historical. |
 | docs/SCORECARDS.md | Scorecards | Partially outdated | 2025-12-07 | Draft targets only; not enforced in Reality-MVP. |
@@ -95,7 +96,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/ingest.md | Ingest (historical/current) | Baseline-only (v4.10) | 2025-12-07 | Vault-first ingest (CLI, UUID healing, mirror, HybridStore); legacy commands noted. |
 | docs/OBSIDIANSYNC.md | Obsidian sync | Baseline-only (v4.10) | 2025-03-10 | Reality-MVP: git watcher primary, filesystem watcher fallback; describes Obsidian → watcher → ingest/update → outbox → indexer; notes Docker-first watcher daemon (`vault-watcher-daemon`) with host fallback. |
 | docs/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
-| docs/AI_DEVELOPMENT.md | AI-assisted development policy | Baseline-only (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
+| docs/AI_DEVELOPMENT.md | AI-assisted development policy | Aligned (forward line v5.x) | 2025-12-28 | Dev-layer policy tied to Core-6 guardrails and vault policy constraints. |
 | docs/DEV_WORKFLOW.md | Developer workflow | Baseline-only (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
 | docs/OPERATIONS.md | Operations playbook | Baseline-only (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
 | docs/OPS_WATCHER.md | Watcher operations (Docker + host) | Aligned (forward line v5.x) | 2025-03-10 | Docker-first watcher daemon with `/state` snapshot storage and host-service fallback; cooldown guidance for iCloud/Obsidian mounts. |
@@ -115,7 +116,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Baseline-only (v4.10) | 2025-12-18 | Local dev targets 3.14, CI smoke floor 3.12 with Docker tripwires and scripts. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-14 | Adds observability-as-tests gates (counters/events as fitness), runtime tick latency budget (p95), and clarifies watcher/panel/promotion counters. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
-| docs/AI_DEVELOPMENT.md | AI development policy | Baseline-only (v4.10) | 2025-12-07 | Matches current dev-layer policy and SoT references. |
+| docs/AI_DEVELOPMENT.md | AI development policy | Aligned (forward line v5.x) | 2025-12-28 | Dev-layer policy tied to Core-6 guardrails and vault policy constraints. |
 | docs/DEV_WORKFLOW.md | Dev workflow | Baseline-only (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
 | docs/scenarios/REALITY_MVP.md | Scenario walkthrough | Baseline-only (v4.10) | 2025-12-07 | Matches e2e pipeline test and ASK expectations. |
 
@@ -211,7 +212,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Baseline-only (v4.10) | 2025-12-18 | Local dev targets 3.14, CI smoke floor 3.12 with Docker tripwires and scripts. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-14 | Adds observability-as-tests gates (counters/events as fitness), runtime tick latency budget (p95), and clarifies watcher/panel/promotion counters. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
-| docs/AI_DEVELOPMENT.md | AI development | Baseline-only (v4.10) | 2025-12-07 | Current dev-layer AI policy (docs-first, mocks/defaults). |
+| docs/AI_DEVELOPMENT.md | AI development | Aligned (forward line v5.x) | 2025-12-28 | Current dev-layer AI policy aligned to Core-6 guardrails and vault settings. |
 | docs/DEV_WORKFLOW.md | Dev workflow | Baseline-only (v4.10) | 2025-12-07 | TDD/docs-first workflow aligned with SoT v4.10. |
 | docs/PROJECTOR.md | Projector | Baseline-only (v4.10) | 2025-12-07 | Promotion projector emits audit/membership; no filesystem projection. |
 | docs/ALIGNMENT.md | Alignment | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
@@ -308,4 +309,3 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 
 - docs/settings/events/registry.yaml (Event Registry manifest)
 - docs/settings/events/*.yaml (Event descriptors)
-

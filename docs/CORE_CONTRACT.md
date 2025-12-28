@@ -1,8 +1,14 @@
 State: SoT v4.10 Reality-MVP (vNext contract).
-# Core-6 Contract (vNext, compatibility alias)
+# Core Contract (Core-6 vNext)
 
-This document is retained for backwards references. The canonical Core-6 contract lives in
-`docs/CORE_CONTRACT.md` and should be treated as authoritative.
+Core-6 is the minimal, stable semantic contract that every note or object must project for agent
+reasoning, trust separation, and idempotent automation. It is a contract of meaning, not a YAML
+schema requirement.
+
+## Purpose
+- Define the smallest stable identity + provenance surface for every object.
+- Keep guardrails (trust, review) separate from mutable state axes.
+- Ensure deterministic automation even when metadata is implicit.
 
 ## Core-6 fields (canonical)
 | Field | Purpose | Ownership | Implicit/derived? |
@@ -14,6 +20,12 @@ This document is retained for backwards references. The canonical Core-6 contrac
 | `trust` | Guardrail level for ownership and promotion decisions. | System-owned (human-authorized changes). | Derived from policy, provenance, or review actions. |
 | `review_state` | Review gate protecting reviewed content from mutation. | System-owned (human-authorized changes). | Derived from review actions or policy defaults. |
 
+## Contract rules
+- Core-6 is a semantic contract, not a literal YAML requirement.
+- Absence of YAML does not imply absence of semantics; Core-6 may be implicit or derived.
+- Notes are the human contract surface; they express intent and meaning.
+- DB/SetDB is a normalized mirror of the contract, not the source of truth.
+
 ## Not Core-6
 The following are explicitly outside the Core-6 contract:
 - `zone` (derived overlay).
@@ -21,3 +33,6 @@ The following are explicitly outside the Core-6 contract:
 - Priority / impact.
 - Maturity and salience.
 - Note kind policies (policy routing, not core semantics).
+
+## Stability
+Core-6 must remain minimal and stable. Any change requires an explicit architecture update.
