@@ -23,6 +23,7 @@ from app.search.service import ingest_object as index_ingest_object
 from app.services.note_log import note_log_path
 from app.store.object_store import DomainObject, ObjectStore
 from app.stores import get_object_store
+from app.vault.layout import ensure_vault_layout
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 
@@ -455,6 +456,7 @@ def run_vault_alpha_ingest(
     resume_from: Iterable[str] | None = None,
 ) -> VaultAlphaSummary:
     vault_root = vault_root.expanduser().resolve()
+    ensure_vault_layout(vault_root)
     ingest_config = resolve_ingest_config(vault_root)
     candidates, included_folders = _select_candidates(
         vault_root,
@@ -476,6 +478,7 @@ def run_vault_alpha_ingest_paths(
     vault_root: Path, paths: Sequence[Path], *, force: bool = False, resume_from: Iterable[str] | None = None
 ) -> VaultAlphaSummary:
     vault_root = vault_root.expanduser().resolve()
+    ensure_vault_layout(vault_root)
     candidates: List[Path] = []
     included_folders: List[str] = []
 

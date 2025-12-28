@@ -29,8 +29,6 @@ def _base_env(tmp_path: Path) -> dict[str, str]:
     }
 
 
-
-
 def _write_system_settings(vault_root: Path) -> None:
     settings_dir = vault_root / "_system" / "settings"
     settings_dir.mkdir(parents=True, exist_ok=True)
@@ -69,10 +67,25 @@ def _write_system_settings(vault_root: Path) -> None:
     path.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
 
 
+def _write_layout_note(vault_root: Path) -> None:
+    layout_path = vault_root / ".yggdrasil.md"
+    layout_path.write_text(
+        """---
+ingest_include_folders:
+  - "."
+---
+
+Vault layout contract for tests.
+""",
+        encoding="utf-8",
+    )
+
+
 def _prepare_vault(tmp_path: Path) -> Path:
     source = Path("tests/fixtures/vault_alpha")
     dest = tmp_path / "vault"
     shutil.copytree(source, dest)
+    _write_layout_note(dest)
     return dest
 
 
@@ -498,6 +511,7 @@ def test_vault_alpha_ingest_handles_malformed_frontmatter(tmp_path: Path, capsys
     get_store().set_documents([])
     vault = tmp_path
     concepts = vault / "Concepts"
+    _write_layout_note(vault)
     concepts.mkdir(parents=True, exist_ok=True)
     bad = concepts / "Broken.md"
     bad.write_text(
@@ -529,6 +543,7 @@ def test_vault_alpha_ingest_records_errors_and_resumes(
     get_store().set_documents([])
     vault = tmp_path
     concepts = vault / "Concepts"
+    _write_layout_note(vault)
     concepts.mkdir(parents=True, exist_ok=True)
     good_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     bad_uuid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -742,6 +757,7 @@ def test_vault_alpha_ingest_defaults_include_all(tmp_path: Path) -> None:
     vault.mkdir()
     (vault / "RootNote.md").write_text("Root note body", encoding="utf-8")
     _write_system_settings(vault)
+    _write_layout_note(vault)
 
     runner = CliRunner()
     env = _base_env(tmp_path)

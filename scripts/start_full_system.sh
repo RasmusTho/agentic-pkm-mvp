@@ -89,6 +89,10 @@ if ! docker compose exec -T api sh -c '[ -d /app/vault ]' >/dev/null 2>&1; then
   echo "ERROR: /app/vault mount is missing inside the api container" >&2
   exit 1
 fi
+
+# Ensure vault layout contract before counting notes or ingest
+docker compose exec -T api python -m app.cli vault-layout-ensure --vault-root /app/vault
+
 vault_note_count=$(docker compose exec -T api sh -c 'find /app/vault -name "*.md" | wc -l' | tr -d '[:space:]')
 vault_note_count=${vault_note_count:-0}
 if [ "$vault_note_count" -le 0 ]; then

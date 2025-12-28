@@ -8,10 +8,11 @@ import yaml
 
 from app.config.paths import resolve_system_settings_path
 from app.services import settings as settings_service
+from app.vault.layout import _normalize_md_name, load_vault_layout
 
 DEFAULT_VAULT_ROOT = Path("vault")
 
-_UNIVERSAL_IGNORES = [".obsidian/**", ".trash/**", "_system/**"]
+_BASE_IGNORES = [".obsidian/**", ".trash/**", "_system/**", ".yggdrasil.md"]
 
 
 @dataclass(frozen=True)
@@ -52,8 +53,13 @@ def _load_frontmatter(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _override_path(vault_root: Path) -> Path:
+    filename = _normalize_md_name("ingest.override.md")
+    return vault_root / "_system" / "settings" / filename
+
+
 def _resolve_override(vault_root: Path) -> dict:
-    override_path = vault_root / "_system" / "settings" / "ingest.override.md"
+    override_path = _override_path(vault_root)
     if not override_path.exists():
         return {}
     try:
@@ -62,9 +68,9 @@ def _resolve_override(vault_root: Path) -> dict:
         return {}
 
 
-def _append_universal_ignores(ignore_glob: List[str]) -> List[str]:
+def _append_universal_ignores(ignore_glob: List[str], system_folder: str) -> List[str]:
     merged = list(ignore_glob)
-    for pattern in _UNIVERSAL_IGNORES:
+    for pattern in _BASE_IGNORES + [f"{system_folder}/**"]:
         if pattern not in merged:
             merged.append(pattern)
     return merged
@@ -84,13 +90,26 @@ def resolve_ingest_config(vault_root: Path) -> IngestConfig:
             include_folders = ingest.get("include_folders")
             ignore_glob = ingest.get("ignore_glob")
 
+    layout = load_vault_layout(vault_root)
     override = _resolve_override(vault_root)
     override_include = override.get("ingest_include_folders")
     override_ignore = override.get("ingest_ignore_glob")
 
-    include = _normalize_include_folders(override_include if override_include is not None else include_folders)
-    ignore = _normalize_list(override_ignore if override_ignore is not None else ignore_glob)
-    ignore = _append_universal_ignores(ignore)
+    if override_include is not None:
+        include = _normalize_include_folders(override_include)
+    elif include_folders is None or not _normalize_list(include_folders):
+        include = _normalize_include_folders(layout.ingest_include_folders)
+    else:
+        include = _normalize_include_folders(include_folders)
+
+    if override_ignore is not None:
+        ignore = _normalize_list(override_ignore)
+    elif ignore_glob is None:
+        ignore = _normalize_list(layout.ingest_ignore_glob)
+    else:
+        ignore = _normalize_list(ignore_glob)
+
+    ignore = _append_universal_ignores(ignore, layout.system_folder)
 
     return IngestConfig(include_folders=include, ignore_glob=ignore)
 

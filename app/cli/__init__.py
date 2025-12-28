@@ -465,6 +465,29 @@ def vault_alpha_ingest(vault_root: Path | None, max_notes: int, include_test_not
         click.echo(f"Scanned {summary.scanned} files; ingested {summary.ingested} notes{suffix}")
     click.echo(f"Included folders: {', '.join(summary.included_folders) if summary.included_folders else '-'}")
 
+@cli.command(
+    name="vault-layout-ensure",
+    help="Ensure vault layout folders and default .yggdrasil.md note exist.",
+)
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional vault root (defaults to VAULT_ROOT or DEFAULT_VAULT_ROOT).",
+)
+def vault_layout_ensure(vault_root: Path | None) -> None:
+    resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=True)
+    if resolved is None:
+        raise click.BadParameter("Vault root could not be resolved.")
+    if not resolved.exists() or not resolved.is_dir():
+        raise click.BadParameter(f"Vault root not found or not a directory: {resolved}")
+    layout = ensure_vault_layout(resolved)
+    click.echo(
+        "Vault layout ensured: "
+        f"inbox={layout.inbox_folder} desk={layout.desk_folder} system={layout.system_folder}"
+    )
+
+
 
 @cli.command(
     name="ingest-vault-paths",

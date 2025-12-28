@@ -9,6 +9,21 @@ from app.retrieval.hybrid import get_store
 from app.stores import reset_store_backends
 
 
+
+def _write_layout_note(vault_root: Path) -> None:
+    layout_path = vault_root / ".yggdrasil.md"
+    layout_path.write_text(
+        """---
+ingest_include_folders:
+  - "."
+---
+
+Vault layout contract for tests.
+""",
+        encoding="utf-8",
+    )
+
+
 def _write_system_settings(vault_root: Path) -> None:
     settings_dir = vault_root / "_system" / "settings"
     settings_dir.mkdir(parents=True, exist_ok=True)
@@ -59,6 +74,7 @@ def test_default_include_folders_scans_root(tmp_path: Path, monkeypatch) -> None
     vault_root.mkdir()
     (vault_root / "RootNote.md").write_text("Root note body", encoding="utf-8")
     _write_system_settings(vault_root)
+    _write_layout_note(vault_root)
 
     summary = run_vault_alpha_ingest(vault_root, max_notes=10, include_test_note=False, force=True)
 
