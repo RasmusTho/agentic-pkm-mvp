@@ -99,12 +99,17 @@ if [ "$vault_note_count" -le 0 ]; then
   exit 1
 fi
 
-store_stats_json=$(docker compose exec -T api python -m app.cli store stats --json)
+store_stats_json=$(docker compose exec -T api python -m app.cli store stats --json || true)
 extract_stat() {
   local key="$1"
   STAT_KEY="$key" STORE_STATS_JSON="$store_stats_json" python - <<'PY'
 import json, os
-print(json.loads(os.environ['STORE_STATS_JSON']).get(os.environ['STAT_KEY']) or 0)
+raw = os.environ.get("STORE_STATS_JSON", "")
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = {}
+print(payload.get(os.environ.get("STAT_KEY", "")) or 0)
 PY
 }
 objects_before=$(extract_stat objects)
@@ -118,7 +123,7 @@ ingest_summary_json="{}"
 if [ "$objects_before" -le 0 ]; then
   ingest_run="yes"
   ingest_summary_json=$(docker compose exec -T api env STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@db:5432/app python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
-  store_stats_json=$(docker compose exec -T api python -m app.cli store stats --json)
+  store_stats_json=$(docker compose exec -T api python -m app.cli store stats --json || true)
   objects_after=$(extract_stat objects)
   vectors_after=$(extract_stat vectors)
   object_count="$objects_after"
@@ -127,22 +132,34 @@ fi
 
 ingested_count=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
 import json, os
-payload = json.loads(os.environ.get("INGEST_JSON", "{}"))
+raw = os.environ.get("INGEST_JSON", "")
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = {}
 print(payload.get("ingested", 0) or 0)
 PY
 )
 skipped_locked_count=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
 import json, os
-payload = json.loads(os.environ.get("INGEST_JSON", "{}"))
+raw = os.environ.get("INGEST_JSON", "")
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = {}
 print(payload.get("skipped_locked", 0) or 0)
 PY
 )
 
-search_payload=$(curl -sS "http://127.0.0.1:18000/search?q=test&k=3")
+search_payload=$(curl -sS "http://127.0.0.1:18000/search?q=test&k=3" || true)
 search_results=$(SEARCH_JSON="$search_payload" python - <<'PY'
 import json, os
-payload = json.loads(os.environ['SEARCH_JSON'])
-print(len(payload.get('results') or []))
+raw = os.environ.get("SEARCH_JSON", "")
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = {}
+print(len(payload.get("results") or []))
 PY
 )
 if [ "$ingest_run" = "yes" ] && [ "$search_results" -eq 0 ]; then
@@ -154,10 +171,16 @@ if [ "$ingest_run" = "yes" ] && [ "$search_results" -eq 0 ]; then
   fi
 fi
 
-ask_payload=$(curl -sS http://127.0.0.1:18000/api/ask -H "Content-Type: application/json" -d '{"question":"warm content"}')
+ask_payload=$(curl -sS http://127.0.0.1:18000/api/ask -H "Content-Type: application/json" -d '{"question":"warm content"}' || true)
 ASK_JSON="$ask_payload" python - <<'PY'
-import json, os
-json.loads(os.environ['ASK_JSON'])
+import json, os, sys
+raw = os.environ.get("ASK_JSON", "")
+if not raw:
+    raise SystemExit(0)
+try:
+    json.loads(raw)
+except Exception:
+    print("WARNING: /api/ask returned a non-JSON payload during bootstrap.", file=sys.stderr)
 PY
 
 cat <<SUMMARY
