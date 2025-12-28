@@ -69,7 +69,7 @@ def _write_system_settings(vault_root: Path) -> None:
 
 
 def _write_layout_note(vault_root: Path) -> None:
-    layout_path = vault_root / "~system" / "vault.layout.md"
+    layout_path = vault_root / "⚙️ System" / "vault.layout.md"
     layout_path.parent.mkdir(parents=True, exist_ok=True)
     layout_path.write_text(
         """---
@@ -81,6 +81,8 @@ Vault layout contract for tests.
 """,
         encoding="utf-8",
     )
+
+
 def _prepare_vault(tmp_path: Path) -> Path:
     source = Path("tests/fixtures/vault_alpha")
     dest = tmp_path / "vault"

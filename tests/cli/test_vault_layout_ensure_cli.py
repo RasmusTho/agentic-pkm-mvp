@@ -25,9 +25,9 @@ def test_vault_layout_ensure_cli_json(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["system_folder"] == "~system"
-    assert payload["inbox_folder"] == "@Inbox"
-    assert payload["desk_folder"] == "@Desk"
-    assert payload["layout_note"].endswith("~system/vault.layout.md")
+    assert payload["system_folder"] == "⚙️ System"
+    assert payload["inbox_folder"] == "📥 Inbox"
+    assert payload["desk_folder"] == "🛠️ Workbench"
+    assert payload["layout_note"].endswith("⚙️ System/vault.layout.md")
     assert "warnings" in payload
     assert "migrated_legacy_system" in payload

@@ -10,7 +10,7 @@ from app.stores import reset_store_backends
 
 
 def _write_layout_note(vault_root: Path) -> None:
-    layout_path = vault_root / "~system" / "vault.layout.md"
+    layout_path = vault_root / "⚙️ System" / "vault.layout.md"
     layout_path.parent.mkdir(parents=True, exist_ok=True)
     layout_path.write_text(
         """---\ninclude_folders:\n  - "."\n---\n\nVault layout contract for tests.\n""",

@@ -236,13 +236,11 @@ Effective runtime configuration (compiled): `runtime/settings/**/*.yaml` (derive
 The canonical configuration is the vault settings surface; the runtime YAML is a derived/compiled representation.
 
 ### Vault Layout Contract (vault.layout.md)
-- Path: `<vault_root>/~system/vault.layout.md` (vault-first, Obsidian-editable).
-- Frontmatter keys: `version`, `system_folder`, `inbox_folder`, `desk_folder`, `include_folders`, `ignore_glob`.
-- Defaults: system=`~system`, inbox=`@Inbox`, desk=`@Desk`; `include_folders` falls back to inbox+desk when unset.
-- Bootstrap behavior: creates the note if missing, ensures listed folders exist, and never deletes other folders.
-- Optional migration: if legacy `System/` exists and the configured `system_folder` does not, it is moved once; if both exist, legacy is left in place with a warning.
-- Ingest defaults: when YAML settings omit `include_folders`/`ignore_glob`, ingest uses the layout note and appends safe ignores for `.obsidian/**`, `.trash/**`, `System/**`, `_system/**`, `<system_folder>/**`, and the layout note path.
-- Unknown folders are allowed to remain; layout changes do not delete or merge existing folders.
+- Location: `<vault_root>/<system_folder>/vault.layout.md` (default system folder: `⚙️ System`).
+- Frontmatter keys: `system_folder`, `inbox_folder`, `desk_folder`, `root_folders`, `include_folders`, `ignore_glob`.
+- `root_folders` defines the top-level folders that are ensured (created if missing) and defaults to the human-first orientation set: `📥 Inbox`, `🛠️ Workbench`, `🔍 Focus`, `📁 Projects`, `🧩 Areas`, `💡 Knowledge`, `🗂️ Reference`, `🗄️ Archive`, `⚙️ System`.
+- Layout enforcement is idempotent: listed folders are created if missing; unknown folders are allowed to remain; nothing is deleted.
+- The layout note is created if missing. A system note is also auto-created if missing at `<system_folder>/Vault Structure – Human-First Orientation (Mimer).md` and is not overwritten once present.
 
 ### Human → Machine pipeline
 1) Markdown → Loader → Sections  
