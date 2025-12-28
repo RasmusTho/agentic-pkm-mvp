@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import shutil
 import uuid
@@ -68,10 +69,11 @@ def _write_system_settings(vault_root: Path) -> None:
 
 
 def _write_layout_note(vault_root: Path) -> None:
-    layout_path = vault_root / ".yggdrasil.md"
+    layout_path = vault_root / "~system" / "vault.layout.md"
+    layout_path.parent.mkdir(parents=True, exist_ok=True)
     layout_path.write_text(
         """---
-ingest_include_folders:
+include_folders:
   - "."
 ---
 
@@ -79,8 +81,6 @@ Vault layout contract for tests.
 """,
         encoding="utf-8",
     )
-
-
 def _prepare_vault(tmp_path: Path) -> Path:
     source = Path("tests/fixtures/vault_alpha")
     dest = tmp_path / "vault"
@@ -778,3 +778,31 @@ def test_vault_alpha_ingest_defaults_include_all(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "Included folders: ." in result.output
     assert _extract_ingested(result.output) >= 1
+
+
+def test_vault_alpha_ingest_json_summary(tmp_path: Path) -> None:
+    reset_store_backends()
+    get_store().set_documents([])
+    vault = _prepare_vault(tmp_path)
+    runner = CliRunner(mix_stderr=False)
+    env = _base_env(tmp_path)
+
+    with patch.dict(os.environ, env, clear=False):
+        result = runner.invoke(
+            cli,
+            [
+                "vault-alpha-ingest",
+                "--vault-root",
+                str(vault),
+                "--max-notes",
+                "5",
+                "--json",
+            ],
+            env=env,
+        )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["scanned"] >= 0
+    assert "skipped_locked" in payload
+    assert "included_folders" in payload

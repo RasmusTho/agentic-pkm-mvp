@@ -451,11 +451,27 @@ def pkm_alpha_ingest(limit: int | None) -> None:
 )
 @click.option("--include-test-note", is_flag=True, help="Include Test/Alpha-HumanFlows.md in this run.")
 @click.option("--force", is_flag=True, help="Re-ingest notes even if they appear already ingested or mirrored.")
-def vault_alpha_ingest(vault_root: Path | None, max_notes: int, include_test_note: bool, force: bool) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output JSON summary.")
+def vault_alpha_ingest(
+    vault_root: Path | None, max_notes: int, include_test_note: bool, force: bool, as_json: bool
+) -> None:
     resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=True)
     if resolved is None:
         raise click.BadParameter("Vault root could not be resolved.")
     summary = run_vault_alpha_ingest(resolved, max_notes=max_notes, include_test_note=include_test_note, force=force)
+    if as_json:
+        payload = {
+            "scanned": summary.scanned,
+            "ingested": summary.ingested,
+            "included_folders": summary.included_folders,
+            "force": summary.force,
+            "malformed": summary.malformed,
+            "errors": summary.errors,
+            "skipped_locked": summary.skipped_locked,
+            "locked_examples": summary.locked_examples,
+        }
+        _dump(payload, True)
+        return
     if summary.ingested == 0 and not summary.force:
         click.echo(
             f"Scanned {summary.scanned} files; ingested {summary.ingested} notes (already up to date; run with --force to resync if the store is empty)"
@@ -467,7 +483,7 @@ def vault_alpha_ingest(vault_root: Path | None, max_notes: int, include_test_not
 
 @cli.command(
     name="vault-layout-ensure",
-    help="Ensure vault layout folders and default .yggdrasil.md note exist.",
+    help="Ensure vault layout folders and default vault.layout.md note exist.",
 )
 @click.option(
     "--vault-root",
@@ -475,18 +491,33 @@ def vault_alpha_ingest(vault_root: Path | None, max_notes: int, include_test_not
     default=None,
     help="Optional vault root (defaults to VAULT_ROOT or DEFAULT_VAULT_ROOT).",
 )
-def vault_layout_ensure(vault_root: Path | None) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output JSON summary.")
+def vault_layout_ensure(vault_root: Path | None, as_json: bool) -> None:
     resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=True)
     if resolved is None:
         raise click.BadParameter("Vault root could not be resolved.")
     if not resolved.exists() or not resolved.is_dir():
         raise click.BadParameter(f"Vault root not found or not a directory: {resolved}")
-    layout = ensure_vault_layout(resolved)
+    from app.vault.layout import ensure_vault_layout_report
+
+    layout, migrated, warnings = ensure_vault_layout_report(resolved)
+    if as_json:
+        payload = {
+            "system_folder": layout.system_folder,
+            "inbox_folder": layout.inbox_folder,
+            "desk_folder": layout.desk_folder,
+            "layout_note": str(layout.note_path),
+            "migrated_legacy_system": migrated,
+            "warnings": warnings,
+        }
+        _dump(payload, True)
+        return
     click.echo(
         "Vault layout ensured: "
         f"inbox={layout.inbox_folder} desk={layout.desk_folder} system={layout.system_folder}"
     )
-
+    if warnings:
+        click.echo(f"Warnings: {', '.join(warnings)}", err=True)
 
 
 @cli.command(

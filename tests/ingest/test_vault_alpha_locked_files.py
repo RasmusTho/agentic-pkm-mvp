@@ -22,14 +22,12 @@ def test_vault_alpha_ingest_skips_locked_files(tmp_path: Path, monkeypatch: pyte
     (vault_root / "Good.md").write_text("Good note body", encoding="utf-8")
     (vault_root / "Locked.md").write_text("Locked note body", encoding="utf-8")
 
-    layout_path = vault_root / ".yggdrasil.md"
-    layout_path.write_text("""---
-ingest_include_folders:
-  - "."
----
-
-Layout note.
-""", encoding="utf-8")
+    layout_path = vault_root / "~system" / "vault.layout.md"
+    layout_path.parent.mkdir(parents=True, exist_ok=True)
+    layout_path.write_text(
+        """---\ninclude_folders:\n  - "."\n---\n\nLayout note.\n""",
+        encoding="utf-8",
+    )
 
     original_read_text = Path.read_text
 

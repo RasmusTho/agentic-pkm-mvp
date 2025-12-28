@@ -50,9 +50,10 @@ def test_ingest_override_merges_settings(tmp_path: Path) -> None:
     vault_root.mkdir()
     _write_system_settings(vault_root)
 
-    override_path = vault_root / "_system" / "settings" / "ingest.override.md"
+    override_path = vault_root / "~system" / "settings" / "ingest.override.md"
+    override_path.parent.mkdir(parents=True, exist_ok=True)
     override_path.write_text(
-        """---\ningest_include_folders:\n  - \"@Inbox\"\ningest_ignore_glob:\n  - \"Legacy/**\"\n---\n\nOverride settings for ingest.\n""",
+        """---\ninclude_folders:\n  - \"@Inbox\"\nignore_glob:\n  - \"Legacy/**\"\n---\n\nOverride settings for ingest.\n""",
         encoding="utf-8",
     )
 
@@ -60,5 +61,5 @@ def test_ingest_override_merges_settings(tmp_path: Path) -> None:
 
     assert config.include_folders == ["@Inbox"]
     assert "Legacy/**" in config.ignore_glob
-    for pattern in [".obsidian/**", ".trash/**", "_system/**", "~system/**"]:
+    for pattern in [".obsidian/**", ".trash/**", "System/**", "_system/**", "~system/**", "~system/vault.layout.md"]:
         assert pattern in config.ignore_glob

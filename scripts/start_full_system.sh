@@ -90,8 +90,7 @@ if ! docker compose exec -T api sh -c '[ -d /app/vault ]' >/dev/null 2>&1; then
   exit 1
 fi
 
-# Ensure vault layout contract before counting notes or ingest
-docker compose exec -T api python -m app.cli vault-layout-ensure --vault-root /app/vault
+layout_json=$(docker compose exec -T api python -m app.cli vault-layout-ensure --vault-root /app/vault --json)
 
 vault_note_count=$(docker compose exec -T api sh -c 'find /app/vault -name "*.md" | wc -l' | tr -d '[:space:]')
 vault_note_count=${vault_note_count:-0}
@@ -115,15 +114,29 @@ ingest_run="no"
 max_notes=${BOOTSTRAP_INGEST_MAX_NOTES:-500}
 object_count="$objects_before"
 vector_count="$vectors_before"
+ingest_summary_json="{}"
 if [ "$objects_before" -le 0 ]; then
   ingest_run="yes"
-  docker compose exec -T api env STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@db:5432/app python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force
+  ingest_summary_json=$(docker compose exec -T api env STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@db:5432/app python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
   store_stats_json=$(docker compose exec -T api python -m app.cli store stats --json)
   objects_after=$(extract_stat objects)
   vectors_after=$(extract_stat vectors)
   object_count="$objects_after"
   vector_count="$vectors_after"
 fi
+
+ingested_count=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
+import json, os
+payload = json.loads(os.environ.get("INGEST_JSON", "{}"))
+print(payload.get("ingested", 0) or 0)
+PY
+)
+skipped_locked_count=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
+import json, os
+payload = json.loads(os.environ.get("INGEST_JSON", "{}"))
+print(payload.get("skipped_locked", 0) or 0)
+PY
+)
 
 search_payload=$(curl -sS "http://127.0.0.1:18000/search?q=test&k=3")
 search_results=$(SEARCH_JSON="$search_payload" python - <<'PY'
@@ -133,8 +146,12 @@ print(len(payload.get('results') or []))
 PY
 )
 if [ "$ingest_run" = "yes" ] && [ "$search_results" -eq 0 ]; then
-  echo "ERROR: search returned zero results after bootstrap ingest; check vault mount/store mismatch" >&2
-  exit 1
+  if [ "$ingested_count" -eq 0 ] && [ "$skipped_locked_count" -gt 0 ]; then
+    echo "WARNING: search returned zero results after bootstrap ingest; all candidates were locked (errno=35)."
+  else
+    echo "ERROR: search returned zero results after bootstrap ingest; check vault mount/store mismatch" >&2
+    exit 1
+  fi
 fi
 
 ask_payload=$(curl -sS http://127.0.0.1:18000/api/ask -H "Content-Type: application/json" -d '{"question":"warm content"}')

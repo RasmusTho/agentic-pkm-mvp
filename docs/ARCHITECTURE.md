@@ -235,14 +235,14 @@ Effective runtime configuration (compiled): `runtime/settings/**/*.yaml` (derive
 
 The canonical configuration is the vault settings surface; the runtime YAML is a derived/compiled representation.
 
-### Vault Layout Contract (.yggdrasil.md)
-- Path: `<vault_root>/.yggdrasil.md` (vault-first, Obsidian-editable).
-- Frontmatter keys: `version`, `inbox_folder`, `desk_folder`, `system_folder`, `ensure_folders`, `ingest_include_folders`, `ingest_ignore_glob`.
-- Defaults: inbox=`@Inbox`, desk=`@Desk`, system=`~system`; `ingest_include_folders` falls back to inbox+desk when unset.
+### Vault Layout Contract (vault.layout.md)
+- Path: `<vault_root>/~system/vault.layout.md` (vault-first, Obsidian-editable).
+- Frontmatter keys: `version`, `system_folder`, `inbox_folder`, `desk_folder`, `include_folders`, `ignore_glob`.
+- Defaults: system=`~system`, inbox=`@Inbox`, desk=`@Desk`; `include_folders` falls back to inbox+desk when unset.
 - Bootstrap behavior: creates the note if missing, ensures listed folders exist, and never deletes other folders.
-- Optional migration: if legacy `System/` exists and the configured `system_folder` does not, it is moved once; otherwise left untouched.
-- Ingest defaults: when YAML settings omit `include_folders`/`ignore_glob`, ingest uses the layout note and appends safe ignores for `.obsidian/**`, `.trash/**`, and `<system_folder>/**`.
-
+- Optional migration: if legacy `System/` exists and the configured `system_folder` does not, it is moved once; if both exist, legacy is left in place with a warning.
+- Ingest defaults: when YAML settings omit `include_folders`/`ignore_glob`, ingest uses the layout note and appends safe ignores for `.obsidian/**`, `.trash/**`, `System/**`, `_system/**`, `<system_folder>/**`, and the layout note path.
+- Unknown folders are allowed to remain; layout changes do not delete or merge existing folders.
 
 ### Human → Machine pipeline
 1) Markdown → Loader → Sections  
