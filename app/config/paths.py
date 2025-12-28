@@ -30,7 +30,7 @@ def resolve_vault_root(cli_override: Path | None = None) -> Path:
         return Path(cli_override)
     env_root = _clean_path(os.getenv("VAULT_ROOT"))
     if env_root is not None:
-        return env_root
+        return env_root if env_root.exists() else _DEFAULT_VAULT
     return _DEFAULT_VAULT
 
 

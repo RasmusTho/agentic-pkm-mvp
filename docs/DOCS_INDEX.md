@@ -39,6 +39,8 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/CONCEPTS/CONFIG_AS_PRODUCT_CONTRACT.md | Config-as-product contract | Aligned (forward line v5.x) | 2025-12-17 | Covers precedence, validation, rollback, audit, and portability rules for config. |
 | docs/CONCEPTS/PORTABILITY_CONTRACT.md | Portability contract (macOS + Windows) | Aligned (forward line v5.x) | 2025-12-16 | Defines portability hazards and rules for portable artifacts and paths; referenced by PROJECT_KERNEL. |
 | docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md | Archive exposure contract (cold brain safety) | Aligned (forward line v5.x) | 2025-12-17 | Defines discovery→citation→preview→materialization modes; notes scope experiment (active domain + global evergreens, with domain excludes + one-shot includes). |
+| docs/CORE6_CONTRACT.md | Core6 contract | Unreviewed | — |  |
+| docs/NOTE_KIND_POLICIES.md | Note kind policies | Unreviewed | — |  |
 | docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-12-17 | Adds a Contracts section pointing to kernel anchors and concept contracts; now also documents watcher/worker heartbeats + the health/story pipelines. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
 | docs/STATUS.md | Operational snapshot | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-12-17 | Notes that layering/portability/archive/trust/event/config are anchored by concept contracts and highlights the heartbeat-driven health spine plus gap-test verification scripts. |
