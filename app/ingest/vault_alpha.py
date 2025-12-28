@@ -13,6 +13,7 @@ import yaml
 
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.filters import strip_ai_panels
+from app.ingest.config import resolve_ingest_config
 from app.index.outbox import append_jsonl
 from app.observability.ingest_meta import record_ingest_run
 from app.obs.log import with_trace_id
@@ -201,15 +202,29 @@ def _write_mirror(
     return mirror_path
 
 
-def _select_candidates(vault_root: Path, *, include_test_note: bool, max_notes: int) -> Tuple[List[Path], List[str]]:
+def _select_candidates(
+    vault_root: Path,
+    *,
+    include_folders: Sequence[str],
+    include_test_note: bool,
+    max_notes: int,
+) -> Tuple[List[Path], List[str]]:
     candidates: List[Path] = []
     included_folders: List[str] = []
     roots: List[Path] = []
-    for folder in sorted(_ALLOWED_TOP):
+    for raw in include_folders:
+        folder = str(raw).strip()
+        if not folder:
+            continue
+        if folder in {".", "./"}:
+            roots.append(vault_root)
+            if "." not in included_folders:
+                included_folders.append(".")
+            continue
         root = vault_root / folder
-        if root.exists() and root.is_dir():
-            included_folders.append(folder)
+        if root.exists():
             roots.append(root)
+            included_folders.append(folder)
     if include_test_note:
         test_path = vault_root / _TEST_NOTE_REL
         if test_path.exists():
@@ -231,6 +246,7 @@ def _select_candidates(vault_root: Path, *, include_test_note: bool, max_notes: 
     if max_notes > 0:
         return candidates[:max_notes], included_folders
     return candidates, included_folders
+
 
 
 def _store_object_count(store: ObjectStore) -> int:
@@ -413,7 +429,13 @@ def run_vault_alpha_ingest(
     resume_from: Iterable[str] | None = None,
 ) -> VaultAlphaSummary:
     vault_root = vault_root.expanduser().resolve()
-    candidates, included_folders = _select_candidates(vault_root, include_test_note=include_test_note, max_notes=max_notes)
+    ingest_config = resolve_ingest_config(vault_root)
+    candidates, included_folders = _select_candidates(
+        vault_root,
+        include_folders=ingest_config.include_folders,
+        include_test_note=include_test_note,
+        max_notes=max_notes,
+    )
     return _ingest_candidates(
         vault_root,
         candidates=candidates,

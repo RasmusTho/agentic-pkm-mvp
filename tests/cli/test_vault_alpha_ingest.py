@@ -9,6 +9,7 @@ from unittest.mock import patch
 from textwrap import dedent
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from app.agents.panel.filters import strip_ai_panels
@@ -26,6 +27,46 @@ def _base_env(tmp_path: Path) -> dict[str, str]:
         "INDEX_OUTBOX_PATH": str(tmp_path / "outbox.jsonl"),
         "STORE_BACKEND": "memory",
     }
+
+
+
+
+def _write_system_settings(vault_root: Path) -> None:
+    settings_dir = vault_root / "_system" / "settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    settings = {
+        "uuid": "TEST-SETTINGS",
+        "title": "Test Settings",
+        "version": "0.0.0",
+        "runtime": {
+            "environment": "dev",
+            "database_url": "postgresql://app:app@localhost:5432/app",
+            "enable_outbox": True,
+            "enable_tracing": False,
+        },
+        "ingest": {
+            "active_vault_path": str(vault_root),
+            "file_glob": ["**/*.md"],
+            "ignore_glob": ["_system/**"],
+            "write_policy": "write_on_diff",
+        },
+        "index": {
+            "bm25_enabled": True,
+            "vector_enabled": False,
+            "embedding_model": "mock",
+            "min_confidence": 0.1,
+            "rules": [],
+        },
+        "sync": {"debounce_ms": 1, "inactive_grace_s": 1},
+        "observability": {
+            "otlp_endpoint": "http://localhost:4318",
+            "jaeger_ui": "http://localhost:16686",
+            "trace_level": "info",
+        },
+        "events": {"catalog_path": "vault/_system/events/catalog.yaml", "sla_outbox_to_index_ms": 1000},
+    }
+    path = settings_dir / "system-settings.yaml"
+    path.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
 
 
 def _prepare_vault(tmp_path: Path) -> Path:
@@ -692,3 +733,32 @@ def test_ingest_vault_paths_handles_missing_files(tmp_path: Path) -> None:
     note_a_uuid = _assert_wikilink_uuid(fm_a.get("uuid"))
     assert get_object_store().get(uuid.UUID(note_a_uuid)) is not None
     assert _store_count() == 1
+
+
+def test_vault_alpha_ingest_defaults_include_all(tmp_path: Path) -> None:
+    reset_store_backends()
+    get_store().set_documents([])
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "RootNote.md").write_text("Root note body", encoding="utf-8")
+    _write_system_settings(vault)
+
+    runner = CliRunner()
+    env = _base_env(tmp_path)
+    with patch.dict(os.environ, env, clear=False):
+        result = runner.invoke(
+            cli,
+            [
+                "vault-alpha-ingest",
+                "--vault-root",
+                str(vault),
+                "--max-notes",
+                "5",
+                "--force",
+            ],
+            env=env,
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Included folders: ." in result.output
+    assert _extract_ingested(result.output) >= 1

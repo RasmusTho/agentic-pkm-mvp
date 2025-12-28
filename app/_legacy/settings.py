@@ -23,15 +23,11 @@ class Settings(BaseSettings):
     agent_config_path: str = "config/agent.yaml"
 
     # Legacy fields retained for compatibility with ingest/watch tooling
-    vault_dir: str = (
-        "/Users/rasmus/Library/Mobile Documents/iCloud~md~obsidian/Documents/" "Mimers valv"
-    )
+    vault_dir: str = "vault"
     chunk_size: int = 800
     chunk_overlap: int = 120
-    watch_dir: str = "/Users/rasmus/Library/Mobile Documents/com~apple~CloudDocs/" "watchfolder"
-    processed_dir: str = (
-        "/Users/rasmus/Library/Mobile Documents/com~apple~CloudDocs/watchfolder/" "processed"
-    )
+    watch_dir: str = "watchfolder"
+    processed_dir: str = "watchfolder/processed"
     inbox_subdir: str = "@Inbox"
     staging_db_path: str = "storage/staging.duckdb"
 

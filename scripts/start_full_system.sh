@@ -4,7 +4,20 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-docker compose up -d db api worker
+runtime_env=""
+vault_host_path="${VAULT_ROOT:-./vault}"
+if [ -n "${VAULT_ROOT:-}" ]; then
+  bash scripts/export_runtime_env.sh
+  runtime_env="--env-file tmp/runtime.env"
+fi
+
+echo "Vault host path: $vault_host_path -> /app/vault"
+
+if [ -n "$runtime_env" ]; then
+  docker compose $runtime_env up -d db api worker
+else
+  docker compose up -d db api worker
+fi
 
 HEALTH_ENDPOINT="http://127.0.0.1:18000/healthz"
 for attempt in $(seq 1 30); do
@@ -27,8 +40,9 @@ try:
 except Exception:
     print("unknown")
     raise SystemExit(0)
-state = data.get("state") or "unknown"
-reason = data.get("reason") or ""
+detail = data.get("detail") or {}
+state = data.get("state") or detail.get("state") or "unknown"
+reason = data.get("reason") or detail.get("reason") or ""
 if reason:
     print(f"{state} ({reason})")
 else:
