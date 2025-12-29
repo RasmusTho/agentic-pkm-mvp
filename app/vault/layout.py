@@ -272,13 +272,14 @@ def _system_note_content() -> str:
 
 
 def load_or_create_layout(vault_root: Path) -> VaultLayout:
-    note_path = _layout_note_path(vault_root, DEFAULT_SYSTEM_FOLDER)
-    if note_path.exists():
-        frontmatter = _load_frontmatter(note_path)
-    else:
-        frontmatter = {}
+    default_note_path = _layout_note_path(vault_root, DEFAULT_SYSTEM_FOLDER)
+    frontmatter = _load_frontmatter(default_note_path) if default_note_path.exists() else {}
 
     system_folder = str(frontmatter.get("system_folder") or DEFAULT_SYSTEM_FOLDER)
+    note_path = _layout_note_path(vault_root, system_folder)
+    if note_path != default_note_path and note_path.exists():
+        frontmatter = _load_frontmatter(note_path)
+
     inbox_folder = str(frontmatter.get("inbox_folder") or DEFAULT_INBOX_FOLDER)
     desk_folder = str(frontmatter.get("desk_folder") or DEFAULT_DESK_FOLDER)
     root_folders = _normalize_optional_list(frontmatter.get("root_folders"))

@@ -115,11 +115,10 @@ def resolve_ingest_config(vault_root: Path) -> IngestConfig:
 
     if override_include is not None:
         include = _finalize_include_folders(override_include, [DEFAULT_INBOX_FOLDER])
+    elif layout.include_folders is not None:
+        include = _finalize_include_folders(layout.include_folders, [DEFAULT_INBOX_FOLDER])
     elif include_folders is None or not _normalize_list(include_folders):
-        if layout.include_folders is not None:
-            include = _finalize_include_folders(layout.include_folders, [DEFAULT_INBOX_FOLDER])
-        else:
-            include = _finalize_include_folders(fallback_include, [DEFAULT_INBOX_FOLDER])
+        include = _finalize_include_folders(fallback_include, [DEFAULT_INBOX_FOLDER])
     else:
         include = _finalize_include_folders(include_folders, [DEFAULT_INBOX_FOLDER])
 

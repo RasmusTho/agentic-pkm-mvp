@@ -87,6 +87,8 @@ def test_include_folders_dot_scans_entire_vault(tmp_path: Path, monkeypatch) -> 
 
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
+    (vault_root / "⚙️ System").mkdir()
+    (vault_root / "⚙️ System" / "SystemDoc.md").write_text("System doc body", encoding="utf-8")
     (vault_root / "📥 Inbox").mkdir()
     (vault_root / "📥 Inbox" / "A.md").write_text("Inbox note body", encoding="utf-8")
     (vault_root / "SomeOtherFolder").mkdir()

@@ -241,6 +241,7 @@ The canonical configuration is the vault settings surface; the runtime YAML is a
 - `root_folders` defines the top-level folders that are ensured (created if missing) and defaults to the human-first orientation set: `📥 Inbox`, `🛠️ Workbench`, `🔍 Focus`, `📁 Projects`, `🧩 Areas`, `💡 Knowledge`, `🗂️ Reference`, `🗄️ Archive`, `⚙️ System`.
 - Layout enforcement is idempotent: listed folders are created if missing; unknown folders are allowed to remain; nothing is deleted.
 - The layout note is created if missing. A system note is also auto-created if missing at `<system_folder>/Vault Structure – Human-First Orientation (Mimer).md` and is not overwritten once present.
+- Ingest always reads the layout note directly from `<vault_root>/<system_folder>/vault.layout.md` and merges `include_folders` / `ignore_glob` from its frontmatter before falling back to settings defaults.
 - `include_folders` accepts `"."` to mean “scan the entire vault root”; when missing/empty, ingest defaults to the human-first folders (Inbox + Workbench).
 - `ignore_glob` is always applied, with safe defaults for `.obsidian/**`, `.trash/**`, and `System/Metadata/VaultMirror/**`; system docs (including the layout note) are not excluded by default.
 
