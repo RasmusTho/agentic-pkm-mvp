@@ -75,3 +75,26 @@ def test_default_include_folders_scans_root(tmp_path: Path, monkeypatch) -> None
     assert summary.included_folders == ["."]
     assert summary.scanned >= 1
     assert summary.ingested >= 1
+
+
+def test_include_folders_dot_scans_entire_vault(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("LLM_MOCK_RESPONSE", "Mock response")
+
+    reset_store_backends()
+    get_store().set_documents([])
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    (vault_root / "📥 Inbox").mkdir()
+    (vault_root / "📥 Inbox" / "A.md").write_text("Inbox note body", encoding="utf-8")
+    (vault_root / "SomeOtherFolder").mkdir()
+    (vault_root / "SomeOtherFolder" / "B.md").write_text("Other note body", encoding="utf-8")
+    _write_layout_note(vault_root)
+
+    summary = run_vault_alpha_ingest(vault_root, max_notes=10, include_test_note=False, force=True)
+
+    assert summary.included_folders == ["."]
+    assert summary.scanned >= 2
+    assert summary.ingested >= 2

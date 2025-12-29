@@ -42,8 +42,6 @@ class VaultAlphaSummary:
     locked_examples: List[str] = field(default_factory=list)
 
 
-_EXCLUDED_TOP = {"System", "Templates", ".obsidian"}
-_ALLOWED_TOP = {"Concepts"}
 _TEST_NOTE_REL = Path("Test") / "Alpha-HumanFlows.md"
 
 
@@ -232,6 +230,8 @@ def _select_candidates(
     candidates: List[Path] = []
     included_folders: List[str] = []
     roots: List[Path] = []
+    if any(str(raw).strip() in {".", "./"} for raw in include_folders):
+        include_folders = ["."]
     for raw in include_folders:
         folder = str(raw).strip()
         if not folder:
@@ -261,9 +261,6 @@ def _select_candidates(
         for path in sorted(root.rglob("*.md")):
             rel = path.relative_to(vault_root)
             rel_str = str(rel)
-            top = rel.parts[0] if rel.parts else ""
-            if top in _EXCLUDED_TOP:
-                continue
             if _is_ignored(rel_str, ignore_glob):
                 continue
             candidates.append(path)

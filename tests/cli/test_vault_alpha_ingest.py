@@ -206,10 +206,11 @@ def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
     mirror_existing_fm, _ = load_frontmatter(existing_mirrors[0].read_text(encoding="utf-8"))
     assert mirror_existing_fm.get("uuid") == _bare_uuid(fm_existing.get("uuid"))
 
-    skipped_paths = [vault / "System" / "Internal.md", vault / "Templates" / "NoteTemplate.md"]
-    for path in skipped_paths:
+    mirrored_paths = [vault / "System" / "Internal.md", vault / "Templates" / "NoteTemplate.md"]
+    for path in mirrored_paths:
         mirror_candidate = vault / "System/Metadata/VaultMirror" / path.relative_to(vault).parent
-        assert not mirror_candidate.exists()
+        assert mirror_candidate.exists()
+        assert any(mirror_candidate.glob("*.md"))
 
 
 def test_vault_alpha_ingest_persists_uuid_to_note_mirror_and_store(tmp_path: Path) -> None:
@@ -532,8 +533,8 @@ def test_vault_alpha_ingest_handles_malformed_frontmatter(tmp_path: Path, capsys
 
     captured = capsys.readouterr()
     assert "Malformed frontmatter" in captured.err
-    assert summary.scanned == 1
-    assert summary.ingested == 0
+    assert summary.scanned == 3
+    assert summary.ingested == 2
     assert summary.malformed == 1
     assert str(Path("Concepts") / "Broken.md") in summary.malformed_notes
 
@@ -595,7 +596,7 @@ def test_vault_alpha_ingest_records_errors_and_resumes(
     assert "Error ingesting" in captured_first.err
     assert summary_first.errors == 1
     assert str(Path("Concepts") / "Bad.md") in summary_first.error_notes
-    assert summary_first.ingested == 1
+    assert summary_first.ingested == 3
 
     # Resume using processed list to avoid rework on already ingested files
     summary_second = run_vault_alpha_ingest(

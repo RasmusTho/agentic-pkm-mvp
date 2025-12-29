@@ -12,7 +12,7 @@ from app.vault.layout import DEFAULT_INBOX_FOLDER, VaultLayout, load_or_create_l
 
 DEFAULT_VAULT_ROOT = Path("vault")
 
-_BASE_IGNORES = [".obsidian/**", ".trash/**", "System/**", "_system/**"]
+_BASE_IGNORES = [".obsidian/**", ".trash/**", "System/Metadata/VaultMirror/**"]
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,10 @@ def _normalize_list(raw: object | None) -> List[str]:
 
 
 def _normalize_include_folders(raw: object | None) -> List[str]:
-    return _normalize_list(raw)
+    values = _normalize_list(raw)
+    if any(value in {".", "./"} for value in values):
+        return ["."]
+    return values
 
 
 def _finalize_include_folders(raw: object | None, fallback: List[str]) -> List[str]:
@@ -74,10 +77,9 @@ def _resolve_override(vault_root: Path, system_folder: str) -> dict:
         return {}
 
 
-def _append_universal_ignores(ignore_glob: List[str], vault_root: Path, layout: VaultLayout) -> List[str]:
+def _append_universal_ignores(ignore_glob: List[str]) -> List[str]:
     merged = list(ignore_glob)
-    note_rel = str(layout.note_path.relative_to(vault_root))
-    safe_ignores = _BASE_IGNORES + [f"{layout.system_folder}/**", note_rel]
+    safe_ignores = list(_BASE_IGNORES)
     for pattern in safe_ignores:
         if pattern not in merged:
             merged.append(pattern)
@@ -128,7 +130,7 @@ def resolve_ingest_config(vault_root: Path) -> IngestConfig:
     else:
         ignore = _normalize_list(ignore_glob)
 
-    ignore = _append_universal_ignores(ignore, vault_root, layout)
+    ignore = _append_universal_ignores(ignore)
 
     return IngestConfig(include_folders=include, ignore_glob=ignore)
 
