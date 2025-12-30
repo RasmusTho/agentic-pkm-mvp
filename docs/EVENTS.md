@@ -22,6 +22,15 @@ Notes:
 - Producers MAY add additional top-level fields for compatibility or convenience; consumers MUST ignore unknown fields (see `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`).
 - Some older producers emit a richer `source` object (e.g. `{component, trigger, sot}`) instead of a string. That shape is legacy; new producers should emit the canonical `source` string. Consumers should degrade safely by extracting a string attribution (typically `source.component`) when present.
 
+## Event Idempotency (normative)
+
+- Every event MUST carry a unique `event_id`.
+- Consumers MUST deduplicate by `event_id` and treat duplicates as no-ops.
+- Producers SHOULD use deterministic `event_id` values for retry safety.
+- `watcher.run` and watcher auto-exec events MUST be deduplicated to prevent duplicate panel intents or promotions.
+
+See `docs/CONCURRENCY.md` for the broader concurrency and idempotency guardrails.
+
 ## Embeddings and Outbox
 
 Outbox events MUST NOT carry embedding vectors.

@@ -4,6 +4,7 @@ State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x Agentic PKM forward
 ## Design principle
 - Non-trivial decision logic should move toward “LangGraph inner, events/A2A outer”: each agent owns an explicit `AgentState` and LangGraph graph for internal choices, while coordination between agents happens via Outbox events/A2A envelopes orchestrated by the Orchestrator/Planner.
 - PanelAgent is the concrete example: LangGraph runtime with an action catalog driving a configurable decider (`PANEL_AGENT_DECIDER=rule|llm`), defaulting to deterministic rule-mode while offering opt-in LLM-based selection.
+- Current adoption is phased: ASK and PanelAgent use LangGraph; most other agents remain deterministic pipelines until v5.6 rollout phases.
 
 ## ASK AgentState (Reality-MVP)
 - `trace_id`: propagated through ASK runs.

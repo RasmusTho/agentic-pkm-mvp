@@ -21,6 +21,19 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - v5.5D is blocked on Concurrency & Idempotency Guards before watcher auto-exec is enabled.
 - v5.6 sequencing: ReasoningFacade + basic graph builder first, then LangGraph Phase 1, then Orchestrator V2 (flagged via `ORCHESTRATOR_VERSION=v1|v2`).
 
+## Concurrency & Safety (v5.5D gate)
+- DedupTaskQueue: planned; required before watcher auto-exec.
+- Optimistic locking: planned; concurrent note/object writes must fail safe.
+- Event idempotency: normative; `event_id` required and dedup enforced (`docs/EVENTS.md`, `docs/CONCURRENCY.md`).
+
+## Migration tracking (forward line)
+
+| Area | v5.5D | v5.6 | Notes |
+| --- | --- | --- | --- |
+| Watcher auto-exec | Blocked on concurrency guards | — | Gate: dedup + optimistic locking + idempotency |
+| LangGraph rollout | ASK + PanelAgent only | Phase 1 pilots after ReasoningFacade | Phased adoption per ROADMAP |
+| Orchestrator V2 | Not started | Flagged rollout (`ORCHESTRATOR_VERSION=v1|v2`) | Preview scope only |
+
 ## Status — Operational Snapshot
 
 Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and deployment topology for this SoT.

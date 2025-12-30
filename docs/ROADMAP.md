@@ -15,11 +15,11 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 
 ## Now / Next / Later
 - **Now**
-  - **BLOCKER: Concurrency & Idempotency Guards** (must be green before enabling watcher auto-exec).
+  - **BLOCKER (v5.5D): Concurrency & Idempotency Guards** (must be green before enabling watcher auto-exec).
     - Two concurrent watcher runs do not create duplicate events.
     - Concurrent note updates fail safe with version mismatch (no corruption).
     - Panel actions with the same ai:id execute at most once.
-  - PanelAgent LangGraph decider opt-in, watcher policy auto-exec plumbing (v5.5C planned).
+  - PanelAgent LangGraph decider opt-in, watcher policy auto-exec plumbing (v5.5C in progress).
   - Watcher → panel → planner/orchestrator automation with safety limits; promotion consumer observable (v5.5D planned).
   - Vault-first config validation (panel wiring, watcher) with schema enforcement.
 - **Next**
@@ -29,7 +29,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - Orchestrator V2 (LangGraph): parallel execution, compensation/rollback, checkpointing, retries.
     - Back-compat: `ORCHESTRATOR_VERSION=v1|v2`.
   - PanelAgent 2.0 timeline:
-    - v5.5C: decider (done).
+    - v5.5C: decider (in progress).
     - v5.6: PanelAgent 2.0 full migration (freeform interpretation, multi-step workflows, uncertainty→suggested checkboxes, catalog-driven discovery).
     - v5.7: advanced (panel versioning, cross-note coordination).
   - Vault-as-GUI settings compiler (`@Settings` / System/Config) with typed artifacts and CI schema checks (v5.6 track).

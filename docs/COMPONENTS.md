@@ -46,6 +46,8 @@ Changing embedding profiles safely: 1) sanity-check with `python -m app.cli embe
 
 - **ASK API** — Question answering endpoint returning answers plus sources/latency. Maturity: Baseline.
 - **Reasoning layer** — Optional structured reasoning overlays (claims/evidence/inference). Maturity: Experimental.
+- **ReasoningFacade** — Shared reasoning/tool entrypoint for LangGraph agents. Maturity: Planned.
+- **BaseLangGraphAgent** — Common agent scaffolding for LangGraph inner loops. Maturity: Planned.
 - **Panel agent** — Panel parsing + intent emission/execution for note interaction. Maturity: Active.
 
 ## Eval stack
@@ -60,6 +62,12 @@ Changing embedding profiles safely: 1) sanity-check with `python -m app.cli embe
 - **Logging/audit** — Structured logs and receipts for actions and runs. Maturity: Baseline.
 - **HealthContract + WriteGuard + incident snapshots** — Health state machine + write guard ensures safe transitions, emits `state/reason/since` snapshots, and logs incident JSONL entries (`tmp/health-incidents.jsonl` or vault overrides). Sidecar CLI surface: `python -m app.cli health status --json`, `python -m app.cli health explain`, `python -m app.cli health incidents tail --n N` plus index/events doctor commands (baseline readiness checks). Maturity: Baseline.
 
+## Concurrency & safety
+
+- **DedupTaskQueue** — Idempotent task queue for watcher/orchestrator retries. Maturity: Planned.
+- **OptimisticLocking** — Version-checked note/object writes to prevent corruption. Maturity: Planned.
+- **IdempotencyGuard** — Dedup by `event_id` and action IDs in consumers. Maturity: Planned.
+
 ## Dev-layer helpers & governance
 
 - **Architecture tests** — Layering/contract tests to keep determinism and boundaries intact. Maturity: Baseline.
@@ -71,5 +79,3 @@ Changing embedding profiles safely: 1) sanity-check with `python -m app.cli embe
 
 - **Structured OCR** — Stubbed extension point; not wired as a user-facing feature. Maturity: Planned.
 - **Compressive OCR** — Stubbed extension point; not wired as a user-facing feature. Maturity: Planned.
-
-
