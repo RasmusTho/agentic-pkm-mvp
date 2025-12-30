@@ -187,12 +187,13 @@ def _derive_note_uuid(frontmatter_uuid: str, mirror_uuid: str, rel_path: Path) -
     return str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, rel_path.as_posix()))
 
 
-def _find_mirror_uuid_by_fingerprint(vault_root: Path, text_sha256: str) -> str:
+def _find_mirror_uuid_by_fingerprint(vault_root: Path, text_sha256: str, title: str | None) -> str:
     if not text_sha256:
         return ""
     mirror_root = vault_root / Path("System/Metadata/VaultMirror")
     if not mirror_root.exists():
         return ""
+    expected_title = _normalize_title(title) if title else None
     for cand in mirror_root.rglob("*.md"):
         try:
             fm, _ = load_frontmatter(cand.read_text(encoding="utf-8"))
@@ -203,6 +204,10 @@ def _find_mirror_uuid_by_fingerprint(vault_root: Path, text_sha256: str) -> str:
             continue
         if ingest_fp.get("text_sha256") != text_sha256:
             continue
+        if expected_title:
+            mirror_title = _normalize_title(_coerce_to_str(fm.get("title") or "") or "")
+            if mirror_title != expected_title:
+                continue
         mirror_uuid = _normalize_uuid(fm.get("uuid") or fm.get("id") or "")
         if mirror_uuid:
             return mirror_uuid
@@ -367,6 +372,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         fingerprint_uuid = _find_mirror_uuid_by_fingerprint(
             vault_root,
             str(ingest_fingerprint.get("text_sha256") or ""),
+            title,
         )
 
     note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
@@ -609,6 +615,7 @@ def _ingest_candidates(
             if fm_error:
                 malformed.append(rel_display)
                 continue
+            title = _frontmatter_title(frontmatter) or _derive_title(body, path)
             stripped_text = strip_ai_panels(body).strip()
             ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
             frontmatter_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
@@ -619,6 +626,7 @@ def _ingest_candidates(
                 fingerprint_uuid = _find_mirror_uuid_by_fingerprint(
                     vault_root,
                     str(ingest_fingerprint.get("text_sha256") or ""),
+                    title,
                 )
             note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
             should_skip = False
