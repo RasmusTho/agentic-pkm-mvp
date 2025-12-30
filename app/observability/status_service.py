@@ -8,10 +8,21 @@ from typing import Iterable
 
 from app.events.types import PROMOTE_INTENT_CREATED, PROMOTE_DONE
 from app.observability.ingest_meta import get_ingest_status
-from app.observability.status_model import AskStatus, EventCounters, IngestionStatus, IntentStatus, StoreStatus, SystemStatus
+from app.observability.status_model import (
+    AskStatus,
+    EventCounters,
+    IngestionStatus,
+    IntentStatus,
+    OutboxLagStatus,
+    StoreStatus,
+    SystemStatus,
+    WriteGuardStatus,
+)
 from app.outbox.events import INDEX_OUTBOX_PATH
+from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.stores import get_object_store
 from app.version import SOT_FORWARD, get_sot_version, get_sot_metadata
+from app.health_contract import DEFAULT_CONTRACT
 
 _ASK_LATENCIES: list[tuple[float, float]] = []
 _ASK_ERRORS: list[float] = []
@@ -244,6 +255,58 @@ def _get_intent_status(outbox_path: Path) -> IntentStatus:
     )
 
 
+def _read_worker_heartbeat() -> dict | None:
+    path = resolve_worker_heartbeat_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _count_outbox_events(path: Path) -> int | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return sum(1 for line in handle if line.strip())
+    except FileNotFoundError:
+        return 0
+    except Exception:
+        return None
+
+
+def _get_outbox_lag() -> OutboxLagStatus:
+    heartbeat = _read_worker_heartbeat()
+    processed_total = None
+    outbox_path = Path(INDEX_OUTBOX_PATH)
+    if heartbeat:
+        processed_total = heartbeat.get("processed_total")
+        heartbeat_path = heartbeat.get("outbox_path")
+        if heartbeat_path:
+            outbox_path = Path(str(heartbeat_path))
+    outbox_events = _count_outbox_events(outbox_path)
+    pending = None
+    if isinstance(outbox_events, int) and isinstance(processed_total, int):
+        pending = max(outbox_events - processed_total, 0)
+    return OutboxLagStatus(
+        outbox_events=outbox_events,
+        worker_processed_total=processed_total if isinstance(processed_total, int) else None,
+        pending_estimate=pending,
+    )
+
+
+def _get_write_guard_status() -> WriteGuardStatus:
+    try:
+        snapshot = DEFAULT_CONTRACT.evaluate()
+    except Exception:
+        return WriteGuardStatus()
+    return WriteGuardStatus(
+        writes_allowed=snapshot.get("writes_allowed"),
+        mode=snapshot.get("state"),
+    )
+
+
 def get_system_status() -> SystemStatus:
     sot_meta = get_sot_metadata()
     ingestion = get_ingestion_status()
@@ -267,6 +330,8 @@ def get_system_status() -> SystemStatus:
         ask=get_ask_status(),
         intents=intent_status,
         events=counters,
+        write_guard=_get_write_guard_status(),
+        outbox_lag=_get_outbox_lag(),
     )
 
 

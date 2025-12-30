@@ -130,6 +130,33 @@ def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
         else:
             lines.append(_line("stores", "(missing)"))
 
+        write_guard = status_payload.get("write_guard") or {}
+        lines.append(
+            _line(
+                "writes",
+                " ".join(
+                    [
+                        f"allowed={_get(write_guard, 'writes_allowed', default='(missing)')}",
+                        f"mode={_get(write_guard, 'mode', default='(missing)')}",
+                    ]
+                ),
+            )
+        )
+
+        outbox_lag = status_payload.get("outbox_lag") or {}
+        lines.append(
+            _line(
+                "outbox",
+                " ".join(
+                    [
+                        f"events={_get(outbox_lag, 'outbox_events', default='(missing)')}",
+                        f"processed_total={_get(outbox_lag, 'worker_processed_total', default='(missing)')}",
+                        f"pending={_get(outbox_lag, 'pending_estimate', default='(missing)')}",
+                    ]
+                ),
+            )
+        )
+
         ingestion = status_payload.get("ingestion") or {}
         lines.append(
             _line(
@@ -162,6 +189,8 @@ def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
     else:
         lines.append(_line("sot", "(missing)"))
         lines.append(_line("stores", "(missing)"))
+        lines.append(_line("writes", "(missing)"))
+        lines.append(_line("outbox", "(missing)"))
         lines.append(_line("ingestion", "(missing)"))
         lines.append(_line("ask", "(missing)"))
 

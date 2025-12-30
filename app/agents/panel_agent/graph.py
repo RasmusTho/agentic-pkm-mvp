@@ -175,6 +175,11 @@ def _load_context(state: PanelAgentState) -> PanelAgentState:
     if state.intent_event is None:
         payload = PanelIntentPayload(note=state.note, panel=state.panel, actions=list(state.actions))
         state.intent_event = PanelIntentEvent(payload=payload)
+    else:
+        payload_actions = list(state.intent_event.payload.actions or [])
+        if payload_actions != list(state.actions):
+            payload = state.intent_event.payload.model_copy(update={"actions": list(state.actions)})
+            state.intent_event = state.intent_event.model_copy(update={"payload": payload})
     if not state.trace_id and state.intent_event:
         state.trace_id = state.intent_event.trace_id
     if not state.action_catalog:

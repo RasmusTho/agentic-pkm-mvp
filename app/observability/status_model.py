@@ -59,6 +59,17 @@ class EventCounters(BaseModel):
     source_path: str | None = None
 
 
+class WriteGuardStatus(BaseModel):
+    writes_allowed: bool | None = None
+    mode: str | None = None
+
+
+class OutboxLagStatus(BaseModel):
+    outbox_events: int | None = None
+    worker_processed_total: int | None = None
+    pending_estimate: int | None = None
+
+
 class SystemStatus(BaseModel):
     timestamp: datetime
     sot_version: str  # legacy alias for baseline SoT
@@ -72,6 +83,8 @@ class SystemStatus(BaseModel):
     ask: AskStatus
     intents: Optional[IntentStatus] = None
     events: Optional[EventCounters] = None
+    write_guard: Optional[WriteGuardStatus] = None
+    outbox_lag: Optional[OutboxLagStatus] = None
 
 
 __all__ = [
@@ -81,5 +94,7 @@ __all__ = [
     "AskStatus",
     "IntentStatus",
     "EventCounters",
+    "WriteGuardStatus",
+    "OutboxLagStatus",
     "SystemStatus",
 ]

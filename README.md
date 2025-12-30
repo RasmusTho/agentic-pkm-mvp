@@ -79,6 +79,20 @@ make alpha-up
 curl -sS http://127.0.0.1:18000/api/status
 ```
 
+Run with Ollama-backed LLMs (reads provider defaults from vault settings):
+
+```bash
+export VAULT_ROOT="/path/to/your/vault"
+make alpha-up-ollama
+```
+
+Bootstrap a fresh environment (full scan ingest if empty + index doctor):
+
+```bash
+export VAULT_ROOT="/path/to/your/vault"
+make alpha-bootstrap
+```
+
 Stop services:
 
 ```bash

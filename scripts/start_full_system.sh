@@ -202,6 +202,61 @@ except Exception:
     print("WARNING: /api/ask returned a non-JSON payload during bootstrap.", file=sys.stderr)
 PY
 
+alpha_bootstrap=${ALPHA_BOOTSTRAP:-0}
+bootstrap_next="none"
+index_doctor_status="skipped"
+index_issue_count=0
+if [ "$alpha_bootstrap" -eq 1 ]; then
+  index_doctor_json=$(docker compose exec -T api python -m app.cli index doctor --json || true)
+  index_doctor_status=$(INDEX_JSON="$index_doctor_json" python - <<'PY'
+import json, os
+raw = os.environ.get("INDEX_JSON", "")
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = {}
+print(payload.get("status") or "unknown")
+PY
+)
+  index_issue_count=$(INDEX_JSON="$index_doctor_json" python - <<'PY'
+import json, os
+raw = os.environ.get("INDEX_JSON", "")
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = {}
+issues = payload.get("issues") or []
+print(len(issues))
+PY
+)
+  rebuild_safe=$(INDEX_JSON="$index_doctor_json" OBJECT_COUNT="$object_count" VECTOR_COUNT="$vector_count" python - <<'PY'
+import json, os
+raw = os.environ.get("INDEX_JSON", "")
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = {}
+issues = payload.get("issues") or []
+warnings = payload.get("warnings") or []
+issue_text = " ".join([str(item).lower() for item in (issues + warnings)])
+objects = int(os.environ.get("OBJECT_COUNT", "0") or 0)
+vectors = int(os.environ.get("VECTOR_COUNT", "0") or 0)
+safe = (
+    objects > 0
+    and vectors == 0
+    and ("embeddings must be rebuilt" in issue_text or "no recorded embedding identity" in issue_text or "empty index" in issue_text)
+)
+print("1" if safe else "0")
+PY
+)
+  if [ "$rebuild_safe" -eq 1 ]; then
+    docker compose exec -T api python -m app.cli index rebuild --backend pg --json || true
+    bootstrap_next="re-run: python -m app.cli index doctor --json"
+  elif [ "$index_doctor_status" != "ok" ]; then
+    bootstrap_next="python -m app.cli index rebuild --backend pg"
+  fi
+fi
+
 cat <<SUMMARY
 SUMMARY:
   healthz OK
@@ -213,6 +268,8 @@ SUMMARY:
   vector entries: $vector_count
   ingest run: $ingest_run
   search results: $search_results
+  index doctor: $index_doctor_status (issues=$index_issue_count)
+  bootstrap next: $bootstrap_next
   note: /api/health ok=false can be expected when optional tools (e.g., ffmpeg) are missing; Stage0 ingest/search/ask can still work.
   next: curl -sS http://127.0.0.1:18000/search?q=test&k=3
 SUMMARY

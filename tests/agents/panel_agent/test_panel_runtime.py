@@ -9,6 +9,7 @@ import pytest
 
 from app.agents.panel_agent.agent import run_panel_intent_for_note
 from app.agents.panel_agent.runtime import PanelRuntimeResult, execute_panel_intent
+from app.components.concurrency import IdempotencyGuard
 from app.store import object_store as object_store_module
 from app.store.object_store import DomainObject, ObjectStore
 
@@ -168,6 +169,42 @@ def test_runtime_llm_filters_executed_actions(tmp_path: Path, monkeypatch: pytes
 
     result = execute_panel_intent(events[0], outbox_path=outbox_path)
     assert isinstance(result, PanelRuntimeResult)
+
+    records = _read_outbox(outbox_path)
+    topics = {rec["event"] for rec in records}
+    assert "promote.intent.created" not in topics
+    assert "panel.action.triggered" not in topics
+
+
+def test_runtime_restart_does_not_reemit_executed_actions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    note_uuid = str(uuid4())
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    settings_path = _settings_file(
+        tmp_path,
+        action_id="promote.evergreen",
+        label="Gör denna anteckning evergreen",
+        intent_type="promotion",
+        downstream_event="review.promote.evergreen",
+    )
+    markdown = _panel_markdown("Gör denna anteckning evergreen", checked=True)
+    _seed_note(note_uuid, markdown, executed_action_ids=["promote.evergreen"])
+
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("PANEL_AGENT_DECIDER", "llm")
+    monkeypatch.setattr("app.agents.panel_agent.graph._IDEMPOTENCY_GUARD", IdempotencyGuard(ttl_seconds=86400.0))
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+    monkeypatch.setattr(
+        "app.agents.panel_agent.graph.get_chat_client",
+        lambda intent: _StubChatClient(json.dumps({"actions": [{"id": "promote.evergreen"}]})),
+    )
+
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-panel-restart")
+    assert len(events) == 1
+
+    result = execute_panel_intent(events[0], outbox_path=outbox_path)
+    assert isinstance(result, PanelRuntimeResult)
+    assert [action.id for action in result.intent.payload.actions] == []
 
     records = _read_outbox(outbox_path)
     topics = {rec["event"] for rec in records}
