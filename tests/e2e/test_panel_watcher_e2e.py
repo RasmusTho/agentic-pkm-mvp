@@ -93,6 +93,7 @@ def test_watcher_rule_mode_promotes_with_catalog(tmp_path: Path, monkeypatch: py
         "PANEL_ACTIONS_PATH": str(actions_path),
         "INDEX_OUTBOX_PATH": str(outbox_path),
         "PANEL_AGENT_DECIDER": "rule",
+        "WATCHER_AUTO_EXEC": "1",
     }
     runner = CliRunner()
     result = runner.invoke(
@@ -146,6 +147,7 @@ def test_watcher_llm_mode_promotes_without_exact_label(tmp_path: Path, monkeypat
         "PANEL_ACTIONS_PATH": str(actions_path),
         "INDEX_OUTBOX_PATH": str(outbox_path),
         "PANEL_AGENT_DECIDER": "llm",
+        "WATCHER_AUTO_EXEC": "1",
     }
     runner = CliRunner()
     result = runner.invoke(

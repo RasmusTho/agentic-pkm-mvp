@@ -111,6 +111,7 @@ mappings:
         "LLM_MOCK_RESPONSE": "Mock response [#1]",
         "PANEL_ACTIONS_PATH": str(actions_path),
         "INDEX_OUTBOX_PATH": str(outbox_path),
+        "WATCHER_AUTO_EXEC": "1",
     }
 
     runner = CliRunner()

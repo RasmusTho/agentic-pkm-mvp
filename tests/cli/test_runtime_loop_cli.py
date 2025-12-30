@@ -176,6 +176,7 @@ Actions:
             "STORE_BACKEND": "memory",
             "PANEL_ACTIONS_PATH": str(actions_path),
             "INDEX_OUTBOX_PATH": str(outbox),
+            "WATCHER_AUTO_EXEC": "1",
         },
     )
 

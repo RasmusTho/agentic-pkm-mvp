@@ -27,6 +27,7 @@ def test_runtime_loop_run_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("PANEL_AGENT_DECIDER", "rule")
     monkeypatch.setenv("PANEL_ACTIONS_PATH", str(Path(__file__).resolve().parents[2] / "docs/settings/panel-actions.md"))
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
 
     # Ensure status service picks up the temp outbox path
     outbox_events.INDEX_OUTBOX_PATH = str(outbox_path)

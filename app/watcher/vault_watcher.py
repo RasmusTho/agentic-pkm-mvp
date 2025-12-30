@@ -169,6 +169,11 @@ def _build_dedup_key(policy_id: str, rel_path: Path, content_hash: str) -> str:
     return f"watcher:{policy_id}:{rel_path.as_posix()}:{content_hash}"
 
 
+def _auto_exec_enabled() -> bool:
+    raw = os.getenv("WATCHER_AUTO_EXEC", "0")
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def compute_changes(
     vault_root: Path, snapshot: Snapshot
 ) -> tuple[list[Path], list[Path], Snapshot]:
@@ -278,6 +283,11 @@ def run_watcher_tick(
         "panel_promotions": 0,
         "panel_skipped_policy": 0,
         "panel_skipped_limit": 0,
+        "panel_skipped_auto_exec": 0,
+        "applied_actions": 0,
+        "skipped_dedup": 0,
+        "skipped_idempotent": 0,
+        "skipped_writes_blocked": 0,
         "errors": 0,
         "dry_run": dry_run,
         "limit_exceeded": False,
@@ -294,6 +304,13 @@ def run_watcher_tick(
             summary["panel_skipped_policy"] += 1
 
     summary["panel_candidates"] = len(policy_allowed_paths)
+
+    auto_exec_enabled = _auto_exec_enabled()
+    if not auto_exec_enabled and not skip_panel:
+        if policy_allowed_paths:
+            summary["panel_skipped_auto_exec"] += len(policy_allowed_paths)
+            messages.append("Watcher auto-exec disabled (WATCHER_AUTO_EXEC=1 required); skipping panel runtime.")
+        skip_panel = True
 
     if summary["changed"] == 0:
         if not dry_run:
@@ -376,10 +393,18 @@ def run_watcher_tick(
             content_hash = _content_hash(current_markdown)
             dedup_key = _build_dedup_key(_PANEL_POLICY_ID, rel_path, content_hash)
             if not _DEDUP_QUEUE.try_acquire(dedup_key):
+                summary["skipped_dedup"] += 1
                 messages.append(f"Watcher dedup skip for {rel_path} (key={dedup_key})")
                 continue
 
             try:
+                try:
+                    DEFAULT_WRITE_GUARD.assert_writes_allowed("vault watcher auto-exec")
+                except WritesBlockedError as exc:
+                    summary["skipped_writes_blocked"] += 1
+                    messages.append(f"Watcher auto-exec blocked for {rel_path}: {exc}")
+                    continue
+
                 expected_version = _WRITE_GUARD.compute_version(current_markdown.encode("utf-8"))
 
                 stored = store.get_object(note_uuid)
@@ -397,6 +422,17 @@ def run_watcher_tick(
 
                 if panel_result.state.actions or panel_result.intents or panel_result.events:
                     summary["panel_runs"] += 1
+
+                applied_actions = sum(
+                    1 for intent in panel_result.intents if getattr(intent, "kind", None) == "action_triggered"
+                )
+                summary["applied_actions"] += applied_actions
+
+                checked_actions = [
+                    action for action in panel_result.state.actions if action.checked and action.text
+                ]
+                if checked_actions and applied_actions == 0:
+                    summary["skipped_idempotent"] += len(checked_actions)
 
                 summary["panel_promotions"] += len(
                     [

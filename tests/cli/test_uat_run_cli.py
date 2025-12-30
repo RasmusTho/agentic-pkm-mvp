@@ -15,6 +15,7 @@ def _env(tmp_path: Path) -> dict[str, str]:
     return {
         "STORE_BACKEND": "memory",
         "INDEX_OUTBOX_PATH": str(tmp_path / "outbox.jsonl"),
+        "WATCHER_AUTO_EXEC": "1",
     }
 
 
