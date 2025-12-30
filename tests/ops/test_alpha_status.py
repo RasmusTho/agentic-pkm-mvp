@@ -49,3 +49,26 @@ def test_alpha_status_handles_fetch_error() -> None:
     assert "- watcher: status=(missing)" in output
     assert "- worker: status=(missing)" in output
     assert "- stores: (missing)" in output
+
+
+@pytest.mark.not_pg
+def test_alpha_status_sums_store_counts() -> None:
+    def fake_fetch(url: str) -> FetchResult:
+        if url.endswith("/api/status"):
+            payload = {
+                "sot_version": "v4.10",
+                "sot_label": "baseline",
+                "stores": [
+                    {"name": "vault", "object_count": 12},
+                    {"name": "external", "object_count": 3},
+                ],
+                "ingestion": {},
+                "ask": {},
+            }
+            return 200, payload, None
+        if url.endswith("/api/health"):
+            return 200, {"ok": True, "runtime": {"db": {"ok": True}}}, None
+        return None, None, "missing"
+
+    output = render_status(fake_fetch, api_base_url="http://localhost:18000")
+    assert "- stores: entries=2 objects=15 external=3, vault=12" in output

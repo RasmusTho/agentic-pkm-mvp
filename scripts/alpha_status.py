@@ -49,19 +49,18 @@ def _line(label: str, value: str) -> str:
 
 def _format_store_line(stores: list[dict]) -> str:
     if not stores:
-        return "entries=0"
-    parts = []
+        return "entries=0 objects=0 external=0, vault=0"
     total_objects = 0
+    per_plane: dict[str, int] = {}
     for entry in stores:
         name = str(entry.get("name") or "(missing)")
         count = entry.get("object_count")
         if isinstance(count, int):
             total_objects += count
-            count_str = str(count)
-        else:
-            count_str = "(missing)"
-        parts.append(f"{name}={count_str}")
-    return f"entries={len(stores)} objects={total_objects} " + ", ".join(parts)
+            per_plane[name] = per_plane.get(name, 0) + count
+    external = per_plane.get("external", 0)
+    vault = per_plane.get("vault", 0)
+    return f"entries={len(stores)} objects={total_objects} external={external}, vault={vault}"
 
 
 def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
