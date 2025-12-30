@@ -389,7 +389,6 @@ def run_watcher_tick(
                 summary["errors"] += 1
                 continue
 
-            _hydrate_store_with_markdown(note_uuid, note_path)
             content_hash = _content_hash(current_markdown)
             dedup_key = _build_dedup_key(_PANEL_POLICY_ID, rel_path, content_hash)
             if not _DEDUP_QUEUE.try_acquire(dedup_key):
@@ -405,6 +404,7 @@ def run_watcher_tick(
                     messages.append(f"Watcher auto-exec blocked for {rel_path}: {exc}")
                     continue
 
+                _hydrate_store_with_markdown(note_uuid, note_path)
                 expected_version = _WRITE_GUARD.compute_version(current_markdown.encode("utf-8"))
 
                 stored = store.get_object(note_uuid)
