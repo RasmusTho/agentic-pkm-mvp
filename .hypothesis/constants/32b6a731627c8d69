@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/panel/filters.py
-# hypothesis_version: 6.148.7
-
-['is_ai_fence', 'strip_ai_panels']

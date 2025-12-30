@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/reasoning/prompts.py
-# hypothesis_version: 6.148.7
-
-['SYSTEM_PROMPT', 'build_user_prompt', 'none']

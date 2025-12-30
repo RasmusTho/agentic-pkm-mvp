@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/legacy_http.py
-# hypothesis_version: 6.148.7
-
-['agent_repository', 'app', 'dsn://stub', 'start', 'stop']

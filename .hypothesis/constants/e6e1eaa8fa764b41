@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/watcher/events.py
-# hypothesis_version: 6.148.7
-
-['+00:00', '1.0', 'WatcherEventSource', 'WatcherRunEvent', 'WatcherRunPayload', 'Z', 'a', 'changed', 'dry_run', 'errors', 'ingest_attempted', 'ingested', 'json', 'limit_exceeded', 'panel_candidates', 'panel_promotions', 'panel_runs', 'panel_skipped_limit', 'panel_skipped_policy', 'runtime_loop', 'snapshot_path', 'utf-8', 'watcher', 'watcher.run']

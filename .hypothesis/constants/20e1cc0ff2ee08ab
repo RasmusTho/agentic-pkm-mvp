@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/fitness/reasoning.py
-# hypothesis_version: 6.148.7
-
-[0.0, 'DATASET_PATH', 'claims_avg', 'conflicts', 'contradiction', 'data', 'golden', 'inferences_avg', 'object_uuid', 'r', 'reasoning_metrics', 'relations', 'text', 'utf-8']

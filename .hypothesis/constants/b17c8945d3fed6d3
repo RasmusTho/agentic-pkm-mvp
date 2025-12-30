@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/obs/__init__.py
-# hypothesis_version: 6.148.7
-
-['json_log', 'span', 'with_trace_id']

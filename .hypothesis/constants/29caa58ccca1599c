@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/classify.py
-# hypothesis_version: 6.148.7
-
-[0.6, 'classification', 'classifier', 'classify', 'classify_run', 'confidence', 'note', 'provisional', 'raw', 'run', 'trace_id', 'trust', 'type']

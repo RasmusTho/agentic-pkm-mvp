@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/api/interesting.py
-# hypothesis_version: 6.148.7
-
-['interesting_summary', 'list_interesting', 'router']

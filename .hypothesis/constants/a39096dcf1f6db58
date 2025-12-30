@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/cli/alpha_human_flows.py
-# hypothesis_version: 6.148.7
-
-['     SOURCES:', '     SOURCES: none', '   AI panel inserted', ' [dry-run]', '## AI-instruktion', '## AI-logg', '## AI-åtgärder', '%% AI:End %%', '%% AI:Start %%', '*.md', '-', 'Alpha-HumanFlows.md', 'Archive', 'Canon', 'Corpus', 'Domains', 'INDEX_OUTBOX_PATH', 'Index', 'Ingress', 'Ontology', 'Projects', 'Sources', 'Test', 'Workspace', 'answer', 'classification', 'classify', 'core6', 'created', 'doc_id', 'evergreen', 'existing', 'id', 'kind', 'maturity', 'normalize', 'note', 'object_id', 'origin', 'payload', 'pipeline', 'promoted', 'raw_text', 'response', 'review_state', 'source', 'source_ref', 'sources', 'text', 'title', 'utf-8', 'uuid', 'vault']

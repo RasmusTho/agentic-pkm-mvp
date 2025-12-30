@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/services/decisions.py
-# hypothesis_version: 6.148.7
-
-['created_at', 'key', 'object_id', 'trace_id', 'value']

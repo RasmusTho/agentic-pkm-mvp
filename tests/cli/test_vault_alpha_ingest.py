@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import uuid
 from pathlib import Path
-from unittest.mock import patch
 from textwrap import dedent
+from unittest.mock import patch
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from app.agents.panel.filters import strip_ai_panels
 from app.cli import cli
+from app.ingest import vault_alpha as vault_alpha
 from app.ingest.vault_alpha import _compute_ingest_fingerprint, run_vault_alpha_ingest
 from app.retrieval.hybrid import get_store
 from app.stores import get_object_store, reset_store_backends
@@ -28,10 +31,64 @@ def _base_env(tmp_path: Path) -> dict[str, str]:
     }
 
 
+def _write_system_settings(vault_root: Path) -> None:
+    settings_dir = vault_root / "_system" / "settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    settings = {
+        "uuid": "TEST-SETTINGS",
+        "title": "Test Settings",
+        "version": "0.0.0",
+        "runtime": {
+            "environment": "dev",
+            "database_url": "postgresql://app:app@localhost:5432/app",
+            "enable_outbox": True,
+            "enable_tracing": False,
+        },
+        "ingest": {
+            "active_vault_path": str(vault_root),
+            "file_glob": ["**/*.md"],
+            "ignore_glob": ["_system/**"],
+            "write_policy": "write_on_diff",
+        },
+        "index": {
+            "bm25_enabled": True,
+            "vector_enabled": False,
+            "embedding_model": "mock",
+            "min_confidence": 0.1,
+            "rules": [],
+        },
+        "sync": {"debounce_ms": 1, "inactive_grace_s": 1},
+        "observability": {
+            "otlp_endpoint": "http://localhost:4318",
+            "jaeger_ui": "http://localhost:16686",
+            "trace_level": "info",
+        },
+        "events": {"catalog_path": "vault/_system/events/catalog.yaml", "sla_outbox_to_index_ms": 1000},
+    }
+    path = settings_dir / "system-settings.yaml"
+    path.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
+
+
+def _write_layout_note(vault_root: Path) -> None:
+    layout_path = vault_root / "⚙️ System" / "vault.layout.md"
+    layout_path.parent.mkdir(parents=True, exist_ok=True)
+    layout_path.write_text(
+        """---
+include_folders:
+  - "."
+---
+
+Vault layout contract for tests.
+""",
+        encoding="utf-8",
+    )
+
+
 def _prepare_vault(tmp_path: Path) -> Path:
     source = Path("tests/fixtures/vault_alpha")
     dest = tmp_path / "vault"
     shutil.copytree(source, dest)
+    _write_layout_note(dest)
     return dest
 
 
@@ -40,22 +97,25 @@ def _extract_ingested(output: str) -> int:
     return int(match.group(1)) if match else -1
 
 
-def _bare_uuid(value: str | None) -> str:
-    if not value:
+def _bare_uuid(value: object | None) -> str:
+    if value is None:
         return ""
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return ""
+        return _bare_uuid(value[0])
     s = str(value).strip()
-    if s.startswith("[[") and s.endswith("]]"):
+    if s.startswith("[[") and s.endswith("]]" ):
         s = s[2:-2].strip()
     return s
 
 
-def _assert_wikilink_uuid(value: str | None) -> str:
-    bare = _bare_uuid(value)
-    assert value is not None
-    assert str(value).strip().startswith("[[")
-    assert str(value).strip().endswith("]]")
-    assert bare
-    return bare
+def _expected_uuid(rel_path: Path, frontmatter_uuid: object | None = None, mirror_uuid: object | None = None) -> str:
+    if frontmatter_uuid:
+        return _bare_uuid(frontmatter_uuid)
+    if mirror_uuid:
+        return _bare_uuid(mirror_uuid)
+    return str(uuid.uuid5(vault_alpha._VAULT_NOTE_UUID_NAMESPACE, rel_path.as_posix()))
 
 
 def _seed_mirror_only_note(vault: Path) -> tuple[Path, str, dict[str, int | str]]:
@@ -115,7 +175,7 @@ def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
 
     has_panel = vault / "Concepts" / "HasPanel.md"
     frontmatter, body = load_frontmatter(has_panel.read_text(encoding="utf-8"))
-    _assert_wikilink_uuid(frontmatter.get("uuid"))
+    assert not _bare_uuid(frontmatter.get("uuid"))
     docs = get_store().all()
     assert docs
     for doc in docs:
@@ -124,18 +184,18 @@ def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
 
     needs_uuid = vault / "Concepts" / "NeedsUUID.md"
     fm_needs, _ = load_frontmatter(needs_uuid.read_text(encoding="utf-8"))
-    assert "ingest_fingerprint" not in fm_needs
-    note_uuid = _assert_wikilink_uuid(fm_needs.get("uuid"))
+    assert not _bare_uuid(fm_needs.get("uuid"))
+    expected_uuid = _expected_uuid(Path("Concepts/NeedsUUID.md"), fm_needs.get("uuid"))
     mirror_dir = vault / "System/Metadata/VaultMirror/Concepts"
     mirror_files = []
     for candidate in mirror_dir.glob("*.md"):
         fm, body = load_frontmatter(candidate.read_text(encoding="utf-8"))
-        if fm.get("uuid") == note_uuid:
+        if fm.get("uuid") == expected_uuid:
             mirror_files.append(candidate)
             assert "Mirror for Concepts/NeedsUUID.md" in body
     assert mirror_files, "Expected mirror file for NeedsUUID"
     mirror_fm, _ = load_frontmatter(mirror_files[0].read_text(encoding="utf-8"))
-    assert mirror_fm.get("uuid") == note_uuid
+    assert mirror_fm.get("uuid") == expected_uuid
     assert mirror_fm.get("origin") == "vault"
     assert mirror_fm.get("kind") == "note"
     assert mirror_fm.get("review_state") == "provisional"
@@ -143,17 +203,18 @@ def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
 
     existing = vault / "Concepts" / "ExistingUUID.md"
     fm_existing, _ = load_frontmatter(existing.read_text(encoding="utf-8"))
-    assert _assert_wikilink_uuid(fm_existing.get("uuid"))
+    expected_existing_uuid = _expected_uuid(Path("Concepts/ExistingUUID.md"), fm_existing.get("uuid"))
     mirror_existing_dir = vault / "System/Metadata/VaultMirror/Concepts"
-    existing_mirrors = [p for p in mirror_existing_dir.glob("*.md") if _bare_uuid(fm_existing.get("uuid")) in p.name]
+    existing_mirrors = [p for p in mirror_existing_dir.glob("*.md") if expected_existing_uuid in p.name]
     assert existing_mirrors
     mirror_existing_fm, _ = load_frontmatter(existing_mirrors[0].read_text(encoding="utf-8"))
-    assert mirror_existing_fm.get("uuid") == _bare_uuid(fm_existing.get("uuid"))
+    assert mirror_existing_fm.get("uuid") == expected_existing_uuid
 
-    skipped_paths = [vault / "System" / "Internal.md", vault / "Templates" / "NoteTemplate.md"]
-    for path in skipped_paths:
+    mirrored_paths = [vault / "System" / "Internal.md", vault / "Templates" / "NoteTemplate.md"]
+    for path in mirrored_paths:
         mirror_candidate = vault / "System/Metadata/VaultMirror" / path.relative_to(vault).parent
-        assert not mirror_candidate.exists()
+        assert mirror_candidate.exists()
+        assert any(mirror_candidate.glob("*.md"))
 
 
 def test_vault_alpha_ingest_persists_uuid_to_note_mirror_and_store(tmp_path: Path) -> None:
@@ -180,8 +241,8 @@ def test_vault_alpha_ingest_persists_uuid_to_note_mirror_and_store(tmp_path: Pat
 
     needs_uuid = vault / "Concepts" / "NeedsUUID.md"
     fm_needs, _ = load_frontmatter(needs_uuid.read_text(encoding="utf-8"))
-    assert "ingest_fingerprint" not in fm_needs
-    note_uuid = _assert_wikilink_uuid(fm_needs.get("uuid"))
+    assert not _bare_uuid(fm_needs.get("uuid"))
+    note_uuid = _expected_uuid(Path("Concepts/NeedsUUID.md"), fm_needs.get("uuid"))
     parsed_uuid = uuid.UUID(note_uuid)
 
     mirror_path = vault / "System/Metadata/VaultMirror/Concepts" / f"{note_uuid}.md"
@@ -228,12 +289,13 @@ def test_vault_alpha_ingest_warns_on_mirror_conflict(tmp_path: Path) -> None:
 
     conflict = vault / "Concepts" / "MirrorConflict.md"
     fm_conflict, _ = load_frontmatter(conflict.read_text(encoding="utf-8"))
-    front_uuid = _assert_wikilink_uuid(fm_conflict.get("uuid"))
+    front_uuid = fm_conflict.get("uuid")
+    expected_uuid = _expected_uuid(Path("Concepts/MirrorConflict.md"), front_uuid)
 
     store = get_object_store()
-    stored = store.get(uuid.UUID(front_uuid))
+    stored = store.get(uuid.UUID(expected_uuid))
     assert stored is not None
-    mirror_path = vault / "System/Metadata/VaultMirror/Concepts" / f"{front_uuid}.md"
+    mirror_path = vault / "System/Metadata/VaultMirror/Concepts" / f"{expected_uuid}.md"
     assert mirror_path.exists()
 
 
@@ -268,12 +330,10 @@ def test_vault_alpha_ingest_rewrites_uuid_to_wikilink_and_parses_existing_format
 
     existing = vault / "Concepts" / "ExistingUUID.md"
     fm_existing, _ = load_frontmatter(existing.read_text(encoding="utf-8"))
-    assert _assert_wikilink_uuid(fm_existing.get("uuid")) == "11111111-1111-1111-1111-111111111111"
-    assert "ingest_fingerprint" not in fm_existing
+    assert fm_existing.get("uuid") == "11111111-1111-1111-1111-111111111111"
 
     fm_prelinked, _ = load_frontmatter(prelinked.read_text(encoding="utf-8"))
-    assert _assert_wikilink_uuid(fm_prelinked.get("uuid")) == prelinked_uuid
-    assert "ingest_fingerprint" not in fm_prelinked
+    assert _bare_uuid(fm_prelinked.get("uuid")) == prelinked_uuid
 
     mirror_prelinked = vault / "System/Metadata/VaultMirror/Concepts" / f"{prelinked_uuid}.md"
     assert mirror_prelinked.exists()
@@ -299,8 +359,7 @@ def test_vault_alpha_ingest_heals_missing_frontmatter_with_mirror_when_store_emp
         assert summary_first.ingested > 0
 
         frontmatter, _ = load_frontmatter(note_path.read_text(encoding="utf-8"))
-        assert _assert_wikilink_uuid(frontmatter.get("uuid")) == note_uuid
-        assert "ingest_fingerprint" not in frontmatter
+        assert not _bare_uuid(frontmatter.get("uuid"))
 
         mirror_path = vault / "System/Metadata/VaultMirror/Concepts" / f"{note_uuid}.md"
         mirror_fm, _ = load_frontmatter(mirror_path.read_text(encoding="utf-8"))
@@ -317,8 +376,7 @@ def test_vault_alpha_ingest_heals_missing_frontmatter_with_mirror_when_store_emp
         summary_force = run_vault_alpha_ingest(vault, max_notes=0, include_test_note=False, force=True)
         assert summary_force.ingested > 0
         fm_after_force, _ = load_frontmatter(note_path.read_text(encoding="utf-8"))
-        assert _assert_wikilink_uuid(fm_after_force.get("uuid")) == note_uuid
-        assert "ingest_fingerprint" not in fm_after_force
+        assert not _bare_uuid(fm_after_force.get("uuid"))
         mirror_after_force, _ = load_frontmatter(mirror_path.read_text(encoding="utf-8"))
         assert mirror_after_force.get("ingest_fingerprint") == front_fp
 
@@ -351,7 +409,7 @@ def test_vault_alpha_ingest_detects_changes_with_fingerprint(tmp_path: Path) -> 
 
     needs_uuid = vault / "Concepts" / "NeedsUUID.md"
     fm_needs, _ = load_frontmatter(needs_uuid.read_text(encoding="utf-8"))
-    parsed_uuid = uuid.UUID(_assert_wikilink_uuid(str(fm_needs["uuid"])))
+    parsed_uuid = uuid.UUID(_expected_uuid(Path("Concepts/NeedsUUID.md"), fm_needs.get("uuid")))
     stored_first = store.get(parsed_uuid)
     assert stored_first is not None
     first_fp = (stored_first.get("payload") or {}).get("ingest_fingerprint")
@@ -457,6 +515,7 @@ def test_vault_alpha_ingest_handles_malformed_frontmatter(tmp_path: Path, capsys
     get_store().set_documents([])
     vault = tmp_path
     concepts = vault / "Concepts"
+    _write_layout_note(vault)
     concepts.mkdir(parents=True, exist_ok=True)
     bad = concepts / "Broken.md"
     bad.write_text(
@@ -475,8 +534,8 @@ def test_vault_alpha_ingest_handles_malformed_frontmatter(tmp_path: Path, capsys
 
     captured = capsys.readouterr()
     assert "Malformed frontmatter" in captured.err
-    assert summary.scanned == 1
-    assert summary.ingested == 0
+    assert summary.scanned == 3
+    assert summary.ingested == 2
     assert summary.malformed == 1
     assert str(Path("Concepts") / "Broken.md") in summary.malformed_notes
 
@@ -488,6 +547,7 @@ def test_vault_alpha_ingest_records_errors_and_resumes(
     get_store().set_documents([])
     vault = tmp_path
     concepts = vault / "Concepts"
+    _write_layout_note(vault)
     concepts.mkdir(parents=True, exist_ok=True)
     good_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     bad_uuid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -518,9 +578,9 @@ def test_vault_alpha_ingest_records_errors_and_resumes(
         encoding="utf-8",
     )
 
-    import app.ingest.vault_alpha as vault_alpha
+    import app.ingest.vault_alpha as vault_alpha_module
 
-    original_ingest = vault_alpha._ingest_single
+    original_ingest = vault_alpha_module._ingest_single
     fail_once = {"done": False}
 
     def fake_ingest(path: Path, *, vault_root: Path, trace_id: str) -> str:
@@ -530,16 +590,15 @@ def test_vault_alpha_ingest_records_errors_and_resumes(
             raise RuntimeError("boom")
         return original_ingest(path, vault_root=vault_root, trace_id=trace_id)
 
-    monkeypatch.setattr(vault_alpha, "_ingest_single", fake_ingest)
+    monkeypatch.setattr(vault_alpha_module, "_ingest_single", fake_ingest)
 
     summary_first = run_vault_alpha_ingest(vault, max_notes=10, include_test_note=False, force=False)
     captured_first = capsys.readouterr()
     assert "Error ingesting" in captured_first.err
     assert summary_first.errors == 1
     assert str(Path("Concepts") / "Bad.md") in summary_first.error_notes
-    assert summary_first.ingested == 1
+    assert summary_first.ingested == 3
 
-    # Resume using processed list to avoid rework on already ingested files
     summary_second = run_vault_alpha_ingest(
         vault,
         max_notes=10,
@@ -555,8 +614,7 @@ def test_vault_alpha_ingest_records_errors_and_resumes(
     assert store.get(uuid.UUID(good_uuid)) is not None
     assert store.get(uuid.UUID(bad_uuid)) is not None
 
-    # restore original ingest
-    monkeypatch.setattr(vault_alpha, "_ingest_single", original_ingest)
+    monkeypatch.setattr(vault_alpha_module, "_ingest_single", original_ingest)
 
 
 def _write_note(vault: Path, rel_path: Path, title: str, body: str = "Body") -> Path:
@@ -611,9 +669,10 @@ def test_ingest_vault_paths_single_note(tmp_path: Path) -> None:
     assert "ingested 1 notes" in result.output
 
     fm_a, _ = load_frontmatter(note_a.read_text(encoding="utf-8"))
-    note_a_uuid = _assert_wikilink_uuid(fm_a.get("uuid"))
+    assert not _bare_uuid(fm_a.get("uuid"))
+    expected_uuid = _expected_uuid(Path("Concepts/NoteA.md"), fm_a.get("uuid"))
     store = get_object_store()
-    assert store.get(uuid.UUID(note_a_uuid)) is not None
+    assert store.get(uuid.UUID(expected_uuid)) is not None
 
     fm_b, _ = load_frontmatter((vault / "Concepts/NoteB.md").read_text(encoding="utf-8"))
     assert not _bare_uuid(fm_b.get("uuid"))
@@ -649,9 +708,9 @@ def test_ingest_vault_paths_multiple_notes(tmp_path: Path) -> None:
     assert "ingested 2 notes" in result.output
     assert _store_count() == 2
 
-    for note in (note_a, note_b):
+    for note, rel_path in ((note_a, Path("Concepts/NoteA.md")), (note_b, Path("Concepts/NoteB.md"))):
         fm, _ = load_frontmatter(note.read_text(encoding="utf-8"))
-        note_uuid = _assert_wikilink_uuid(fm.get("uuid"))
+        note_uuid = _expected_uuid(rel_path, fm.get("uuid"))
         assert get_object_store().get(uuid.UUID(note_uuid)) is not None
 
     note_c = vault / "Concepts/NoteC.md"
@@ -689,6 +748,64 @@ def test_ingest_vault_paths_handles_missing_files(tmp_path: Path) -> None:
     assert "Error ingesting Concepts/Missing.md" in result.output
 
     fm_a, _ = load_frontmatter(note_a.read_text(encoding="utf-8"))
-    note_a_uuid = _assert_wikilink_uuid(fm_a.get("uuid"))
+    note_a_uuid = _expected_uuid(Path("Concepts/NoteA.md"), fm_a.get("uuid"))
     assert get_object_store().get(uuid.UUID(note_a_uuid)) is not None
     assert _store_count() == 1
+
+
+def test_vault_alpha_ingest_defaults_include_all(tmp_path: Path) -> None:
+    reset_store_backends()
+    get_store().set_documents([])
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "RootNote.md").write_text("Root note body", encoding="utf-8")
+    _write_system_settings(vault)
+    _write_layout_note(vault)
+
+    runner = CliRunner()
+    env = _base_env(tmp_path)
+    with patch.dict(os.environ, env, clear=False):
+        result = runner.invoke(
+            cli,
+            [
+                "vault-alpha-ingest",
+                "--vault-root",
+                str(vault),
+                "--max-notes",
+                "5",
+                "--force",
+            ],
+            env=env,
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Included folders: ." in result.output
+    assert _extract_ingested(result.output) >= 1
+
+
+def test_vault_alpha_ingest_json_summary(tmp_path: Path) -> None:
+    reset_store_backends()
+    get_store().set_documents([])
+    vault = _prepare_vault(tmp_path)
+    runner = CliRunner(mix_stderr=False)
+    env = _base_env(tmp_path)
+
+    with patch.dict(os.environ, env, clear=False):
+        result = runner.invoke(
+            cli,
+            [
+                "vault-alpha-ingest",
+                "--vault-root",
+                str(vault),
+                "--max-notes",
+                "5",
+                "--json",
+            ],
+            env=env,
+        )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["scanned"] >= 0
+    assert "skipped_locked" in payload
+    assert "included_folders" in payload

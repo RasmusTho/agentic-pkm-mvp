@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/media/transcribe.py
-# hypothesis_version: 6.148.7
-
-[0.0, '%(id)s.%(ext)s', '-ac', '-ar', '-i', '-y', './tmp/audio', '.wav', '1', '16000', 'ASR_DEVICE', 'ASR_MODEL', 'TRANSCRIBE_CACHE_DIR', 'auto', 'base', 'bestaudio/best', 'download_audio', 'end', 'ffmpeg', 'ffmpeg_to_wav', 'format', 'http://', 'https://', 'int8', 'kind', 'language', 'noprogress', 'object_id', 'outtmpl', 'payload', 'quiet', 'run_asr', 'segments', 'source_ref', 'start', 'text', 'trace_id', 'transcribe', 'transcribe_source', 'transcript', 'unknown']

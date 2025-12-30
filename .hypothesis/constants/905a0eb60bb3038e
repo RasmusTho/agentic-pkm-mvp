@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/ask/utils.py
-# hypothesis_version: 6.148.7
-
-[0.0, 0.1, 0.15, 0.2, 0.3, 0.4, '1', 'REASONING_ENABLE', 'agents', 'answer', 'ask', 'ask.answer', 'ask.api', 'build_ask_context', 'evergreen', 'external', 'get_ask_settings', 'hot', 'llm_answer', 'ok', 'on', 'origin', 'own_raw', 'own_reviewed', 'payload', 'raw_text', 'reasoning_enabled', 'score', 'score_hit', 'snippet', 'source_ref', 'text', 'title', 'true', 'trust', 'unspecified', 'vault', 'warm', 'yes', 'zone']

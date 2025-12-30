@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/ask/graph.py
-# hypothesis_version: 6.148.7
-
-[0.0, 'No results found.', 'TOP_K_INITIAL', 'answer', 'build_ask_graph', 'doc_id', 'id', 'origin', 'payload', 'raw_text', 'rerank', 'retrieve', 'run_ask_graph', 'score', 'snippet', 'source_ref', 'text', 'title', 'trust', 'uuid', 'zone']

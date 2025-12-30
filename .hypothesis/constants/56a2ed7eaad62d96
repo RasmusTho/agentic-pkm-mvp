@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/policy/enforce.py
-# hypothesis_version: 6.148.7
-
-['1', 'POLICY_ENFORCE', 'allowed_tools', 'on', 'true', 'yes']

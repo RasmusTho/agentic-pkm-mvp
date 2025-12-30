@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/deduper/agent.py
-# hypothesis_version: 6.148.7
-
-[0.0, 0.5, 'a', 'b', 'core6', 'deduper', 'deterministic', 'duplicate', 'event', 'pairs', 'raw_text', 'score', 'threshold', 'title', 'trace_id', 'ts']

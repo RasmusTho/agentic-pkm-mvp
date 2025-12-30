@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/settings/yggdrasil_scaffolder.py
-# hypothesis_version: 6.148.7
-
-['---', '@Settings', 'Archive', 'Brokkr', 'Canon', 'Corpus', 'Domains', 'Heimdall', 'Hugin', 'Index', 'Ingress', 'Machina', 'Mimer', 'Munin', 'Ontology', 'Projects', 'Ratatosk', 'Sources', 'Taxonomy', 'Tyr', 'Workspace', 'Yggdrasil', 'YggdrasilScaffolder', 'created', 'existed', 'global.md', 'kind: settings', 'module: Mimer', 'root', 'scope: global', 'system: Yggdrasil', 'utf-8']

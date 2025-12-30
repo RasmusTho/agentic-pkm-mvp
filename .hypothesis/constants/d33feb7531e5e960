@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/config/paths.py
-# hypothesis_version: 6.148.7
-
-['@Settings', 'FLOW_SETTINGS_PATH', 'Mimer', 'ResolvedPaths', 'SETTINGS_PATH', 'VAULT_ROOT', 'YGGDRASIL_ROOT', 'Yggdrasil', '_system', 'flows.settings.yaml', 'resolve_paths', 'resolve_vault_root', 'settings', 'system-settings.yaml', 'vault']

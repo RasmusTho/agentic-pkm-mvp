@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/index/doctor.py
-# hypothesis_version: 6.148.7
-
-['backend', 'diagnose_index', 'dim', 'dims', 'error', 'expected_identity', 'get_identity', 'identity_present', 'issues', 'model', 'normalize', 'ok', 'pg_state', 'provider', 'rows_wrong_dim', 'status', 'stored_identity', 'timestamp', 'warn', 'warnings']

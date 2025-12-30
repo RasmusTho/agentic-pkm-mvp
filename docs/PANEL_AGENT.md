@@ -8,6 +8,7 @@ Purpose: translate human-driven AI panels in vault notes into structured intents
 - Runtime V1 uses a fixed mapping from panel actions to follow-up events (e.g., promotion intents) and writes receipts into an in-note AI status callout; the panel stays a small working set with no history.
 - This is a simplified bridge/runtime loop, not the final agentic design; it keeps watcher and manual panel flows working while the agent migrates to LangGraph.
 - Internal implementation now runs through a LangGraph-based control flow (`PanelAgentState`), but external behaviour and emitted events remain identical.
+- v5.5C decider hardening is in progress; rule remains the default while LLM mode stays opt-in.
 - Planner pipeline (opt-in, `PANEL_AGENT_PIPELINE=planner`): PanelAgent builds a `PanelActionIntent` and asks the Planner to create a plan for the selected actions. Plans can now be executed via the Orchestrator using the CLI (`python -m app.cli panel-orchestrate-plan --plan-id <plan_id>`), while the default direct path remains unchanged.
 - Action catalog (`docs/settings/panel-actions.md`) is the canonical list of actions (id, kind, labels/synonyms, description/llm_hint, downstream event, params). Rule-mode matches checkbox labels deterministically; LLM-mode is opt-in and uses the catalog + panel/note context with checkboxes as hints.
 
@@ -18,7 +19,7 @@ Purpose: translate human-driven AI panels in vault notes into structured intents
 - Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
 - Idempotency keys: each checkbox gets a hidden `ai:id=...`; auto-executed freeform actions use stable ids (e.g., `auto:promote.evergreen`) recorded in `executed_action_ids` to prevent re-runs across ticks.
 
-## PanelAgent 2.0 (planned v5.5)
+## PanelAgent 2.0 (planned v5.6)
 - Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `graph.py`).
 - LLM-based reasoning decides which panel actions to execute (and in what order) rather than relying on fixed mappings.
 - Planner/Orchestrator integration (A2A/plan objects) executes chosen actions (promotion, summaries, hygiene) with the same guardrails as other agents.

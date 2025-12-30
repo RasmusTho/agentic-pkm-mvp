@@ -21,6 +21,7 @@ services:
     working_dir: /app
     volumes:
       - ./:/app
+      - "${VAULT_ROOT:-./vault}:/app/vault"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && bash /app/scripts/start_api.sh"]
     environment:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
@@ -47,6 +48,7 @@ services:
     working_dir: /app
     volumes:
       - ./:/app
+      - "${VAULT_ROOT:-./vault}:/app/vault"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.workers.outbox_worker"]
     environment:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app

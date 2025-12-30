@@ -7,6 +7,7 @@ from typing import Iterable, List, Tuple
 from uuid import UUID
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import dict_row
 
 from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
@@ -160,8 +161,14 @@ def truncate_pg_tables() -> None:
 
 
 class PgObjectStore(ObjectStore):
+    _OBJECTS_TABLE = "store_objects"
+
     def __init__(self) -> None:
         _ensure_tables()
+
+    def _active_table(self, conn) -> str:
+        del conn
+        return self._OBJECTS_TABLE
 
     def get(self, object_id: UUID) -> dict | None:
         with _connect() as conn:
@@ -209,6 +216,24 @@ class PgObjectStore(ObjectStore):
                     (kind, limit),
                 )
                 return cur.fetchall()
+
+    def count_objects(self, kind: str | None = None) -> int:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                table = self._active_table(conn)
+                if kind is not None:
+                    stmt = sql.SQL("SELECT count(*) AS total FROM {table} WHERE kind = %s").format(table=sql.Identifier(table))
+                    params = (kind,)
+                else:
+                    stmt = sql.SQL("SELECT count(*) AS total FROM {table}").format(table=sql.Identifier(table))
+                    params = ()
+                cur.execute(stmt, params)
+                row = cur.fetchone()
+        if not row:
+            return 0
+        if isinstance(row, dict):
+            return int(row.get('total') or row.get('count') or 0)
+        return int(row[0] or 0)
 
 
 @dataclass
@@ -355,6 +380,18 @@ class PgVectorIndex(VectorIndex):
                     (object_id,),
                 )
                 return cur.rowcount or 0
+
+    def count_vectors(self) -> int:
+        _ensure_tables()
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT count(*) AS total FROM store_vector_index")
+                row = cur.fetchone()
+        if not row:
+            return 0
+        if isinstance(row, dict):
+            return int(row.get('total') or 0)
+        return int(list(row.values())[0] or 0)
 
 
 class PgRelationIndex(RelationIndex):

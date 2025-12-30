@@ -101,6 +101,11 @@ class MemoryObjectStore(ObjectStore):
                 break
         return out
 
+    def count_objects(self, kind: str | None = None) -> int:
+        if kind is None:
+            return len(self._objects)
+        return sum(1 for rec in self._objects.values() if rec.get("kind") == kind)
+
 
 @dataclass
 class _VectorEntry:
@@ -188,6 +193,9 @@ class MemoryVectorIndex(VectorIndex):
             del self._entries[object_id]
             return 1
         return 0
+
+    def count_vectors(self) -> int:
+        return len(self._entries)
 
     def search(self, vector: list[float], *, k: int = 5, identity: EmbeddingIdentity | None = None) -> list:
         if not self._entries:

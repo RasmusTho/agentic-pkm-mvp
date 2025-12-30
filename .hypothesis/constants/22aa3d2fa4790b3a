@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/panel_agent/wiring.py
-# hypothesis_version: 6.148.7
-
-['.json', '; ', 'VAULT_ROOT', 'actions', 'event', 'event_type', 'get_action_wiring', 'id', 'intent', 'intent_type', 'kind', 'load_action_wiring', 'target_event', 'utf-8']

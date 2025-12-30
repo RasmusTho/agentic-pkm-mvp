@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/retrieval/rerank/provider.py
-# hypothesis_version: 6.148.7
-
-[0.0, 0.01, 0.1, 0.25, 0.4, 1.0, '2.5', 'CE_HTTP_URL', 'RERANK_HTTP_ENDPOINT', 'RERANK_HTTP_TIMEOUT', 'RERANK_PROVIDER', 'ce-local-mini', 'ce_http', 'ce_local', 'disabled', 'http', 'id', 'items', 'local', 'mock', 'mock-cross-encoder', 'mock_ce', 'none', 'off', 'query', 'score', 'scores', 'text', 'top_k']

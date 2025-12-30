@@ -17,6 +17,23 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - `active_features`: human-readable list of forward-line capabilities (PanelAgent runtime, watcher track, config-driven wiring).
 - Counters (totals + 24h window): `watcher_runs`, `panel_runs` (`panel.intent.executed`), `promote.intent.created`, `promotion_executed` (`promote.done`), and ingest run counts per plane. Use these in UAT to confirm watcher/panel flows; if promotion intents increment but notes do not change, the promotion consumer is not running.
 
+## Current / Next up
+- v5.5D is blocked on Concurrency & Idempotency Guards before watcher auto-exec is enabled.
+- v5.6 sequencing: ReasoningFacade + basic graph builder first, then LangGraph Phase 1, then Orchestrator V2 (flagged via `ORCHESTRATOR_VERSION=v1|v2`).
+
+## Concurrency & Safety (v5.5D gate)
+- DedupTaskQueue: planned; required before watcher auto-exec.
+- Optimistic locking: planned; concurrent note/object writes must fail safe.
+- Event idempotency: normative; `event_id` required and dedup enforced (`docs/EVENTS.md`, `docs/CONCURRENCY.md`).
+
+## Migration tracking (forward line)
+
+| Area | v5.5D | v5.6 | Notes |
+| --- | --- | --- | --- |
+| Watcher auto-exec | Blocked on concurrency guards | — | Gate: dedup + optimistic locking + idempotency |
+| LangGraph rollout | ASK + PanelAgent only | Phase 1 pilots after ReasoningFacade | Phased adoption per ROADMAP |
+| Orchestrator V2 | Not started | Flagged rollout (`ORCHESTRATOR_VERSION=v1|v2`) | Preview scope only |
+
 ## Status — Operational Snapshot
 
 Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and deployment topology for this SoT.
@@ -38,7 +55,7 @@ Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and 
 | v5.3 | Auto-panel as explicit policy | Delivered — frontmatter policy (`ai_panel_auto_run` or `ai_panel.auto_run`) gates watcher-triggered `panel run-many`/note-update after ingest; AI logs/events remain; manual CLI unaffected | None | Prepare further policy refinements for v5.4 | Must be opt-in and auditable |
 | v5.4 | Watcher hardening & ergonomics | Delivered — dry-run mode, max-notes guard (with force override), structured watcher summaries; manual/cron ready | None | Prepare further ops polish if needed | Builds on v5.2–v5.3 |
 | v5.5 | PanelAgent 2.0 (LangGraph inner) | In-progress (v5.5B) — `PanelActionIntent` + opt-in planner pipeline (`PANEL_AGENT_PIPELINE=planner`) create plans from panel actions; CLI-first execution via Orchestrator now available (promotion tool emits `promote.intent.created`) | Wire watcher auto-exec + extend action coverage; broaden action mapping | Design schema/graph; keep Runtime V1 baseline in place until 2.0 is proven | Bridges to the “LangGraph inner per agent” principle |
-| v5.6 | LangGraph rollout to other agents | Planned — select 1–2 agents (Promotion, Reviewer, Hygiene), add AgentState + LangGraph graphs, move non-trivial decision logic out of pipelines | None | Pick pilot agents and design graphs | Extends LangGraph inner model beyond PanelAgent |
+| v5.6 | ReasoningFacade + LangGraph rollout | Planned — ReasoningFacade + basic graph builder; LangGraph rollout Phase 1 for 1–2 agents (Promotion, Reviewer, Hygiene); Orchestrator V2 flagged (`ORCHESTRATOR_VERSION=v1|v2`) | None | Sequence ReasoningFacade → Phase 1 → Orchestrator V2 | Extends LangGraph inner model beyond PanelAgent |
 | v5.x | Symbolic reasoning + reflexive agents | Governance concepts, Agent Memory Graph sketches | RDF/OWL/SHACL enforcement, logic gates | Define policy bundles + knowledge graph API | Dependent on v4.6 telemetry |
 
 Pattern Harvest (Outer/Inner agent architecture) — In progress (docs-first); see docs/research/pattern-harvest-agentic-architecture.md.

@@ -15,13 +15,28 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 
 ## Now / Next / Later
 - **Now**
-  - PanelAgent LangGraph decider opt-in, watcher policy auto-exec plumbing (v5.5C planned).
+  - **BLOCKER (v5.5D): Concurrency & Idempotency Guards** (must be green before enabling watcher auto-exec).
+    - Two concurrent watcher runs do not create duplicate events.
+    - Concurrent note updates fail safe with version mismatch (no corruption).
+    - Panel actions with the same ai:id execute at most once.
+  - PanelAgent LangGraph decider opt-in, watcher policy auto-exec plumbing (v5.5C in progress).
   - Watcher → panel → planner/orchestrator automation with safety limits; promotion consumer observable (v5.5D planned).
   - Vault-first config validation (panel wiring, watcher) with schema enforcement.
 - **Next**
   - **Quality Wave: Runtime Loop Evaluation Stack** — A: contract tests for watcher→panel→promotion event chain; B: golden vault + seeded snapshots; C: metamorphic runs (interval/dry-run/max-notes); D: cold rebuild coverage (empty store + existing mirrors/snapshots); E: fitness gates (status/outbox counters, idempotence, no dup intents on rerun); F: scripted UAT harness (CLI-first). **Done means** idempotence proven (first run vs rerun stable), event chain proven (watcher.run→panel.intent.*→promote.*), deterministic diffs on golden vault, and gates enforced in CI/UAT. **Modules & Files to be touched during implementation**: `app/runtime/runtime_loop.py`, `app/watcher/vault_watcher.py`, `app/agents/panel_agent/*`, `app/components/settings/panel_actions_loader.py`, `app/promotion/consumer.py`, outbox writer/reader + status command modules, CLI runtime-loop/uat/status modules, `app/fitness/*` and `ops/quality/baselines.yaml`, `docs/examples/vault_test_seed/*`.
+  - **ReasoningFacade + basic graph builder** (BLOCKER for LangGraph rollout).
+    - Rationale: prevents pattern fragmentation; all LangGraph agents route reasoning/tool calls through the facade.
+  - Orchestrator V2 (LangGraph): parallel execution, compensation/rollback, checkpointing, retries.
+    - Back-compat: `ORCHESTRATOR_VERSION=v1|v2`.
+  - PanelAgent 2.0 timeline:
+    - v5.5C: decider (in progress).
+    - v5.6: PanelAgent 2.0 full migration (freeform interpretation, multi-step workflows, uncertainty→suggested checkboxes, catalog-driven discovery).
+    - v5.7: advanced (panel versioning, cross-note coordination).
   - Vault-as-GUI settings compiler (`@Settings` / System/Config) with typed artifacts and CI schema checks (v5.6 track).
-  - LangGraph rollout to additional agents (Promotion/Reviewer/Hygiene) with AgentState + graphs; event/A2A outer contracts preserved.
+  - LangGraph rollout to additional agents (Promotion/Reviewer/Hygiene) in phases:
+    - Phase 1: single pilot agent behind a flag; AgentState + graph parity tests green.
+    - Phase 2: two agents; planner/orchestrator integration stable; event/A2A contracts unchanged.
+    - Phase 3: broader adoption; runtime metrics + rollback plan validated.
   - A2A/MCP orchestration routing with deterministic adapters and audit.
 - **Later**
   - Watcher auto-exec of panel plans with guardrails and rollback; richer panel actions (summary/reply) via tool/MCP boundary.
@@ -49,7 +64,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 | v5.1–v5.4 | Watcher track (ingest/panel CLI, policy, ergonomics) | Operationally accepted |
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
 | v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
-| v5.6 | LangGraph rollout + Vault-as-GUI settings compiler | Planned |
+| v5.6 | ReasoningFacade + LangGraph rollout + Orchestrator V2 (flagged) + Vault-as-GUI settings compiler | Planned |
 
 ## Tracks (details moved)
 - Watcher track details: `docs/tracks/TRACK_WATCHER.md`

@@ -1,4 +1,4 @@
-State: v5.4 delivered (watcher MVP + hardening); forward extensions tracked in ROADMAP Now/Next.
+State: v5.4 delivered (watcher MVP + hardening); v5.5D auto-exec gated on concurrency guards.
 # Track — Watcher (v5.1–v5.4 delivered)
 
 Scope: snapshot-based vault watcher CLI/daemon, policy-gated panel auto-runs, ergonomics (dry-run, max-notes), Docker-first deployment.
@@ -10,6 +10,13 @@ Scope: snapshot-based vault watcher CLI/daemon, policy-gated panel auto-runs, er
 - Auto-panel policy: frontmatter `ai_panel_auto_run: watcher` (or `ai_panel: { auto_run: watcher }`) gates watcher-driven panel runs; manual CLI is always allowed — v5.3.
 - Hardening & ergonomics: `--dry-run`, `--max-notes` + `--force`, structured summaries, policy skip counters — v5.4.
 - Deployment: `vault-watcher-daemon` for Docker-first polling with snapshot at `/state/vault_watcher_state.json`; host service fallback (launchd/systemd) for unreliable mounts.
+
+## v5.5D: Auto-exec Safety (CRITICAL)
+- Concurrency & Idempotency Guards MUST be green before watcher auto-exec is enabled.
+- Deduplicate concurrent watcher runs and auto-exec triggers to avoid duplicate events/intents.
+- Note writes MUST use optimistic locking; conflicts fail safe with no corruption.
+- Panel actions MUST be idempotent (`ai:id` executes at most once).
+- Reference: `docs/CONCURRENCY.md`.
 
 ## Operational notes
 - Watcher remains polling/snapshot-based (no OS file events).

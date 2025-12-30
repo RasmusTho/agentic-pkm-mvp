@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/db/dsn.py
-# hypothesis_version: 6.148.7
-
-['DATABASE_URL', 'postgresql://']

@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/panel_agent/settings.py
-# hypothesis_version: 6.148.7
-
-['DeciderMode', 'PANEL_AGENT_DECIDER', 'PANEL_AGENT_PIPELINE', 'PipelineMode', 'direct', 'llm', 'planner', 'rule']

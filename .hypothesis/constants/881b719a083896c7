@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/panel_agent/__init__.py
-# hypothesis_version: 6.148.7
-
-['PanelRuntimeResult', 'execute_panel_intent']

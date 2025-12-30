@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/observability/tracing.py
-# hypothesis_version: 6.148.7
-
-['app', 'enable_tracing', 'observability', 'otlp_endpoint', 'promotion-agent', 'runtime', 'service.name', 'utf-8']

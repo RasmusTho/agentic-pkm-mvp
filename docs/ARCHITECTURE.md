@@ -35,19 +35,31 @@ Architecture describes how things are wired today; these documents define what m
 ## SoT lines
 - **SoT v4.10 Reality-MVP (baseline locked)** — single-user PKM with stable vault ingest, minimal external ingest, hybrid retrieval + ASK with sources/latency, observability/status surfaces (CLI/API/GUI), and orchestrator runtime V1. Operational acceptance: soak vault ingest and external newsletter/PDF samples. Collaboration/multi-user deferred.
 - **SoT v5.0 PanelAgent Runtime V1 (first v5.x baseline)** — sits on top of the locked v4.10 baseline; Panel runtime interprets `panel.intent.created`, fans promotion actions to `promote.intent.created`, emits `panel.intent.executed`/`panel.action.*`/`panel.log.created`, and writes AI panel logs (`panel_logs`) that connect the note UI to internal intents.
-- **SoT v5.x Agentic PKM (active forward line, currently through v5.4)** — Agentic flows (PanelAgent v5+), Satellite Sync (`docs/PROTOCOL_SATELLITE_SYNC.md`), and Yggdrasil modules (Munin/Brokkr/Tyr/Heimdall) that extend the v4.10 backbone; richer orchestration (LangGraph + MCP ToolProvider) and reasoning live here. The forward line now includes a watcher/agent infra track that builds on v5.0: v5.1 watcher-ready ingest/panel flows (including targeted ingest via `ingest-vault-paths` and multi-note panel CLI), v5.2 snapshot-based CLI polling watcher MVP (`vault-watcher-run` driving ingest + panel), v5.3 explicit policy for auto-panel via frontmatter gating watcher runs, and v5.4 watcher hardening/ergonomics (dry-run, max-notes guard, structured summaries).
+- **SoT v5.x Agentic PKM (active forward line, currently through v5.5)** — Agentic flows (PanelAgent v5+), Satellite Sync (`docs/PROTOCOL_SATELLITE_SYNC.md`), and Yggdrasil modules (Munin/Brokkr/Tyr/Heimdall) that extend the v4.10 backbone; richer orchestration (LangGraph + MCP ToolProvider) and reasoning live here. The forward line now includes a watcher/agent infra track that builds on v5.0: v5.1 watcher-ready ingest/panel flows (including targeted ingest via `ingest-vault-paths` and multi-note panel CLI), v5.2 snapshot-based CLI polling watcher MVP (`vault-watcher-run` driving ingest + panel), v5.3 explicit policy for auto-panel via frontmatter gating watcher runs, v5.4 watcher hardening/ergonomics (dry-run, max-notes guard, structured summaries), and v5.5 planner pipeline + CLI-first orchestration.
 
 ### Architecture Statement: Multi-agent outer, LangGraph inner
 - Outer architecture: many autonomous agents coordinate via events/A2A envelopes; the Orchestrator routes/executes plans but does not embed each agent’s internal reasoning or decision logic.
 - Inner architecture: each agent is modeled as a LangGraph-driven state machine with an explicit `AgentState`; non-trivial decisions (what to do, in what order) belong inside these graphs rather than outer pipelines.
 - Tools/MCP: tools are actions an agent chooses from within its LangGraph; they should not be hard-wired at the pipeline/Orchestrator level beyond routing envelopes.
 - Examples: the ASK agent already follows this pattern (`app/agents/ask/graph.py` + `AgentState`); PanelAgent is partially aligned today (Runtime V1 fixed mapping) with a planned migration to the same LangGraph + AgentState pattern (PanelAgent 2.0).
+- Current adoption is phased: ASK and PanelAgent use LangGraph; most other agents remain deterministic pipelines until v5.6 rollout phases.
+
+## Agent Implementation Pattern (Normative)
+- Agents MUST route reasoning/tool calls through the ReasoningFacade once it is available.
+- LangGraph agents SHOULD share a common BaseLangGraphAgent to keep state transitions and tool invocation uniform.
+- Agents MUST preserve external event contracts and Outbox envelopes during migrations.
+- Implementation details will live in `docs/AGENT_IMPLEMENTATION.md` (placeholder for later).
+
+## Concurrency & Idempotency
+- Concurrency guards are a v5.5D gate for watcher auto-exec and orchestration.
+- Events MUST carry `event_id` and consumers MUST deduplicate; note writes MUST fail safe on version mismatch.
+- See `docs/CONCURRENCY.md` for the required patterns and testing strategy.
 
 ## Reality-MVP Orientation
 - Primary focus: make ingestion of the real Obsidian vault stable, add a minimal external ingest path, expose a reliable ASK API, and ship observability plus an interim GUI so the system is usable end to end.
 - Zoned cognition overlay (Active/ Warm/ Cold) applied on top of the knowledge base; zones are derived from signals (usage, recency, trust) rather than folder names.
 - Two planes: Obsidian vault as the human graph (LYT + PARA) with minimal human frontmatter, and an external corpus plane (newsletters/emails/PDFs) that is indexed and retrievable but never rendered as Obsidian notes.
-- Metadata backbone lives in Stores + SetDB/AMG: Core-6 frontmatter remains a projection for humans, while system metadata (signals, relations, usage counts, agent reflections) sits in the data layer.
+- Metadata backbone lives in Stores + SetDB/AMG: Core-6 frontmatter remains a projection for humans (see `docs/CORE_CONTRACT.md`), while system metadata (signals, relations, usage counts, agent reflections) sits in the data layer.
 - Collaboration/multi-user stays out of scope for Reality-MVP; the current work is single-user, vault-first reliability.
 
 ## Zoned Cognition Overlay
@@ -57,10 +69,22 @@ Architecture describes how things are wired today; these documents define what m
 - Zones are orthogonal to lifecycle (inbox → processed/staging → evergreen → archived) and to temporal value (ephemeral vs normal vs evergreen longevity). A note can be evergreen and Cold, or ephemeral and Active.
 - Zones are derived overlays driven by system metadata (recency, relations, usage), not mandatory folder/tag names; they can be projected into ASK responses and GUI status but do not dictate file layout.
 
+## Core Contract, State Axes, and Overlays (vNext)
+- Core contract: Core-6 is the minimal semantic projection (uuid, title, origin, source_ref, trust, review_state). Fields may be explicit or derived; see `docs/CORE_CONTRACT.md`.
+- State axes: orthogonal and policy-driven via vault settings; policies define which axes are enabled, locked, or forced.
+- Derived / overlay metadata: system-owned overlays such as `zone`, recency, or salience are computed from signals and remain outside the core contract.
+- Agent reasoning operates on Core-6 + state axes + policy profiles (see `docs/NOTE_KIND_POLICIES.md`) + derived overlays.
+
+## Note Kind Policies (policy profiles)
+- Note kinds are policy profiles, not schemas. `kind` routes policy and does not define structure.
+- State axes are orthogonal and selectively enabled by policy per kind.
+- Policies can lock axis values and gate agent read/write permissions; defaults live in vault settings (vault-as-GUI).
+- See `docs/NOTE_KIND_POLICIES.md` for policy profile examples.
+
 ## Planes and Metadata Surfaces
 - Vault plane (Obsidian): the human graph of linkable notes; minimal human frontmatter is allowed/encouraged, but the system does not require heavy YAML. Notes belong here when the user might want to read or link them directly.
 - External corpus plane: imported newsletters/emails/PDFs/raw docs that should be searchable and usable for answers but should not appear as notes. These objects live only in Stores/AMG with origins such as `origin: external_newsletter` and review states like `external_raw`.
-- Human frontmatter vs system metadata: frontmatter is for user-facing fields (uuid, title, type/status/area); system metadata (signals, zone inference inputs, relations, promotions, usage counts) remains in SetDB/AMG and Stores. Core-6 remains a projection ({uuid, title, origin, review_state, trust, source_ref}) and is not the full truth.
+- Human frontmatter vs system metadata: frontmatter is for user-facing fields (Core-6 plus optional policy axes like kind/status/priority); system metadata (signals, zone inference inputs, relations, promotions, usage counts) remains in SetDB/AMG and Stores. Core-6 remains a projection ({uuid, title, origin, source_ref, trust, review_state}) and is not the full truth.
 
 ### Note Log in the metadata mirror
 - For each object/uuid in the vault there is a matching `uuid.md` in the metadata mirror (`System/Metadata/VaultMirror/<vault-relative path>/`).
@@ -73,7 +97,7 @@ Architecture describes how things are wired today; these documents define what m
    - Panel/runtime watcher entrypoint: `panel run-many` runs the same PanelAgent parse/runtime for multiple notes (emit-only supported) and will be the panel-side hook for Vault Watcher batches; watcher auto-run is gated by frontmatter policy (`ai_panel_auto_run`).
    - Vault Watcher CLI: `vault-watcher-run` (v5.2) performs snapshot-based change detection, calls `ingest-vault-paths` for changed notes, optionally runs `panel run-many`, then refreshes the snapshot for polling/scheduler use; v5.4 adds dry-run and max-notes guard plus structured summaries.
 2) **External corpus ingest (minimal)** — a small drop folder/pipeline for real external documents ingested as `external_raw` objects, stored in ObjectStore and indexed without surfacing as vault notes (txt/md drop-folder CLI implemented; newsletters/PDFs can extend the same path).
-3) **ASK API** — FastAPI endpoint returning answer text plus sources `{uuid, title, origin (vault/external), zone if known, path/source_ref}` and latency; uses hybrid retrieval over both planes with an in-process HybridStore warmed from `store_objects` on first use. Zone overlays are planned but not yet populated in responses.
+3) **ASK API** — FastAPI endpoint returning answer text plus sources `{uuid, title, origin (vault/external), zone overlay if known, path/source_ref}` and latency; uses hybrid retrieval over both planes with an in-process HybridStore warmed from `store_objects` on first use. Zone overlays are planned but not yet populated in responses.
 4) **Observability backend** — status service that aggregates per-store object counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency; exposed via CLI and interim GUI.
 5) **Interim GUI** — simple FastAPI-served page (root `/`) that shows status (object counts, last ingest, ASK stats) and an ASK input with answers + visible sources; explicitly a temporary observability/interaction surface.
 All Reality-MVP components run on the existing PER-loop agents (Normalizer, Classifier, Chunker, CitationChecker, Indexer, Reviewer, Promotion Agent) and Store abstraction (ObjectStore, VectorIndex, RelationIndex) with Outbox-driven events and Projector/Planner/Reasoning layers kept as additive overlays.
@@ -85,7 +109,7 @@ The sections below retain the v4.5A Canon details as a historical baseline; inva
 ## Purpose & Principles
 - Human-first and agentic PKM: agents stay assistive, preserve author context, and only advance maturity when a reviewer signs off.
 - Observability-first to drive transparency: every agent emits structured audit spans plus deterministic fixtures so regressions reproduce in CI.
-- Core-6 frontmatter & UUID identity: each object carries the Core-6 envelope (id, type, title, created, updated, origin) and a stable UUID threaded through stores and events.
+- Core-6 contract & UUID identity: each object carries the Core-6 envelope (uuid, title, origin, source_ref, trust, review_state), whether explicit or derived, and a stable UUID threaded through stores and events.
 - Store abstraction & Outbox events: ObjectStore, VectorIndex, and RelationIndex share a Store interface, while the Outbox broadcasts change events for asynchronous consumers.
 - Separation of trust and audit: trust levels gate promotion; audit trails remain append-only so reviewers can replay any decision independently.
 
@@ -169,6 +193,14 @@ Invariants:
 - `claims` is successful (`status="ok"`) only when at least one claim or evidence exists; fully empty `{claims:[], evidence:[], inferences:[]}` is `status="failed"`.
 - `ranking` is successful only when the ranking list is non-empty and contains at least one non-empty reason; otherwise `status="failed"`.
 
+## Orchestrator V2 Design (Preview)
+- Parallel step execution with deterministic scheduling and replay.
+- Compensation/rollback hooks for multi-step plans.
+- Checkpointing and resumption for long-running plans.
+- Structured retry policy for idempotent steps.
+- Flagged rollout: `ORCHESTRATOR_VERSION=v1|v2` (preview only).
+- Placeholder: `docs/ORCHESTRATOR_V2.md`.
+
 ## Persistence & Execution Modes
 - `STORE_BACKEND=memory` is the default for CI and unit tests; it instantiates in-memory implementations of ObjectStore, VectorIndex, and RelationIndex with deterministic UUID seeds.
 - `STORE_BACKEND=pg` connects to Postgres/pgvector for full-fidelity runs; migrations guarantee schema parity with the memory structs.
@@ -186,65 +218,8 @@ The adapter `app/retrieval/hook_adapter.py::maybe_rerank(query, items)` sits on 
 JSONL audit logs capture `trace_id`, agent name, inputs, and outputs for each PER step; correlated `span_id`s map to structured metrics for latency and retries. Deterministic CI runs use `pytest -q -m "not pg"`, memory stores, and mock LLMs to ensure reproducible timings. Outbox processing meets QAS-010 by keeping ingest-to-index latency ≤ 2 s, while search endpoints monitor QAS-003 with p95 latency < 250 ms under hybrid retrieval. Telemetry dashboards watch agent failure rates and promotion cooldown breaches so regressions are caught before shipping.
 Runtime status lives in `app.observability.status_service`: it aggregates per-plane object counts (vault/external), ingest run timestamps/errors (via ingest summaries), and ASK latency/error counts. The `status` CLI command and interim GUI (root `/`, static HTML + JS under `app/web/static/index.html`) call this backend to show a human-readable snapshot.
 
-## Fitness Functions
-- **QAS-003 Hybrid Search Latency** — `app.fitness.metrics.qas003_hybrid_latency()` warms the in-memory hybrid store with a deterministic corpus and times `hybrid_search()` invocations. CI fails if the measured p95 exceeds 250 ms, and the GitHub workflow prints the JSON report via `python -m app.fitness.report`.
-- **QAS-010 Outbox→Index Propagation** — `app.fitness.metrics.qas010_outbox_to_index_latency()` simulates ingest events flowing from an in-memory outbox into `MemoryVectorIndex`. Each event measures emission-to-index duration; CI enforces a 2 s ceiling.
-Both probes run in memory mode with `LLM_PROVIDER=mock` so they remain deterministic and guard regressions without external services.
-
-### CI Gates (v4.6-D)
-`python -m app.fitness.report` now emits seven CI summary lines (LATENCY, EVAL, EVAL DELTA, RELATION COVERAGE, RELATIONS, DIARIZATION, GATES). The first six capture raw metrics, while the GATES line reports whether thresholds were met plus any failure codes. Baselines live in `ops/quality/baselines.yaml` and are overridable via `THRESHOLDS_PATH`; tolerances are additive (e.g., latency ≤ baseline × 1.10, diarization chunk_p95_on ≤ chunk_p95_off × 0.95). The GitHub workflow tees the report into `tmp/ci_summary.log`, parses it via `parse_summary_lines()`, and fails fast if any line is missing or `ok=false`, ensuring every PR presents the same contract without network access.
-
-## Relation Index v1 & Orphan Gate
-`MemoryRelationIndex` and `PgRelationIndex` now implement `link()`, `neighbors()`, and `has_any()` so agents can assert provenance before publishing. PromotionAgent wires in `app.promotion.gates.ensure_object_has_relations()` — if no relation exists for a queued UUID the agent blocks promotion by default. Overrides require `PROMOTION_ALLOW_ORPHANS=1` plus `PROMOTION_ORPHAN_OVERRIDE_REASON`, which emits an `audit_log(action="promotion.orphan.override")` entry and a `promote.orphan.override` log line. This keeps the promoted surface free from orphaned knowledge while still allowing audited manual exceptions. CI also reports the ratio of promoted items with relations using the golden sample in `data/golden/relations.json`.
-
-### Relation Layer v1
-`app.stores.relation_index` provides deterministic extraction + registration helpers that scan frontmatter fields (`supports`, `extends`, `contradicts`, `derived_from`, `relations`, `related`, tag prefixes) and markdown sections such as “See also” / “Derived from”. The extractor normalizes targets, caps supported relation types to `{supports, extends, contradicts, derived_from}`, and deduplicates matches before `register_relation_candidates()` writes them via the configured `RelationIndex`. `prepare_relations_for_promotion()` runs these heuristics for every queue item, persists the links, and emits audit entries: `relation.added` for valid edges, `relation.missing` when parsing fails. When `PROMOTION_REQUIRE_RELATIONS=1`, promotion halts until at least one link is recorded, preserving determinism and blocking orphaned cards. The RelationIndex payload retains evidence (frontmatter field or body heading) so later graph tooling can trace why a link exists.
-
-## Diarization Hook
-`app.diarization.hook.apply_diarization()` post-processes ASR output inside `app/media/transcribe.py`. Flags:
-- `DIARIZE_ENABLE` — master switch (defaults to off).
-- `DIARIZE_PROVIDER` — `none|mock|external`; the mock provider yields alternating `spk_0`/`spk_1` segments without external dependencies, while the external provider calls `DIARIZE_HTTP_ENDPOINT` and falls back to mock on errors.
-| Provider | Env | Behaviour |
-| --- | --- | --- |
-| `none` | `DIARIZE_ENABLE=0` or provider unset | Pass-through single segment. |
-| `mock` | `DIARIZE_ENABLE=1`, `DIARIZE_PROVIDER=mock` | Splits text into alternating speakers deterministically. |
-| `external` | `DIARIZE_PROVIDER=external`, `DIARIZE_HTTP_ENDPOINT=<url>` | Calls HTTP diarization API with fallback to mock. |
-Segments preserve `{speaker, text}` metadata so downstream ingestion can attach speaker context without reprocessing audio.
-
-## Golden Set Evaluation
-`app.eval.golden.evaluate_golden_set()` loads `data/golden/corpus.jsonl` plus `data/golden/judgments.json`, stamps them into the hybrid store, and runs `precision@k` / `nDCG@k` over the synthetic queries. The evaluation runs as part of the not-pg test suite to guarantee that rerank and retrieval improvements never regress the baseline metrics; docs and CI reference the golden corpus as the agreed benchmark. `python -m app.fitness.report` compares ce_local against the baseline provider and emits `CI SUMMARY EVAL P@10=<val> nDCG@10=<val>` so regressions block merges automatically.
-
-## Extensibility & v5 Direction
-The v5 roadmap layers declarative reasoning (RDF/OWL/SHACL constraints) on top of the existing stores, enabling Reviewer and PromotionAgent to validate logic gates instead of bespoke Python checks. The Agent Memory Graph will evolve to persist reflective notes per object, informing future PER plans. Provenance and promotion governance will add policy bundles (who can promote, when to reset cooldowns) so humans stay accountable even as automation deepens.
-## Settings Architecture — Vault-as-GUI, Code-as-Source
-
-Control surface (human-facing): `vault/@Settings/**`  
-Effective runtime configuration (compiled): `runtime/settings/**/*.yaml` (derived; rebuildable)
-
-The canonical configuration is the vault settings surface; the runtime YAML is a derived/compiled representation.
-
-### Human → Machine pipeline
-1) Markdown → Loader → Sections  
-2) Sections → Parsers → Semantic dicts  
-3) Merge + Precedence → Compiler → Typing (Pydantic) + secrets resolution  
-4) Artifacts are written to `runtime/settings/**` + `settings.changed` event
-
-### Precedence
-Process overrides > ENV/.env > Vault Markdown > Defaults
-
-### Secrets
-Vault only references `${SECRET:NAME}`. Resolution comes from `.env` or SOPS-encrypted files. Raw values are never written to Markdown or `runtime/`.
-
-### Hot-reload
-Components subscribe to `settings.changed` and re-read idempotently.
-
-### Markup rules
-- Checkboxes → bool
-- Two-column table → key: value with dot-path
-- YAML `settings` block → authoritative section
-
-## Agent Coordination Layer (A2A) — v4.8
-A2A introduces a declarative agent-to-agent messaging fabric layered on Stores + Events + the PER loop. When `A2A_ENABLE=1`, the Outbox registers an additional channel that carries envelopes between agents without bypassing audit or promotion invariants, and every agent can opt into message handling via `handle_agent_message()` while continuing to emit the standard ingest events. The canonical schema (request/response/error) plus audit events (`agent.request.created`, `agent.response.created`, `agent.error.created`) now ship in-tree so tests can exercise protocol hooks while routing/orchestrator wiring remains feature-gated.
+## A2A / Agent-to-Agent Protocol (v4.8)
+A2A runs as an internal message bus over the same Stores + Events + the PER loop. When `A2A_ENABLE=1`, the Outbox registers an additional channel that carries envelopes between agents without bypassing audit or promotion invariants, and every agent can opt into message handling via `handle_agent_message()` while continuing to emit the standard ingest events. The canonical schema (request/response/error) plus audit events (`agent.request.created`, `agent.response.created`, `agent.error.created`) now ship in-tree so tests can exercise protocol hooks while routing/orchestrator wiring remains feature-gated.
 
 ### Envelope Events
 - `agent.request.created` — emitted when an agent wants follow-up work from another agent; carries `request_id`, `trace_id`, desired capability, and payload summary.

@@ -2,8 +2,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VAULT_DEFAULT="/Users/rasmus/Library/Mobile Documents/iCloud~md~obsidian/Documents/PKM - Alpha"
-VAULT="${VAULT:-${1:-$VAULT_DEFAULT}}"
+VAULT="${VAULT:-${1:-${VAULT_ROOT:-}}}"
+
+if [[ -z "$VAULT" ]]; then
+  echo "VAULT_ROOT (or VAULT/arg) is required" >&2
+  exit 2
+fi
 
 export POLICY_ENFORCE="${POLICY_ENFORCE:-1}"
 export WATCHER_ENABLE="${WATCHER_ENABLE:-1}"

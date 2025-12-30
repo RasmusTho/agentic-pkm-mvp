@@ -7,19 +7,30 @@ State: Kernel-adjacent (warm-surface metadata contract; implementation-agnostic)
 Frontmatter exists to support a human writing workflow, not to turn notes into database rows.
 
 This document defines:
-- The **minimal human-facing frontmatter philosophy**.
-- The **write contract**: what the system may write automatically, what requires confirmation, and what must never be auto-applied.
-- Where **receipts/cursors** belong (warm note vs system plane) and why.
+- The minimal human-facing frontmatter philosophy.
+- The write contract: what the system may write automatically, what requires confirmation, and what must never be auto-applied.
+- Where receipts/cursors belong (warm note vs system plane) and why.
 
 See also:
 - `docs/CONCEPTS/LAYERING_MODEL.md` (Domain/Plane/Trust/Zone)
 - `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md` (ASSERT/SUGGEST/APPLY + evidence/receipts)
+- `docs/CORE_CONTRACT.md` (Core-6 semantic contract)
+
+## Metadata layers
+
+Frontmatter may contain multiple layers of metadata, each with distinct ownership and intent:
+
+- Core Contract fields: the Core-6 contract (uuid, title, origin, source_ref, trust, review_state).
+- State fields: policy-selected axes (e.g., status, maturity, priority, temporal fields) enabled by note kind policies.
+- Derived / overlay fields: system-computed overlays (e.g., zone, recency, salience) that should remain system-owned.
+
+Not all semantics must be explicit in YAML. Core-6 fields may be implicit or derived when unambiguous.
 
 ## Minimal human-facing philosophy
 
-- **Frontmatter is small**: prefer a few stable fields over a sprawling schema.
-- **Meaning stays in prose**: the note body remains the primary place the human expresses intent and nuance.
-- **Metadata is assistive**: metadata improves retrieval, curation, and navigation, but must not become a second, competing authoring surface.
+- Frontmatter is small: prefer a few stable fields over a sprawling schema.
+- Meaning stays in prose: the note body remains the primary place the human expresses intent and nuance.
+- Metadata is assistive: metadata improves retrieval, curation, and navigation, but must not become a second, competing authoring surface.
 
 ## Ownership: human vs system
 
@@ -34,8 +45,9 @@ The system may propose changes to these (SUGGEST), but must not silently overwri
 
 ### System-owned (bounded)
 The system may maintain small, bounded metadata needed for safety and stability, such as:
-- A stable identity handle (e.g., an id/uuid) when missing.
-- A minimal state marker that represents an explicit workflow decision (only when authorized via APPLY).
+- A stable identity handle (e.g., uuid) when missing.
+- Guardrails like trust/review_state and derived overlays (zone/recency/salience).
+- Policy-selected state markers only when authorized via APPLY.
 
 System-written fields must be:
 - Easy to distinguish from human prose/meaning.
@@ -57,13 +69,13 @@ Frontmatter writes must follow the trust semantics:
 ### Must never be auto-applied
 - Destructive or irreversible changes.
 - Silent boundary crossings (e.g., pulling external/cold material into a warm note without explicit intent).
-- Upgrading low-provenance content into “confirmed truth” without explicit review.
+- Upgrading low-provenance content into confirmed truth without explicit review.
 
 ## Receipts and cursors (where they live)
 
 Receipts and cursors are operational artifacts:
-- They belong primarily in the **system plane**, so they remain available and auditable without polluting the writing surface.
-- They may be *mirrored* into the warm note only as a bounded, clearly non-authoritative status surface (for human convenience).
+- They belong primarily in the system plane, so they remain available and auditable without polluting the writing surface.
+- They may be mirrored into the warm note only as a bounded, clearly non-authoritative status surface (for human convenience).
 
 If a note displays status/receipts, it must remain clear that:
 - The note body is still the human’s writing.

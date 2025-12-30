@@ -170,24 +170,33 @@ class ObjectStore:
         if not _pg_available():
             return
         with _conn_rw() as conn:
+            table = self._active_table(conn)
+            id_col, uuid_col = _table_columns(table)
+            stmt = sql.SQL(
+                """
+                insert into {table} (
+                    {id_col},
+                    {uuid_col},
+                    kind,
+                    source_ref,
+                    payload,
+                    created_at
+                )
+                values (%s, %s, %s, %s, %s::jsonb, %s)
+                on conflict ({id_col}) do update set
+                    {uuid_col} = excluded.{uuid_col},
+                    kind = excluded.kind,
+                    source_ref = excluded.source_ref,
+                    payload = excluded.payload
+                """
+            ).format(
+                table=sql.Identifier(table),
+                id_col=sql.Identifier(id_col),
+                uuid_col=sql.Identifier(uuid_col),
+            )
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    insert into objects (
-                        id,
-                        uuid,
-                        kind,
-                        source_ref,
-                        payload,
-                        created_at
-                    )
-                    values (%s, %s, %s, %s, %s::jsonb, %s)
-                    on conflict (id) do update set
-                        uuid = excluded.uuid,
-                        kind = excluded.kind,
-                        source_ref = excluded.source_ref,
-                        payload = excluded.payload
-                    """,
+                    stmt,
                     (
                         obj.uuid,
                         obj.uuid,
@@ -229,3 +238,34 @@ class ObjectStore:
                 return self._db_list_objects(conn, kind, limit)
         except Exception:
             return _list_from_memory(kind, limit)
+
+    def count_objects(self, kind: Optional[str] = None) -> int:
+        if not _pg_available():
+            values = list(_MEMORY_STORE.values())
+            if kind is not None:
+                values = [obj for obj in values if obj.kind == kind]
+            return len(values)
+        try:
+            with _conn_rw() as conn:
+                table = self._active_table(conn)
+                params: list[Any] = []
+                if kind is not None:
+                    stmt = sql.SQL("SELECT count(*) FROM {table} WHERE kind = %s").format(table=sql.Identifier(table))
+                    params.append(kind)
+                else:
+                    stmt = sql.SQL("SELECT count(*) FROM {table}").format(table=sql.Identifier(table))
+                with conn.cursor() as cur:
+                    cur.execute(stmt, params)
+                    row = cur.fetchone()
+                value = 0
+                if row:
+                    if isinstance(row, dict):
+                        value = int(row.get("count") or row.get("total") or row.get("objects") or 0)
+                    else:
+                        value = int(row[0] or 0)
+                return value
+        except Exception:
+            values = list(_MEMORY_STORE.values())
+            if kind is not None:
+                values = [obj for obj in values if obj.kind == kind]
+            return len(values)

@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/diarization/hook.py
-# hypothesis_version: 6.148.7
-
-['!', '.', '1', '3.0', '?', 'DIARIZE_ENABLE', 'DIARIZE_HTTP_TIMEOUT', 'DIARIZE_PROVIDER', 'apply_diarization', 'demo', 'external', 'http', 'mock', 'none', 'off', 'on', 'segments', 'speaker', 'spk_0', 'text', 'true', 'yes']

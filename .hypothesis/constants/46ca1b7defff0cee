@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/__init__.py
-# hypothesis_version: 6.148.7
-
-['classify_run', 'normalize_run']

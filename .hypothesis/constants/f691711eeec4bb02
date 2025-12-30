@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agent/repository.py
-# hypothesis_version: 6.148.7
-
-[' AND ', 'WHERE ', 'count', 'created_at', 'emergent_tags', 'intent', 'json', 'last_seen', 'running', 'system_intent', 'tag', 'total', 'unknown', 'value']

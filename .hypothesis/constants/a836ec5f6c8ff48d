@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/planner/events.py
-# hypothesis_version: 6.148.7
-
-['/', '1', 'body', 'content', 'event_id', 'event_type', 'extras', 'flow:', 'flow_id', 'flow_ids', 'flow_profiles', 'flow_tags', 'flows', 'general', 'id', 'intent', 'metadata', 'name', 'note', 'note_moves_enable', 'object_id', 'object_uuid', 'on', 'original_intent', 'original_kind', 'original_tool', 'payload', 'plan_for_event', 'planner_mode', 'planning_mode', 'profiles', 'prompt', 'prompt_profiles', 'question', 'skipped_move', 'source_object_uuid', 'suggested_patterns', 'summary', 'text', 'trace_id', 'true', 'uuid', 'yes']

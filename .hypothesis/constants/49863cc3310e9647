@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/events/types.py
-# hypothesis_version: 6.148.7
-
-['AGENT_ERROR_CREATED', 'ASK_QUERY_RECEIVED', 'CLEANUP_DONE', 'CURATION_DEDUPE_DONE', 'CURATION_REVIEW_DONE', 'INGEST_CHUNK_DONE', 'INGEST_INDEX_DONE', 'JOBS_BACKFILL_DONE', 'PLANNER_PLAN_CREATED', 'PLANNER_PLAN_ERROR', 'PROMOTE_AGENT_PLAN', 'PROMOTE_AGENT_RUN', 'PROMOTE_DONE', 'PROMOTE_ERROR', 'PROMOTE_SKIP_DECODE', 'PROMOTE_SKIP_MISSING', 'PROMOTE_SKIP_MOVE', 'PROMOTE_SKIP_ORPHAN', 'RELATION_MISSING', 'TEXT_CHUNK_CREATED', 'agent.error.created', 'ask.query.received', 'cleanup.done', 'curation.dedupe.done', 'curation.review.done', 'ingest.chunk.done', 'ingest.index.done', 'jobs.backfill.done', 'planner.plan.created', 'planner.plan.error', 'promote.agent.plan', 'promote.agent.run', 'promote.done', 'promote.error', 'promote.skip.decode', 'promote.skip.missing', 'promote.skip.move', 'promote.skip.orphan', 'relation.missing', 'text.chunk.created']

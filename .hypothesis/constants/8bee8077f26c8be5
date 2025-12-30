@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/reasoning/store.py
-# hypothesis_version: 6.148.7
-
-['ReasoningStore', 'claims', 'evidence', 'get_reasoning_store', 'id', 'inferences']

@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/llm/trace_inspect.py
-# hypothesis_version: 6.148.7
-
-[0.0, 'LLMSequence', 'LLMSequenceStep', 'LLMTraceRecord', 'LLM_TRACE_PATH', 'agent', 'filter_flows', 'group_by_trace_id', 'kind', 'load_trace', 'mode', 'model', 'prompt_preview', 'provider', 'r', 'raw_response_preview', 'response_preview', 'status', 'timestamp', 'trace_id', 'utf-8']

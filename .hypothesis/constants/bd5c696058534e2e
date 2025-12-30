@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/index/rules.py
-# hypothesis_version: 6.148.7
-
-[0.0, 1.0, 'action', 'exclude', 'include', 'soft_exclude', 'weight', 'when']

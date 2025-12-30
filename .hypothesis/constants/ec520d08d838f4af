@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/observability/status_service.py
-# hypothesis_version: 6.148.7
-
-['+00:00', 'Z', '_objects', 'baseline', 'created_at', 'event', 'event_type', 'external', 'forward_line', 'get_ask_status', 'get_ingestion_status', 'get_store_status', 'get_system_status', 'id', 'label', 'object_id', 'origin', 'payload', 'plane', 'planes', 'r', 'record_ask_error', 'record_ask_query', 'reset_ask_metrics', 'source', 'source_ref', 'timestamp', 'topic', 'utf-8', 'vault', 'watcher.run']

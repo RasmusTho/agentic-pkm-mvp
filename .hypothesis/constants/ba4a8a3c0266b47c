@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/indexer/agent.py
-# hypothesis_version: 6.148.7
-
-[0.0, 'core6', 'deterministic', 'embeddings', 'event', 'indexer', 'object_id', 'raw_text', 'title', 'trace_id', 'ts']

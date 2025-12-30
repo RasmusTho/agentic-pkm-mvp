@@ -16,7 +16,7 @@ from app.promotion.consumer import consume_promotion_intents
 from app.ingest.config import DEFAULT_VAULT_ROOT
 from app.cli.alpha_human_flows import run_alpha_human_flows
 from app.ingest.vault_root import ingest_vault_root
-from app.ingest.vault_alpha import run_vault_alpha_ingest, run_vault_alpha_ingest_paths
+from app.ingest.vault_alpha import run_vault_alpha_ingest, run_vault_alpha_ingest_paths, run_vault_alpha_ingest_locked_only
 from app.ingest.external import ingest_external_folder
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
@@ -41,6 +41,7 @@ from app.cli.uat import (
     run_vault_test_flow,
     seed_vault_test_notes,
 )
+from app.stores import get_object_store, get_vector_index, resolve_store_backend
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
 from app.services.note_update import NoteUpdateResult, process_note_update
@@ -93,7 +94,6 @@ def _dump(data: dict, as_json: bool) -> None:
         click.echo(json.dumps(data, ensure_ascii=False))
     else:
         click.echo(json.dumps(data, ensure_ascii=False, indent=2))
-
 
 def _should_transcribe(source: str) -> bool:
     path = Path(source)
@@ -231,6 +231,36 @@ cli.add_command(index_cli, name="index")
 cli.add_command(events_doctor)
 cli.add_command(smoke_cli, name="smoke")
 
+
+def _store_stats_payload() -> dict:
+    backend = resolve_store_backend()
+    store = get_object_store()
+    vector_idx = get_vector_index()
+    result = {
+        "backend": backend,
+        "objects": store.count_objects(),
+    }
+    vector_counter = getattr(vector_idx, "count_vectors", None)
+    if callable(vector_counter):
+        result["vectors"] = vector_counter()
+    return result
+
+
+@cli.group(name="store", help="Store utilities.")
+def store_cli() -> None:
+    ...
+
+
+@store_cli.command(name="stats", help="Report store and vector index counts for diagnostics.")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Print the result as JSON.")
+def store_stats(as_json: bool) -> None:
+    _dump(_store_stats_payload(), as_json)
+
+
+@cli.command(name="store-stats", help="Report store and vector index counts for diagnostics (deprecated; use 'store stats').")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Print the result as JSON.")
+def store_stats_legacy(as_json: bool) -> None:
+    _dump(_store_stats_payload(), as_json)
 
 
 @cli.command(name="llm-trace-sequence", help="Render a single trace flow as text or Mermaid sequence diagram.")
@@ -421,11 +451,31 @@ def pkm_alpha_ingest(limit: int | None) -> None:
 )
 @click.option("--include-test-note", is_flag=True, help="Include Test/Alpha-HumanFlows.md in this run.")
 @click.option("--force", is_flag=True, help="Re-ingest notes even if they appear already ingested or mirrored.")
-def vault_alpha_ingest(vault_root: Path | None, max_notes: int, include_test_note: bool, force: bool) -> None:
+@click.option("--locked-only", is_flag=True, help="Retry only files previously skipped due to locked errors (errno=35).")
+@click.option("--json", "as_json", is_flag=True, help="Output JSON summary.")
+def vault_alpha_ingest(
+    vault_root: Path | None, max_notes: int, include_test_note: bool, force: bool, locked_only: bool, as_json: bool
+) -> None:
     resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=True)
     if resolved is None:
         raise click.BadParameter("Vault root could not be resolved.")
-    summary = run_vault_alpha_ingest(resolved, max_notes=max_notes, include_test_note=include_test_note, force=force)
+    if locked_only:
+        summary = run_vault_alpha_ingest_locked_only(resolved, force=force)
+    else:
+        summary = run_vault_alpha_ingest(resolved, max_notes=max_notes, include_test_note=include_test_note, force=force)
+    if as_json:
+        payload = {
+            "scanned": summary.scanned,
+            "ingested": summary.ingested,
+            "included_folders": summary.included_folders,
+            "force": summary.force,
+            "malformed": summary.malformed,
+            "errors": summary.errors,
+            "skipped_locked": summary.skipped_locked,
+            "locked_examples": summary.locked_examples,
+        }
+        _dump(payload, True)
+        return
     if summary.ingested == 0 and not summary.force:
         click.echo(
             f"Scanned {summary.scanned} files; ingested {summary.ingested} notes (already up to date; run with --force to resync if the store is empty)"
@@ -434,6 +484,44 @@ def vault_alpha_ingest(vault_root: Path | None, max_notes: int, include_test_not
         suffix = f" (force={summary.force})" if summary.force else ""
         click.echo(f"Scanned {summary.scanned} files; ingested {summary.ingested} notes{suffix}")
     click.echo(f"Included folders: {', '.join(summary.included_folders) if summary.included_folders else '-'}")
+
+@cli.command(
+    name="vault-layout-ensure",
+    help="Ensure vault layout folders and default vault.layout.md note exist.",
+)
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional vault root (defaults to VAULT_ROOT or DEFAULT_VAULT_ROOT).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Output JSON summary.")
+def vault_layout_ensure(vault_root: Path | None, as_json: bool) -> None:
+    resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=True)
+    if resolved is None:
+        raise click.BadParameter("Vault root could not be resolved.")
+    if not resolved.exists() or not resolved.is_dir():
+        raise click.BadParameter(f"Vault root not found or not a directory: {resolved}")
+    from app.vault.layout import ensure_vault_layout_report
+
+    layout, migrated, warnings = ensure_vault_layout_report(resolved)
+    if as_json:
+        payload = {
+            "system_folder": layout.system_folder,
+            "inbox_folder": layout.inbox_folder,
+            "desk_folder": layout.desk_folder,
+            "layout_note": str(layout.note_path),
+            "migrated_legacy_system": migrated,
+            "warnings": warnings,
+        }
+        _dump(payload, True)
+        return
+    click.echo(
+        "Vault layout ensured: "
+        f"inbox={layout.inbox_folder} desk={layout.desk_folder} system={layout.system_folder}"
+    )
+    if warnings:
+        click.echo(f"Warnings: {', '.join(warnings)}", err=True)
 
 
 @cli.command(

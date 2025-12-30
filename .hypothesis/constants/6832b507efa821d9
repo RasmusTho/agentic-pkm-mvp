@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/api/routers/interesting.py
-# hypothesis_version: 6.148.7
-
-[0.0, '/interesting', '/interesting/summary', 'anomaly', 'created_at', 'emergent_tags', 'interesting_items', 'novelty', 'object_id', 'payload', 'reason', 'run_id', 'score', 'system_intent', 'uncertainty', 'value', 'values']

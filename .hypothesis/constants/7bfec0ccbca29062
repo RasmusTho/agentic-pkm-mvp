@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/agents/normalizer/agent.py
-# hypothesis_version: 6.148.7
-
-['#', 'core6', 'created_at', 'event', 'id', 'kind', 'normalizer', 'note', 'object_id', 'path', 'payload', 'raw_text', 'review_state', 'reviewed', 'source_path', 'source_ref', 'title', 'trace_id', 'ts', 'utf-8', 'uuid']

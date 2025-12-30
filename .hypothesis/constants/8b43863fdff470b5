@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/components/embeddings.py
-# hypothesis_version: 6.148.7
-
-['EMBED_MODEL', 'EMBED_PROFILE', 'EmbeddingIdentity', 'default', 'describe_embedding', 'deterministic', 'deterministic-hash', 'get_embedding_client', 'identity', 'offline', 'profile', 'test']

@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/mcp/vault_tools.py
-# hypothesis_version: 6.148.7
-
-['-', 'MCP_VAULT_ROOT', 'VAULT_DIR', 'VaultToolError', '[^a-zA-Z0-9]+', '_mcp', 'append_note', 'body is required', 'get_vault_root', 'metadata', 'note', 'path', 'root', 'tags', 'title', 'title is required', 'utf-8', 'vault', 'vault_root']

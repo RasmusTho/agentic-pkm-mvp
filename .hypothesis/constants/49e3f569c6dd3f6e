@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/observability/status_model.py
-# hypothesis_version: 6.148.7
-
-['AskStatus', 'EventCounters', 'IngestionPlaneStatus', 'IngestionStatus', 'IntentStatus', 'StoreStatus', 'SystemStatus']

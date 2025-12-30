@@ -1,4 +1,0 @@
-# file: /Users/rasmus/workspace/app/db/__init__.py
-# hypothesis_version: 6.148.7
-
-['Base', 'SessionLocal', 'conn_ro', 'conn_rw', 'engine', 'ensure_schema', 'resolve_dsn']

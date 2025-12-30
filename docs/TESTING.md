@@ -16,6 +16,18 @@ State: SoT v4.10 Reality-MVP (current core).
 - **E. Fitness gates** — status/outbox counters checked post-run (watcher_runs, panel_runs, promote.intent.created/done) with idempotence (no duplicate intents on rerun) enforced in CI (`app/fitness/*`, `ops/quality/baselines.yaml`).
 - **F. Scripted UAT** — CLI harness for runtime-loop + promotion consumer + status assertions; runs on memory backend and real vaults with the golden seed pack.
 
+## Concurrency Tests (docs-only)
+These tests will land in PR2. Requirements live in `docs/CONCURRENCY.md`.
+
+- **Event deduplication:** concurrent watcher runs must not emit duplicate intents or `watcher.run` events.
+- **Optimistic locking:** concurrent note/object writes must fail safe on version mismatch (no corruption).
+- **Action idempotency:** replaying the same `event_id` or `ai:id` must be a no-op.
+
+Example commands (placeholders until tests land):
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/ops/test_concurrency_watchers.py -m "not pg"`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/runtime/test_optimistic_locking.py -m "not pg"`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/ops/test_event_idempotency.py -m "not pg"`
+
 ## Commands
 - Repo-root deterministic run (memory backend; plugin autoload disabled):
   - STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"
