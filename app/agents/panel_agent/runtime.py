@@ -90,6 +90,7 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
         action_wiring=wiring,
         note_content=note_text,
         panel_hints=panel_hints,
+        executed_action_ids=sorted(executed_ids),
     )
     decider_mode = get_panel_agent_decider()
     state = run_panel_graph(initial_state, decider_mode=decider_mode)
