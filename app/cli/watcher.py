@@ -94,7 +94,7 @@ def watcher_run(config: Path, max_ticks: int | None) -> None:
     click.echo(
         "watcher registry: "
         f"config={cfg.config_path} vault={cfg.vault_path} outbox={cfg.outbox_path} "
-        f"watchers=[{watcher_names}] stop_file={cfg.stop_file}"
+        f"watchers=[{watcher_names}] stop_file={cfg.stop_file} tick_sleep={cfg.tick_sleep_seconds}"
     )
 
     try:

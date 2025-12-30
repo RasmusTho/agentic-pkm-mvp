@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -26,11 +27,8 @@ def test_registry_tick_sleep_seconds_from_env(tmp_path: Path, monkeypatch: pytes
     config_path = tmp_path / "watchers.yaml"
     _write_config(config_path)
 
-    vault_path = tmp_path / "vault"
-    vault_path.mkdir()
-
     monkeypatch.setenv("WATCHER_ENABLE", "1")
-    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_path))
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(tmp_path / "vault"))
     monkeypatch.setenv("WATCHER_TICK_SLEEP_SECONDS", "0.75")
     monkeypatch.setenv("WATCHER_SUMMARY_INTERVAL", "1")
     monkeypatch.setenv("WATCHER_HEARTBEAT_PATH", str(tmp_path / "watcher_heartbeat.json"))
@@ -52,3 +50,19 @@ def test_registry_tick_sleep_seconds_from_env(tmp_path: Path, monkeypatch: pytes
     registry.run_registry_forever(config_path, max_ticks=1)
 
     assert seen == [0.75]
+
+
+def test_registry_tick_sleep_clamps_minimum(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "watchers.yaml"
+    _write_config(config_path)
+
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(tmp_path / "vault"))
+    monkeypatch.setenv("WATCHER_TICK_SLEEP_SECONDS", "0")
+    monkeypatch.setenv("WATCHER_SUMMARY_INTERVAL", "1")
+    monkeypatch.setenv("WATCHER_HEARTBEAT_PATH", str(tmp_path / "watcher_heartbeat.json"))
+    monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+
+    cfg = registry.load_registry_config(config_path)
+    assert cfg.tick_sleep_seconds == registry.MIN_TICK_SLEEP_SECONDS

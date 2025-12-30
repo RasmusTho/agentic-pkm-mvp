@@ -21,6 +21,8 @@ from app.watcher.state import WatcherState
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
+MIN_TICK_SLEEP_SECONDS = 0.05
+
 
 def _now_iso() -> str:
     return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
@@ -209,6 +211,8 @@ class RegistryConfig:
         state_dir = Path(os.getenv("WATCHER_STATE_DIR", "tmp/watcher_states")).expanduser()
         summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), 60)
         tick_sleep_seconds = _as_float(os.getenv("WATCHER_TICK_SLEEP_SECONDS"), 1.0)
+        if tick_sleep_seconds <= 0:
+            tick_sleep_seconds = MIN_TICK_SLEEP_SECONDS
         return cls(
             enable=enable,
             vault_path=vault_path,
