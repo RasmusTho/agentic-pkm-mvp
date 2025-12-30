@@ -19,6 +19,11 @@ else
   docker compose up -d db api worker
 fi
 
+reset_runtime_state=${RESET_RUNTIME_STATE:-1}
+if [ "$reset_runtime_state" -eq 1 ]; then
+  docker compose exec -T api sh -c 'rm -f /app/tmp/index-outbox.jsonl /app/tmp/watcher_heartbeat.json /app/tmp/worker_heartbeat.json'
+fi
+
 HEALTH_ENDPOINT="http://127.0.0.1:18000/healthz"
 for attempt in $(seq 1 30); do
   if curl -sf "$HEALTH_ENDPOINT" >/dev/null 2>&1; then

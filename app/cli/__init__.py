@@ -16,7 +16,7 @@ from app.promotion.consumer import consume_promotion_intents
 from app.ingest.config import DEFAULT_VAULT_ROOT
 from app.cli.alpha_human_flows import run_alpha_human_flows
 from app.ingest.vault_root import ingest_vault_root
-from app.ingest.vault_alpha import run_vault_alpha_ingest, run_vault_alpha_ingest_paths
+from app.ingest.vault_alpha import run_vault_alpha_ingest, run_vault_alpha_ingest_paths, run_vault_alpha_ingest_locked_only
 from app.ingest.external import ingest_external_folder
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
@@ -451,14 +451,18 @@ def pkm_alpha_ingest(limit: int | None) -> None:
 )
 @click.option("--include-test-note", is_flag=True, help="Include Test/Alpha-HumanFlows.md in this run.")
 @click.option("--force", is_flag=True, help="Re-ingest notes even if they appear already ingested or mirrored.")
+@click.option("--locked-only", is_flag=True, help="Retry only files previously skipped due to locked errors (errno=35).")
 @click.option("--json", "as_json", is_flag=True, help="Output JSON summary.")
 def vault_alpha_ingest(
-    vault_root: Path | None, max_notes: int, include_test_note: bool, force: bool, as_json: bool
+    vault_root: Path | None, max_notes: int, include_test_note: bool, force: bool, locked_only: bool, as_json: bool
 ) -> None:
     resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=True)
     if resolved is None:
         raise click.BadParameter("Vault root could not be resolved.")
-    summary = run_vault_alpha_ingest(resolved, max_notes=max_notes, include_test_note=include_test_note, force=force)
+    if locked_only:
+        summary = run_vault_alpha_ingest_locked_only(resolved, force=force)
+    else:
+        summary = run_vault_alpha_ingest(resolved, max_notes=max_notes, include_test_note=include_test_note, force=force)
     if as_json:
         payload = {
             "scanned": summary.scanned,

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import hashlib
 import fnmatch
-import uuid
+import hashlib
+import json
 import os
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Tuple, Iterable, Set, Sequence
+from typing import Iterable, List, Sequence, Set, Tuple
 
 import click
 import yaml
@@ -46,7 +47,71 @@ _TEST_NOTE_REL = Path("Test") / "Alpha-HumanFlows.md"
 
 
 def _is_locked_error(exc: Exception) -> bool:
-    return isinstance(exc, OSError) and getattr(exc, 'errno', None) == 35
+    return isinstance(exc, OSError) and getattr(exc, "errno", None) == 35
+
+
+_LOCKED_FILES_LOG_ENV = "LOCKED_FILES_LOG_PATH"
+_LOCKED_FILES_LOG_DEFAULT = Path("/app/tmp/locked-files.jsonl")
+
+_VAULT_NOTE_UUID_NAMESPACE = uuid.UUID("b6b2d8b3-8f2a-4a75-9c65-4c4a0d36b3b8")
+
+
+def _locked_files_log_path() -> Path:
+    raw = os.getenv(_LOCKED_FILES_LOG_ENV)
+    return Path(raw).expanduser() if raw else _LOCKED_FILES_LOG_DEFAULT
+
+
+def _append_locked_path(rel_display: str) -> None:
+    log_path = _locked_files_log_path()
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"path": rel_display}) + "\n")
+    except Exception:
+        pass
+
+
+def _read_locked_paths() -> list[str]:
+    log_path = _locked_files_log_path()
+    if not log_path.exists():
+        return []
+    paths: list[str] = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = None
+        value = None
+        if isinstance(payload, dict):
+            value = payload.get("path") or payload.get("rel_path") or payload.get("source_ref")
+        if value:
+            paths.append(str(value))
+        else:
+            paths.append(raw)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in paths:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def _write_locked_paths(paths: list[str]) -> None:
+    log_path = _locked_files_log_path()
+    if not paths:
+        try:
+            log_path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = "\n".join(json.dumps({"path": path}) for path in paths) + "\n"
+    log_path.write_text(payload, encoding="utf-8")
 
 
 def _is_ignored(rel_path: str, ignore_glob: Sequence[str]) -> bool:
@@ -60,18 +125,38 @@ def _compute_ingest_fingerprint(stripped_text: str, path: Path) -> dict[str, int
     }
 
 
+def _normalize_title(value: str) -> str | None:
+    cleaned = " ".join(value.split())
+    return cleaned or None
+
+
+def _frontmatter_title(frontmatter: dict) -> str | None:
+    raw = frontmatter.get("title")
+    value = _coerce_to_str(raw)
+    if value is None:
+        return None
+    return _normalize_title(value)
+
+
 def _derive_title(body: str, path: Path) -> str:
+    first_non_empty: str | None = None
     for line in body.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("---"):
+        if not stripped:
             continue
         if stripped.startswith("#"):
-            candidate = stripped.lstrip("#").strip()
-            if candidate:
-                return candidate
-        else:
-            return stripped
-    return path.stem
+            hashes = len(stripped) - len(stripped.lstrip("#"))
+            if hashes == 1:
+                candidate = _normalize_title(stripped[1:])
+                if candidate:
+                    return candidate
+        if first_non_empty is None:
+            first_non_empty = stripped
+    if first_non_empty:
+        candidate = _normalize_title(first_non_empty)
+        if candidate:
+            return candidate
+    return _normalize_title(path.stem) or "Untitled"
 
 
 def _coerce_to_str(value: object) -> str | None:
@@ -89,24 +174,17 @@ def _normalize_uuid(raw: object | None) -> str:
     if value is None:
         return ""
     value = value.strip()
-    if value.startswith("[[") and value.endswith("]]"):
+    if value.startswith("[[") and value.endswith("]]" ):
         value = value[2:-2].strip()
     return value
 
 
-def _uuid_wikilink(note_uuid: str) -> str:
-    return f"[[{note_uuid}]]"
-
-
-def _is_wikilink(raw: str | None) -> bool:
-    if raw is None:
-        return False
-    if isinstance(raw, (list, tuple)):
-        if not raw:
-            return False
-        return _is_wikilink(raw[0])
-    value = str(raw).strip()
-    return value.startswith("[[") and value.endswith("]]")
+def _derive_note_uuid(frontmatter_uuid: str, mirror_uuid: str, rel_path: Path) -> str:
+    if frontmatter_uuid:
+        return frontmatter_uuid
+    if mirror_uuid:
+        return mirror_uuid
+    return str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, rel_path.as_posix()))
 
 
 def _load_mirror_frontmatter(vault_root: Path, rel_path: Path) -> tuple[Path | None, dict, str]:
@@ -122,11 +200,6 @@ def _load_mirror_frontmatter(vault_root: Path, rel_path: Path) -> tuple[Path | N
         except Exception:
             continue
     return None, {}, ""
-
-
-def _existing_mirror_uuid(vault_root: Path, rel_path: Path) -> str:
-    _, fm, _ = _load_mirror_frontmatter(vault_root, rel_path)
-    return _normalize_uuid(fm.get("uuid") or fm.get("id") or "")
 
 
 def _load_frontmatter_with_reporting(raw_text: str, path: Path) -> tuple[dict, str, bool]:
@@ -148,43 +221,6 @@ def _load_frontmatter_with_reporting(raw_text: str, path: Path) -> tuple[dict, s
     except yaml.YAMLError as exc:
         click.echo(f"Warning: Malformed frontmatter in {path}: {exc}", err=True)
         return {}, body.lstrip("\n"), True
-
-
-def _ensure_note_uuid_frontmatter(path: Path, frontmatter: dict, body: str, note_uuid: str, *, rel_path: Path) -> tuple[str, bool]:
-    existing_uuid_raw = frontmatter.get("uuid")
-    existing_uuid = _normalize_uuid(existing_uuid_raw)
-    existing_id_raw = frontmatter.get("id")
-    existing_id = _normalize_uuid(existing_id_raw)
-
-    if existing_uuid:
-        if existing_uuid != note_uuid:
-            click.echo(
-                f"Warning: {rel_path} frontmatter uuid {existing_uuid} differs from derived {note_uuid}; using frontmatter uuid.",
-                err=True,
-            )
-            note_uuid = existing_uuid
-        if not _is_wikilink(existing_uuid_raw):
-            updated_frontmatter = dict(frontmatter)
-            updated_frontmatter["uuid"] = _uuid_wikilink(existing_uuid)
-            path.write_text(dump_frontmatter(updated_frontmatter, body), encoding="utf-8")
-            return existing_uuid, True
-        return existing_uuid, False
-
-    if existing_id:
-        if existing_id != note_uuid:
-            click.echo(
-                f"Warning: {rel_path} frontmatter id {existing_id} differs from derived {note_uuid}; using frontmatter id.",
-                err=True,
-            )
-        updated_frontmatter = dict(frontmatter)
-        updated_frontmatter["uuid"] = _uuid_wikilink(existing_id)
-        path.write_text(dump_frontmatter(updated_frontmatter, body), encoding="utf-8")
-        return existing_id, True
-
-    updated_frontmatter = dict(frontmatter)
-    updated_frontmatter["uuid"] = _uuid_wikilink(note_uuid)
-    path.write_text(dump_frontmatter(updated_frontmatter, body), encoding="utf-8")
-    return note_uuid, True
 
 
 def _write_mirror(
@@ -222,54 +258,42 @@ def _write_mirror(
 def _select_candidates(
     vault_root: Path,
     *,
-    include_folders: Sequence[str],
+    include_folders: List[str] | None,
     ignore_glob: Sequence[str],
     include_test_note: bool,
     max_notes: int,
 ) -> Tuple[List[Path], List[str]]:
     candidates: List[Path] = []
-    included_folders: List[str] = []
-    roots: List[Path] = []
-    if any(str(raw).strip() in {".", "./"} for raw in include_folders):
-        include_folders = ["."]
-    for raw in include_folders:
-        folder = str(raw).strip()
-        if not folder:
-            continue
-        if folder in {".", "./"}:
-            roots.append(vault_root)
-            if "." not in included_folders:
-                included_folders.append(".")
-            continue
-        root = vault_root / folder
-        if root.exists():
-            roots.append(root)
-            included_folders.append(folder)
-    if include_test_note:
-        test_path = vault_root / _TEST_NOTE_REL
-        if test_path.exists():
-            roots.append(test_path)
-            if "Test" not in included_folders:
-                included_folders.append("Test")
-    for root in roots:
-        if root.is_file() and root.suffix.lower() == ".md":
-            rel = str(root.relative_to(vault_root))
-            if _is_ignored(rel, ignore_glob):
-                continue
-            candidates.append(root)
+    included_folders = include_folders or ["."]
+    vault_root = vault_root.expanduser().resolve()
+
+    for folder in included_folders:
+        if folder == ".":
+            root = vault_root
+        else:
+            root = vault_root / folder
+        if not root.exists() or not root.is_dir():
             continue
         for path in sorted(root.rglob("*.md")):
-            rel = path.relative_to(vault_root)
-            rel_str = str(rel)
-            if _is_ignored(rel_str, ignore_glob):
+            try:
+                rel_path = path.relative_to(vault_root)
+            except ValueError:
+                continue
+            rel_display = str(rel_path)
+            if rel_display.startswith("."):
+                continue
+            if not path.is_file():
+                continue
+            if include_test_note is False and rel_path == _TEST_NOTE_REL:
+                continue
+            if _is_ignored(rel_display, ignore_glob):
                 continue
             candidates.append(path)
-            if max_notes > 0 and len(candidates) >= max_notes:
-                return candidates[:max_notes], included_folders
-    if max_notes > 0:
-        return candidates[:max_notes], included_folders
-    return candidates, included_folders
 
+    if max_notes > 0:
+        candidates = candidates[:max_notes]
+
+    return candidates, included_folders
 
 
 def _store_object_count(store: ObjectStore) -> int:
@@ -302,7 +326,6 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
     mirror_path, mirror_frontmatter, mirror_body = _load_mirror_frontmatter(vault_root, rel_path)
     frontmatter_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
     mirror_uuid = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
-    note_uuid = frontmatter_uuid or mirror_uuid or str(uuid.uuid4())
     # Frontmatter is the canonical identity; mirror is a log to help heal missing metadata.
     if frontmatter_uuid and mirror_uuid and frontmatter_uuid != mirror_uuid:
         click.echo(
@@ -310,29 +333,13 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
             err=True,
         )
 
-    note_uuid, rewrote_uuid = _ensure_note_uuid_frontmatter(path, frontmatter, body, note_uuid, rel_path=rel_path)
-    updated_frontmatter = dict(frontmatter)
-    updated_frontmatter["uuid"] = _uuid_wikilink(note_uuid)
-    if "ingest_fingerprint" in updated_frontmatter:
-        updated_frontmatter.pop("ingest_fingerprint", None)
-        rewrote_uuid = True
-    if rewrote_uuid:
-        path.write_text(dump_frontmatter(updated_frontmatter, body), encoding="utf-8")
-    frontmatter = updated_frontmatter
-
-    title = str(frontmatter.get("title") or _derive_title(body, path))
+    note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid, rel_path)
+    title = _frontmatter_title(frontmatter) or _derive_title(body, path)
     review_state = str(frontmatter.get("review_state") or "provisional")
     maturity = str(frontmatter.get("maturity") or "note")
     stripped_body = strip_ai_panels(body)
     stripped_text = stripped_body.strip()
     ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
-
-    try:
-        mtime_ns = int(ingest_fingerprint.get("mtime_ns", 0))
-        if mtime_ns > 0:
-            os.utime(path, ns=(mtime_ns, mtime_ns))
-    except Exception:
-        pass
 
     _write_mirror(
         vault_root,
@@ -503,6 +510,23 @@ def run_vault_alpha_ingest_paths(
     )
 
 
+def run_vault_alpha_ingest_locked_only(vault_root: Path, *, force: bool = False) -> VaultAlphaSummary:
+    vault_root = vault_root.expanduser().resolve()
+    ensure_vault_layout(vault_root)
+    locked_paths = _read_locked_paths()
+    if not locked_paths:
+        return VaultAlphaSummary(scanned=0, ingested=0, included_folders=[], force=force)
+    summary = run_vault_alpha_ingest_paths(
+        vault_root,
+        [Path(path) for path in locked_paths],
+        force=force,
+        resume_from=None,
+    )
+    remaining = [path for path in locked_paths if path not in summary.processed_notes]
+    _write_locked_paths(remaining)
+    return summary
+
+
 def _ingest_candidates(
     vault_root: Path,
     *,
@@ -510,6 +534,7 @@ def _ingest_candidates(
     included_folders: List[str],
     force: bool,
     resume_from: Iterable[str] | None,
+    record_locked: bool = True,
 ) -> VaultAlphaSummary:
     store = get_object_store()
 
@@ -534,6 +559,8 @@ def _ingest_candidates(
         skipped_locked += 1
         if len(locked_examples) < 3:
             locked_examples.append(rel_display)
+        if record_locked:
+            _append_locked_path(rel_display)
 
     for path in candidates:
         try:
@@ -555,7 +582,7 @@ def _ingest_candidates(
             frontmatter_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
             mirror_path, mirror_frontmatter, _ = _load_mirror_frontmatter(vault_root, rel_path)
             mirror_uuid = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
-            note_uuid = frontmatter_uuid or mirror_uuid
+            note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid, rel_path)
             stripped_text = strip_ai_panels(body).strip()
             ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
             should_skip = False
@@ -627,4 +654,9 @@ def _ingest_candidates(
     return summary
 
 
-__all__ = ["run_vault_alpha_ingest", "run_vault_alpha_ingest_paths", "VaultAlphaSummary"]
+__all__ = [
+    "run_vault_alpha_ingest",
+    "run_vault_alpha_ingest_paths",
+    "run_vault_alpha_ingest_locked_only",
+    "VaultAlphaSummary",
+]

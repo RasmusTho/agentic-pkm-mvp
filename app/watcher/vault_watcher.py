@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.agents.panel.agent import handle_note_update
 from app.agents.panel_agent.policy import watcher_may_run_panel
+from app.ingest import vault_alpha as vault_alpha
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.store.object_store import ObjectStore
@@ -77,12 +79,18 @@ def _read_frontmatter(note_path: Path) -> dict:
         return {}
 
 
-def _note_uuid_from_frontmatter(frontmatter: dict) -> str | None:
-    raw = frontmatter.get("uuid") or ""
+def _note_uuid_from_frontmatter(frontmatter: dict, *, rel_path: Path | None = None) -> str | None:
+    raw = frontmatter.get("uuid") or frontmatter.get("id") or ""
+    if isinstance(raw, (list, tuple)):
+        raw = raw[0] if raw else ""
     value = raw.strip() if isinstance(raw, str) else str(raw).strip()
-    if value.startswith("[[") and value.endswith("]]"):
+    if value.startswith("[[") and value.endswith("]]" ):
         value = value[2:-2].strip()
-    return value or None
+    if value:
+        return value
+    if rel_path is None:
+        return None
+    return str(uuid.uuid5(vault_alpha._VAULT_NOTE_UUID_NAMESPACE, rel_path.as_posix()))
 
 
 def _hydrate_store_with_markdown(note_uuid: str, note_path: Path) -> None:
@@ -234,7 +242,6 @@ def run_watcher_tick(
     policy_allowed_paths: list[Path] = []
     for path in result.changed:
         frontmatter = _read_frontmatter(path)
-        note_uuid = _note_uuid_from_frontmatter(frontmatter)
         if watcher_may_run_panel(frontmatter):
             policy_allowed_paths.append(path)
         else:
@@ -291,7 +298,8 @@ def run_watcher_tick(
         store = ObjectStore()
         for note_path in policy_allowed_paths:
             refreshed_frontmatter = _read_frontmatter(note_path)
-            note_uuid = _note_uuid_from_frontmatter(refreshed_frontmatter)
+            rel_path = note_path.relative_to(vault_root)
+            note_uuid = _note_uuid_from_frontmatter(refreshed_frontmatter, rel_path=rel_path)
             if not note_uuid:
                 messages.append(
                     "Warning: unable to resolve uuid for "
