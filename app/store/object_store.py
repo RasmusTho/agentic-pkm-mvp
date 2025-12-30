@@ -172,40 +172,66 @@ class ObjectStore:
         with _conn_rw() as conn:
             table = self._active_table(conn)
             id_col, uuid_col = _table_columns(table)
-            stmt = sql.SQL(
-                """
-                insert into {table} (
-                    {id_col},
-                    {uuid_col},
-                    kind,
-                    source_ref,
-                    payload,
-                    created_at
+            if id_col == uuid_col:
+                stmt = sql.SQL(
+                    """
+                    insert into {table} (
+                        {id_col},
+                        kind,
+                        source_ref,
+                        payload,
+                        created_at
+                    )
+                    values (%s, %s, %s, %s::jsonb, %s)
+                    on conflict ({id_col}) do update set
+                        kind = excluded.kind,
+                        source_ref = excluded.source_ref,
+                        payload = excluded.payload
+                    """
+                ).format(
+                    table=sql.Identifier(table),
+                    id_col=sql.Identifier(id_col),
                 )
-                values (%s, %s, %s, %s, %s::jsonb, %s)
-                on conflict ({id_col}) do update set
-                    {uuid_col} = excluded.{uuid_col},
-                    kind = excluded.kind,
-                    source_ref = excluded.source_ref,
-                    payload = excluded.payload
-                """
-            ).format(
-                table=sql.Identifier(table),
-                id_col=sql.Identifier(id_col),
-                uuid_col=sql.Identifier(uuid_col),
-            )
+                params = (
+                    obj.uuid,
+                    obj.kind,
+                    obj.source_ref,
+                    json.dumps(obj.payload),
+                    obj.created_at,
+                )
+            else:
+                stmt = sql.SQL(
+                    """
+                    insert into {table} (
+                        {id_col},
+                        {uuid_col},
+                        kind,
+                        source_ref,
+                        payload,
+                        created_at
+                    )
+                    values (%s, %s, %s, %s, %s::jsonb, %s)
+                    on conflict ({id_col}) do update set
+                        {uuid_col} = excluded.{uuid_col},
+                        kind = excluded.kind,
+                        source_ref = excluded.source_ref,
+                        payload = excluded.payload
+                    """
+                ).format(
+                    table=sql.Identifier(table),
+                    id_col=sql.Identifier(id_col),
+                    uuid_col=sql.Identifier(uuid_col),
+                )
+                params = (
+                    obj.uuid,
+                    obj.uuid,
+                    obj.kind,
+                    obj.source_ref,
+                    json.dumps(obj.payload),
+                    obj.created_at,
+                )
             with conn.cursor() as cur:
-                cur.execute(
-                    stmt,
-                    (
-                        obj.uuid,
-                        obj.uuid,
-                        obj.kind,
-                        obj.source_ref,
-                        json.dumps(obj.payload),
-                        obj.created_at,
-                    ),
-                )
+                cur.execute(stmt, params)
                 if emit_outbox:
                     event = {
                         "event": INGEST_OBJECT_CREATED,
