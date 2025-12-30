@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Any, Dict
 from uuid import UUID
 
-from app.components.embeddings import EmbeddingIdentity, get_embedding_client, get_embedding_identity
+from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
+from app.components.llm.fabric import get_embeddings_client
+from app.components.llm.router import LLMTaskIntent
 from app.embedding_config import coerce_floats
 from app.llm.embeddings import EMBED_MODEL
 from app.outbox import events as outbox_events
@@ -84,7 +86,7 @@ def process_event(evt: Dict[str, Any]) -> None:
     obj_payload = dict(obj.payload or {})
     text = _extract_text(obj_payload)
 
-    embedder = get_embedding_client()
+    embedder = get_embeddings_client(LLMTaskIntent(task_kind="embed", determinism_required=True))
     embedding = embedder.embed_text(text)
     identity = get_embedding_identity(client=embedder)
 

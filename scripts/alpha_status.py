@@ -82,8 +82,9 @@ def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
         lines.append(_line("health", f"non-JSON ({health_code})"))
     else:
         ok = _get(health_payload, "ok", default="(missing)")
+        required_ok = _get(health_payload, "required_ok", default="(missing)")
         db_ok = _get(health_payload, "runtime", "db", "ok", default="(missing)")
-        lines.append(_line("health", f"ok={ok} db_ok={db_ok}"))
+        lines.append(_line("health", f"ok={ok} required_ok={required_ok} db_ok={db_ok}"))
 
         watcher = _get(health_payload, "runtime", "watcher", default={})
         watcher_status = _get(watcher, "status", default="(missing)")

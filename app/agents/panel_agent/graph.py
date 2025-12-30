@@ -23,7 +23,8 @@ from app.events.panel import (
     PanelRuntimeActionResult,
 )
 from app.events.schema import OutboxEvent
-from app.services.llm import call_llm
+from app.components.llm.fabric import get_chat_client
+from app.components.llm.router import LLMTaskIntent
 
 _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 
@@ -238,7 +239,8 @@ def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str
     ]
     pack = {"system": system, "user": "\n".join(user_parts)}
     try:
-        raw = call_llm("panel_agent.decider", pack, agent="panel_agent", kind="panel.decider", trace_id=state.trace_id)
+        client = get_chat_client(LLMTaskIntent(task_kind="decide", risk="high"))
+        raw = client.chat("panel_agent.decider", pack, agent="panel_agent", kind="panel.decider", trace_id=state.trace_id)
         parsed = json.loads(raw or "{}")
         candidates = parsed.get("actions") if isinstance(parsed, dict) else parsed
         if candidates is None:

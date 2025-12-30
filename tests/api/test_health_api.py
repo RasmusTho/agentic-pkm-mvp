@@ -83,6 +83,15 @@ def _health_client(
     return client
 
 
+def _assert_check_metadata(payload: dict) -> None:
+    checks = payload.get("checks") or {}
+    assert "ffmpeg" in checks
+    assert "required" in checks["ffmpeg"]
+    assert "severity" in checks["ffmpeg"]
+    assert "llm_router" in checks
+    assert "llm_providers" in checks
+
+
 def test_health_success(monkeypatch, tmp_path) -> None:
     heartbeat = tmp_path / "watcher-heartbeat.json"
     _write_watcher_heartbeat(heartbeat, ts=time.time())
@@ -92,7 +101,7 @@ def test_health_success(monkeypatch, tmp_path) -> None:
     resp = client.get("/api/health")
     assert resp.status_code == 200
     data = resp.json()
-    assert data.get("ok") is True
+    assert data.get("required_ok") is True
     runtime = data["runtime"]
     watcher = runtime["watcher"]
     worker = runtime["worker"]
@@ -100,6 +109,7 @@ def test_health_success(monkeypatch, tmp_path) -> None:
     assert worker.get("ok") is True
     assert isinstance(worker.get("freshness_seconds"), float)
     assert worker.get("processed_total") == 2
+    _assert_check_metadata(data)
 
 
 def test_health_allows_stale(monkeypatch, tmp_path) -> None:
@@ -119,7 +129,7 @@ def test_health_ok_without_watcher(monkeypatch, tmp_path) -> None:
     resp = client.get("/api/health")
     assert resp.status_code == 200
     data = resp.json()
-    assert data.get("ok") is True
+    assert data.get("required_ok") is True
     assert data["runtime"]["watcher"]["ok"] is False
 
 
@@ -129,7 +139,7 @@ def test_health_requires_watcher_when_flagged(monkeypatch, tmp_path) -> None:
     client = _health_client(monkeypatch, tmp_path, worker_enabled=False)
     resp = client.get("/api/health")
     assert resp.status_code == 200
-    assert resp.json().get("ok") is False
+    assert resp.json().get("required_ok") is False
 
 
 def test_health_reads_repo_heartbeat(monkeypatch, tmp_path) -> None:
@@ -157,7 +167,7 @@ def test_health_skips_worker_when_disabled(monkeypatch, tmp_path) -> None:
     assert resp.status_code == 200
     worker = resp.json()["runtime"]["worker"]
     assert worker.get("status") == "skipped"
-    assert resp.json().get("ok") is True
+    assert resp.json().get("required_ok") is True
 
 
 def test_health_skips_worker_by_default_in_memory_mode(monkeypatch, tmp_path) -> None:
@@ -167,7 +177,7 @@ def test_health_skips_worker_by_default_in_memory_mode(monkeypatch, tmp_path) ->
     resp = client.get("/api/health")
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload.get("ok") is True
+    assert payload.get("required_ok") is True
     worker = payload["runtime"]["worker"]
     assert worker.get("status") == "skipped"
 

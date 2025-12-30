@@ -10,6 +10,7 @@ from typing import Any, Dict
 
 import httpx
 
+from app.components.llm.fabric import describe_default_routes
 from app.obs.log import span, with_trace_id
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.stores.db_health import ping_postgres, resolve_dsn
@@ -23,6 +24,12 @@ def _result(ok: bool, detail: str, *, data: Dict[str, Any] | None = None) -> Dic
     if data:
         out["data"] = data
     return out
+
+
+def _annotate_required(payload: Dict[str, Any], *, required: bool, severity: str | None = None) -> Dict[str, Any]:
+    payload["required"] = required
+    payload["severity"] = severity or ("required" if required else "optional")
+    return payload
 
 
 def _env_float(name: str, fallback: float) -> float:
@@ -47,6 +54,11 @@ def _watcher_required() -> bool:
     if not raw:
         return False
     return raw.strip().lower() in _TRUE_VALUES
+
+
+def _ollama_required() -> bool:
+    provider = (os.getenv("LLM_PROVIDER") or "").strip().lower()
+    return provider in {"", "ollama", "llm"}
 
 
 def _check_ffmpeg() -> Dict[str, Any]:
@@ -96,6 +108,44 @@ def _check_ollama() -> Dict[str, Any]:
     result["provider"] = provider
     result["base_url"] = base
     return result
+
+
+def _check_llm_router() -> Dict[str, Any]:
+    forced_provider = os.getenv("LLM_FORCE_PROVIDER")
+    forced_model = os.getenv("LLM_FORCE_MODEL")
+    return {
+        "ok": True,
+        "detail": "router ready",
+        "selected_defaults": describe_default_routes(),
+        "forced_overrides": {
+            "provider": forced_provider or "",
+            "model": forced_model or "",
+        },
+    }
+
+
+def _check_llm_providers(ollama_check: Dict[str, Any]) -> Dict[str, Any]:
+    provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
+    providers: list[dict[str, Any]] = [{"name": "mock", "ok": True, "detail": "deterministic"}]
+    if provider in {"ollama", "llm", ""}:
+        providers.append(
+            {
+                "name": "ollama",
+                "ok": bool(ollama_check.get("ok")),
+                "detail": ollama_check.get("detail", ""),
+            }
+        )
+    elif provider and provider != "mock":
+        providers.append({"name": provider, "ok": False, "detail": "unknown provider"})
+
+    overall = all(entry.get("ok") for entry in providers)
+    detail = "providers ready" if overall else "one or more providers unavailable"
+    return {
+        "ok": overall,
+        "detail": detail,
+        "providers": providers,
+        "active_provider": provider or "mock",
+    }
 
 
 def _heartbeat_status(
@@ -234,25 +284,37 @@ def _runtime_ok(runtime: dict[str, dict[str, Any]]) -> bool:
     return base_ok
 
 
+def _checks_ok(checks: dict[str, dict[str, Any]]) -> bool:
+    return all(item.get("ok") for item in checks.values())
+
+
+def _required_checks_ok(checks: dict[str, dict[str, Any]]) -> bool:
+    return all(item.get("ok") for item in checks.values() if item.get("required", True))
+
+
 @span("health.check")
 def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     trace_id = with_trace_id(trace_id)
     checks = {
-        "ffmpeg": _check_ffmpeg(),
-        "yt_dlp": _check_yt_dlp(),
-        "index_outbox": _check_outbox_path(),
-        "ollama": _check_ollama(),
+        "ffmpeg": _annotate_required(_check_ffmpeg(), required=False),
+        "yt_dlp": _annotate_required(_check_yt_dlp(), required=False),
+        "index_outbox": _annotate_required(_check_outbox_path(), required=True),
+        "ollama": _annotate_required(_check_ollama(), required=_ollama_required()),
     }
+    checks["llm_router"] = _annotate_required(_check_llm_router(), required=False)
+    checks["llm_providers"] = _annotate_required(_check_llm_providers(checks["ollama"]), required=False)
+
     runtime = {
         "watcher": _watcher_runtime_status(),
         "worker": _worker_runtime_status(),
         "db": _db_runtime_status(),
         "llm": _llm_runtime_status(checks["ollama"]),
     }
-    checks_ok = all(item.get("ok") for item in checks.values())
+    checks_ok = _checks_ok(checks)
     runtime_ok = _runtime_ok(runtime)
     ok = bool(checks_ok and runtime_ok)
-    return {"ok": ok, "checks": checks, "runtime": runtime, "trace_id": trace_id}
+    required_ok = bool(_required_checks_ok(checks) and runtime_ok)
+    return {"ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id}
 
 
 __all__ = ["run_health"]

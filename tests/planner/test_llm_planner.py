@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, List
+from typing import Callable, Dict, List
 
 import pytest
 
@@ -10,6 +10,14 @@ from app.events.types import PLANNER_PLAN_FALLBACK
 from app.planner.provider import LLMPlanner, PlannerInput, select_flow_pattern_prompt
 
 pytestmark = pytest.mark.not_pg
+
+
+class _StubChatClient:
+    def __init__(self, handler: Callable[..., str]) -> None:
+        self._handler = handler
+
+    def chat(self, name: str, pack: dict, **kwargs: object) -> str:
+        return self._handler(name, pack, **kwargs)
 
 
 def _fake_plan_payload() -> Dict[str, object]:
@@ -48,10 +56,13 @@ def test_select_flow_pattern_prompt_picks_first_entries() -> None:
 def test_llm_planner_parses_valid_plan(monkeypatch: pytest.MonkeyPatch) -> None:
     planner = LLMPlanner()
 
-    def fake_call_llm(name: str, pack: dict, **_: object) -> str:
+    def fake_call(name: str, pack: dict, **_: object) -> str:
         return json.dumps(_fake_plan_payload())
 
-    monkeypatch.setattr("app.planner.provider.call_llm", fake_call_llm)
+    monkeypatch.setattr(
+        "app.planner.provider.get_chat_client",
+        lambda intent: _StubChatClient(fake_call),
+    )
     inp = PlannerInput(object_uuid="obj-9", goal="Goal", text="Text body")
     plan = planner.plan(inp)
     assert plan.id == "plan-llm"
@@ -65,11 +76,14 @@ def test_llm_planner_includes_flow_profile_guidance(monkeypatch: pytest.MonkeyPa
     planner = LLMPlanner()
     captured: Dict[str, str] = {}
 
-    def fake_call_llm(name: str, pack: dict, **_: object) -> str:
+    def fake_call(name: str, pack: dict, **_: object) -> str:
         captured["user"] = pack["user"]
         return json.dumps(_fake_plan_payload())
 
-    monkeypatch.setattr("app.planner.provider.call_llm", fake_call_llm)
+    monkeypatch.setattr(
+        "app.planner.provider.get_chat_client",
+        lambda intent: _StubChatClient(fake_call),
+    )
     flow_profiles = [
         {
             "flow_id": "ingest",
@@ -96,7 +110,14 @@ def test_llm_planner_includes_flow_profile_guidance(monkeypatch: pytest.MonkeyPa
 
 def test_llm_planner_falls_back_on_invalid_output(monkeypatch: pytest.MonkeyPatch) -> None:
     planner = LLMPlanner()
-    monkeypatch.setattr("app.planner.provider.call_llm", lambda name, pack, **_: "not-json")
+
+    def fake_call(name: str, pack: dict, **_: object) -> str:
+        return "not-json"
+
+    monkeypatch.setattr(
+        "app.planner.provider.get_chat_client",
+        lambda intent: _StubChatClient(fake_call),
+    )
     inp = PlannerInput(object_uuid="obj-10", goal="Goal", text="body", metadata={"trace_id": "trace-x"})
     before = _audit_ring_snapshot()
     plan = planner.plan(inp)
@@ -110,11 +131,14 @@ def test_llm_planner_legacy_prompt_without_profiles(monkeypatch: pytest.MonkeyPa
     planner = LLMPlanner()
     captured: Dict[str, str] = {}
 
-    def fake_call_llm(name: str, pack: dict, **_: object) -> str:
+    def fake_call(name: str, pack: dict, **_: object) -> str:
         captured["user"] = pack["user"]
         return json.dumps(_fake_plan_payload())
 
-    monkeypatch.setattr("app.planner.provider.call_llm", fake_call_llm)
+    monkeypatch.setattr(
+        "app.planner.provider.get_chat_client",
+        lambda intent: _StubChatClient(fake_call),
+    )
     inp = PlannerInput(object_uuid="obj-300", goal="Goal", text="legacy text")
     plan = planner.plan(inp)
     assert "Flow guidance" not in captured["user"]

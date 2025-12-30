@@ -18,13 +18,13 @@ def test_alpha_status_handles_non_json_status() -> None:
         if url.endswith("/api/status"):
             return 200, None, "not json"
         if url.endswith("/api/health"):
-            return 200, {"ok": True, "runtime": {"db": {"ok": True}}}, None
+            return 200, {"ok": True, "required_ok": True, "runtime": {"db": {"ok": True}}}, None
         return None, None, "missing"
 
     output = render_status(fake_fetch, api_base_url="http://localhost:18000")
     assert "Alpha status" in output
     assert "- api: OK (200)" in output
-    assert "- health: ok=True db_ok=True" in output
+    assert "- health: ok=True required_ok=True db_ok=True" in output
     assert "- watcher:" in output
     assert "- worker:" in output
     assert "- sot: (missing)" in output
@@ -67,7 +67,7 @@ def test_alpha_status_sums_store_counts() -> None:
             }
             return 200, payload, None
         if url.endswith("/api/health"):
-            return 200, {"ok": True, "runtime": {"db": {"ok": True}}}, None
+            return 200, {"ok": True, "required_ok": True, "runtime": {"db": {"ok": True}}}, None
         return None, None, "missing"
 
     output = render_status(fake_fetch, api_base_url="http://localhost:18000")

@@ -40,6 +40,25 @@ class Providers(BaseModel):
     reranker: Dict[str, ProviderRef] = Field(default_factory=dict, description="Cross-encoder/rerank providers.")
 
 
+class LLMRoutingSettings(BaseModel):
+    default_provider: str | None = Field(
+        default=None,
+        description="Default LLM provider override for router (vault-configurable).",
+    )
+    default_chat_model: str | None = Field(
+        default=None,
+        description="Default chat model override for routed LLM tasks.",
+    )
+    default_embed_model: str | None = Field(
+        default=None,
+        description="Default embedding model override for routed tasks.",
+    )
+    task_overrides: Dict[str, Dict[str, str]] = Field(
+        default_factory=dict,
+        description="Per task_kind provider/model overrides (future use).",
+    )
+
+
 class RetryPolicy(BaseModel):
     max_tries: int = Field(default=2, description="Retry attempts before surfacing errors.")
 
@@ -174,6 +193,7 @@ class InstanceSettings(BaseModel):
 class SettingsBundle(BaseModel):
     global_: GlobalSettings = Field(default_factory=GlobalSettings)
     providers: Providers = Field(default_factory=Providers)
+    llm_routing: LLMRoutingSettings = Field(default_factory=LLMRoutingSettings)
     embedding_profiles: EmbeddingProfiles = Field(default_factory=EmbeddingProfiles)
     agents: Dict[str, Any] = Field(default_factory=dict)
     yggdrasil_paths: Optional[YggdrasilPaths] = None

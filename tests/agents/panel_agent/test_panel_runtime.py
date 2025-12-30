@@ -13,6 +13,15 @@ from app.store import object_store as object_store_module
 from app.store.object_store import DomainObject, ObjectStore
 
 
+class _StubChatClient:
+    def __init__(self, response: str) -> None:
+        self._response = response
+
+    def chat(self, *args, **kwargs) -> str:
+        return self._response
+
+
+
 def _seed_note(note_uuid: str, markdown: str, *, executed_action_ids: list[str] | None = None) -> None:
     payload = {"raw_text": markdown, "origin": "vault"}
     if executed_action_ids:
@@ -150,8 +159,8 @@ def test_runtime_llm_filters_executed_actions(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setenv("PANEL_AGENT_DECIDER", "llm")
     monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.call_llm",
-        lambda *args, **kwargs: json.dumps({"actions": [{"id": "promote.evergreen"}]}),
+        "app.agents.panel_agent.graph.get_chat_client",
+        lambda intent: _StubChatClient(json.dumps({"actions": [{"id": "promote.evergreen"}]})),
     )
 
     events = run_panel_intent_for_note(note_uuid, trace_id="trace-panel-executed")

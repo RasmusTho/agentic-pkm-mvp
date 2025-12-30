@@ -157,6 +157,24 @@ def with_llm_retries(
             time.sleep(max(bd, 0.0) * attempt)
 
 
+def _normalize_provider(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = value.strip().lower()
+    if normalized == "llm":
+        return "ollama"
+    if normalized in {"", "fake"}:
+        return "mock"
+    return normalized
+
+
+def _normalize_model(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
 def call_llm(
     name: str,
     pack: Dict[str, Any],
@@ -164,6 +182,8 @@ def call_llm(
     agent: str | None = None,
     kind: str | None = None,
     trace_id: Optional[str] = None,
+    provider_override: str | None = None,
+    model_override: str | None = None,
 ) -> str:
     def _deterministic_response_for_kind() -> str:
         if kind and "ranking" in str(kind):
@@ -178,12 +198,8 @@ def call_llm(
         except Exception:
             return {}
 
-    provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
-    if provider == "llm":
-        provider = "ollama"
-    if provider in {"", "fake"}:
-        provider = "mock"
-    model = os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", "llama3.1:8b"))
+    provider = _normalize_provider(provider_override) or _normalize_provider(os.getenv("LLM_PROVIDER")) or "mock"
+    model = _normalize_model(model_override) or os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", "llama3.1:8b"))
     temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
     system = pack.get("system", "")
     user = pack.get("user", "")
@@ -194,7 +210,7 @@ def call_llm(
         response_text = _deterministic_response_for_kind()
     else:
         try:
-            response_text = with_llm_retries(lambda: _ollama_chat(system, user, model, temperature))
+            response_text = with_llm_retries(lambda: _ollama_chat(system, user, str(model), temperature))
         except LLMError:
             response_text = _deterministic_response_for_kind()
         except (socket.timeout, ConnectionRefusedError, RuntimeError):
@@ -213,7 +229,7 @@ def call_llm(
 
     log_llm_call(
         provider=provider or "unknown",
-        model=model,
+        model=str(model),
         agent=agent or name or "unknown",
         kind=kind or name or "unknown",
         messages=messages,
@@ -223,3 +239,6 @@ def call_llm(
     )
 
     return response_text
+
+
+__all__ = ["call_llm", "LLMError", "validate_json", "with_llm_retries"]

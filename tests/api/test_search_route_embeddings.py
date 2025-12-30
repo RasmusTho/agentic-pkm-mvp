@@ -43,7 +43,7 @@ def test_search_route_uses_configured_embedding_client(monkeypatch) -> None:
         def embed_text(self, text: str) -> list[float]:
             return [0.1, 0.2, 0.3]
 
-    monkeypatch.setattr("app.api.routes.search.get_embedding_client", lambda: _StubClient())
+    monkeypatch.setattr("app.api.routes.search.get_embeddings_client", lambda intent: _StubClient())
     monkeypatch.setattr(
         "app.api.routes.search.psycopg.connect",
         lambda *args, **kwargs: _FakeConnection(),

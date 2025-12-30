@@ -13,7 +13,8 @@ try:
 except ImportError:
     process = None
 
-from app.components.embeddings import get_embedding_client, resolve_embedding_identity
+from app.components.llm.fabric import get_embeddings_client
+from app.components.llm.router import LLMTaskIntent
 from app.retrieval.hook_adapter import maybe_rerank
 
 
@@ -170,10 +171,12 @@ def _doc_in_scope(doc: Document, scope: str) -> bool:
 
 def _get_embed_client():
     global _EMBED_CLIENT, _EMBED_IDENTITY
-    current = resolve_embedding_identity()
-    if _EMBED_CLIENT is None or _EMBED_IDENTITY != current:
-        _EMBED_CLIENT = get_embedding_client()
-        _EMBED_IDENTITY = _EMBED_CLIENT.identity
+    intent = LLMTaskIntent(task_kind="embed", determinism_required=True)
+    client = get_embeddings_client(intent)
+    identity = client.identity
+    if _EMBED_CLIENT is None or _EMBED_IDENTITY != identity:
+        _EMBED_CLIENT = client
+        _EMBED_IDENTITY = identity
     return _EMBED_CLIENT
 
 
