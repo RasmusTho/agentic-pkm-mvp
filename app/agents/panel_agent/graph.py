@@ -5,6 +5,7 @@ from typing import Any, Tuple
 
 from langgraph.graph import END, START, StateGraph
 
+from app.components.concurrency import IdempotencyGuard
 from app.components.settings.panel_actions_loader import PanelActionCatalog, PanelActionDescriptor
 from app.agents.panel_agent.settings import DeciderMode
 from app.agents.panel_agent.state import PanelAgentState
@@ -23,6 +24,8 @@ from app.events.panel import (
 )
 from app.events.schema import OutboxEvent
 from app.services.llm import call_llm
+
+_IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 
 
 def _build_panel_source() -> PanelEventSource:
@@ -120,6 +123,15 @@ def _handle_action(
             action_to_use, status="skipped", emitted=[], reason=reason or "unchecked"
         ), emitted
 
+    note_id = intent_event.payload.note.uuid
+    if action_to_use.id and _IDEMPOTENCY_GUARD.seen_action(note_id, action_to_use.id):
+        return _build_action_result(
+            action_to_use,
+            status="skipped",
+            emitted=[],
+            reason=reason or "idempotent_duplicate",
+        ), emitted
+
     mapping = action_to_use.mapping
     wiring = action_wiring or {}
     target_event = wiring.get(action_to_use.id)
@@ -129,12 +141,14 @@ def _handle_action(
         triggered_event = _action_triggered_event(intent_event, action_to_use, target_event=target)
         emitted.extend([promote_event, triggered_event])
         emitted_names.extend([promote_event.event, triggered_event.event])
+        _IDEMPOTENCY_GUARD.mark_action(note_id, action_to_use.id)
         return _build_action_result(action_to_use, status="triggered", emitted=emitted_names), emitted
 
     logged_reason = reason or ("unhandled_action" if mapping else "unmapped_action")
     logged = _logged_event(intent_event, action_to_use, logged_reason)
     emitted.append(logged)
     emitted_names.append(logged.event)
+    _IDEMPOTENCY_GUARD.mark_action(note_id, action_to_use.id)
     return (
         _build_action_result(
             action_to_use, status="logged", emitted=emitted_names, reason=logged.payload.get("reason")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -10,6 +11,7 @@ from pathlib import Path
 
 from app.agents.panel.agent import handle_note_update
 from app.agents.panel_agent.policy import watcher_may_run_panel
+from app.components.concurrency import DedupTaskQueue, OptimisticWriteGuard, SystemClock, VersionMismatch
 from app.ingest import vault_alpha as vault_alpha
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
@@ -20,6 +22,10 @@ from scripts.yaml_roundtrip import load_frontmatter
 
 Snapshot = dict[str, float]
 Summary = dict[str, object]
+
+_PANEL_POLICY_ID = "panel_auto"
+_DEDUP_QUEUE = DedupTaskQueue(SystemClock(), ttl_seconds=300.0)
+_WRITE_GUARD = OptimisticWriteGuard()
 
 
 class OutboxPathError(ValueError):
@@ -121,6 +127,14 @@ def _write_outbox_events(outbox_path: Path | None, events: Iterable) -> int:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
             written += 1
     return written
+
+
+def _content_hash(markdown: str) -> str:
+    return hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+
+
+def _build_dedup_key(policy_id: str, rel_path: Path, content_hash: str) -> str:
+    return f"watcher:{policy_id}:{rel_path.as_posix()}:{content_hash}"
 
 
 def compute_changes(
@@ -319,43 +333,61 @@ def run_watcher_tick(
                 summary["errors"] += 1
                 continue
 
-            stored = store.get_object(note_uuid)
-            old_markdown = ""
-            if stored:
-                old_markdown = str((stored.payload or {}).get("raw_text") or "")
+            content_hash = _content_hash(current_markdown)
+            dedup_key = _build_dedup_key(_PANEL_POLICY_ID, rel_path, content_hash)
+            if not _DEDUP_QUEUE.try_acquire(dedup_key):
+                messages.append(f"Watcher dedup skip for {rel_path} (key={dedup_key})")
+                continue
 
-            panel_result = handle_note_update(
-                note_uuid,
-                old_markdown,
-                current_markdown,
-                action_mappings=action_mappings,
-                note_path=str(note_path),
-            )
+            try:
+                expected_version = _WRITE_GUARD.compute_version(current_markdown.encode("utf-8"))
 
-            if panel_result.state.actions or panel_result.intents or panel_result.events:
-                summary["panel_runs"] += 1
+                stored = store.get_object(note_uuid)
+                old_markdown = ""
+                if stored:
+                    old_markdown = str((stored.payload or {}).get("raw_text") or "")
 
-            summary["panel_promotions"] += len(
-                [
-                    ev
-                    for ev in panel_result.events
-                    if getattr(ev, "event", None) == "promote.intent.created"
-                    or getattr(ev, "event_type", "") == "promote.intent.created"
-                ]
-            )
+                panel_result = handle_note_update(
+                    note_uuid,
+                    old_markdown,
+                    current_markdown,
+                    action_mappings=action_mappings,
+                    note_path=str(note_path),
+                )
 
-            if not emit_only and panel_result.updated_markdown != current_markdown:
-                try:
-                    DEFAULT_WRITE_GUARD.assert_writes_allowed("vault watcher panel write")
-                    note_path.write_text(panel_result.updated_markdown, encoding="utf-8")
-                    _hydrate_store_with_markdown(note_uuid, note_path)
-                except WritesBlockedError:
-                    raise
-                except Exception:
-                    messages.append(f"Warning: failed to write updates to {note_path}")
-                    summary["errors"] += 1
+                if panel_result.state.actions or panel_result.intents or panel_result.events:
+                    summary["panel_runs"] += 1
 
-            _write_outbox_events(resolved_outbox, panel_result.events)
+                summary["panel_promotions"] += len(
+                    [
+                        ev
+                        for ev in panel_result.events
+                        if getattr(ev, "event", None) == "promote.intent.created"
+                        or getattr(ev, "event_type", "") == "promote.intent.created"
+                    ]
+                )
+
+                if not emit_only and panel_result.updated_markdown != current_markdown:
+                    try:
+                        DEFAULT_WRITE_GUARD.assert_writes_allowed("vault watcher panel write")
+                        _WRITE_GUARD.write_if_unchanged(
+                            note_path,
+                            expected_version,
+                            panel_result.updated_markdown,
+                        )
+                        _hydrate_store_with_markdown(note_uuid, note_path)
+                    except VersionMismatch:
+                        messages.append(f"Warning: stale write prevented for {note_path}")
+                        summary["errors"] += 1
+                    except WritesBlockedError:
+                        raise
+                    except Exception:
+                        messages.append(f"Warning: failed to write updates to {note_path}")
+                        summary["errors"] += 1
+
+                _write_outbox_events(resolved_outbox, panel_result.events)
+            finally:
+                _DEDUP_QUEUE.release(dedup_key)
     else:
         messages.append("Panel runtime skipped (no candidates or --skip-panel set).")
 

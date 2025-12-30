@@ -70,17 +70,21 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
     store = ObjectStore()
     note_obj = store.get_object(intent_event.payload.note.uuid)
     note_text = ""
+    executed_ids: set[str] = set()
     if note_obj:
         payload = note_obj.payload or {}
         note_text = str(payload.get("raw_text") or payload.get("text") or "")
+        executed_ids = set(payload.get("executed_action_ids") or [])
+
+    actions = [action for action in intent_event.payload.actions if action.id not in executed_ids]
     panel_hints = [
-        {"id": action.id, "label": action.label, "checked": action.checked} for action in intent_event.payload.actions
+        {"id": action.id, "label": action.label, "checked": action.checked} for action in actions
     ]
     initial_state = PanelAgentState(
         trace_id=intent_event.trace_id,
         note=intent_event.payload.note,
         panel=intent_event.payload.panel,
-        actions=list(intent_event.payload.actions),
+        actions=list(actions),
         intent_event=intent_event,
         action_catalog=catalog,
         action_wiring=wiring,
