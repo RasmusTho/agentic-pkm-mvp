@@ -46,6 +46,7 @@ The system may propose changes to these (SUGGEST), but must not silently overwri
 ### System-owned (bounded)
 The system may maintain small, bounded metadata needed for safety and stability, such as:
 - A stable identity handle (e.g., uuid) when missing.
+- VaultMirror fingerprint UUID reuse SHOULD also match normalized titles to avoid collisions on identical bodies.
 - Guardrails like trust/review_state and derived overlays (zone/recency/salience).
 - Policy-selected state markers only when authorized via APPLY.
 

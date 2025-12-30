@@ -23,6 +23,9 @@ State: SoT v4.10 Reality-MVP (baseline locked) with v5.x forward line extending 
 - `/api/ask` and `python -m app.cli ask` query the HybridStore (BM25 + embeddings) warmed from Store objects. Answers cite sources with origin/plane tags.
 - Default LLM provider is mock; set `LLM_PROVIDER` + credentials to enable LLM drafting/self-check. Errors surface in ASK status metrics.
 - Cite-before-trust: answers show source IDs/paths; rerank hooks/critique are optional overlays.
+- `ASK_DOMAIN_SCOPE` (when set) limits retrieval to a single domain; default behavior excludes cross-domain results.
+- `bridge_domains` explicitly allows inclusion across domains when needed (no implicit bridges).
+- Contract tests enforce the scope boundary to prevent regressions.
 
 ## 5. Design Principles (Human-first constraints)
 - The human is the ultimate authority for classification and meaning; the system proposes but never silently overrides.

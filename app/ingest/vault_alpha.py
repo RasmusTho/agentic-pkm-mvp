@@ -174,7 +174,7 @@ def _normalize_uuid(raw: object | None) -> str:
     if value is None:
         return ""
     value = value.strip()
-    if value.startswith("[[") and value.endswith("]]" ):
+    if value.startswith("[[") and value.endswith("]]"):
         value = value[2:-2].strip()
     return value
 
@@ -185,6 +185,33 @@ def _derive_note_uuid(frontmatter_uuid: str, mirror_uuid: str, rel_path: Path) -
     if mirror_uuid:
         return mirror_uuid
     return str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, rel_path.as_posix()))
+
+
+def _find_mirror_uuid_by_fingerprint(vault_root: Path, text_sha256: str, title: str | None) -> str:
+    if not text_sha256:
+        return ""
+    mirror_root = vault_root / Path("System/Metadata/VaultMirror")
+    if not mirror_root.exists():
+        return ""
+    expected_title = _normalize_title(title) if title else None
+    for cand in mirror_root.rglob("*.md"):
+        try:
+            fm, _ = load_frontmatter(cand.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        ingest_fp = fm.get("ingest_fingerprint")
+        if not isinstance(ingest_fp, dict):
+            continue
+        if ingest_fp.get("text_sha256") != text_sha256:
+            continue
+        if expected_title:
+            mirror_title = _normalize_title(_coerce_to_str(fm.get("title") or "") or "")
+            if mirror_title != expected_title:
+                continue
+        mirror_uuid = _normalize_uuid(fm.get("uuid") or fm.get("id") or "")
+        if mirror_uuid:
+            return mirror_uuid
+    return ""
 
 
 def _load_mirror_frontmatter(vault_root: Path, rel_path: Path) -> tuple[Path | None, dict, str]:
@@ -333,13 +360,22 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
             err=True,
         )
 
-    note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid, rel_path)
     title = _frontmatter_title(frontmatter) or _derive_title(body, path)
     review_state = str(frontmatter.get("review_state") or "provisional")
     maturity = str(frontmatter.get("maturity") or "note")
     stripped_body = strip_ai_panels(body)
     stripped_text = stripped_body.strip()
     ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
+
+    fingerprint_uuid = ""
+    if not frontmatter_uuid and not mirror_uuid:
+        fingerprint_uuid = _find_mirror_uuid_by_fingerprint(
+            vault_root,
+            str(ingest_fingerprint.get("text_sha256") or ""),
+            title,
+        )
+
+    note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
 
     _write_mirror(
         vault_root,
@@ -579,12 +615,20 @@ def _ingest_candidates(
             if fm_error:
                 malformed.append(rel_display)
                 continue
+            title = _frontmatter_title(frontmatter) or _derive_title(body, path)
+            stripped_text = strip_ai_panels(body).strip()
+            ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
             frontmatter_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
             mirror_path, mirror_frontmatter, _ = _load_mirror_frontmatter(vault_root, rel_path)
             mirror_uuid = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
-            note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid, rel_path)
-            stripped_text = strip_ai_panels(body).strip()
-            ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
+            fingerprint_uuid = ""
+            if not frontmatter_uuid and not mirror_uuid:
+                fingerprint_uuid = _find_mirror_uuid_by_fingerprint(
+                    vault_root,
+                    str(ingest_fingerprint.get("text_sha256") or ""),
+                    title,
+                )
+            note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
             should_skip = False
             if note_uuid and not force and not cold_rebuild:
                 parsed_uuid = None

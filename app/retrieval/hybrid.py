@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable, Iterator, List, Optional
 
 import numpy as np
@@ -129,6 +131,43 @@ _EMBED_CLIENT = None
 _EMBED_IDENTITY = None
 
 
+def _resolve_domain_scope() -> str | None:
+    raw = os.getenv("ASK_DOMAIN_SCOPE", "").strip()
+    return raw or None
+
+
+def _extract_domain(doc: Document) -> str | None:
+    payload = doc.payload or {}
+    raw = payload.get("domain")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    if doc.source_ref:
+        path = Path(str(doc.source_ref))
+        parts = [part for part in path.parts if part not in (path.anchor, "")]
+        if parts:
+            return parts[0]
+    return None
+
+
+def _bridge_domains(doc: Document) -> set[str]:
+    payload = doc.payload or {}
+    raw = payload.get("bridge_domains")
+    if isinstance(raw, str):
+        return {item.strip() for item in raw.split(",") if item.strip()}
+    if isinstance(raw, (list, tuple, set)):
+        return {str(item).strip() for item in raw if str(item).strip()}
+    return set()
+
+
+def _doc_in_scope(doc: Document, scope: str) -> bool:
+    domain = _extract_domain(doc)
+    if not domain:
+        return False
+    if domain == scope:
+        return True
+    return scope in _bridge_domains(doc)
+
+
 def _get_embed_client():
     global _EMBED_CLIENT, _EMBED_IDENTITY
     current = resolve_embedding_identity()
@@ -193,6 +232,14 @@ def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None) -> 
     docs = _STORE.all()
     if not docs:
         return []
+
+    scope = _resolve_domain_scope()
+    allowed_idx: set[int] | None = None
+    if scope:
+        allowed_idx = {idx for idx, doc in enumerate(docs) if _doc_in_scope(doc, scope)}
+        if not allowed_idx:
+            return []
+
     tokens = _tokenize(query, language)
     bm25_raw = _STORE.bm25_scores(tokens)
     emb_vector_raw = embed_text(query)
@@ -212,9 +259,15 @@ def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None) -> 
             overlap_bonus[i] = len(token_set & doc_tokens) / max(1, len(token_set))
 
     combined = 0.5 * bm25_norm + 0.4 * emb_norm + 0.1 * overlap_bonus
-    order = np.argsort(-combined)[:k]
+    order = np.argsort(-combined)
+    if allowed_idx is not None:
+        ordered = [int(idx) for idx in order if int(idx) in allowed_idx]
+    else:
+        ordered = [int(idx) for idx in order]
+    ordered = ordered[:k]
+
     results: List[dict] = []
-    for idx in order:
+    for idx in ordered:
         doc = docs[int(idx)]
         score = float(np.clip(combined[int(idx)], 0.0, 1.0))
         snippet = _snippet(doc.text, query)
@@ -234,4 +287,3 @@ def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None) -> 
 
 
 __all__ = ["hybrid_search", "get_store", "MemoryHybridStore", "Document"]
-

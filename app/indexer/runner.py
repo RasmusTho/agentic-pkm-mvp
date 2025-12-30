@@ -4,8 +4,11 @@ import json
 from pathlib import Path
 from typing import List
 
+from app.components.concurrency import EventDedupStore, SystemClock
 from app.indexer.consumer import process_event
 from app.outbox import events as outbox_events
+
+_EVENT_DEDUP = EventDedupStore(SystemClock(), ttl_seconds=3600.0)
 
 
 def _load_events(path: Path) -> List[dict]:
@@ -45,6 +48,11 @@ def _load_events(path: Path) -> List[dict]:
     return to_process
 
 
+def _event_id_from_record(evt: dict) -> str:
+    event_id = evt.get("event_id")
+    return str(event_id).strip() if event_id else ""
+
+
 def main() -> None:
     path = outbox_events.INDEX_OUTBOX_PATH
     events = _load_events(path)
@@ -54,6 +62,9 @@ def main() -> None:
 
     processed = 0
     for evt in events:
+        event_id = _event_id_from_record(evt)
+        if event_id and _EVENT_DEDUP.seen(event_id):
+            continue
         process_event(evt)
         processed += 1
     print(f"indexer: processed {processed} events")

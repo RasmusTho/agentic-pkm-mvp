@@ -4,12 +4,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from app.components.concurrency import EventDedupStore, SystemClock
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_VAULT_CHANGED
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
 from app.services.indexer import handle_ingest_object_created
 from app.services.outbox import bootstrap, poll_outbox_one
 from app.observability.tracer import start_span
 from scripts.yaml_roundtrip import load_frontmatter
+
+_EVENT_DEDUP = EventDedupStore(SystemClock(), ttl_seconds=3600.0)
 
 
 @dataclass
@@ -52,6 +55,18 @@ def _normalize_uuid_value(raw: str | None) -> str:
     if value.startswith("[[") and value.endswith("]]"):
         value = value[2:-2].strip()
     return value
+
+
+def _event_id_from_message(message: Mapping[str, Any]) -> str:
+    evt = message.get("event")
+    if hasattr(evt, "event_id"):
+        return str(getattr(evt, "event_id") or "")
+    payload = message.get("payload")
+    if isinstance(payload, Mapping):
+        event_id = payload.get("event_id")
+        if event_id:
+            return str(event_id)
+    return ""
 
 
 def handle_ingest_vault_changed(
@@ -120,6 +135,9 @@ def run(
                 if topic:
                     processed_by_event[topic] = processed_by_event.get(topic, 0) + 1
                     last_processed[topic] = event_ts
+                event_id = _event_id_from_message(message)
+                if event_id and _EVENT_DEDUP.seen(event_id):
+                    continue
                 trace_id = message.get("payload", {}).get("trace_id") or message.get("trace_id") or "-"
                 with start_span("worker.consume", trace_id, {"topic": topic}):
                     if topic == INGEST_OBJECT_CREATED:
