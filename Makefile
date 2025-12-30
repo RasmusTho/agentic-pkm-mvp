@@ -42,3 +42,20 @@ setup-merge-driver:
 hygiene-logs:
 	mkdir -p logs
 	chmod -R u+rwX logs || true
+
+
+.PHONY: alpha-up alpha-down alpha-status alpha-smoke
+
+alpha-up:
+	@if [ -z "$(VAULT_ROOT)" ]; then echo "VAULT_ROOT is required (path to your vault)"; exit 1; fi
+	VAULT_ROOT="$(VAULT_ROOT)" scripts/start_full_system.sh
+
+alpha-down:
+	docker compose down
+
+alpha-status:
+	@curl -sS http://127.0.0.1:18000/api/status || true
+	@docker compose exec -T api python -m app.cli store stats || true
+
+alpha-smoke:
+	@if [ -x scripts/reality_smoke.sh ]; then bash scripts/reality_smoke.sh; else echo "scripts/reality_smoke.sh not found"; fi

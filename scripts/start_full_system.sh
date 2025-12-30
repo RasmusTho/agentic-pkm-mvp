@@ -14,14 +14,15 @@ fi
 echo "Vault host path: $vault_host_path -> /app/vault"
 
 if [ -n "$runtime_env" ]; then
-  docker compose $runtime_env up -d db api worker
+  docker compose $runtime_env up -d db api worker watcher
 else
-  docker compose up -d db api worker
+  docker compose up -d db api worker watcher
 fi
 
 reset_runtime_state=${RESET_RUNTIME_STATE:-1}
 if [ "$reset_runtime_state" -eq 1 ]; then
   docker compose exec -T api sh -c 'rm -f /app/tmp/index-outbox.jsonl /app/tmp/watcher_heartbeat.json /app/tmp/worker_heartbeat.json'
+  docker compose exec -T watcher sh -c 'rm -f /app/tmp/watcher_heartbeat.json' || true
 fi
 
 HEALTH_ENDPOINT="http://127.0.0.1:18000/healthz"
@@ -33,6 +34,19 @@ for attempt in $(seq 1 30); do
 done
 if ! curl -sf "$HEALTH_ENDPOINT" >/dev/null 2>&1; then
   echo "ERROR: /healthz did not respond on 127.0.0.1:18000" >&2
+  exit 1
+fi
+
+watcher_ready=0
+for attempt in $(seq 1 30); do
+  if docker compose exec -T watcher sh -c 'test -s /app/tmp/watcher_heartbeat.json' >/dev/null 2>&1; then
+    watcher_ready=1
+    break
+  fi
+  sleep 2
+done
+if [ "$watcher_ready" -ne 1 ]; then
+  echo "ERROR: watcher heartbeat not detected at /app/tmp/watcher_heartbeat.json" >&2
   exit 1
 fi
 
@@ -202,3 +216,6 @@ SUMMARY:
   note: /api/health ok=false can be expected when optional tools (e.g., ffmpeg) are missing; Stage0 ingest/search/ask can still work.
   next: curl -sS http://127.0.0.1:18000/search?q=test&k=3
 SUMMARY
+
+echo "Stop watcher: docker compose exec watcher sh -c 'touch /app/tmp/WATCHER_STOP'"
+echo "URLs: http://127.0.0.1:18000  |  http://127.0.0.1:18000/api/status"
