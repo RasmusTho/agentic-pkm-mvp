@@ -170,26 +170,33 @@ class ObjectStore:
         if not _pg_available():
             return
         with _conn_rw() as conn:
+            table = self._active_table(conn)
+            id_col, uuid_col = _table_columns(table)
+            stmt = sql.SQL(
+                """
+                insert into {table} (
+                    {id_col},
+                    {uuid_col},
+                    kind,
+                    source_ref,
+                    payload,
+                    created_at
+                )
+                values (%s, %s, %s, %s, %s::jsonb, %s)
+                on conflict ({id_col}) do update set
+                    {uuid_col} = excluded.{uuid_col},
+                    kind = excluded.kind,
+                    source_ref = excluded.source_ref,
+                    payload = excluded.payload
+                """
+            ).format(
+                table=sql.Identifier(table),
+                id_col=sql.Identifier(id_col),
+                uuid_col=sql.Identifier(uuid_col),
+            )
             with conn.cursor() as cur:
-                # P1: route inserts through choose_object_table() when store_objects is active
-                # Writes must target the active table so readers see newly ingested objects across processes.
                 cur.execute(
-                    """
-                    insert into objects (
-                        id,
-                        uuid,
-                        kind,
-                        source_ref,
-                        payload,
-                        created_at
-                    )
-                    values (%s, %s, %s, %s, %s::jsonb, %s)
-                    on conflict (id) do update set
-                        uuid = excluded.uuid,
-                        kind = excluded.kind,
-                        source_ref = excluded.source_ref,
-                        payload = excluded.payload
-                    """,
+                    stmt,
                     (
                         obj.uuid,
                         obj.uuid,
@@ -253,7 +260,7 @@ class ObjectStore:
                 value = 0
                 if row:
                     if isinstance(row, dict):
-                        value = int(row.get('count') or row.get('total') or row.get('objects') or 0)
+                        value = int(row.get("count") or row.get("total") or row.get("objects") or 0)
                     else:
                         value = int(row[0] or 0)
                 return value
@@ -262,4 +269,3 @@ class ObjectStore:
             if kind is not None:
                 values = [obj for obj in values if obj.kind == kind]
             return len(values)
-
