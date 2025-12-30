@@ -103,7 +103,13 @@ def _warn_once_per_minute(state: WatcherState, message: str, *, now: float) -> N
         state.last_stop_warning = now
 
 
-def _summary_line(name: str, state: WatcherState, *, backoff_active: bool) -> str:
+def _summary_line(
+    name: str,
+    state: WatcherState,
+    *,
+    backoff_active: bool,
+    tick_sleep_seconds: float,
+) -> str:
     parts = [
         f"name={name}",
         f"ticks={state.ticks_run}",
@@ -112,6 +118,7 @@ def _summary_line(name: str, state: WatcherState, *, backoff_active: bool) -> st
         f"errors={state.errors}",
         f"rate_limited={state.rate_limited}",
         f"backoff={backoff_active}",
+        f"tick_sleep={tick_sleep_seconds}",
     ]
     if state.last_trace_id:
         parts.append(f"trace_id={state.last_trace_id}")
@@ -416,7 +423,14 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
                 if should_log:
                     summary = summaries[spec.name]
                     backoff_active = bool(summary.get("backoff_active"))
-                    print(_summary_line(spec.name, state, backoff_active=backoff_active))
+                    print(
+                        _summary_line(
+                            spec.name,
+                            state,
+                            backoff_active=backoff_active,
+                            tick_sleep_seconds=cfg.tick_sleep_seconds,
+                        )
+                    )
                     state.last_summary_at = now
                     state.save(_state_path(cfg.state_dir, spec.name))
         tick += 1
