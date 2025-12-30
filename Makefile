@@ -54,8 +54,7 @@ alpha-down:
 	docker compose down
 
 alpha-status:
-	@curl -sS http://127.0.0.1:18000/api/status || true
-	@docker compose exec -T api python -m app.cli store stats || true
+	@python scripts/alpha_status.py
 
 alpha-smoke:
 	@if [ -x scripts/reality_smoke.sh ]; then bash scripts/reality_smoke.sh; else echo "scripts/reality_smoke.sh not found"; fi
