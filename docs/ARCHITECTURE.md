@@ -55,6 +55,11 @@ Architecture describes how things are wired today; these documents define what m
 - Events MUST carry `event_id` and consumers MUST deduplicate; note writes MUST fail safe on version mismatch.
 - See `docs/CONCURRENCY.md` for the required patterns and testing strategy.
 
+## Boundary Enforcement
+- Domain-scoped retrieval defaults to excluding cross-domain results; set `ASK_DOMAIN_SCOPE` to the active domain and use `bridge_domains` for explicit inclusion.
+- Panel/UI sections are a control surface and MUST NOT be indexed as knowledge.
+- When writes are blocked (WriteGuard / `safe_mode`), reviewed notes MUST NOT be mutated without explicit intent/APPLY.
+
 ## Reality-MVP Orientation
 - Primary focus: make ingestion of the real Obsidian vault stable, add a minimal external ingest path, expose a reliable ASK API, and ship observability plus an interim GUI so the system is usable end to end.
 - Zoned cognition overlay (Active/ Warm/ Cold) applied on top of the knowledge base; zones are derived from signals (usage, recency, trust) rather than folder names.

@@ -37,7 +37,7 @@ Use one label consistently:
 
 ## Retrieval & ranking
 
-- **Hybrid retrieval** — Combined lexical + semantic retrieval with optional reranking overlays. Maturity: Baseline.
+- **Hybrid retrieval** — Combined lexical + semantic retrieval with optional reranking overlays. Domain scope filtering with `ASK_DOMAIN_SCOPE` + `bridge_domains` is part of the retrieval policy. Maturity: Baseline.
 - **Rerankers** — Optional reranking providers with deterministic fallbacks. Maturity: Baseline.
 - **Embeddings** — Embedding provider entrypoint with deterministic profiles for tests. Embedding profiles (vault settings) define provider/model/dim/normalization flags so cosine similarity stays consistent. Operational guardrails: `python -m app.cli embed_probe --profile <name>` (inspect provider/model/dim + normalization), `python -m app.cli index doctor --warn/--strict` (check identity drift), and `python -m app.cli index rebuild --profile <name>` (regenerate derived embeddings after changes). Maturity: Baseline.
 Changing embedding profiles safely: 1) sanity-check with `python -m app.cli embed_probe --profile <name>`, 2) verify index health via `python -m app.cli index doctor --warn` (or `--strict` before rollout), 3) rebuild via `python -m app.cli index rebuild --profile <name>` to refresh derived vectors.
