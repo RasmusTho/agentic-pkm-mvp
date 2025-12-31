@@ -27,6 +27,13 @@ def test_status_endpoint_returns_snapshot():
     assert "promotion_executed_total" in events
     assert isinstance(events.get("ingest_runs_by_plane", {}), dict)
 
+    events_log = body.get("events_log") or {}
+    assert "path" in events_log
+    assert "total_lines" in events_log
+
+    worker_queue = body.get("worker_queue") or {}
+    assert "mode" in worker_queue
+
 
 def test_status_counts_watcher_runs(tmp_path: Path, monkeypatch) -> None:
     outbox = tmp_path / "outbox.jsonl"
@@ -42,3 +49,6 @@ def test_status_counts_watcher_runs(tmp_path: Path, monkeypatch) -> None:
     data = resp.json()
     events = data.get("events") or {}
     assert events.get("watcher_runs_total", 0) >= 1
+
+    events_log = data.get("events_log") or {}
+    assert events_log.get("total_lines") == 1

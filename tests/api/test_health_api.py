@@ -112,6 +112,9 @@ def test_health_success(monkeypatch, tmp_path) -> None:
     assert isinstance(worker.get("freshness_seconds"), float)
     assert worker.get("processed_total") == 2
     _assert_check_metadata(data)
+    actions = data.get("suggested_actions")
+    assert isinstance(actions, list)
+    assert any(action.get("id") == "llm_mock" for action in actions if isinstance(action, dict))
 
 
 def test_health_allows_stale(monkeypatch, tmp_path) -> None:

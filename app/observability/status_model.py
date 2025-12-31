@@ -70,6 +70,18 @@ class OutboxLagStatus(BaseModel):
     pending_estimate: int | None = None
 
 
+class EventsLogStatus(BaseModel):
+    path: str | None = None
+    total_lines: int | None = None
+
+
+class WorkerQueueStatus(BaseModel):
+    mode: str
+    pending: int | None = None
+    processed_total: int | None = None
+    source_path: str | None = None
+
+
 class SystemStatus(BaseModel):
     timestamp: datetime
     sot_version: str  # legacy alias for baseline SoT
@@ -85,6 +97,8 @@ class SystemStatus(BaseModel):
     events: Optional[EventCounters] = None
     write_guard: Optional[WriteGuardStatus] = None
     outbox_lag: Optional[OutboxLagStatus] = None
+    events_log: Optional[EventsLogStatus] = None
+    worker_queue: Optional[WorkerQueueStatus] = None
 
 
 __all__ = [
@@ -96,5 +110,7 @@ __all__ = [
     "EventCounters",
     "WriteGuardStatus",
     "OutboxLagStatus",
+    "EventsLogStatus",
+    "WorkerQueueStatus",
     "SystemStatus",
 ]

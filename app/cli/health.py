@@ -292,6 +292,52 @@ def _required_checks_ok(checks: dict[str, dict[str, Any]]) -> bool:
     return all(item.get("ok") for item in checks.values() if item.get("required", True))
 
 
+def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+
+    ffmpeg = checks.get("ffmpeg", {})
+    if ffmpeg.get("ok") is False:
+        actions.append(
+            {
+                "id": "ffmpeg_missing",
+                "severity": "optional",
+                "message": "ffmpeg missing; media transcription features disabled",
+                "command_hint": "",
+            }
+        )
+
+    try:
+        from app.index.doctor import diagnose_index
+
+        diag = diagnose_index()
+        issues = diag.get("issues") or []
+        if issues:
+            actions.append(
+                {
+                    "id": "index_rebuild",
+                    "severity": "required",
+                    "message": "Embedding/index identity mismatch detected",
+                    "command_hint": "python -m app.cli index rebuild --profile default",
+                }
+            )
+    except Exception:
+        pass
+
+    llm_providers = checks.get("llm_providers", {})
+    active_provider = (llm_providers.get("active_provider") or "").lower()
+    if active_provider == "mock":
+        actions.append(
+            {
+                "id": "llm_mock",
+                "severity": "optional",
+                "message": "LLM provider is mock; LLM features are deterministic only",
+                "command_hint": "LLM_PROVIDER=ollama",
+            }
+        )
+
+    return actions
+
+
 @span("health.check")
 def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     trace_id = with_trace_id(trace_id)
@@ -314,7 +360,8 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     runtime_ok = _runtime_ok(runtime)
     ok = bool(checks_ok and runtime_ok)
     required_ok = bool(_required_checks_ok(checks) and runtime_ok)
-    return {"ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id}
+    suggested_actions = _suggested_actions(checks, runtime)
+    return {"ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions}
 
 
 __all__ = ["run_health"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,11 +12,13 @@ from app.observability.ingest_meta import get_ingest_status
 from app.observability.status_model import (
     AskStatus,
     EventCounters,
+    EventsLogStatus,
     IngestionStatus,
     IntentStatus,
     OutboxLagStatus,
     StoreStatus,
     SystemStatus,
+    WorkerQueueStatus,
     WriteGuardStatus,
 )
 from app.outbox.events import INDEX_OUTBOX_PATH
@@ -34,6 +37,9 @@ _ACTIVE_FEATURES = [
     "Config-driven panel action wiring",
 ]
 _WATCHER_EVENT_NAMES = {"watcher.run", "watcher.run.completed"}
+
+
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 def record_ask_query(latency_ms: float) -> None:
@@ -307,6 +313,74 @@ def _get_write_guard_status() -> WriteGuardStatus:
     )
 
 
+def _events_log_status() -> EventsLogStatus:
+    outbox_path = Path(INDEX_OUTBOX_PATH)
+    total_lines = _count_outbox_events(outbox_path)
+    return EventsLogStatus(path=str(outbox_path), total_lines=total_lines)
+
+
+def _worker_queue_mode() -> str:
+    raw_enabled = (os.getenv("WORKER_ENABLE") or "").strip().lower()
+    if raw_enabled and raw_enabled not in _TRUE_VALUES:
+        return "none"
+    backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
+    db_url = os.getenv("DATABASE_URL") or os.getenv("DB_DSN")
+    if backend == "pg" or db_url:
+        return "db"
+    if os.getenv("INDEX_OUTBOX_PATH"):
+        return "jsonl"
+    return "none"
+
+
+def _count_outbox_pending_db() -> int | None:
+    try:
+        from app.services import outbox as outbox_service
+    except Exception:
+        return None
+    try:
+        conn = outbox_service._open_conn()
+    except Exception:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("select count(*) from outbox where delivered_at is null")
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+    except Exception:
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _get_worker_queue_status() -> WorkerQueueStatus:
+    mode = _worker_queue_mode()
+    heartbeat = _read_worker_heartbeat() or {}
+    processed_total = heartbeat.get("processed_total") if isinstance(heartbeat.get("processed_total"), int) else None
+    source_path = None
+    pending: int | None = None
+
+    if mode == "db":
+        source_path = os.getenv("DATABASE_URL") or os.getenv("DB_DSN") or "outbox"
+        pending = _count_outbox_pending_db()
+    elif mode == "jsonl":
+        source_path = os.getenv("INDEX_OUTBOX_PATH") or str(Path(INDEX_OUTBOX_PATH))
+        total_lines = _count_outbox_events(Path(source_path)) if source_path else None
+        if isinstance(total_lines, int) and isinstance(processed_total, int):
+            pending = max(total_lines - processed_total, 0)
+        elif isinstance(total_lines, int):
+            pending = total_lines
+
+    return WorkerQueueStatus(
+        mode=mode,
+        pending=pending,
+        processed_total=processed_total,
+        source_path=source_path,
+    )
+
+
 def get_system_status() -> SystemStatus:
     sot_meta = get_sot_metadata()
     ingestion = get_ingestion_status()
@@ -332,6 +406,8 @@ def get_system_status() -> SystemStatus:
         events=counters,
         write_guard=_get_write_guard_status(),
         outbox_lag=_get_outbox_lag(),
+        events_log=_events_log_status(),
+        worker_queue=_get_worker_queue_status(),
     )
 
 

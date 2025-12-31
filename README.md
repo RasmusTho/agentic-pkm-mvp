@@ -75,8 +75,15 @@ You should see the eight-line CI summary: LATENCY / EVAL / DELTA / RELATION COVE
 
 ```bash
 export VAULT_ROOT="/path/to/your/vault"
-make alpha-up
+make alpha
 curl -sS http://127.0.0.1:18000/api/status
+```
+
+Bootstrap a fresh environment (doctor is read-only):
+
+```bash
+export VAULT_ROOT="/path/to/your/vault"
+make alpha-bootstrap
 ```
 
 Run with Ollama-backed LLMs (reads provider defaults from vault settings):
@@ -86,11 +93,11 @@ export VAULT_ROOT="/path/to/your/vault"
 make alpha-up-ollama
 ```
 
-Bootstrap a fresh environment (full scan ingest if empty + index doctor):
+Check environment readiness (read-only):
 
 ```bash
 export VAULT_ROOT="/path/to/your/vault"
-make alpha-bootstrap
+make alpha-doctor
 ```
 
 Stop services:

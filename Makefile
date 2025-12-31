@@ -44,7 +44,9 @@ hygiene-logs:
 	chmod -R u+rwX logs || true
 
 
-.PHONY: alpha-up alpha-up-ollama alpha-bootstrap alpha-down alpha-status alpha-smoke
+.PHONY: alpha alpha-up alpha-up-ollama alpha-bootstrap alpha-doctor alpha-down alpha-status alpha-smoke
+
+alpha: alpha-up
 
 alpha-up:
 	@if [ -z "$(VAULT_ROOT)" ]; then echo "VAULT_ROOT is required (path to your vault)"; exit 1; fi
@@ -54,9 +56,14 @@ alpha-up-ollama:
 	@if [ -z "$(VAULT_ROOT)" ]; then echo "VAULT_ROOT is required (path to your vault)"; exit 1; fi
 	VAULT_ROOT="$(VAULT_ROOT)" LLM_PROVIDER=ollama scripts/start_full_system.sh
 
+alpha-doctor:
+	@python scripts/alpha_doctor.py
+
 alpha-bootstrap:
 	@if [ -z "$(VAULT_ROOT)" ]; then echo "VAULT_ROOT is required (path to your vault)"; exit 1; fi
-	VAULT_ROOT="$(VAULT_ROOT)" LLM_PROVIDER=ollama ALPHA_BOOTSTRAP=1 BOOTSTRAP_INGEST_MAX_NOTES=$${BOOTSTRAP_INGEST_MAX_NOTES:-100000} scripts/start_full_system.sh
+	@$(MAKE) alpha-doctor
+	@$(MAKE) alpha-up
+	@$(MAKE) alpha-status
 
 alpha-down:
 	docker compose down
