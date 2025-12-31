@@ -46,7 +46,11 @@ hygiene-logs:
 
 .PHONY: alpha alpha-up alpha-up-ollama alpha-bootstrap alpha-doctor alpha-down alpha-status alpha-smoke alpha-e2e
 
-alpha: alpha-up
+alpha:
+	@$(MAKE) alpha-up
+	@$(MAKE) alpha-status
+	@$(MAKE) alpha-e2e
+	@$(MAKE) alpha-smoke
 
 alpha-up:
 	@if [ -z "$(VAULT_ROOT)" ]; then echo "VAULT_ROOT is required (path to your vault)"; exit 1; fi

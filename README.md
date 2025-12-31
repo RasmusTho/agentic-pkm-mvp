@@ -71,6 +71,24 @@ LLM_TRACE_PATH=/tmp/llm-trace-sample.jsonl python -m app.cli llm-trace-sequence 
 
 You should see the eight-line CI summary: LATENCY / EVAL / DELTA / RELATION COVERAGE / RELATIONS / DIARIZATION / REASONING / GATES
 
+## Golden Path (Alpha)
+
+```bash
+export VAULT_ROOT="/Users/rasmus/Library/Mobile Documents/iCloud~md~obsidian/Documents/PKM - Alpha"
+make alpha-down || true
+make alpha-up
+make alpha-status
+```
+
+Confidence checks (optional):
+- `make alpha-doctor`
+- `make alpha-e2e`
+- `make alpha-smoke`
+
+What each command does: `scripts/start_full_system.sh` is the canonical orchestrator entrypoint used by `make alpha-up`. `alpha-status` is read-only and safe. `alpha-smoke` is deterministic (runs=2 no-op guarantee). `alpha-e2e` enforces runtime invariants so status semantics regressions get caught.
+
+Note: `/api/health` can report `ok=false` when only optional tools (e.g., ffmpeg) are missing; treat `required_ok` as the gating signal.
+
 ## Alpha quickstart (Docker)
 
 ```bash
