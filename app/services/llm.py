@@ -6,6 +6,9 @@ import os
 import socket
 import time
 from typing import Any, Callable, Dict, Optional
+from urllib.parse import urlparse
+
+import requests
 
 from app.llm.trace import log_llm_call
 
@@ -39,18 +42,47 @@ def validate_json(raw: str, schema_path: str) -> Dict[str, Any]:
     return data
 
 
-def _ollama_chat(system: str, user: str, model: str, temperature: float = 0.0, timeout: float = 12.0) -> str:
+def _ollama_base_url() -> str:
+    return os.getenv("OLLAMA_HOST", os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")).rstrip("/")
+
+
+def _normalize_ollama_path(path: str) -> str:
+    clean = (path or "").rstrip("/")
+    if clean.endswith("/v1"):
+        clean = clean[:-3]
+    return clean
+
+
+def _ollama_chat(
+    system: str,
+    user: str,
+    model: str,
+    temperature: float = 0.0,
+    timeout: float = 12.0,
+    max_tokens: int | None = None,
+) -> str:
     body = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
-            {"role": "user", "content": user}
+            {"role": "user", "content": user},
         ],
-        "options": {"temperature": temperature}
+        "options": {"temperature": temperature},
     }
-    conn = http.client.HTTPConnection("127.0.0.1", 11434, timeout=timeout)
+    if max_tokens is not None:
+        body["options"]["num_predict"] = int(max_tokens)
+
+    base = _ollama_base_url()
+    parsed = urlparse(base)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    prefix = _normalize_ollama_path(parsed.path)
+    path = f"{prefix}/api/chat" if prefix else "/api/chat"
+
+    conn_class = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    conn = conn_class(host, port, timeout=timeout)
     try:
-        conn.request("POST", "/api/chat", body=json.dumps(body), headers={"Content-Type":"application/json"})
+        conn.request("POST", path, body=json.dumps(body), headers={"Content-Type": "application/json"})
         resp = conn.getresponse()
         if resp.status != 200:
             raise RuntimeError(f"ollama http {resp.status}")
@@ -175,6 +207,54 @@ def _normalize_model(value: str | None) -> str | None:
     return cleaned or None
 
 
+def _default_model() -> str:
+    return os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", "llama3.1:8b"))
+
+
+def _mock_response_for_kind(kind: str | None) -> str:
+    kind_lower = (kind or "").lower()
+    if "reasoning" in kind_lower:
+        return _deterministic_reasoning_response()
+    if "ranking" in kind_lower:
+        return _deterministic_ranking_response([])
+    return _deterministic_llm_response()
+
+
+def _extract_openai_content(payload: dict) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    choices = payload.get("choices") or []
+    if not choices:
+        return ""
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if isinstance(message, dict):
+        return str(message.get("content") or "")
+    return ""
+
+
+def _http_chat(
+    *,
+    url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    timeout: float,
+    max_tokens: int | None = None,
+) -> tuple[str, dict[str, Any]]:
+    payload: dict[str, Any] = {"model": model, "messages": messages}
+    if max_tokens is not None:
+        payload["max_tokens"] = int(max_tokens)
+    resp = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        data=json.dumps(payload),
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return _extract_openai_content(data), data
+
+
 def call_llm(
     name: str,
     pack: Dict[str, Any],
@@ -184,6 +264,7 @@ def call_llm(
     trace_id: Optional[str] = None,
     provider_override: str | None = None,
     model_override: str | None = None,
+    max_tokens: int | None = None,
 ) -> str:
     def _deterministic_response_for_kind() -> str:
         if kind and "ranking" in str(kind):
@@ -199,33 +280,96 @@ def call_llm(
             return {}
 
     provider = _normalize_provider(provider_override) or _normalize_provider(os.getenv("LLM_PROVIDER")) or "mock"
-    model = _normalize_model(model_override) or os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", "llama3.1:8b"))
+    model = _normalize_model(model_override) or _default_model()
     temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
     system = pack.get("system", "")
     user = pack.get("user", "")
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     response_text: str
+    response_payload: dict[str, Any] = {}
+    kind_lower = (kind or "").lower()
 
     if provider == "mock":
-        response_text = _deterministic_response_for_kind()
-    else:
+        mock_override = os.getenv("LLM_MOCK_RESPONSE")
+        use_override = False
+        if mock_override and "reasoning" not in kind_lower and "ranking" not in kind_lower:
+            stripped = mock_override.strip()
+            if any(token in kind_lower for token in ("qa", "ask")):
+                use_override = True
+            elif stripped.startswith("{") or stripped.startswith("["):
+                use_override = True
+            elif not kind_lower:
+                use_override = True
+        if use_override:
+            response_text = mock_override
+        else:
+            response_text = _deterministic_response_for_kind()
+        response_payload = {"content": response_text}
+    elif provider == "ollama":
         try:
-            response_text = with_llm_retries(lambda: _ollama_chat(system, user, str(model), temperature))
+            response_text = with_llm_retries(
+                lambda: _ollama_chat(
+                    system,
+                    user,
+                    str(model),
+                    temperature,
+                    timeout=float(os.getenv("LLM_TIMEOUT", "12")),
+                    max_tokens=max_tokens,
+                )
+            )
         except LLMError:
             response_text = _deterministic_response_for_kind()
         except (socket.timeout, ConnectionRefusedError, RuntimeError):
             response_text = _deterministic_response_for_kind()
+        response_payload = {"content": response_text}
+    elif provider == "openai":
+        try:
+            api_key = os.environ["OPENAI_API_KEY"]
+            url = os.getenv("OPENAI_BASE", "https://api.openai.com/v1/chat/completions")
+            response_text, response_payload = _http_chat(
+                url=url,
+                api_key=api_key,
+                model=str(model),
+                messages=messages,
+                timeout=float(os.getenv("LLM_TIMEOUT", "60")),
+                max_tokens=max_tokens,
+            )
+        except Exception:
+            response_text = _deterministic_response_for_kind()
+            response_payload = {"content": response_text}
+    elif provider == "deepseek":
+        try:
+            api_key = os.environ["DEEPSEEK_API_KEY"]
+            url = os.getenv("DEEPSEEK_BASE", "https://api.deepseek.com/chat/completions")
+            response_text, response_payload = _http_chat(
+                url=url,
+                api_key=api_key,
+                model=str(model),
+                messages=messages,
+                timeout=float(os.getenv("LLM_TIMEOUT", "60")),
+                max_tokens=max_tokens,
+            )
+        except Exception:
+            response_text = _deterministic_response_for_kind()
+            response_payload = {"content": response_text}
+    else:
+        response_text = _deterministic_response_for_kind()
+        response_payload = {"content": response_text}
+
     if str(response_text or "").strip() in {"", "{}"}:
         response_text = _deterministic_response_for_kind()
+        response_payload = {"content": response_text}
     # Enforce deterministic reasoning/ranking shape when upstream returns non-JSON or empty content.
     parsed = _parsed(response_text)
     if kind and "reasoning" in str(kind):
         if not parsed or not parsed.get("claims") and not parsed.get("evidence"):
             response_text = _deterministic_reasoning_response()
+            response_payload = {"content": response_text}
             parsed = _parsed(response_text)
     if kind and "ranking" in str(kind):
         if not parsed or not parsed.get("ranking"):
             response_text = _deterministic_ranking_response([str(p) for p in pack.values() if isinstance(p, str)])
+            response_payload = {"content": response_text}
 
     log_llm_call(
         provider=provider or "unknown",
@@ -233,7 +377,7 @@ def call_llm(
         agent=agent or name or "unknown",
         kind=kind or name or "unknown",
         messages=messages,
-        response={"content": response_text},
+        response=response_payload,
         response_text=response_text,
         trace_id=trace_id,
     )

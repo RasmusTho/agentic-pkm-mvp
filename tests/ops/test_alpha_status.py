@@ -27,6 +27,8 @@ def test_alpha_status_handles_non_json_status() -> None:
     assert "- health: ok=True required_ok=True db_ok=True" in output
     assert "- watcher:" in output
     assert "- worker:" in output
+    assert "- llm routes: (missing)" in output
+    assert "- llm providers: (missing)" in output
     assert "- sot: (missing)" in output
     assert "- stores: (missing)" in output
     assert "- ingestion: (missing)" in output
@@ -48,6 +50,8 @@ def test_alpha_status_handles_fetch_error() -> None:
     assert "- health: ERROR (unreachable)" in output
     assert "- watcher: status=(missing)" in output
     assert "- worker: status=(missing)" in output
+    assert "- llm routes: (missing)" in output
+    assert "- llm providers: (missing)" in output
     assert "- stores: (missing)" in output
 
 

@@ -3,9 +3,7 @@ from __future__ import annotations
 import os
 from typing import Dict, List, Optional
 
-import httpx
-
-from app.llm.trace import log_llm_call
+from app.components.llm.fabric import LLMTaskIntent, get_chat_client
 from app.obs.log import span, with_trace_id
 from app.quality.guardrails import enforce_quality
 from app.retrieval.hybrid import hybrid_search
@@ -38,62 +36,18 @@ def _max_tokens() -> int:
     return _QA_SETTINGS.llm.max_tokens
 
 
-def _provider() -> str:
-    prov = (os.getenv("LLM_PROVIDER") or _QA_SETTINGS.llm.provider).lower()
-    return "ollama" if prov == "llm" else prov
-
-
-def _llm_host() -> str:
-    return os.getenv("OLLAMA_HOST", _QA_SETTINGS.llm.host).rstrip("/")
-
-
 def _call_llm(messages: List[Dict[str, str]], *, trace_id: str, max_tokens: int) -> str:
-    provider = _provider()
-    model = os.getenv("OLLAMA_MODEL", _QA_SETTINGS.llm.model)
-    if provider == "mock":
-        content = os.getenv("LLM_MOCK_RESPONSE", "Mock response [#1]").strip()
-        log_llm_call(
-            provider=provider,
-            model=model,
-            agent="qa",
-            kind="qa.draft",
-            messages=messages,
-            response={"content": content},
-            response_text=content,
-            trace_id=trace_id,
-        )
-        return content
-    if provider != "ollama":
-        raise ValueError(f"Unsupported provider for QA agent: {provider}")
-
-    host = _llm_host()
-    resp = httpx.post(
-        f"{host}/api/chat",
-        json={
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "options": {"num_predict": max_tokens},
-        },
-        timeout=float(os.getenv("LLM_TIMEOUT", str(_QA_SETTINGS.llm.timeout_s))),
-        headers={"x-trace-id": trace_id},
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    message = data.get("message", {})
-    content = message.get("content") or data.get("response") or ""
-    content = str(content).strip()
-    log_llm_call(
-        provider=provider,
-        model=model,
+    system = messages[0]["content"] if messages else ""
+    user = messages[-1]["content"] if messages else ""
+    client = get_chat_client(LLMTaskIntent(task_kind="qa", risk="medium"))
+    return client.chat(
+        "qa",
+        {"system": system, "user": user},
         agent="qa",
         kind="qa.draft",
-        messages=messages,
-        response=data,
-        response_text=content,
         trace_id=trace_id,
+        max_tokens=max_tokens,
     )
-    return content
 
 
 def _format_context(ctx_docs: List[dict]) -> str:

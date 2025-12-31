@@ -6,7 +6,7 @@ from statistics import fmean
 from typing import Dict, List, Sequence
 from uuid import uuid4
 
-from app.components.embeddings import get_embedding_client, get_embedding_identity
+from app.components.llm.fabric import LLMTaskIntent, get_embeddings_client
 from app.retrieval.hybrid import MemoryHybridStore, hybrid_search, get_store
 from app.stores.memory import MemoryVectorIndex
 
@@ -98,9 +98,9 @@ def _process_outbox_event(
     *,
     vector_index: MemoryVectorIndex,
 ) -> None:
-    client = get_embedding_client()
+    client = get_embeddings_client(LLMTaskIntent(task_kind="embed", determinism_required=True))
     vec = client.embed_text(payload["text"])
-    identity = get_embedding_identity(client=client)
+    identity = client.identity
     vector_index.upsert(
         uuid4(),
         kind="fitness",

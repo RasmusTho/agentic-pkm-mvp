@@ -63,6 +63,34 @@ def _format_store_line(stores: list[dict]) -> str:
     return f"entries={len(stores)} objects={total_objects} external={external}, vault={vault}"
 
 
+def _format_llm_routes(routes: dict | None) -> str:
+    if not isinstance(routes, dict) or not routes:
+        return "(missing)"
+    parts = []
+    for key in sorted(routes.keys()):
+        route = routes.get(key) or {}
+        if not isinstance(route, dict):
+            continue
+        provider = route.get("provider") or "?"
+        model = route.get("model") or "?"
+        parts.append(f"{key}={provider}/{model}")
+    return " ".join(parts) if parts else "(missing)"
+
+
+def _format_providers(providers: list[dict] | None) -> str:
+    if not isinstance(providers, list) or not providers:
+        return "(missing)"
+    parts = []
+    for entry in providers:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name") or "?"
+        ok = entry.get("ok")
+        status = "ok" if ok else "fail"
+        parts.append(f"{name}={status}")
+    return " ".join(parts) if parts else "(missing)"
+
+
 def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
     base_url = api_base_url.rstrip("/")
     lines: list[str] = ["Alpha status"]
@@ -108,6 +136,11 @@ def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
             )
         )
 
+        router_routes = _get(health_payload, "checks", "llm_router", "selected_defaults", default={})
+        providers = _get(health_payload, "checks", "llm_providers", "providers", default=[])
+        lines.append(_line("llm routes", _format_llm_routes(router_routes)))
+        lines.append(_line("llm providers", _format_providers(providers)))
+
         ffmpeg = _get(health_payload, "checks", "ffmpeg", default={})
         ffmpeg_ok = _get(ffmpeg, "ok", default=True)
         ffmpeg_detail = _get(ffmpeg, "detail", default="")
@@ -118,6 +151,8 @@ def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
     if not isinstance(health_payload, dict):
         lines.append(_line("watcher", "status=(missing) freshness_s=(missing) paused=(missing)"))
         lines.append(_line("worker", "status=(missing) freshness_s=(missing) processed_total=(missing)"))
+        lines.append(_line("llm routes", "(missing)"))
+        lines.append(_line("llm providers", "(missing)"))
 
     if isinstance(status_payload, dict):
         sot_version = _get(status_payload, "sot_version", default="(missing)")

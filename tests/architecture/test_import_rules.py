@@ -99,3 +99,39 @@ def test_high_level_imports_use_components_entrypoints() -> None:
         "Use app.components.embeddings/rerankers entrypoints instead of concrete modules: "
         f"{[(str(p.relative_to(REPO_ROOT)), sorted(list(mods))) for p, mods in offenders]}"
     )
+
+
+def test_high_level_llm_access_uses_fabric() -> None:
+    """High-level layers should not import provider clients directly; use LLM fabric/router."""
+    scan_roots = [
+        REPO_ROOT / "app" / "agents",
+        REPO_ROOT / "app" / "agent",
+        REPO_ROOT / "app" / "fitness",
+        REPO_ROOT / "app" / "index",
+        REPO_ROOT / "app" / "cli",
+        REPO_ROOT / "app" / "reasoning",
+        REPO_ROOT / "app" / "observability",
+    ]
+    forbidden = {
+        "app.llm.adapter",
+        "app.llm.embeddings",
+        "app.services.llm",
+    }
+    allow_subpaths = {
+        REPO_ROOT / "app" / "components" / "llm",
+        REPO_ROOT / "app" / "services",
+        REPO_ROOT / "app" / "llm",
+    }
+    offenders: list[tuple[Path, set[str]]] = []
+    for root in scan_roots:
+        for path in _iter_py_files(root):
+            if any(path.is_relative_to(allowed) for allowed in allow_subpaths):
+                continue
+            imports = _imports(path)
+            hits = {mod for mod in imports if any(mod == f or mod.startswith(f + ".") for f in forbidden)}
+            if hits:
+                offenders.append((path, hits))
+    assert not offenders, (
+        "High-level modules should use app.components.llm.fabric, not provider clients: "
+        f"{[(str(p.relative_to(REPO_ROOT)), sorted(list(mods))) for p, mods in offenders]}"
+    )

@@ -20,6 +20,7 @@ class ChatClient:
         agent: str | None = None,
         kind: str | None = None,
         trace_id: str | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         return call_llm(
             name,
@@ -29,6 +30,7 @@ class ChatClient:
             trace_id=trace_id,
             provider_override=self.route.provider,
             model_override=self.route.model,
+            max_tokens=max_tokens,
         )
 
 

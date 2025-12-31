@@ -89,7 +89,9 @@ def _assert_check_metadata(payload: dict) -> None:
     assert "required" in checks["ffmpeg"]
     assert "severity" in checks["ffmpeg"]
     assert "llm_router" in checks
+    assert "selected_defaults" in checks["llm_router"]
     assert "llm_providers" in checks
+    assert "providers" in checks["llm_providers"]
 
 
 def test_health_success(monkeypatch, tmp_path) -> None:
