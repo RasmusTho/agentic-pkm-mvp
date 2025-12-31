@@ -4,6 +4,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+mkdir -p tmp logs
+for dir in tmp logs; do
+  if [ ! -w "$dir" ]; then
+    uid="$(id -u)"
+    gid="$(id -g)"
+    echo "ERROR: $dir is not writable." >&2
+    echo "Fix with:" >&2
+    echo "  sudo chown -R $uid:$gid $dir" >&2
+    echo "  sudo chmod -R u+rwX $dir" >&2
+    exit 2
+  fi
+done
+
 runtime_env=""
 vault_host_path="${VAULT_ROOT:-./vault}"
 if [ -n "${VAULT_ROOT:-}" ]; then

@@ -19,6 +19,7 @@ services:
     build: .
     image: workspace-app
     working_dir: /app
+    user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
       - ./:/app
       - "${VAULT_ROOT:-./vault}:/app/vault"
@@ -54,6 +55,7 @@ services:
     build: .
     image: workspace-app
     working_dir: /app
+    user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
       - ./:/app
       - "${VAULT_ROOT:-./vault}:/app/vault"
@@ -87,6 +89,7 @@ services:
     build: .
     image: workspace-app
     working_dir: /app
+    user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
       - ./:/app
       - "${VAULT_ROOT:-./vault}:/app/vault"
