@@ -12,6 +12,14 @@ from app.cli import cli
 pytestmark = pytest.mark.not_pg
 
 
+class _StubChatClient:
+    def __init__(self, response: str) -> None:
+        self._response = response
+
+    def chat(self, *args, **kwargs) -> str:
+        return self._response
+
+
 def _panel_actions_file(tmp_path: Path) -> Path:
     path = tmp_path / "panel-actions.md"
     path.write_text(
@@ -93,6 +101,7 @@ def test_watcher_rule_mode_promotes_with_catalog(tmp_path: Path, monkeypatch: py
         "PANEL_ACTIONS_PATH": str(actions_path),
         "INDEX_OUTBOX_PATH": str(outbox_path),
         "PANEL_AGENT_DECIDER": "rule",
+        "WATCHER_AUTO_EXEC": "1",
     }
     runner = CliRunner()
     result = runner.invoke(
@@ -136,8 +145,8 @@ def test_watcher_llm_mode_promotes_without_exact_label(tmp_path: Path, monkeypat
     snapshot_path = tmp_path / "snapshot.json"
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.call_llm",
-        lambda *args, **kwargs: json.dumps({"actions": [{"id": "promote.evergreen", "reason": "panel intent"}]}),
+        "app.agents.panel_agent.graph.get_chat_client",
+        lambda intent: _StubChatClient(json.dumps({"actions": [{"id": "promote.evergreen", "reason": "panel intent"}]})),
     )
 
     env = {
@@ -146,6 +155,7 @@ def test_watcher_llm_mode_promotes_without_exact_label(tmp_path: Path, monkeypat
         "PANEL_ACTIONS_PATH": str(actions_path),
         "INDEX_OUTBOX_PATH": str(outbox_path),
         "PANEL_AGENT_DECIDER": "llm",
+        "WATCHER_AUTO_EXEC": "1",
     }
     runner = CliRunner()
     result = runner.invoke(

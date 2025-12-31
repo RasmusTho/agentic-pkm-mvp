@@ -83,6 +83,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/INFRASTRUCTURE.md | Infrastructure notes | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
 | docs/HEALTH.md | Health checks | Baseline-only (v4.10) | 2025-12-07 | CLI health checks (ffmpeg/yt-dlp/outbox/ollama) + ci-smoke reference. |
 | docs/CLI.md | CLI reference | Baseline-only (v4.10) | 2025-12-07 | Updated commands (ingest/ask flows, alpha demos, health). |
+| docs/LLM_ROUTING.md | LLM routing contract (router + fabric) | Aligned (forward line v5.x) | 2025-03-14 | Canonical routing/fabric contract; documents env precedence and debug surfaces. |
 | docs/LLM.md | LLM integration | Baseline-only (v4.10) | 2025-12-07 | Providers/env defaults (mock/Ollama/OpenAI/DeepSeek). |
 | docs/LLM_BACKENDS.md | LLM backends | Baseline-only (v4.10) | 2025-12-07 | Providers mock/ollama/openai/deepseek; timeouts/keys noted. |
 | docs/RETRIEVAL.md | Retrieval | Baseline-only (v4.10) | 2025-12-07 | Hybrid search + optional rerank; ASK graph defaults noted. |

@@ -77,6 +77,8 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
         executed_ids = set(payload.get("executed_action_ids") or [])
 
     actions = [action for action in intent_event.payload.actions if action.id not in executed_ids]
+    payload = intent_event.payload.model_copy(update={"actions": list(actions)})
+    intent_event = intent_event.model_copy(update={"payload": payload})
     panel_hints = [
         {"id": action.id, "label": action.label, "checked": action.checked} for action in actions
     ]
@@ -90,6 +92,7 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
         action_wiring=wiring,
         note_content=note_text,
         panel_hints=panel_hints,
+        executed_action_ids=sorted(executed_ids),
     )
     decider_mode = get_panel_agent_decider()
     state = run_panel_graph(initial_state, decider_mode=decider_mode)

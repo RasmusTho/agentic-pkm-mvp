@@ -3,7 +3,8 @@ from __future__ import annotations
 import time
 from typing import Any, Dict
 
-from app.components.embeddings import EmbeddingIdentity, get_embedding_client, get_embedding_identity
+from app.components.embeddings import EmbeddingIdentity
+from app.components.llm.fabric import LLMTaskIntent, get_embeddings_client
 from app.stores import get_vector_index
 
 try:  # Runtime type hints without hard dependencies at import time
@@ -30,8 +31,8 @@ def _identity_to_dict(identity: EmbeddingIdentity | None) -> Dict[str, Any] | No
 
 
 def diagnose_index() -> Dict[str, Any]:
-    client = get_embedding_client()
-    expected_identity = get_embedding_identity(client=client)
+    client = get_embeddings_client(LLMTaskIntent(task_kind="embed", determinism_required=False))
+    expected_identity = client.identity
     vector_index = get_vector_index()
     stored_identity = None
     if hasattr(vector_index, "get_identity"):
@@ -86,4 +87,3 @@ def diagnose_index() -> Dict[str, Any]:
 
 
 __all__ = ["diagnose_index"]
-

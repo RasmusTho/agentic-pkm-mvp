@@ -33,6 +33,7 @@ class PanelAgentState(BaseModel):
     selected_action_reasons: dict[str, str] = Field(default_factory=dict)
     note_content: str | None = None
     panel_hints: List[dict[str, Any]] = Field(default_factory=list)
+    executed_action_ids: List[str] = Field(default_factory=list)
 
     # Runtime-populated fields
     intent_event: PanelIntentEvent | None = None

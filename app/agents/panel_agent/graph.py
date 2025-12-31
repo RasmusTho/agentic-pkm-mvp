@@ -23,7 +23,10 @@ from app.events.panel import (
     PanelRuntimeActionResult,
 )
 from app.events.schema import OutboxEvent
-from app.services.llm import call_llm
+from app.components.llm.fabric import get_chat_client
+from app.components.llm.router import LLMTaskIntent
+
+_IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 
 _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 
@@ -174,10 +177,13 @@ def _load_context(state: PanelAgentState) -> PanelAgentState:
     if state.intent_event is None:
         payload = PanelIntentPayload(note=state.note, panel=state.panel, actions=list(state.actions))
         state.intent_event = PanelIntentEvent(payload=payload)
+    else:
+        payload_actions = list(state.intent_event.payload.actions or [])
+        if payload_actions != list(state.actions):
+            payload = state.intent_event.payload.model_copy(update={"actions": list(state.actions)})
+            state.intent_event = state.intent_event.model_copy(update={"payload": payload})
     if not state.trace_id and state.intent_event:
         state.trace_id = state.intent_event.trace_id
-    if not state.actions and state.intent_event:
-        state.actions = list(state.intent_event.payload.actions)
     if not state.action_catalog:
         state.action_catalog = PanelActionCatalog.from_descriptors([])
     if not state.action_wiring:
@@ -193,12 +199,26 @@ def _available_actions_for_prompt(catalog: PanelActionCatalog) -> list[PanelActi
 
 def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str]] | None:
     assert state.intent_event is not None, "PanelAgentState must include intent_event"
-    actions = state.intent_event.payload.actions
+    actions = list(state.actions)
+    if not actions:
+        return set(), {}
     catalog = state.action_catalog or PanelActionCatalog.from_descriptors([])
-    available = _available_actions_for_prompt(catalog) or [
-        PanelActionDescriptor(id=a.id, intent_type=a.mapping.intent_type if a.mapping else "", downstream_event="", labels=[a.label])  # type: ignore[arg-type]
-        for a in actions
+    allowed_ids = {a.id for a in actions}
+    available = [
+        descriptor
+        for descriptor in _available_actions_for_prompt(catalog)
+        if descriptor.id in allowed_ids
     ]
+    if not available:
+        available = [
+            PanelActionDescriptor(
+                id=a.id,
+                intent_type=a.mapping.intent_type if a.mapping else "",
+                downstream_event="",
+                labels=[a.label],
+            )  # type: ignore[arg-type]
+            for a in actions
+        ]
     action_lines = []
     for descriptor in available:
         hint = descriptor.llm_hint or descriptor.description or descriptor.kind or descriptor.intent_type
@@ -226,7 +246,8 @@ def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str
     ]
     pack = {"system": system, "user": "\n".join(user_parts)}
     try:
-        raw = call_llm("panel_agent.decider", pack, agent="panel_agent", kind="panel.decider", trace_id=state.trace_id)
+        client = get_chat_client(LLMTaskIntent(task_kind="decide", risk="high"))
+        raw = client.chat("panel_agent.decider", pack, agent="panel_agent", kind="panel.decider", trace_id=state.trace_id)
         parsed = json.loads(raw or "{}")
         candidates = parsed.get("actions") if isinstance(parsed, dict) else parsed
         if candidates is None:
@@ -235,7 +256,7 @@ def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str
             candidates = []
         selected: set[str] = set()
         reasons: dict[str, str] = {}
-        valid_ids = catalog.ids() or {a.id for a in actions}
+        valid_ids = {a.id for a in actions}
 
         if isinstance(candidates, list):
             for item in candidates:
@@ -265,25 +286,13 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
     actions: list[PanelRuntimeActionResult] = []
     emitted: list[Any] = []
 
-    actions_to_process: list[PanelIntentAction] = list(state.actions)
+    executed_ids = {aid for aid in (state.executed_action_ids or []) if aid}
+    allowed_ids = {action.id for action in state.actions}
+    actions_to_process: list[PanelIntentAction] = [
+        action for action in list(state.actions) if action.id not in executed_ids
+    ]
     if selected_ids:
-        catalog = state.action_catalog or PanelActionCatalog.from_descriptors([])
-        known_ids = {a.id for a in actions_to_process}
-        for selected_id in selected_ids:
-            if selected_id in known_ids:
-                continue
-            descriptor = catalog.get(selected_id)
-            if not descriptor:
-                continue
-            label = descriptor.labels[0] if descriptor.labels else descriptor.id
-            actions_to_process.append(
-                PanelIntentAction(
-                    id=descriptor.id,
-                    label=label,
-                    checked=True,
-                    mapping=descriptor.to_mapping(),
-                )
-            )
+        selected_ids = {aid for aid in selected_ids if aid in allowed_ids and aid not in executed_ids}
 
     for action in actions_to_process:
         override_checked = None

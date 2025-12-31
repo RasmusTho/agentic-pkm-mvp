@@ -71,6 +71,34 @@ LLM_TRACE_PATH=/tmp/llm-trace-sample.jsonl python -m app.cli llm-trace-sequence 
 
 You should see the eight-line CI summary: LATENCY / EVAL / DELTA / RELATION COVERAGE / RELATIONS / DIARIZATION / REASONING / GATES
 
+## Alpha quickstart (Docker)
+
+```bash
+export VAULT_ROOT="/path/to/your/vault"
+make alpha-up
+curl -sS http://127.0.0.1:18000/api/status
+```
+
+Run with Ollama-backed LLMs (reads provider defaults from vault settings):
+
+```bash
+export VAULT_ROOT="/path/to/your/vault"
+make alpha-up-ollama
+```
+
+Bootstrap a fresh environment (full scan ingest if empty + index doctor):
+
+```bash
+export VAULT_ROOT="/path/to/your/vault"
+make alpha-bootstrap
+```
+
+Stop services:
+
+```bash
+make alpha-down
+```
+
 ### Run Reality-MVP HTTP API locally
 
 From the repo root:

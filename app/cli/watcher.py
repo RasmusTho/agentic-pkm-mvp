@@ -22,8 +22,13 @@ def _echo_summary(summary: dict) -> None:
         f"panel_candidates={summary['panel_candidates']}",
         f"panel_runs={summary['panel_runs']}",
         f"panel_promotions={summary['panel_promotions']}",
+        f"applied_actions={summary.get('applied_actions', 0)}",
         f"skipped_policy={summary['panel_skipped_policy']}",
         f"skipped_limit={summary['panel_skipped_limit']}",
+        f"skipped_auto_exec={summary.get('panel_skipped_auto_exec', 0)}",
+        f"skipped_dedup={summary.get('skipped_dedup', 0)}",
+        f"skipped_idempotent={summary.get('skipped_idempotent', 0)}",
+        f"skipped_writes_blocked={summary.get('skipped_writes_blocked', 0)}",
         f"errors={summary['errors']}",
         f"dry_run={summary['dry_run']}",
         f"limit_exceeded={summary['limit_exceeded']}",
@@ -89,7 +94,7 @@ def watcher_run(config: Path, max_ticks: int | None) -> None:
     click.echo(
         "watcher registry: "
         f"config={cfg.config_path} vault={cfg.vault_path} outbox={cfg.outbox_path} "
-        f"watchers=[{watcher_names}] stop_file={cfg.stop_file}"
+        f"watchers=[{watcher_names}] stop_file={cfg.stop_file} tick_sleep={cfg.tick_sleep_seconds}"
     )
 
     try:

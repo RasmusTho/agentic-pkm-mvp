@@ -18,6 +18,14 @@ from app.events.panel import (
 )
 
 
+class _StubChatClient:
+    def __init__(self, response: str) -> None:
+        self._response = response
+
+    def chat(self, *args, **kwargs) -> str:
+        return self._response
+
+
 def _intent_event_with_action(action: PanelIntentAction, *, trace_id: str = "trace-graph") -> PanelIntentEvent:
     note = NoteRef(uuid=str(uuid4()), path="vault/Note.md", origin="vault")
     panel = PanelInfo(panel_id="panel-1", instruction="Promote please.", raw_block=None)
@@ -105,8 +113,8 @@ def test_panel_graph_llm_selects_subset(monkeypatch) -> None:
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.call_llm",
-        lambda *args, **kwargs: json.dumps({"actions": ["promote.evergreen"]}),
+        "app.agents.panel_agent.graph.get_chat_client",
+        lambda intent: _StubChatClient(json.dumps({"actions": ["promote.evergreen"]})),
     )
 
     result = run_panel_graph(state, decider_mode="llm")
@@ -143,7 +151,10 @@ def test_panel_graph_llm_falls_back_on_malformed(monkeypatch) -> None:
     )
     state = _state_from_intent(intent, catalog=catalog)
 
-    monkeypatch.setattr("app.agents.panel_agent.graph.call_llm", lambda *args, **kwargs: "not-json")
+    monkeypatch.setattr(
+        "app.agents.panel_agent.graph.get_chat_client",
+        lambda intent: _StubChatClient("not-json"),
+    )
 
     result = run_panel_graph(state, decider_mode="llm")
     event_names = {getattr(evt, "event", None) for evt in result.emitted_events}
@@ -174,8 +185,10 @@ def test_panel_graph_llm_can_select_unchecked(monkeypatch) -> None:
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.call_llm",
-        lambda *args, **kwargs: json.dumps({"actions": [{"id": "promote.evergreen", "reason": "panel instruction"}]}),
+        "app.agents.panel_agent.graph.get_chat_client",
+        lambda intent: _StubChatClient(
+            json.dumps({"actions": [{"id": "promote.evergreen", "reason": "panel instruction"}]})
+        ),
     )
 
     result = run_panel_graph(state, decider_mode="llm")

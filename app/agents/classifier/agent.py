@@ -4,11 +4,12 @@ import json
 import re
 from typing import Any
 
-from app.llm.adapter import generate
 from app.agents.base.audit import audit_log
+from app.components.llm.fabric import LLMTaskIntent, get_chat_client
 from app.memory.store import remember, recall
 from app.store.object_store import ObjectStore, DomainObject
 from app.stores.decisions import put_decision
+
 
 def _heuristic(text: str) -> dict[str, Any]:
     title_first = re.search(r"^#\s+(.+)$", text, re.M)
@@ -19,7 +20,8 @@ def _heuristic(text: str) -> dict[str, Any]:
         tags.append("topic/links")
     if title_first:
         tags.append("topic/has_title")
-    return {"type":"note","trust":"provisional","tags":sorted(set(tags)), "confidence":0.55}
+    return {"type": "note", "trust": "provisional", "tags": sorted(set(tags)), "confidence": 0.55}
+
 
 def _parse_json_block(s: str) -> dict[str, Any] | None:
     m = re.search(r"\{.*\}", s, re.S)
@@ -52,6 +54,7 @@ def _ensure_labels(value: Any) -> list[str]:
         return [str(v) for v in value.values()]
     return [str(value)]
 
+
 def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
     store = ObjectStore()
     domain_obj: DomainObject | None = store.get_object(object_id)
@@ -60,15 +63,20 @@ def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
     payload = domain_obj.payload or {}
     text = payload.get("text") or payload.get("content") or ""
 
-    messages = [
-        {"role":"system","content":"Returnera JSON {type, tags, trust, confidence}. type∈{note,seed,idea,doc}. trust∈{own,provisional,external,conflict}. tags=[topic/*]. Svara enbart JSON."},
-        {"role":"user","content":text[:4000]},
-    ]
+    pack = {
+        "system": (
+            "Returnera JSON {type, tags, trust, confidence}. "
+            "type∈{note,seed,idea,doc}. trust∈{own,provisional,external,conflict}. "
+            "tags=[topic/*]. Svara enbart JSON."
+        ),
+        "user": text[:4000],
+    }
     content = None
     try:
-        content = generate(
-            messages,
-            reasoning=True,
+        client = get_chat_client(LLMTaskIntent(task_kind="classify", complexity_hint="low"))
+        content = client.chat(
+            "classifier",
+            pack,
             agent="classifier",
             kind="classification",
             trace_id=trace_id,
@@ -108,8 +116,15 @@ def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
         },
     )
     audit_log(object_id=object_id, agent="classifier", action="classify", trace_id=trace_id, details=value)
-    audit_log(object_id=object_id, agent="classifier", action="metadata.changed", trace_id=trace_id, details={"key":"classification"})
+    audit_log(
+        object_id=object_id,
+        agent="classifier",
+        action="metadata.changed",
+        trace_id=trace_id,
+        details={"key": "classification"},
+    )
     return {"object_id": object_id, "classification": value, "raw": content}
+
 
 def run(object_id: str, *, trace_id: str) -> dict[str, Any]:
     recall("classifier", "classified", object_id=None, limit=3)

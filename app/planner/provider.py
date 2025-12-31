@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.agents.base.audit import audit_log
 from app.events.types import PLANNER_PLAN_FALLBACK
-from app.services.llm import call_llm
+from app.components.llm.fabric import get_chat_client
+from app.components.llm.router import LLMTaskIntent
 
 from .prompts import PLANNER_SYSTEM_PROMPT, build_planner_user_prompt
 from .schema import Plan, PlanMetadata, PlanStep, PlanTrigger, new_plan_id
@@ -260,7 +261,8 @@ class LLMPlanner(BasePlanner):
         trace_id = None
         if isinstance(inp.metadata, dict):
             trace_id = inp.metadata.get("trace_id")
-        raw = call_llm(
+        client = get_chat_client(LLMTaskIntent(task_kind="plan", complexity_hint="high"))
+        raw = client.chat(
             "planner",
             {
                 "system": PLANNER_SYSTEM_PROMPT,

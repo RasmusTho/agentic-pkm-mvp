@@ -49,6 +49,7 @@ Changing embedding profiles safely: 1) sanity-check with `python -m app.cli embe
 - **ReasoningFacade** — Shared reasoning/tool entrypoint for LangGraph agents. Maturity: Planned.
 - **BaseLangGraphAgent** — Common agent scaffolding for LangGraph inner loops. Maturity: Planned.
 - **Panel agent** — Panel parsing + intent emission/execution for note interaction. Maturity: Active.
+- **LLM router + fabric** — Canonical access layer for chat + embeddings (`app/components/llm/router.py`, `app/components/llm/fabric.py`). High-level modules must use `get_chat_client` / `get_embeddings_client`; routes are reported via `/api/health`. Maturity: Active.
 
 ## Eval stack
 

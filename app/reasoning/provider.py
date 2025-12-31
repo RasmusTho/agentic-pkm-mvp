@@ -7,13 +7,31 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from uuid import UUID
 
+from app.components.llm.fabric import LLMTaskIntent, get_chat_client
 from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.reasoning.schema import ReasoningInput, ReasoningOutput, ReasoningValidationError, validate_output
 from app.reasoning.models import ReasoningMode, ReasoningRun
-from app.services.llm import call_llm
 from app.stores import get_object_store
 
 _FIXTURE_PATH = Path("data") / "golden" / "reasoning_samples.jsonl"
+
+
+def _call_chat(
+    *,
+    task_kind: str,
+    pack: Dict[str, Any],
+    agent: str | None,
+    kind: str | None,
+    trace_id: str | None,
+) -> str:
+    client = get_chat_client(LLMTaskIntent(task_kind=task_kind, risk="high"))
+    return client.chat(
+        task_kind,
+        pack,
+        agent=agent,
+        kind=kind,
+        trace_id=trace_id,
+    )
 
 
 class BaseDeliberationAgent:
@@ -59,9 +77,9 @@ class OllamaDeliberationAgent(BaseDeliberationAgent):
         agent = metadata.get("agent") or "reasoning"
         kind = metadata.get("kind") or metadata.get("reasoning_kind") or "reasoning.claims"
 
-        response = call_llm(
-            "reasoning",
-            {
+        response = _call_chat(
+            task_kind="reasoning",
+            pack={
                 "system": SYSTEM_PROMPT,
                 "user": prompt,
             },
@@ -186,7 +204,7 @@ def run_reasoning(
                 status="failed",
                 error=str(exc),
                 result={"claims": [], "evidence": [], "inferences": []},
-        )
+            )
         result = output.model_dump()
         has_content = bool(output.claims or output.evidence)
         status_val = "ok" if has_content else "failed"
@@ -222,9 +240,9 @@ def run_reasoning(
             return ReasoningRun(mode=mode, trace_id=trace_id, object_uuids=[object_id], result=result, status="ok")
         prompt = f"NOTE:\n{text}\n\nReturn JSON with summary, issues (list), suggestions (list)."
         try:
-            raw = call_llm(
-                "reasoning",
-                {"system": "You are a reviewer that summarizes and critiques notes. Respond with JSON.", "user": prompt},
+            raw = _call_chat(
+                task_kind="reasoning",
+                pack={"system": "You are a reviewer that summarizes and critiques notes. Respond with JSON.", "user": prompt},
                 agent=agent_name,
                 kind=kind_name,
                 trace_id=trace_id,
@@ -282,7 +300,7 @@ def run_reasoning(
                 status=status_val,
                 error=error_val,
             )
-        prompt_lines = ["You rank candidate notes for the given question. Return JSON {\"ranking\": [{\"object_uuid\":\"...\",\"score\":0-1,\"reason\":\"...\"}]}."]
+        prompt_lines = ["You rank candidate notes for the given question. Return JSON {\"ranking\": [{\"object_uuid\":\"...\",\"score\":0-1,\"reason\":\"...\"}]}." ]
         if question:
             prompt_lines.append(f"Question: {question}")
         prompt_lines.append("Candidates:")
@@ -290,9 +308,9 @@ def run_reasoning(
             prompt_lines.append(f"- {oid}: {_simple_preview(text, 180)}")
         prompt = "\n".join(prompt_lines)
         try:
-            raw = call_llm(
-                "reasoning",
-                {"system": "You are a ranking agent. Respond with JSON ranking.", "user": prompt},
+            raw = _call_chat(
+                task_kind="reasoning",
+                pack={"system": "You are a ranking agent. Respond with JSON ranking.", "user": prompt},
                 agent=agent_name,
                 kind=kind_name,
                 trace_id=trace_id,
@@ -353,9 +371,9 @@ def run_reasoning(
             "You answer questions using only the provided sources. Prefer vault-origin and hot-zone items when present."
         )
         try:
-            raw = call_llm(
-                "ask",
-                {"system": sys_prompt, "user": user_prompt},
+            raw = _call_chat(
+                task_kind="ask",
+                pack={"system": sys_prompt, "user": user_prompt},
                 agent=agent_name,
                 kind=kind_name,
                 trace_id=trace_id,

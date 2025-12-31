@@ -102,9 +102,10 @@ def _normalize_name(value: str | None) -> str | None:
     return value or None
 
 
-def resolve_embedding_identity(profile: str | None = None, override_model: str | None = None) -> EmbeddingIdentity:
+def resolve_embedding_identity(profile: str | None = None, override_model: str | None = None, override_provider: str | None = None) -> EmbeddingIdentity:
     spec = _normalize_name(profile)
     override_model = _normalize_name(override_model)
+    override_provider = _normalize_name(override_provider)
     if spec in {"deterministic", "test", "offline"}:
         dim = get_embed_dim()
         return EmbeddingIdentity(provider="deterministic", model="deterministic-hash", dim=dim, normalize=True)
@@ -148,20 +149,20 @@ def resolve_embedding_identity(profile: str | None = None, override_model: str |
         cfg = profiles_map.get(low)
         if not cfg:
             continue
-        provider = cfg.provider or get_embedding_provider()
+        provider = override_provider or cfg.provider or get_embedding_provider()
         model = override_model or cfg.model or EMBED_MODEL
         dim = cfg.dim or get_embed_dim()
         normalize = cfg.normalize if cfg.normalize is not None else True
         return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=normalize)
 
-    provider = get_embedding_provider()
+    provider = override_provider or get_embedding_provider()
     model = override_model or EMBED_MODEL
     dim = get_embed_dim()
     return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=True)
 
 
-def get_embedding_client(profile: str = "default", override_model: str | None = None) -> EmbeddingClientProtocol:
-    identity = resolve_embedding_identity(profile=profile, override_model=override_model)
+def get_embedding_client(profile: str = "default", override_model: str | None = None, override_provider: str | None = None) -> EmbeddingClientProtocol:
+    identity = resolve_embedding_identity(profile=profile, override_model=override_model, override_provider=override_provider)
     if identity.provider == "deterministic":
         return _DeterministicEmbeddingClient(identity)
     return _ProfiledEmbeddingClient(identity)
@@ -175,11 +176,11 @@ def get_embedding_identity(
 ) -> EmbeddingIdentity:
     if client is not None and getattr(client, "identity", None) is not None:
         return client.identity
-    return resolve_embedding_identity(profile=profile, override_model=override_model)
+    return resolve_embedding_identity(profile=profile, override_model=override_model, override_provider=None)
 
 
-def describe_embedding(text: str, *, profile: str = "default", override_model: str | None = None) -> tuple[EmbeddingIdentity, list[float]]:
-    client = get_embedding_client(profile=profile, override_model=override_model)
+def describe_embedding(text: str, *, profile: str = "default", override_model: str | None = None, override_provider: str | None = None) -> tuple[EmbeddingIdentity, list[float]]:
+    client = get_embedding_client(profile=profile, override_model=override_model, override_provider=override_provider)
     vector = client.embed_text(text)
     identity = client.identity
     return identity, vector

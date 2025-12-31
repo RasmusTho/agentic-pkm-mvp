@@ -21,6 +21,8 @@ from app.watcher.state import WatcherState
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
+MIN_TICK_SLEEP_SECONDS = 0.05
+
 
 def _now_iso() -> str:
     return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
@@ -103,7 +105,13 @@ def _warn_once_per_minute(state: WatcherState, message: str, *, now: float) -> N
         state.last_stop_warning = now
 
 
-def _summary_line(name: str, state: WatcherState, *, backoff_active: bool) -> str:
+def _summary_line(
+    name: str,
+    state: WatcherState,
+    *,
+    backoff_active: bool,
+    tick_sleep_seconds: float,
+) -> str:
     parts = [
         f"name={name}",
         f"ticks={state.ticks_run}",
@@ -112,6 +120,7 @@ def _summary_line(name: str, state: WatcherState, *, backoff_active: bool) -> st
         f"errors={state.errors}",
         f"rate_limited={state.rate_limited}",
         f"backoff={backoff_active}",
+        f"tick_sleep={tick_sleep_seconds}",
     ]
     if state.last_trace_id:
         parts.append(f"trace_id={state.last_trace_id}")
@@ -202,6 +211,8 @@ class RegistryConfig:
         state_dir = Path(os.getenv("WATCHER_STATE_DIR", "tmp/watcher_states")).expanduser()
         summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), 60)
         tick_sleep_seconds = _as_float(os.getenv("WATCHER_TICK_SLEEP_SECONDS"), 1.0)
+        if tick_sleep_seconds <= 0:
+            tick_sleep_seconds = MIN_TICK_SLEEP_SECONDS
         return cls(
             enable=enable,
             vault_path=vault_path,
@@ -416,7 +427,14 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
                 if should_log:
                     summary = summaries[spec.name]
                     backoff_active = bool(summary.get("backoff_active"))
-                    print(_summary_line(spec.name, state, backoff_active=backoff_active))
+                    print(
+                        _summary_line(
+                            spec.name,
+                            state,
+                            backoff_active=backoff_active,
+                            tick_sleep_seconds=cfg.tick_sleep_seconds,
+                        )
+                    )
                     state.last_summary_at = now
                     state.save(_state_path(cfg.state_dir, spec.name))
         tick += 1
