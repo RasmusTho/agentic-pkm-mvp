@@ -28,6 +28,8 @@ from app.components.llm.router import LLMTaskIntent
 
 _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 
+_IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
+
 
 def _build_panel_source() -> PanelEventSource:
     return PanelEventSource(trigger="runtime", component="panel_agent", sot="v5.0-runtime1")
