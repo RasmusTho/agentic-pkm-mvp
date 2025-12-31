@@ -47,6 +47,18 @@ def _line(label: str, value: str) -> str:
     return f"- {label}: {value}"
 
 
+def _short_path(value: object, max_len: int = 40) -> str | None:
+    if not value:
+        return None
+    text = str(value)
+    if len(text) <= max_len:
+        return text
+    base = os.path.basename(text)
+    if len(base) <= max_len:
+        return base
+    return None
+
+
 def _format_store_line(stores: list[dict]) -> str:
     if not stores:
         return "entries=0 objects=0 external=0, vault=0"
@@ -187,28 +199,24 @@ def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
             lines.append(_line("stores", "(missing)"))
 
         events_log = status_payload.get("events_log") or {}
-        lines.append(
-            _line(
-                "events_log",
-                f"lines={_get(events_log, 'total_lines', default='(missing)')} path={_get(events_log, 'path', default='(missing)')}",
-            )
-        )
+        events_parts = [f"lines={_get(events_log, 'total_lines', default='(missing)')}"]
+        events_path = _short_path(events_log.get("path"))
+        if events_path:
+            events_parts.append(f"path={events_path}")
+        lines.append(_line("events_log", " ".join(events_parts)))
 
         worker_queue = status_payload.get("worker_queue") or {}
         mode = _get(worker_queue, "mode", default="(missing)")
         if mode in {"db", "jsonl"}:
-            lines.append(
-                _line(
-                    "worker_queue",
-                    " ".join(
-                        [
-                            f"mode={mode}",
-                            f"pending={_get(worker_queue, 'pending', default='(missing)')}",
-                            f"processed_total={_get(worker_queue, 'processed_total', default='(missing)')}",
-                        ]
-                    ),
-                )
-            )
+            queue_parts = [
+                f"mode={mode}",
+                f"pending={_get(worker_queue, 'pending', default='(missing)')}",
+                f"processed_total={_get(worker_queue, 'processed_total', default='(missing)')}",
+            ]
+            source_path = _short_path(worker_queue.get("source_path"))
+            if source_path:
+                queue_parts.append(f"source={source_path}")
+            lines.append(_line("worker_queue", " ".join(queue_parts)))
         else:
             lines.append(_line("worker_queue", f"mode={mode}"))
 
@@ -220,20 +228,6 @@ def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
                     [
                         f"allowed={_get(write_guard, 'writes_allowed', default='(missing)')}",
                         f"mode={_get(write_guard, 'mode', default='(missing)')}",
-                    ]
-                ),
-            )
-        )
-
-        outbox_lag = status_payload.get("outbox_lag") or {}
-        lines.append(
-            _line(
-                "outbox",
-                " ".join(
-                    [
-                        f"events={_get(outbox_lag, 'outbox_events', default='(missing)')}",
-                        f"processed_total={_get(outbox_lag, 'worker_processed_total', default='(missing)')}",
-                        f"pending={_get(outbox_lag, 'pending_estimate', default='(missing)')}",
                     ]
                 ),
             )
@@ -274,7 +268,6 @@ def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
         lines.append(_line("events_log", "(missing)"))
         lines.append(_line("worker_queue", "(missing)"))
         lines.append(_line("writes", "(missing)"))
-        lines.append(_line("outbox", "(missing)"))
         lines.append(_line("ingestion", "(missing)"))
         lines.append(_line("ask", "(missing)"))
 
