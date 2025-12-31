@@ -44,16 +44,18 @@ hygiene-logs:
 	chmod -R u+rwX logs || true
 
 
-.PHONY: alpha alpha-up alpha-up-ollama alpha-bootstrap alpha-doctor alpha-down alpha-status alpha-smoke alpha-e2e
+.PHONY: alpha alpha-up alpha-up-ollama alpha-bootstrap alpha-doctor alpha-down alpha-status alpha-smoke alpha-e2e require-vault-root
 
-alpha:
+require-vault-root:
+	@: $(if $(strip $(VAULT_ROOT)),,$(error VAULT_ROOT is required. Example: export VAULT_ROOT="/path/to/your/vault"))
+
+alpha: require-vault-root
 	@$(MAKE) alpha-up
 	@$(MAKE) alpha-status
 	@$(MAKE) alpha-e2e
 	@$(MAKE) alpha-smoke
 
-alpha-up:
-	@if [ -z "$(VAULT_ROOT)" ]; then echo "VAULT_ROOT is required (path to your vault)"; exit 1; fi
+alpha-up: require-vault-root
 	VAULT_ROOT="$(VAULT_ROOT)" scripts/start_full_system.sh
 
 alpha-up-ollama:
