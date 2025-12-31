@@ -44,7 +44,7 @@ hygiene-logs:
 	chmod -R u+rwX logs || true
 
 
-.PHONY: alpha alpha-up alpha-up-ollama alpha-bootstrap alpha-doctor alpha-down alpha-status alpha-smoke
+.PHONY: alpha alpha-up alpha-up-ollama alpha-bootstrap alpha-doctor alpha-down alpha-status alpha-smoke alpha-e2e
 
 alpha: alpha-up
 
@@ -73,3 +73,7 @@ alpha-status:
 
 alpha-smoke:
 	@if [ -x scripts/reality_smoke.sh ]; then bash scripts/reality_smoke.sh; else echo "scripts/reality_smoke.sh not found"; fi
+
+alpha-e2e:
+	@if [ -z "$(VAULT_ROOT)" ]; then echo "VAULT_ROOT is required (path to your vault)"; exit 1; fi
+	VAULT_ROOT="$(VAULT_ROOT)" python scripts/alpha_e2e.py

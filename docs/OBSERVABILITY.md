@@ -13,6 +13,7 @@ Logs are the primary tracing surface; no external APM is required for the curren
 - The `python -m app.cli status` (or `poetry run app status`) command renders the snapshot for humans; the interim GUI (root `/` in the FastAPI app) reuses the same backend and surfaces a basic ASK form.
 - Status snapshot now reports SoT baseline (v4.10) and forward line (v5.x) plus the active feature list.
 - Intent counters: totals and 24h window for `promote.intent.created`, sourced from the configured outbox path; useful for UAT to confirm panel emission without tailing logs.
+- **Status semantics**: `events_log` is an append-only audit log (JSONL). `worker_queue` is the active processing queue. Do not derive `pending` across them unless `worker_queue.mode` is `file`/`jsonl` and the queue is explicitly wired to that log.
 
 ## Feature-line and Event Counters
 - **SoT baseline vs forward line**: `sot_baseline_version` is the locked Reality-MVP (v4.10). `sot_forward_line_version` / `feature_line_version` represent the active forward line (currently v5.x: PanelAgent + Watchers). `active_features` enumerates which forward-line capabilities are present (PanelAgent runtime, watcher snapshot/policy track, config-driven panel wiring).
