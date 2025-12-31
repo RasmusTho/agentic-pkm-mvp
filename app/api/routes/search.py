@@ -71,7 +71,7 @@ async def search(request: Request, q: str = Query(...)) -> dict[str, object]:
     results: list[dict[str, object]] = []
     with span_cm:
         try:
-            client = get_embeddings_client(LLMTaskIntent(task_kind="embed", determinism_required=True))
+            client = get_embeddings_client(LLMTaskIntent(task_kind="embed"))
             query_vector = client.embed_text(q)
         except Exception:
             return {"results": _recent_objects()}

@@ -58,7 +58,7 @@ def _watcher_required() -> bool:
 
 def _ollama_required() -> bool:
     provider = (os.getenv("LLM_PROVIDER") or "").strip().lower()
-    return provider in {"", "ollama", "llm"}
+    return provider in {"ollama", "llm"}
 
 
 def _check_ffmpeg() -> Dict[str, Any]:
@@ -362,6 +362,4 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     required_ok = bool(_required_checks_ok(checks) and runtime_ok)
     suggested_actions = _suggested_actions(checks, runtime)
     return {"ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions}
-
-
 __all__ = ["run_health"]
