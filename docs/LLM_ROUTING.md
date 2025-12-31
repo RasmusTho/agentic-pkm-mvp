@@ -76,6 +76,12 @@ export LLM_FORCE_MODEL=llama3.1:8b-instruct
 - **Alpha status output** (`scripts/alpha_status.py`)
   - Prints `llm routes` and `llm providers` summaries for human operators.
 
+## Future: task-aware routing
+
+Task-aware routing will eventually use `task_kind` and `complexity_hint` to pick providers/models.
+The routing policy will live in the vault-first settings compiler once that integration ships.
+This is **not implemented today**; the current router remains env-driven and deterministic.
+
 ## Non-goals / future work
 
 - Vault-first settings compiler integration for LLM routes is planned but not yet wired.
