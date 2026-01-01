@@ -205,6 +205,7 @@ def _heartbeat_status(
         "vault_path",
         "outbox_path",
         "processed_total",
+        "enqueue_failures_total",
         "status",
     ):
         if key in raw:
@@ -332,6 +333,18 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
                 "severity": "optional",
                 "message": "LLM provider is mock; LLM features are deterministic only",
                 "command_hint": "LLM_PROVIDER=ollama",
+            }
+        )
+
+    watcher_runtime = runtime.get("watcher", {})
+    enqueue_failures = watcher_runtime.get("enqueue_failures_total")
+    if isinstance(enqueue_failures, int) and enqueue_failures > 0:
+        actions.append(
+            {
+                "id": "watcher_outbox_enqueue_failed",
+                "severity": "required",
+                "message": "Watcher failed to enqueue DB outbox events",
+                "command_hint": "Check DATABASE_URL and watcher logs",
             }
         )
 

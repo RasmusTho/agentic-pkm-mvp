@@ -1,6 +1,6 @@
 import copy
 
-from scripts.alpha_e2e import validate_status_invariants
+from scripts.alpha_e2e import validate_runtime_progress, validate_status_invariants
 
 
 def _base_payloads():
@@ -50,3 +50,28 @@ def test_invariants_file_mode_pending_mismatch_fails() -> None:
     errors = validate_status_invariants(status, health)
     assert errors
     assert "worker_queue.pending" in errors[0]
+
+
+def test_runtime_progress_skips_pending_when_none() -> None:
+    errors = validate_runtime_progress(
+        baseline_pending=None,
+        current_pending=None,
+        baseline_processed=3,
+        current_processed=4,
+        processed_by_event={"ingest.vault.changed": 1},
+        required_topic="ingest.vault.changed",
+    )
+    assert not errors
+
+
+def test_runtime_progress_reports_missing_topic() -> None:
+    errors = validate_runtime_progress(
+        baseline_pending=1,
+        current_pending=2,
+        baseline_processed=3,
+        current_processed=4,
+        processed_by_event={"other": 1},
+        required_topic="ingest.vault.changed",
+    )
+    assert errors
+    assert "did not process" in errors[-1]

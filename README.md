@@ -1,7 +1,7 @@
 Agentic PKM — Second-Brain Engine
 
 System-of-Truth baseline: v4.10 (Reality-MVP, locked)
-System-of-Truth forward line: v5.4 (PanelAgent Runtime + Watchers)
+System-of-Truth forward line: v5.5 (PanelAgent Runtime + Watchers)
 
 Agentic PKM is an agentic, event-driven, CI-guarded system for personal knowledge management.
 It treats the human writing surface (a Markdown vault) and the cold archive brain (source artifacts) as canonical, portable artifacts.
@@ -88,6 +88,12 @@ Confidence checks (optional):
 What each command does: `scripts/start_full_system.sh` is the canonical orchestrator entrypoint used by `make alpha-up`. `alpha-status` is read-only and safe. `alpha-smoke` is deterministic (runs=2 no-op guarantee). `alpha-e2e` enforces runtime invariants so status semantics regressions get caught.
 
 Note: `/api/health` can report `ok=false` when only optional tools (e.g., ffmpeg) are missing; treat `required_ok` as the gating signal.
+
+## Alpha Compose Runtime
+
+The canonical Alpha Compose Runtime runs `db`, `api`, `watcher`, and `worker` in Docker Compose. The watcher writes audit events (JSONL) and enqueues DB outbox events. The worker consumes the DB outbox to perform ingest and promotion side effects, while the API surfaces status and health.
+
+Deprecated: `scripts/run_alpha_stack.sh` and `scripts/run_alpha_live.sh` are legacy helpers; use `make alpha-up` (which calls `scripts/start_full_system.sh`) instead.
 
 ## Alpha quickstart (Docker)
 
@@ -231,7 +237,7 @@ Claims, Evidence, and Inferences are schema-validated structures that feed the r
 A deterministic MockDeliberationAgent keeps CI runs reproducible.
 
 ## Watcher readiness and panel flows
-- Vault Watcher (v5.1–v5.4) watches Obsidian files, batches edits, ingests changed notes, and triggers PanelAgent runtime when frontmatter policies allow it.
+- Vault Watcher (v5.1–v5.5) watches Obsidian files, batches edits, ingests changed notes, and triggers PanelAgent runtime when frontmatter policies allow it.
 - `vault-watcher-run` (v5.2 CLI) polls snapshots, runs ingest/panel flows, emits summaries, and respects dry-run / `--max-notes` guards.
 - Frontmatter controls (`ai_panel_auto_run` / `ai_panel: { auto_run: watcher|manual|never }`) gate watcher automation.
 - Watchers remain opt-in and auditable; they reuse CLI entrypoints rather than inventing new pipelines.

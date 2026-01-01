@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from app.events.schema import OutboxEvent, make_outbox_event
 from app.events.types import PROMOTE_DONE, PROMOTE_ERROR, PROMOTE_INTENT_CREATED
+from app.events.models import new_event
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.note_update import apply_promotion_frontmatter
 from app.store.object_store import DomainObject, ObjectStore
+from app.services.outbox import write_outbox_event
 
 
 def _read_outbox(path: Path, start: int = 0) -> Iterable[dict]:
@@ -83,6 +85,104 @@ def _apply_promotion_to_store(note_uuid: str, desired_state: str, trace_id: str 
     store.save_object(obj, emit_outbox=False, trace_id=trace_id)
 
 
+def _emit_jsonl_event(events: list[OutboxEvent], event_type: str, payload: dict, trace_id: str | None) -> None:
+    events.append(make_outbox_event(event_type, source="promotion.consumer", payload=payload, trace_id=trace_id))
+
+
+def _emit_db_event(event_type: str, payload: dict, trace_id: str | None) -> None:
+    event = new_event(event_type=event_type, payload=payload, trace_id=trace_id, source="promotion.consumer")
+    write_outbox_event(event)
+
+
+def _handle_promotion_payload(
+    payload: Mapping[str, object],
+    *,
+    trace_id: str | None,
+    event_id: str | None,
+    emit,
+) -> dict:
+    summary = {"intents_seen": 1, "applied": 0, "errors": 0, "emitted": 0}
+
+    note = payload.get("note") or {}
+    note_uuid = str(note.get("uuid") or "").strip() if isinstance(note, dict) else ""
+    note_path_value = None
+    if isinstance(note, dict):
+        note_path_value = note.get("path")
+        title = note.get("title")
+    else:
+        title = None
+    if not note_path_value:
+        note_path_value = payload.get("note_path") if isinstance(payload, dict) else None
+    desired_state = "promoted"
+    if isinstance(payload, dict):
+        desired_state = str(payload.get("maturity") or payload.get("action", {}).get("id") or desired_state)
+
+    if not note_uuid:
+        summary["errors"] += 1
+        emit(
+            PROMOTE_ERROR,
+            {"reason": "missing_uuid", "source_event": event_id},
+            trace_id,
+        )
+        summary["emitted"] += 1
+        return summary
+
+    if not note_path_value:
+        summary["errors"] += 1
+        emit(
+            PROMOTE_ERROR,
+            {"reason": "missing_note_path", "note_uuid": note_uuid, "source_event": event_id},
+            trace_id,
+        )
+        summary["emitted"] += 1
+        return summary
+
+    note_path = Path(str(note_path_value))
+    if not apply_promotion_frontmatter(note_path, note_uuid, desired_state, optional_title=title):
+        summary["errors"] += 1
+        emit(
+            PROMOTE_ERROR,
+            {
+                "reason": "path_not_found",
+                "note_uuid": note_uuid,
+                "note_path": str(note_path),
+                "source_event": event_id,
+            },
+            trace_id,
+        )
+        summary["emitted"] += 1
+        return summary
+
+    _apply_promotion_to_store(note_uuid, desired_state, trace_id, note_path)
+    summary["applied"] += 1
+    emit(
+        PROMOTE_DONE,
+        {
+            "note_uuid": note_uuid,
+            "note_path": str(note_path),
+            "state": desired_state,
+            "source_event": event_id,
+        },
+        trace_id,
+    )
+    summary["emitted"] += 1
+    return summary
+
+
+def consume_promotion_intent_payload(
+    payload: Mapping[str, object],
+    *,
+    trace_id: str | None = None,
+    event_id: str | None = None,
+) -> dict:
+    return _handle_promotion_payload(
+        payload,
+        trace_id=trace_id,
+        event_id=event_id,
+        emit=_emit_db_event,
+    )
+
+
 def consume_promotion_intents(
     *,
     outbox_path: Path | None = None,
@@ -114,73 +214,23 @@ def consume_promotion_intents(
         if limit is not None and summary.get("applied", 0) >= limit:
             continue
         payload = rec.get("payload") or {}
-        note = payload.get("note") or {}
-        note_uuid = str(note.get("uuid") or "").strip()
-        note_path_value = note.get("path") or payload.get("note_path")
-        desired_state = str(payload.get("maturity") or payload.get("action", {}).get("id") or "promoted")
         trace_id = rec.get("trace_id")
         event_id = rec.get("event_id")
-        title = note.get("title") if isinstance(note, dict) else None
-
-        if not note_uuid:
-            summary["errors"] += 1
-            emitted.append(
-                make_outbox_event(
-                    PROMOTE_ERROR,
-                    source="promotion.consumer",
-                    payload={"reason": "missing_uuid", "source_event": event_id},
-                    trace_id=trace_id,
-                )
-            )
-            continue
-
-        if not note_path_value:
-            summary["errors"] += 1
-            emitted.append(
-                make_outbox_event(
-                    PROMOTE_ERROR,
-                    source="promotion.consumer",
-                    payload={"reason": "missing_note_path", "note_uuid": note_uuid, "source_event": event_id},
-                    trace_id=trace_id,
-                )
-            )
-            continue
-
-        note_path = Path(note_path_value)
-        if not apply_promotion_frontmatter(note_path, note_uuid, desired_state, optional_title=title):
-            summary["errors"] += 1
-            emitted.append(
-                make_outbox_event(
-                    PROMOTE_ERROR,
-                    source="promotion.consumer",
-                    payload={"reason": "path_not_found", "note_uuid": note_uuid, "note_path": str(note_path)},
-                    trace_id=trace_id,
-                )
-            )
-            continue
-
-        _apply_promotion_to_store(note_uuid, desired_state, trace_id, note_path)
-        summary["applied"] += 1
-        emitted.append(
-            make_outbox_event(
-                PROMOTE_DONE,
-                source="promotion.consumer",
-                payload={
-                    "note_uuid": note_uuid,
-                    "note_path": str(note_path),
-                    "state": desired_state,
-                    "source_event": event_id,
-                },
-                trace_id=trace_id,
-            )
+        result = _handle_promotion_payload(
+            payload,
+            trace_id=trace_id,
+            event_id=event_id,
+            emit=lambda event_type, payload, trace: _emit_jsonl_event(emitted, event_type, payload, trace),
         )
+        summary["applied"] += result.get("applied", 0)
+        summary["errors"] += result.get("errors", 0)
+        summary["emitted"] += result.get("emitted", 0)
 
     if emitted:
         _write_outbox(resolved_outbox, emitted)
-        summary["emitted"] = len(emitted)
 
     _save_cursor(resolved_cursor, resolved_outbox, len(lines))
     return summary
 
 
-__all__ = ["consume_promotion_intents"]
+__all__ = ["consume_promotion_intents", "consume_promotion_intent_payload"]

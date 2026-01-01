@@ -68,6 +68,7 @@ class WatcherState:
     ticks_run: int = 0
     errors: int = 0
     rate_limited: int = 0
+    enqueue_failures_total: int = 0
     backoff_until: float | None = None
     last_summary_at: float | None = None
     last_stop_warning: float | None = None
@@ -89,6 +90,7 @@ class WatcherState:
             ticks_run=int(data.get("ticks_run") or 0),
             errors=int(data.get("errors") or 0),
             rate_limited=int(data.get("rate_limited") or 0),
+            enqueue_failures_total=int(data.get("enqueue_failures_total") or 0),
             backoff_until=_sanitize_ts(data.get("backoff_until")),
             last_summary_at=_sanitize_ts(data.get("last_summary_at")),
             last_stop_warning=_sanitize_ts(data.get("last_stop_warning")),
@@ -105,6 +107,7 @@ class WatcherState:
             "ticks_run": self.ticks_run,
             "errors": self.errors,
             "rate_limited": self.rate_limited,
+            "enqueue_failures_total": self.enqueue_failures_total,
             "backoff_until": self.backoff_until,
             "last_summary_at": self.last_summary_at,
             "last_stop_warning": self.last_stop_warning,

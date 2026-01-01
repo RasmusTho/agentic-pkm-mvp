@@ -2,11 +2,16 @@ State: SoT v4.10 Reality-MVP (current core).
 # Observability
 ## Shared heartbeat/outbox paths
 - The health CLI and API rely on `tmp/watcher_heartbeat.json` and `tmp/index-outbox.jsonl` under the repo root.
-- Host scripts (`scripts/run_alpha_live.sh`) and the Docker compose services now export `WATCHER_HEARTBEAT_PATH` and `INDEX_OUTBOX_PATH` to the same absolute locations so containers and the host view the same files.
+- Deprecated host scripts (`scripts/run_alpha_live.sh`, `scripts/run_alpha_stack.sh`) and Docker Compose now export `WATCHER_HEARTBEAT_PATH` and `INDEX_OUTBOX_PATH` to the same absolute locations so containers and the host view the same files.
 - If you point a watcher or worker at a different vault or temporary directory, make sure those two env vars reference the shared path so the dashboard and health checks see the live heartbeat.
 
 
 Logs are the primary tracing surface; no external APM is required for the current MVP.
+
+## Alpha Compose Runtime
+- Canonical compose stack: `db`, `api`, `watcher`, `worker`.
+- The watcher writes audit JSONL events and enqueues DB outbox events; the worker consumes the DB outbox for ingest and promotion side effects.
+- Treat `events_log` as append-only audit and `worker_queue` as the live queue; do not derive pending across them unless `worker_queue.mode` is `file`/`jsonl` and explicitly wired.
 
 ## Status snapshot (CLI)
 - `app.observability.status_service.get_system_status()` aggregates per-plane object counts (vault vs external), ingest run timestamps/error counts (via ingest summaries), and ASK query counts/latency/error counts over the last 24h window.

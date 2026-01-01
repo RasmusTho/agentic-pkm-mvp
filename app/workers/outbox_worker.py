@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from app.components.concurrency import EventDedupStore, SystemClock
-from app.events.types import INGEST_OBJECT_CREATED, INGEST_VAULT_CHANGED
+from app.events.types import INGEST_OBJECT_CREATED, INGEST_VAULT_CHANGED, PROMOTE_INTENT_CREATED
+from app.promotion.consumer import consume_promotion_intent_payload
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
 from app.services.indexer import handle_ingest_object_created
 from app.services.outbox import bootstrap, poll_outbox_one
@@ -144,6 +145,12 @@ def run(
                         handle_ingest_object_created(message["payload"])
                     elif topic == INGEST_VAULT_CHANGED:
                         handle_ingest_vault_changed(message["payload"])
+                    elif topic == PROMOTE_INTENT_CREATED:
+                        consume_promotion_intent_payload(
+                            message["payload"],
+                            trace_id=trace_id,
+                            event_id=event_id,
+                        )
         except Exception:
             errors_total += 1
             raise

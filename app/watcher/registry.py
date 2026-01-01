@@ -64,6 +64,7 @@ def _emit_watch_event(
     rel_path: Path,
     mtime: float,
     content_hash: str | None,
+    state: WatcherState,
 ) -> str:
     trace_id = uuid4().hex
     payload = {
@@ -94,8 +95,9 @@ def _emit_watch_event(
                 trace_id=trace_id,
                 source="watcher.registry",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            state.enqueue_failures_total += 1
+            print(f"WARN: watcher failed to enqueue DB outbox event: {exc}")
     return trace_id
 
 
@@ -119,6 +121,7 @@ def _summary_line(
         f"emitted={state.intents_emitted}",
         f"errors={state.errors}",
         f"rate_limited={state.rate_limited}",
+        f"enqueue_failures={state.enqueue_failures_total}",
         f"backoff={backoff_active}",
         f"tick_sleep={tick_sleep_seconds}",
     ]
@@ -263,6 +266,7 @@ def _build_watchers_payload(
             "emitted_total": state.intents_emitted,
             "errors_total": state.errors,
             "rate_limited_total": state.rate_limited,
+        "enqueue_failures_total": state.enqueue_failures_total,
         }
         if state.last_trace_id:
             payload[spec.name]["last_trace_id"] = state.last_trace_id
@@ -289,6 +293,7 @@ def _run_spec_tick(
         "changed_detected": state.changed_detected,
         "errors": state.errors,
         "rate_limited": state.rate_limited,
+        "enqueue_failures_total": state.enqueue_failures_total,
     }
 
     if not cfg.enable:
@@ -346,6 +351,7 @@ def _run_spec_tick(
                 rel_path=rel,
                 mtime=mtime,
                 content_hash=digest,
+                state=state,
             )
             state.last_trace_id = trace_id
             state.intents_emitted += 1
@@ -363,6 +369,7 @@ def _run_spec_tick(
     summary["intents_emitted"] = state.intents_emitted
     summary["errors"] = state.errors
     summary["rate_limited"] = state.rate_limited
+    summary["enqueue_failures_total"] = state.enqueue_failures_total
 
     state.save(_state_path(cfg.state_dir, spec.name))
     return summary
@@ -379,6 +386,7 @@ def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
         spec.name: _run_spec_tick(cfg, spec, states[spec.name], now=now)
         for spec in cfg.specs
     }
+    enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
     write_registry_heartbeat(
         path=cfg.heartbeat_path,
         status="running",
@@ -387,6 +395,7 @@ def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
         vault_path=cfg.vault_path,
         config_path=cfg.config_path,
         paused=cfg.stop_file.exists(),
+        enqueue_failures_total=enqueue_failures_total,
         now=now,
     )
     return summaries
@@ -407,6 +416,7 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
             spec.name: _run_spec_tick(cfg, spec, states[spec.name], now=now)
             for spec in cfg.specs
         }
+        enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
         write_registry_heartbeat(
             path=cfg.heartbeat_path,
             status="running",
@@ -415,6 +425,7 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
             vault_path=cfg.vault_path,
             config_path=cfg.config_path,
             paused=cfg.stop_file.exists(),
+            enqueue_failures_total=enqueue_failures_total,
             now=now,
         )
         if cfg.summary_interval > 0:

@@ -5,9 +5,14 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
+
+_DEFAULT_API_BASE = "http://127.0.0.1:18000"
+_REQUIRED_TOPIC = "ingest.vault.changed"
 
 
 def _fetch_json(url: str, timeout: float = 5.0) -> dict[str, Any]:
@@ -20,9 +25,33 @@ def _fetch_json(url: str, timeout: float = 5.0) -> dict[str, Any]:
     return payload
 
 
+def _read_json_file(path: Path) -> dict[str, Any] | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def _is_postgres_dsn(value: str) -> bool:
     lowered = value.lower()
     return lowered.startswith("postgres://") or lowered.startswith("postgresql://")
+
+
+def _worker_heartbeat_path() -> Path:
+    raw = os.getenv("WORKER_HEARTBEAT_PATH")
+    if raw:
+        return Path(raw).expanduser()
+    return Path("tmp") / "worker_heartbeat.json"
+
+
+def _write_test_note(vault_root: Path) -> Path:
+    inbox = vault_root / "@Inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    note_path = inbox / "alpha_e2e_runtime.md"
+    stamp = time.time()
+    content = f"# Alpha E2E Runtime\n\nUpdated: {stamp}\n"
+    note_path.write_text(content, encoding="utf-8")
+    return note_path
 
 
 def validate_status_invariants(status: dict[str, Any], health: dict[str, Any]) -> list[str]:
@@ -67,25 +96,117 @@ def validate_status_invariants(status: dict[str, Any], health: dict[str, Any]) -
     return errors
 
 
+def validate_runtime_progress(
+    *,
+    baseline_pending: int | None,
+    current_pending: int | None,
+    baseline_processed: int,
+    current_processed: int,
+    processed_by_event: dict[str, int] | None,
+    required_topic: str,
+) -> list[str]:
+    errors: list[str] = []
+    if baseline_pending is not None and current_pending is not None:
+        if current_pending < baseline_pending + 1:
+            errors.append("worker_queue.pending did not increase")
+    if current_processed < baseline_processed + 1:
+        errors.append("worker processed_total did not increase")
+    if processed_by_event is None or processed_by_event.get(required_topic, 0) < 1:
+        errors.append(f"worker did not process {required_topic}")
+    return errors
+
+
 def _run(cmd: list[str], *, allow_fail: bool = False) -> None:
     result = subprocess.run(cmd, check=not allow_fail)
     if result.returncode != 0 and not allow_fail:
         raise subprocess.CalledProcessError(result.returncode, cmd)
 
 
+def _wait_for(label: str, timeout_s: float, interval_s: float, predicate) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval_s)
+    return False
+
+
+def _run_golden_path(vault_root: Path, api_base: str) -> list[str]:
+    status = _fetch_json(f"{api_base}/api/status")
+    worker_queue = status.get("worker_queue") or {}
+    if not isinstance(worker_queue, dict) or worker_queue.get("mode") != "db":
+        return ["worker_queue.mode is not db"]
+
+    baseline_pending = int(worker_queue.get("pending") or 0)
+    heartbeat_path = _worker_heartbeat_path()
+    heartbeat = _read_json_file(heartbeat_path) or {}
+    baseline_processed = int(heartbeat.get("processed_total") or 0)
+
+    _write_test_note(vault_root)
+
+    pending_ok = _wait_for(
+        "pending",
+        timeout_s=30.0,
+        interval_s=1.0,
+        predicate=lambda: int((_fetch_json(f"{api_base}/api/status").get("worker_queue") or {}).get("pending") or 0)
+        >= baseline_pending + 1,
+    )
+    if not pending_ok:
+        return ["worker_queue.pending did not increase"]
+
+    def _processed_ready() -> bool:
+        hb = _read_json_file(heartbeat_path) or {}
+        processed_total = int(hb.get("processed_total") or 0)
+        processed_by_event = hb.get("processed_by_event")
+        errors = validate_runtime_progress(
+            baseline_pending=None,
+            current_pending=None,
+            baseline_processed=baseline_processed,
+            current_processed=processed_total,
+            processed_by_event=processed_by_event if isinstance(processed_by_event, dict) else None,
+            required_topic=_REQUIRED_TOPIC,
+        )
+        return not errors
+
+    processed_ok = _wait_for("processed", timeout_s=30.0, interval_s=1.0, predicate=_processed_ready)
+    if not processed_ok:
+        hb = _read_json_file(heartbeat_path) or {}
+        processed_total = int(hb.get("processed_total") or 0)
+        processed_by_event = hb.get("processed_by_event")
+        errors = validate_runtime_progress(
+            baseline_pending=None,
+            current_pending=None,
+            baseline_processed=baseline_processed,
+            current_processed=processed_total,
+            processed_by_event=processed_by_event if isinstance(processed_by_event, dict) else None,
+            required_topic=_REQUIRED_TOPIC,
+        )
+        return errors or ["worker did not process event in time"]
+
+    return []
+
+
 def main() -> int:
-    if not os.getenv("VAULT_ROOT"):
+    vault_root_raw = os.getenv("VAULT_ROOT")
+    if not vault_root_raw:
         print("ALPHA_E2E: VAULT_ROOT is required", file=sys.stderr)
         return 2
+
+    api_base = os.getenv("API_BASE_URL") or _DEFAULT_API_BASE
+    vault_root = Path(vault_root_raw).expanduser()
 
     try:
         _run(["make", "alpha-down"], allow_fail=True)
         _run(["make", "alpha-up"])
-        status = _fetch_json("http://127.0.0.1:18000/api/status")
-        health = _fetch_json("http://127.0.0.1:18000/api/health")
+        status = _fetch_json(f"{api_base}/api/status")
+        health = _fetch_json(f"{api_base}/api/health")
         errors = validate_status_invariants(status, health)
         if errors:
             print(f"ALPHA_E2E: FAIL - {errors[0]}")
+            return 2
+        flow_errors = _run_golden_path(vault_root, api_base)
+        if flow_errors:
+            print(f"ALPHA_E2E: FAIL - {flow_errors[0]}")
             return 2
         print("ALPHA_E2E: OK")
         return 0

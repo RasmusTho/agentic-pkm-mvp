@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+echo "DEPRECATED: use make alpha-up (scripts/start_full_system.sh) instead of scripts/run_alpha_stack.sh" >&2
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
