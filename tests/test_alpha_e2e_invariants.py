@@ -20,6 +20,18 @@ def test_invariants_require_required_ok() -> None:
     assert "health.required_ok" in errors[0]
 
 
+def test_invariants_db_mode_accepts_sqlalchemy_dsn() -> None:
+    status, health = _base_payloads()
+    status["worker_queue"] = {
+        "mode": "db",
+        "pending": 0,
+        "processed_total": 0,
+        "source_path": "postgresql+psycopg://app:app@db:5432/app",
+    }
+    errors = validate_status_invariants(status, health)
+    assert not errors
+
+
 def test_invariants_db_mode_does_not_require_events_log_math() -> None:
     status, health = _base_payloads()
     status["worker_queue"] = {"mode": "db", "pending": 0, "processed_total": 0, "source_path": "postgresql://app:app@db:5432/app"}

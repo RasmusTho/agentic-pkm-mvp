@@ -34,7 +34,11 @@ def _read_json_file(path: Path) -> dict[str, Any] | None:
 
 def _is_postgres_dsn(value: str) -> bool:
     lowered = value.lower()
-    return lowered.startswith("postgres://") or lowered.startswith("postgresql://")
+    return (
+        lowered.startswith("postgres://")
+        or lowered.startswith("postgresql://")
+        or lowered.startswith("postgresql+")
+    )
 
 
 def _worker_heartbeat_path() -> Path:
