@@ -9,7 +9,7 @@ from app.events.types import INGEST_OBJECT_CREATED, INGEST_VAULT_CHANGED, PROMOT
 from app.promotion.consumer import consume_promotion_intent_payload
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
 from app.services.indexer import handle_ingest_object_created
-from app.services.outbox import bootstrap, poll_outbox_one
+from app.services.outbox import ack_outbox, bootstrap, poll_outbox_one
 from app.observability.tracer import start_span
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -151,6 +151,7 @@ def run(
                             trace_id=trace_id,
                             event_id=event_id,
                         )
+                ack_outbox(message["id"])
         except Exception:
             errors_total += 1
             raise

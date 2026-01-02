@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 _DEFAULT_API_BASE = "http://127.0.0.1:18000"
-_REQUIRED_TOPIC = "ingest.vault.changed"
+_REQUIRED_TOPIC = "promote.intent.created"
 
 
 def _fetch_json(url: str, timeout: float = 5.0) -> dict[str, Any]:
@@ -53,7 +53,7 @@ def _write_test_note(vault_root: Path) -> Path:
     inbox.mkdir(parents=True, exist_ok=True)
     note_path = inbox / "alpha_e2e_runtime.md"
     stamp = time.time()
-    content = f"# Alpha E2E Runtime\n\nUpdated: {stamp}\n"
+    content = f"---\nuuid: alpha-e2e-{int(stamp)}\n---\n# Alpha E2E Runtime\n\n- [x] Make this note evergreen <!--ai:id=promote.evergreen-->\n"
     note_path.write_text(content, encoding="utf-8")
     return note_path
 
@@ -146,7 +146,7 @@ def _run_golden_path(vault_root: Path, api_base: str) -> list[str]:
     heartbeat = _read_json_file(heartbeat_path) or {}
     baseline_processed = int(heartbeat.get("processed_total") or 0)
 
-    _write_test_note(vault_root)
+    note_path = _write_test_note(vault_root)
 
     pending_ok = _wait_for(
         "pending",
