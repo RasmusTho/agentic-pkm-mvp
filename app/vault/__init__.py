@@ -16,6 +16,7 @@ from app.vault.paths import (
     ensure_vault_path_env_defaults,
     get_vault_inbox_dir_rel,
     get_vault_runtime_dir_rel,
+    get_vault_system_dir_rel,
 )
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "ensure_vault_path_env_defaults",
     "get_vault_inbox_dir_rel",
     "get_vault_runtime_dir_rel",
+    "get_vault_system_dir_rel",
 ]

@@ -15,7 +15,7 @@ This runbook documents the CLI-driven regression smoke that ensures a single vau
 scripts/gap_test_alpha.sh
 ```
 3. Optional arguments:
-   - `NOTE_REL` (default `@Inbox/_gap_test.md`) places the marker in another vault subpath.
+   - `NOTE_REL` (default `${VAULT_INBOX_DIR_REL}/_gap_test.md`) places the marker in another vault subpath.
    - `API_BASE_URL` points to a non-local API instance if you have a custom endpoint.
 
 ## Expectations

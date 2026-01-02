@@ -11,8 +11,12 @@ from typing import Any
 import yaml
 
 from app.config.paths import resolve_vault_root
+from app.vault.paths import get_vault_system_dir_rel
 
-SETTINGS_REL_PATH = Path("@System") / "Settings" / "health.md"
+
+def _settings_rel_path(vault_root: Path) -> Path:
+    system_dir_rel = get_vault_system_dir_rel(vault_root)
+    return Path(system_dir_rel) / "Settings" / "health.md"
 
 
 @dataclass(frozen=True)
@@ -116,7 +120,7 @@ def load_health_settings(
     env_getter: Callable[[str], str | None] | None = None,
 ) -> HealthSettingsLoadResult:
     vault_root = vault_root or resolve_vault_root()
-    target = vault_root / SETTINGS_REL_PATH
+    target = vault_root / _settings_rel_path(vault_root)
     source = _build_source(target)
     if not target.exists():
         return HealthSettingsLoadResult(
@@ -201,71 +205,52 @@ def _parse_thresholds(data: dict[str, Any], errors: list[str]) -> HealthThreshol
         ("degrade_samples", int),
         ("recover_samples", int),
     ]:
-        raw = raw_thresholds.get(key)
-        if raw is None:
-            threshold_errors.append(f"thresholds.{key} is required")
+        raw_value = raw_thresholds.get(key)
+        if raw_value is None:
+            threshold_errors.append(f"missing thresholds.{key}")
             continue
         try:
-            values[key] = caster(raw)
-        except (TypeError, ValueError):
-            threshold_errors.append(f"thresholds.{key} must be {caster.__name__}")
+            values[key] = caster(raw_value)
+        except Exception:
+            threshold_errors.append(f"invalid thresholds.{key}")
     if threshold_errors:
         errors.extend(threshold_errors)
         return None
-    return HealthThresholds(
-        outbox_degrade_oldest_age_s=float(values["outbox_degrade_oldest_age_s"]),
-        outbox_recover_oldest_age_s=float(values["outbox_recover_oldest_age_s"]),
-        degrade_samples=int(values["degrade_samples"]),
-        recover_samples=int(values["recover_samples"]),
-    )
+    return HealthThresholds(**values)
 
 
 def _parse_incident_capture(data: dict[str, Any], errors: list[str]) -> IncidentCaptureSettings:
-    block = data.get("incident_capture") or {}
-    if block is None:
-        block = {}
-    if not isinstance(block, dict):
-        errors.append("incident_capture must be a mapping")
+    raw = data.get("incident_capture")
+    if not isinstance(raw, dict):
         return IncidentCaptureSettings()
-    enabled, err_enabled = _coerce_bool(block.get("enabled"))
-    if err_enabled:
-        errors.append("incident_capture.enabled must be boolean")
-    history, err_history = _coerce_bool(block.get("transition_history"))
-    if err_history:
-        errors.append("incident_capture.transition_history must be boolean")
-    return IncidentCaptureSettings(enabled=enabled, transition_history=history)
+    enabled = raw.get("enabled")
+    transition_history = raw.get("transition_history")
+    if enabled is None:
+        enabled = False
+    if transition_history is None:
+        transition_history = False
+    try:
+        return IncidentCaptureSettings(
+            enabled=bool(enabled),
+            transition_history=bool(transition_history),
+        )
+    except Exception:
+        errors.append("invalid incident_capture")
+        return IncidentCaptureSettings()
 
 
 def _parse_policy(data: dict[str, Any], errors: list[str]) -> HealthPolicy:
-    block = data.get("policy") or {}
-    if block is None:
-        block = {}
-    if not isinstance(block, dict):
-        errors.append("policy must be a mapping")
+    raw = data.get("policy")
+    if not isinstance(raw, dict):
         return HealthPolicy()
-    env_overrides, err = _coerce_bool(block.get("env_overrides"))
-    if err:
-        errors.append("policy.env_overrides must be boolean")
-    return HealthPolicy(env_overrides=env_overrides)
-
-
-def _coerce_bool(value: Any) -> tuple[bool, bool]:
-    if value is None:
-        return False, False
-    if isinstance(value, bool):
-        return value, False
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "1", "yes", "on"}:
-            return True, False
-        if normalized in {"false", "0", "no", "off"}:
-            return False, False
-    return False, True
-
-
-def _default_incident_log_path() -> Path:
-    repo_root = Path(__file__).resolve().parents[2]
-    return repo_root / "tmp" / "health-incidents.jsonl"
+    env_overrides = raw.get("env_overrides")
+    if env_overrides is None:
+        env_overrides = False
+    try:
+        return HealthPolicy(env_overrides=bool(env_overrides))
+    except Exception:
+        errors.append("invalid policy")
+        return HealthPolicy()
 
 
 def _parse_incident_log_path(data: dict[str, Any], errors: list[str]) -> Path:
@@ -275,37 +260,32 @@ def _parse_incident_log_path(data: dict[str, Any], errors: list[str]) -> Path:
     if not isinstance(raw, str):
         errors.append("incident_log_path must be a string")
         return _default_incident_log_path()
-    value = raw.strip()
-    if not value:
-        errors.append("incident_log_path must be a non-empty string")
-        return _default_incident_log_path()
-    candidate = Path(value)
-    if not candidate.is_absolute():
-        candidate = Path(__file__).resolve().parents[2] / candidate
-    return candidate.expanduser()
+    return Path(raw)
+
+
+def _default_incident_log_path() -> Path:
+    return Path("tmp") / "health_incidents.jsonl"
+
 
 def _apply_env_overrides(
     thresholds: HealthThresholds,
     env_getter: Callable[[str], str | None],
 ) -> tuple[HealthThresholds, list[str]]:
+    overrides: dict[str, float | int] = {
+        "outbox_degrade_oldest_age_s": thresholds.outbox_degrade_oldest_age_s,
+        "outbox_recover_oldest_age_s": thresholds.outbox_recover_oldest_age_s,
+        "degrade_samples": thresholds.degrade_samples,
+        "recover_samples": thresholds.recover_samples,
+    }
     errors: list[str] = []
-    values = thresholds.to_payload().copy()
-    for var, (attr, caster) in _ENV_OVERRIDE_SPEC.items():
-        raw = env_getter(var)
+    for env_key, (field, caster) in _ENV_OVERRIDE_SPEC.items():
+        raw = env_getter(env_key)
         if raw is None:
             continue
         try:
-            values[attr] = caster(raw)
-        except (TypeError, ValueError):
-            errors.append(f"{var} must be {caster.__name__}")
+            overrides[field] = caster(raw)
+        except Exception:
+            errors.append(f"invalid {env_key}")
     if errors:
         return thresholds, errors
-    return (
-        HealthThresholds(
-            outbox_degrade_oldest_age_s=float(values["outbox_degrade_oldest_age_s"]),
-            outbox_recover_oldest_age_s=float(values["outbox_recover_oldest_age_s"]),
-            degrade_samples=int(values["degrade_samples"]),
-            recover_samples=int(values["recover_samples"]),
-        ),
-        [],
-    )
+    return HealthThresholds(**overrides), []

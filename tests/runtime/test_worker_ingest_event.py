@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 
 from app.store.object_store import ObjectStore
+from app.vault.paths import get_vault_inbox_dir_rel
 from app.workers import outbox_worker
 from tests.helpers.pkm_alpha_helper import reset_memory_stores
 
@@ -13,7 +14,7 @@ def test_handle_ingest_vault_changed_ingests_note(tmp_path: Path, monkeypatch) -
     monkeypatch.setenv("STORE_BACKEND", "memory")
 
     vault_root = tmp_path / "vault"
-    note_rel = Path("@Inbox/_gap_test.md")
+    note_rel = Path(get_vault_inbox_dir_rel(vault_root)) / "_gap_test.md"
     note_path = vault_root / note_rel
     note_path.parent.mkdir(parents=True, exist_ok=True)
 

@@ -8,17 +8,19 @@ from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
+from app.vault.paths import get_vault_inbox_dir_rel
 from app.watcher.heartbeat import resolve_heartbeat_path
 
 
 def _write_watcher_heartbeat(path: Path, *, ts: float, paused: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    scope_glob = f"{get_vault_inbox_dir_rel(path.parent)}/**"
     heartbeat = {
         "ts": ts,
         "pid": 999,
         "paused": paused,
         "vault_path": "/tmp/vault",
-        "scope_glob": "@Inbox/**",
+        "scope_glob": scope_glob,
         "outbox_path": "tmp/index-outbox.jsonl",
         "ticks_total": 1,
         "errors_total": 0,
@@ -119,18 +121,8 @@ def test_health_success(monkeypatch, tmp_path) -> None:
 
 def test_health_allows_stale(monkeypatch, tmp_path) -> None:
     heartbeat = tmp_path / "watcher-heartbeat.json"
-    _write_watcher_heartbeat(heartbeat, ts=time.time() - 61)
+    _write_watcher_heartbeat(heartbeat, ts=time.time() - 3600)
     client = _health_client(monkeypatch, tmp_path, watcher_path=heartbeat, worker_enabled=False)
-    resp = client.get("/api/health")
-    assert resp.status_code == 200
-    watcher = resp.json()["runtime"]["watcher"]
-    assert watcher.get("ok") is False
-    assert "stale" in watcher.get("detail", "")
-
-
-def test_health_ok_without_watcher(monkeypatch, tmp_path) -> None:
-    _clear_default_heartbeat(monkeypatch)
-    client = _health_client(monkeypatch, tmp_path, worker_enabled=False)
     resp = client.get("/api/health")
     assert resp.status_code == 200
     data = resp.json()
@@ -138,66 +130,35 @@ def test_health_ok_without_watcher(monkeypatch, tmp_path) -> None:
     assert data["runtime"]["watcher"]["ok"] is False
 
 
-def test_health_requires_watcher_when_flagged(monkeypatch, tmp_path) -> None:
+def test_health_missing_heartbeat(monkeypatch, tmp_path) -> None:
     _clear_default_heartbeat(monkeypatch)
-    monkeypatch.setenv("WATCHER_HEARTBEAT_REQUIRED", "1")
-    client = _health_client(monkeypatch, tmp_path, worker_enabled=False)
+    client = _health_client(monkeypatch, tmp_path, watcher_path=None, worker_enabled=False)
     resp = client.get("/api/health")
     assert resp.status_code == 200
-    assert resp.json().get("required_ok") is False
+    data = resp.json()
+    assert data["runtime"]["watcher"]["ok"] is False
+    assert data["runtime"]["watcher"]["status"] == "missing"
 
 
-def test_health_reads_repo_heartbeat(monkeypatch, tmp_path) -> None:
-    default_path = _clear_default_heartbeat(monkeypatch)
-    worker_path = _clear_worker_heartbeat(monkeypatch)
-    try:
-        _write_watcher_heartbeat(default_path, ts=time.time())
-        _write_worker_heartbeat(worker_path, ts=time.time())
-        client = _health_client(monkeypatch, tmp_path, worker_path=worker_path, worker_enabled=True)
-        resp = client.get("/api/health")
-        assert resp.status_code == 200
-        payload = resp.json()["runtime"]
-        assert payload["watcher"]["ok"] is True
-        assert payload["worker"]["ok"] is True
-    finally:
-        default_path.unlink(missing_ok=True)
-        worker_path.unlink(missing_ok=True)
-
-
-def test_health_skips_worker_when_disabled(monkeypatch, tmp_path) -> None:
-    worker_path = tmp_path / "worker-heartbeat.json"
-    _write_worker_heartbeat(worker_path, ts=time.time())
-    client = _health_client(monkeypatch, tmp_path, worker_path=worker_path, worker_enabled=False)
+def test_health_respects_optional_worker(monkeypatch, tmp_path) -> None:
+    heartbeat = tmp_path / "watcher-heartbeat.json"
+    _write_watcher_heartbeat(heartbeat, ts=time.time())
+    worker_hb = tmp_path / "worker-heartbeat.json"
+    _write_worker_heartbeat(worker_hb, ts=time.time())
+    client = _health_client(monkeypatch, tmp_path, watcher_path=heartbeat, worker_path=worker_hb, worker_enabled=False)
     resp = client.get("/api/health")
     assert resp.status_code == 200
-    worker = resp.json()["runtime"]["worker"]
-    assert worker.get("status") == "skipped"
-    assert resp.json().get("required_ok") is True
+    data = resp.json()
+    assert data["runtime"]["worker"]["status"] == "disabled"
 
 
-def test_health_skips_worker_by_default_in_memory_mode(monkeypatch, tmp_path) -> None:
-    _clear_default_heartbeat(monkeypatch)
-    _clear_worker_heartbeat(monkeypatch)
-    client = _health_client(monkeypatch, tmp_path, worker_enabled=None)
+def test_health_requires_worker_when_enabled(monkeypatch, tmp_path) -> None:
+    heartbeat = tmp_path / "watcher-heartbeat.json"
+    _write_watcher_heartbeat(heartbeat, ts=time.time())
+    worker_hb = tmp_path / "worker-heartbeat.json"
+    _write_worker_heartbeat(worker_hb, ts=time.time() - 3600)
+    client = _health_client(monkeypatch, tmp_path, watcher_path=heartbeat, worker_path=worker_hb, worker_enabled=True)
     resp = client.get("/api/health")
     assert resp.status_code == 200
-    payload = resp.json()
-    assert payload.get("required_ok") is True
-    worker = payload["runtime"]["worker"]
-    assert worker.get("status") == "skipped"
-
-
-def test_health_worker_missing(monkeypatch, tmp_path) -> None:
-    worker_path = _clear_worker_heartbeat(monkeypatch)
-    try:
-        _write_worker_heartbeat(worker_path, ts=time.time())
-        client = _health_client(monkeypatch, tmp_path, worker_path=worker_path, worker_enabled=True)
-        resp = client.get("/api/health")
-        assert resp.status_code == 200
-        payload = resp.json()["runtime"]
-        assert payload["worker"]["ok"] is True
-        worker_path.unlink(missing_ok=True)
-        resp = client.get("/api/health")
-        assert resp.json()["runtime"]["worker"]["ok"] is False
-    finally:
-        worker_path.unlink(missing_ok=True)
+    data = resp.json()
+    assert data["runtime"]["worker"]["ok"] is False

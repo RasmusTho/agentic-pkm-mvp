@@ -5,16 +5,24 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.index.outbox import DEFAULT_OUTBOX_PATH
+from app.vault.paths import ensure_vault_path_env_defaults, get_vault_inbox_dir_rel
 from app.watcher.heartbeat import DEFAULT_HEARTBEAT_PATH, resolve_heartbeat_path
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+
+ensure_vault_path_env_defaults()
+
+
+def _default_scope_glob() -> str:
+    inbox = os.getenv("VAULT_INBOX_DIR_REL") or get_vault_inbox_dir_rel()
+    return f"{inbox}/**"
 
 
 @dataclass
 class WatcherConfig:
     enable: bool
     vault_path: Path
-    scope_glob: str = "@Inbox/**"
+    scope_glob: str = _default_scope_glob()
     debounce_ms: int = 1500
     rate_limit_per_min: int = 30
     backoff_seconds: int = 10
@@ -33,7 +41,7 @@ class WatcherConfig:
             raise ValueError("WATCHER_VAULT_PATH is required when WATCHER_ENABLE=1")
         vault_path = Path(vault_raw or ".")
 
-        scope_glob = os.getenv("WATCHER_SCOPE_GLOB", "@Inbox/**")
+        scope_glob = os.getenv("WATCHER_SCOPE_GLOB", _default_scope_glob())
         debounce_ms = _as_int(os.getenv("WATCHER_DEBOUNCE_MS"), fallback=1500)
         rate_limit_per_min = _as_int(os.getenv("WATCHER_RATE_LIMIT_PER_MIN"), fallback=30)
         backoff_seconds = _as_int(os.getenv("WATCHER_BACKOFF_SECONDS"), fallback=10)

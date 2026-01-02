@@ -156,6 +156,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/runbooks/RUNBOOK_STARTUP.md | Runbook: startup checklist | Baseline-only (v4.10) | 2025-12-21 | Command-first startup checklist: vault/health config, docker compose bring-up, health status/explain/incidents tail, and go-live signals. |
 | docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md | Runbook: full-system startup | Aligned (forward line v5.x) | 2025-12-23 | Brings up db/api/worker/watcher via scripts/start_full_system.sh; documents watcher registry + heartbeat checks. |
 | docs/runbooks/RUNBOOK_RUNTIME_GAP_TEST.md | Runbook: runtime gap test | Aligned (forward line v5.x) | 2025-12-23 | Verifies watcher registry ingest.vault.changed → worker heartbeat → /api/ask via scripts/gap_test_alpha.sh. |
+| docs/E2E_ALPHA.md | Alpha E2E contract | Aligned (forward line v5.x) | 2026-01-02 | Canonical alpha-up → alpha_e2e → alpha-smoke flow, runtime note cleanup, and status semantics. |
 | docs/howto/memory.md | How-to: memory | Legacy (archived) | 2025-12-07 | Agent-memory guide superseded by ObjectStore/decisions in v4.10. |
 | docs/settings/sample-flows/ingest.flow.md | Sample flow | Partially outdated | 2025-12-07 | Template for future planner/orchestrator ingest; not loaded in v4.10. |
 | docs/settings/sample-agents/planner.md | Sample agent config | Partially outdated | 2025-12-07 | Planner config template for v5.x; unused in Reality-MVP. |

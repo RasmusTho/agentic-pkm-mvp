@@ -1,4 +1,4 @@
-{"ts": "2025-10-28T21:23:18Z", "level": "info", "event": "promote.done", "uuid": "U-DEMO-1", "from": "vault/@Desk/galaxy-test.md", "to": "vault/@Desk/galaxy-test.md"}
+{"ts": "2025-10-28T21:23:18Z", "level": "info", "event": "promote.done", "uuid": "U-DEMO-1", "from": "vault/Workbench/galaxy-test.md", "to": "vault/Workbench/galaxy-test.md"}
 {"ts": "2025-10-29T17:16:21Z", "level": "debug", "event": "promote.agent.plan", "agent": "promotion-agent"}
 {"ts": "2025-10-29T17:16:21Z", "level": "info", "event": "promote.agent.run", "agent": "promotion-agent", "processed": 0}
 {"ts": "2025-10-29T17:16:21Z", "level": "debug", "event": "promote.agent.plan", "agent": "promotion-agent"}

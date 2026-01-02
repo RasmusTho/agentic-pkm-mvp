@@ -53,7 +53,7 @@ def _worker_heartbeat_path() -> Path:
 
 
 def _runtime_note_dir(vault_root: Path, runtime_dir_rel: str) -> Path:
-    return (vault_root / runtime_dir_rel).expanduser()
+    return (vault_root / runtime_dir_rel / "alpha_e2e").expanduser()
 
 
 def _create_runtime_note(vault_root: Path, runtime_dir_rel: str, note_uuid: str) -> Path:

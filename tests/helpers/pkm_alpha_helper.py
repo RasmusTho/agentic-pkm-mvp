@@ -17,10 +17,13 @@ from app.stores import get_object_store, reset_store_backends
 
 PKM_ALPHA_ROOT = Path(os.getenv("PKM_ALPHA_ROOT", "vault"))
 
+INBOX_DIR = os.getenv("VAULT_INBOX_DIR_REL", "Inbox")
+WORKBENCH_DIR = os.getenv("VAULT_WORKBENCH_DIR_REL", "Workbench")
+
 NOTE_PATHS: Dict[str, Path] = {
-    "research": Path("@Inbox/Desicion science for data scientists 2.md"),
+    "research": Path(INBOX_DIR) / "Desicion science for data scientists 2.md",
     "concept": Path("settings/Overview.md"),
-    "project": Path("@Desk/galaxy-test.md"),
+    "project": Path(WORKBENCH_DIR) / "galaxy-test.md",
 }
 
 # Stable ids to keep tests deterministic even though the normalizer generates UUID4 values.
@@ -76,13 +79,12 @@ def load_pkm_alpha_subset_for_reasoning(object_store=None) -> dict[str, str]:
     """
     os.environ.setdefault("STORE_BACKEND", "memory")
 
-    # Ensure the caller's store is materialized for downstream lookups.
     if object_store is None:
         reset_memory_stores()
         store = get_object_store()
     else:
         store = object_store
-    _ = store  # keep lints happy while relying on get_object_store() inside _ingest_file
+    _ = store
 
     uuid_sequence = [UUID(DETERMINISTIC_UUIDS[key]) for key in _NOTE_ORDER]
     with _patched_normalizer_uuids(uuid_sequence):
@@ -119,6 +121,3 @@ def load_pkm_alpha_subset_for_reasoning(object_store=None) -> dict[str, str]:
             else:
                 ids[key] = obj_id
     return ids
-
-
-__all__ = ["load_pkm_alpha_subset_for_reasoning", "reset_memory_stores"]

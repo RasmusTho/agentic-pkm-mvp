@@ -157,13 +157,14 @@ def _heartbeat_status(
     skip: bool = False,
 ) -> Dict[str, Any]:
     if skip:
-        return {"ok": True, "detail": "skipped (disabled)", "status": "skipped"}
+        return {"ok": True, "detail": "disabled (skipped)", "status": "disabled"}
 
     if not path.exists():
         return {
             "ok": False,
             "detail": f"{name} not running (no heartbeat)",
             "path": str(path),
+            "status": "missing",
         }
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -172,6 +173,7 @@ def _heartbeat_status(
             "ok": False,
             "detail": f"{name} heartbeat unreadable ({exc})",
             "path": str(path),
+            "status": "unreadable",
         }
     ts_raw = raw.get("ts")
     try:
@@ -181,6 +183,7 @@ def _heartbeat_status(
             "ok": False,
             "detail": f"{name} heartbeat missing timestamp",
             "path": str(path),
+            "status": "invalid",
         }
     freshness = max(0.0, now - ts_value)
     ok = freshness <= stale_seconds

@@ -57,7 +57,7 @@ def _domain_row(object_id: str) -> dict:
         "uuid": object_id,
         "kind": "capture_note",
         "payload": {"plane": "vault"},
-        "source_ref": "vault://@Inbox/note.md",
+        "source_ref": "vault://Inbox/note.md",
         "created_at": datetime.now(timezone.utc),
     }
 

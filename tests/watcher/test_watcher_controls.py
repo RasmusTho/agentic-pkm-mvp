@@ -4,16 +4,22 @@ import json
 import os
 from pathlib import Path
 
+from app.vault.paths import get_vault_inbox_dir_rel
 from app.watcher.config import WatcherConfig
 from app.watcher.state import WatcherState
 from app.watcher.watcher import run_tick
 
 
+def _inbox_dir(tmp_path: Path) -> str:
+    return get_vault_inbox_dir_rel(tmp_path / "vault")
+
+
 def _config(tmp_path: Path, *, rate_limit: int = 30, debounce_ms: int = 1500) -> WatcherConfig:
+    inbox_dir = _inbox_dir(tmp_path)
     return WatcherConfig(
         enable=True,
         vault_path=tmp_path / "vault",
-        scope_glob="@Inbox/**",
+        scope_glob=f"{inbox_dir}/**",
         debounce_ms=debounce_ms,
         rate_limit_per_min=rate_limit,
         backoff_seconds=10,
@@ -35,7 +41,7 @@ def _read_outbox(outbox: Path) -> list[dict]:
 def test_scope_glob_limits_to_inbox(tmp_path: Path) -> None:
     cfg = _config(tmp_path)
     cfg.vault_path.mkdir(parents=True, exist_ok=True)
-    inbox = cfg.vault_path / "@Inbox"
+    inbox = cfg.vault_path / _inbox_dir(tmp_path)
     inbox.mkdir()
     other_dir = cfg.vault_path / "Other"
     other_dir.mkdir()
@@ -52,14 +58,14 @@ def test_scope_glob_limits_to_inbox(tmp_path: Path) -> None:
     entries = _read_outbox(cfg.outbox_path)
     assert len(entries) == 1
     payload = entries[0].get("payload") or {}
-    assert payload.get("relative_path") == str(Path("@Inbox") / inbox_note.name)
+    assert payload.get("relative_path") == str(Path(_inbox_dir(tmp_path)) / inbox_note.name)
     assert other_note.name not in cfg.outbox_path.read_text(encoding="utf-8")
 
 
 def test_debounce_blocks_rapid_retriggers(tmp_path: Path) -> None:
     cfg = _config(tmp_path, debounce_ms=1500)
     cfg.vault_path.mkdir(parents=True, exist_ok=True)
-    note = (cfg.vault_path / "@Inbox").joinpath("note.md")
+    note = (cfg.vault_path / _inbox_dir(tmp_path)).joinpath("note.md")
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("v1", encoding="utf-8")
 
@@ -76,7 +82,7 @@ def test_debounce_blocks_rapid_retriggers(tmp_path: Path) -> None:
 def test_rate_limit_blocks_after_threshold(tmp_path: Path) -> None:
     cfg = _config(tmp_path, rate_limit=1)
     cfg.vault_path.mkdir(parents=True, exist_ok=True)
-    note = (cfg.vault_path / "@Inbox").joinpath("rate.md")
+    note = (cfg.vault_path / _inbox_dir(tmp_path)).joinpath("rate.md")
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("first", encoding="utf-8")
 
@@ -97,7 +103,7 @@ def test_rate_limit_blocks_after_threshold(tmp_path: Path) -> None:
 def test_kill_switch_pauses_without_emitting(tmp_path: Path) -> None:
     cfg = _config(tmp_path)
     cfg.vault_path.mkdir(parents=True, exist_ok=True)
-    note = (cfg.vault_path / "@Inbox").joinpath("stop.md")
+    note = (cfg.vault_path / _inbox_dir(tmp_path)).joinpath("stop.md")
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("halt", encoding="utf-8")
 
@@ -115,11 +121,11 @@ def test_kill_switch_pauses_without_emitting(tmp_path: Path) -> None:
 def test_restart_sanitizes_monotonic_state(tmp_path: Path) -> None:
     cfg = _config(tmp_path)
     cfg.vault_path.mkdir(parents=True, exist_ok=True)
-    note = (cfg.vault_path / "@Inbox").joinpath("restart.md")
+    note = (cfg.vault_path / _inbox_dir(tmp_path)).joinpath("restart.md")
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("v1", encoding="utf-8")
 
-    rel = str(Path("@Inbox") / note.name)
+    rel = str(Path(_inbox_dir(tmp_path)) / note.name)
     state_payload = {
         "files": {rel: {"last_seen": 123.45, "last_emitted": 234.56, "hash": "old", "mtime": 1.0}},
         "backoff_until": 456.78,

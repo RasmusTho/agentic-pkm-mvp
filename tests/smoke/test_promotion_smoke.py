@@ -4,7 +4,7 @@ from app.promotion.queue import enqueue, run_once
 
 def test_smoke(tmp_path: Path, monkeypatch):
     vault = tmp_path / "vault"
-    note = vault / "@Desk" / "draft.md"
+    note = vault / "Workbench" / "draft.md"
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text(dedent("""\
         ---

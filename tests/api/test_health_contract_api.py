@@ -20,7 +20,7 @@ def _mock_snapshot(state: str, reason: str) -> dict[str, object]:
         "errors_last_10m": 0,
         "settings_status": "ok",
         "settings_source": {
-            "path": "/fake/vault/@System/Settings/health.md",
+            "path": "/fake/vault/System/Settings/health.md",
             "mtime": "2025-01-01T00:00:00+00:00",
             "sha256": "deadbeef",
         },

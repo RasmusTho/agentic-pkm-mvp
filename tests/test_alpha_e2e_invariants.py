@@ -107,10 +107,11 @@ def test_runtime_progress_accepts_processed_increment_and_topic() -> None:
 
 def test_runtime_note_path_and_content(tmp_path) -> None:
     note_uuid = uuid.uuid4().hex
+    uuid.UUID(note_uuid)
     runtime_dir_rel = get_vault_runtime_dir_rel(tmp_path)
     note_path = _create_runtime_note(tmp_path, runtime_dir_rel, note_uuid)
     assert note_path.exists()
-    assert runtime_dir_rel in str(note_path)
+    assert f"{runtime_dir_rel}/alpha_e2e" in str(note_path)
     content = note_path.read_text(encoding="utf-8")
     assert f"uuid: {note_uuid}" in content
     assert note_uuid in note_path.name

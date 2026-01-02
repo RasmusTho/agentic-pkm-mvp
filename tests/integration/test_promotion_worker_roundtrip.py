@@ -7,7 +7,7 @@ def test_roundtrip_promotes_and_cleans_intent(tmp_path: Path, monkeypatch):
     log   = tmp_path / "log.jsonl"
     settings = tmp_path / "settings.yaml"
     vault = tmp_path / "vault"
-    note  = vault / "@Desk" / "draft.md"
+    note  = vault / "Workbench" / "draft.md"
     vault.mkdir(parents=True, exist_ok=True)
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text(dedent("""\

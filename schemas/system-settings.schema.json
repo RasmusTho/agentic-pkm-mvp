@@ -71,6 +71,9 @@
         },
         "runtime_dir_rel": {
           "type": "string"
+        },
+        "system_dir_rel": {
+          "type": "string"
         }
       },
       "additionalProperties": false

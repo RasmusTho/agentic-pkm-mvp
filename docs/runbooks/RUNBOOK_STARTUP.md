@@ -4,7 +4,7 @@ State: SoT v4.10 Reality-MVP (work branch prep).
 
 ## 1. Config prerequisites
 1. Expose the vault root: `export VAULT_ROOT=/path/to/vault` (or set in docker compose env file).
-2. Seed `@System/Settings/health.md` so guided thresholds/incident logging exist (see `docs/HEALTH.md`).
+2. Seed `${VAULT_SYSTEM_DIR_REL}/Settings/health.md` so guided thresholds/incident logging exist (see `docs/HEALTH.md`).
 3. Optional overrides: `INDEX_OUTBOX_PATH`, `HEALTH_THRESHOLDS_*` and `HEALTH_INCIDENT_CAPTURE_*` can guard tuning; keep `incident_log_path` in the vault to a known location you can tail.
 
 ## 2. Containers

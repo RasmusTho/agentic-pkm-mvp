@@ -42,7 +42,7 @@ def _setup(monkeypatch, tmp_path: Path, *, note_moves_enabled: bool, settings_ya
 
 def test_nightly_batch_moves_when_enabled(tmp_path: Path, monkeypatch):
     qpath, log, vault = _setup(monkeypatch, tmp_path, note_moves_enabled=True)
-    src = vault / "@Desk" / "concept.md"
+    src = vault / "Workbench" / "concept.md"
     dst_dir = vault / "2_Cards" / "Concepts"
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_text(dedent("""        ---
@@ -65,7 +65,7 @@ def test_nightly_batch_moves_when_enabled(tmp_path: Path, monkeypatch):
 
 def test_batch_move_skipped_when_note_moves_disabled(tmp_path: Path, monkeypatch):
     qpath, log, vault = _setup(monkeypatch, tmp_path, note_moves_enabled=False)
-    src = vault / "@Desk" / "concept.md"
+    src = vault / "Workbench" / "concept.md"
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_text(dedent("""        ---
         uuid: 00000000-0000-0000-0000-000000000006
@@ -87,7 +87,7 @@ def test_batch_move_skipped_when_note_moves_disabled(tmp_path: Path, monkeypatch
 
 def test_move_updates_review_state_and_preserves_frontmatter(tmp_path: Path, monkeypatch):
     qpath, log, vault = _setup(monkeypatch, tmp_path, note_moves_enabled=True)
-    src = vault / "@Desk" / "note.md"
+    src = vault / "Workbench" / "note.md"
     dst_dir = vault / "2_Cards" / "Concepts"
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_text(dedent("""        ---
@@ -118,8 +118,8 @@ def test_move_updates_review_state_and_preserves_frontmatter(tmp_path: Path, mon
 
 def test_move_handles_name_collision_with_suffix(tmp_path: Path, monkeypatch):
     qpath, log, vault = _setup(monkeypatch, tmp_path, note_moves_enabled=True)
-    src1 = vault / "@Desk" / "concept.md"
-    src2 = vault / "@Inbox" / "concept.md"
+    src1 = vault / "Workbench" / "concept.md"
+    src2 = vault / "Inbox" / "concept.md"
     dst_dir = vault / "2_Cards" / "Concepts"
     src1.parent.mkdir(parents=True, exist_ok=True)
     src2.parent.mkdir(parents=True, exist_ok=True)
@@ -170,7 +170,7 @@ def test_move_respects_target_rules_when_enabled(tmp_path: Path, monkeypatch):
         default_target: 1_Triage
     """)
     qpath, log, vault = _setup(monkeypatch, tmp_path, note_moves_enabled=True, settings_yaml=settings_yaml)
-    src = vault / "@Desk" / "archived.md"
+    src = vault / "Workbench" / "archived.md"
     target = vault / "3_Archive" / "Notes"
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_text(dedent("""        ---
@@ -196,7 +196,7 @@ def test_move_handles_multiple_collisions(tmp_path: Path, monkeypatch):
     dst_dir = vault / "2_Cards" / "Concepts"
     sources = []
     for idx in range(3):
-        src = vault / f"@Desk{idx}" / "concept.md"
+        src = vault / f"Workbench{idx}" / "concept.md"
         src.parent.mkdir(parents=True, exist_ok=True)
         src.write_text(dedent(f"""            ---
             uuid: 00000000-0000-0000-0000-00000000002{idx}

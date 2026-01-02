@@ -10,7 +10,7 @@ RULES = [
 
 def test_intent_leads_to_index_visibility(tmp_path: Path, monkeypatch):
     vault = tmp_path / "vault"
-    note = vault / "@Desk" / "galaxy.md"
+    note = vault / "Workbench" / "galaxy.md"
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text(dedent("""\
     ---

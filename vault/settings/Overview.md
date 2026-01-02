@@ -22,5 +22,5 @@ Rekommendation: öppna YAML-filen ovan när du faktiskt vill ändra värden. Den
 - Kanon: [[../_system/settings/system-settings.yaml]]
 - Eventkatalog: [[../_system/events/]]
 - Scheman: [[../_system/schemas/]]
-- Arbetsyta: [[../@Desk/]]
-- Inbox: [[../@Inbox/]]
+- Arbetsyta: [[../Workbench/]]
+- Inbox: [[../Inbox/]]

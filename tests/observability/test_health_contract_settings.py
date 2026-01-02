@@ -4,6 +4,7 @@ from pathlib import Path
 
 from app.health_contract import HealthContract, HealthStateMachine
 from app.settings.health_settings import HealthThresholds
+from app.vault.paths import get_vault_system_dir_rel
 
 
 def _mock_index_doctor() -> dict:
@@ -34,7 +35,7 @@ def test_health_contract_uses_vault_thresholds(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(_prepare_outbox(tmp_path)))
     monkeypatch.setattr("app.index.doctor.diagnose_index", lambda: _mock_index_doctor())
     vault = tmp_path / "vault"
-    settings_path = vault / "@System" / "Settings" / "health.md"
+    settings_path = vault / get_vault_system_dir_rel(vault) / "Settings" / "health.md"
     _write_health_markdown(
         settings_path,
         """
@@ -65,7 +66,7 @@ def test_health_contract_invalid_settings_fallbacks(monkeypatch, tmp_path) -> No
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(_prepare_outbox(tmp_path)))
     monkeypatch.setattr("app.index.doctor.diagnose_index", lambda: _mock_index_doctor())
     vault = tmp_path / "vault"
-    settings_path = vault / "@System" / "Settings" / "health.md"
+    settings_path = vault / get_vault_system_dir_rel(vault) / "Settings" / "health.md"
     _write_health_markdown(
         settings_path,
         """

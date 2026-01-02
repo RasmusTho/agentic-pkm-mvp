@@ -9,6 +9,7 @@ import yaml
 
 _DEFAULT_INBOX_DIR = "Inbox"
 _DEFAULT_RUNTIME_DIR = "System/Runtime"
+_DEFAULT_SYSTEM_DIR = "System"
 _SETTINGS_REL_PATH = Path("_system") / "settings" / "system-settings.yaml"
 
 
@@ -64,13 +65,23 @@ def get_vault_runtime_dir_rel(vault_root: Path | None = None) -> str:
     return paths.get("runtime_dir_rel", _DEFAULT_RUNTIME_DIR)
 
 
+def get_vault_system_dir_rel(vault_root: Path | None = None) -> str:
+    env_value = os.getenv("VAULT_SYSTEM_DIR_REL")
+    if env_value:
+        return env_value
+    paths = _paths_data(vault_root)
+    return paths.get("system_dir_rel", _DEFAULT_SYSTEM_DIR)
+
+
 def ensure_vault_path_env_defaults(vault_root: Path | None = None) -> None:
     os.environ.setdefault("VAULT_INBOX_DIR_REL", get_vault_inbox_dir_rel(vault_root))
     os.environ.setdefault("VAULT_RUNTIME_DIR_REL", get_vault_runtime_dir_rel(vault_root))
+    os.environ.setdefault("VAULT_SYSTEM_DIR_REL", get_vault_system_dir_rel(vault_root))
 
 
 __all__ = [
     "get_vault_inbox_dir_rel",
     "get_vault_runtime_dir_rel",
+    "get_vault_system_dir_rel",
     "ensure_vault_path_env_defaults",
 ]
