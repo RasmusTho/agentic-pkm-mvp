@@ -12,6 +12,11 @@ from app.vault.layout import (
     load_or_create_layout,
     normalize_md_filename,
 )
+from app.vault.paths import (
+    ensure_vault_path_env_defaults,
+    get_vault_inbox_dir_rel,
+    get_vault_runtime_dir_rel,
+)
 
 __all__ = [
     "DEFAULT_DESK_FOLDER",
@@ -26,4 +31,7 @@ __all__ = [
     "ensure_vault_layout_report",
     "load_or_create_layout",
     "normalize_md_filename",
+    "ensure_vault_path_env_defaults",
+    "get_vault_inbox_dir_rel",
+    "get_vault_runtime_dir_rel",
 ]

@@ -13,12 +13,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Sequence
 
+from app.vault.paths import ensure_vault_path_env_defaults, get_vault_runtime_dir_rel
+
 _DEFAULT_API_BASE = "http://127.0.0.1:18000"
 _REQUIRED_TOPIC = "promote.intent.created"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_DEFAULT_RUNTIME_DIR_REL = "System/Runtime"
-_RUNTIME_DIR_ENV = "VAULT_RUNTIME_DIR_REL"
-
 
 def _fetch_json(url: str, timeout: float = 5.0) -> dict[str, Any]:
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -53,16 +52,12 @@ def _worker_heartbeat_path() -> Path:
     return Path("tmp") / "worker_heartbeat.json"
 
 
-def _runtime_dir_rel() -> str:
-    return os.getenv(_RUNTIME_DIR_ENV, _DEFAULT_RUNTIME_DIR_REL)
+def _runtime_note_dir(vault_root: Path, runtime_dir_rel: str) -> Path:
+    return (vault_root / runtime_dir_rel).expanduser()
 
 
-def _runtime_note_dir(vault_root: Path) -> Path:
-    return (vault_root / _runtime_dir_rel()).expanduser()
-
-
-def _create_runtime_note(vault_root: Path, note_uuid: str) -> Path:
-    runtime_dir = _runtime_note_dir(vault_root)
+def _create_runtime_note(vault_root: Path, runtime_dir_rel: str, note_uuid: str) -> Path:
+    runtime_dir = _runtime_note_dir(vault_root, runtime_dir_rel)
     runtime_dir.mkdir(parents=True, exist_ok=True)
     note_path = runtime_dir / f"alpha_e2e_runtime_{note_uuid}.md"
     content = (
@@ -75,6 +70,8 @@ def _create_runtime_note(vault_root: Path, note_uuid: str) -> Path:
     )
     note_path.write_text(content, encoding="utf-8")
     return note_path
+
+
 
 
 def _cleanup_runtime_notes(paths: Sequence[Path]) -> None:
@@ -177,7 +174,7 @@ def _wait_for(label: str, timeout_s: float, interval_s: float, predicate) -> boo
     return False
 
 
-def _run_golden_path(vault_root: Path, api_base: str) -> tuple[list[str], Path | None]:
+def _run_golden_path(vault_root: Path, runtime_dir_rel: str, api_base: str) -> tuple[list[str], Path | None]:
     status = _fetch_json(f"{api_base}/api/status")
     worker_queue = status.get("worker_queue") or {}
     if not isinstance(worker_queue, dict) or worker_queue.get("mode") != "db":
@@ -188,7 +185,7 @@ def _run_golden_path(vault_root: Path, api_base: str) -> tuple[list[str], Path |
     baseline_processed = int(heartbeat.get("processed_total") or 0)
 
     note_uuid = uuid.uuid4().hex
-    note_path = _create_runtime_note(vault_root, note_uuid)
+    note_path = _create_runtime_note(vault_root, runtime_dir_rel, note_uuid)
 
     def _processed_ready() -> bool:
         hb = _read_json_file(heartbeat_path) or {}
@@ -235,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
 
     api_base = os.getenv("API_BASE_URL") or _DEFAULT_API_BASE
     vault_root = Path(vault_root_raw).expanduser()
+    ensure_vault_path_env_defaults(vault_root)
+    runtime_dir_rel = get_vault_runtime_dir_rel(vault_root)
     note_paths: list[Path] = []
 
     try:
@@ -245,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
         errors = validate_status_invariants(status, health)
         if errors:
             raise RuntimeError(errors[0])
-        flow_errors, created_note = _run_golden_path(vault_root, api_base)
+        flow_errors, created_note = _run_golden_path(vault_root, runtime_dir_rel, api_base)
         if created_note:
             note_paths.append(created_note)
         if flow_errors:

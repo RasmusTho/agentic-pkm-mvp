@@ -77,16 +77,19 @@ You should see the eight-line CI summary: LATENCY / EVAL / DELTA / RELATION COVE
 export VAULT_ROOT="/Users/rasmus/Library/Mobile Documents/iCloud~md~obsidian/Documents/PKM - Alpha"
 make alpha-down || true
 make alpha-up
+python scripts/alpha_e2e.py
 make alpha-status
+make alpha-smoke
 ```
+
+This lists the core commands in order: `make alpha-up` brings the stack online, `python scripts/alpha_e2e.py` validates runtime invariants (it writes a temporary note under `${VAULT_ROOT}/${VAULT_RUNTIME_DIR_REL}` and removes it after success, or when run with `--teardown`), `make alpha-status` reports health/queue state, and `make alpha-smoke` runs a deterministic smoke test. The watcher scope is defined by `${VAULT_INBOX_DIR_REL}` (default `Inbox`), so you can relocate the inbox with that variable.
 
 Confidence checks (optional):
 - `make alpha-doctor`
-- `make alpha-e2e`
+- `make alpha-e2e --teardown`
 - `make alpha-smoke`
 
-What each command does: `scripts/start_full_system.sh` is the canonical orchestrator entrypoint used by `make alpha-up`. `alpha-status` is read-only and safe. `alpha-smoke` is deterministic (runs=2 no-op guarantee). `alpha-e2e` enforces runtime invariants so status semantics regressions get caught.
-It writes a temporary note under `VAULT_ROOT/VAULT_RUNTIME_DIR_REL` (default `System/Runtime`) and removes it after success (use `python scripts/alpha_e2e.py --teardown` or `make alpha-e2e` to clean up artifacts after failures).
+What each command does: `scripts/start_full_system.sh` is the canonical orchestrator entrypoint used by `make alpha-up`. `alpha-status` is read-only and safe. `alpha-smoke` is deterministic (runs=2 no-op guarantee). `alpha-e2e` enforces runtime invariants so status semantics regressions get caught; it reports the runtime note path when dumping debug info.
 
 Note: `/api/health` can report `ok=false` when optional tools are missing; in Alpha runtime, ffmpeg is bundled in the container image, so a missing ffmpeg check indicates a build/runtime issue. Treat `required_ok` as the gating signal.
 

@@ -13,6 +13,8 @@ from uuid import uuid4
 
 import yaml
 
+from app.vault.paths import ensure_vault_path_env_defaults, get_vault_inbox_dir_rel
+
 from app.agents.panel.agent import handle_note_update
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
@@ -31,6 +33,8 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 MIN_TICK_SLEEP_SECONDS = 0.05
 
 _WRITE_GUARD = OptimisticWriteGuard()
+
+ensure_vault_path_env_defaults()
 
 
 def _now_iso() -> str:
@@ -141,6 +145,12 @@ def _process_panel_note(
             print(f"WARN: failed to append JSONL outbox event {event.event}: {exc}")
 
 
+
+
+def _default_scope_glob() -> str:
+    inbox = os.getenv("VAULT_INBOX_DIR_REL") or get_vault_inbox_dir_rel()
+    return f"{inbox}/**"
+
 @dataclass
 class WatcherSpec:
     name: str
@@ -181,7 +191,7 @@ class RegistryConfig:
     @classmethod
     def from_env(cls, specs: list[WatcherSpec], config_path: Path) -> "RegistryConfig":
         enable = _as_bool(os.getenv("WATCHER_ENABLE", "1"))
-        scope_glob = os.getenv("WATCHER_SCOPE_GLOB", "@Inbox/**")
+        scope_glob = os.getenv("WATCHER_SCOPE_GLOB", _default_scope_glob())
         debounce_ms = int(os.getenv("WATCHER_DEBOUNCE_MS", "1500"))
         rate_limit_per_min = int(os.getenv("WATCHER_RATE_LIMIT_PER_MIN", "30"))
         outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH", get_index_outbox_path()))
@@ -229,6 +239,15 @@ class WatcherTickResult:
     last_trace_id: str | None
 
 
+def _expand_env_values(value: object) -> object:
+    if isinstance(value, str):
+        return os.path.expandvars(value)
+    if isinstance(value, list):
+        return [_expand_env_values(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _expand_env_values(val) for key, val in value.items()}
+    return value
+
 def load_registry_config(config_path: Path) -> RegistryConfig:
     config_path = config_path.expanduser()
     if not config_path.exists():
@@ -237,7 +256,7 @@ def load_registry_config(config_path: Path) -> RegistryConfig:
     watchers_raw = raw.get("watchers") or []
     if not isinstance(watchers_raw, list):
         raise ValueError("watchers config must include a list of watchers")
-    specs = [WatcherSpec.from_dict(entry or {}) for entry in watchers_raw]
+    specs = [WatcherSpec.from_dict(_expand_env_values(entry or {})) for entry in watchers_raw]
     if not specs:
         raise ValueError("watchers config is empty")
     return RegistryConfig.from_env(specs, config_path=config_path)

@@ -1,6 +1,8 @@
 import copy
 import uuid
 
+from app.vault.paths import get_vault_runtime_dir_rel
+
 from scripts.alpha_e2e import (
     _cleanup_runtime_notes,
     _create_runtime_note,
@@ -105,9 +107,10 @@ def test_runtime_progress_accepts_processed_increment_and_topic() -> None:
 
 def test_runtime_note_path_and_content(tmp_path) -> None:
     note_uuid = uuid.uuid4().hex
-    note_path = _create_runtime_note(tmp_path, note_uuid)
+    runtime_dir_rel = get_vault_runtime_dir_rel(tmp_path)
+    note_path = _create_runtime_note(tmp_path, runtime_dir_rel, note_uuid)
     assert note_path.exists()
-    assert "System/Runtime" in str(note_path)
+    assert runtime_dir_rel in str(note_path)
     content = note_path.read_text(encoding="utf-8")
     assert f"uuid: {note_uuid}" in content
     assert note_uuid in note_path.name
