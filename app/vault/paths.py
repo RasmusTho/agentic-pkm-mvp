@@ -33,11 +33,16 @@ def _read_system_settings(path: Path) -> Dict[str, Any]:
 
 
 def _extract_paths(settings: Dict[str, Any]) -> Dict[str, str]:
-    raw = settings.get("paths")
-    if not isinstance(raw, dict):
-        return {}
     out: Dict[str, str] = {}
-    for key, value in raw.items():
+    raw = settings.get("paths")
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if isinstance(value, str) and value:
+                out[key] = value
+    for key in ("inbox_dir_rel", "runtime_dir_rel", "system_dir_rel"):
+        if key in out:
+            continue
+        value = settings.get(key)
         if isinstance(value, str) and value:
             out[key] = value
     return out

@@ -2,7 +2,7 @@ State: SoT v5.x forward line.
 # Alpha E2E Contract
 
 ## Purpose
-This document defines the end-to-end runtime contract for Alpha: the watcher detects a vault change, the DB outbox records the intent, the worker consumes it, and status/health expose the outcome. It also documents where the E2E runtime note is written and how cleanup behaves.
+This document defines the end-to-end runtime contract for Alpha: the watcher detects a vault change, the DB outbox records the intent, the worker consumes it, and status/health expose the outcome. It also documents where the E2E note is written and how cleanup behaves.
 
 ## Preconditions
 - `VAULT_ROOT` points at the live vault.
@@ -21,8 +21,8 @@ python scripts/alpha_e2e.py
 make alpha-smoke
 ```
 
-## Runtime Note
-- alpha_e2e writes a temporary note under `${VAULT_ROOT}/${VAULT_RUNTIME_DIR_REL}/alpha_e2e`.
+## E2E Note Location
+- alpha_e2e writes a temporary note under `${VAULT_ROOT}/${VAULT_INBOX_DIR_REL}/_alpha_e2e` so it is always in watcher scope.
 - The note UUID is a real `uuid4().hex` value.
 - On success, the note is deleted.
 - On failure, the note is retained unless `--teardown` is used.

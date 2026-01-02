@@ -179,11 +179,29 @@ def _normalize_uuid(raw: object | None) -> str:
     return value
 
 
-def _derive_note_uuid(frontmatter_uuid: str, mirror_uuid: str, rel_path: Path) -> str:
+def _sanitize_uuid(raw: str) -> tuple[str, bool]:
+    if not raw:
+        return "", False
+    try:
+        uuid.UUID(raw)
+    except Exception:
+        return "", True
+    return raw, False
+
+
+def _derive_note_uuid(
+    frontmatter_uuid: str,
+    mirror_uuid: str,
+    rel_path: Path,
+    *,
+    invalid_frontmatter: bool = False,
+) -> str:
     if frontmatter_uuid:
         return frontmatter_uuid
     if mirror_uuid:
         return mirror_uuid
+    if invalid_frontmatter:
+        return uuid.uuid4().hex
     return str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, rel_path.as_posix()))
 
 
@@ -208,7 +226,10 @@ def _find_mirror_uuid_by_fingerprint(vault_root: Path, text_sha256: str, title: 
             mirror_title = _normalize_title(_coerce_to_str(fm.get("title") or "") or "")
             if mirror_title != expected_title:
                 continue
-        mirror_uuid = _normalize_uuid(fm.get("uuid") or fm.get("id") or "")
+        mirror_uuid_raw = _normalize_uuid(fm.get("uuid") or fm.get("id") or "")
+        mirror_uuid, mirror_invalid = _sanitize_uuid(mirror_uuid_raw)
+        if mirror_invalid:
+            continue
         if mirror_uuid:
             return mirror_uuid
     return ""
@@ -351,8 +372,15 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         raw_text = path.read_text(encoding="utf-8")
     frontmatter, body, _ = _load_frontmatter_with_reporting(raw_text, path)
     mirror_path, mirror_frontmatter, mirror_body = _load_mirror_frontmatter(vault_root, rel_path)
-    frontmatter_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
-    mirror_uuid = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
+    frontmatter_uuid_raw = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
+    frontmatter_uuid, frontmatter_invalid = _sanitize_uuid(frontmatter_uuid_raw)
+    if frontmatter_invalid:
+        click.echo(
+            f"Warning: {rel_path} has invalid frontmatter uuid {frontmatter_uuid_raw}; generating a new uuid.",
+            err=True,
+        )
+    mirror_uuid_raw = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
+    mirror_uuid, _ = _sanitize_uuid(mirror_uuid_raw)
     # Frontmatter is the canonical identity; mirror is a log to help heal missing metadata.
     if frontmatter_uuid and mirror_uuid and frontmatter_uuid != mirror_uuid:
         click.echo(
@@ -375,7 +403,10 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
             title,
         )
 
-    note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
+    if frontmatter_invalid:
+        note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid, rel_path, invalid_frontmatter=True)
+    else:
+        note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
 
     _write_mirror(
         vault_root,
@@ -618,9 +649,11 @@ def _ingest_candidates(
             title = _frontmatter_title(frontmatter) or _derive_title(body, path)
             stripped_text = strip_ai_panels(body).strip()
             ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
-            frontmatter_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
+            frontmatter_uuid_raw = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
+            frontmatter_uuid, frontmatter_invalid = _sanitize_uuid(frontmatter_uuid_raw)
             mirror_path, mirror_frontmatter, _ = _load_mirror_frontmatter(vault_root, rel_path)
-            mirror_uuid = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
+            mirror_uuid_raw = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
+            mirror_uuid, _ = _sanitize_uuid(mirror_uuid_raw)
             fingerprint_uuid = ""
             if not frontmatter_uuid and not mirror_uuid:
                 fingerprint_uuid = _find_mirror_uuid_by_fingerprint(
@@ -628,7 +661,10 @@ def _ingest_candidates(
                     str(ingest_fingerprint.get("text_sha256") or ""),
                     title,
                 )
-            note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
+            if frontmatter_invalid:
+                note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid, rel_path, invalid_frontmatter=True)
+            else:
+                note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
             should_skip = False
             if note_uuid and not force and not cold_rebuild:
                 parsed_uuid = None

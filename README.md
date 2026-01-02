@@ -84,7 +84,7 @@ python scripts/alpha_e2e.py
 make alpha-smoke
 ```
 
-The canonical flow is `make alpha-up` → `python scripts/alpha_e2e.py` → `make alpha-smoke`. `VAULT_INBOX_DIR_REL` defines the watcher scope, `VAULT_RUNTIME_DIR_REL` defines where alpha_e2e writes its temporary runtime note (under `<runtime_dir_rel>/alpha_e2e`), and `VAULT_SYSTEM_DIR_REL` controls where health settings live. The alpha_e2e note is deleted after success; on failure it is kept unless you run with `--teardown`.
+The canonical flow is `make alpha-up` → `python scripts/alpha_e2e.py` → `make alpha-smoke`. `VAULT_INBOX_DIR_REL` defines the watcher scope and where alpha_e2e writes its temporary note (under `<inbox_dir_rel>/_alpha_e2e`), `VAULT_RUNTIME_DIR_REL` defines the runtime scratch area, and `VAULT_SYSTEM_DIR_REL` controls where health settings live. The alpha_e2e note is deleted after success; on failure it is kept unless you run with `--teardown`.
 
 Optional checks:
 - `make alpha-status`
