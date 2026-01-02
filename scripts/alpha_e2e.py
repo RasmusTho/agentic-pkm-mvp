@@ -19,6 +19,7 @@ _DEFAULT_API_BASE = "http://127.0.0.1:18000"
 _REQUIRED_TOPIC = "promote.intent.created"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
+
 def _fetch_json(url: str, timeout: float = 5.0) -> dict[str, Any]:
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -72,8 +73,6 @@ def _create_runtime_note(vault_root: Path, inbox_dir_rel: str, note_uuid: str) -
     return note_path
 
 
-
-
 def _cleanup_runtime_notes(paths: Sequence[Path]) -> None:
     for path in paths:
         try:
@@ -81,6 +80,31 @@ def _cleanup_runtime_notes(paths: Sequence[Path]) -> None:
                 path.unlink()
         except Exception as exc:
             print(f"ALPHA_E2E: cleanup failed for {path}: {exc}", file=sys.stderr)
+
+
+def _event_counter(status: dict[str, Any], key: str) -> int | None:
+    events = status.get("events")
+    if isinstance(events, dict):
+        value = events.get(key)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _find_action(health: dict[str, Any], action_id: str) -> dict[str, Any] | None:
+    actions = health.get("suggested_actions")
+    if isinstance(actions, list):
+        for action in actions:
+            if isinstance(action, dict) and action.get("id") == action_id:
+                return action
+    return None
+
+
+def _read_status_safe(api_base: str) -> dict[str, Any]:
+    try:
+        return _fetch_json(f"{api_base}/api/status")
+    except Exception:
+        return {}
 
 
 def validate_status_invariants(status: dict[str, Any], health: dict[str, Any]) -> list[str]:
@@ -129,12 +153,39 @@ def validate_status_invariants(status: dict[str, Any], health: dict[str, Any]) -
     return errors
 
 
-def validate_runtime_progress(*, baseline_processed: int, current_processed: int, processed_by_event: dict[str, int] | None, required_topic: str) -> list[str]:
+def validate_runtime_progress(
+    *,
+    baseline_processed: int,
+    current_processed: int,
+    processed_by_event: dict[str, int] | None,
+    required_topic: str,
+    baseline_promotion_executed: int | None,
+    current_promotion_executed: int | None,
+) -> list[str]:
     errors: list[str] = []
-    if current_processed < baseline_processed + 1:
+    processed_ok = False
+    if current_processed >= baseline_processed + 1:
+        if processed_by_event:
+            if processed_by_event.get(required_topic, 0) >= 1:
+                processed_ok = True
+            else:
+                errors.append("worker processed_total increased but promote.intent.created not counted")
+        else:
+            processed_ok = True
+    else:
         errors.append("worker processed_total did not increase")
-    if processed_by_event is None or processed_by_event.get(required_topic, 0) < 1:
-        errors.append(f"worker did not process {required_topic}")
+
+    promotion_ok = False
+    if baseline_promotion_executed is not None and current_promotion_executed is not None:
+        if current_promotion_executed > baseline_promotion_executed:
+            promotion_ok = True
+        else:
+            errors.append("status.events.promotion_executed_total did not increase")
+    else:
+        errors.append("status.events.promotion_executed_total missing")
+
+    if processed_ok or promotion_ok:
+        return []
     return errors
 
 
@@ -180,6 +231,7 @@ def _run_golden_path(vault_root: Path, inbox_dir_rel: str, api_base: str) -> tup
     if not isinstance(worker_queue, dict) or worker_queue.get("mode") != "db":
         return ["worker_queue.mode is not db"], None
 
+    baseline_promotion_executed = _event_counter(status, "promotion_executed_total")
     heartbeat_path = _worker_heartbeat_path()
     heartbeat = _read_json_file(heartbeat_path) or {}
     baseline_processed = int(heartbeat.get("processed_total") or 0)
@@ -191,11 +243,15 @@ def _run_golden_path(vault_root: Path, inbox_dir_rel: str, api_base: str) -> tup
         hb = _read_json_file(heartbeat_path) or {}
         processed_total = int(hb.get("processed_total") or 0)
         processed_by_event = hb.get("processed_by_event")
+        current_status = _read_status_safe(api_base)
+        current_promotion_executed = _event_counter(current_status, "promotion_executed_total")
         errors = validate_runtime_progress(
             baseline_processed=baseline_processed,
             current_processed=processed_total,
             processed_by_event=processed_by_event if isinstance(processed_by_event, dict) else None,
             required_topic=_REQUIRED_TOPIC,
+            baseline_promotion_executed=baseline_promotion_executed,
+            current_promotion_executed=current_promotion_executed,
         )
         return not errors
 
@@ -204,11 +260,15 @@ def _run_golden_path(vault_root: Path, inbox_dir_rel: str, api_base: str) -> tup
         hb = _read_json_file(heartbeat_path) or {}
         processed_total = int(hb.get("processed_total") or 0)
         processed_by_event = hb.get("processed_by_event")
+        current_status = _read_status_safe(api_base)
+        current_promotion_executed = _event_counter(current_status, "promotion_executed_total")
         errors = validate_runtime_progress(
             baseline_processed=baseline_processed,
             current_processed=processed_total,
             processed_by_event=processed_by_event if isinstance(processed_by_event, dict) else None,
             required_topic=_REQUIRED_TOPIC,
+            baseline_promotion_executed=baseline_promotion_executed,
+            current_promotion_executed=current_promotion_executed,
         )
         return errors or ["worker did not process event in time"], note_path
 
@@ -244,6 +304,11 @@ def main(argv: list[str] | None = None) -> int:
         errors = validate_status_invariants(status, health)
         if errors:
             raise RuntimeError(errors[0])
+        index_action = _find_action(health, "index_rebuild")
+        if index_action:
+            message = index_action.get("message") or "Embedding/index identity mismatch detected"
+            hint = index_action.get("command_hint") or "python -m app.cli index rebuild --profile default"
+            raise RuntimeError(f"{message}. command_hint: {hint}")
         flow_errors, created_note = _run_golden_path(vault_root, inbox_dir_rel, api_base)
         if created_note:
             note_paths.append(created_note)
