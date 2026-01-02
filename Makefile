@@ -82,4 +82,4 @@ alpha-smoke:
 
 alpha-e2e:
 	@if [ -z "$(VAULT_ROOT)" ]; then echo "VAULT_ROOT is required (path to your vault)"; exit 1; fi
-	VAULT_ROOT="$(VAULT_ROOT)" python scripts/alpha_e2e.py
+	VAULT_ROOT="$(VAULT_ROOT)" python scripts/alpha_e2e.py --teardown

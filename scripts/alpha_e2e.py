@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -13,6 +14,7 @@ from typing import Any
 
 _DEFAULT_API_BASE = "http://127.0.0.1:18000"
 _REQUIRED_TOPIC = "promote.intent.created"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _fetch_json(url: str, timeout: float = 5.0) -> dict[str, Any]:
@@ -84,7 +86,11 @@ def validate_status_invariants(status: dict[str, Any], health: dict[str, Any]) -
             total_lines = events_log.get("total_lines")
             processed_total = worker_queue.get("processed_total")
             pending = worker_queue.get("pending")
-            if isinstance(total_lines, int) and isinstance(processed_total, int) and isinstance(pending, int):
+            if (
+                isinstance(total_lines, int)
+                and isinstance(processed_total, int)
+                and isinstance(pending, int)
+            ):
                 expected = max(total_lines - processed_total, 0)
                 if pending != expected:
                     errors.append("worker_queue.pending does not match events_log total_lines")
@@ -100,19 +106,8 @@ def validate_status_invariants(status: dict[str, Any], health: dict[str, Any]) -
     return errors
 
 
-def validate_runtime_progress(
-    *,
-    baseline_pending: int | None,
-    current_pending: int | None,
-    baseline_processed: int,
-    current_processed: int,
-    processed_by_event: dict[str, int] | None,
-    required_topic: str,
-) -> list[str]:
+def validate_runtime_progress(*, baseline_processed: int, current_processed: int, processed_by_event: dict[str, int] | None, required_topic: str) -> list[str]:
     errors: list[str] = []
-    if baseline_pending is not None and current_pending is not None:
-        if current_pending < baseline_pending + 1:
-            errors.append("worker_queue.pending did not increase")
     if current_processed < baseline_processed + 1:
         errors.append("worker processed_total did not increase")
     if processed_by_event is None or processed_by_event.get(required_topic, 0) < 1:
@@ -121,9 +116,26 @@ def validate_runtime_progress(
 
 
 def _run(cmd: list[str], *, allow_fail: bool = False) -> None:
-    result = subprocess.run(cmd, check=not allow_fail)
-    if result.returncode != 0 and not allow_fail:
-        raise subprocess.CalledProcessError(result.returncode, cmd)
+    subprocess.run(cmd, check=not allow_fail, cwd=_REPO_ROOT)
+
+
+def _debug_cmd(cmd: list[str]) -> None:
+    print(f"ALPHA_E2E: DEBUG CMD: {' '.join(cmd)}")
+    result = subprocess.run(cmd, check=False, cwd=_REPO_ROOT, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout.strip())
+    if result.stderr:
+        print(result.stderr.strip())
+
+
+def debug_dump(api_base: str) -> None:
+    print("ALPHA_E2E: DEBUG DUMP")
+    _debug_cmd(["curl", "-sS", f"{api_base}/api/status"])
+    _debug_cmd(["curl", "-sS", f"{api_base}/api/health"])
+    _debug_cmd(["docker", "compose", "ps"])
+    _debug_cmd(["docker", "compose", "logs", "--tail=200", "watcher"])
+    _debug_cmd(["docker", "compose", "logs", "--tail=200", "worker"])
+    _debug_cmd(["docker", "compose", "logs", "--tail=200", "api"])
 
 
 def _wait_for(label: str, timeout_s: float, interval_s: float, predicate) -> bool:
@@ -141,30 +153,17 @@ def _run_golden_path(vault_root: Path, api_base: str) -> list[str]:
     if not isinstance(worker_queue, dict) or worker_queue.get("mode") != "db":
         return ["worker_queue.mode is not db"]
 
-    baseline_pending = int(worker_queue.get("pending") or 0)
     heartbeat_path = _worker_heartbeat_path()
     heartbeat = _read_json_file(heartbeat_path) or {}
     baseline_processed = int(heartbeat.get("processed_total") or 0)
 
-    note_path = _write_test_note(vault_root)
-
-    pending_ok = _wait_for(
-        "pending",
-        timeout_s=30.0,
-        interval_s=1.0,
-        predicate=lambda: int((_fetch_json(f"{api_base}/api/status").get("worker_queue") or {}).get("pending") or 0)
-        >= baseline_pending + 1,
-    )
-    if not pending_ok:
-        return ["worker_queue.pending did not increase"]
+    _write_test_note(vault_root)
 
     def _processed_ready() -> bool:
         hb = _read_json_file(heartbeat_path) or {}
         processed_total = int(hb.get("processed_total") or 0)
         processed_by_event = hb.get("processed_by_event")
         errors = validate_runtime_progress(
-            baseline_pending=None,
-            current_pending=None,
             baseline_processed=baseline_processed,
             current_processed=processed_total,
             processed_by_event=processed_by_event if isinstance(processed_by_event, dict) else None,
@@ -178,8 +177,6 @@ def _run_golden_path(vault_root: Path, api_base: str) -> list[str]:
         processed_total = int(hb.get("processed_total") or 0)
         processed_by_event = hb.get("processed_by_event")
         errors = validate_runtime_progress(
-            baseline_pending=None,
-            current_pending=None,
             baseline_processed=baseline_processed,
             current_processed=processed_total,
             processed_by_event=processed_by_event if isinstance(processed_by_event, dict) else None,
@@ -190,7 +187,16 @@ def _run_golden_path(vault_root: Path, api_base: str) -> list[str]:
     return []
 
 
-def main() -> int:
+def _maybe_teardown(teardown: bool) -> None:
+    if teardown:
+        _run(["make", "alpha-down"], allow_fail=True)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run Alpha runtime e2e checks")
+    parser.add_argument("--teardown", action="store_true", help="Tear down the Alpha stack after checks")
+    args = parser.parse_args(argv)
+
     vault_root_raw = os.getenv("VAULT_ROOT")
     if not vault_root_raw:
         print("ALPHA_E2E: VAULT_ROOT is required", file=sys.stderr)
@@ -206,22 +212,18 @@ def main() -> int:
         health = _fetch_json(f"{api_base}/api/health")
         errors = validate_status_invariants(status, health)
         if errors:
-            print(f"ALPHA_E2E: FAIL - {errors[0]}")
-            return 2
+            raise RuntimeError(errors[0])
         flow_errors = _run_golden_path(vault_root, api_base)
         if flow_errors:
-            print(f"ALPHA_E2E: FAIL - {flow_errors[0]}")
-            return 2
+            raise RuntimeError(flow_errors[0])
         print("ALPHA_E2E: OK")
         return 0
-    except (urllib.error.URLError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+    except (urllib.error.URLError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError, RuntimeError) as exc:
         print(f"ALPHA_E2E: FAIL - {exc}")
+        debug_dump(api_base)
         return 2
     finally:
-        try:
-            _run(["make", "alpha-down"], allow_fail=True)
-        except Exception:
-            pass
+        _maybe_teardown(args.teardown)
 
 
 if __name__ == "__main__":

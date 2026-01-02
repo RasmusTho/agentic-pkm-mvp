@@ -1,6 +1,10 @@
 import copy
 
-from scripts.alpha_e2e import validate_runtime_progress, validate_status_invariants
+from scripts.alpha_e2e import (
+    _maybe_teardown,
+    validate_runtime_progress,
+    validate_status_invariants,
+)
 
 
 def _base_payloads():
@@ -64,26 +68,55 @@ def test_invariants_file_mode_pending_mismatch_fails() -> None:
     assert "worker_queue.pending" in errors[0]
 
 
-def test_runtime_progress_skips_pending_when_none() -> None:
+def test_runtime_progress_requires_processed_increment() -> None:
     errors = validate_runtime_progress(
-        baseline_pending=None,
-        current_pending=None,
+        baseline_processed=3,
+        current_processed=3,
+        processed_by_event={"promote.intent.created": 1},
+        required_topic="promote.intent.created",
+    )
+    assert errors
+    assert "processed_total" in errors[0]
+
+
+def test_runtime_progress_requires_processing_topic() -> None:
+    errors = validate_runtime_progress(
         baseline_processed=3,
         current_processed=4,
-        processed_by_event={"ingest.vault.changed": 1},
-        required_topic="ingest.vault.changed",
+        processed_by_event={"other": 2},
+        required_topic="promote.intent.created",
+    )
+    assert errors
+    assert "did not process" in errors[-1]
+
+
+def test_runtime_progress_accepts_processed_increment_and_topic() -> None:
+    errors = validate_runtime_progress(
+        baseline_processed=1,
+        current_processed=2,
+        processed_by_event={"promote.intent.created": 1},
+        required_topic="promote.intent.created",
     )
     assert not errors
 
 
-def test_runtime_progress_reports_missing_topic() -> None:
-    errors = validate_runtime_progress(
-        baseline_pending=1,
-        current_pending=2,
-        baseline_processed=3,
-        current_processed=4,
-        processed_by_event={"other": 1},
-        required_topic="ingest.vault.changed",
-    )
-    assert errors
-    assert "did not process" in errors[-1]
+def test_maybe_teardown_runs_alpha_down_when_requested(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *, allow_fail: bool = False) -> None:
+        calls.append(cmd)
+
+    monkeypatch.setattr("scripts.alpha_e2e._run", fake_run)
+    _maybe_teardown(True)
+    assert calls == [["make", "alpha-down"]]
+
+
+def test_maybe_teardown_is_noop_when_not_requested(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *, allow_fail: bool = False) -> None:
+        calls.append(cmd)
+
+    monkeypatch.setattr("scripts.alpha_e2e._run", fake_run)
+    _maybe_teardown(False)
+    assert calls == []
