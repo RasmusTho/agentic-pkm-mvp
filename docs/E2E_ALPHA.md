@@ -17,7 +17,7 @@ Run these in order:
 ```bash
 export VAULT_ROOT="/path/to/vault"
 make alpha-up
-python scripts/alpha_e2e.py
+python -m scripts.alpha_e2e
 make alpha-smoke
 ```
 
@@ -56,5 +56,5 @@ docker compose logs --tail=200 api
 To ensure the stack is torn down after E2E checks:
 
 ```bash
-python scripts/alpha_e2e.py --teardown
+python -m scripts.alpha_e2e --teardown
 ```

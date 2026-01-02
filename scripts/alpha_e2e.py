@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 import argparse
 import json
 import os
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
 import uuid
-from pathlib import Path
 from typing import Any, Sequence
 
 from app.vault.paths import ensure_vault_path_env_defaults, get_vault_inbox_dir_rel
 
 _DEFAULT_API_BASE = "http://127.0.0.1:18000"
 _REQUIRED_TOPIC = "promote.intent.created"
-_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _fetch_json(url: str, timeout: float = 5.0) -> dict[str, Any]:
