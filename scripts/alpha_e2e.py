@@ -9,12 +9,15 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 _DEFAULT_API_BASE = "http://127.0.0.1:18000"
 _REQUIRED_TOPIC = "promote.intent.created"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_DEFAULT_RUNTIME_DIR_REL = "System/Runtime"
+_RUNTIME_DIR_ENV = "VAULT_RUNTIME_DIR_REL"
 
 
 def _fetch_json(url: str, timeout: float = 5.0) -> dict[str, Any]:
@@ -50,14 +53,37 @@ def _worker_heartbeat_path() -> Path:
     return Path("tmp") / "worker_heartbeat.json"
 
 
-def _write_test_note(vault_root: Path) -> Path:
-    inbox = vault_root / "@Inbox"
-    inbox.mkdir(parents=True, exist_ok=True)
-    note_path = inbox / "alpha_e2e_runtime.md"
-    stamp = time.time()
-    content = f"---\nuuid: alpha-e2e-{int(stamp)}\n---\n# Alpha E2E Runtime\n\n- [x] Make this note evergreen <!--ai:id=promote.evergreen-->\n"
+def _runtime_dir_rel() -> str:
+    return os.getenv(_RUNTIME_DIR_ENV, _DEFAULT_RUNTIME_DIR_REL)
+
+
+def _runtime_note_dir(vault_root: Path) -> Path:
+    return (vault_root / _runtime_dir_rel()).expanduser()
+
+
+def _create_runtime_note(vault_root: Path, note_uuid: str) -> Path:
+    runtime_dir = _runtime_note_dir(vault_root)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    note_path = runtime_dir / f"alpha_e2e_runtime_{note_uuid}.md"
+    content = (
+        "---\n"
+        f"uuid: {note_uuid}\n"
+        "created_by: alpha_e2e\n"
+        "---\n"
+        "# Alpha E2E Runtime\n\n"
+        "- [x] Make this note evergreen <!--ai:id=promote.evergreen-->\n"
+    )
     note_path.write_text(content, encoding="utf-8")
     return note_path
+
+
+def _cleanup_runtime_notes(paths: Sequence[Path]) -> None:
+    for path in paths:
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception as exc:
+            print(f"ALPHA_E2E: cleanup failed for {path}: {exc}", file=sys.stderr)
 
 
 def validate_status_invariants(status: dict[str, Any], health: dict[str, Any]) -> list[str]:
@@ -128,7 +154,7 @@ def _debug_cmd(cmd: list[str]) -> None:
         print(result.stderr.strip())
 
 
-def debug_dump(api_base: str) -> None:
+def debug_dump(api_base: str, note_paths: Sequence[Path]) -> None:
     print("ALPHA_E2E: DEBUG DUMP")
     _debug_cmd(["curl", "-sS", f"{api_base}/api/status"])
     _debug_cmd(["curl", "-sS", f"{api_base}/api/health"])
@@ -136,6 +162,10 @@ def debug_dump(api_base: str) -> None:
     _debug_cmd(["docker", "compose", "logs", "--tail=200", "watcher"])
     _debug_cmd(["docker", "compose", "logs", "--tail=200", "worker"])
     _debug_cmd(["docker", "compose", "logs", "--tail=200", "api"])
+    if note_paths:
+        print("ALPHA_E2E: runtime notes created:")
+        for path in note_paths:
+            print(f"  {path}")
 
 
 def _wait_for(label: str, timeout_s: float, interval_s: float, predicate) -> bool:
@@ -147,17 +177,18 @@ def _wait_for(label: str, timeout_s: float, interval_s: float, predicate) -> boo
     return False
 
 
-def _run_golden_path(vault_root: Path, api_base: str) -> list[str]:
+def _run_golden_path(vault_root: Path, api_base: str) -> tuple[list[str], Path | None]:
     status = _fetch_json(f"{api_base}/api/status")
     worker_queue = status.get("worker_queue") or {}
     if not isinstance(worker_queue, dict) or worker_queue.get("mode") != "db":
-        return ["worker_queue.mode is not db"]
+        return ["worker_queue.mode is not db"], None
 
     heartbeat_path = _worker_heartbeat_path()
     heartbeat = _read_json_file(heartbeat_path) or {}
     baseline_processed = int(heartbeat.get("processed_total") or 0)
 
-    _write_test_note(vault_root)
+    note_uuid = uuid.uuid4().hex
+    note_path = _create_runtime_note(vault_root, note_uuid)
 
     def _processed_ready() -> bool:
         hb = _read_json_file(heartbeat_path) or {}
@@ -182,9 +213,9 @@ def _run_golden_path(vault_root: Path, api_base: str) -> list[str]:
             processed_by_event=processed_by_event if isinstance(processed_by_event, dict) else None,
             required_topic=_REQUIRED_TOPIC,
         )
-        return errors or ["worker did not process event in time"]
+        return errors or ["worker did not process event in time"], note_path
 
-    return []
+    return [], note_path
 
 
 def _maybe_teardown(teardown: bool) -> None:
@@ -204,6 +235,7 @@ def main(argv: list[str] | None = None) -> int:
 
     api_base = os.getenv("API_BASE_URL") or _DEFAULT_API_BASE
     vault_root = Path(vault_root_raw).expanduser()
+    note_paths: list[Path] = []
 
     try:
         _run(["make", "alpha-down"], allow_fail=True)
@@ -213,14 +245,19 @@ def main(argv: list[str] | None = None) -> int:
         errors = validate_status_invariants(status, health)
         if errors:
             raise RuntimeError(errors[0])
-        flow_errors = _run_golden_path(vault_root, api_base)
+        flow_errors, created_note = _run_golden_path(vault_root, api_base)
+        if created_note:
+            note_paths.append(created_note)
         if flow_errors:
             raise RuntimeError(flow_errors[0])
         print("ALPHA_E2E: OK")
+        _cleanup_runtime_notes(note_paths)
         return 0
     except (urllib.error.URLError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError, RuntimeError) as exc:
         print(f"ALPHA_E2E: FAIL - {exc}")
-        debug_dump(api_base)
+        debug_dump(api_base, note_paths)
+        if args.teardown and note_paths:
+            _cleanup_runtime_notes(note_paths)
         return 2
     finally:
         _maybe_teardown(args.teardown)

@@ -1,6 +1,9 @@
 import copy
+import uuid
 
 from scripts.alpha_e2e import (
+    _cleanup_runtime_notes,
+    _create_runtime_note,
     _maybe_teardown,
     validate_runtime_progress,
     validate_status_invariants,
@@ -98,6 +101,23 @@ def test_runtime_progress_accepts_processed_increment_and_topic() -> None:
         required_topic="promote.intent.created",
     )
     assert not errors
+
+
+def test_runtime_note_path_and_content(tmp_path) -> None:
+    note_uuid = uuid.uuid4().hex
+    note_path = _create_runtime_note(tmp_path, note_uuid)
+    assert note_path.exists()
+    assert "System/Runtime" in str(note_path)
+    content = note_path.read_text(encoding="utf-8")
+    assert f"uuid: {note_uuid}" in content
+    assert note_uuid in note_path.name
+
+
+def test_cleanup_runtime_notes_removes_files(tmp_path) -> None:
+    note_path = tmp_path / "temp.md"
+    note_path.write_text("ok", encoding="utf-8")
+    _cleanup_runtime_notes([note_path])
+    assert not note_path.exists()
 
 
 def test_maybe_teardown_runs_alpha_down_when_requested(monkeypatch) -> None:

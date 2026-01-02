@@ -86,6 +86,7 @@ Confidence checks (optional):
 - `make alpha-smoke`
 
 What each command does: `scripts/start_full_system.sh` is the canonical orchestrator entrypoint used by `make alpha-up`. `alpha-status` is read-only and safe. `alpha-smoke` is deterministic (runs=2 no-op guarantee). `alpha-e2e` enforces runtime invariants so status semantics regressions get caught.
+It writes a temporary note under `VAULT_ROOT/VAULT_RUNTIME_DIR_REL` (default `System/Runtime`) and removes it after success (use `python scripts/alpha_e2e.py --teardown` or `make alpha-e2e` to clean up artifacts after failures).
 
 Note: `/api/health` can report `ok=false` when optional tools are missing; in Alpha runtime, ffmpeg is bundled in the container image, so a missing ffmpeg check indicates a build/runtime issue. Treat `required_ok` as the gating signal.
 
