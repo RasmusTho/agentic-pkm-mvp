@@ -164,6 +164,19 @@ PY
 update_health_state
 
 auto_bootstrap=${AUTO_BOOTSTRAP:-0}
+if [ "$auto_bootstrap" -eq 1 ]; then
+  set +e
+  settings_validate_json=$(docker compose exec -T api python -m app.cli settings validate --json)
+  settings_validate_status=$?
+  set -e
+  if [ "$settings_validate_status" -ne 0 ]; then
+    echo "ERROR: settings validate failed" >&2
+    echo "$settings_validate_json" >&2
+    echo "Run: docker compose exec -T api python -m app.cli settings validate --json" >&2
+    exit 1
+  fi
+fi
+
 if [ "$api_health_required_ok" != "true" ] && [ "$api_health_index_rebuild" -eq 1 ]; then
   if [ "$auto_bootstrap" -eq 1 ]; then
     echo "AUTO_BOOTSTRAP: running index rebuild"

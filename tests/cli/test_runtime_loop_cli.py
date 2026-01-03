@@ -25,6 +25,8 @@ def test_runtime_loop_emits_watcher_event_and_counts(monkeypatch: pytest.MonkeyP
     outbox = tmp_path / "outbox.jsonl"
     snapshot = tmp_path / "snapshot.json"
 
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("STORE_BACKEND", "memory")
     runner = CliRunner()
     result = runner.invoke(

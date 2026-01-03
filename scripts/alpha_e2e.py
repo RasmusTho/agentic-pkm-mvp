@@ -95,6 +95,20 @@ def _event_counter(status: dict[str, Any], key: str) -> int | None:
     return None
 
 
+def _intent_counter(status: dict[str, Any], key: str) -> int | None:
+    intents = status.get("intents")
+    if isinstance(intents, dict):
+        value = intents.get(key)
+        if isinstance(value, int):
+            return value
+    events = status.get("events")
+    if isinstance(events, dict):
+        value = events.get(key)
+        if isinstance(value, int):
+            return value
+    return None
+
+
 def _find_action(health: dict[str, Any], action_id: str) -> dict[str, Any] | None:
     actions = health.get("suggested_actions")
     if isinstance(actions, list):
@@ -203,13 +217,15 @@ def validate_runtime_progress(
     current_processed: int,
     processed_by_event: dict[str, int] | None,
     required_topic: str,
+    baseline_promote_created: int | None,
+    current_promote_created: int | None,
     baseline_promotion_executed: int | None,
     current_promotion_executed: int | None,
 ) -> list[str]:
     errors: list[str] = []
     processed_ok = False
     if current_processed >= baseline_processed + 1:
-        if processed_by_event:
+        if processed_by_event is not None:
             if processed_by_event.get(required_topic, 0) >= 1:
                 processed_ok = True
             else:
@@ -218,6 +234,15 @@ def validate_runtime_progress(
             processed_ok = True
     else:
         errors.append("worker processed_total did not increase")
+
+    promote_created_ok = False
+    if baseline_promote_created is not None and current_promote_created is not None:
+        if current_promote_created > baseline_promote_created:
+            promote_created_ok = True
+        else:
+            errors.append("status.intents.promote_created_total did not increase")
+    else:
+        errors.append("status.intents.promote_created_total missing")
 
     promotion_ok = False
     if baseline_promotion_executed is not None and current_promotion_executed is not None:
@@ -228,7 +253,7 @@ def validate_runtime_progress(
     else:
         errors.append("status.events.promotion_executed_total missing")
 
-    if processed_ok or promotion_ok:
+    if processed_ok or promote_created_ok or promotion_ok:
         return []
     return errors
 
@@ -275,6 +300,7 @@ def _run_golden_path(vault_root: Path, inbox_dir_rel: str, api_base: str) -> tup
     if not isinstance(worker_queue, dict) or worker_queue.get("mode") != "db":
         return ["worker_queue.mode is not db"], None
 
+    baseline_promote_created = _intent_counter(status, "promote_created_total")
     baseline_promotion_executed = _event_counter(status, "promotion_executed_total")
     heartbeat_path = _worker_heartbeat_path()
     heartbeat = _read_json_file(heartbeat_path) or {}
@@ -288,12 +314,15 @@ def _run_golden_path(vault_root: Path, inbox_dir_rel: str, api_base: str) -> tup
         processed_total = int(hb.get("processed_total") or 0)
         processed_by_event = hb.get("processed_by_event")
         current_status = _read_status_safe(api_base)
+        current_promote_created = _intent_counter(current_status, "promote_created_total")
         current_promotion_executed = _event_counter(current_status, "promotion_executed_total")
         errors = validate_runtime_progress(
             baseline_processed=baseline_processed,
             current_processed=processed_total,
             processed_by_event=processed_by_event if isinstance(processed_by_event, dict) else None,
             required_topic=_REQUIRED_TOPIC,
+            baseline_promote_created=baseline_promote_created,
+            current_promote_created=current_promote_created,
             baseline_promotion_executed=baseline_promotion_executed,
             current_promotion_executed=current_promotion_executed,
         )
@@ -305,12 +334,15 @@ def _run_golden_path(vault_root: Path, inbox_dir_rel: str, api_base: str) -> tup
         processed_total = int(hb.get("processed_total") or 0)
         processed_by_event = hb.get("processed_by_event")
         current_status = _read_status_safe(api_base)
+        current_promote_created = _intent_counter(current_status, "promote_created_total")
         current_promotion_executed = _event_counter(current_status, "promotion_executed_total")
         errors = validate_runtime_progress(
             baseline_processed=baseline_processed,
             current_processed=processed_total,
             processed_by_event=processed_by_event if isinstance(processed_by_event, dict) else None,
             required_topic=_REQUIRED_TOPIC,
+            baseline_promote_created=baseline_promote_created,
+            current_promote_created=current_promote_created,
             baseline_promotion_executed=baseline_promotion_executed,
             current_promotion_executed=current_promotion_executed,
         )

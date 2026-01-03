@@ -10,7 +10,6 @@ from app.promotion.consumer import consume_promotion_intents
 from app.runtime.runtime_loop import RuntimeLoopConfig, run_once
 from app.store import object_store as object_store_module
 from app.store.object_store import ObjectStore
-import app.outbox.events as outbox_events
 from scripts.yaml_roundtrip import load_frontmatter
 
 PROMOTE_UUID = "11111111-1111-4111-8111-111111111111"
@@ -21,16 +20,15 @@ def test_runtime_loop_run_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     object_store_module._MEMORY_STORE.clear()
 
     outbox_path = tmp_path / "outbox.jsonl"
-    original_outbox = outbox_events.INDEX_OUTBOX_PATH
 
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("PANEL_AGENT_DECIDER", "rule")
     monkeypatch.setenv("PANEL_ACTIONS_PATH", str(Path(__file__).resolve().parents[2] / "docs/settings/panel-actions.md"))
     monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
 
-    # Ensure status service picks up the temp outbox path
-    outbox_events.INDEX_OUTBOX_PATH = str(outbox_path)
     importlib.reload(status_service)
 
     vault_root = tmp_path / "vault"
@@ -79,6 +77,4 @@ def test_runtime_loop_run_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert status.events.promote_created_total >= 1
     assert status.events.promotion_executed_total >= 1
 
-    outbox_events.INDEX_OUTBOX_PATH = original_outbox
-    importlib.reload(status_service)
     object_store_module._MEMORY_STORE.clear()

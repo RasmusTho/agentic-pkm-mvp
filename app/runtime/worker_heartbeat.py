@@ -50,9 +50,9 @@ def write_worker_heartbeat(
     }
     if processed_total is not None:
         payload["processed_total"] = processed_total
-    if processed_by_event:
+    if processed_by_event is not None:
         payload["processed_by_event"] = {k: int(v) for k, v in processed_by_event.items()}
-    if last_processed:
+    if last_processed is not None:
         payload["last_processed"] = {k: float(v) for k, v in last_processed.items()}
     _write_payload(path, payload)
 

@@ -105,17 +105,29 @@ def _coerce_event(event: Event | OutboxEvent) -> Event:
     )
 
 
-def write_outbox_event(event: Event | OutboxEvent, conn: Any = None) -> str:
+def write_outbox_event(
+    event: Event | OutboxEvent,
+    conn: Any = None,
+    *,
+    idempotency_key: str | None = None,
+) -> str:
     envelope = _coerce_event(event)
     conn, close = _use_conn(conn)
     stored = envelope.model_dump_json()
     created_at = envelope.created_at or datetime.now(timezone.utc)
     try:
-        cur = _exec(
-            conn,
-            "insert into outbox (topic, payload, created_at, attempts) values (%s, %s::jsonb, %s, %s) returning id",
-            (envelope.event_type, stored, created_at, 0),
-        )
+        if idempotency_key:
+            cur = _exec(
+                conn,
+                "insert into outbox (id, topic, payload, created_at, attempts) values (%s, %s, %s::jsonb, %s, %s) on conflict (id) do nothing returning id",
+                (idempotency_key, envelope.event_type, stored, created_at, 0),
+            )
+        else:
+            cur = _exec(
+                conn,
+                "insert into outbox (topic, payload, created_at, attempts) values (%s, %s::jsonb, %s, %s) returning id",
+                (envelope.event_type, stored, created_at, 0),
+            )
         if hasattr(cur, "fetchone"):
             row = cur.fetchone()
             if row:

@@ -112,6 +112,8 @@ def test_runtime_progress_requires_processed_increment() -> None:
         current_processed=3,
         processed_by_event={"promote.intent.created": 1},
         required_topic="promote.intent.created",
+        baseline_promote_created=0,
+        current_promote_created=0,
         baseline_promotion_executed=0,
         current_promotion_executed=0,
     )
@@ -125,6 +127,8 @@ def test_runtime_progress_requires_processing_topic() -> None:
         current_processed=4,
         processed_by_event={"other": 2},
         required_topic="promote.intent.created",
+        baseline_promote_created=0,
+        current_promote_created=0,
         baseline_promotion_executed=0,
         current_promotion_executed=0,
     )
@@ -138,6 +142,8 @@ def test_runtime_progress_accepts_processed_increment_and_topic() -> None:
         current_processed=2,
         processed_by_event={"promote.intent.created": 1},
         required_topic="promote.intent.created",
+        baseline_promote_created=0,
+        current_promote_created=0,
         baseline_promotion_executed=0,
         current_promotion_executed=0,
     )
@@ -150,6 +156,22 @@ def test_runtime_progress_accepts_processed_increment_without_topic() -> None:
         current_processed=2,
         processed_by_event=None,
         required_topic="promote.intent.created",
+        baseline_promote_created=0,
+        current_promote_created=0,
+        baseline_promotion_executed=0,
+        current_promotion_executed=0,
+    )
+    assert not errors
+
+
+def test_runtime_progress_accepts_promote_created_increase() -> None:
+    errors = validate_runtime_progress(
+        baseline_processed=0,
+        current_processed=0,
+        processed_by_event=None,
+        required_topic="promote.intent.created",
+        baseline_promote_created=2,
+        current_promote_created=3,
         baseline_promotion_executed=0,
         current_promotion_executed=0,
     )
@@ -162,6 +184,8 @@ def test_runtime_progress_accepts_promotion_executed_increase() -> None:
         current_processed=0,
         processed_by_event=None,
         required_topic="promote.intent.created",
+        baseline_promote_created=0,
+        current_promote_created=0,
         baseline_promotion_executed=2,
         current_promotion_executed=3,
     )

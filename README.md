@@ -86,7 +86,7 @@ make alpha-smoke
 
 The canonical flow is `make alpha-up` → `python -m scripts.alpha_e2e` → `make alpha-smoke`. `VAULT_INBOX_DIR_REL` defines the watcher scope and where alpha_e2e writes its temporary note (under `<inbox_dir_rel>/_alpha_e2e`), `VAULT_RUNTIME_DIR_REL` defines the runtime scratch area, and `VAULT_SYSTEM_DIR_REL` controls where health settings live. The alpha_e2e note is deleted after success; on failure it is kept unless you run with `--teardown`.
 
-Embeddings/retrieval should go through `app.components.retrieval` (`embed_query`, `embed_docs`, `search`) so embedding identities stay consistent; `/search` and hybrid retrieval use it. If `/api/health` reports a required `index_rebuild`, either run `docker compose exec -T api python -m app.cli index rebuild --profile default` or set `AUTO_BOOTSTRAP=1` so `make alpha-up` runs it once.
+Embeddings/retrieval should go through `app.components.retrieval` (`embed_query`, `embed_docs`, `search`) so embedding identities stay consistent; `/search` and hybrid retrieval use it. If `/api/health` reports a required `index_rebuild`, either run `docker compose exec -T api python -m app.cli index rebuild --profile default` or set `AUTO_BOOTSTRAP=1` so `make alpha-up` runs a deterministic preflight (settings validate + one rebuild).
 
 Optional checks:
 - `make alpha-status`
@@ -98,6 +98,8 @@ Note: `/api/health` can report `ok=false` when optional tools are missing; in Al
 ## Alpha Compose Runtime
 
 The canonical Alpha Compose Runtime runs `db`, `api`, `watcher`, and `worker` in Docker Compose. The watcher writes audit events (JSONL) and enqueues DB outbox events. The worker consumes the DB outbox to perform ingest and promotion side effects, while the API surfaces status and health.
+In pg-mode, the DB outbox is the canonical queue; `INDEX_OUTBOX_PATH` is an audit log only (surfaced as `events_log` in `/api/status`) and should not drive lag estimates.
+
 
 Deprecated: `scripts/run_alpha_stack.sh` and `scripts/run_alpha_live.sh` are legacy helpers; use `make alpha-up` (which calls `scripts/start_full_system.sh`) instead.
 

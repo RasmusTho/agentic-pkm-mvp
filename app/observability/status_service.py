@@ -243,6 +243,74 @@ def _count_events(outbox_path: Path) -> EventCounters:
     )
 
 
+def _outbox_db_source() -> str:
+    return os.getenv("DATABASE_URL") or os.getenv("DB_DSN") or "outbox"
+
+
+def _count_events_db() -> EventCounters | None:
+    try:
+        from app.services import outbox as outbox_service
+    except Exception:
+        return None
+    try:
+        conn = outbox_service._open_conn()
+    except Exception:
+        return None
+    panel_total = panel_recent = promote_total = promote_recent = watcher_total = watcher_recent = 0
+    promotion_done_total = promotion_done_recent = 0
+    cutoff = datetime.now(timezone.utc) - _EVENT_WINDOW
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "select topic, count(*) as total, sum(case when created_at >= %s then 1 else 0 end) as recent from outbox group by topic",
+            (cutoff,),
+        )
+        rows = cur.fetchall() or []
+    except Exception:
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    for row in rows:
+        if isinstance(row, dict):
+            topic = row.get("topic")
+            total = row.get("total")
+            recent = row.get("recent")
+        else:
+            topic = row[0]
+            total = row[1] if len(row) > 1 else 0
+            recent = row[2] if len(row) > 2 else 0
+        topic = str(topic or "")
+        total = int(total or 0)
+        recent = int(recent or 0)
+        if topic == "panel.intent.executed":
+            panel_total += total
+            panel_recent += recent
+        if topic == PROMOTE_INTENT_CREATED:
+            promote_total += total
+            promote_recent += recent
+        if topic == PROMOTE_DONE:
+            promotion_done_total += total
+            promotion_done_recent += recent
+        if topic in _WATCHER_EVENT_NAMES:
+            watcher_total += total
+            watcher_recent += recent
+    return EventCounters(
+        watcher_runs_total=watcher_total,
+        watcher_runs_24h=watcher_recent,
+        panel_runs_total=panel_total,
+        panel_runs_24h=panel_recent,
+        promote_created_total=promote_total,
+        promote_created_24h=promote_recent,
+        promotion_executed_total=promotion_done_total,
+        promotion_executed_24h=promotion_done_recent,
+        ingest_runs_by_plane={},
+        source_path=_outbox_db_source(),
+    )
+
+
 def _fill_ingest_run_counts(counters: EventCounters, ingestion: IngestionStatus) -> EventCounters:
     per_plane: dict[str, int] = {}
     for plane in getattr(ingestion, "planes", []) or []:
@@ -252,12 +320,11 @@ def _fill_ingest_run_counts(counters: EventCounters, ingestion: IngestionStatus)
     return counters
 
 
-def _get_intent_status(outbox_path: Path) -> IntentStatus:
-    counts = _count_events(outbox_path)
+def _get_intent_status(counters: EventCounters) -> IntentStatus:
     return IntentStatus(
-        promote_created_total=counts.promote_created_total,
-        promote_created_24h=counts.promote_created_24h,
-        source_path=counts.source_path,
+        promote_created_total=counters.promote_created_total,
+        promote_created_24h=counters.promote_created_24h,
+        source_path=counters.source_path,
     )
 
 
@@ -283,11 +350,21 @@ def _count_outbox_events(path: Path) -> int | None:
 
 
 def _get_outbox_lag() -> OutboxLagStatus:
+    mode = _worker_queue_mode()
     heartbeat = _read_worker_heartbeat()
     processed_total = None
+    if heartbeat and isinstance(heartbeat.get("processed_total"), int):
+        processed_total = heartbeat.get("processed_total")
+    if mode == "db":
+        pending = _count_outbox_pending_db()
+        total = _count_outbox_total_db()
+        return OutboxLagStatus(
+            outbox_events=total,
+            worker_processed_total=processed_total,
+            pending_estimate=pending,
+        )
     outbox_path = Path(INDEX_OUTBOX_PATH)
     if heartbeat:
-        processed_total = heartbeat.get("processed_total")
         heartbeat_path = heartbeat.get("outbox_path")
         if heartbeat_path:
             outbox_path = Path(str(heartbeat_path))
@@ -355,6 +432,29 @@ def _count_outbox_pending_db() -> int | None:
             pass
 
 
+def _count_outbox_total_db() -> int | None:
+    try:
+        from app.services import outbox as outbox_service
+    except Exception:
+        return None
+    try:
+        conn = outbox_service._open_conn()
+    except Exception:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("select count(*) from outbox")
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+    except Exception:
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def _get_worker_queue_status() -> WorkerQueueStatus:
     mode = _worker_queue_mode()
     heartbeat = _read_worker_heartbeat() or {}
@@ -384,13 +484,14 @@ def _get_worker_queue_status() -> WorkerQueueStatus:
 def get_system_status() -> SystemStatus:
     sot_meta = get_sot_metadata()
     ingestion = get_ingestion_status()
-    counters = _count_events(Path(INDEX_OUTBOX_PATH)) if INDEX_OUTBOX_PATH else EventCounters()
+    queue_mode = _worker_queue_mode()
+    counters: EventCounters | None = None
+    if queue_mode == "db":
+        counters = _count_events_db()
+    if counters is None:
+        counters = _count_events(Path(INDEX_OUTBOX_PATH)) if INDEX_OUTBOX_PATH else EventCounters()
     counters = _fill_ingest_run_counts(counters, ingestion)
-    intent_status = IntentStatus(
-        promote_created_total=counters.promote_created_total,
-        promote_created_24h=counters.promote_created_24h,
-        source_path=counters.source_path,
-    )
+    intent_status = _get_intent_status(counters)
     return SystemStatus(
         timestamp=datetime.now(timezone.utc),
         sot_version=get_sot_version(),

@@ -41,6 +41,9 @@ def test_status_counts_watcher_runs(tmp_path: Path, monkeypatch) -> None:
     outbox.write_text(json.dumps(watcher_event) + "\n", encoding="utf-8")
 
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
     status_service.INDEX_OUTBOX_PATH = str(outbox)
 
     client = TestClient(app)
