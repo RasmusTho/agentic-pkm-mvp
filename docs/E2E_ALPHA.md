@@ -27,6 +27,11 @@ make alpha-smoke
 - On success, the note is deleted.
 - On failure, the note is retained unless `--teardown` is used.
 
+## Auto-Heal (Index Rebuild)
+- If `/api/health` reports a required `index_rebuild`, alpha_e2e will run the rebuild once inside the api container.
+- If `index_rebuild` remains after one attempt, alpha_e2e fails with the command hint so you can run it manually.
+- Volumes persist between runs; use `docker compose down -v` to reset the DB fully.
+
 ## Queue Semantics (Status)
 - `events_log` is an append-only audit log.
 - `worker_queue` is the active queue (db or file).

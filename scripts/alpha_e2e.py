@@ -104,6 +104,46 @@ def _find_action(health: dict[str, Any], action_id: str) -> dict[str, Any] | Non
     return None
 
 
+def _index_rebuild_command() -> list[str]:
+    return [
+        "docker",
+        "compose",
+        "exec",
+        "-T",
+        "api",
+        "python",
+        "-m",
+        "app.cli",
+        "index",
+        "rebuild",
+        "--profile",
+        "default",
+    ]
+
+
+def _index_rebuild_required(health: dict[str, Any]) -> dict[str, Any] | None:
+    action = _find_action(health, "index_rebuild")
+    if not action:
+        return None
+    severity = str(action.get("severity") or "").lower()
+    if severity != "required":
+        return None
+    return action
+
+
+def _maybe_auto_rebuild_index(api_base: str, health: dict[str, Any]) -> dict[str, Any]:
+    action = _index_rebuild_required(health)
+    if not action:
+        return health
+    _run(_index_rebuild_command())
+    refreshed = _fetch_json(f"{api_base}/api/health")
+    if _index_rebuild_required(refreshed):
+        message = action.get("message") or "Embedding/index identity mismatch detected"
+        hint = action.get("command_hint") or "python -m app.cli index rebuild --profile default"
+        raise RuntimeError(f"{message}. command_hint: {hint}")
+    return refreshed
+
+
 def _read_status_safe(api_base: str) -> dict[str, Any]:
     try:
         return _fetch_json(f"{api_base}/api/status")
@@ -305,14 +345,10 @@ def main(argv: list[str] | None = None) -> int:
         _run(["make", "alpha-up"])
         status = _fetch_json(f"{api_base}/api/status")
         health = _fetch_json(f"{api_base}/api/health")
+        health = _maybe_auto_rebuild_index(api_base, health)
         errors = validate_status_invariants(status, health)
         if errors:
             raise RuntimeError(errors[0])
-        index_action = _find_action(health, "index_rebuild")
-        if index_action:
-            message = index_action.get("message") or "Embedding/index identity mismatch detected"
-            hint = index_action.get("command_hint") or "python -m app.cli index rebuild --profile default"
-            raise RuntimeError(f"{message}. command_hint: {hint}")
         flow_errors, created_note = _run_golden_path(vault_root, inbox_dir_rel, api_base)
         if created_note:
             note_paths.append(created_note)

@@ -6,6 +6,8 @@ from app.vault.paths import get_vault_inbox_dir_rel
 from scripts.alpha_e2e import (
     _cleanup_runtime_notes,
     _create_runtime_note,
+    _index_rebuild_command,
+    _maybe_auto_rebuild_index,
     _maybe_teardown,
     validate_runtime_progress,
     validate_status_invariants,
@@ -71,6 +73,37 @@ def test_invariants_file_mode_pending_mismatch_fails() -> None:
     errors = validate_status_invariants(status, health)
     assert errors
     assert "worker_queue.pending" in errors[0]
+
+
+def test_auto_rebuild_index_runs_once(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *, allow_fail: bool = False) -> None:
+        calls.append(cmd)
+
+    first_health = {
+        "required_ok": False,
+        "suggested_actions": [
+            {
+                "id": "index_rebuild",
+                "severity": "required",
+                "message": "Embedding/index identity mismatch detected",
+                "command_hint": "python -m app.cli index rebuild --profile default",
+            }
+        ],
+    }
+    refreshed_health = {"required_ok": True, "suggested_actions": []}
+
+    def fake_fetch(url: str, timeout: float = 5.0):
+        assert url.endswith("/api/health")
+        return refreshed_health
+
+    monkeypatch.setattr("scripts.alpha_e2e._run", fake_run)
+    monkeypatch.setattr("scripts.alpha_e2e._fetch_json", fake_fetch)
+
+    result = _maybe_auto_rebuild_index("http://example", first_health)
+    assert result == refreshed_health
+    assert calls == [_index_rebuild_command()]
 
 
 def test_runtime_progress_requires_processed_increment() -> None:
