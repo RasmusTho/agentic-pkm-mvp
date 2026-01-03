@@ -52,7 +52,11 @@ jobs:
           set -euo pipefail
           echo "Doc TODO scan"
           set +e
-          grep -R -n -E "TODO|FIXME" README.md CHANGELOG.md docs --exclude-dir=legacy --exclude-dir=uml > /tmp/doc_todos.txt
+          files=(README.md docs)
+          if [ -f CHANGELOG.md ]; then
+            files+=(CHANGELOG.md)
+          fi
+          grep -R -n -E "TODO|FIXME" "${files[@]}" --exclude-dir=legacy --exclude-dir=uml > /tmp/doc_todos.txt
           scan_status=$?
           set -e
           if [ "$scan_status" -eq 0 ]; then
