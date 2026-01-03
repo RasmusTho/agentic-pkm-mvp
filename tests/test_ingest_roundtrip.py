@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.search.service import ingest_object
-from app.settings import settings
+from app.components.embeddings import get_embedding_identity
 
 
 def test_ingest_roundtrip(stub_index) -> None:
@@ -19,12 +19,13 @@ def test_ingest_roundtrip(stub_index) -> None:
     )
 
     assert isinstance(object_id, UUID)
-    assert dims == 1536
+    identity = get_embedding_identity()
+    assert dims == identity.dim
 
     stored = stub_index.store[object_id]
     assert stored.kind == "note"
     assert stored.source_ref == "unit-test"
-    assert stored.model == settings.embed_model
+    assert stored.model == identity.model
     assert stored.payload["title"] == "Sample doc"
     assert stored.payload["text"].startswith("Alpha beta")
     assert stored.payload["content"].startswith("Alpha beta")

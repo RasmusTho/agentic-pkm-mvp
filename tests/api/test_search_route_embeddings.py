@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.components.embeddings import EmbeddingIdentity
 
 
 class _FakeCursor:
@@ -38,12 +39,16 @@ class _FakeConnection:
         return None
 
 
-def test_search_route_uses_configured_embedding_client(monkeypatch) -> None:
-    class _StubClient:
-        def embed_text(self, text: str) -> list[float]:
-            return [0.1, 0.2, 0.3]
+def test_search_route_uses_canonical_embedding_entrypoint(monkeypatch) -> None:
+    identity = EmbeddingIdentity(provider="mock", model="mock-model", dim=3, normalize=True)
+    seen: dict[str, str] = {}
 
-    monkeypatch.setattr("app.api.routes.search.get_embeddings_client", lambda intent: _StubClient())
+    def fake_embed_query(text: str, profile: str = "default"):
+        seen["text"] = text
+        seen["profile"] = profile
+        return [0.1, 0.2, 0.3], identity
+
+    monkeypatch.setattr("app.api.routes.search.embed_query", fake_embed_query)
     monkeypatch.setattr(
         "app.api.routes.search.psycopg.connect",
         lambda *args, **kwargs: _FakeConnection(),
@@ -57,3 +62,4 @@ def test_search_route_uses_configured_embedding_client(monkeypatch) -> None:
     assert "results" in payload
     assert payload["results"], "Expected at least one result"
     assert payload["results"][0]["uuid"] == "uuid-1"
+    assert seen.get("text") == "hello"

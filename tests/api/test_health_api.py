@@ -162,3 +162,34 @@ def test_health_requires_worker_when_enabled(monkeypatch, tmp_path) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["runtime"]["worker"]["ok"] is False
+
+
+def test_health_suggests_index_rebuild(monkeypatch, tmp_path) -> None:
+    heartbeat = tmp_path / "watcher-heartbeat.json"
+    _write_watcher_heartbeat(heartbeat, ts=time.time())
+    worker_hb = tmp_path / "worker-heartbeat.json"
+    _write_worker_heartbeat(worker_hb, ts=time.time())
+
+    monkeypatch.setattr(
+        "app.index.doctor.diagnose_index",
+        lambda: {
+            "backend": "pg",
+            "expected_identity": {"provider": "mock", "model": "mock", "dim": 8},
+            "stored_identity": {"provider": "mock", "model": "mock", "dim": 7},
+            "issues": ["Identity mismatch"],
+            "warnings": [],
+            "status": "error",
+        },
+    )
+
+    client = _health_client(monkeypatch, tmp_path, watcher_path=heartbeat, worker_path=worker_hb, worker_enabled=True)
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    actions = data.get("suggested_actions")
+    assert isinstance(actions, list)
+    assert any(
+        action.get("id") == "index_rebuild" and action.get("severity") == "required"
+        for action in actions
+        if isinstance(action, dict)
+    )

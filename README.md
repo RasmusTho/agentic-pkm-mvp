@@ -86,6 +86,8 @@ make alpha-smoke
 
 The canonical flow is `make alpha-up` → `python -m scripts.alpha_e2e` → `make alpha-smoke`. `VAULT_INBOX_DIR_REL` defines the watcher scope and where alpha_e2e writes its temporary note (under `<inbox_dir_rel>/_alpha_e2e`), `VAULT_RUNTIME_DIR_REL` defines the runtime scratch area, and `VAULT_SYSTEM_DIR_REL` controls where health settings live. The alpha_e2e note is deleted after success; on failure it is kept unless you run with `--teardown`.
 
+Embeddings/retrieval should go through `app.components.retrieval` (`embed_query`, `embed_docs`, `search`) so embedding identities stay consistent; `/search` and hybrid retrieval use it. If `/api/health` reports a required `index_rebuild`, either run `docker compose exec -T api python -m app.cli index rebuild --profile default` or set `AUTO_BOOTSTRAP=1` so `make alpha-up` runs it once.
+
 Optional checks:
 - `make alpha-status`
 - `make alpha-doctor`

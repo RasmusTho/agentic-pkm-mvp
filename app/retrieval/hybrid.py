@@ -13,8 +13,7 @@ try:
 except ImportError:
     process = None
 
-from app.components.llm.fabric import get_embeddings_client
-from app.components.llm.router import LLMTaskIntent
+from app.components.retrieval import embed_docs, embed_query
 from app.retrieval.hook_adapter import maybe_rerank
 
 
@@ -88,10 +87,8 @@ class MemoryHybridStore:
         if self._bm25 is None and self._tokenized:
             self._bm25 = BM25Okapi(self._tokenized)
         if self._embeddings is None:
-            vectors: List[List[float]] = []
             texts = [doc.text for doc in self._docs]
-            for chunk in embed_batches(texts):
-                vectors.extend(chunk)
+            vectors, _ = embed_docs(texts)
             if not vectors:
                 self._embeddings = np.zeros((0, 0), dtype=np.float32)
                 self._emb_norms = np.zeros(0, dtype=np.float32)
@@ -128,8 +125,6 @@ class MemoryHybridStore:
 
 
 _STORE = MemoryHybridStore()
-_EMBED_CLIENT = None
-_EMBED_IDENTITY = None
 
 
 def _resolve_domain_scope() -> str | None:
@@ -169,25 +164,17 @@ def _doc_in_scope(doc: Document, scope: str) -> bool:
     return scope in _bridge_domains(doc)
 
 
-def _get_embed_client():
-    global _EMBED_CLIENT, _EMBED_IDENTITY
-    intent = LLMTaskIntent(task_kind="embed", determinism_required=True)
-    client = get_embeddings_client(intent)
-    identity = client.identity
-    if _EMBED_CLIENT is None or _EMBED_IDENTITY != identity:
-        _EMBED_CLIENT = client
-        _EMBED_IDENTITY = identity
-    return _EMBED_CLIENT
-
-
 def embed_text(text: str, language: Optional[str] = None) -> list[float]:
     """Backwards-compatible embedding helper for tests that patch this symbol."""
-    return _get_embed_client().embed_text(text)
+    vector, _ = embed_query(text)
+    return vector
 
 
 def embed_batches(texts: Iterable[str], batch_size: int = 32) -> Iterator[list[list[float]]]:
     """Backwards-compatible batch embedding helper for tests that patch this symbol."""
-    yield from _get_embed_client().embed_batches(texts, batch_size=batch_size)
+    del batch_size
+    vectors, _ = embed_docs(texts)
+    yield vectors
 
 
 def get_store() -> MemoryHybridStore:
@@ -231,7 +218,7 @@ def _snippet(text: str, query: str, size: int = 300) -> str:
     return text[start:end].strip()
 
 
-def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None) -> List[dict]:
+def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None, query_vector: list[float] | None = None) -> List[dict]:
     docs = _STORE.all()
     if not docs:
         return []
@@ -245,7 +232,7 @@ def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None) -> 
 
     tokens = _tokenize(query, language)
     bm25_raw = _STORE.bm25_scores(tokens)
-    emb_vector_raw = embed_text(query)
+    emb_vector_raw = query_vector if query_vector is not None else embed_text(query)
     emb_vector = np.array(emb_vector_raw, dtype=np.float32)
     if emb_vector.ndim != 1 or not emb_vector.shape[0]:
         raise ValueError("embedding client returned invalid vector shape")

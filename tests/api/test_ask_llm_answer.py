@@ -10,8 +10,8 @@ from app.retrieval.hybrid import get_store
 
 
 def _stub_embeddings(monkeypatch) -> None:
-    monkeypatch.setattr("app.index.embeddings.embed_texts", lambda texts: [[0.1, 0.1, 0.1] for _ in texts])
-    monkeypatch.setattr("app.index.embeddings.embed_text", lambda text: [0.1, 0.1, 0.1])
+    monkeypatch.setattr("app.index.embeddings.embed_texts", lambda texts, **_kwargs: [[0.1, 0.1, 0.1] for _ in texts])
+    monkeypatch.setattr("app.index.embeddings.embed_text", lambda text, **_kwargs: [0.1, 0.1, 0.1])
     monkeypatch.setattr("app.retrieval.hybrid.embed_text", lambda text, language=None: [0.1, 0.1, 0.1])
 
     def _fake_embed_batches(gen):

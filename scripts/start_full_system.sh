@@ -4,6 +4,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+debug_dump() {
+  echo "DEBUG: docker compose ps"
+  docker compose ps || true
+  echo "DEBUG: docker compose logs --tail=200 watcher"
+  docker compose logs --tail=200 watcher || true
+  echo "DEBUG: docker compose logs --tail=200 worker"
+  docker compose logs --tail=200 worker || true
+  echo "DEBUG: docker compose logs --tail=200 api"
+  docker compose logs --tail=200 api || true
+}
+
 mkdir -p tmp logs
 for dir in tmp logs; do
   if [ ! -w "$dir" ]; then
@@ -83,7 +94,8 @@ PY
 )
 
 api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
-api_health_ok=$(API_HEALTH_JSON="$api_health_payload" python - <<'PY'
+update_health_state() {
+  api_health_ok=$(API_HEALTH_JSON="$api_health_payload" python - <<'PY'
 import json, os
 raw = os.environ.get("API_HEALTH_JSON", "")
 try:
@@ -95,7 +107,38 @@ value = data.get("ok")
 print("true" if value else "false")
 PY
 )
-api_health_failed=$(API_HEALTH_JSON="$api_health_payload" python - <<'PY'
+  api_health_required_ok=$(API_HEALTH_JSON="$api_health_payload" python - <<'PY'
+import json, os
+raw = os.environ.get("API_HEALTH_JSON", "")
+try:
+    data = json.loads(raw)
+except Exception:
+    print("unknown")
+    raise SystemExit(0)
+value = data.get("required_ok")
+print("true" if value else "false")
+PY
+)
+  api_health_index_rebuild=$(API_HEALTH_JSON="$api_health_payload" python - <<'PY'
+import json, os
+raw = os.environ.get("API_HEALTH_JSON", "")
+try:
+    data = json.loads(raw)
+except Exception:
+    print("0")
+    raise SystemExit(0)
+actions = data.get("suggested_actions") or []
+needed = False
+for action in actions:
+    if isinstance(action, dict) and action.get("id") == "index_rebuild":
+        severity = str(action.get("severity") or "").lower()
+        if severity == "required":
+            needed = True
+            break
+print("1" if needed else "0")
+PY
+)
+  api_health_failed=$(API_HEALTH_JSON="$api_health_payload" python - <<'PY'
 import json, os
 raw = os.environ.get("API_HEALTH_JSON", "")
 try:
@@ -115,7 +158,31 @@ for key, val in checks.items():
 print(", ".join(items))
 PY
 )
-api_health_failed=${api_health_failed:-none}
+  api_health_failed=${api_health_failed:-none}
+}
+
+update_health_state
+
+auto_bootstrap=${AUTO_BOOTSTRAP:-0}
+if [ "$api_health_required_ok" != "true" ] && [ "$api_health_index_rebuild" -eq 1 ]; then
+  if [ "$auto_bootstrap" -eq 1 ]; then
+    echo "AUTO_BOOTSTRAP: running index rebuild"
+    docker compose exec -T api python -m app.cli index rebuild --profile default
+    api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
+    update_health_state
+    if [ "$api_health_required_ok" != "true" ] && [ "$api_health_index_rebuild" -eq 1 ]; then
+      echo "ERROR: index rebuild required after AUTO_BOOTSTRAP" >&2
+      debug_dump
+      exit 1
+    fi
+  else
+    echo "ERROR: /api/health required checks failed; index rebuild required" >&2
+    echo "Run: docker compose exec -T api python -m app.cli index rebuild --profile default" >&2
+    echo "Or set AUTO_BOOTSTRAP=1" >&2
+    debug_dump
+    exit 1
+  fi
+fi
 
 if ! docker compose exec -T api sh -c '[ -d /app/vault ]' >/dev/null 2>&1; then
   echo "ERROR: /app/vault mount is missing inside the api container" >&2
@@ -275,6 +342,7 @@ SUMMARY:
   healthz OK
   readyz: $readiness_state
   api health ok: $api_health_ok
+  api health required_ok: $api_health_required_ok
   api health failed: $api_health_failed
   vault notes: $vault_note_count
   store objects: $object_count

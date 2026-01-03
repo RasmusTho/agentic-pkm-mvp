@@ -41,6 +41,7 @@ class StubVectorIndex:
         payload: dict[str, Any],
         embedding: Sequence[float],
         model: str,
+        identity: Any | None = None,
     ) -> None:
         self.store[object_id] = StoredObject(
             kind=kind,
