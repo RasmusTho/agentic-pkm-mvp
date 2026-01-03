@@ -13,6 +13,7 @@ import httpx
 from app.components.llm.fabric import describe_default_routes
 from app.obs.log import span, with_trace_id
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
+from app.settings.panel_actions import get_panel_actions_diagnostics
 from app.stores.db_health import ping_postgres, resolve_dsn
 from app.watcher.heartbeat import resolve_heartbeat_path
 
@@ -73,6 +74,22 @@ def _check_yt_dlp() -> Dict[str, Any]:
         return _result(True, "yt-dlp kan importeras")
     except Exception as exc:  # pragma: no cover - import side-effects differ per env
         return _result(False, f"yt-dlp import misslyckades: {exc!s}")
+
+
+def _check_panel_actions() -> Dict[str, Any]:
+    diag = get_panel_actions_diagnostics()
+    count = diag.get("panel_actions_mappings_count") or 0
+    resolved = diag.get("resolved_panel_actions_root")
+    error = diag.get("last_panel_mapping_load_error")
+    if count > 0:
+        detail = f"panel actions loaded ({count})"
+    elif resolved is None:
+        detail = "panel actions root not resolved"
+    elif error:
+        detail = f"panel actions load error: {error}"
+    else:
+        detail = "panel actions root missing or empty"
+    return _result(True, detail, data={"resolved_root": resolved, "count": count})
 
 
 def _check_outbox_path() -> Dict[str, Any]:
@@ -361,6 +378,7 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
         "ffmpeg": _annotate_required(_check_ffmpeg(), required=False),
         "yt_dlp": _annotate_required(_check_yt_dlp(), required=False),
         "index_outbox": _annotate_required(_check_outbox_path(), required=True),
+        "panel_actions": _annotate_required(_check_panel_actions(), required=False),
         "ollama": _annotate_required(_check_ollama(), required=_ollama_required()),
     }
     checks["llm_router"] = _annotate_required(_check_llm_router(), required=False)

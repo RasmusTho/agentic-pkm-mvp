@@ -34,6 +34,13 @@ def test_status_endpoint_returns_snapshot():
     worker_queue = body.get("worker_queue") or {}
     assert "mode" in worker_queue
 
+    panel_diag = body.get("panel_diagnostics") or {}
+    assert "resolved_panel_actions_root" in panel_diag
+    assert "panel_actions_mappings_count" in panel_diag
+    assert "panel_actions_ids_sample" in panel_diag
+    assert "has_promote_evergreen_mapping" in panel_diag
+    assert "last_panel_mapping_load_error" in panel_diag
+
 
 def test_status_counts_watcher_runs(tmp_path: Path, monkeypatch) -> None:
     outbox = tmp_path / "outbox.jsonl"

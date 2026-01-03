@@ -54,6 +54,11 @@ except ImportError:
     events_tail_router = None
 
 try:
+    from app.api.routes.debug import router as debug_router
+except ImportError:
+    debug_router = None
+
+try:
     from app.api.routers.agent import router as agent_router
 except ImportError:
     agent_router = None
@@ -123,6 +128,8 @@ def _create_app() -> FastAPI:
         application.include_router(settings_validate_router, prefix="/api")
     if events_tail_router is not None:
         application.include_router(events_tail_router, prefix="/api")
+    if debug_router is not None:
+        application.include_router(debug_router)
     if agent_router is not None:
         application.include_router(agent_router)
     return application

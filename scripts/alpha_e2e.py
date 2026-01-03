@@ -14,6 +14,7 @@ import os
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from typing import Any, Sequence
@@ -279,6 +280,16 @@ def debug_dump(api_base: str, note_paths: Sequence[Path]) -> None:
     _debug_cmd(["docker", "compose", "logs", "--tail=200", "watcher"])
     _debug_cmd(["docker", "compose", "logs", "--tail=200", "worker"])
     _debug_cmd(["docker", "compose", "logs", "--tail=200", "api"])
+    vault_root = os.getenv("VAULT_ROOT")
+    if vault_root and note_paths:
+        base = Path(vault_root).expanduser().resolve()
+        for path in note_paths:
+            try:
+                note_rel = path.resolve().relative_to(base)
+            except Exception:
+                continue
+            encoded = urllib.parse.quote(str(note_rel))
+            _debug_cmd(["curl", "-sS", f"{api_base}/api/debug/panel?note_rel={encoded}"])
     if note_paths:
         print("ALPHA_E2E: runtime notes created:")
         for path in note_paths:

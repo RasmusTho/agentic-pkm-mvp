@@ -16,6 +16,7 @@ from app.observability.status_model import (
     IngestionStatus,
     IntentStatus,
     IndexStatus,
+    PanelDiagnostics,
     OutboxLagStatus,
     StoreStatus,
     SystemStatus,
@@ -24,6 +25,7 @@ from app.observability.status_model import (
 )
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
+from app.settings.panel_actions import get_panel_actions_diagnostics
 from app.stores import get_object_store
 from app.version import SOT_FORWARD, get_sot_version, get_sot_metadata
 from app.health_contract import DEFAULT_CONTRACT
@@ -414,6 +416,14 @@ def _get_index_status() -> IndexStatus | None:
     )
 
 
+def _get_panel_diagnostics() -> PanelDiagnostics:
+    try:
+        diag = get_panel_actions_diagnostics()
+    except Exception:
+        return PanelDiagnostics()
+    return PanelDiagnostics(**diag)
+
+
 def _events_log_status() -> EventsLogStatus:
     outbox_path = Path(INDEX_OUTBOX_PATH)
     total_lines = _count_outbox_events(outbox_path)
@@ -530,6 +540,7 @@ def get_system_status() -> SystemStatus:
         intents=intent_status,
         events=counters,
         index=_get_index_status(),
+        panel_diagnostics=_get_panel_diagnostics(),
         write_guard=_get_write_guard_status(),
         outbox_lag=_get_outbox_lag(),
         events_log=_events_log_status(),
