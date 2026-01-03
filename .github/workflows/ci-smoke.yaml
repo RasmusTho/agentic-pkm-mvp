@@ -1,3 +1,4 @@
+---
 name: CI Smoke
 
 on:
@@ -67,6 +68,35 @@ jobs:
       - name: Prepare tmp dir
         run: mkdir -p tmp
 
+      - name: Docker smoke (worker stdout log)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/docker-compose.worker-ci.yaml <<'YAML'
+          services:
+            worker:
+              environment:
+                WORKER_LOG_HEARTBEAT_SECONDS: "0"
+          YAML
+          compose_files="-f docker-compose.yaml -f /tmp/docker-compose.worker-ci.yaml"
+          docker compose $compose_files up -d --build worker
+          cleanup() {
+            docker compose $compose_files down -v || true
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 30); do
+            logs_output="$(docker compose $compose_files logs --no-color --tail=200 worker || true)"
+            if echo "$logs_output" | grep -F "worker starting" >/dev/null; then
+              echo "worker startup log found"
+              echo "$logs_output"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "worker startup log not found after 30s"
+          docker compose $compose_files logs --no-color --tail=200 worker || true
+          exit 1
+
       - name: Pytest smoke (memory)
         run: pytest -q -c /dev/null -m "not pg and not alpha_llm"
 
@@ -82,7 +112,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           from app.fitness.report import parse_summary_lines, SUMMARY_LABELS
-          
+
           lines = Path("tmp/ci_summary.log").read_text(encoding="utf-8").splitlines()
           parsed = parse_summary_lines(lines, required=SUMMARY_LABELS)
           if set(parsed.keys()) != set(SUMMARY_LABELS):
@@ -127,7 +157,7 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
 
-      - name: Guard: skip when LLM E2E not configured
+      - name: "Guard: skip when LLM E2E not configured"
         shell: bash
         run: |
           set -euo pipefail
