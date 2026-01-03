@@ -44,7 +44,7 @@ hygiene-logs:
 	chmod -R u+rwX logs || true
 
 
-.PHONY: alpha alpha-up alpha-up-ollama alpha-bootstrap alpha-doctor alpha-down alpha-status alpha-smoke alpha-e2e require-vault-root
+.PHONY: alpha alpha-up alpha-up-ollama alpha-bootstrap alpha-doctor alpha-down alpha-status alpha-smoke alpha-e2e alpha-rebuild require-vault-root
 
 require-vault-root:
 	@: $(if $(strip $(VAULT_ROOT)),,$(error VAULT_ROOT is required. Example: export VAULT_ROOT="/path/to/your/vault"))
@@ -57,6 +57,9 @@ alpha: require-vault-root
 
 alpha-up: require-vault-root
 	VAULT_ROOT="$(VAULT_ROOT)" scripts/start_full_system.sh
+
+alpha-rebuild:
+	@if [ "${ALPHA_REBUILD_PULL:-0}" = "1" ]; then docker compose build --pull api worker watcher; else docker compose build api worker watcher; fi
 
 alpha-up-ollama:
 	@if [ -z "$(VAULT_ROOT)" ]; then echo "VAULT_ROOT is required (path to your vault)"; exit 1; fi

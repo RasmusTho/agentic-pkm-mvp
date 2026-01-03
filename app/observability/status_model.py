@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -64,6 +64,16 @@ class WriteGuardStatus(BaseModel):
     mode: str | None = None
 
 
+class IndexStatus(BaseModel):
+    status: str | None = None
+    issues: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    backend: str | None = None
+    expected_identity: Dict[str, Any] | None = None
+    stored_identity: Dict[str, Any] | None = None
+    rebuild_required: bool | None = None
+
+
 class OutboxLagStatus(BaseModel):
     outbox_events: int | None = None
     worker_processed_total: int | None = None
@@ -95,6 +105,7 @@ class SystemStatus(BaseModel):
     ask: AskStatus
     intents: Optional[IntentStatus] = None
     events: Optional[EventCounters] = None
+    index: Optional[IndexStatus] = None
     write_guard: Optional[WriteGuardStatus] = None
     outbox_lag: Optional[OutboxLagStatus] = None
     events_log: Optional[EventsLogStatus] = None
@@ -108,6 +119,7 @@ __all__ = [
     "AskStatus",
     "IntentStatus",
     "EventCounters",
+    "IndexStatus",
     "WriteGuardStatus",
     "OutboxLagStatus",
     "EventsLogStatus",

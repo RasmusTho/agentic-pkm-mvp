@@ -37,6 +37,21 @@ fi
 
 echo "Vault host path: $vault_host_path -> /app/vault"
 
+alpha_rebuild=${ALPHA_REBUILD:-0}
+alpha_rebuild_pull=${ALPHA_REBUILD_PULL:-0}
+if [ "$alpha_rebuild" -eq 1 ]; then
+  build_flags=""
+  if [ "$alpha_rebuild_pull" -eq 1 ]; then
+    build_flags="--pull"
+  fi
+  echo "ALPHA_REBUILD: docker compose build $build_flags api worker watcher"
+  if [ -n "$runtime_env" ]; then
+    docker compose $runtime_env build $build_flags api worker watcher
+  else
+    docker compose build $build_flags api worker watcher
+  fi
+fi
+
 if [ -n "$runtime_env" ]; then
   docker compose $runtime_env up -d db api worker watcher
 else
@@ -177,24 +192,12 @@ if [ "$auto_bootstrap" -eq 1 ]; then
   fi
 fi
 
-if [ "$api_health_required_ok" != "true" ] && [ "$api_health_index_rebuild" -eq 1 ]; then
-  if [ "$auto_bootstrap" -eq 1 ]; then
-    echo "AUTO_BOOTSTRAP: running index rebuild"
-    docker compose exec -T api python -m app.cli index rebuild --profile default
-    api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
-    update_health_state
-    if [ "$api_health_required_ok" != "true" ] && [ "$api_health_index_rebuild" -eq 1 ]; then
-      echo "ERROR: index rebuild required after AUTO_BOOTSTRAP" >&2
-      debug_dump
-      exit 1
-    fi
-  else
-    echo "ERROR: /api/health required checks failed; index rebuild required" >&2
-    echo "Run: docker compose exec -T api python -m app.cli index rebuild --profile default" >&2
-    echo "Or set AUTO_BOOTSTRAP=1" >&2
-    debug_dump
-    exit 1
-  fi
+index_rebuild_status="skipped"
+if [ "$api_health_index_rebuild" -eq 1 ] && [ "$auto_bootstrap" -ne 1 ]; then
+  echo "INDEX REBUILD: required (AUTO_BOOTSTRAP=1 to run)" >&2
+  echo "Run: docker compose exec -T api python -m app.cli index rebuild --profile default" >&2
+  debug_dump
+  exit 1
 fi
 
 if ! docker compose exec -T api sh -c '[ -d /app/vault ]' >/dev/null 2>&1; then
@@ -240,6 +243,33 @@ if [ "$objects_before" -le 0 ]; then
   vectors_after=$(extract_stat vectors)
   object_count="$objects_after"
   vector_count="$vectors_after"
+fi
+
+if [ "$auto_bootstrap" -eq 1 ]; then
+  api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
+  update_health_state
+  if [ "$api_health_index_rebuild" -eq 1 ]; then
+    echo "INDEX REBUILD: running"
+    set +e
+    docker compose exec -T api sh -lc "python -m app.cli index rebuild --profile default"
+    rebuild_status=$?
+    set -e
+    if [ "$rebuild_status" -ne 0 ]; then
+      echo "INDEX REBUILD: failed (exit $rebuild_status)" >&2
+      debug_dump
+      exit 1
+    fi
+    index_rebuild_status="ran"
+    api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
+    update_health_state
+    if [ "$api_health_index_rebuild" -eq 1 ]; then
+      echo "INDEX REBUILD: failed (still required)" >&2
+      debug_dump
+      exit 1
+    fi
+  else
+    echo "INDEX REBUILD: skipped (not required)"
+  fi
 fi
 
 ingested_count=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
@@ -362,6 +392,7 @@ SUMMARY:
   vector entries: $vector_count
   ingest run: $ingest_run
   search results: $search_results
+  index rebuild: $index_rebuild_status
   index doctor: $index_doctor_status (issues=$index_issue_count)
   bootstrap next: $bootstrap_next
   note: /api/health ok=false can be expected when optional tools (e.g., ffmpeg) are missing; Stage0 ingest/search/ask can still work.

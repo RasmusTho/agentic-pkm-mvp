@@ -258,8 +258,8 @@ def validate_runtime_progress(
     return errors
 
 
-def _run(cmd: list[str], *, allow_fail: bool = False) -> None:
-    subprocess.run(cmd, check=not allow_fail, cwd=_REPO_ROOT)
+def _run(cmd: list[str], *, allow_fail: bool = False, env: dict[str, str] | None = None) -> None:
+    subprocess.run(cmd, check=not allow_fail, cwd=_REPO_ROOT, env=env)
 
 
 def _debug_cmd(cmd: list[str]) -> None:
@@ -372,12 +372,26 @@ def main(argv: list[str] | None = None) -> int:
     inbox_dir_rel = get_vault_inbox_dir_rel(vault_root)
     note_paths: list[Path] = []
 
+    auto_bootstrap_env = os.getenv("AUTO_BOOTSTRAP")
+    if auto_bootstrap_env is None:
+        auto_bootstrap_env = "1"
+
     try:
         _run(["make", "alpha-down"], allow_fail=True)
-        _run(["make", "alpha-up"])
+        env = os.environ.copy()
+        env["AUTO_BOOTSTRAP"] = auto_bootstrap_env
+        _run(["make", "alpha-up"], env=env)
         status = _fetch_json(f"{api_base}/api/status")
         health = _fetch_json(f"{api_base}/api/health")
-        health = _maybe_auto_rebuild_index(api_base, health)
+        auto_bootstrap = auto_bootstrap_env == "1"
+        if auto_bootstrap:
+            action = _index_rebuild_required(health)
+            if action:
+                message = action.get("message") or "Embedding/index identity mismatch detected"
+                hint = action.get("command_hint") or "python -m app.cli index rebuild --profile default"
+                raise RuntimeError(f"AUTO_BOOTSTRAP=1 but index_rebuild is still required. {message}. command_hint: {hint}")
+        else:
+            health = _maybe_auto_rebuild_index(api_base, health)
         errors = validate_status_invariants(status, health)
         if errors:
             raise RuntimeError(errors[0])

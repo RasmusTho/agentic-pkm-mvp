@@ -15,6 +15,7 @@ from app.observability.status_model import (
     EventsLogStatus,
     IngestionStatus,
     IntentStatus,
+    IndexStatus,
     OutboxLagStatus,
     StoreStatus,
     SystemStatus,
@@ -390,6 +391,29 @@ def _get_write_guard_status() -> WriteGuardStatus:
     )
 
 
+def _get_index_status() -> IndexStatus | None:
+    try:
+        from app.index.doctor import diagnose_index
+    except Exception:
+        return None
+    try:
+        diag = diagnose_index()
+    except Exception:
+        return None
+    issues = diag.get("issues") or []
+    warnings = diag.get("warnings") or []
+    status = diag.get("status") or "unknown"
+    return IndexStatus(
+        status=status,
+        issues=[str(item) for item in issues],
+        warnings=[str(item) for item in warnings],
+        backend=diag.get("backend"),
+        expected_identity=diag.get("expected_identity"),
+        stored_identity=diag.get("stored_identity"),
+        rebuild_required=bool(issues),
+    )
+
+
 def _events_log_status() -> EventsLogStatus:
     outbox_path = Path(INDEX_OUTBOX_PATH)
     total_lines = _count_outbox_events(outbox_path)
@@ -505,6 +529,7 @@ def get_system_status() -> SystemStatus:
         ask=get_ask_status(),
         intents=intent_status,
         events=counters,
+        index=_get_index_status(),
         write_guard=_get_write_guard_status(),
         outbox_lag=_get_outbox_lag(),
         events_log=_events_log_status(),
