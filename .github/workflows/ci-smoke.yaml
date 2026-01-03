@@ -72,35 +72,6 @@ jobs:
       - name: Prepare tmp dir
         run: mkdir -p tmp
 
-      - name: Docker smoke (worker stdout log)
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > /tmp/docker-compose.worker-ci.yaml <<'YAML'
-          services:
-            worker:
-              environment:
-                WORKER_LOG_HEARTBEAT_SECONDS: "0"
-          YAML
-          compose_files="-f docker-compose.yaml -f /tmp/docker-compose.worker-ci.yaml"
-          docker compose $compose_files up -d --build worker
-          cleanup() {
-            docker compose $compose_files down -v || true
-          }
-          trap cleanup EXIT
-          for attempt in $(seq 1 30); do
-            logs_output="$(docker compose $compose_files logs --no-color --tail=200 worker || true)"
-            if echo "$logs_output" | grep -F "worker starting" >/dev/null; then
-              echo "worker startup log found"
-              echo "$logs_output"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "worker startup log not found after 30s"
-          docker compose $compose_files logs --no-color --tail=200 worker || true
-          exit 1
-
       - name: Pytest smoke (memory)
         run: pytest -q -c /dev/null -m "not pg and not alpha_llm"
 
@@ -132,6 +103,49 @@ jobs:
         run: |
           python -m app.cli --help >/dev/null
           python -m app.cli health --json || true
+
+      - name: "Docker smoke: worker emits startup log"
+        shell: bash
+        run: |
+          set -euo pipefail
+          export WORKER_LOG_HEARTBEAT_SECONDS=0
+          cat > /tmp/docker-compose.worker-ci.yaml <<'YAML'
+          services:
+            worker:
+              environment:
+                WORKER_LOG_HEARTBEAT_SECONDS: "${WORKER_LOG_HEARTBEAT_SECONDS}"
+          YAML
+          compose_files="-f docker-compose.yaml -f /tmp/docker-compose.worker-ci.yaml"
+          cleanup() {
+            rc=$?
+            trap - EXIT
+            if [ "$rc" -ne 0 ]; then
+              echo "docker compose ps"
+              docker compose $compose_files ps || true
+              echo "worker logs (tail=200)"
+              docker compose $compose_files logs --no-color --tail=200 worker || true
+              echo "db logs (tail=120)"
+              docker compose $compose_files logs --no-color --tail=120 db || true
+            fi
+            docker compose $compose_files down -v || true
+            exit "$rc"
+          }
+          trap cleanup EXIT
+
+          docker compose $compose_files up -d --build worker
+
+          start_time=$SECONDS
+          while [ $((SECONDS - start_time)) -lt 30 ]; do
+            if docker compose $compose_files logs --no-color --tail=200 worker | grep -Fq "worker starting"; then
+              echo "worker startup log found"
+              docker compose $compose_files logs --no-color --tail=50 worker || true
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "::error::worker startup log not found after 30 seconds"
+          exit 1
 
   panel-llm-e2e:
     runs-on: ubuntu-latest
