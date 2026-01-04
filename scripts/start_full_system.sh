@@ -56,6 +56,59 @@ if [ -n "$runtime_env" ]; then
   docker compose $runtime_env up -d db api worker watcher
 else
   docker compose up -d db api worker watcher
+db_probe=${SKIP_DB_PROBE:-0}
+if [ "$db_probe" -ne 1 ]; then
+  echo "--- DB PROBE ---"
+  db_cid=$(docker compose ps -q db)
+  if [ -z "$db_cid" ]; then
+    echo "ERROR: db container not found" >&2
+    docker compose ps
+    exit 1
+  fi
+  db_user=$(docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_USER"')
+  db_name=$(docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_DB"')
+  db_pwd=$(docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_PASSWORD"')
+  db_user=${db_user:-app}
+  db_name=${db_name:-app}
+  db_start=$SECONDS
+  db_ready=0
+  while [ $((SECONDS - db_start)) -lt 30 ]; do
+    if docker exec "$db_cid" env PGPASSWORD="$db_pwd" pg_isready -U "$db_user" -d "$db_name" >/dev/null 2>&1; then
+      db_ready=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "$db_ready" -ne 1 ]; then
+    echo "ERROR: PostgreSQL did not become ready in 30 seconds" >&2
+    docker compose ps
+    docker compose logs --tail=200 db || true
+    exit 1
+  fi
+  echo "DB credentials: user=$db_user db=$db_name"
+  docker exec "$db_cid" env PGPASSWORD="$db_pwd" psql -U "$db_user" -d "$db_name" -c "select current_user, current_database();"
+fi
+
+worker_probe=${SKIP_WORKER_PROBE:-0}
+if [ "$worker_probe" -ne 1 ]; then
+  echo "--- WORKER HEARTBEAT ---"
+  worker_start=$SECONDS
+  heartbeat_ready=0
+  while [ $((SECONDS - worker_start)) -lt 30 ]; do
+    if [ -s tmp/worker_heartbeat.json ]; then
+      heartbeat_ready=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "$heartbeat_ready" -ne 1 ]; then
+    echo "ERROR: worker heartbeat file missing after 30 seconds" >&2
+    docker compose logs --tail=200 worker || true
+    exit 1
+  fi
+  tail -n 1 tmp/worker_heartbeat.json
+fi
+
 fi
 
 reset_runtime_state=${RESET_RUNTIME_STATE:-1}
@@ -379,6 +432,8 @@ PY
     bootstrap_next="python -m app.cli index rebuild --backend pg"
   fi
 fi
+
+echo "--- STARTUP COMPLETE ---"
 
 cat <<SUMMARY
 SUMMARY:

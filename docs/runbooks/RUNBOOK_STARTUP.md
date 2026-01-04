@@ -22,6 +22,15 @@ State: SoT v4.10 Reality-MVP (work branch prep).
 - `health status` returns `state` running (or transient catch_up) with `writes_allowed` true and doctor statuses at `pass`. `suggested_actions` can be empty when stable.
 - After ingesting a vault snapshot, `health status` should report `state` running (or transient catch_up) with `writes_allowed` true, `catch_up_progress` idle, and a short `outbox_recent_age_s`.
 
+## DB sanity & worker verification
+- `scripts/start_full_system.sh` now probes the DB container using `POSTGRES_USER`/`POSTGRES_DB` from inside the container (defaults: `app`/`app`) so it never assumes a `postgres` superuser. After readiness it runs `psql -c \"select current_user, current_database();\"` for a quick sanity check.
+- Example commands to inspect the running services:
+  ```bash
+  docker exec -it "$(docker compose ps -q db)" sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\\dt"'
+  tail -n 1 tmp/worker_heartbeat.json
+  ```
+- The host script also tails `tmp/worker_heartbeat.json` and prints the last line once the worker writes its heartbeat. Skip the probes with `SKIP_DB_PROBE=1` and/or `SKIP_WORKER_PROBE=1` when you only need to rebuild the stack.
+
 ## 5. Host-based PG ingest fallback
 1. When `scripts/ingest_alpha_inbox_pg.sh` reports `Errno 35`/`Resource deadlock` while reading the iCloud vault inside Docker, the mounted filesystem cannot be accessed reliably by the container; Docker/Colima deadlocks on macOS because the host lock is held by iCloud sync.
 2. Run `scripts/ingest_alpha_inbox_pg_host.sh` instead: it reads the PKM - Alpha vault directly on the host and pushes events into PostgreSQL on `localhost:15432`, avoiding the Docker mount.
