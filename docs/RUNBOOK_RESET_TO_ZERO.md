@@ -60,6 +60,11 @@ If you point at a live Ollama daemon, make sure `OLLAMA_HOST`/`OLLAMA_URL` is se
    ```
 3. Wait for the worker to read the log (check `docker compose logs --tail=20 worker`).
 4. Verify the event recorded in the log: `tail -n 5 tmp/index-outbox.jsonl` should show your event with the new timestamp.
+4.1. Confirm the DB outbox row (the table uses `delivered_at`, not `processed_at`).
+   ```bash
+   docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select topic, created_at, delivered_at from outbox order by created_at desc limit 5;"'
+   ```
+   Expect an `ingest.object.created` row with a recent `created_at`.
 5. Optionally query the API with `curl -sS http://127.0.0.1:18000/api/status` or an `/api/ask` prompt to ensure the embeddings/index bank the event.
 
 This runbook alongside `scripts/reset_to_zero.sh` and the `make` helpers (`reset-zero`, `reset-zero-force`, `alpha-e2e-smoke`) provides a repeatable reset workflow without leaking old health/state breadcrumbs.
