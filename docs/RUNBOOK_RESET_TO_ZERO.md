@@ -1,3 +1,5 @@
+State: Aligned (forward line v5.x)
+
 # Reset to Zero Runbook
 
 Use this procedure when you need to fully wipe runtime artifacts and restart the Reality-MVP stack from a deterministic state.
