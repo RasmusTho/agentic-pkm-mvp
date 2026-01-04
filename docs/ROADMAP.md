@@ -47,6 +47,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 - `pytest -q -c /dev/null -m "not pg and not alpha_llm"` is the primary smoke gate in CI.
 - `ops/quality/baselines.yaml` writes the `GATES` block and must report `ok=true` for merges; CI pipelines rely on that signal.
 - Docker smoke checks ensure the worker emits the `worker starting` log and that the stack responds to health probes.
+- Latency thresholds are provisional while the stack is still stabilizing; they can be re-tuned as the system matures to avoid blocking CI before the runtime is fully healthy.
 
 ## Reality-MVP acceptance (operator outcomes)
 - Vault ingest and external ingest run successfully on real samples with provenance preserved; no data loss.
