@@ -15,7 +15,7 @@ def test_health_state_machine_hysteresis() -> None:
             now=base + timedelta(seconds=i),
         )
     assert state == "degraded"
-    assert "lag" in reason
+    assert "idle" in reason
     for i in range(9):
         state, reason, since = machine.update(
             3.0,
