@@ -103,3 +103,20 @@ def test_health_contract_reports_recent_outbox_age(monkeypatch, tmp_path) -> Non
     result = contract.evaluate()
     expected_age = float((datetime(2025, 1, 2, tzinfo=UTC) - datetime(2025, 1, 1, 12, 0, tzinfo=UTC)).total_seconds())
     assert abs(result["outbox_recent_age_s"] - expected_age) < 1e-3
+
+
+def test_health_contract_uses_newest_event_age(monkeypatch, tmp_path) -> None:
+    records = [
+        {"event": "watcher.run", "timestamp": "2025-01-02T10:00:10Z"},
+        {"event": "ingest.run", "timestamp": "2025-01-01T00:00:00Z"},
+    ]
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(_prepare_outbox(tmp_path, records=records)))
+    monkeypatch.setattr("app.index.doctor.diagnose_index", lambda: _mock_index_doctor())
+    contract = HealthContract(
+        state_machine=HealthStateMachine(),
+        now_fn=lambda: datetime(2025, 1, 2, 10, 0, 20, tzinfo=UTC),
+        vault_root_fn=lambda: tmp_path,
+    )
+    result = contract.evaluate()
+    expected_age = float((datetime(2025, 1, 2, 10, 0, 20, tzinfo=UTC) - datetime(2025, 1, 2, 10, 0, 10, tzinfo=UTC)).total_seconds())
+    assert abs(result["outbox_recent_age_s"] - expected_age) < 1e-3

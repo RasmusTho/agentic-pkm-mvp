@@ -28,7 +28,8 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
@@ -64,7 +65,8 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
@@ -98,7 +100,8 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}

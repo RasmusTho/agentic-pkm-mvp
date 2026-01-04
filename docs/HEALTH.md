@@ -27,6 +27,10 @@ python -m app.cli health status --json
 - `catch_up_progress` reports how the worker interprets `INDEX_OUTBOX_PATH`: it is the append-only JSONL log that records events/ingests, not a queue.
 - The worker heartbeat file (`$WORKER_HEARTBEAT_PATH`) is the signal the Docker healthcheck verifies; the contract observes the latest heartbeat timestamp too.
 
+- `catch_up_progress` now leans on `outbox_recent_age_s`, which is computed from the newest timestamp in the JSONL log. `catch_up` therefore means the worker has not seen new events within the configured thresholds rather than being stuck on the oldest record.
+- The Postgres/memory outbox tables mirror those events for diagnostics, but `INDEX_OUTBOX_PATH` (a JSONL audit log under `tmp/index-outbox.jsonl`) is the canonical work queue that the worker consumes. Clearing that file resets the backlog without touching the DB mirror.
+- There is no `health explain` command in this release; use `python -m app.cli health status --json` (plus the health incident log) to understand why a state transition occurred.
+
 ## Span + logging
 The command is wrapped with `@span("health.check")`, so health check runs are recorded in `docs/OBSERVABILITY.md`. Exceptions populate `extra.error`.
 

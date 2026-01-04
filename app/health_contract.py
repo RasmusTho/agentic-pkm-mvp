@@ -62,10 +62,10 @@ class HealthStateMachine:
             self.good_counter = 0
             if self.bad_counter >= degrade_samples:
                 next_state = "degraded"
-                reason = f"outbox idle {age:.1f}s without new events"
+                reason = f"outbox idle, last event {age:.1f}s ago"
             else:
                 next_state = "catch_up"
-                reason = f"catching up (no new events for {age:.1f}s)"
+                reason = f"catching up (last event {age:.1f}s ago)"
         elif age < recover_limit:
             self.good_counter += 1
             self.bad_counter = 0

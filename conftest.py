@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import os
 
+os.environ.setdefault("LLM_PROVIDER", "mock")
+
+
 def pytest_configure(config) -> None:
     # Provide marker definitions for pytest when pyproject/pytest.ini is ignored.
     markers = {
