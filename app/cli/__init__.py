@@ -47,9 +47,10 @@ from app.agents.panel.integration import handle_panel_update
 from app.services.note_update import NoteUpdateResult, process_note_update
 from app.services.note_watcher import NoteWatcherService
 from app.events.models import new_event
-from app.events.types import ASK_QUERY_RECEIVED
+from app.events.types import ASK_QUERY_RECEIVED, INGEST_OBJECT_CREATED
 from app.agents.normalizer.agent import run as normalize_run
 from app.index.outbox import append_jsonl
+from app.services.outbox import write_outbox_event
 from app.orchestrator.handler import OrchestratorContext, handle_event
 from app.orchestrator.runtime import Orchestrator
 from app.media.transcribe import transcribe_source
@@ -379,6 +380,24 @@ def pipe(source: str, as_json: bool, trace_id: Optional[str]) -> None:
             "payload": output,
         }
     )
+    emit_db_outbox = _truthy_flag(os.getenv("PIPE_EMIT_DB_OUTBOX", "1"))
+    if emit_db_outbox:
+        db_payload = {
+            "object_id": normalize_res["object_id"],
+            "source_ref": str(path),
+            "trace_id": trace_id,
+        }
+        db_event = new_event(
+            event_type=INGEST_OBJECT_CREATED,
+            payload=db_payload,
+            trace_id=trace_id,
+            source=str(path),
+        )
+        try:
+            write_outbox_event(db_event)
+        except Exception as exc:
+            click.echo(f"WARNING: pipe DB outbox emit failed: {exc}", err=True)
+
     _dump(output, as_json)
 
 
