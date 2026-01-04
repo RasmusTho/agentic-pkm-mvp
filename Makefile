@@ -38,25 +38,25 @@ reset-zero-force:
 
 alpha-e2e-smoke:
 	@python - <<'PY'
-import os, pathlib, subprocess, sys, tempfile, textwrap
-provider = os.environ.get('LLM_PROVIDER')
-if not provider:
-    raise SystemExit('LLM_PROVIDER must be set before running alpha-e2e-smoke')
-note = pathlib.Path(tempfile.mktemp(prefix='tmp/alpha-e2e-smoke-', suffix='.md'))
-content = textwrap.dedent('''
----
-uuid: alpha-e2e-smoke
-created_by: smoke
----
-# alpha-e2e-smoke
-- [x] verify note
-''')
-note.write_text(content, encoding='utf-8')
-try:
-    subprocess.run([sys.executable, '-m', 'app.cli', 'pipe', str(note)], check=True)
-finally:
-    note.unlink(missing_ok=True)
-PY
+	import os, pathlib, subprocess, sys, tempfile, textwrap
+	provider = os.environ.get('LLM_PROVIDER')
+	if not provider:
+		raise SystemExit('LLM_PROVIDER must be set before running alpha-e2e-smoke')
+	note = pathlib.Path(tempfile.mktemp(prefix='tmp/alpha-e2e-smoke-', suffix='.md'))
+	content = textwrap.dedent('''
+	---
+	uuid: alpha-e2e-smoke
+	created_by: smoke
+	---
+	# alpha-e2e-smoke
+	- [x] verify note
+	''')
+	note.write_text(content, encoding='utf-8')
+	try:
+		subprocess.run([sys.executable, '-m', 'app.cli', 'pipe', str(note)], check=True)
+	finally:
+		note.unlink(missing_ok=True)
+	PY
 
 	@tail -n 5 tmp/index-outbox.jsonl
 	@docker compose logs --tail=20 worker || true
