@@ -9,7 +9,7 @@ def _mock_snapshot(state: str, reason: str) -> dict[str, object]:
         "reason": reason,
         "since_ts": "2025-01-01T00:00:00+00:00",
         "outbox_count": 1,
-        "outbox_oldest_age_s": 0.1,
+        "outbox_recent_age_s": 0.1,
         "embedding_identity": {
             "backend": "mock",
             "expected_identity": None,

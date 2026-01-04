@@ -16,7 +16,7 @@ def emit_health_contract_status(as_json: bool) -> None:
     click.echo(f"reason: {payload['reason']}")
     click.echo(f"since: {payload['since_ts']}")
     click.echo(f"outbox_count: {payload['outbox_count']}")
-    click.echo(f"outbox_oldest_age_s: {payload['outbox_oldest_age_s']:.1f}")
+    click.echo(f"outbox_recent_age_s: {payload['outbox_recent_age_s']:.1f}")
     click.echo(f"index_doctor_status: {payload['index_doctor_status']}")
     click.echo(f"events_doctor_status: {payload['events_doctor_status']}")
     errors = payload.get("errors_last_10m")
