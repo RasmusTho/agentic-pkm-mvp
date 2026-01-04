@@ -11,6 +11,10 @@ System map: `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md` covers the high-level Y
 
 This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system. A high-level overview of Yggdrasil’s modules and flows lives in `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`, and human interaction patterns in `docs/HUMAN-FLOWS.md`.
 
+## Fitness Functions
+
+Fitness functions capture the high-level criteria that must hold true for the runtime to be considered healthy (indexing uptime, worker heartbeats, doc guardrails, etc.). These functions are expressed as CI jobs, operational checklists, and runtime invariants that are enforced before code merges or releases.
+
 ### Instance model (internal master/satellite plumbing)
 - SettingsBundle includes `instance` with `id` (e.g., `home`, `work`, `laptop`) and `role` (`master` or `satellite`).
 - Default when nothing is configured: `id="home"` and `role="master"`, matching the Reality-MVP single-runtime focus.
