@@ -32,6 +32,8 @@ Architecture describes how things are wired today; these documents define what m
 - `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`
 - `docs/CONCEPTS/CONFIG_AS_PRODUCT_CONTRACT.md`
 
+Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, inbox taxonomy, contract tweaks, and guardrails) live in `docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md`, giving you the detailed connector nomenclature that aligns with the summaries above.
+
 ## Component Catalog
 - See `docs/COMPONENTS.md` for the canonical, human- and machine-readable list of active components (stores, agents, embeddings, rerankers, eval stack, observability). Update it when wiring new component entrypoints under `app/components/*`.
 - The outbox/event system uses a common envelope (`event`, `trace_id`, `source`, `timestamp`, `payload`, `meta`) defined in `app/events/schema.py` and enforced by architecture tests; emitters should write via outbox helpers to preserve the contract.
