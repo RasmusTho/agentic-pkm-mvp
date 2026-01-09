@@ -13,8 +13,6 @@ from uuid import uuid4
 
 import yaml
 
-from app.vault.paths import ensure_vault_path_env_defaults, get_vault_inbox_dir_rel
-
 from app.agents.panel.agent import handle_note_update
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
@@ -34,7 +32,16 @@ MIN_TICK_SLEEP_SECONDS = 0.05
 
 _WRITE_GUARD = OptimisticWriteGuard()
 
-ensure_vault_path_env_defaults()
+INBOX_CANDIDATES = ("📥 Inbox", "Inbox")
+
+def _detect_inbox_dir(vault_root: Path) -> str:
+    env_value = os.getenv("VAULT_INBOX_DIR_REL")
+    if env_value:
+        return env_value
+    for candidate in INBOX_CANDIDATES:
+        if (vault_root / candidate).is_dir():
+            return candidate
+    return INBOX_CANDIDATES[0]
 
 
 def _now_iso() -> str:
@@ -148,7 +155,11 @@ def _process_panel_note(
 
 
 def _default_scope_glob() -> str:
-    inbox = os.getenv("VAULT_INBOX_DIR_REL") or get_vault_inbox_dir_rel()
+    scope_env = os.getenv("WATCHER_SCOPE_GLOB")
+    if scope_env:
+        return scope_env
+    vault_path = Path(os.getenv("WATCHER_VAULT_PATH", "vault")).expanduser()
+    inbox = _detect_inbox_dir(vault_path)
     return f"{inbox}/**"
 
 @dataclass

@@ -6,11 +6,12 @@ State: SoT v4.10 Reality-MVP (work branch prep).
 1. Expose the vault root: `export VAULT_ROOT=/path/to/vault` (or set in docker compose env file).
 2. Seed `${VAULT_SYSTEM_DIR_REL}/Settings/health.md` so guided thresholds/incident logging exist (see `docs/HEALTH.md`).
 3. Optional overrides: `INDEX_OUTBOX_PATH`, `HEALTH_THRESHOLDS_*` and `HEALTH_INCIDENT_CAPTURE_*` can guard tuning; keep `incident_log_path` in the vault to a known location you can tail.
+4. `scripts/start_full_system.sh` refuses to proceed without `VAULT_ROOT`; set `ALLOW_LEGACY_VAULT=1` only when you deliberately want to fall back to `./vault` for short-lived demos. The script checks `docker info`, optionally starts Colima when `AUTO_START_COLIMA=1`, and uses `vault.layout.md` to derive `VAULT_INBOX_DIR_REL`/`VAULT_SYSTEM_DIR_REL` before exporting them to the container env so the watcher scopes the actual inbox.
 
 ## 2. Containers
-1. Build & start the API + worker: `docker compose up -d --build api worker`.
-2. (Optional) restart watcher/panel services if the deployment uses them: `docker compose up -d --build watcher`.
-3. Confirm logs are warm using `docker compose logs -f api` / `docker compose logs -f worker` (CTRL+C once ready).
+1. Run `scripts/start_full_system.sh` to bring up the stack: it runs `docker compose up -d --build db api`, waits for `/healthz`, calls `python -m app.cli vault-layout-ensure` so the layout note exists, exports the resolved inbox/system folders (the banner prints `inbox=… system=…`), and then continues with `docker compose up -d --build watcher worker`.
+2. When the script finishes, confirm the logs are warm using `docker compose logs -f api` / `docker compose logs -f worker` (CTRL+C once ready).
+3. If you need to restart just the watcher/panel services, rerun the last stage manually: `docker compose up -d --build watcher worker` while `VAULT_INBOX_DIR_REL` is exported via `runtime.env`.
 
 ## 3. Health verification
 1. `python -m app.cli health status --json` -> expect `state` running/catch_up, `writes_allowed=true`, doctor statuses non-fail, and `catch_up_progress`/`suggested_actions` reported. Repeat after any manual ingest or injection so `outbox_recent_age_s` shrinks again.
@@ -23,14 +24,29 @@ State: SoT v4.10 Reality-MVP (work branch prep).
 - After ingesting a vault snapshot, `health status` should report `state` running (or transient catch_up) with `writes_allowed` true, `catch_up_progress` idle, and a short `outbox_recent_age_s`.
 
 ## DB sanity & worker verification
-- `scripts/start_full_system.sh` now probes the DB container using `POSTGRES_USER`/`POSTGRES_DB` from inside the container (defaults: `app`/`app`) so it never assumes a `postgres` superuser. After readiness it runs `psql -c \"select current_user, current_database();\"` for a quick sanity check.
+- `scripts/start_full_system.sh` now probes the DB container using `POSTGRES_USER`/`POSTGRES_DB` from inside the container (defaults: `app`/`app`) so it never assumes a `postgres` superuser. After readiness it runs `psql -c "select current_user, current_database();"` for a quick sanity check.
 - Example commands to inspect the running services:
   ```bash
-  docker exec -it "$(docker compose ps -q db)" sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\\dt"'
+  docker exec -it "$(docker compose ps -q db)" sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt"'
   tail -n 1 tmp/worker_heartbeat.json
   ```
 - The host script also tails `tmp/worker_heartbeat.json` and prints the last line once the worker writes its heartbeat. Skip the probes with `SKIP_DB_PROBE=1` and/or `SKIP_WORKER_PROBE=1` when you only need to rebuild the stack.
+- The vault layout detection order is `📥 Inbox`, `Inbox` (unless `VAULT_INBOX_DIR_REL`/`VAULT_SYSTEM_DIR_REL` are already set). The watcher uses the resolved folders so it never rescans the legacy `Inbox/System` tree.
 - `python -m app.cli pipe <path>` now writes an `ingest.object.created` row directly into the DB outbox so the worker can react even without the watcher; set `PIPE_EMIT_DB_OUTBOX=0` to keep the CLI write limited to the local JSONL log.
+
+## Ollama readiness
+- Export `OLLAMA_URL` (and optionally `OLLAMA_MODEL`/`OLLAMA_EMBED_MODEL`) before startup and verify the service from inside the API container:
+  ```bash
+  docker compose exec -T api curl -sfS "$OLLAMA_URL/api/tags" >/dev/null
+  docker compose exec -T api curl -sfS "$OLLAMA_URL/v1/models" >/dev/null
+  ```
+- Embeddings now call `/api/embed` with `{"model":…,"input":[…],"truncate":true}` and fall back to `/v1/embeddings` when the first endpoint returns HTTP 404/405/500+ or an HTTPX error. Both paths assert the configured `EMBED_DIM` against the returned vector length.
+- Skip the smoke notes under `/app/tmp`; the real `scripts/smoke_vault_ingest.sh` writes into `/app/vault/<inbox>/@Smoke` so you can prove the watcher + worker react to the same inbox that powers `/api/ask`.
+
+## Vault layout & smoke notes
+- `scripts/start_full_system.sh` calls `python -m app.cli vault-layout-ensure --vault-root /app/vault` before spinning up watcher/worker, exports the json output paths, and prints a banner like `--- VAULT LAYOUT --- inbox: 📥 Inbox system: ⚙️ System`.
+- The helper `scripts/smoke_vault_ingest.sh` mirrors the same inbox detection order and writes a brief note to `/app/vault/<inbox>/@Smoke/smoke-<timestamp>.md`. It runs `python -m app.cli pipe <path> --json`, asserts the `ingest.object.created` row is in the DB outbox, and waits for the worker to mark `delivered_at` so you know the event was processed.
+- Use the smoke script whenever you want a fast, deterministic proof that the runtime is watching the real vault rather than `/app/tmp` or a temporary note store.
 
 ## 5. Host-based PG ingest fallback
 1. When `scripts/ingest_alpha_inbox_pg.sh` reports `Errno 35`/`Resource deadlock` while reading the iCloud vault inside Docker, the mounted filesystem cannot be accessed reliably by the container; Docker/Colima deadlocks on macOS because the host lock is held by iCloud sync.
