@@ -35,12 +35,33 @@ State: SoT v4.10 Reality-MVP (work branch prep).
 - `python -m app.cli pipe <path>` now writes an `ingest.object.created` row directly into the DB outbox so the worker can react even without the watcher; set `PIPE_EMIT_DB_OUTBOX=0` to keep the CLI write limited to the local JSONL log.
 
 ## Ollama readiness
-- Export `OLLAMA_URL` (and optionally `OLLAMA_MODEL`/`OLLAMA_EMBED_MODEL`) before startup and verify the service from inside the API container:
-  ```bash
-  docker compose exec -T api curl -sfS "$OLLAMA_URL/api/tags" >/dev/null
-  docker compose exec -T api curl -sfS "$OLLAMA_URL/v1/models" >/dev/null
-  ```
-- Embeddings now call `/api/embed` with `{"model":…,"input":[…],"truncate":true}` and fall back to `/v1/embeddings` when the first endpoint returns HTTP 404/405/500+ or an HTTPX error. Both paths assert the configured `EMBED_DIM` against the returned vector length.
+- `scripts/start_full_system.sh` runs an httpx-based preflight inside the API container (GET `/api/tags` + POST `/api/embed` with `["startup-check"]`) before the bootstrap run; failures print a warning and `/api/ask` is skipped. To rerun manually, execute the same python probe via:
+```bash
+docker compose exec -T api python - <<'PY'
+import os, sys
+import httpx
+
+base = os.environ.get("OLLAMA_URL")
+if not base:
+    print("OLLAMA_URL missing", file=sys.stderr)
+    raise SystemExit(2)
+model = os.environ.get("OLLAMA_EMBED_MODEL") or os.environ.get("EMBED_MODEL", "nomic-embed-text:latest")
+with httpx.Client(timeout=10.0) as client:
+    client.get(f"{base}/api/tags").raise_for_status()
+    resp = client.post(
+        f"{base}/api/embed",
+        json={"model": model, "input": ["startup-check"], "truncate": True},
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    candidates = data.get("embeddings") or data.get("embedding")
+    if not candidates:
+        raise SystemExit(3)
+    entry = candidates[0] if isinstance(candidates, list) and isinstance(candidates[0], (list, tuple)) else candidates
+    print("Ollama embed dim:", len(entry))
+PY
+```
+- Embeddings now call `/api/embed` with `{"model":…,"input":[…],"truncate":true}` and fall back to `/v1/embeddings` when `/api/embed` returns HTTP 404/405/500+ or an HTTPX error; both paths assert the configured `EMBED_DIM` against the returned vector length.
 - Skip the smoke notes under `/app/tmp`; the real `scripts/smoke_vault_ingest.sh` writes into `/app/vault/<inbox>/@Smoke` so you can prove the watcher + worker react to the same inbox that powers `/api/ask`.
 
 ## Vault layout & smoke notes

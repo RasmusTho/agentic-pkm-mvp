@@ -183,6 +183,43 @@ done
   fi
 }
 
+ollama_preflight_ok=0
+run_ollama_preflight() {
+  if docker compose exec -T api sh -c 'python - <<'"'"'PY'"'"'
+from __future__ import annotations
+import os, sys
+import httpx
+
+base = os.environ.get("OLLAMA_URL")
+if not base:
+    print("OLLAMA_URL missing inside the api container.", file=sys.stderr)
+    raise SystemExit(2)
+model = os.environ.get("OLLAMA_EMBED_MODEL") or os.environ.get("EMBED_MODEL", "nomic-embed-text:latest")
+with httpx.Client(timeout=10.0) as client:
+    tags_resp = client.get(f"{base}/api/tags")
+    tags_resp.raise_for_status()
+    models = tags_resp.json().get("models") or []
+    print(f"Ollama tags ok ({len(models)} models)")
+    embed_resp = client.post(
+        f"{base}/api/embed",
+        json={"model": model, "input": ["startup-check"], "truncate": True},
+    )
+    embed_resp.raise_for_status()
+    data = embed_resp.json()
+    embeddings = data.get("embeddings") or data.get("embedding")
+    if not embeddings:
+        raise SystemExit(3)
+    entry = embeddings[0] if isinstance(embeddings, list) and isinstance(embeddings[0], (list, tuple)) else embeddings
+    print(f"Ollama embed dim: {len(entry)}")
+PY'; then
+    echo "Ollama preflight succeeded"
+    ollama_preflight_ok=1
+  else
+    echo "WARNING: Ollama preflight failed; skipping /api/ask bootstrap" >&2
+    ollama_preflight_ok=0
+  fi
+}
+
 HEALTH_ENDPOINT="http://127.0.0.1:18000/healthz"
 
 compose_up --build db api
@@ -222,6 +259,8 @@ if [ -n "$layout_inbox" ] && [ -n "$layout_system" ]; then
   echo "system: $layout_system"
   echo "layout note: $layout_note"
 fi
+
+run_ollama_preflight
 
 compose_up --build watcher worker
 run_worker_probe
@@ -467,8 +506,10 @@ if [ "$ingest_run" = "yes" ] && [ "$search_results" -eq 0 ]; then
   fi
 fi
 
-ask_payload=$(curl -sS http://127.0.0.1:18000/api/ask -H "Content-Type: application/json" -d '{"question":"warm content"}' || true)
-ASK_JSON="$ask_payload" python - <<'PY'
+ask_payload=""
+if [ "$ollama_preflight_ok" -eq 1 ]; then
+  ask_payload=$(curl -sS http://127.0.0.1:18000/api/ask -H "Content-Type: application/json" -d '{"question":"warm content"}' || true)
+  ASK_JSON="$ask_payload" python - <<'PY'
 import json, os, sys
 raw = os.environ.get("ASK_JSON", "")
 if not raw:
@@ -478,6 +519,9 @@ try:
 except Exception:
     print("WARNING: /api/ask returned a non-JSON payload during bootstrap.", file=sys.stderr)
 PY
+else
+  echo "Skipping /api/ask bootstrap because Ollama preflight probe failed."
+fi
 
 alpha_bootstrap="${ALPHA_BOOTSTRAP:-0}"
 bootstrap_next="none"

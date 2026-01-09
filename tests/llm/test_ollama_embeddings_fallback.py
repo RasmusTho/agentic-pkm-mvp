@@ -1,19 +1,9 @@
 from __future__ import annotations
 
-import os
 import httpx
 import pytest
 
 from app.llm import embeddings
-
-
-@pytest.fixture(autouse=True)
-def ensure_embed_env(monkeypatch) -> None:
-    monkeypatch.setenv("LLM_PROVIDER", "ollama")
-    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
-    monkeypatch.setenv("EMBED_DIM", "4")
-    monkeypatch.delenv("OLLAMA_EMBED_DIMENSIONS", raising=False)
-
 
 
 def _make_payload_response(url: str, status_code: int, payload: dict) -> httpx.Response:
@@ -35,17 +25,37 @@ def test_ollama_embed_payload_uses_list(monkeypatch) -> None:
     assert vector == [0.1, -0.1, 0.2, 0.3]
 
 
-def test_ollama_embed_fallback_on_error(monkeypatch) -> None:
-    responses = [
-        _make_payload_response("http://ollama.test/api/embed", 500, {}),
-        _make_payload_response("http://ollama.test/v1/embeddings", 200, {"data": [{"embedding": [0.2, 0.4, -0.1, 0.0]}]})
-    ]
+def test_ollama_embed_dimensions_flag(monkeypatch) -> None:
+    called: list[dict] = []
 
     def fake_post(url: str, **kwargs) -> httpx.Response:
-        if not responses:
-            raise RuntimeError("No more fake responses")
-        return responses.pop(0)
+        called.append({"url": url, "json": kwargs.get("json")})
+        return _make_payload_response(url, 200, {"embeddings": [[0.1, -0.1, 0.2, 0.3]]})
+
+    monkeypatch.setenv("OLLAMA_EMBED_DIMENSIONS", "1")
+    monkeypatch.setattr(httpx, "post", fake_post)
+    vector = embeddings.embed_text("payload-dim", provider="ollama", model="test", dim=4, normalize=False)
+    assert called[0]["json"].get("dimensions") == 4
+    assert vector == [0.1, -0.1, 0.2, 0.3]
+
+
+def test_ollama_embed_fallback_on_error(monkeypatch) -> None:
+    def fake_post(url: str, **kwargs) -> httpx.Response:
+        if url.endswith("/api/embed"):
+            request = httpx.Request("POST", url)
+            raise httpx.HTTPStatusError("error", request=request, response=httpx.Response(500, request=request))
+        return _make_payload_response(url, 200, {"data": [{"embedding": [0.2, 0.4, -0.1, 0.0]}]})
 
     monkeypatch.setattr(httpx, "post", fake_post)
     vector = embeddings.embed_text("fallback-test", provider="ollama", model="test", dim=4, normalize=False)
     assert vector == [0.2, 0.4, -0.1, 0.0]
+
+
+def test_ollama_embed_dim_mismatch_raises(monkeypatch) -> None:
+    def fake_post(url: str, **kwargs) -> httpx.Response:
+        return _make_payload_response(url, 200, {"embeddings": [[0.1, 0.2]]})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    with pytest.raises(ValueError) as excinfo:
+        embeddings.embed_text("dim-mismatch", provider="ollama", model="test", dim=4, normalize=False)
+    assert "expected_dim=4" in str(excinfo.value)

@@ -12,7 +12,6 @@ from app.embedding_config import assert_embed_dim, get_embed_dim, l2_normalize
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
-OLLAMA_SEND_DIMENSIONS = os.getenv("OLLAMA_EMBED_DIMENSIONS", "0").strip().lower() in _TRUE_VALUES
 
 
 def get_embed_model() -> str:
@@ -72,7 +71,7 @@ def _extract_vector_from_payload(payload: Mapping[str, object]) -> list[float] |
 
 def _ollama_payload(text: str, model: str, dim: int) -> dict[str, object]:
     payload: dict[str, object] = {"model": model, "input": [text], "truncate": True}
-    if OLLAMA_SEND_DIMENSIONS:
+    if os.getenv("OLLAMA_EMBED_DIMENSIONS", "0").strip().lower() in _TRUE_VALUES:
         payload["dimensions"] = dim
     return payload
 
@@ -122,12 +121,13 @@ def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> t
         timeout = float(os.getenv("LLM_TIMEOUT", "60"))
         try:
             return _ollama_embed_api(text, model, dim, timeout)
-        except httpx.HTTPError as exc:
+        except httpx.HTTPError as primary_exc:
             try:
                 return _ollama_openai_fallback(text, model, dim, timeout)
             except httpx.HTTPError as fallback_exc:
                 raise RuntimeError(
-                    f"Ollama embedding requests failed (model={model}, expected_dim={dim}): {fallback_exc}"
+                    f"Ollama embedding requests failed (model={model}, expected_dim={dim}). "
+                    f"Primary error: {primary_exc}; fallback: {fallback_exc}"
                 ) from fallback_exc
         except ValueError as exc:
             raise ValueError(
