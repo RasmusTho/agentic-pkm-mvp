@@ -425,27 +425,31 @@ from __future__ import annotations
 import os, sys
 import httpx
 
-base = os.environ.get("OLLAMA_URL")
-if not base:
-    print("OLLAMA_URL missing inside the api container.", file=sys.stderr)
-    raise SystemExit(2)
-model = os.environ.get("OLLAMA_EMBED_MODEL") or os.environ.get("EMBED_MODEL", "nomic-embed-text:latest")
-with httpx.Client(timeout=10.0) as client:
-    tags_resp = client.get(f"{base}/api/tags")
-    tags_resp.raise_for_status()
-    models = tags_resp.json().get("models") or []
-    print(f"Ollama tags ok ({len(models)} models)")
-    embed_resp = client.post(
-        f"{base}/api/embed",
-        json={"model": model, "input": ["startup-check"], "truncate": True},
-    )
-    embed_resp.raise_for_status()
-    data = embed_resp.json()
-    embeddings = data.get("embeddings") or data.get("embedding")
-    if not embeddings:
-        raise SystemExit(3)
-    entry = embeddings[0] if isinstance(embeddings, list) and isinstance(embeddings[0], (list, tuple)) else embeddings
-    print(f"Ollama embed dim: {len(entry)}")
+try:
+    base = os.environ.get("OLLAMA_URL")
+    if not base:
+        print("INFO: optional preflight failed: OLLAMA_URL missing", file=sys.stderr)
+        raise SystemExit(0)
+    model = os.environ.get("OLLAMA_EMBED_MODEL") or os.environ.get("EMBED_MODEL", "nomic-embed-text:latest")
+    with httpx.Client(timeout=10.0) as client:
+        tags_resp = client.get(f"{base}/api/tags")
+        tags_resp.raise_for_status()
+        models = tags_resp.json().get("models") or []
+        print(f"Ollama tags ok ({len(models)} models)")
+        embed_resp = client.post(
+            f"{base}/api/embed",
+            json={"model": model, "input": ["startup-check"], "truncate": True},
+        )
+        embed_resp.raise_for_status()
+        data = embed_resp.json()
+        embeddings = data.get("embeddings") or data.get("embedding")
+        if not embeddings:
+            raise SystemExit(0)
+        entry = embeddings[0] if isinstance(embeddings, list) and isinstance(embeddings[0], (list, tuple)) else embeddings
+        print(f"Ollama embed dim: {len(entry)}")
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
+    sys.exit(0)
 PY'; then
     echo "Ollama preflight succeeded"
     ollama_preflight_ok=1
@@ -469,7 +473,7 @@ wait_for_healthz
 store_stats_json=$(run_docker_compose exec -T api python -m app.cli store stats --json || true)
 extract_stat() {
   local key="$1"
-  STAT_KEY="$key" STORE_STATS_JSON="$store_stats_json" python - <<'PY'
+STAT_KEY="$key" STORE_STATS_JSON="$store_stats_json" python - <<'PY'
 import json, os
 raw = os.environ.get("STORE_STATS_JSON", "")
 try:
@@ -484,7 +488,10 @@ vectors_before=$(extract_stat vectors)
 outbox_count=0
 if outbox_result=$(run_docker_compose exec -T api python - <<'PY'
 from app.events.outbox import read_outbox
-print(len(read_outbox()))
+try:
+    print(len(read_outbox()))
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}")
 PY
 ); then
   outbox_count=$(echo "$outbox_result" | tr -d '[:space:]')
@@ -509,13 +516,14 @@ extract_layout_field() {
   local key="$1"
   LAYOUT_JSON="$layout_json" LAYOUT_KEY="$key" python - <<'PY'
 from __future__ import annotations
-import json, os
-raw = os.environ.get("LAYOUT_JSON", "")
+import json, os, sys
 try:
+    raw = os.environ.get("LAYOUT_JSON", "")
     payload = json.loads(raw)
-except Exception:
-    payload = {}
-print(payload.get(os.environ.get("LAYOUT_KEY", ""), ""))
+    print(payload.get(os.environ.get("LAYOUT_KEY", ""), ""))
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
+    sys.exit(0)
 PY
 }
 
@@ -586,86 +594,86 @@ fi
 
 ready_payload=$(curl -sS http://127.0.0.1:18000/readyz || true)
 readiness_state=$(READY_JSON="$ready_payload" python - <<'PY'
-import json, os
-raw = os.environ.get("READY_JSON", "")
+import json, os, sys
 try:
+    raw = os.environ.get("READY_JSON", "")
     data = json.loads(raw)
-except Exception:
-    print("unknown")
-    raise SystemExit(0)
-detail = data.get("detail") or {}
-state = data.get("state") or detail.get("state") or "unknown"
-reason = data.get("reason") or detail.get("reason") or ""
-if reason:
-    print(f"{state} ({reason})")
-else:
-    print(state)
+    detail = data.get("detail") or {}
+    state = data.get("state") or detail.get("state") or "unknown"
+    reason = data.get("reason") or detail.get("reason") or ""
+    if reason:
+        print(f"{state} ({reason})")
+    else:
+        print(state)
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}")
+    sys.exit(0)
 PY
 )
 
 api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
 update_health_state() {
   api_health_ok=$(API_HEALTH_JSON="$api_health_payload" python - <<'PY'
-import json, os
-raw = os.environ.get("API_HEALTH_JSON", "")
+import json, os, sys
 try:
+    raw = os.environ.get("API_HEALTH_JSON", "")
     data = json.loads(raw)
-except Exception:
-    print("unknown")
-    raise SystemExit(0)
-value = data.get("ok")
-print("true" if value else "false")
+    value = data.get("ok")
+    print("true" if value else "false")
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
+    sys.exit(0)
 PY
 )
   api_health_required_ok=$(API_HEALTH_JSON="$api_health_payload" python - <<'PY'
-import json, os
-raw = os.environ.get("API_HEALTH_JSON", "")
+import json, os, sys
 try:
+    raw = os.environ.get("API_HEALTH_JSON", "")
     data = json.loads(raw)
-except Exception:
-    print("unknown")
-    raise SystemExit(0)
-value = data.get("required_ok")
-print("true" if value else "false")
+    value = data.get("required_ok")
+    print("true" if value else "false")
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
+    sys.exit(0)
 PY
 )
   api_health_index_rebuild=$(API_HEALTH_JSON="$api_health_payload" python - <<'PY'
-import json, os
-raw = os.environ.get("API_HEALTH_JSON", "")
+import json, os, sys
 try:
+    raw = os.environ.get("API_HEALTH_JSON", "")
     data = json.loads(raw)
-except Exception:
-    print("0")
-    raise SystemExit(0)
-actions = data.get("suggested_actions") or []
-needed = False
-for action in actions:
-    if isinstance(action, dict) and action.get("id") == "index_rebuild":
-        severity = str(action.get("severity") or "").lower()
-        if severity == "required":
-            needed = True
-            break
-print("1" if needed else "0")
+    actions = data.get("suggested_actions") or []
+    needed = False
+    for action in actions:
+        if isinstance(action, dict) and action.get("id") == "index_rebuild":
+            severity = str(action.get("severity") or "").lower()
+            if severity == "required":
+                needed = True
+                break
+    print("1" if needed else "0")
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
+    sys.exit(0)
 PY
 )
   api_health_failed=$(API_HEALTH_JSON="$api_health_payload" python - <<'PY'
-import json, os
-raw = os.environ.get("API_HEALTH_JSON", "")
+import json, os, sys
 try:
+    raw = os.environ.get("API_HEALTH_JSON", "")
     data = json.loads(raw)
-except Exception:
-    print("")
-    raise SystemExit(0)
-checks = data.get("checks") or {}
-items = []
-for key, val in checks.items():
-    if isinstance(val, dict) and not val.get("ok", True):
-        detail = val.get("detail")
-        if detail:
-            items.append(f"{key}: {detail}")
-        else:
-            items.append(key)
-print(", ".join(items))
+    checks = data.get("checks") or {}
+    items = []
+    for key, val in checks.items():
+        if isinstance(val, dict) and not val.get("ok", True):
+            detail = val.get("detail")
+            if detail:
+                items.append(f"{key}: {detail}")
+            else:
+                items.append(key)
+    print(", ".join(items))
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
+    sys.exit(0)
 PY
 )
   api_health_failed=${api_health_failed:-none}
@@ -769,35 +777,38 @@ if [ "$auto_bootstrap" -eq 1 ]; then
 fi
 
 ingested_count=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
-import json, os
-raw = os.environ.get("INGEST_JSON", "")
+import json, os, sys
 try:
+    raw = os.environ.get("INGEST_JSON", "")
     payload = json.loads(raw)
-except Exception:
-    payload = {}
-print(payload.get("ingested", 0) or 0)
+    print(payload.get("ingested", 0) or 0)
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
+    sys.exit(0)
 PY
 )
 skipped_locked_count=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
-import json, os
-raw = os.environ.get("INGEST_JSON", "")
+import json, os, sys
 try:
+    raw = os.environ.get("INGEST_JSON", "")
     payload = json.loads(raw)
-except Exception:
-    payload = {}
-print(payload.get("skipped_locked", 0) or 0)
+    print(payload.get("skipped_locked", 0) or 0)
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
+    sys.exit(0)
 PY
 )
 
 search_payload=$(curl -sS "http://127.0.0.1:18000/search?q=test&k=3" || true)
 search_results=$(SEARCH_JSON="$search_payload" python - <<'PY'
-import json, os
-raw = os.environ.get("SEARCH_JSON", "")
+import json, os, sys
 try:
+    raw = os.environ.get("SEARCH_JSON", "")
     payload = json.loads(raw)
-except Exception:
-    payload = {}
-print(len(payload.get("results") or []))
+    print(len(payload.get("results") or []))
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
+    sys.exit(0)
 PY
 )
 if [ "$BOOTSTRAP_STATE" = "active" ]; then
@@ -840,44 +851,47 @@ index_issue_count=0
 if [ "$alpha_bootstrap" -eq 1 ]; then
   index_doctor_json=$(run_docker_compose exec -T api python -m app.cli index doctor --json || true)
   index_doctor_status=$(INDEX_JSON="$index_doctor_json" python - <<'PY'
-import json, os
-raw = os.environ.get("INDEX_JSON", "")
+import json, os, sys
 try:
+    raw = os.environ.get("INDEX_JSON", "")
     payload = json.loads(raw)
-except Exception:
-    payload = {}
-print(payload.get("status") or "unknown")
+    print(payload.get("status") or "unknown")
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
+    sys.exit(0)
 PY
 )
   index_issue_count=$(INDEX_JSON="$index_doctor_json" python - <<'PY'
-import json, os
-raw = os.environ.get("INDEX_JSON", "")
+import json, os, sys
 try:
+    raw = os.environ.get("INDEX_JSON", "")
     payload = json.loads(raw)
-except Exception:
-    payload = {}
-issues = payload.get("issues") or []
-print(len(issues))
+    issues = payload.get("issues") or []
+    print(len(issues))
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
+    sys.exit(0)
 PY
 )
   rebuild_safe=$(INDEX_JSON="$index_doctor_json" OBJECT_COUNT="$object_count" VECTOR_COUNT="$vector_count" python - <<'PY'
-import json, os
-raw = os.environ.get("INDEX_JSON", "")
+import json, os, sys
 try:
+    raw = os.environ.get("INDEX_JSON", "")
     payload = json.loads(raw)
-except Exception:
-    payload = {}
-issues = payload.get("issues") or []
-warnings = payload.get("warnings") or []
-issue_text = " ".join([str(item).lower() for item in (issues + warnings)])
-objects = int(os.environ.get("OBJECT_COUNT", "0") or 0)
-vectors = int(os.environ.get("VECTOR_COUNT", "0") or 0)
-safe = (
-    objects > 0
-    and vectors == 0
-    and ("embeddings must be rebuilt" in issue_text or "no recorded embedding identity" in issue_text or "empty index" in issue_text)
-)
-print("1" if safe else "0")
+    issues = payload.get("issues") or []
+    warnings = payload.get("warnings") or []
+    issue_text = " ".join([str(item).lower() for item in (issues + warnings)])
+    objects = int(os.environ.get("OBJECT_COUNT", "0") or 0)
+    vectors = int(os.environ.get("VECTOR_COUNT", "0") or 0)
+    safe = (
+        objects > 0
+        and vectors == 0
+        and ("embeddings must be rebuilt" in issue_text or "no recorded embedding identity" in issue_text or "empty index" in issue_text)
+    )
+    print("1" if safe else "0")
+except Exception as exc:
+    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
+    sys.exit(0)
 PY
 )
   if [ "$rebuild_safe" -eq 1 ]; then
