@@ -4,6 +4,98 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+load_dotenv() {
+  if [ -f ".env" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source ".env"
+    set +a
+  fi
+}
+
+load_dotenv
+
+START_MODE="${START_MODE:-runtime}"
+startup_status_path="$ROOT/tmp/startup_status.json"
+mkdir -p "$ROOT/tmp"
+
+write_startup_status() {
+  local passed="$1"
+  local reason="$2"
+  export START_MODE
+  export PRE_FLIGHT_PASSED="$passed"
+  export PRE_FLIGHT_REASON="${reason:-}"
+  python - <<'PY' > "$startup_status_path"
+import datetime
+import json
+import os
+
+payload = {
+    "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+    "start_mode": os.environ.get("START_MODE"),
+    "llm_provider": os.environ.get("LLM_PROVIDER") or None,
+    "preflight_passed": os.environ.get("PRE_FLIGHT_PASSED") == "1",
+    "failure_reason": os.environ.get("PRE_FLIGHT_REASON") or None,
+}
+print(json.dumps(payload, ensure_ascii=False))
+PY
+}
+
+fail_preflight() {
+  local reason="$1"
+  write_startup_status 0 "$reason"
+  echo "ERROR: Preflight failed: $reason" >&2
+  exit 1
+}
+
+require_vars() {
+  for var in "$@"; do
+    if [ -z "${!var:-}" ]; then
+      fail_preflight "START_MODE runtime requires $var"
+    fi
+  done
+}
+
+preflight_runtime() {
+  require_vars LLM_PROVIDER OPENAI_BASE_URL LLM_MODEL
+  if [ "${LLM_PROVIDER_ENFORCE:-}" != "1" ]; then
+    fail_preflight "runtime mode requires LLM_PROVIDER_ENFORCE=1"
+  fi
+  export LLM_PROVIDER_ENFORCE=1
+}
+
+preflight_infra() {
+  if [ "${LLM_PROVIDER_ENFORCE:-}" != "0" ]; then
+    fail_preflight "infra mode requires LLM_PROVIDER_ENFORCE=0"
+  fi
+  START_WATCHERS=0
+  START_WORKER=0
+}
+
+preflight_diagnostic() {
+  START_WATCHERS=0
+  START_WORKER=0
+}
+
+run_preflight() {
+  case "$START_MODE" in
+    infra)
+      preflight_infra
+      ;;
+    runtime)
+      preflight_runtime
+      ;;
+    diagnostic)
+      preflight_diagnostic
+      ;;
+    *)
+      fail_preflight "Invalid START_MODE: $START_MODE"
+      ;;
+  esac
+  write_startup_status 1 ""
+}
+
+
 START_WATCHERS="${START_WATCHERS:-0}"
 START_WORKER="${START_WORKER:-0}"
 START_FLIGHT_RECORDER="${START_FLIGHT_RECORDER:-1}"
@@ -114,6 +206,8 @@ run_docker_compose() {
     docker compose "$@"
   fi
 }
+
+run_preflight
 
 alpha_rebuild="${ALPHA_REBUILD:-0}"
 alpha_rebuild_pull="${ALPHA_REBUILD_PULL:-0}"
@@ -337,6 +431,13 @@ PY'; then
    ollama_preflight_ok=0
  fi
 }
+
+
+if [ "$START_MODE" = "diagnostic" ]; then
+  echo "START_MODE=diagnostic: running API in the foreground (no detach)"
+  run_docker_compose up --build db api
+  exit $?
+fi
 
 compose_up --build db api
 run_db_probe
