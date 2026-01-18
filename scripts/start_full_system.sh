@@ -101,6 +101,22 @@ run_preflight() {
   write_startup_status 1 ""
 }
 
+optional_check() {
+  local label="$1"
+  shift
+  if [ "$BOOTSTRAP_STATE" = "empty" ] && [ "${VERIFY_ACTIVE:-0}" -ne 1 ]; then
+    set +e
+    "$@"
+    status=$?
+    set -e
+    if [ "$status" -ne 0 ]; then
+      echo "INFO: $label (ignored for empty bootstrap)"
+    fi
+    return 0
+  fi
+  "$@"
+}
+
 
 START_WATCHERS="${START_WATCHERS:-0}"
 START_WORKER="${START_WORKER:-0}"
@@ -526,7 +542,7 @@ fi
 if [ "$BOOTSTRAP_STATE" = "empty" ]; then
   echo "BOOTSTRAP: empty system, skipping Ollama preflight"
 else
-  run_ollama_preflight
+  optional_check "Ollama preflight" run_ollama_preflight
 fi
 
 services_to_start=()
@@ -701,7 +717,19 @@ vector_count="$vectors_before"
 ingest_summary_json="{}"
 if [ "$objects_before" -le 0 ]; then
   ingest_run="yes"
-  ingest_summary_json=$(run_docker_compose exec -T api env STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@db:5432/app python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
+  if [ "$BOOTSTRAP_STATE" = "empty" ]; then
+    set +e
+    ingest_summary_json=$(run_docker_compose exec -T api env STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@db:5432/app python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
+    ingest_status=$?
+    set -e
+    if [ "$ingest_status" -ne 0 ]; then
+      echo "INFO: bootstrap ingest failed but will be retried after first ingest (empty system)"
+      ingest_run="no"
+      ingest_summary_json="{}"
+    fi
+  else
+    ingest_summary_json=$(run_docker_compose exec -T api env STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@db:5432/app python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
+  fi
   store_stats_json=$(run_docker_compose exec -T api python -m app.cli store stats --json || true)
   objects_after=$(extract_stat objects)
   vectors_after=$(extract_stat vectors)
