@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot
 
 fmt:
 	rufflehog --version >/dev/null 2>&1 || true
@@ -25,6 +25,10 @@ transcribe:
 qa:
 	@if [ -z "$(QUERY)" ]; then echo "Usage: make qa QUERY='Your question'"; exit 1; fi
 	QUERY="$(QUERY)" python -c 'import json, os; from app.agents.qa.agent import answer; res = answer(os.environ["QUERY"]); print(json.dumps(res, ensure_ascii=False, indent=2))'
+
+
+cold-boot:
+	@bash scripts/cold_boot.sh
 
 smoke:
 	PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
