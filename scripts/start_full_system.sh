@@ -107,6 +107,7 @@ START_WORKER="${START_WORKER:-0}"
 START_FLIGHT_RECORDER="${START_FLIGHT_RECORDER:-1}"
 FLIGHT_RECORDER_INTERVAL="${FLIGHT_RECORDER_INTERVAL:-5}"
 FLIGHT_RECORDER_DURATION="${FLIGHT_RECORDER_DURATION:-0}"
+VERIFY_ACTIVE="${VERIFY_ACTIVE:-0}"
 ALLOW_LEGACY_VAULT="${ALLOW_LEGACY_VAULT:-0}"
 HEALTH_ENDPOINT="${HEALTH_ENDPOINT:-http://127.0.0.1:18000/healthz}"
 HEALTH_MAX_ATTEMPTS="${HEALTH_MAX_ATTEMPTS:-12}"
@@ -672,10 +673,10 @@ fi
 
 index_rebuild_status="skipped"
 if [ "$BOOTSTRAP_STATE" = "empty" ]; then
-  echo "INDEX: skipped (no objects ingested yet)"
+  echo "INDEX: not required (no objects yet)"
   index_rebuild_status="skipped (empty)"
 elif [ "$api_health_index_rebuild" -eq 1 ] && [ "$auto_bootstrap" -ne 1 ]; then
-  echo "INDEX REBUILD: required (AUTO_BOOTSTRAP=1 to run)" >&2
+  echo "INDEX: required (AUTO_BOOTSTRAP=1 to run)" >&2
   echo "Run: docker compose exec -T api python -m app.cli index rebuild --profile default" >&2
   debug_dump
   exit 1
@@ -710,7 +711,7 @@ fi
 
 if [ "$auto_bootstrap" -eq 1 ]; then
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then
-    echo "INDEX: skipped (no objects ingested yet)"
+    echo "INDEX: not required (no objects yet)"
   else
     api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
     update_health_state
@@ -771,11 +772,35 @@ except Exception:
 print(len(payload.get("results") or []))
 PY
 )
-if [ "$ingest_run" = "yes" ] && [ "$search_results" -eq 0 ]; then
-  if [ "$ingested_count" -eq 0 ] && [ "$skipped_locked_count" -gt 0 ]; then
-    echo "WARNING: search returned zero results after bootstrap ingest; all candidates were locked (errno=35)."
-  else
-    echo "ERROR: search returned zero results after bootstrap ingest; check vault mount/store mismatch" >&2
+if [ "$BOOTSTRAP_STATE" = "active" ]; then
+  if [ "$ingest_run" = "yes" ] && [ "$search_results" -eq 0 ]; then
+    if [ "$ingested_count" -eq 0 ] && [ "$skipped_locked_count" -gt 0 ]; then
+      echo "WARNING: search returned zero results after bootstrap ingest; all candidates were locked (errno=35)."
+    else
+      echo "ERROR: search returned zero results after bootstrap ingest; check vault mount/store mismatch" >&2
+      exit 1
+    fi
+  fi
+else
+  echo "BOOTSTRAP: empty system, awaiting first ingest"
+fi
+
+if [ "$VERIFY_ACTIVE" -eq 1 ]; then
+  if [ "$BOOTSTRAP_STATE" = "empty" ]; then
+    echo "VERIFY: requires ingested objects; system is empty" >&2
+    exit 1
+  fi
+  if [ "$ollama_preflight_ok" -ne 1 ]; then
+    echo "VERIFY: Ollama preflight must succeed (set OLLAMA_URL/LLM_PROVIDER)" >&2
+    exit 1
+  fi
+  if [ "$object_count" -le 0 ]; then
+    echo "VERIFY: index missing objects" >&2
+    exit 1
+  fi
+  ask_status=$(curl -sS -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:18000/api/ask -H 'Content-Type: application/json' -d '{"query":"startup verify"}' || true)
+  if [ "$ask_status" != "200" ]; then
+    echo "VERIFY: /api/ask returned $ask_status" >&2
     exit 1
   fi
 fi
