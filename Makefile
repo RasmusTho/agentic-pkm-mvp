@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start
 
 fmt:
 	rufflehog --version >/dev/null 2>&1 || true
@@ -29,6 +29,12 @@ qa:
 
 cold-boot:
 	@bash scripts/cold_boot.sh
+
+
+# make start = daily runtime bring-up
+# make cold-boot = from-scratch verification
+start:
+	@START_MODE=runtime scripts/start_full_system.sh
 
 smoke:
 	PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
