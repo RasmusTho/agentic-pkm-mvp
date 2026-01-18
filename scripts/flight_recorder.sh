@@ -9,6 +9,7 @@ INTERVAL=5
 DURATION=0
 ONCE=0
 LOG_PATH=""
+DOCKER_PROBE_TIMEOUT=2
 
 print_usage() {
   cat <<USAGE
@@ -87,6 +88,18 @@ run_with_timeout() {
   fi
 }
 
+run_with_timeout_short() {
+  local duration="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$duration" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$duration" "$@"
+  else
+    "$@"
+  fi
+}
+
 safe_cmd() {
   local label="$1"
   shift
@@ -107,6 +120,18 @@ safe_cmd_with_tool() {
     return 0
   fi
   safe_cmd "$label" "$@"
+}
+
+docker_probe() {
+  local label="$1"
+  shift
+  append_line "\n=== docker ${label} probe ==="
+  if run_with_timeout_short "$DOCKER_PROBE_TIMEOUT" "$@" >>"$LOG_PATH" 2>&1; then
+    append_line "docker_${label}_ok=true"
+    return 0
+  fi
+  append_line "docker_${label}_ok=false"
+  return 1
 }
 
 flight_active=1
@@ -135,6 +160,12 @@ record_snapshot() {
   fi
   safe_cmd "processes" sh -c 'ps -A -o pid,ppid,%cpu,%mem,command | sort -nrk 3 | head -n 20' || true
   safe_cmd "df" df -h || true
+  if command -v docker >/dev/null 2>&1; then
+    docker_probe "info" docker info || true
+    docker_probe "ps" docker ps || true
+  else
+    append_line "docker: missing"
+  fi
   safe_cmd_with_tool "docker info" docker run_with_timeout docker info || true
   safe_cmd_with_tool "docker compose ps" docker run_with_timeout docker compose ps || true
   safe_cmd_with_tool "docker compose logs" docker run_with_timeout docker compose logs --tail=50 api watcher worker || true
