@@ -47,12 +47,12 @@ def _now_iso() -> str:
     return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
 
 
-def _hash_file(path: Path) -> str | None:
+def _hash_file(path: Path) -> tuple[str, int] | None:
     try:
         data = path.read_bytes()
     except Exception:
         return None
-    return hashlib.sha256(data).hexdigest()
+    return hashlib.sha256(data).hexdigest(), len(data)
 
 
 def _matches_scope(rel_path: Path, scope_glob: str) -> bool:
@@ -60,8 +60,8 @@ def _matches_scope(rel_path: Path, scope_glob: str) -> bool:
     return fnmatch.fnmatch(rel_str, scope_glob)
 
 
-def _scan_markdown(vault_root: Path, scope_glob: str) -> Iterable[tuple[Path, float, Path]]:
-    for path in sorted(vault_root.rglob("*.md")):
+def _scan_markdown(vault_root: Path, scan_root: Path, scope_glob: str) -> Iterable[tuple[Path, float, Path]]:
+    for path in sorted(scan_root.rglob("*.md")):
         try:
             rel = path.relative_to(vault_root)
         except Exception:
@@ -73,6 +73,143 @@ def _scan_markdown(vault_root: Path, scope_glob: str) -> Iterable[tuple[Path, fl
         except Exception:
             continue
         yield rel, mtime, path
+
+
+def _scope_prefix(scope_glob: str) -> str:
+    wildcard_chars = {"*", "?", "["}
+    limit = len(scope_glob)
+    for idx, char in enumerate(scope_glob):
+        if char in wildcard_chars:
+            limit = idx
+            break
+    prefix = scope_glob[:limit].rstrip("/")
+    return prefix
+
+def _inbox_prefix_from_layout(vault_root: Path) -> str:
+    layout = ensure_vault_layout(vault_root)
+    return layout.inbox_folder
+
+def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
+    prefix = _scope_prefix(scope_glob)
+    if not prefix:
+        prefix = _inbox_prefix_from_layout(vault_root)
+    if not prefix:
+        raise ValueError("Watcher scope_glob must specify a folder prefix before wildcards")
+    candidate = vault_root / prefix
+    if not candidate.exists() or not candidate.is_dir():
+        raise FileNotFoundError(f"Scan root missing: {candidate}")
+    resolved_vault = vault_root.resolve()
+    resolved_candidate = candidate.resolve()
+    if not resolved_candidate.is_relative_to(resolved_vault):
+        raise ValueError(f"Scan root {resolved_candidate} must live under vault root {resolved_vault}")
+    return candidate
+
+def _now_iso_from_timestamp(value: float) -> str:
+    return datetime.fromtimestamp(value, tz=UTC).isoformat().replace("+00:00", "Z")
+
+def _log_tick_diagnostics_registry(
+    cfg: RegistryConfig,
+    summary: dict[str, object],
+    scan_root: Path | None,
+    watcher_name: str,
+) -> None:
+    payload: dict[str, object | None] = {
+        "timestamp": summary.get("tick_start_ts"),
+        "watcher_name": watcher_name,
+        "scope_glob": summary.get("scope_glob") or cfg.scope_glob,
+        "scan_root": str(scan_root) if scan_root is not None else None,
+        "scanned_files": summary.get("scanned_files", 0),
+        "hashed_files": summary.get("hashed_files", 0),
+        "bytes_read": summary.get("bytes_read", 0),
+        "changed_files": summary.get("changed_in_tick", 0),
+        "emitted_events": summary.get("emitted_in_tick", 0),
+        "elapsed_ms": summary.get("tick_ms"),
+        "bad_tick": summary.get("bad_tick", False),
+        "bad_reason": summary.get("bad_tick_reason"),
+        "chosen_sleep_seconds": summary.get("chosen_sleep_seconds"),
+        "kill_switch": summary.get("kill_switch", False),
+        "thresholds": summary.get("thresholds"),
+        "stop_reason": summary.get("stop_reason"),
+    }
+    try:
+        cfg.tick_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with cfg.tick_log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False))
+            handle.write("\n")
+    except Exception:
+        return
+
+def _trip_stop_file(cfg: RegistryConfig, summary: dict[str, object]) -> None:
+    msg = (
+        "WATCHER_STOP_TRIPPED: "
+        f"scanned={summary.get('scanned_files')} bytes={summary.get('bytes_read')}"
+        f" emit={summary.get('emitted_in_tick')} thresholds="
+        f"scanned={cfg.max_scanned_files_per_tick} bytes={cfg.max_bytes_read_per_tick}"
+        f" elapsed={cfg.max_elapsed_ms_per_tick} bad_ticks={cfg.max_bad_ticks}"
+    )
+    if not cfg.stop_file.exists():
+        print(msg)
+        cfg.stop_file.parent.mkdir(parents=True, exist_ok=True)
+        cfg.stop_file.write_text(msg + "\n", encoding="utf-8")
+    summary["stop_reason"] = msg
+
+def _apply_guardrails_registry(cfg: RegistryConfig, state: WatcherState, summary: dict[str, object]) -> None:
+    thresholds = {
+        "max_scanned_files_per_tick": cfg.max_scanned_files_per_tick,
+        "max_bytes_read_per_tick": cfg.max_bytes_read_per_tick,
+        "max_elapsed_ms_per_tick": cfg.max_elapsed_ms_per_tick,
+        "max_bad_ticks": cfg.max_bad_ticks,
+        "bad_tick_backoff_seconds": cfg.bad_tick_backoff_seconds,
+    }
+    summary["thresholds"] = thresholds
+    scanned = int(summary.get("scanned_files", 0))
+    bytes_read = int(summary.get("bytes_read", 0))
+    elapsed = int(summary.get("tick_ms", 0))
+    errors = int(summary.get("errors_in_tick", 0))
+    bad_reason: str | None = None
+    if scanned >= cfg.max_scanned_files_per_tick:
+        bad_reason = "too_many_files"
+    elif bytes_read >= cfg.max_bytes_read_per_tick:
+        bad_reason = "too_many_bytes"
+    elif elapsed >= cfg.max_elapsed_ms_per_tick:
+        bad_reason = "too_slow"
+    elif errors:
+        bad_reason = "errors"
+    if bad_reason:
+        state.bad_ticks += 1
+        summary["bad_tick"] = True
+        summary["bad_tick_reason"] = bad_reason
+        sleep_seconds = cfg.tick_sleep_seconds + cfg.bad_tick_backoff_seconds * state.bad_ticks
+        summary["chosen_sleep_seconds"] = sleep_seconds
+        state.dynamic_sleep_seconds = sleep_seconds
+        if state.bad_ticks >= cfg.max_bad_ticks:
+            summary["stop_tripped"] = True
+            _trip_stop_file(cfg, summary)
+    else:
+        state.bad_ticks = 0
+        summary["bad_tick"] = False
+        summary["bad_tick_reason"] = None
+        state.dynamic_sleep_seconds = None
+        summary["chosen_sleep_seconds"] = cfg.tick_sleep_seconds
+
+def _finalize_spec_tick(
+    cfg: RegistryConfig,
+    state: WatcherState,
+    summary: dict[str, object],
+    tick_start: float,
+    scan_root: Path | None,
+    watcher_name: str,
+) -> dict[str, object]:
+    if "tick_ms" not in summary:
+        summary["tick_ms"] = max(int((time.time() - tick_start) * 1000), 0)
+    summary["elapsed_ms"] = summary["tick_ms"]
+    summary.setdefault("tick_start_ts", _now_iso_from_timestamp(tick_start))
+    summary.setdefault("chosen_sleep_seconds", state.dynamic_sleep_seconds or cfg.tick_sleep_seconds)
+    try:
+        _log_tick_diagnostics_registry(cfg, summary, scan_root, watcher_name)
+    finally:
+        state.save(_state_path(cfg.state_dir, watcher_name))
+    return summary
 
 
 def _write_jsonl_event(event: OutboxEvent, outbox_path: Path) -> None:
@@ -196,21 +333,38 @@ class RegistryConfig:
     summary_interval: int
     stop_file: Path
     tick_sleep_seconds: float
+    tick_log_path: Path
+    max_scanned_files_per_tick: int
+    max_bytes_read_per_tick: int
+    max_elapsed_ms_per_tick: int
+    max_bad_ticks: int
+    bad_tick_backoff_seconds: float
     specs: list[WatcherSpec]
 
     @classmethod
     def from_env(cls, specs: list[WatcherSpec], config_path: Path) -> "RegistryConfig":
         enable = _as_bool(os.getenv("WATCHER_ENABLE", "1"))
         scope_glob = os.getenv("WATCHER_SCOPE_GLOB", _default_scope_glob())
-        debounce_ms = int(os.getenv("WATCHER_DEBOUNCE_MS", "1500"))
-        rate_limit_per_min = int(os.getenv("WATCHER_RATE_LIMIT_PER_MIN", "30"))
+        debounce_ms = _as_int(os.getenv("WATCHER_DEBOUNCE_MS"), fallback=1500)
+        rate_limit_per_min = _as_int(os.getenv("WATCHER_RATE_LIMIT_PER_MIN"), fallback=30)
         outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH", get_index_outbox_path()))
         vault_path = Path(os.getenv("WATCHER_VAULT_PATH", "vault")).expanduser()
         state_dir = Path(os.getenv("WATCHER_STATE_DIR", "tmp")).expanduser()
         heartbeat_path = Path(os.getenv("WATCHER_HEARTBEAT_PATH", resolve_heartbeat_path()))
-        summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), 60)
-        stop_file = Path(os.getenv("WATCHER_STOP_FILE", "tmp/WATCHER_STOP"))
-        tick_sleep_seconds = max(float(os.getenv("WATCHER_TICK_SLEEP_SECONDS", "0.2")), MIN_TICK_SLEEP_SECONDS)
+        summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), fallback=60)
+        stop_file = Path(os.getenv("WATCHER_STOP_FILE", "/app/tmp/WATCHER_STOP")).expanduser()
+        tick_sleep_seconds = max(
+            float(os.getenv("WATCHER_TICK_SLEEP_SECONDS", "0.2")),
+            MIN_TICK_SLEEP_SECONDS,
+        )
+        tick_log_env = os.getenv("WATCHER_TICK_LOG_PATH")
+        tick_log_path = Path(tick_log_env) if tick_log_env else Path("/app/tmp/watcher_tick.jsonl")
+        max_scanned_files_per_tick = _as_int(os.getenv("WATCHER_MAX_SCANNED_FILES_PER_TICK"), fallback=500)
+        max_bytes_read_per_tick = _as_int(os.getenv("WATCHER_MAX_BYTES_READ_PER_TICK"), fallback=50_000_000)
+        max_elapsed_ms_per_tick = _as_int(os.getenv("WATCHER_MAX_ELAPSED_MS_PER_TICK"), fallback=2000)
+        max_bad_ticks = _as_int(os.getenv("WATCHER_MAX_BAD_TICKS"), fallback=10)
+        bad_tick_backoff_seconds = _as_float(os.getenv("WATCHER_BAD_TICK_BACKOFF_SECONDS"), fallback=2.0)
+
         for spec in specs:
             spec.scope_glob = scope_glob
             spec.debounce_ms = debounce_ms
@@ -228,6 +382,12 @@ class RegistryConfig:
             summary_interval=summary_interval,
             stop_file=stop_file,
             tick_sleep_seconds=tick_sleep_seconds,
+            tick_log_path=tick_log_path.expanduser(),
+            max_scanned_files_per_tick=max_scanned_files_per_tick,
+            max_bytes_read_per_tick=max_bytes_read_per_tick,
+            max_elapsed_ms_per_tick=max_elapsed_ms_per_tick,
+            max_bad_ticks=max_bad_ticks,
+            bad_tick_backoff_seconds=bad_tick_backoff_seconds,
             specs=specs,
         )
 
@@ -339,6 +499,12 @@ def _as_bool(value: str | None) -> bool:
 def _as_int(value: str | None, fallback: int) -> int:
     try:
         return int(value) if value is not None else fallback
+    except Exception:
+        return fallback
+
+def _as_float(value: str | None, *, fallback: float) -> float:
+    try:
+        return float(value) if value is not None else fallback
     except Exception:
         return fallback
 
@@ -473,7 +639,9 @@ def _run_spec_tick(
     *,
     now: float,
 ) -> dict[str, object]:
+    tick_start = now
     state.ticks_run += 1
+    errors_before = state.errors
 
     summary: dict[str, object] = {
         "changed_in_tick": 0,
@@ -485,44 +653,57 @@ def _run_spec_tick(
         "intents_emitted": state.intents_emitted,
         "changed_detected": state.changed_detected,
         "errors": state.errors,
+        "errors_in_tick": 0,
         "rate_limited": state.rate_limited,
         "enqueue_failures_total": state.enqueue_failures_total,
+        "scanned_files": 0,
+        "hashed_files": 0,
+        "bytes_read": 0,
+        "scope_glob": spec.scope_glob,
     }
 
     if not cfg.enable:
         summary["disabled"] = True
-        return summary
+        return _finalize_spec_tick(cfg, state, summary, tick_start, None, spec.name)
 
     if cfg.stop_file.exists():
         summary["kill_switch"] = True
         _warn_once_per_minute(state, f"WATCHER_STOP present at {cfg.stop_file}; pausing.", now=now)
-        state.save(_state_path(cfg.state_dir, spec.name))
-        return summary
+        return _finalize_spec_tick(cfg, state, summary, tick_start, None, spec.name)
 
     if state.in_backoff(now):
         summary["backoff_active"] = True
-        state.save(_state_path(cfg.state_dir, spec.name))
-        return summary
+        return _finalize_spec_tick(cfg, state, summary, tick_start, None, spec.name)
 
     if not cfg.vault_path.exists() or not cfg.vault_path.is_dir():
         state.errors += 1
         state.save(_state_path(cfg.state_dir, spec.name))
         raise FileNotFoundError(f"Vault path not found: {cfg.vault_path}")
 
+    scan_root = _derive_scan_root(cfg.vault_path, spec.scope_glob)
     changed_entries: list[tuple[Path, float, str | None]] = []
-    for rel, mtime, path in _scan_markdown(cfg.vault_path, spec.scope_glob):
-        previous_hash = state.last_hash(str(rel))
-        digest = _hash_file(path)
-        if digest is None:
+    for rel, mtime, path in _scan_markdown(cfg.vault_path, scan_root, spec.scope_glob):
+        summary["scanned_files"] = int(summary["scanned_files"]) + 1
+        rel_str = str(rel)
+        last_mtime = state.last_mtime(rel_str)
+        previous_hash = state.last_hash(rel_str)
+        if last_mtime is not None and last_mtime == mtime:
+            state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash, seen_at=now)
             continue
+        hashed = _hash_file(path)
+        if hashed is None:
+            continue
+        digest, read_bytes = hashed
+        summary["hashed_files"] = int(summary["hashed_files"]) + 1
+        summary["bytes_read"] = int(summary["bytes_read"]) + read_bytes
         if previous_hash is not None and previous_hash == digest:
-            state.update_file_state(str(rel), mtime=mtime, content_hash=digest)
+            state.update_file_state(rel_str, mtime=mtime, content_hash=digest, seen_at=now)
             continue
         changed_entries.append((rel, mtime, digest))
 
+    summary["changed_in_tick"] = len(changed_entries)
     state.changed_detected += len(changed_entries)
     summary["changed_detected"] = state.changed_detected
-    summary["changed_in_tick"] = len(changed_entries)
 
     emitted_in_tick = 0
     rate_limited_in_tick = 0
@@ -566,12 +747,17 @@ def _run_spec_tick(
     summary["rate_limited_in_tick"] = rate_limited_in_tick
     summary["intents_emitted"] = state.intents_emitted
     summary["errors"] = state.errors
+    summary["errors_in_tick"] = state.errors - errors_before
     summary["rate_limited"] = state.rate_limited
     summary["enqueue_failures_total"] = state.enqueue_failures_total
+    summary["scan_root"] = str(scan_root)
+    summary["scope_glob"] = spec.scope_glob
 
-    state.save(_state_path(cfg.state_dir, spec.name))
-    return summary
+    elapsed_ms = max(int((time.time() - tick_start) * 1000), 0)
+    summary["tick_ms"] = elapsed_ms
+    _apply_guardrails_registry(cfg, state, summary)
 
+    return _finalize_spec_tick(cfg, state, summary, tick_start, scan_root, spec.name)
 
 def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
     cfg = load_registry_config(config_path)
@@ -649,7 +835,9 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
         tick += 1
         if tick_limit is not None and tick >= tick_limit:
             break
-        time.sleep(cfg.tick_sleep_seconds)
+        dynamic_sleep = max((state.dynamic_sleep_seconds or 0.0) for state in states.values())
+        sleep_seconds = max(cfg.tick_sleep_seconds, dynamic_sleep)
+        time.sleep(sleep_seconds)
 
 
 __all__ = [

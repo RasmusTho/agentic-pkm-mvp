@@ -4,10 +4,14 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from app.vault.paths import get_vault_inbox_dir_rel
 from app.watcher.config import WatcherConfig
 from app.watcher.state import WatcherState
 from app.watcher.watcher import run_tick
+
+pytestmark = pytest.mark.watcher_controls
 
 
 def _inbox_dir(tmp_path: Path) -> str:
@@ -56,6 +60,7 @@ def test_scope_glob_limits_to_inbox(tmp_path: Path) -> None:
     summary = run_tick(cfg, state, now=0.0)
 
     assert summary["emitted_in_tick"] == 1
+    assert summary["scanned_files"] == 1
     entries = _read_outbox(cfg.outbox_path)
     assert len(entries) == 1
     payload = entries[0].get("payload") or {}
@@ -99,6 +104,7 @@ def test_unchanged_file_skips_hash(tmp_path: Path, monkeypatch) -> None:
     assert second["emitted_in_tick"] == 0
     assert second["hashed_files"] == 0
     assert second["bytes_read"] == 0
+
 
 def test_rate_limit_blocks_after_threshold(tmp_path: Path) -> None:
     cfg = _config(tmp_path, rate_limit=1)
@@ -173,3 +179,30 @@ def test_restart_sanitizes_monotonic_state(tmp_path: Path) -> None:
     assert summary2["emitted_in_tick"] == 1
     entries2 = _read_outbox(cfg.outbox_path)
     assert len(entries2) == 2
+
+
+def test_bad_tick_triggers_backoff_and_stop(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    cfg.max_scanned_files_per_tick = 1
+    cfg.max_bad_ticks = 2
+    cfg.bad_tick_backoff_seconds = 0.5
+    cfg.tick_sleep_seconds = 0.1
+    cfg.vault_path.mkdir(parents=True, exist_ok=True)
+    inbox = cfg.vault_path / _inbox_dir(tmp_path)
+    inbox.mkdir(parents=True, exist_ok=True)
+    for idx in range(3):
+        note = inbox / f"note-{idx}.md"
+        note.write_text('payload', encoding='utf-8')
+    if cfg.stop_file.exists():
+        cfg.stop_file.unlink()
+    state = WatcherState()
+    first = run_tick(cfg, state, now=0.0)
+    assert first["bad_tick"] is True
+    assert not cfg.stop_file.exists()
+    second = run_tick(cfg, state, now=1.0)
+    assert second["bad_tick"] is True
+    assert cfg.stop_file.exists()
+    assert second.get("stop_tripped") is True
+    expected_sleep = cfg.tick_sleep_seconds + cfg.bad_tick_backoff_seconds * state.bad_ticks
+    assert second["chosen_sleep_seconds"] == expected_sleep
+    assert state.dynamic_sleep_seconds == expected_sleep

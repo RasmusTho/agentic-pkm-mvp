@@ -162,6 +162,11 @@ log_layout_info() {
   append_startup_log "layout note: ${layout_note:-<missing>}"
 }
 
+log_tick_log_path() {
+  log_section "watcher tick log"
+  append_startup_log "WATCHER_TICK_LOG_PATH=${WATCHER_TICK_LOG_PATH:-<not set>}"
+}
+
 log_worker_heartbeat_snapshot() {
   log_section "worker heartbeat"
   if [ -f tmp/worker_heartbeat.json ]; then
@@ -179,6 +184,7 @@ capture_startup_logs() {
   log_service_tail "watcher"
   log_service_tail "worker"
   log_layout_info
+  log_tick_log_path
   log_worker_heartbeat_snapshot
   append_startup_log ""
   append_startup_log "startup log available at: $startup_log_path"
@@ -602,23 +608,6 @@ if [ "$ingest_run" = "yes" ] && [ "$search_results" -eq 0 ]; then
     echo "ERROR: search returned zero results after bootstrap ingest; check vault mount/store mismatch" >&2
     exit 1
   fi
-fi
-
-ask_payload=""
-if [ "$ollama_preflight_ok" -eq 1 ]; then
-  ask_payload=$(curl -sS http://127.0.0.1:18000/api/ask -H "Content-Type: application/json" -d '{"question":"warm content"}' || true)
-  ASK_JSON="$ask_payload" python - <<'PY'
-import json, os, sys
-raw = os.environ.get("ASK_JSON", "")
-if not raw:
-    raise SystemExit(0)
-try:
-    json.loads(raw)
-except Exception:
-    print("WARNING: /api/ask returned a non-JSON payload during bootstrap.", file=sys.stderr)
-PY
-else
-  echo "Skipping /api/ask bootstrap because Ollama preflight probe failed."
 fi
 
 alpha_bootstrap="${ALPHA_BOOTSTRAP:-0}"

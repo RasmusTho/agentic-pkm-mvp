@@ -74,6 +74,9 @@ class WatcherState:
     last_stop_warning: float | None = None
     rate_window: list[float] = field(default_factory=list)
     last_trace_id: str | None = None
+    bad_ticks: int = 0
+    outbox_offset: int = 0
+    dynamic_sleep_seconds: float | None = None
 
     @classmethod
     def load(cls, path: Path) -> WatcherState:
@@ -96,6 +99,9 @@ class WatcherState:
             last_stop_warning=_sanitize_ts(data.get("last_stop_warning")),
             rate_window=_sanitize_rate_window(data.get("rate_window")),
             last_trace_id=data.get("last_trace_id"),
+            bad_ticks=int(data.get("bad_ticks") or 0),
+            outbox_offset=int(data.get("outbox_offset") or 0),
+            dynamic_sleep_seconds=_sanitize_ts(data.get("dynamic_sleep_seconds")),
         )
 
     def save(self, path: Path) -> None:
@@ -113,6 +119,9 @@ class WatcherState:
             "last_stop_warning": self.last_stop_warning,
             "rate_window": self.rate_window,
             "last_trace_id": self.last_trace_id,
+            "bad_ticks": self.bad_ticks,
+            "outbox_offset": self.outbox_offset,
+            "dynamic_sleep_seconds": self.dynamic_sleep_seconds,
         }
         path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
