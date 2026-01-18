@@ -77,6 +77,12 @@ RUNTIME_ENV_PATH="$runtime_env_path"
 bash scripts/export_runtime_env.sh
 runtime_env="--env-file $runtime_env_path"
 
+latest_tick_log_path="$ROOT/tmp/latest_watcher_tick_log"
+tick_log_path="/app/tmp/watcher_tick-$(date -u +"%Y%m%d-%H%M%S").jsonl"
+printf "WATCHER_TICK_LOG_PATH=%s\n" "$tick_log_path" >> "$runtime_env_path"
+export WATCHER_TICK_LOG_PATH="$tick_log_path"
+printf "%s\n" "$tick_log_path" > "$latest_tick_log_path"
+
 echo "Vault host path: $vault_host_path -> /app/vault"
 
 run_docker_compose() {
@@ -682,6 +688,8 @@ else
 fi
 capture_startup_logs
 echo "Startup log: $startup_log_path"
+echo "Watcher tick log: ${WATCHER_TICK_LOG_PATH:-<not set>}"
+echo "Tail: docker compose exec watcher sh -lc 'tail -n 20 \"${WATCHER_TICK_LOG_PATH:-/app/tmp/watcher_tick.jsonl}\"'"
 
 echo "--- STARTUP COMPLETE ---"
 
