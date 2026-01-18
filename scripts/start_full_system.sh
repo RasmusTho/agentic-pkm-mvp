@@ -104,17 +104,18 @@ run_preflight() {
 optional_check() {
   local label="$1"
   shift
-  if [ "$BOOTSTRAP_STATE" = "empty" ] && [ "${VERIFY_ACTIVE:-0}" -ne 1 ]; then
-    set +e
+  if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
     "$@"
-    status=$?
-    set -e
-    if [ "$status" -ne 0 ]; then
-      echo "INFO: $label (ignored for empty bootstrap)"
-    fi
     return 0
   fi
+  set +e
   "$@"
+  status=$?
+  set -e
+  if [ "$status" -ne 0 ]; then
+    echo "INFO: optional check '$label' failed (ignored for fast start)"
+  fi
+  return 0
 }
 
 
@@ -510,7 +511,19 @@ fi
 export BOOTSTRAP_STATE BOOTSTRAP_REASON
 write_startup_status 1 ""
 
-layout_json=$(run_docker_compose exec -T api python -m app.cli vault-layout-ensure --vault-root /app/vault --json)
+layout_json=""
+if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+  layout_json=$(run_docker_compose exec -T api python -m app.cli vault-layout-ensure --vault-root /app/vault --json)
+else
+  set +e
+  layout_json=$(run_docker_compose exec -T api python -m app.cli vault-layout-ensure --vault-root /app/vault --json) || layout_json=""
+  status=$?
+  set -e
+  if [ "$status" -ne 0 ]; then
+    echo "INFO: vault layout ensure failed (ignored for fast start)"
+  fi
+fi
+
 
 extract_layout_field() {
   local key="$1"
@@ -547,11 +560,7 @@ fi
 
 
 
-if [ "$BOOTSTRAP_STATE" = "empty" ]; then
-  echo "BOOTSTRAP: empty system, skipping Ollama preflight"
-else
-  optional_check "Ollama preflight" run_ollama_preflight
-fi
+optional_check "Ollama preflight" run_ollama_preflight
 
 services_to_start=()
 if [ "$START_WATCHERS" -eq 1 ]; then
