@@ -32,6 +32,7 @@ class WatcherConfig:
     heartbeat_path: Path = DEFAULT_HEARTBEAT_PATH
     summary_interval: int = 60
     tick_sleep_seconds: float = 1.0
+    tick_log_path: Path = Path("/app/tmp/watcher_tick.jsonl")
 
     @classmethod
     def from_env(cls) -> WatcherConfig:
@@ -49,6 +50,8 @@ class WatcherConfig:
         state_path = Path(os.getenv("WATCHER_STATE_PATH", "tmp/watcher_state.json"))
         stop_file = Path(os.getenv("WATCHER_STOP_FILE", "tmp/WATCHER_STOP"))
         heartbeat_path = resolve_heartbeat_path()
+        tick_log_env = os.getenv("WATCHER_TICK_LOG_PATH")
+        tick_log_path = Path(tick_log_env) if tick_log_env else Path("/app/tmp/watcher_tick.jsonl")
 
         return cls(
             enable=enable,
@@ -61,6 +64,7 @@ class WatcherConfig:
             stop_file=stop_file.expanduser(),
             outbox_path=Path(outbox_env).expanduser(),
             heartbeat_path=heartbeat_path,
+            tick_log_path=tick_log_path.expanduser(),
         )
 
 

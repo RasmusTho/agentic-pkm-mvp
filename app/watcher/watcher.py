@@ -18,21 +18,45 @@ def _now_iso() -> str:
     return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
 
 
-def _hash_file(path: Path) -> str | None:
+def _hash_file(path: Path) -> tuple[str, int] | None:
     try:
         data = path.read_bytes()
     except Exception:
         return None
-    return hashlib.sha256(data).hexdigest()
+    return hashlib.sha256(data).hexdigest(), len(data)
 
 
 def _matches_scope(rel_path: Path, scope_glob: str) -> bool:
     rel_str = str(rel_path)
     return fnmatch.fnmatch(rel_str, scope_glob)
 
+def _scope_prefix(scope_glob: str) -> str:
+    wildcard_chars = {"*", "?", "["}
+    limit = len(scope_glob)
+    for idx, char in enumerate(scope_glob):
+        if char in wildcard_chars:
+            limit = idx
+            break
+    prefix = scope_glob[:limit].rstrip("/")
+    return prefix
 
-def _scan_markdown(vault_root: Path, scope_glob: str) -> Iterable[tuple[Path, float, Path]]:
-    for path in sorted(vault_root.rglob("*.md")):
+
+def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
+    prefix = _scope_prefix(scope_glob)
+    if not prefix:
+        raise ValueError("Watcher scope_glob must specify a folder prefix before wildcards")
+    candidate = vault_root / prefix
+    if not candidate.exists() or not candidate.is_dir():
+        raise FileNotFoundError(f"Scan root missing: {candidate}")
+    resolved_vault = vault_root.resolve()
+    resolved_candidate = candidate.resolve()
+    if not resolved_candidate.is_relative_to(resolved_vault):  # type: ignore[attr-defined]
+        raise ValueError(f"Scan root {resolved_candidate} must live under vault root {resolved_vault}")
+    return candidate
+
+
+def _scan_markdown(vault_root: Path, scan_root: Path, scope_glob: str) -> Iterable[tuple[Path, float, Path]]:
+    for path in sorted(scan_root.rglob("*.md")):
         try:
             rel = path.relative_to(vault_root)
         except Exception:
@@ -95,6 +119,46 @@ def _summary_line(state: WatcherState, *, backoff_active: bool) -> str:
     return "watcher summary: " + " ".join(parts)
 
 
+def _log_tick_diagnostics(cfg: WatcherConfig, summary: dict[str, object], scan_root: Path | None) -> None:
+    payload: dict[str, object | None] = {
+        "tick_start_ts": summary.get("tick_start_ts"),
+        "tick_ms": summary.get("tick_ms"),
+        "scanned_files": summary.get("scanned_files", 0),
+        "hashed_files": summary.get("hashed_files", 0),
+        "bytes_read": summary.get("bytes_read", 0),
+        "emitted_in_tick": summary.get("emitted_in_tick", 0),
+        "rate_limited_in_tick": summary.get("rate_limited_in_tick", 0),
+        "backoff_active": summary.get("backoff_active", False),
+        "kill_switch": summary.get("kill_switch", False),
+        "scope_glob": cfg.scope_glob,
+        "scan_root": str(scan_root) if scan_root is not None else None,
+    }
+    try:
+        cfg.tick_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with cfg.tick_log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False))
+            handle.write("\n")
+    except Exception:
+        return
+
+
+def _finalize_tick(
+    cfg: WatcherConfig,
+    state: WatcherState,
+    summary: dict[str, object],
+    tick_start: float,
+    scan_root: Path | None,
+) -> dict[str, object]:
+    tick_ms = max(int((time.time() - tick_start) * 1000), 0)
+    summary["tick_ms"] = tick_ms
+    summary["tick_start_ts"] = tick_start
+    try:
+        _log_tick_diagnostics(cfg, summary, scan_root)
+    finally:
+        state.save(cfg.state_path)
+    return summary
+
+
 def run_tick(
     cfg: WatcherConfig,
     state: WatcherState,
@@ -102,6 +166,7 @@ def run_tick(
     now: float | None = None,
 ) -> dict[str, object]:
     now = now if now is not None else time.time()
+    tick_start = now
     state.ticks_run += 1
 
     summary: dict[str, object] = {
@@ -110,6 +175,9 @@ def run_tick(
         "rate_limited_in_tick": 0,
         "backoff_active": False,
         "kill_switch": False,
+        "scanned_files": 0,
+        "hashed_files": 0,
+        "bytes_read": 0,
         "ticks_run": state.ticks_run,
         "intents_emitted": state.intents_emitted,
         "changed_detected": state.changed_detected,
@@ -119,35 +187,50 @@ def run_tick(
 
     if not cfg.enable:
         summary["disabled"] = True
-        return summary
+        return _finalize_tick(cfg, state, summary, tick_start, None)
 
     if cfg.stop_file.exists():
         summary["kill_switch"] = True
         _warn_once_per_minute(state, f"WATCHER_STOP present at {cfg.stop_file}; pausing.", now=now)
-        state.save(cfg.state_path)
-        return summary
+        return _finalize_tick(cfg, state, summary, tick_start, None)
 
     if state.in_backoff(now):
         summary["backoff_active"] = True
-        state.save(cfg.state_path)
-        return summary
+        return _finalize_tick(cfg, state, summary, tick_start, None)
 
     if not cfg.vault_path.exists() or not cfg.vault_path.is_dir():
         state.errors += 1
+        summary["errors"] = state.errors
         state.save(cfg.state_path)
         raise FileNotFoundError(f"Vault path not found: {cfg.vault_path}")
 
+    scan_root = _derive_scan_root(cfg.vault_path, cfg.scope_glob)
     changed_entries: list[tuple[Path, float, str | None]] = []
-    for rel, mtime, path in _scan_markdown(cfg.vault_path, cfg.scope_glob):
-        previous_hash = state.last_hash(str(rel))
-        digest = _hash_file(path)
-        if digest is None:
+    scanned_files = 0
+    hashed_files = 0
+    bytes_read = 0
+    for rel, mtime, path in _scan_markdown(cfg.vault_path, scan_root, cfg.scope_glob):
+        rel_str = str(rel)
+        scanned_files += 1
+        last_mtime = state.last_mtime(rel_str)
+        previous_hash = state.last_hash(rel_str)
+        if last_mtime is not None and last_mtime == mtime:
+            state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash, seen_at=now)
             continue
+        hashed = _hash_file(path)
+        if hashed is None:
+            continue
+        digest, read_bytes = hashed
+        hashed_files += 1
+        bytes_read += read_bytes
         if previous_hash is not None and previous_hash == digest:
-            state.update_file_state(str(rel), mtime=mtime, content_hash=digest)
+            state.update_file_state(rel_str, mtime=mtime, content_hash=digest, seen_at=now)
             continue
         changed_entries.append((rel, mtime, digest))
 
+    summary["scanned_files"] = scanned_files
+    summary["hashed_files"] = hashed_files
+    summary["bytes_read"] = bytes_read
     state.changed_detected += len(changed_entries)
     summary["changed_detected"] = state.changed_detected
     summary["changed_in_tick"] = len(changed_entries)
@@ -156,8 +239,9 @@ def run_tick(
     rate_limited_in_tick = 0
 
     for rel, mtime, digest in changed_entries:
-        last_seen = state.last_seen(str(rel))
-        state.update_file_state(str(rel), mtime=mtime, content_hash=digest, seen_at=now)
+        rel_str = str(rel)
+        last_seen = state.last_seen(rel_str)
+        state.update_file_state(rel_str, mtime=mtime, content_hash=digest, seen_at=now)
         if last_seen is not None and (now - last_seen) * 1000 < cfg.debounce_ms:
             continue
         if state.rate_window_count(now) >= cfg.rate_limit_per_min:
@@ -176,9 +260,10 @@ def run_tick(
             state.intents_emitted += 1
             emitted_in_tick += 1
             state.record_rate_event(now)
-            state.update_file_state(str(rel), mtime=mtime, content_hash=digest, emitted_at=now)
+            state.update_file_state(rel_str, mtime=mtime, content_hash=digest, emitted_at=now)
         except Exception:
             state.errors += 1
+            summary["errors"] = state.errors
             state.backoff_until = now + cfg.backoff_seconds
             summary["backoff_active"] = True
             break
@@ -189,8 +274,7 @@ def run_tick(
     summary["errors"] = state.errors
     summary["rate_limited"] = state.rate_limited
 
-    state.save(cfg.state_path)
-    return summary
+    return _finalize_tick(cfg, state, summary, tick_start, scan_root)
 
 
 def run_forever(cfg: WatcherConfig, state: WatcherState | None = None) -> None:

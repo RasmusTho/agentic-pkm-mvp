@@ -28,6 +28,7 @@ def _config(tmp_path: Path, *, rate_limit: int = 30, debounce_ms: int = 1500) ->
         outbox_path=tmp_path / "outbox.jsonl",
         summary_interval=10,
         tick_sleep_seconds=0.0,
+        tick_log_path=tmp_path / "tick.jsonl",
     )
 
 
@@ -78,6 +79,26 @@ def test_debounce_blocks_rapid_retriggers(tmp_path: Path) -> None:
     second = run_tick(cfg, state, now=0.5)
     assert second["emitted_in_tick"] == 0
 
+
+def test_unchanged_file_skips_hash(tmp_path: Path, monkeypatch) -> None:
+    cfg = _config(tmp_path)
+    cfg.vault_path.mkdir(parents=True, exist_ok=True)
+    note = (cfg.vault_path / _inbox_dir(tmp_path)).joinpath("note.md")
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("stable", encoding="utf-8")
+
+    state = WatcherState()
+    first = run_tick(cfg, state, now=0.0)
+    assert first["emitted_in_tick"] == 1
+
+    def fail_read_bytes(self) -> bytes:
+        raise AssertionError("read_bytes should not be invoked for unchanged files")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+    second = run_tick(cfg, state, now=1.0)
+    assert second["emitted_in_tick"] == 0
+    assert second["hashed_files"] == 0
+    assert second["bytes_read"] == 0
 
 def test_rate_limit_blocks_after_threshold(tmp_path: Path) -> None:
     cfg = _config(tmp_path, rate_limit=1)

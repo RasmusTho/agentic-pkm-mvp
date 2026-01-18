@@ -36,6 +36,7 @@ Enabling both flags starts the watcher and worker after layout detection so they
 ## 4. What good looks like
 - `health status` returns `state` running (or transient catch_up) with `writes_allowed` true and doctor statuses at `pass`. `suggested_actions` can be empty when stable.
 - After ingesting a vault snapshot, `health status` should report `state` running (or transient catch_up) with `writes_allowed` true, `catch_up_progress` idle, and a short `outbox_recent_age_s`.
+- The watcher now resolves its scan root from the layout note, keeps scope to `${INBOX_FOLDER}/**`, and hashes notes only when their modification time actually changes; every tick records a compact JSON line in `${WATCHER_TICK_LOG_PATH:-/app/tmp/watcher_tick.jsonl}` so you can inspect `scanned_files`, `hashed_files`, `bytes_read`, etc. after a hard reset.
 
 ## DB sanity & worker verification
 - `scripts/start_full_system.sh` now probes the DB container using `POSTGRES_USER`/`POSTGRES_DB` from inside the container (defaults: `app`/`app`) so it never assumes a `postgres` superuser. After readiness it runs `psql -c "select current_user, current_database();"` for a quick sanity check.
