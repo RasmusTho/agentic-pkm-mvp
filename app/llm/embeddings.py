@@ -69,9 +69,16 @@ def _extract_vector_from_payload(payload: Mapping[str, object]) -> list[float] |
     return None
 
 
+def _ollama_include_dimensions() -> bool:
+    raw = os.getenv("OLLAMA_EMBED_DIMENSIONS")
+    if raw is None:
+        return True
+    return raw.strip().lower() in _TRUE_VALUES
+
+
 def _ollama_payload(text: str, model: str, dim: int) -> dict[str, object]:
-    payload: dict[str, object] = {"model": model, "input": [text], "truncate": True}
-    if os.getenv("OLLAMA_EMBED_DIMENSIONS", "0").strip().lower() in _TRUE_VALUES:
+    payload: dict[str, object] = {"model": model, "input": text, "truncate": True}
+    if _ollama_include_dimensions():
         payload["dimensions"] = dim
     return payload
 

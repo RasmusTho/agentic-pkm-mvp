@@ -10,7 +10,7 @@ def _make_payload_response(url: str, status_code: int, payload: dict) -> httpx.R
     return httpx.Response(status_code, json=payload, request=httpx.Request("POST", url))
 
 
-def test_ollama_embed_payload_uses_list(monkeypatch) -> None:
+def test_ollama_embed_payload_includes_text_and_dimensions(monkeypatch) -> None:
     called: list[dict] = []
 
     def fake_post(url: str, **kwargs) -> httpx.Response:
@@ -20,8 +20,8 @@ def test_ollama_embed_payload_uses_list(monkeypatch) -> None:
     monkeypatch.setattr(httpx, "post", fake_post)
     vector = embeddings.embed_text("payload-test", provider="ollama", model="test", dim=4, normalize=False)
     assert len(called) == 1
-    assert called[0]["json"]["input"] == ["payload-test"]
-    assert "dimensions" not in called[0]["json"]
+    assert called[0]["json"]["input"] == "payload-test"
+    assert called[0]["json"]["dimensions"] == 4
     assert vector == [0.1, -0.1, 0.2, 0.3]
 
 
@@ -32,10 +32,10 @@ def test_ollama_embed_dimensions_flag(monkeypatch) -> None:
         called.append({"url": url, "json": kwargs.get("json")})
         return _make_payload_response(url, 200, {"embeddings": [[0.1, -0.1, 0.2, 0.3]]})
 
-    monkeypatch.setenv("OLLAMA_EMBED_DIMENSIONS", "1")
+    monkeypatch.setenv("OLLAMA_EMBED_DIMENSIONS", "0")
     monkeypatch.setattr(httpx, "post", fake_post)
     vector = embeddings.embed_text("payload-dim", provider="ollama", model="test", dim=4, normalize=False)
-    assert called[0]["json"].get("dimensions") == 4
+    assert "dimensions" not in called[0]["json"]
     assert vector == [0.1, -0.1, 0.2, 0.3]
 
 
