@@ -6,6 +6,9 @@ cd "$ROOT"
 
 START_WATCHERS="${START_WATCHERS:-0}"
 START_WORKER="${START_WORKER:-0}"
+START_FLIGHT_RECORDER="${START_FLIGHT_RECORDER:-1}"
+FLIGHT_RECORDER_INTERVAL="${FLIGHT_RECORDER_INTERVAL:-5}"
+FLIGHT_RECORDER_DURATION="${FLIGHT_RECORDER_DURATION:-0}"
 ALLOW_LEGACY_VAULT="${ALLOW_LEGACY_VAULT:-0}"
 HEALTH_ENDPOINT="${HEALTH_ENDPOINT:-http://127.0.0.1:18000/healthz}"
 HEALTH_MAX_ATTEMPTS="${HEALTH_MAX_ATTEMPTS:-12}"
@@ -71,6 +74,20 @@ if [ ! -d "$vault_host_path" ]; then
 fi
 vault_host_path="$(cd "$vault_host_path" && pwd)"
 export VAULT_ROOT="$vault_host_path"
+
+flight_recorder_log_path=""
+flight_recorder_pid=""
+if [ "$START_FLIGHT_RECORDER" -eq 1 ]; then
+  flight_recorder_log_path="$ROOT/tmp/flightrecorder-$(date -u +"%Y%m%d-%H%M%S").log"
+  scripts/flight_recorder.sh --log-path "$flight_recorder_log_path" --interval "$FLIGHT_RECORDER_INTERVAL" --duration "$FLIGHT_RECORDER_DURATION" >/dev/null 2>&1 &
+  flight_recorder_pid=$!
+  echo "Flight recorder logging to $flight_recorder_log_path"
+  trap '
+    if [ -n "${flight_recorder_pid:-}" ]; then
+      kill "$flight_recorder_pid" >/dev/null 2>&1 || true
+    fi
+  ' EXIT
+fi
 
 runtime_env_path="${RUNTIME_ENV_PATH:-tmp/runtime.env}"
 RUNTIME_ENV_PATH="$runtime_env_path"
@@ -167,6 +184,15 @@ log_tick_log_path() {
   append_startup_log "WATCHER_TICK_LOG_PATH=${WATCHER_TICK_LOG_PATH:-<not set>}"
 }
 
+log_flight_recorder_path() {
+  log_section "flight recorder"
+  if [ -n "${flight_recorder_log_path:-}" ]; then
+    append_startup_log "flight recorder log: $flight_recorder_log_path"
+  else
+    append_startup_log "flight recorder disabled"
+  fi
+}
+
 log_worker_heartbeat_snapshot() {
   log_section "worker heartbeat"
   if [ -f tmp/worker_heartbeat.json ]; then
@@ -185,6 +211,7 @@ capture_startup_logs() {
   log_service_tail "worker"
   log_layout_info
   log_tick_log_path
+  log_flight_recorder_path
   log_worker_heartbeat_snapshot
   append_startup_log ""
   append_startup_log "startup log available at: $startup_log_path"
@@ -678,6 +705,7 @@ fi
 capture_startup_logs
 echo "Startup log: $startup_log_path"
 echo "Watcher tick log: ${WATCHER_TICK_LOG_PATH:-<not set>}"
+echo "Flight recorder log: ${flight_recorder_log_path:-<disabled>}"
 echo "Tail: docker compose exec watcher sh -lc 'tail -n 20 \"${WATCHER_TICK_LOG_PATH:-/app/tmp/watcher_tick.jsonl}\"'"
 
 echo "--- STARTUP COMPLETE ---"
