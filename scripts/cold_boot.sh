@@ -42,10 +42,11 @@ run_start_mode() {
 verify_startup_status() {
   local mode="$1"
   local require_provider="${2:-0}"
+  local expected_bootstrap="${3:-}"
   if [ ! -f "$startup_status_path" ]; then
     fail "startup_status.json missing after START_MODE=$mode"
   fi
-  EXPECTED_MODE="$mode" REQUIRE_PROVIDER="$require_provider" STARTUP_STATUS_PATH="$startup_status_path" python - <<'PY'
+  EXPECTED_MODE="$mode" REQUIRE_PROVIDER="$require_provider" EXPECTED_BOOTSTRAP="$expected_bootstrap" STARTUP_STATUS_PATH="$startup_status_path" python - <<'PY'
 import json, os, sys
 path = os.environ['STARTUP_STATUS_PATH']
 mode = os.environ['EXPECTED_MODE']
@@ -66,6 +67,11 @@ if not payload.get('preflight_passed'):
 if require_provider and not payload.get('llm_provider'):
     print('llm_provider missing in startup_status.json', file=sys.stderr)
     sys.exit(1)
+expected_bootstrap = os.environ.get('EXPECTED_BOOTSTRAP', '')
+bootstrap_state = payload.get('bootstrap_state')
+if expected_bootstrap and bootstrap_state != expected_bootstrap:
+    print(f'bootstrap_state {bootstrap_state!r} does not match expected {expected_bootstrap!r}', file=sys.stderr)
+    sys.exit(1)
 print('ok', end='')
 PY
   log "startup_status.json indicates $mode preflight OK"
@@ -85,14 +91,14 @@ main() {
   ensure_docker
 
   run_start_mode infra
-  verify_startup_status infra 0
+  verify_startup_status infra 0 empty
   check_healthz infra
 
   log "Tearing down infra containers"
   docker compose down >/dev/null 2>&1 || true
 
   run_start_mode runtime
-  verify_startup_status runtime 1
+  verify_startup_status runtime 1 active
   check_healthz runtime
 
   log "Cold boot successful: runtime mode healthy"

@@ -23,9 +23,17 @@ async def readyz() -> dict[str, str]:
     if snapshot["state"] not in READY_STATES:
         raise HTTPException(
             status_code=503,
-            detail={"state": snapshot["state"], "reason": snapshot["reason"]},
+            detail={
+                "state": snapshot["state"],
+                "reason": snapshot["reason"],
+                "class": snapshot.get("bootstrap_state") or "active",
+            },
         )
-    return {"state": snapshot["state"], "reason": snapshot["reason"]}
+    return {
+        "state": snapshot["state"],
+        "reason": snapshot.get("bootstrap_reason") or snapshot["reason"],
+        "class": snapshot.get("bootstrap_state") or "active",
+    }
 
 
 @router.get("/status")

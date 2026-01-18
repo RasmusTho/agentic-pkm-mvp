@@ -15,6 +15,10 @@ load_dotenv() {
 
 load_dotenv
 
+BOOTSTRAP_STATE="${BOOTSTRAP_STATE:-pending}"
+BOOTSTRAP_REASON="${BOOTSTRAP_REASON:-preflight}"
+export BOOTSTRAP_STATE BOOTSTRAP_REASON
+
 START_MODE="${START_MODE:-runtime}"
 startup_status_path="$ROOT/tmp/startup_status.json"
 mkdir -p "$ROOT/tmp"
@@ -36,6 +40,8 @@ payload = {
     "llm_provider": os.environ.get("LLM_PROVIDER") or None,
     "preflight_passed": os.environ.get("PRE_FLIGHT_PASSED") == "1",
     "failure_reason": os.environ.get("PRE_FLIGHT_REASON") or None,
+    "bootstrap_state": os.environ.get("BOOTSTRAP_STATE") or None,
+    "bootstrap_reason": os.environ.get("BOOTSTRAP_REASON") or None,
 }
 print(json.dumps(payload, ensure_ascii=False))
 PY
@@ -443,6 +449,43 @@ compose_up --build db api
 run_db_probe
 wait_for_healthz
 
+store_stats_json=$(run_docker_compose exec -T api python -m app.cli store stats --json || true)
+extract_stat() {
+  local key="$1"
+  STAT_KEY="$key" STORE_STATS_JSON="$store_stats_json" python - <<'PY'
+import json, os
+raw = os.environ.get("STORE_STATS_JSON", "")
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = {}
+print(payload.get(os.environ.get("STAT_KEY", "")) or 0)
+PY
+}
+objects_before=$(extract_stat objects)
+vectors_before=$(extract_stat vectors)
+outbox_count=0
+if outbox_result=$(run_docker_compose exec -T api python - <<'PY'
+from app.events.outbox import read_outbox
+print(len(read_outbox()))
+PY
+); then
+  outbox_count=$(echo "$outbox_result" | tr -d '[:space:]')
+fi
+objects_before=${objects_before:-0}
+vectors_before=${vectors_before:-0}
+outbox_count=${outbox_count:-0}
+if [ "$objects_before" -le 0 ] && [ "$outbox_count" -le 0 ]; then
+  BOOTSTRAP_STATE="empty"
+  BOOTSTRAP_REASON="no objects ingested yet"
+  echo "BOOTSTRAP: empty system, awaiting first ingest"
+else
+  BOOTSTRAP_STATE="active"
+  BOOTSTRAP_REASON="objects or outbox events detected"
+fi
+export BOOTSTRAP_STATE BOOTSTRAP_REASON
+write_startup_status 1 ""
+
 layout_json=$(run_docker_compose exec -T api python -m app.cli vault-layout-ensure --vault-root /app/vault --json)
 
 extract_layout_field() {
@@ -479,8 +522,11 @@ fi
 
 
 
-
-run_ollama_preflight
+if [ "$BOOTSTRAP_STATE" = "empty" ]; then
+  echo "BOOTSTRAP: empty system, skipping Ollama preflight"
+else
+  run_ollama_preflight
+fi
 
 services_to_start=()
 if [ "$START_WATCHERS" -eq 1 ]; then
@@ -625,7 +671,10 @@ if [ "$auto_bootstrap" -eq 1 ]; then
 fi
 
 index_rebuild_status="skipped"
-if [ "$api_health_index_rebuild" -eq 1 ] && [ "$auto_bootstrap" -ne 1 ]; then
+if [ "$BOOTSTRAP_STATE" = "empty" ]; then
+  echo "INDEX: skipped (no objects ingested yet)"
+  index_rebuild_status="skipped (empty)"
+elif [ "$api_health_index_rebuild" -eq 1 ] && [ "$auto_bootstrap" -ne 1 ]; then
   echo "INDEX REBUILD: required (AUTO_BOOTSTRAP=1 to run)" >&2
   echo "Run: docker compose exec -T api python -m app.cli index rebuild --profile default" >&2
   debug_dump
@@ -644,22 +693,6 @@ if [ "$vault_note_count" -le 0 ]; then
   exit 1
 fi
 
-store_stats_json=$(run_docker_compose exec -T api python -m app.cli store stats --json || true)
-extract_stat() {
-  local key="$1"
-  STAT_KEY="$key" STORE_STATS_JSON="$store_stats_json" python - <<'PY'
-import json, os
-raw = os.environ.get("STORE_STATS_JSON", "")
-try:
-    payload = json.loads(raw)
-except Exception:
-    payload = {}
-print(payload.get(os.environ.get("STAT_KEY", "")) or 0)
-PY
-}
-objects_before=$(extract_stat objects)
-vectors_before=$(extract_stat vectors)
-
 ingest_run="no"
 max_notes="${BOOTSTRAP_INGEST_MAX_NOTES:-500}"
 object_count="$objects_before"
@@ -676,29 +709,33 @@ if [ "$objects_before" -le 0 ]; then
 fi
 
 if [ "$auto_bootstrap" -eq 1 ]; then
-  api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
-  update_health_state
-  if [ "$api_health_index_rebuild" -eq 1 ]; then
-    echo "INDEX REBUILD: running"
-    set +e
-    run_docker_compose exec -T api sh -lc "python -m app.cli index rebuild --profile default"
-    rebuild_status=$?
-    set -e
-    if [ "$rebuild_status" -ne 0 ]; then
-      echo "INDEX REBUILD: failed (exit $rebuild_status)" >&2
-      debug_dump
-      exit 1
-    fi
-    index_rebuild_status="ran"
+  if [ "$BOOTSTRAP_STATE" = "empty" ]; then
+    echo "INDEX: skipped (no objects ingested yet)"
+  else
     api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
     update_health_state
     if [ "$api_health_index_rebuild" -eq 1 ]; then
-      echo "INDEX REBUILD: failed (still required)" >&2
-      debug_dump
-      exit 1
+      echo "INDEX REBUILD: running"
+      set +e
+      run_docker_compose exec -T api sh -lc "python -m app.cli index rebuild --profile default"
+      rebuild_status=$?
+      set -e
+      if [ "$rebuild_status" -ne 0 ]; then
+        echo "INDEX REBUILD: failed (exit $rebuild_status)" >&2
+        debug_dump
+        exit 1
+      fi
+      index_rebuild_status="ran"
+      api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
+      update_health_state
+      if [ "$api_health_index_rebuild" -eq 1 ]; then
+        echo "INDEX REBUILD: failed (still required)" >&2
+        debug_dump
+        exit 1
+      fi
+    else
+      echo "INDEX REBUILD: skipped (not required)"
     fi
-  else
-    echo "INDEX REBUILD: skipped (not required)"
   fi
 fi
 

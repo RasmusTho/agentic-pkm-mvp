@@ -11,6 +11,7 @@ from app.config.paths import resolve_vault_root
 from app.events.outbox import event_name, latest_trace_story, normalize_timestamp, read_outbox
 from app.index.doctor import diagnose_index
 from app.settings.health_settings import HealthThresholds, load_health_settings
+from app.stores import get_object_store
 
 WRITE_BLOCKED_STATES = {"safe_mode", "unhealthy"}
 INCIDENT_STATES = {"degraded", "unhealthy", "safe_mode"}
@@ -117,6 +118,7 @@ class HealthContract:
         settings_result = load_health_settings(vault_root=vault_root)
         records = read_outbox()
         outbox_count = len(records)
+        object_count = self._count_objects()
         latest_ts = self._latest_timestamp(records)
         age = self._compute_age(latest_ts, now)
         prev_state = self.state_machine.state
@@ -140,6 +142,8 @@ class HealthContract:
         writes_allowed = state not in WRITE_BLOCKED_STATES
         write_guard_reason = None if writes_allowed else reason
         suggested_actions = self._suggested_actions(age, index_status, writes_allowed)
+
+        bootstrap_state, bootstrap_reason = self._bootstrap_state(object_count, outbox_count)
 
         if settings_result.settings.incident_capture.enabled:
             transitioned = state != prev_state
@@ -169,6 +173,9 @@ class HealthContract:
             "since_ts": since_ts,
             "outbox_count": outbox_count,
             "outbox_recent_age_s": age,
+            "store_object_count": object_count,
+            "bootstrap_state": bootstrap_state,
+            "bootstrap_reason": bootstrap_reason,
             "embedding_identity": {
                 "backend": index_result.get("backend"),
                 "expected_identity": index_result.get("expected_identity"),
@@ -324,6 +331,17 @@ class HealthContract:
                 handle.write("\n")
         except Exception:
             return
+
+    def _count_objects(self) -> int:
+        try:
+            return get_object_store().count_objects()
+        except Exception:
+            return 0
+
+    def _bootstrap_state(self, object_count: int, outbox_count: int) -> tuple[str, str]:
+        if object_count == 0 and outbox_count == 0:
+            return "empty", "no objects ingested yet"
+        return "active", "objects or outbox events detected"
 
 
 GLOBAL_STATE_MACHINE = HealthStateMachine()
