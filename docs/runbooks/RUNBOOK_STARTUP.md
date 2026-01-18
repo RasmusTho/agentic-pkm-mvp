@@ -6,12 +6,26 @@ State: SoT v4.10 Reality-MVP (work branch prep).
 1. Expose the vault root: `export VAULT_ROOT=/path/to/vault` (or set in docker compose env file).
 2. Seed `${VAULT_SYSTEM_DIR_REL}/Settings/health.md` so guided thresholds/incident logging exist (see `docs/HEALTH.md`).
 3. Optional overrides: `INDEX_OUTBOX_PATH`, `HEALTH_THRESHOLDS_*` and `HEALTH_INCIDENT_CAPTURE_*` can guard tuning; keep `incident_log_path` in the vault to a known location you can tail.
-4. `scripts/start_full_system.sh` refuses to proceed without `VAULT_ROOT`; set `ALLOW_LEGACY_VAULT=1` only when you deliberately want to fall back to `./vault` for short-lived demos. The script checks `docker info`, optionally starts Colima when `AUTO_START_COLIMA=1`, and uses `vault.layout.md` to derive `VAULT_INBOX_DIR_REL`/`VAULT_SYSTEM_DIR_REL` before exporting them to the container env so the watcher scopes the actual inbox.
+4. `scripts/start_full_system.sh` now enforces `VAULT_ROOT` (fail-fast unless `ALLOW_LEGACY_VAULT=1`) and uses `vault.layout.md` to resolve `VAULT_INBOX_DIR_REL`/`VAULT_SYSTEM_DIR_REL`. The resolved inbox is exported so the watcher scope defaults to that single folder. The script starts only `db`+`api` by default; set `START_WATCHERS=1` and/or `START_WORKER=1` when you need the watcher or worker services beside the API.
 
 ## 2. Containers
-1. Run `scripts/start_full_system.sh` to bring up the stack: it runs `docker compose up -d --build db api`, waits for `/healthz`, calls `python -m app.cli vault-layout-ensure` so the layout note exists, exports the resolved inbox/system folders (the banner prints `inbox=… system=…`), and then continues with `docker compose up -d --build watcher worker`.
-2. When the script finishes, confirm the logs are warm using `docker compose logs -f api` / `docker compose logs -f worker` (CTRL+C once ready).
-3. If you need to restart just the watcher/panel services, rerun the last stage manually: `docker compose up -d --build watcher worker` while `VAULT_INBOX_DIR_REL` is exported via `runtime.env`.
+1. Run `scripts/start_full_system.sh` to bring up the stack. The safe-default mode brings up only `db`+`api`, waits for `/healthz`, ensures the layout note, exports the derived `VAULT_INBOX_DIR_REL`/`VAULT_SYSTEM_DIR_REL`, and runs the same ingest/health/preflight probes as before. Watcher and worker services are **not** started unless `START_WATCHERS=1` and/or `START_WORKER=1` are set in the host environment.
+2. When you need logs from the running services, tail `docker compose logs -f api` (and `worker` if it is enabled). The startup script also writes a timestamped log into `tmp/startup-logs/startup-<timestamp>.log` that captures `docker info`, `docker compose ps`, the last 200 lines of any enabled service logs, the resolved layout, and the latest worker heartbeat snapshot.
+3. If you need to restart only the watcher or panel services manually, rerun `docker compose up -d --build watcher worker` with `VAULT_INBOX_DIR_REL` exported via the generated `runtime.env`.
+
+### Minimal safe bring-up
+```bash
+export VAULT_ROOT=/path/to/vault
+scripts/start_full_system.sh
+```
+This sequence keeps watchers/workers off the grid while still validating `/healthz`, ingest/search, and the host-side diagnostics log.
+
+### Full system bring-up
+```bash
+export VAULT_ROOT=/path/to/vault
+START_WATCHERS=1 START_WORKER=1 scripts/start_full_system.sh
+```
+Enabling both flags starts the watcher and worker after layout detection so they can begin scanning the layout-derived inbox scope.
 
 ## 3. Health verification
 1. `python -m app.cli health status --json` -> expect `state` running/catch_up, `writes_allowed=true`, doctor statuses non-fail, and `catch_up_progress`/`suggested_actions` reported. Repeat after any manual ingest or injection so `outbox_recent_age_s` shrinks again.
@@ -31,7 +45,7 @@ State: SoT v4.10 Reality-MVP (work branch prep).
   tail -n 1 tmp/worker_heartbeat.json
   ```
 - The host script also tails `tmp/worker_heartbeat.json` and prints the last line once the worker writes its heartbeat. Skip the probes with `SKIP_DB_PROBE=1` and/or `SKIP_WORKER_PROBE=1` when you only need to rebuild the stack.
-- The vault layout detection order is `📥 Inbox`, `Inbox` (unless `VAULT_INBOX_DIR_REL`/`VAULT_SYSTEM_DIR_REL` are already set). The watcher uses the resolved folders so it never rescans the legacy `Inbox/System` tree.
+- The vault layout detection now reads the `vault.layout.md` note that `vault-layout-ensure` guarantees; the derived `VAULT_INBOX_DIR_REL`/`VAULT_SYSTEM_DIR_REL` (and their watcher-scope exports) ensure the watcher only scans `${INBOX_FOLDER}/**`. Legacy heuristics (`Inbox`, `📥 Inbox`) are ignored unless you intentionally run with `ALLOW_LEGACY_VAULT=1`.
 - `python -m app.cli pipe <path>` now writes an `ingest.object.created` row directly into the DB outbox so the worker can react even without the watcher; set `PIPE_EMIT_DB_OUTBOX=0` to keep the CLI write limited to the local JSONL log.
 
 ## Ollama readiness

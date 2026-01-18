@@ -4,18 +4,28 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+START_WATCHERS="${START_WATCHERS:-0}"
+START_WORKER="${START_WORKER:-0}"
+ALLOW_LEGACY_VAULT="${ALLOW_LEGACY_VAULT:-0}"
+HEALTH_ENDPOINT="${HEALTH_ENDPOINT:-http://127.0.0.1:18000/healthz}"
+HEALTH_MAX_ATTEMPTS="${HEALTH_MAX_ATTEMPTS:-12}"
+HEALTH_SLEEP_SECONDS="${HEALTH_SLEEP_SECONDS:-2}"
+HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-5}"
+WATCHER_HEARTBEAT_TIMEOUT="${WATCHER_HEARTBEAT_TIMEOUT:-30}"
+WORKER_HEARTBEAT_TIMEOUT="${WORKER_HEARTBEAT_TIMEOUT:-30}"
+
 debug_dump() {
   echo "DEBUG: docker compose ps"
-  docker compose ps || true
+  run_docker_compose ps || true
   echo "DEBUG: docker compose logs --tail=200 watcher"
-  docker compose logs --tail=200 watcher || true
+  run_docker_compose logs --tail=200 watcher || true
   echo "DEBUG: docker compose logs --tail=200 worker"
-  docker compose logs --tail=200 worker || true
+  run_docker_compose logs --tail=200 worker || true
   echo "DEBUG: docker compose logs --tail=200 api"
-  docker compose logs --tail=200 api || true
+  run_docker_compose logs --tail=200 api || true
 }
 
-for dir in tmp logs; do
+for dir in tmp logs tmp/startup-logs; do
   mkdir -p "$dir"
   if [ ! -w "$dir" ]; then
     uid="$(id -u)"
@@ -27,6 +37,9 @@ for dir in tmp logs; do
     exit 2
   fi
 done
+
+startup_log_dir="$ROOT/tmp/startup-logs"
+startup_log_path="$startup_log_dir/startup-$(date -u +"%Y%m%dT%H%M%SZ").log"
 
 check_docker_daemon() {
   if docker info >/dev/null 2>&1; then
@@ -43,9 +56,7 @@ check_docker_daemon() {
   exit 1
 }
 
-check_docker_daemon
 
-ALLOW_LEGACY_VAULT="${ALLOW_LEGACY_VAULT:-0}"
 vault_host_path="${VAULT_ROOT:-}"
 if [ -z "$vault_host_path" ]; then
   if [ "$ALLOW_LEGACY_VAULT" -ne 1 ]; then
@@ -68,6 +79,14 @@ runtime_env="--env-file $runtime_env_path"
 
 echo "Vault host path: $vault_host_path -> /app/vault"
 
+run_docker_compose() {
+  if [ -n "${runtime_env:-}" ]; then
+    docker compose $runtime_env "$@"
+  else
+    docker compose "$@"
+  fi
+}
+
 alpha_rebuild="${ALPHA_REBUILD:-0}"
 alpha_rebuild_pull="${ALPHA_REBUILD_PULL:-0}"
 if [ "$alpha_rebuild" -eq 1 ]; then
@@ -76,11 +95,7 @@ if [ "$alpha_rebuild" -eq 1 ]; then
     build_flags="--pull"
   fi
   echo "ALPHA_REBUILD: docker compose build $build_flags api worker watcher"
-  if [ -n "$runtime_env" ]; then
-    docker compose $runtime_env build $build_flags api worker watcher
-  else
-    docker compose build $build_flags api worker watcher
-  fi
+  run_docker_compose build $build_flags api worker watcher
 fi
 
 compose_up() {
@@ -97,11 +112,70 @@ compose_up() {
     esac
     shift
   done
-  if [ -n "$runtime_env" ]; then
-    docker compose $runtime_env up -d "${extra[@]}" "${services[@]}"
-  else
-    docker compose up -d "${extra[@]}" "${services[@]}"
+  run_docker_compose up -d "${extra[@]}" "${services[@]}"
+}
+
+append_startup_log() {
+  printf "%s\n" "$*" >>"$startup_log_path"
+}
+
+log_section() {
+  append_startup_log ""
+  append_startup_log "=== $1 ==="
+}
+
+log_command_output() {
+  local title="$1"
+  shift
+  log_section "$title"
+  if [ $# -eq 0 ]; then
+    append_startup_log "<no command>"
+    return
   fi
+  if ! "$@" >>"$startup_log_path" 2>&1; then
+    append_startup_log "COMMAND FAILED: $*"
+  fi
+}
+
+log_service_tail() {
+  local service="$1"
+  log_section "docker compose logs --tail=200 $service"
+  local service_id
+  service_id=$(run_docker_compose ps -q "$service" 2>/dev/null || true)
+  if [ -n "$service_id" ]; then
+    run_docker_compose logs --tail=200 "$service" >>"$startup_log_path" 2>&1 || true
+  else
+    append_startup_log "service $service is not running, skipping logs"
+  fi
+}
+
+log_layout_info() {
+  log_section "vault layout"
+  append_startup_log "inbox: ${layout_inbox:-<missing>}"
+  append_startup_log "system: ${layout_system:-<missing>}"
+  append_startup_log "layout note: ${layout_note:-<missing>}"
+}
+
+log_worker_heartbeat_snapshot() {
+  log_section "worker heartbeat"
+  if [ -f tmp/worker_heartbeat.json ]; then
+    tail -n 20 tmp/worker_heartbeat.json >>"$startup_log_path" 2>&1 || true
+  else
+    append_startup_log "tmp/worker_heartbeat.json missing"
+  fi
+}
+
+capture_startup_logs() {
+  log_section "timestamp $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  log_command_output "docker info" docker info
+  log_command_output "docker compose ps" run_docker_compose ps
+  log_service_tail "api"
+  log_service_tail "watcher"
+  log_service_tail "worker"
+  log_layout_info
+  log_worker_heartbeat_snapshot
+  append_startup_log ""
+  append_startup_log "startup log available at: $startup_log_path"
 }
 
 run_db_probe() {
@@ -111,10 +185,10 @@ run_db_probe() {
   fi
   echo "--- DB PROBE ---"
   local db_cid
-  db_cid=$(docker compose ps -q db)
+  db_cid=$(run_docker_compose ps -q db)
   if [ -z "$db_cid" ]; then
     echo "ERROR: db container not found" >&2
-    docker compose ps
+    run_docker_compose ps
     exit 1
   fi
   local db_user
@@ -134,11 +208,11 @@ run_db_probe() {
       break
     fi
     sleep 1
-done
+  done
   if [ "$db_ready" -ne 1 ]; then
     echo "ERROR: PostgreSQL did not become ready in 30 seconds" >&2
-    docker compose ps
-    docker compose logs --tail=200 db || true
+    run_docker_compose ps
+    run_docker_compose logs --tail=200 db || true
     exit 1
   fi
   echo "DB credentials: user=$db_user db=$db_name"
@@ -154,38 +228,38 @@ run_worker_probe() {
   local worker_start
   worker_start=$SECONDS
   local heartbeat_ready=0
-  while [ $((SECONDS - worker_start)) -lt 30 ]; do
+  while [ $((SECONDS - worker_start)) -lt "$WORKER_HEARTBEAT_TIMEOUT" ]; do
     if [ -s tmp/worker_heartbeat.json ]; then
       heartbeat_ready=1
       break
     fi
     sleep 1
-done
+  done
   if [ "$heartbeat_ready" -ne 1 ]; then
-    echo "ERROR: worker heartbeat file missing after 30 seconds" >&2
-    docker compose logs --tail=200 worker || true
+    echo "ERROR: worker heartbeat file missing after $WORKER_HEARTBEAT_TIMEOUT seconds" >&2
+    run_docker_compose logs --tail=200 worker || true
     exit 1
   fi
   tail -n 1 tmp/worker_heartbeat.json
 }
 
 wait_for_healthz() {
-  local endpoint="${HEALTH_ENDPOINT:-http://127.0.0.1:18000/healthz}"
-  for attempt in $(seq 1 30); do
-    if curl -sf "$endpoint" >/dev/null 2>&1; then
-      break
+  local endpoint="${HEALTH_ENDPOINT}"
+  local attempt=1
+  while [ "$attempt" -le "$HEALTH_MAX_ATTEMPTS" ]; do
+    if curl -sSf --max-time "$HEALTH_TIMEOUT_SECONDS" "$endpoint" >/dev/null 2>&1; then
+      return 0
     fi
-    sleep 2
-done
-  if ! curl -sf "$endpoint" >/dev/null 2>&1; then
-    echo "ERROR: /healthz did not respond on 127.0.0.1:18000" >&2
-    exit 1
-  fi
+    sleep "$HEALTH_SLEEP_SECONDS"
+    attempt=$((attempt + 1))
+  done
+  echo "ERROR: /healthz did not respond on $endpoint after $HEALTH_MAX_ATTEMPTS attempts" >&2
+  exit 1
 }
 
 ollama_preflight_ok=0
 run_ollama_preflight() {
-  if docker compose exec -T api sh -c 'python - <<'"'"'PY'"'"'
+  if run_docker_compose exec -T api sh -c 'python - <<'"'"'PY'"'"'
 from __future__ import annotations
 import os, sys
 import httpx
@@ -214,19 +288,17 @@ with httpx.Client(timeout=10.0) as client:
 PY'; then
     echo "Ollama preflight succeeded"
     ollama_preflight_ok=1
-  else
-    echo "WARNING: Ollama preflight failed; skipping /api/ask bootstrap" >&2
-    ollama_preflight_ok=0
-  fi
+ else
+   echo "WARNING: Ollama preflight failed; skipping /api/ask bootstrap" >&2
+   ollama_preflight_ok=0
+ fi
 }
-
-HEALTH_ENDPOINT="http://127.0.0.1:18000/healthz"
 
 compose_up --build db api
 run_db_probe
 wait_for_healthz
 
-layout_json=$(docker compose exec -T api python -m app.cli vault-layout-ensure --vault-root /app/vault --json)
+layout_json=$(run_docker_compose exec -T api python -m app.cli vault-layout-ensure --vault-root /app/vault --json)
 
 extract_layout_field() {
   local key="$1"
@@ -260,28 +332,48 @@ if [ -n "$layout_inbox" ] && [ -n "$layout_system" ]; then
   echo "layout note: $layout_note"
 fi
 
+
+
+
 run_ollama_preflight
 
-compose_up --build watcher worker
-run_worker_probe
-
-reset_runtime_state="${RESET_RUNTIME_STATE:-1}"
-if [ "$reset_runtime_state" -eq 1 ]; then
-  docker compose exec -T api sh -c 'rm -f /app/tmp/index-outbox.jsonl /app/tmp/watcher_heartbeat.json /app/tmp/worker_heartbeat.json'
-  docker compose exec -T watcher sh -c 'rm -f /app/tmp/watcher_heartbeat.json' || true
+services_to_start=()
+if [ "$START_WATCHERS" -eq 1 ]; then
+  services_to_start+=("watcher")
+fi
+if [ "$START_WORKER" -eq 1 ]; then
+  services_to_start+=("worker")
+fi
+if [ "${#services_to_start[@]}" -gt 0 ]; then
+  compose_up --build "${services_to_start[@]}"
 fi
 
-watcher_ready=0
-for attempt in $(seq 1 30); do
-  if docker compose exec -T watcher sh -c 'test -s /app/tmp/watcher_heartbeat.json' >/dev/null 2>&1; then
-    watcher_ready=1
-    break
+if [ "$START_WORKER" -eq 1 ]; then
+  run_worker_probe
+fi
+
+reset_runtime_state="${RESET_RUNTIME_STATE:-1}"
+if [ "$reset_runtime_state" -eq 1 ] && { [ "$START_WATCHERS" -eq 1 ] || [ "$START_WORKER" -eq 1 ]; }; then
+  run_docker_compose exec -T api sh -c 'rm -f /app/tmp/index-outbox.jsonl /app/tmp/watcher_heartbeat.json /app/tmp/worker_heartbeat.json'
+  if [ "$START_WATCHERS" -eq 1 ]; then
+    run_docker_compose exec -T watcher sh -c 'rm -f /app/tmp/watcher_heartbeat.json' || true
   fi
-  sleep 2
-done
-if [ "$watcher_ready" -ne 1 ]; then
-  echo "ERROR: watcher heartbeat not detected at /app/tmp/watcher_heartbeat.json" >&2
-  exit 1
+fi
+
+if [ "$START_WATCHERS" -eq 1 ]; then
+  watcher_ready=0
+  watcher_deadline=$((SECONDS + WATCHER_HEARTBEAT_TIMEOUT))
+  while [ $SECONDS -lt $watcher_deadline ]; do
+    if run_docker_compose exec -T watcher sh -c 'test -s /app/tmp/watcher_heartbeat.json' >/dev/null 2>&1; then
+      watcher_ready=1
+      break
+    fi
+    sleep 2
+  done
+  if [ "$watcher_ready" -ne 1 ]; then
+    echo "ERROR: watcher heartbeat not detected at /app/tmp/watcher_heartbeat.json after $WATCHER_HEARTBEAT_TIMEOUT seconds" >&2
+    exit 1
+  fi
 fi
 
 ready_payload=$(curl -sS http://127.0.0.1:18000/readyz || true)
@@ -376,7 +468,7 @@ update_health_state
 auto_bootstrap="${AUTO_BOOTSTRAP:-0}"
 if [ "$auto_bootstrap" -eq 1 ]; then
   set +e
-  settings_validate_json=$(docker compose exec -T api python -m app.cli settings validate --json)
+  settings_validate_json=$(run_docker_compose exec -T api python -m app.cli settings validate --json)
   settings_validate_status=$?
   set -e
   if [ "$settings_validate_status" -ne 0 ]; then
@@ -395,19 +487,19 @@ if [ "$api_health_index_rebuild" -eq 1 ] && [ "$auto_bootstrap" -ne 1 ]; then
   exit 1
 fi
 
-if ! docker compose exec -T api sh -c '[ -d /app/vault ]' >/dev/null 2>&1; then
+if ! run_docker_compose exec -T api sh -c '[ -d /app/vault ]' >/dev/null 2>&1; then
   echo "ERROR: /app/vault mount is missing inside the api container" >&2
   exit 1
 fi
 
-vault_note_count=$(docker compose exec -T api sh -c 'find /app/vault -name "*.md" | wc -l' | tr -d '[:space:]')
+vault_note_count=$(run_docker_compose exec -T api sh -c 'find /app/vault -name "*.md" | wc -l' | tr -d '[:space:]')
 vault_note_count=${vault_note_count:-0}
 if [ "$vault_note_count" -le 0 ]; then
   echo "ERROR: /app/vault contains no markdown files for the watcher scope" >&2
   exit 1
 fi
 
-store_stats_json=$(docker compose exec -T api python -m app.cli store stats --json || true)
+store_stats_json=$(run_docker_compose exec -T api python -m app.cli store stats --json || true)
 extract_stat() {
   local key="$1"
   STAT_KEY="$key" STORE_STATS_JSON="$store_stats_json" python - <<'PY'
@@ -430,8 +522,8 @@ vector_count="$vectors_before"
 ingest_summary_json="{}"
 if [ "$objects_before" -le 0 ]; then
   ingest_run="yes"
-  ingest_summary_json=$(docker compose exec -T api env STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@db:5432/app python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
-  store_stats_json=$(docker compose exec -T api python -m app.cli store stats --json || true)
+  ingest_summary_json=$(run_docker_compose exec -T api env STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@db:5432/app python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
+  store_stats_json=$(run_docker_compose exec -T api python -m app.cli store stats --json || true)
   objects_after=$(extract_stat objects)
   vectors_after=$(extract_stat vectors)
   object_count="$objects_after"
@@ -444,7 +536,7 @@ if [ "$auto_bootstrap" -eq 1 ]; then
   if [ "$api_health_index_rebuild" -eq 1 ]; then
     echo "INDEX REBUILD: running"
     set +e
-    docker compose exec -T api sh -lc "python -m app.cli index rebuild --profile default"
+    run_docker_compose exec -T api sh -lc "python -m app.cli index rebuild --profile default"
     rebuild_status=$?
     set -e
     if [ "$rebuild_status" -ne 0 ]; then
@@ -528,7 +620,7 @@ bootstrap_next="none"
 index_doctor_status="skipped"
 index_issue_count=0
 if [ "$alpha_bootstrap" -eq 1 ]; then
-  index_doctor_json=$(docker compose exec -T api python -m app.cli index doctor --json || true)
+  index_doctor_json=$(run_docker_compose exec -T api python -m app.cli index doctor --json || true)
   index_doctor_status=$(INDEX_JSON="$index_doctor_json" python - <<'PY'
 import json, os
 raw = os.environ.get("INDEX_JSON", "")
@@ -571,12 +663,25 @@ print("1" if safe else "0")
 PY
 )
   if [ "$rebuild_safe" -eq 1 ]; then
-    docker compose exec -T api python -m app.cli index rebuild --backend pg --json || true
+    run_docker_compose exec -T api python -m app.cli index rebuild --backend pg --json || true
     bootstrap_next="re-run: python -m app.cli index doctor --json"
   elif [ "$index_doctor_status" != "ok" ]; then
     bootstrap_next="python -m app.cli index rebuild --backend pg"
   fi
 fi
+
+if [ "$START_WATCHERS" -eq 1 ]; then
+  watchers_status="enabled"
+else
+  watchers_status="disabled"
+fi
+if [ "$START_WORKER" -eq 1 ]; then
+  worker_status="enabled"
+else
+  worker_status="disabled"
+fi
+capture_startup_logs
+echo "Startup log: $startup_log_path"
 
 echo "--- STARTUP COMPLETE ---"
 
@@ -595,9 +700,13 @@ SUMMARY:
   index rebuild: $index_rebuild_status
   index doctor: $index_doctor_status (issues=$index_issue_count)
   bootstrap next: $bootstrap_next
+  watchers: $watchers_status
+  worker: $worker_status
   note: /api/health ok=false can be expected when optional tools (e.g., ffmpeg) are missing; Stage0 ingest/search/ask can still work.
   next: curl -sS http://127.0.0.1:18000/search?q=test&k=3
 SUMMARY
 
-echo "Stop watcher: docker compose exec watcher sh -c 'touch /app/tmp/WATCHER_STOP'"
+if [ "$START_WATCHERS" -eq 1 ]; then
+  echo "Stop watcher: docker compose exec watcher sh -c 'touch /app/tmp/WATCHER_STOP'"
+fi
 echo "URLs: http://127.0.0.1:18000  |  http://127.0.0.1:18000/api/status"

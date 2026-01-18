@@ -21,6 +21,7 @@ from app.outbox.events import get_index_outbox_path
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import write_outbox_event
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
+from app.vault.layout import ensure_vault_layout
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
 from app.watcher.state import WatcherState
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -32,16 +33,14 @@ MIN_TICK_SLEEP_SECONDS = 0.05
 
 _WRITE_GUARD = OptimisticWriteGuard()
 
-INBOX_CANDIDATES = ("📥 Inbox", "Inbox")
-
 def _detect_inbox_dir(vault_root: Path) -> str:
     env_value = os.getenv("VAULT_INBOX_DIR_REL")
     if env_value:
         return env_value
-    for candidate in INBOX_CANDIDATES:
-        if (vault_root / candidate).is_dir():
-            return candidate
-    return INBOX_CANDIDATES[0]
+    if not vault_root.exists():
+        raise FileNotFoundError(f"Vault root not found: {vault_root}")
+    layout = ensure_vault_layout(vault_root)
+    return layout.inbox_folder
 
 
 def _now_iso() -> str:
