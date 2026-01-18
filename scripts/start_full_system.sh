@@ -700,10 +700,15 @@ if [ "$BOOTSTRAP_STATE" = "empty" ]; then
   echo "INDEX: not required (no objects yet)"
   index_rebuild_status="skipped (empty)"
 elif [ "$api_health_index_rebuild" -eq 1 ] && [ "$auto_bootstrap" -ne 1 ]; then
-  echo "INDEX: required (AUTO_BOOTSTRAP=1 to run)" >&2
-  echo "Run: docker compose exec -T api python -m app.cli index rebuild --profile default" >&2
-  debug_dump
-  exit 1
+  index_rebuild_status="required"
+  if [ "$VERIFY_ACTIVE" -eq 1 ]; then
+    echo "INDEX: required (AUTO_BOOTSTRAP=1 to run)" >&2
+    echo "Run: docker compose exec -T api python -m app.cli index rebuild --profile default" >&2
+    debug_dump
+    exit 1
+  else
+    echo "INFO: index rebuild is required but deferred (AUTO_BOOTSTRAP=1 to run)"
+  fi
 fi
 
 if ! run_docker_compose exec -T api sh -c '[ -d /app/vault ]' >/dev/null 2>&1; then
@@ -714,8 +719,9 @@ fi
 vault_note_count=$(run_docker_compose exec -T api sh -c 'find /app/vault -name "*.md" | wc -l' | tr -d '[:space:]')
 vault_note_count=${vault_note_count:-0}
 if [ "$vault_note_count" -le 0 ]; then
-  echo "ERROR: /app/vault contains no markdown files for the watcher scope" >&2
-  exit 1
+  echo "INFO: /app/vault contains no markdown files for the watcher scope"
+else
+  echo "INFO: /app/vault contains $vault_note_count markdown files"
 fi
 
 ingest_run="no"
@@ -816,8 +822,12 @@ if [ "$BOOTSTRAP_STATE" = "active" ]; then
     if [ "$ingested_count" -eq 0 ] && [ "$skipped_locked_count" -gt 0 ]; then
       echo "WARNING: search returned zero results after bootstrap ingest; all candidates were locked (errno=35)."
     else
-      echo "ERROR: search returned zero results after bootstrap ingest; check vault mount/store mismatch" >&2
-      exit 1
+      if [ "$VERIFY_ACTIVE" -eq 1 ]; then
+        echo "ERROR: search returned zero results after bootstrap ingest; check vault mount/store mismatch" >&2
+        exit 1
+      else
+        echo "INFO: search returned zero results after bootstrap ingest; run 'make verify' for strict checks"
+      fi
     fi
   fi
 else
