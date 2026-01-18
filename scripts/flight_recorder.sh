@@ -134,6 +134,15 @@ docker_probe() {
   return 1
 }
 
+df_probe_target() {
+  local target="$1"
+  if [[ -e "$target" ]]; then
+    safe_cmd "df ${target}" sh -c "df -h '$target'" || true
+  else
+    append_line "df probe missing: $target"
+  fi
+}
+
 flight_active=1
 cleanup() {
   if [[ $flight_active -eq 1 ]]; then
@@ -160,6 +169,16 @@ record_snapshot() {
   fi
   safe_cmd "processes" sh -c 'ps -A -o pid,ppid,%cpu,%mem,command | sort -nrk 3 | head -n 20' || true
   safe_cmd "df" df -h || true
+  if [[ -n "${VAULT_ROOT:-}" ]]; then
+    df_probe_target "$VAULT_ROOT"
+  else
+    append_line "VAULT_ROOT: unset"
+  fi
+  if command -v iostat >/dev/null 2>&1; then
+    safe_cmd "iostat" iostat -d 1 1 || true
+  else
+    append_line "iostat: missing"
+  fi
   if command -v docker >/dev/null 2>&1; then
     docker_probe "info" docker info || true
     docker_probe "ps" docker ps || true
@@ -191,4 +210,5 @@ while true; do
     fi
   fi
   sleep "$INTERVAL"
+
 done
