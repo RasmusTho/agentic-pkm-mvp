@@ -17,7 +17,9 @@ State: SoT v4.10 Reality-MVP (work branch prep).
 
 6. Guard the watcher controls with the regression marker command so watchdog failures are caught quickly: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory pytest -q -m watcher_controls`. If the marker ever drifts, the direct fallback `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory pytest -q tests/watcher/test_watcher_controls.py tests/watcher/test_registry_guardrails.py` (or `scripts/test_watcher_controls.sh`) exercises the inbox-bounded scan, mtime gating, and stop-file/backoff guardrails without running unrelated suites.
 
-7. Flight recorder: `scripts/start_full_system.sh` now starts `scripts/flight_recorder.sh` (default `START_FLIGHT_RECORDER=1`) which writes `tmp/flightrecorder-<timestamp>.log` outside the vault every ~5s; each entry dumps `uptime`, `top`, `ps`, `df`, and docker info/logs so you can postmortem a hard reset. When diagnosing a hang, tail `tail -n 40 tmp/flightrecorder-<timestamp>.log` plus the watcher tick log, and include that file when reporting the issue. Use `scripts/flight_recorder.sh --once` (and the `--interval`/`--duration` knobs) for a single snapshot even on hosts without docker.
+7. Flight recorder: `scripts/start_full_system.sh` now starts `scripts/flight_recorder.sh` (default `START_FLIGHT_RECORDER=1`) before any Docker/`VAULT_ROOT` checks, so you still capture host diagnostics even if Docker is down or `VAULT_ROOT` is unset. The recorder writes `tmp/flightrecorder-<timestamp>.log` outside the vault every ~5s; each entry dumps `uptime`, `top`, `ps`, `df`, and docker info/logs so you can postmortem a hard reset. When diagnosing a hang, tail `tail -n 40 tmp/flightrecorder-<timestamp>.log` plus the watcher tick log, and include that file when reporting the issue. Use `scripts/flight_recorder.sh --once` (and the `--interval`/`--duration` knobs) for a single snapshot even on hosts without docker. Run `scripts/test_flight_recorder_invariant.sh` when you tweak startup to verify the recorder still creates `tmp/flightrecorder-*.log` despite an early failure.
+
+
 
 ### Minimal safe bring-up
 ```bash

@@ -17,6 +17,25 @@ HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-5}"
 WATCHER_HEARTBEAT_TIMEOUT="${WATCHER_HEARTBEAT_TIMEOUT:-30}"
 WORKER_HEARTBEAT_TIMEOUT="${WORKER_HEARTBEAT_TIMEOUT:-30}"
 
+flight_recorder_log_path="$ROOT/tmp/flightrecorder-$(date -u +"%Y%m%d-%H%M%S").log"
+flight_recorder_pid=""
+if [ "$START_FLIGHT_RECORDER" -eq 1 ]; then
+  scripts/flight_recorder.sh --log-path "$flight_recorder_log_path" --interval "$FLIGHT_RECORDER_INTERVAL" --duration "$FLIGHT_RECORDER_DURATION" >/dev/null 2>&1 &
+  flight_recorder_pid=$!
+  echo "Flight recorder logging to $flight_recorder_log_path"
+  for attempt in 1 2 3 4 5; do
+    if [ -f "$flight_recorder_log_path" ]; then
+      break
+    fi
+    sleep 0.1
+  done
+  trap '
+    if [ -n "${flight_recorder_pid:-}" ]; then
+      kill "$flight_recorder_pid" >/dev/null 2>&1 || true
+    fi
+  ' EXIT
+fi
+
 debug_dump() {
   echo "DEBUG: docker compose ps"
   run_docker_compose ps || true
@@ -74,20 +93,6 @@ if [ ! -d "$vault_host_path" ]; then
 fi
 vault_host_path="$(cd "$vault_host_path" && pwd)"
 export VAULT_ROOT="$vault_host_path"
-
-flight_recorder_log_path=""
-flight_recorder_pid=""
-if [ "$START_FLIGHT_RECORDER" -eq 1 ]; then
-  flight_recorder_log_path="$ROOT/tmp/flightrecorder-$(date -u +"%Y%m%d-%H%M%S").log"
-  scripts/flight_recorder.sh --log-path "$flight_recorder_log_path" --interval "$FLIGHT_RECORDER_INTERVAL" --duration "$FLIGHT_RECORDER_DURATION" >/dev/null 2>&1 &
-  flight_recorder_pid=$!
-  echo "Flight recorder logging to $flight_recorder_log_path"
-  trap '
-    if [ -n "${flight_recorder_pid:-}" ]; then
-      kill "$flight_recorder_pid" >/dev/null 2>&1 || true
-    fi
-  ' EXIT
-fi
 
 runtime_env_path="${RUNTIME_ENV_PATH:-tmp/runtime.env}"
 RUNTIME_ENV_PATH="$runtime_env_path"

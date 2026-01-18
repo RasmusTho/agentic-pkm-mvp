@@ -93,7 +93,20 @@ safe_cmd() {
   append_line "\n=== $label ==="
   if ! "$@" >>"$LOG_PATH" 2>&1; then
     append_line "FAILED: $* (exit $? )"
+    return 1
   fi
+  return 0
+}
+
+safe_cmd_with_tool() {
+  local label="$1"
+  local tool="$2"
+  shift 2
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    append_line "missing: $tool"
+    return 0
+  fi
+  safe_cmd "$label" "$@"
 }
 
 flight_active=1
@@ -108,23 +121,23 @@ trap 'cleanup SIGTERM; exit 0' TERM
 
 record_snapshot() {
   append_line "\n===== Flight recorder snapshot: $(date -u +"%Y-%m-%dT%H:%M:%SZ") ====="
-  safe_cmd "date" date
-  safe_cmd "uptime" uptime
+  safe_cmd "date" date || true
+  safe_cmd "uptime" uptime || true
   if command -v vm_stat >/dev/null 2>&1; then
-    safe_cmd "vm_stat" vm_stat
+    safe_cmd "vm_stat" vm_stat || true
   else
-    append_line "vm_stat: not available"
+    append_line "vm_stat: missing"
   fi
   if [[ "$(uname)" == "Darwin" ]]; then
-    safe_cmd "top (Darwin)" top -l 1 -n 20
+    safe_cmd "top (Darwin)" top -l 1 -n 20 || true
   else
-    safe_cmd "top (batch)" sh -c 'top -b -n 1 | head -n 20'
+    safe_cmd "top (batch)" sh -c 'top -b -n 1 | head -n 20' || true
   fi
-  safe_cmd "processes" sh -c 'ps -A -o pid,ppid,%cpu,%mem,command | sort -nrk 3 | head -n 20'
-  safe_cmd "df" df -h
-  safe_cmd "docker info" run_with_timeout docker info
-  safe_cmd "docker compose ps" run_with_timeout docker compose ps
-  safe_cmd "docker compose logs" run_with_timeout docker compose logs --tail=50 api watcher worker
+  safe_cmd "processes" sh -c 'ps -A -o pid,ppid,%cpu,%mem,command | sort -nrk 3 | head -n 20' || true
+  safe_cmd "df" df -h || true
+  safe_cmd_with_tool "docker info" docker run_with_timeout docker info || true
+  safe_cmd_with_tool "docker compose ps" docker run_with_timeout docker compose ps || true
+  safe_cmd_with_tool "docker compose logs" docker run_with_timeout docker compose logs --tail=50 api watcher worker || true
 }
 
 printf "Flight recorder log: %s\n" "$LOG_PATH"
