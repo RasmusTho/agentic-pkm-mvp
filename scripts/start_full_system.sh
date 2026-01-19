@@ -23,6 +23,20 @@ START_MODE="${START_MODE:-runtime}"
 startup_status_path="$ROOT/tmp/startup_status.json"
 mkdir -p "$ROOT/tmp"
 
+readiness_state="unknown"
+api_health_ok="false"
+api_health_required_ok="false"
+api_health_failed="none"
+vault_note_count="unknown"
+object_count=0
+vector_count=0
+ingest_run="no"
+search_results=0
+index_rebuild_status="skipped"
+index_doctor_status="skipped"
+index_issue_count=0
+bootstrap_next="none"
+
 write_startup_status() {
   local passed="$1"
   local reason="$2"
