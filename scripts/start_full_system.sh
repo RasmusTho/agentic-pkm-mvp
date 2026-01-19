@@ -503,7 +503,6 @@ outbox_count=${outbox_count:-0}
 if [ "$objects_before" -le 0 ] && [ "$outbox_count" -le 0 ]; then
   BOOTSTRAP_STATE="empty"
   BOOTSTRAP_REASON="no objects ingested yet"
-  echo "BOOTSTRAP: empty system, awaiting first ingest"
 else
   BOOTSTRAP_STATE="active"
   BOOTSTRAP_REASON="objects or outbox events detected"
@@ -560,7 +559,9 @@ fi
 
 
 
-optional_check "Ollama preflight" run_ollama_preflight
+if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+  optional_check "Ollama preflight" run_ollama_preflight
+fi
 
 services_to_start=()
 if [ "$START_WATCHERS" -eq 1 ]; then
@@ -690,7 +691,18 @@ PY
 
 update_health_state
 
-auto_bootstrap="${AUTO_BOOTSTRAP:-0}"
+ingest_run="no"
+ingested_count=0
+skipped_locked_count=0
+search_results=0
+vault_note_count="unknown"
+index_rebuild_status="skipped"
+bootstrap_next="none"
+index_doctor_status="skipped"
+index_issue_count=0
+
+if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+  auto_bootstrap="${AUTO_BOOTSTRAP:-0}"
 if [ "$auto_bootstrap" -eq 1 ]; then
   set +e
   settings_validate_json=$(run_docker_compose exec -T api python -m app.cli settings validate --json)
@@ -732,6 +744,11 @@ if [ "$vault_note_count" -le 0 ]; then
 else
   echo "INFO: /app/vault contains $vault_note_count markdown files"
 fi
+
+if [ "$BOOTSTRAP_STATE" = "empty" ]; then
+  echo "BOOTSTRAP: empty system, awaiting first ingest"
+fi
+
 
 ingest_run="no"
 max_notes="${BOOTSTRAP_INGEST_MAX_NOTES:-500}"
@@ -839,8 +856,6 @@ if [ "$BOOTSTRAP_STATE" = "active" ]; then
       fi
     fi
   fi
-else
-  echo "BOOTSTRAP: empty system, awaiting first ingest"
 fi
 
 if [ "$VERIFY_ACTIVE" -eq 1 ]; then
@@ -919,6 +934,7 @@ PY
   elif [ "$index_doctor_status" != "ok" ]; then
     bootstrap_next="python -m app.cli index rebuild --backend pg"
   fi
+fi
 fi
 
 if [ "$START_WATCHERS" -eq 1 ]; then
