@@ -14,6 +14,7 @@ from app.observability.ingest_meta import record_ingest_failure, record_ingest_s
 from app.obs.log import with_trace_id
 from app.search.service import ingest_object as index_ingest_object
 from app.stores import get_object_store
+from app.stores.provider import get_stores
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +46,31 @@ def _ingest_file(path: Path, *, trace_id: str) -> str:
     if "raw_text" in payload_copy:
         payload_copy["raw_text"] = stripped_text
     payload_copy.setdefault("text", stripped_text)
+    payload_copy.setdefault("source_path", str(path))
+    payload_copy.setdefault("source_ref", str(path))
     sanitize_normalize["payload"] = payload_copy
     object_id = str(normalize_res.get("object_id") or normalize_res.get("uuid") or "").strip()
     if not object_id:
         raise RuntimeError("normalize did not return object_id")
+
+    try:
+        object_uuid = uuid.UUID(object_id)
+    except Exception:
+        object_uuid = uuid.uuid4()
+
+    title = (normalize_res.get("core6") or {}).get("title")
+    payload = {"title": title, "origin": "vault", "source": str(path)}
+    canonical_payload = {**payload_copy, "core6": normalize_res.get("core6") or {}}
+    objects_store, _ = get_stores()
+    upsert_kwargs = dict(kind="note", payload=canonical_payload, source_ref=str(path), path=str(path))
+    try:
+        objects_store.upsert(id=object_id, **upsert_kwargs)
+    except TypeError as exc:
+        msg = str(exc)
+        if "unexpected keyword argument" in msg and "id" in msg:
+            objects_store.upsert(**upsert_kwargs)
+        else:
+            raise
 
     classify_res = classify_run(object_id, trace_id=trace_id)
     append_jsonl(
@@ -60,13 +82,6 @@ def _ingest_file(path: Path, *, trace_id: str) -> str:
         }
     )
 
-    try:
-        object_uuid = uuid.UUID(object_id)
-    except Exception:
-        object_uuid = uuid.uuid4()
-
-    title = (normalize_res.get("core6") or {}).get("title")
-    payload = {"title": title, "origin": "vault", "source": str(path)}
     try:
         index_ingest_object(
             object_id=object_uuid,
