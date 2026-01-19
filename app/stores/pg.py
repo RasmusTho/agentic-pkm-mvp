@@ -160,6 +160,11 @@ def truncate_pg_tables() -> None:
             cur.execute("TRUNCATE TABLE vector_index_meta")
 
 
+def reset_vector_index(cur) -> None:
+    cur.execute("DELETE FROM store_vector_index")
+    cur.execute("DELETE FROM vector_index_meta")
+
+
 class PgObjectStore(ObjectStore):
     _OBJECTS_TABLE = "store_objects"
 

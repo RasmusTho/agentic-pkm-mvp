@@ -9,7 +9,10 @@ def _mock_snapshot(state: str, reason: str) -> dict[str, object]:
         "reason": reason,
         "since_ts": "2025-01-01T00:00:00+00:00",
         "outbox_count": 1,
-        "outbox_oldest_age_s": 0.1,
+        "outbox_recent_age_s": 0.1,
+        "store_object_count": 1,
+        "bootstrap_state": "active",
+        "bootstrap_reason": "objects or outbox events detected",
         "embedding_identity": {
             "backend": "mock",
             "expected_identity": None,
@@ -20,7 +23,7 @@ def _mock_snapshot(state: str, reason: str) -> dict[str, object]:
         "errors_last_10m": 0,
         "settings_status": "ok",
         "settings_source": {
-            "path": "/fake/vault/@System/Settings/health.md",
+            "path": "/fake/vault/System/Settings/health.md",
             "mtime": "2025-01-01T00:00:00+00:00",
             "sha256": "deadbeef",
         },
@@ -49,6 +52,7 @@ def test_health_endpoints_ready(monkeypatch) -> None:
     resp_ready = client.get("/readyz")
     assert resp_ready.status_code == 200
     assert resp_ready.json()["state"] == "running"
+    assert resp_ready.json()["class"] == "active"
 
     resp_status = client.get("/status")
     assert resp_status.status_code == 200
@@ -67,3 +71,4 @@ def test_readyz_unhealthy(monkeypatch) -> None:
     resp = client.get("/readyz")
     assert resp.status_code == 503
     assert resp.json()["detail"]["state"] == "boot"
+    assert resp.json()["detail"]["class"] == "active"

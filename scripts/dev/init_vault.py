@@ -1,17 +1,22 @@
 from pathlib import Path
-import uuid
+import os
 import textwrap
+import uuid
+
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 VAULT = ROOT / "vault"
 
+INBOX_DIR = os.getenv("VAULT_INBOX_DIR_REL", "Inbox")
+WORKBENCH_DIR = os.getenv("VAULT_WORKBENCH_DIR_REL", "Workbench")
+
 STRUCTURE = [
     "vault/0_Atlas",
     "vault/1_Calendar/Daily",
     "vault/1_Calendar/Monthly",
-    "vault/@Desk",
-    "vault/@Inbox",
+    f"vault/{WORKBENCH_DIR}",
+    f"vault/{INBOX_DIR}",
     "vault/2_Cards/Concepts",
     "vault/2_Cards/People",
     "vault/2_Cards/Evergreen",
@@ -36,11 +41,13 @@ STRUCTURE = [
     "vault/settings",
 ]
 
+
 def ensure_dirs():
     for d in STRUCTURE:
         p = ROOT / d
         p.mkdir(parents=True, exist_ok=True)
         (p / ".gitkeep").write_text("", encoding="utf-8")
+
 
 def write_system_settings_yaml():
     settings_uuid = uuid.uuid4().hex.upper()
@@ -58,10 +65,15 @@ def write_system_settings_yaml():
             "enable_outbox": True,
             "enable_tracing": True,
         },
+        "paths": {
+            "inbox_dir_rel": INBOX_DIR,
+            "runtime_dir_rel": "System/Runtime",
+            "system_dir_rel": "System",
+        },
         "ingest": {
             "active_vault_path": str((VAULT).resolve()),
             "file_glob": ["**/*.md", "**/*.yaml"],
-            "ignore_glob": ["_system/**"],   # endast system hård-ignoreras
+            "ignore_glob": ["_system/**"],
             "write_policy": "write_on_diff",
         },
         "index": {
@@ -96,8 +108,10 @@ def write_system_settings_yaml():
     path = ROOT / "vault/_system/settings/system-settings.yaml"
     path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
+
 def write_readable_overview_md():
-    md = textwrap.dedent("""\
+    md = textwrap.dedent(
+        f"""\
     ---
     uuid: "SET-BY-SYSTEM"
     title: "System Settings — Overview"
@@ -122,27 +136,33 @@ def write_readable_overview_md():
     - Kanon: [[../_system/settings/system-settings.yaml]]
     - Eventkatalog: [[../_system/events/]]
     - Scheman: [[../_system/schemas/]]
-    - Arbetsyta: [[../@Desk/]]
-    - Inbox: [[../@Inbox/]]
-    """)
+    - Arbetsyta: [[../{WORKBENCH_DIR}/]]
+    - Inbox: [[../{INBOX_DIR}/]]
+    """
+    )
     (ROOT / "vault/settings/Overview.md").write_text(md, encoding="utf-8")
 
+
 def write_atlas_home():
-    home = textwrap.dedent("""\
+    home = textwrap.dedent(
+        f"""\
     # Home
 
-    - [[../@Desk/|Desk]] – skapa nya anteckningar här.
-    - [[../@Inbox/|Inbox]] – systemets inflöde.
+    - [[../{WORKBENCH_DIR}/|Workbench]] – skapa nya anteckningar här.
+    - [[../{INBOX_DIR}/|Inbox]] – systemets inflöde.
     - [[../settings/Overview|System Settings Overview]]
     - [[../2_Cards/|Cards]] · [[../3_Sources/|Sources]] · [[../4_Spaces/|Spaces]] · [[../9_Extras/|Extras]]
-    """)
+    """
+    )
     (ROOT / "vault/0_Atlas/Home.md").write_text(home, encoding="utf-8")
+
 
 def main():
     ensure_dirs()
     write_system_settings_yaml()
     write_readable_overview_md()
     write_atlas_home()
+
 
 if __name__ == "__main__":
     main()

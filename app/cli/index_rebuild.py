@@ -9,7 +9,7 @@ from uuid import UUID
 
 import click
 
-from app.components.embeddings import get_embedding_client
+from app.components.embeddings import EmbeddingIdentity, get_embedding_client
 from app.store import object_store as legacy_store
 from app.stores import get_vector_index
 
@@ -79,6 +79,24 @@ def _load_objects(limit: int | None) -> List[legacy_store.DomainObject]:
     return _db_objects(limit)
 
 
+def _maybe_reset_pg_index(index_store, identity: EmbeddingIdentity, *, as_json: bool) -> None:
+    try:
+        from app.stores.pg import PgVectorIndex, _connect, _load_index_identity, reset_vector_index
+    except Exception:
+        return
+    if not isinstance(index_store, PgVectorIndex):
+        return
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                stored = _load_index_identity(cur)
+                if stored is None or stored != identity:
+                    reset_vector_index(cur)
+    except Exception as exc:
+        if not as_json:
+            click.echo(f"Warning: failed to reset pg vector index: {exc}")
+
+
 @click.group(help="Index maintenance commands.")
 def index() -> None:
     """Index maintenance command group."""
@@ -143,6 +161,7 @@ def rebuild(
         return
 
     index_store = get_vector_index()
+    _maybe_reset_pg_index(index_store, identity, as_json=as_json)
     start = time.perf_counter()
 
     for domain_obj in objects:

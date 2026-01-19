@@ -1,49 +1,65 @@
 from __future__ import annotations
 
-import logging
 from uuid import uuid4
 
 import pytest
 
+from app.components.embeddings import EmbeddingIdentity
 from app.search import service as search_service
 
 
-class _LegacyVectorIndex:
+class _CapturingIndex:
     def __init__(self) -> None:
-        self.calls: list[tuple[tuple, dict]] = []
+        self.calls: list[dict] = []
 
     def upsert(self, *args, **kwargs):
-        if "identity" in kwargs:
-            raise TypeError("unexpected keyword 'identity'")
-        self.calls.append((args, kwargs))
+        self.calls.append(kwargs)
         return None
 
 
-def test_ingest_object_warns_on_legacy_fallback(monkeypatch, caplog) -> None:
-    idx = _LegacyVectorIndex()
-    monkeypatch.setenv("VECTOR_INDEX_DISABLE_LEGACY", "0")
-    monkeypatch.setattr(search_service, "get_vector_index", lambda *_: idx)
-    search_service._LEGACY_FALLBACK_WARNED = False
+class _LegacyIndex:
+    def upsert(self, *args, **kwargs):
+        if "identity" in kwargs:
+            raise TypeError("unexpected keyword 'identity'")
+        return None
 
-    caplog.set_level(logging.WARNING)
 
-    search_service.ingest_object(
+def test_ingest_object_uses_canonical_identity(monkeypatch) -> None:
+    identity = EmbeddingIdentity(provider="mock", model="mock-model", dim=3, normalize=True)
+    index = _CapturingIndex()
+
+    def fake_embed_query(text: str, profile: str = "default"):
+        return [0.1, 0.2, 0.3], identity
+
+    monkeypatch.setattr(search_service, "embed_query", fake_embed_query)
+    monkeypatch.setattr(search_service, "get_vector_index", lambda *_: index)
+
+    object_id, dims = search_service.ingest_object(
         object_id=uuid4(),
         kind="note",
         source_ref="tests",
-        payload={"text": "legacy"},
-        text="legacy",
+        payload={"text": "hello"},
+        text="hello",
     )
 
-    assert idx.calls, "Fallback path should upsert without identity"
-    assert "Legacy VectorIndex fallback" in caplog.text
+    assert dims == 3
+    assert index.calls, "Expected ingest_object to upsert via vector index"
+    call = index.calls[0]
+    assert call.get("identity") is identity
+    assert call.get("model") == identity.model
+    assert call.get("embedding") == [0.1, 0.2, 0.3]
+    assert call.get("object_id") == object_id
 
 
-def test_ingest_object_raises_when_legacy_disabled(monkeypatch) -> None:
-    idx = _LegacyVectorIndex()
-    monkeypatch.setenv("VECTOR_INDEX_DISABLE_LEGACY", "1")
-    monkeypatch.setattr(search_service, "get_vector_index", lambda *_: idx)
-    search_service._LEGACY_FALLBACK_WARNED = False
+def test_ingest_object_requires_identity_support(monkeypatch) -> None:
+    identity = EmbeddingIdentity(provider="mock", model="mock-model", dim=3, normalize=True)
+    legacy = _LegacyIndex()
+
+    def fake_embed_query(text: str, profile: str = "default"):
+        return [0.1, 0.2, 0.3], identity
+
+    monkeypatch.setattr(search_service, "embed_query", fake_embed_query)
+    monkeypatch.setattr(search_service, "get_vector_index", lambda *_: legacy)
 
     with pytest.raises(TypeError):
         search_service.ingest_object(

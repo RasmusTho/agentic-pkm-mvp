@@ -60,7 +60,7 @@ def write_runtime_heartbeat(
     errors: int,
     status: str = "running",
     now: float | None = None,
-) -> Path:
+) -> None:
     resolved = path or resolve_heartbeat_path()
     timestamp = now if now is not None else time.time()
     payload = {
@@ -84,6 +84,7 @@ def write_registry_heartbeat(
     vault_path: Path | None = None,
     config_path: Path | None = None,
     paused: bool | None = None,
+    enqueue_failures_total: int | None = None,
     now: float | None = None,
 ) -> None:
     timestamp = now if now is not None else time.time()
@@ -101,6 +102,8 @@ def write_registry_heartbeat(
         payload["config_path"] = str(config_path)
     if paused is not None:
         payload["paused"] = paused
+    if enqueue_failures_total is not None:
+        payload["enqueue_failures_total"] = enqueue_failures_total
     _write_payload(path, payload)
 
 

@@ -10,6 +10,10 @@ runtime:
   database_url: postgresql://app:app@localhost:15432/app
   enable_outbox: true
   enable_tracing: true
+paths:
+  inbox_dir_rel: Inbox
+  runtime_dir_rel: System/Runtime
+  system_dir_rel: System
 ingest:
   active_vault_path: vault
   file_glob:

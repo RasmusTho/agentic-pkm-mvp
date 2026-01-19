@@ -19,6 +19,7 @@ services:
     build: .
     image: workspace-app
     working_dir: /app
+    user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
       - ./:/app
       - "${VAULT_ROOT:-./vault}:/app/vault"
@@ -27,7 +28,8 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
@@ -54,6 +56,7 @@ services:
     build: .
     image: workspace-app
     working_dir: /app
+    user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
       - ./:/app
       - "${VAULT_ROOT:-./vault}:/app/vault"
@@ -62,7 +65,8 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
@@ -78,7 +82,7 @@ services:
       - db
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "test -s /app/tmp/worker_heartbeat.json"]
+      test: ["CMD-SHELL", "test -s \"${WORKER_HEARTBEAT_PATH:-/app/tmp/worker_heartbeat.json}\""]
       interval: 20s
       timeout: 5s
       retries: 3
@@ -87,6 +91,7 @@ services:
     build: .
     image: workspace-app
     working_dir: /app
+    user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
       - ./:/app
       - "${VAULT_ROOT:-./vault}:/app/vault"
@@ -95,7 +100,8 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
@@ -105,7 +111,7 @@ services:
       EMBED_DIM: ${EMBED_DIM:-768}
       EMBED_NORMALIZE: ${EMBED_NORMALIZE:-1}
       WATCHER_ENABLE: "1"
-      WATCHER_SCOPE_GLOB: "@Inbox/**"
+      WATCHER_SCOPE_GLOB: "${VAULT_INBOX_DIR_REL:-Inbox}/**"
       WATCHER_VAULT_PATH: /app/vault
       WATCHER_HEARTBEAT_PATH: /app/tmp/watcher_heartbeat.json
       WATCHER_STATE_PATH: /app/tmp/watcher_state.json

@@ -1,7 +1,7 @@
 Agentic PKM — Second-Brain Engine
 
 System-of-Truth baseline: v4.10 (Reality-MVP, locked)
-System-of-Truth forward line: v5.4 (PanelAgent Runtime + Watchers)
+System-of-Truth forward line: v5.5 (PanelAgent Runtime + Watchers)
 
 Agentic PKM is an agentic, event-driven, CI-guarded system for personal knowledge management.
 It treats the human writing surface (a Markdown vault) and the cold archive brain (source artifacts) as canonical, portable artifacts.
@@ -71,12 +71,51 @@ LLM_TRACE_PATH=/tmp/llm-trace-sample.jsonl python -m app.cli llm-trace-sequence 
 
 You should see the eight-line CI summary: LATENCY / EVAL / DELTA / RELATION COVERAGE / RELATIONS / DIARIZATION / REASONING / GATES
 
+## Golden Path (Alpha)
+
+```bash
+export VAULT_ROOT="/Users/rasmus/Library/Mobile Documents/iCloud~md~obsidian/Documents/PKM - Alpha"
+export VAULT_INBOX_DIR_REL="Inbox"
+export VAULT_RUNTIME_DIR_REL="System/Runtime"
+export VAULT_SYSTEM_DIR_REL="System"
+make alpha-down || true
+make alpha-up
+python -m scripts.alpha_e2e
+make alpha-smoke
+```
+
+The canonical flow is `make alpha-up` → `python -m scripts.alpha_e2e` → `make alpha-smoke`. `VAULT_INBOX_DIR_REL` defines the watcher scope and where alpha_e2e writes its temporary note (under `<inbox_dir_rel>/_alpha_e2e`), `VAULT_RUNTIME_DIR_REL` defines the runtime scratch area, and `VAULT_SYSTEM_DIR_REL` controls where health settings live. The alpha_e2e note is deleted after success; on failure it is kept unless you run with `--teardown`. To force a fresh image build before startup, run `ALPHA_REBUILD=1 AUTO_BOOTSTRAP=1 make alpha-up` (or `make alpha-rebuild` then `make alpha-up`).
+
+Embeddings/retrieval should go through `app.components.retrieval` (`embed_query`, `embed_docs`, `search`) so embedding identities stay consistent; `/search` and hybrid retrieval use it. If `/api/health` reports a required `index_rebuild`, set `AUTO_BOOTSTRAP=1` so `make alpha-up` runs a deterministic preflight (settings validate + one rebuild) and prints `INDEX REBUILD: ran`. You can verify the outcome via `/api/health` suggested_actions and `/api/status` `index.status` / `index.issues`.
+
+Optional checks:
+- `make alpha-status`
+- `make alpha-doctor`
+- `make alpha-e2e`
+
+Note: `/api/health` can report `ok=false` when optional tools are missing; in Alpha runtime, ffmpeg is bundled in the container image, so a missing ffmpeg check indicates a build/runtime issue. Treat `required_ok` as the gating signal.
+
+## Alpha Compose Runtime
+
+The canonical Alpha Compose Runtime runs `db`, `api`, `watcher`, and `worker` in Docker Compose. The watcher writes audit events (JSONL) and enqueues DB outbox events. The worker consumes the DB outbox to perform ingest and promotion side effects, while the API surfaces status and health.
+In pg-mode, the DB outbox is the canonical queue; `INDEX_OUTBOX_PATH` is an audit log only (surfaced as `events_log` in `/api/status`) and should not drive lag estimates.
+
+
+Deprecated: `scripts/run_alpha_stack.sh` and `scripts/run_alpha_live.sh` are legacy helpers; use `make alpha-up` (which calls `scripts/start_full_system.sh`) instead.
+
 ## Alpha quickstart (Docker)
 
 ```bash
 export VAULT_ROOT="/path/to/your/vault"
-make alpha-up
+make alpha
 curl -sS http://127.0.0.1:18000/api/status
+```
+
+Bootstrap a fresh environment (doctor is read-only):
+
+```bash
+export VAULT_ROOT="/path/to/your/vault"
+make alpha-bootstrap
 ```
 
 Run with Ollama-backed LLMs (reads provider defaults from vault settings):
@@ -86,11 +125,11 @@ export VAULT_ROOT="/path/to/your/vault"
 make alpha-up-ollama
 ```
 
-Bootstrap a fresh environment (full scan ingest if empty + index doctor):
+Check environment readiness (read-only):
 
 ```bash
 export VAULT_ROOT="/path/to/your/vault"
-make alpha-bootstrap
+make alpha-doctor
 ```
 
 Stop services:
@@ -206,7 +245,7 @@ Claims, Evidence, and Inferences are schema-validated structures that feed the r
 A deterministic MockDeliberationAgent keeps CI runs reproducible.
 
 ## Watcher readiness and panel flows
-- Vault Watcher (v5.1–v5.4) watches Obsidian files, batches edits, ingests changed notes, and triggers PanelAgent runtime when frontmatter policies allow it.
+- Vault Watcher (v5.1–v5.5) watches Obsidian files, batches edits, ingests changed notes, and triggers PanelAgent runtime when frontmatter policies allow it.
 - `vault-watcher-run` (v5.2 CLI) polls snapshots, runs ingest/panel flows, emits summaries, and respects dry-run / `--max-notes` guards.
 - Frontmatter controls (`ai_panel_auto_run` / `ai_panel: { auto_run: watcher|manual|never }`) gate watcher automation.
 - Watchers remain opt-in and auditable; they reuse CLI entrypoints rather than inventing new pipelines.

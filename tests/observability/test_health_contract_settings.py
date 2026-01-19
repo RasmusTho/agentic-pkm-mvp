@@ -4,6 +4,7 @@ from pathlib import Path
 
 from app.health_contract import HealthContract, HealthStateMachine
 from app.settings.health_settings import HealthThresholds
+from app.vault.paths import get_vault_system_dir_rel
 
 
 def _mock_index_doctor() -> dict:
@@ -21,12 +22,13 @@ def _write_health_markdown(path, thresholds_block: str) -> None:
     path.write_text(f"---\n{thresholds_block}---\n", encoding="utf-8")
 
 
-def _prepare_outbox(tmp_path) -> Path:
+def _prepare_outbox(tmp_path, *, records=None) -> Path:
     outbox = tmp_path / "outbox.jsonl"
-    records = [
+    default_records = [
         {"event": "watcher.run", "timestamp": "2024-01-01T00:00:00Z", "trace_id": "1"},
     ]
-    outbox.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+    payload = records if records is not None else default_records
+    outbox.write_text("\n".join(json.dumps(r) for r in payload), encoding="utf-8")
     return outbox
 
 
@@ -34,7 +36,7 @@ def test_health_contract_uses_vault_thresholds(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(_prepare_outbox(tmp_path)))
     monkeypatch.setattr("app.index.doctor.diagnose_index", lambda: _mock_index_doctor())
     vault = tmp_path / "vault"
-    settings_path = vault / "@System" / "Settings" / "health.md"
+    settings_path = vault / get_vault_system_dir_rel(vault) / "Settings" / "health.md"
     _write_health_markdown(
         settings_path,
         """
@@ -65,7 +67,7 @@ def test_health_contract_invalid_settings_fallbacks(monkeypatch, tmp_path) -> No
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(_prepare_outbox(tmp_path)))
     monkeypatch.setattr("app.index.doctor.diagnose_index", lambda: _mock_index_doctor())
     vault = tmp_path / "vault"
-    settings_path = vault / "@System" / "Settings" / "health.md"
+    settings_path = vault / get_vault_system_dir_rel(vault) / "Settings" / "health.md"
     _write_health_markdown(
         settings_path,
         """
@@ -84,3 +86,37 @@ thresholds:
     assert result["thresholds"] == HealthThresholds.defaults().to_payload()
     assert any("thresholds.degrade_samples" in err for err in result["settings_errors"])
     assert result["settings_source"]["path"] == str(settings_path)
+
+
+def test_health_contract_reports_recent_outbox_age(monkeypatch, tmp_path) -> None:
+    records = [
+        {"event": "watcher.run", "timestamp": "2024-12-31T23:00:00Z"},
+        {"event": "ingest.run", "timestamp": "2025-01-01T12:00:00Z"},
+    ]
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(_prepare_outbox(tmp_path, records=records)))
+    monkeypatch.setattr("app.index.doctor.diagnose_index", lambda: _mock_index_doctor())
+    contract = HealthContract(
+        state_machine=HealthStateMachine(),
+        now_fn=lambda: datetime(2025, 1, 2, tzinfo=UTC),
+        vault_root_fn=lambda: tmp_path,
+    )
+    result = contract.evaluate()
+    expected_age = float((datetime(2025, 1, 2, tzinfo=UTC) - datetime(2025, 1, 1, 12, 0, tzinfo=UTC)).total_seconds())
+    assert abs(result["outbox_recent_age_s"] - expected_age) < 1e-3
+
+
+def test_health_contract_uses_newest_event_age(monkeypatch, tmp_path) -> None:
+    records = [
+        {"event": "watcher.run", "timestamp": "2025-01-02T10:00:10Z"},
+        {"event": "ingest.run", "timestamp": "2025-01-01T00:00:00Z"},
+    ]
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(_prepare_outbox(tmp_path, records=records)))
+    monkeypatch.setattr("app.index.doctor.diagnose_index", lambda: _mock_index_doctor())
+    contract = HealthContract(
+        state_machine=HealthStateMachine(),
+        now_fn=lambda: datetime(2025, 1, 2, 10, 0, 20, tzinfo=UTC),
+        vault_root_fn=lambda: tmp_path,
+    )
+    result = contract.evaluate()
+    expected_age = float((datetime(2025, 1, 2, 10, 0, 20, tzinfo=UTC) - datetime(2025, 1, 2, 10, 0, 10, tzinfo=UTC)).total_seconds())
+    assert abs(result["outbox_recent_age_s"] - expected_age) < 1e-3

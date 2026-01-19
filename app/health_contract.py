@@ -11,6 +11,7 @@ from app.config.paths import resolve_vault_root
 from app.events.outbox import event_name, latest_trace_story, normalize_timestamp, read_outbox
 from app.index.doctor import diagnose_index
 from app.settings.health_settings import HealthThresholds, load_health_settings
+from app.stores import get_object_store
 
 WRITE_BLOCKED_STATES = {"safe_mode", "unhealthy"}
 INCIDENT_STATES = {"degraded", "unhealthy", "safe_mode"}
@@ -62,28 +63,28 @@ class HealthStateMachine:
             self.good_counter = 0
             if self.bad_counter >= degrade_samples:
                 next_state = "degraded"
-                reason = f"outbox lag {age:.1f}s exceeded {degrade_limit}s"
+                reason = f"outbox idle, last event {age:.1f}s ago"
             else:
                 next_state = "catch_up"
-                reason = f"catching up (lag {age:.1f}s)"
+                reason = f"catching up (last event {age:.1f}s ago)"
         elif age < recover_limit:
             self.good_counter += 1
             self.bad_counter = 0
             if self.state in {"degraded", "recovery"}:
                 if self.good_counter >= recover_samples:
                     next_state = "running"
-                    reason = "outbox lag recovered"
+                    reason = "outbox activity recovered"
                 else:
                     next_state = "recovery"
-                    reason = "recovering (lag improving)"
+                    reason = "recovering (activity improving)"
             else:
                 next_state = "running"
-                reason = "operational"
+                reason = "recent activity"
         else:
             self.bad_counter = 0
             self.good_counter = 0
             next_state = "running"
-            reason = "normal"
+            reason = "recent activity"
 
         if next_state != prev_state:
             self.state = next_state
@@ -117,8 +118,9 @@ class HealthContract:
         settings_result = load_health_settings(vault_root=vault_root)
         records = read_outbox()
         outbox_count = len(records)
-        oldest_ts = self._earliest_timestamp(records)
-        age = self._compute_age(oldest_ts, now)
+        object_count = self._count_objects()
+        latest_ts = self._latest_timestamp(records)
+        age = self._compute_age(latest_ts, now)
         prev_state = self.state_machine.state
         state, reason, since_ts = self.state_machine.update(
             age,
@@ -141,34 +143,39 @@ class HealthContract:
         write_guard_reason = None if writes_allowed else reason
         suggested_actions = self._suggested_actions(age, index_status, writes_allowed)
 
+        bootstrap_state, bootstrap_reason = self._bootstrap_state(object_count, outbox_count)
+
         if settings_result.settings.incident_capture.enabled:
             transitioned = state != prev_state
             if transitioned and state in INCIDENT_STATES:
-                self._append_incident_log(
-                    path=settings_result.settings.incident_log_path,
-                    entry=self._incident_entry(
-                        now=now,
-                        state=state,
-                        reason=reason,
-                        since_ts=since_ts,
-                        settings_result=settings_result,
-                        outbox_count=outbox_count,
-                        outbox_oldest_age_s=age,
-                        index_status=index_status,
-                        events_status=events_status,
-                        writes_allowed=writes_allowed,
-                        write_guard_reason=write_guard_reason,
-                        catch_up_progress=catch_up_progress,
-                        suggested_actions=suggested_actions,
-                    ),
-                )
+                    self._append_incident_log(
+                        path=settings_result.settings.incident_log_path,
+                        entry=self._incident_entry(
+                            now=now,
+                            state=state,
+                            reason=reason,
+                            since_ts=since_ts,
+                            settings_result=settings_result,
+                            outbox_count=outbox_count,
+                            outbox_recent_age_s=age,
+                            index_status=index_status,
+                            events_status=events_status,
+                            writes_allowed=writes_allowed,
+                            write_guard_reason=write_guard_reason,
+                            catch_up_progress=catch_up_progress,
+                            suggested_actions=suggested_actions,
+                        ),
+                    )
 
         result = {
             "state": state,
             "reason": reason,
             "since_ts": since_ts,
             "outbox_count": outbox_count,
-            "outbox_oldest_age_s": age,
+            "outbox_recent_age_s": age,
+            "store_object_count": object_count,
+            "bootstrap_state": bootstrap_state,
+            "bootstrap_reason": bootstrap_reason,
             "embedding_identity": {
                 "backend": index_result.get("backend"),
                 "expected_identity": index_result.get("expected_identity"),
@@ -190,16 +197,16 @@ class HealthContract:
             result["recent_transition_history"] = list(self.state_machine.transition_history)
         return result
 
-    def _earliest_timestamp(self, records: Iterable[dict[str, Any]]) -> datetime | None:
-        earliest: datetime | None = None
+    def _latest_timestamp(self, records: Iterable[dict[str, Any]]) -> datetime | None:
+        latest: datetime | None = None
         for rec in records:
             value = normalize_timestamp(rec)
             ts = self._parse_timestamp(value)
             if ts is None:
                 continue
-            if earliest is None or ts < earliest:
-                earliest = ts
-        return earliest
+            if latest is None or ts > latest:
+                latest = ts
+        return latest
 
     def _compute_age(self, ts: datetime | None, now: datetime) -> float:
         if ts is None:
@@ -253,20 +260,20 @@ class HealthContract:
     def _catch_up_progress(
         self,
         outbox_count: int,
-        outbox_oldest_age_s: float,
+        outbox_recent_age_s: float,
         thresholds: HealthThresholds,
     ) -> dict[str, Any] | None:
         if outbox_count <= 0:
             mode = "idle"
-        elif outbox_oldest_age_s > thresholds.outbox_degrade_oldest_age_s:
+        elif outbox_recent_age_s > thresholds.outbox_degrade_oldest_age_s:
             mode = "replay"
-        elif outbox_oldest_age_s > thresholds.outbox_recover_oldest_age_s:
+        elif outbox_recent_age_s > thresholds.outbox_recover_oldest_age_s:
             mode = "stalled"
         else:
             mode = "idle"
         return {
             "outbox_count": outbox_count,
-            "outbox_oldest_age_s": outbox_oldest_age_s,
+            "outbox_recent_age_s": outbox_recent_age_s,
             "processing_mode": mode,
         }
 
@@ -289,7 +296,7 @@ class HealthContract:
         since_ts: str,
         settings_result: Any,
         outbox_count: int,
-        outbox_oldest_age_s: float,
+        outbox_recent_age_s: float,
         index_status: str,
         events_status: str,
         writes_allowed: bool,
@@ -304,7 +311,7 @@ class HealthContract:
             "since_ts": since_ts,
             "settings_source": settings_result.source.to_payload(),
             "outbox_count": outbox_count,
-            "outbox_oldest_age_s": outbox_oldest_age_s,
+            "outbox_recent_age_s": outbox_recent_age_s,
             "index_doctor_status": index_status,
             "events_doctor_status": events_status,
             "writes_allowed": writes_allowed,
@@ -324,6 +331,17 @@ class HealthContract:
                 handle.write("\n")
         except Exception:
             return
+
+    def _count_objects(self) -> int:
+        try:
+            return get_object_store().count_objects()
+        except Exception:
+            return 0
+
+    def _bootstrap_state(self, object_count: int, outbox_count: int) -> tuple[str, str]:
+        if object_count == 0 and outbox_count == 0:
+            return "empty", "no objects ingested yet"
+        return "active", "objects or outbox events detected"
 
 
 GLOBAL_STATE_MACHINE = HealthStateMachine()

@@ -4,16 +4,26 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
+from app.vault.paths import get_vault_inbox_dir_rel
 from app.watcher.config import WatcherConfig
 from app.watcher.state import WatcherState
 from app.watcher.watcher import run_tick
 
+pytestmark = pytest.mark.watcher_controls
+
+
+def _inbox_dir(tmp_path: Path) -> str:
+    return get_vault_inbox_dir_rel(tmp_path / "vault")
+
 
 def _config(tmp_path: Path, *, rate_limit: int = 30, debounce_ms: int = 1500) -> WatcherConfig:
+    inbox_dir = _inbox_dir(tmp_path)
     return WatcherConfig(
         enable=True,
         vault_path=tmp_path / "vault",
-        scope_glob="@Inbox/**",
+        scope_glob=f"{inbox_dir}/**",
         debounce_ms=debounce_ms,
         rate_limit_per_min=rate_limit,
         backoff_seconds=10,
@@ -22,6 +32,7 @@ def _config(tmp_path: Path, *, rate_limit: int = 30, debounce_ms: int = 1500) ->
         outbox_path=tmp_path / "outbox.jsonl",
         summary_interval=10,
         tick_sleep_seconds=0.0,
+        tick_log_path=tmp_path / "tick.jsonl",
     )
 
 
@@ -35,7 +46,7 @@ def _read_outbox(outbox: Path) -> list[dict]:
 def test_scope_glob_limits_to_inbox(tmp_path: Path) -> None:
     cfg = _config(tmp_path)
     cfg.vault_path.mkdir(parents=True, exist_ok=True)
-    inbox = cfg.vault_path / "@Inbox"
+    inbox = cfg.vault_path / _inbox_dir(tmp_path)
     inbox.mkdir()
     other_dir = cfg.vault_path / "Other"
     other_dir.mkdir()
@@ -49,17 +60,18 @@ def test_scope_glob_limits_to_inbox(tmp_path: Path) -> None:
     summary = run_tick(cfg, state, now=0.0)
 
     assert summary["emitted_in_tick"] == 1
+    assert summary["scanned_files"] == 1
     entries = _read_outbox(cfg.outbox_path)
     assert len(entries) == 1
     payload = entries[0].get("payload") or {}
-    assert payload.get("relative_path") == str(Path("@Inbox") / inbox_note.name)
+    assert payload.get("relative_path") == str(Path(_inbox_dir(tmp_path)) / inbox_note.name)
     assert other_note.name not in cfg.outbox_path.read_text(encoding="utf-8")
 
 
 def test_debounce_blocks_rapid_retriggers(tmp_path: Path) -> None:
     cfg = _config(tmp_path, debounce_ms=1500)
     cfg.vault_path.mkdir(parents=True, exist_ok=True)
-    note = (cfg.vault_path / "@Inbox").joinpath("note.md")
+    note = (cfg.vault_path / _inbox_dir(tmp_path)).joinpath("note.md")
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("v1", encoding="utf-8")
 
@@ -73,10 +85,31 @@ def test_debounce_blocks_rapid_retriggers(tmp_path: Path) -> None:
     assert second["emitted_in_tick"] == 0
 
 
+def test_unchanged_file_skips_hash(tmp_path: Path, monkeypatch) -> None:
+    cfg = _config(tmp_path)
+    cfg.vault_path.mkdir(parents=True, exist_ok=True)
+    note = (cfg.vault_path / _inbox_dir(tmp_path)).joinpath("note.md")
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("stable", encoding="utf-8")
+
+    state = WatcherState()
+    first = run_tick(cfg, state, now=0.0)
+    assert first["emitted_in_tick"] == 1
+
+    def fail_read_bytes(self) -> bytes:
+        raise AssertionError("read_bytes should not be invoked for unchanged files")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+    second = run_tick(cfg, state, now=1.0)
+    assert second["emitted_in_tick"] == 0
+    assert second["hashed_files"] == 0
+    assert second["bytes_read"] == 0
+
+
 def test_rate_limit_blocks_after_threshold(tmp_path: Path) -> None:
     cfg = _config(tmp_path, rate_limit=1)
     cfg.vault_path.mkdir(parents=True, exist_ok=True)
-    note = (cfg.vault_path / "@Inbox").joinpath("rate.md")
+    note = (cfg.vault_path / _inbox_dir(tmp_path)).joinpath("rate.md")
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("first", encoding="utf-8")
 
@@ -97,7 +130,7 @@ def test_rate_limit_blocks_after_threshold(tmp_path: Path) -> None:
 def test_kill_switch_pauses_without_emitting(tmp_path: Path) -> None:
     cfg = _config(tmp_path)
     cfg.vault_path.mkdir(parents=True, exist_ok=True)
-    note = (cfg.vault_path / "@Inbox").joinpath("stop.md")
+    note = (cfg.vault_path / _inbox_dir(tmp_path)).joinpath("stop.md")
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("halt", encoding="utf-8")
 
@@ -115,11 +148,11 @@ def test_kill_switch_pauses_without_emitting(tmp_path: Path) -> None:
 def test_restart_sanitizes_monotonic_state(tmp_path: Path) -> None:
     cfg = _config(tmp_path)
     cfg.vault_path.mkdir(parents=True, exist_ok=True)
-    note = (cfg.vault_path / "@Inbox").joinpath("restart.md")
+    note = (cfg.vault_path / _inbox_dir(tmp_path)).joinpath("restart.md")
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("v1", encoding="utf-8")
 
-    rel = str(Path("@Inbox") / note.name)
+    rel = str(Path(_inbox_dir(tmp_path)) / note.name)
     state_payload = {
         "files": {rel: {"last_seen": 123.45, "last_emitted": 234.56, "hash": "old", "mtime": 1.0}},
         "backoff_until": 456.78,
@@ -146,3 +179,30 @@ def test_restart_sanitizes_monotonic_state(tmp_path: Path) -> None:
     assert summary2["emitted_in_tick"] == 1
     entries2 = _read_outbox(cfg.outbox_path)
     assert len(entries2) == 2
+
+
+def test_bad_tick_triggers_backoff_and_stop(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    cfg.max_scanned_files_per_tick = 1
+    cfg.max_bad_ticks = 2
+    cfg.bad_tick_backoff_seconds = 0.5
+    cfg.tick_sleep_seconds = 0.1
+    cfg.vault_path.mkdir(parents=True, exist_ok=True)
+    inbox = cfg.vault_path / _inbox_dir(tmp_path)
+    inbox.mkdir(parents=True, exist_ok=True)
+    for idx in range(3):
+        note = inbox / f"note-{idx}.md"
+        note.write_text('payload', encoding='utf-8')
+    if cfg.stop_file.exists():
+        cfg.stop_file.unlink()
+    state = WatcherState()
+    first = run_tick(cfg, state, now=0.0)
+    assert first["bad_tick"] is True
+    assert not cfg.stop_file.exists()
+    second = run_tick(cfg, state, now=1.0)
+    assert second["bad_tick"] is True
+    assert cfg.stop_file.exists()
+    assert second.get("stop_tripped") is True
+    expected_sleep = cfg.tick_sleep_seconds + cfg.bad_tick_backoff_seconds * state.bad_ticks
+    assert second["chosen_sleep_seconds"] == expected_sleep
+    assert state.dynamic_sleep_seconds == expected_sleep

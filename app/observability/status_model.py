@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -59,6 +59,24 @@ class EventCounters(BaseModel):
     source_path: str | None = None
 
 
+class IndexStatus(BaseModel):
+    status: str | None = None
+    issues: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    backend: str | None = None
+    expected_identity: Dict[str, Any] | None = None
+    stored_identity: Dict[str, Any] | None = None
+    rebuild_required: bool | None = None
+
+
+class PanelDiagnostics(BaseModel):
+    resolved_panel_actions_root: str | None = None
+    panel_actions_mappings_count: int = 0
+    panel_actions_ids_sample: list[str] = Field(default_factory=list)
+    has_promote_evergreen_mapping: bool = False
+    last_panel_mapping_load_error: str | None = None
+
+
 class WriteGuardStatus(BaseModel):
     writes_allowed: bool | None = None
     mode: str | None = None
@@ -68,6 +86,18 @@ class OutboxLagStatus(BaseModel):
     outbox_events: int | None = None
     worker_processed_total: int | None = None
     pending_estimate: int | None = None
+
+
+class EventsLogStatus(BaseModel):
+    path: str | None = None
+    total_lines: int | None = None
+
+
+class WorkerQueueStatus(BaseModel):
+    mode: str
+    pending: int | None = None
+    processed_total: int | None = None
+    source_path: str | None = None
 
 
 class SystemStatus(BaseModel):
@@ -83,8 +113,12 @@ class SystemStatus(BaseModel):
     ask: AskStatus
     intents: Optional[IntentStatus] = None
     events: Optional[EventCounters] = None
+    index: Optional[IndexStatus] = None
+    panel_diagnostics: Optional[PanelDiagnostics] = None
     write_guard: Optional[WriteGuardStatus] = None
     outbox_lag: Optional[OutboxLagStatus] = None
+    events_log: Optional[EventsLogStatus] = None
+    worker_queue: Optional[WorkerQueueStatus] = None
 
 
 __all__ = [
@@ -94,7 +128,11 @@ __all__ = [
     "AskStatus",
     "IntentStatus",
     "EventCounters",
+    "IndexStatus",
+    "PanelDiagnostics",
     "WriteGuardStatus",
     "OutboxLagStatus",
+    "EventsLogStatus",
+    "WorkerQueueStatus",
     "SystemStatus",
 ]

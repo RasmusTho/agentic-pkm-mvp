@@ -50,6 +50,10 @@ def _read_outbox(path: Path) -> list[dict]:
 def test_panel_promotion_flow_consumes_and_applies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     object_store_module._MEMORY_STORE.clear()
 
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
     note_uuid = str(uuid4())
     markdown = _panel_markdown("Gör denna anteckning evergreen")
     note_path = tmp_path / "vault" / "Note.md"

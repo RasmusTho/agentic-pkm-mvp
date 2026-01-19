@@ -47,6 +47,18 @@ def _line(label: str, value: str) -> str:
     return f"- {label}: {value}"
 
 
+def _short_path(value: object, max_len: int = 40) -> str | None:
+    if not value:
+        return None
+    text = str(value)
+    if len(text) <= max_len:
+        return text
+    base = os.path.basename(text)
+    if len(base) <= max_len:
+        return base
+    return None
+
+
 def _format_store_line(stores: list[dict]) -> str:
     if not stores:
         return "entries=0 objects=0 external=0, vault=0"
@@ -89,6 +101,23 @@ def _format_providers(providers: list[dict] | None) -> str:
         status = "ok" if ok else "fail"
         parts.append(f"{name}={status}")
     return " ".join(parts) if parts else "(missing)"
+
+
+def _format_suggested(actions: list[dict] | None) -> str:
+    if not isinstance(actions, list) or not actions:
+        return "(none)"
+    parts = []
+    for action in actions[:2]:
+        if not isinstance(action, dict):
+            continue
+        action_id = action.get("id") or "?"
+        severity = action.get("severity") or "info"
+        message = (action.get("message") or "").strip()
+        if message:
+            parts.append(f"{action_id}({severity}) {message}")
+        else:
+            parts.append(f"{action_id}({severity})")
+    return " | ".join(parts) if parts else "(none)"
 
 
 def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
@@ -141,6 +170,9 @@ def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
         lines.append(_line("llm routes", _format_llm_routes(router_routes)))
         lines.append(_line("llm providers", _format_providers(providers)))
 
+        suggested = _get(health_payload, "suggested_actions", default=[])
+        lines.append(_line("suggested", _format_suggested(suggested)))
+
         ffmpeg = _get(health_payload, "checks", "ffmpeg", default={})
         ffmpeg_ok = _get(ffmpeg, "ok", default=True)
         ffmpeg_detail = _get(ffmpeg, "detail", default="")
@@ -153,6 +185,7 @@ def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
         lines.append(_line("worker", "status=(missing) freshness_s=(missing) processed_total=(missing)"))
         lines.append(_line("llm routes", "(missing)"))
         lines.append(_line("llm providers", "(missing)"))
+        lines.append(_line("suggested", "(none)"))
 
     if isinstance(status_payload, dict):
         sot_version = _get(status_payload, "sot_version", default="(missing)")
@@ -165,6 +198,28 @@ def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
         else:
             lines.append(_line("stores", "(missing)"))
 
+        events_log = status_payload.get("events_log") or {}
+        events_parts = [f"lines={_get(events_log, 'total_lines', default='(missing)')}"]
+        events_path = _short_path(events_log.get("path"))
+        if events_path:
+            events_parts.append(f"path={events_path}")
+        lines.append(_line("events_log", " ".join(events_parts)))
+
+        worker_queue = status_payload.get("worker_queue") or {}
+        mode = _get(worker_queue, "mode", default="(missing)")
+        if mode in {"db", "jsonl"}:
+            queue_parts = [
+                f"mode={mode}",
+                f"pending={_get(worker_queue, 'pending', default='(missing)')}",
+                f"processed_total={_get(worker_queue, 'processed_total', default='(missing)')}",
+            ]
+            source_path = _short_path(worker_queue.get("source_path"))
+            if source_path:
+                queue_parts.append(f"source={source_path}")
+            lines.append(_line("worker_queue", " ".join(queue_parts)))
+        else:
+            lines.append(_line("worker_queue", f"mode={mode}"))
+
         write_guard = status_payload.get("write_guard") or {}
         lines.append(
             _line(
@@ -173,20 +228,6 @@ def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
                     [
                         f"allowed={_get(write_guard, 'writes_allowed', default='(missing)')}",
                         f"mode={_get(write_guard, 'mode', default='(missing)')}",
-                    ]
-                ),
-            )
-        )
-
-        outbox_lag = status_payload.get("outbox_lag") or {}
-        lines.append(
-            _line(
-                "outbox",
-                " ".join(
-                    [
-                        f"events={_get(outbox_lag, 'outbox_events', default='(missing)')}",
-                        f"processed_total={_get(outbox_lag, 'worker_processed_total', default='(missing)')}",
-                        f"pending={_get(outbox_lag, 'pending_estimate', default='(missing)')}",
                     ]
                 ),
             )
@@ -224,8 +265,9 @@ def render_status(fetch_json: FetchFunc, *, api_base_url: str) -> str:
     else:
         lines.append(_line("sot", "(missing)"))
         lines.append(_line("stores", "(missing)"))
+        lines.append(_line("events_log", "(missing)"))
+        lines.append(_line("worker_queue", "(missing)"))
         lines.append(_line("writes", "(missing)"))
-        lines.append(_line("outbox", "(missing)"))
         lines.append(_line("ingestion", "(missing)"))
         lines.append(_line("ask", "(missing)"))
 

@@ -166,3 +166,56 @@ def test_index_rebuild_sets_pg_meta(monkeypatch) -> None:
 
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
+
+@pytest.mark.pg
+def test_index_rebuild_resets_missing_meta(monkeypatch) -> None:
+    try:
+        from tests.stores.test_store_contract_pg import _pg_available
+    except Exception:
+        pytest.skip("Postgres helper unavailable")
+
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    reset_store_backends()
+    legacy_store._MEMORY_STORE.clear()
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("EMBED_DIM", "8")
+
+    _seed_object("pg meta reset object", source_ref="pg-test")
+
+    dsn = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM vector_index_meta")
+            cur.execute("DELETE FROM store_vector_index")
+            cur.execute(
+                "INSERT INTO store_vector_index (object_id, kind, source_ref, payload, embedding, dim, model, updated_at) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, now())",
+                (uuid4(), "note", "stale", json.dumps({}), [0.1, 0.2], 2, "stale-model"),
+            )
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["index", "rebuild"])
+    assert result.exit_code == 0
+
+    expected = get_embedding_identity(client=get_embedding_client())
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT identity_json FROM vector_index_meta WHERE id = 1")
+            row = cur.fetchone()
+            assert row is not None
+            data = json.loads(row[0])
+            assert data.get("provider") == expected.provider
+            assert data.get("model") == expected.model
+            assert int(data.get("dim", 0)) == expected.dim
+            cur.execute("SELECT DISTINCT dim FROM store_vector_index")
+            dims = {int(row[0]) for row in cur.fetchall() if row and row[0] is not None}
+            assert dims == {expected.dim}
+            cur.execute("SELECT count(*) FROM store_vector_index")
+            count_row = cur.fetchone()
+            assert int(count_row[0]) > 0
+
+    reset_store_backends()
+    legacy_store._MEMORY_STORE.clear()
+

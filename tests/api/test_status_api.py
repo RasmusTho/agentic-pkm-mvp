@@ -27,6 +27,20 @@ def test_status_endpoint_returns_snapshot():
     assert "promotion_executed_total" in events
     assert isinstance(events.get("ingest_runs_by_plane", {}), dict)
 
+    events_log = body.get("events_log") or {}
+    assert "path" in events_log
+    assert "total_lines" in events_log
+
+    worker_queue = body.get("worker_queue") or {}
+    assert "mode" in worker_queue
+
+    panel_diag = body.get("panel_diagnostics") or {}
+    assert "resolved_panel_actions_root" in panel_diag
+    assert "panel_actions_mappings_count" in panel_diag
+    assert "panel_actions_ids_sample" in panel_diag
+    assert "has_promote_evergreen_mapping" in panel_diag
+    assert "last_panel_mapping_load_error" in panel_diag
+
 
 def test_status_counts_watcher_runs(tmp_path: Path, monkeypatch) -> None:
     outbox = tmp_path / "outbox.jsonl"
@@ -34,6 +48,9 @@ def test_status_counts_watcher_runs(tmp_path: Path, monkeypatch) -> None:
     outbox.write_text(json.dumps(watcher_event) + "\n", encoding="utf-8")
 
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
     status_service.INDEX_OUTBOX_PATH = str(outbox)
 
     client = TestClient(app)
@@ -42,3 +59,6 @@ def test_status_counts_watcher_runs(tmp_path: Path, monkeypatch) -> None:
     data = resp.json()
     events = data.get("events") or {}
     assert events.get("watcher_runs_total", 0) >= 1
+
+    events_log = data.get("events_log") or {}
+    assert events_log.get("total_lines") == 1

@@ -11,6 +11,10 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the watcher→worker→index→/api/ask chain, emit `index.object.embedded` / `index.embedding.failed`, and log diagnostics when sources are missing.
 - The interim GUI and Status service consume these heartbeats/events so the dashboard shows ingest health, counts, and incidents in one place.
 
+## CI & Test Markers
+- CI legs assert `docs/ARCHITECTURE.md` contains fitness guard statements, confirm CLI health smoke commands pass, and verify the worker logs show `worker starting`.
+- The runbook ensures `pytest -q -m "not pg and not alpha_llm"` plus curated fitness gates keep the SoT baseline stable before merges.
+
 ## Status fields (baseline vs forward line)
 - `sot_baseline_version`: locked Reality-MVP baseline (v4.10).
 - `sot_forward_line_version` / `feature_line_version`: active forward line (v5.x features on top of v4.10).

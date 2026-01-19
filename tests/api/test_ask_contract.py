@@ -11,6 +11,8 @@ from app.retrieval.hybrid import get_store
 
 def test_ask_contract_structure(monkeypatch) -> None:
     # Minimal embeddings stub to keep determinism
+    monkeypatch.setattr("app.index.embeddings.embed_texts", lambda texts, **_kwargs: [[0.1, 0.1, 0.1] for _ in texts])
+    monkeypatch.setattr("app.index.embeddings.embed_text", lambda text, **_kwargs: [0.1, 0.1, 0.1])
     monkeypatch.setattr("app.retrieval.hybrid.embed_text", lambda text, language=None: [0.1, 0.1, 0.1])
     monkeypatch.setattr(
         "app.retrieval.hybrid.embed_batches",

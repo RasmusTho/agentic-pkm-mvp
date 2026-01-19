@@ -63,6 +63,21 @@
       },
       "additionalProperties": false
     },
+    "paths": {
+      "type": "object",
+      "properties": {
+        "inbox_dir_rel": {
+          "type": "string"
+        },
+        "runtime_dir_rel": {
+          "type": "string"
+        },
+        "system_dir_rel": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "ingest": {
       "type": "object",
       "required": [

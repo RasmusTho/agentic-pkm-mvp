@@ -2,6 +2,7 @@ from pathlib import Path
 from textwrap import dedent
 
 from app.index.build import build_index, query
+from app.vault.paths import get_vault_inbox_dir_rel
 
 RULES_CFG = [
     {"when": {"review_state": "inbox"}, "action": "exclude"},
@@ -10,32 +11,45 @@ RULES_CFG = [
     {"when": {"review_state": "evergreen"}, "action": "include", "weight": 1.2},
 ]
 
+
 def write(p: Path, s: str):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(s, encoding="utf-8")
 
+
 def test_inbox_is_not_returned_but_promoted_is(tmp_path: Path):
     root = tmp_path / "vault"
-    inbox = root / "@Inbox" / "inbox_note.md"
+    inbox_dir = get_vault_inbox_dir_rel(root)
+    inbox = root / inbox_dir / "inbox_note.md"
     promoted = root / "2_Cards" / "Concepts" / "promoted_note.md"
 
-    write(inbox, dedent("""\
+    write(
+        inbox,
+        dedent(
+            """\
     ---
     uuid: "X1"
     title: "Raw capture"
     review_state: "inbox"
     ---
     Galaxy data and rough capture text.
-    """))
+    """
+        ),
+    )
 
-    write(promoted, dedent("""\
+    write(
+        promoted,
+        dedent(
+            """\
     ---
     uuid: "X2"
     title: "Refined concept"
     review_state: "promoted"
     ---
     Galaxy data refined and linked.
-    """))
+    """
+        ),
+    )
 
     idx = build_index(root, RULES_CFG, ignore_glob=["_system/**"])
     hits = query(idx, "galaxy")

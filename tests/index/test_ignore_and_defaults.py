@@ -2,6 +2,7 @@ from pathlib import Path
 from textwrap import dedent
 
 from app.index.build import build_index
+from app.vault.paths import get_vault_inbox_dir_rel
 
 RULES = [
     {"when": {"review_state": "inbox"}, "action": "exclude"},
@@ -11,23 +12,29 @@ RULES = [
     {"when": {"review_state": "processed"}, "action": "include", "weight": 0.8},
 ]
 
+
 def write(p: Path, s: str):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(s, encoding="utf-8")
 
+
 def test_ignore_glob_and_path_defaults(tmp_path: Path):
     root = tmp_path / "vault"
-    # no frontmatter in these three; rely on path defaults
-    write(root / "@Inbox" / "a.md", "inbox body")
+    inbox_dir = get_vault_inbox_dir_rel(root)
+    write(root / inbox_dir / "a.md", "inbox body")
     write(root / "9_Extras" / "Archive" / "z.md", "archived body")
     write(root / "2_Cards" / "x.md", "processed body")
-    # frontmatter overrides path default
-    write(root / "2_Cards" / "y.md", dedent("""\
+    write(
+        root / "2_Cards" / "y.md",
+        dedent(
+            """\
     ---
     review_state: evergreen
     ---
     evergreen body
-    """))
+    """
+        ),
+    )
 
     idx = build_index(root, RULES, ignore_glob=["_system/**"])
 

@@ -35,13 +35,13 @@ Deterministic ASK slice with POLICY_ENFORCE=1, seeded corpus, ASK graph run, and
 ## Live watcher (local)
 Guardrailed continuous watcher for real vaults with kill switch, scope, and rate limiting:
 - Feature flags (defaults in parentheses):
-  - `WATCHER_ENABLE` (0), `WATCHER_VAULT_PATH` (required when enabled), `WATCHER_SCOPE_GLOB` (@Inbox/**)
+  - `WATCHER_ENABLE` (0), `WATCHER_VAULT_PATH` (required when enabled), `WATCHER_SCOPE_GLOB` (${VAULT_INBOX_DIR_REL}/**)
   - `WATCHER_DEBOUNCE_MS` (1500), `WATCHER_RATE_LIMIT_PER_MIN` (30), `WATCHER_BACKOFF_SECONDS` (10)
   - Kill switch: `tmp/WATCHER_STOP` (or override via `WATCHER_STOP_FILE`) pauses the loop with a once-per-minute warning.
 - Script: `VAULT=/path/to/vault scripts/run_live_watcher.sh` (sets POLICY_ENFORCE=1, WATCHER_ENABLE=1, and prints outbox/stopfile locations).
 - Manual run:
   - `python -m app.cli settings validate`
-  - `POLICY_ENFORCE=1 WATCHER_ENABLE=1 WATCHER_VAULT_PATH=/path/to/vault WATCHER_SCOPE_GLOB="@Inbox/**" WATCHER_DEBOUNCE_MS=1500 WATCHER_RATE_LIMIT_PER_MIN=30 WATCHER_BACKOFF_SECONDS=10 INDEX_OUTBOX_PATH=tmp/index-outbox.live.jsonl python -m app.cli watcher run`
+  - `POLICY_ENFORCE=1 WATCHER_ENABLE=1 WATCHER_VAULT_PATH=/path/to/vault WATCHER_SCOPE_GLOB="${VAULT_INBOX_DIR_REL}/**" WATCHER_DEBOUNCE_MS=1500 WATCHER_RATE_LIMIT_PER_MIN=30 WATCHER_BACKOFF_SECONDS=10 INDEX_OUTBOX_PATH=tmp/index-outbox.live.jsonl python -m app.cli watcher run`
   - Single tick for debugging: same env + `python -m app.cli watcher once`
 - State is auto-migrated to drop legacy monotonic timestamps; delete `tmp/watcher_state.json` to fully reset watcher memory when troubleshooting.
 

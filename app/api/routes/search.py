@@ -6,8 +6,7 @@ from typing import Iterable, Sequence
 import psycopg
 from fastapi import APIRouter, Query, Request
 
-from app.components.llm.fabric import get_embeddings_client
-from app.components.llm.router import LLMTaskIntent
+from app.components.retrieval import embed_query
 from app.db.dsn import resolve_dsn
 from app.observability.tracer import start_span
 from app.search.cosine import cosine
@@ -71,8 +70,7 @@ async def search(request: Request, q: str = Query(...)) -> dict[str, object]:
     results: list[dict[str, object]] = []
     with span_cm:
         try:
-            client = get_embeddings_client(LLMTaskIntent(task_kind="embed", determinism_required=True))
-            query_vector = client.embed_text(q)
+            query_vector, _ = embed_query(q)
         except Exception:
             return {"results": _recent_objects()}
 

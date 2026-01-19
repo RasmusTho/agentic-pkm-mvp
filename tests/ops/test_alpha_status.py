@@ -29,8 +29,11 @@ def test_alpha_status_handles_non_json_status() -> None:
     assert "- worker:" in output
     assert "- llm routes: (missing)" in output
     assert "- llm providers: (missing)" in output
+    assert "- suggested: (none)" in output
     assert "- sot: (missing)" in output
     assert "- stores: (missing)" in output
+    assert "- events_log: (missing)" in output
+    assert "- worker_queue: (missing)" in output
     assert "- ingestion: (missing)" in output
     assert "- ask: (missing)" in output
     assert calls == [
@@ -52,7 +55,10 @@ def test_alpha_status_handles_fetch_error() -> None:
     assert "- worker: status=(missing)" in output
     assert "- llm routes: (missing)" in output
     assert "- llm providers: (missing)" in output
+    assert "- suggested: (none)" in output
     assert "- stores: (missing)" in output
+    assert "- events_log: (missing)" in output
+    assert "- worker_queue: (missing)" in output
 
 
 @pytest.mark.not_pg
@@ -68,11 +74,23 @@ def test_alpha_status_sums_store_counts() -> None:
                 ],
                 "ingestion": {},
                 "ask": {},
+                "events_log": {"path": "/tmp/index-outbox.jsonl", "total_lines": 9},
+                "worker_queue": {"mode": "jsonl", "pending": 2, "processed_total": 7},
             }
             return 200, payload, None
         if url.endswith("/api/health"):
-            return 200, {"ok": True, "required_ok": True, "runtime": {"db": {"ok": True}}}, None
+            return 200, {
+                "ok": True,
+                "required_ok": True,
+                "runtime": {"db": {"ok": True}},
+                "suggested_actions": [
+                    {"id": "llm_mock", "severity": "optional", "message": "mock"},
+                ],
+            }, None
         return None, None, "missing"
 
     output = render_status(fake_fetch, api_base_url="http://localhost:18000")
     assert "- stores: entries=2 objects=15 external=3, vault=12" in output
+    assert "- events_log: lines=9 path=/tmp/index-outbox.jsonl" in output
+    assert "- worker_queue: mode=jsonl pending=2 processed_total=7" in output
+    assert "- suggested: llm_mock(optional) mock" in output

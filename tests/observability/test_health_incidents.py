@@ -1,8 +1,9 @@
 import json
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.health_contract import HealthContract, HealthStateMachine
+from app.vault.paths import get_vault_system_dir_rel
 
 
 def _write_health_markdown(path: Path, body: str) -> None:
@@ -12,7 +13,7 @@ def _write_health_markdown(path: Path, body: str) -> None:
 
 def test_health_incident_logging(monkeypatch, tmp_path: Path) -> None:
     vault = tmp_path / "vault"
-    settings_path = vault / "@System" / "Settings" / "health.md"
+    settings_path = vault / get_vault_system_dir_rel(vault) / "Settings" / "health.md"
     log_path = tmp_path / "incidents.jsonl"
     _write_health_markdown(
         settings_path,

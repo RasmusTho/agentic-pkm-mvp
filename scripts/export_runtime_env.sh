@@ -9,14 +9,25 @@ if [ -z "${VAULT_ROOT:-}" ]; then
   exit 2
 fi
 
-mkdir -p tmp
-printf "%s\n" "VAULT_ROOT=$VAULT_ROOT" > tmp/runtime.env
+runtime_env_path="${RUNTIME_ENV_PATH:-tmp/runtime.env}"
+runtime_env_dir="$(dirname "$runtime_env_path")"
+mkdir -p "$runtime_env_dir"
+
+local_uid="${LOCAL_UID:-$(id -u)}"
+local_gid="${LOCAL_GID:-$(id -g)}"
+
+cat > "$runtime_env_path" <<ENV
+VAULT_ROOT=$VAULT_ROOT
+LOCAL_UID=$local_uid
+LOCAL_GID=$local_gid
+ENV
+
 if [ -n "${LLM_PROVIDER:-}" ]; then
-  printf "%s\n" "LLM_PROVIDER=$LLM_PROVIDER" >> tmp/runtime.env
+  printf "%s\n" "LLM_PROVIDER=$LLM_PROVIDER" >> "$runtime_env_path"
 fi
 
 if [ "${LLM_PROVIDER:-}" = "ollama" ]; then
-  python - <<'PY' >> tmp/runtime.env
+  python - <<'PY' >> "$runtime_env_path"
 from __future__ import annotations
 
 import os

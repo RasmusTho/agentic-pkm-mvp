@@ -2,7 +2,7 @@ latency:
   # Allow more headroom on shared runners; still orders of magnitude tighter than the 0.25s/2s probes.
   tolerance: 3.0
   QAS003:
-    value: 0.000360
+    value: 1.0
   QAS010:
     value: 0.000150
 

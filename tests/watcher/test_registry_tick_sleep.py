@@ -14,7 +14,7 @@ def _write_config(path: Path) -> None:
     payload = (
         "watchers:\n"
         "  - name: panel\n"
-        "    scope_glob: \"@Inbox/**\"\n"
+        "    scope_glob: \"${VAULT_INBOX_DIR_REL}/**\"\n"
         "    debounce_ms: 1500\n"
         "    rate_limit_per_min: 30\n"
         "    backoff_seconds: 10\n"
@@ -88,3 +88,26 @@ def test_registry_tick_sleep_calls_sleep(tmp_path: Path, monkeypatch: pytest.Mon
     registry.run_registry_forever(config_path, max_ticks=2)
 
     assert calls == [1.0]
+
+
+def test_registry_scope_glob_uses_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "watchers.yaml"
+    _write_config(config_path)
+
+    vault_path = _base_env(tmp_path, tick_sleep="0.5", monkeypatch=monkeypatch)
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", "CustomInbox")
+
+    cfg = registry.load_registry_config(config_path)
+    assert cfg.scope_glob == "CustomInbox/**"
+    assert cfg.specs[0].scope_glob == "CustomInbox/**"
+
+
+def test_registry_scope_glob_defaults_to_inbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "watchers.yaml"
+    _write_config(config_path)
+
+    _base_env(tmp_path, tick_sleep="0.5", monkeypatch=monkeypatch)
+    monkeypatch.delenv("VAULT_INBOX_DIR_REL", raising=False)
+
+    cfg = registry.load_registry_config(config_path)
+    assert cfg.scope_glob.endswith("Inbox/**")

@@ -127,3 +127,17 @@ def test_parse_panel_tolerant_ai_fences():
     assert len(state.spans) == 1
     assert state.instruction_text.startswith("Gör saker")
     assert [a.text for a in state.actions] == ["Förslag 1"]
+
+def test_parse_panel_action_with_ai_id_comment():
+    markdown = textwrap.dedent(
+        """
+        ## AI-åtgärder
+        - [x] Make this note evergreen <!--ai:id=promote.evergreen-->
+        """
+    )
+    state = parse_panel(markdown)
+    assert len(state.actions) == 1
+    action = state.actions[0]
+    assert action.action_id == "promote.evergreen"
+    assert action.checked is True
+    assert action.text == "Make this note evergreen"

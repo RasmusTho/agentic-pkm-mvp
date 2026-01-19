@@ -13,6 +13,7 @@ import httpx
 from app.components.llm.fabric import describe_default_routes
 from app.obs.log import span, with_trace_id
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
+from app.settings.panel_actions import get_panel_actions_diagnostics
 from app.stores.db_health import ping_postgres, resolve_dsn
 from app.watcher.heartbeat import resolve_heartbeat_path
 
@@ -58,7 +59,7 @@ def _watcher_required() -> bool:
 
 def _ollama_required() -> bool:
     provider = (os.getenv("LLM_PROVIDER") or "").strip().lower()
-    return provider in {"", "ollama", "llm"}
+    return provider in {"ollama", "llm"}
 
 
 def _check_ffmpeg() -> Dict[str, Any]:
@@ -73,6 +74,22 @@ def _check_yt_dlp() -> Dict[str, Any]:
         return _result(True, "yt-dlp kan importeras")
     except Exception as exc:  # pragma: no cover - import side-effects differ per env
         return _result(False, f"yt-dlp import misslyckades: {exc!s}")
+
+
+def _check_panel_actions() -> Dict[str, Any]:
+    diag = get_panel_actions_diagnostics()
+    count = diag.get("panel_actions_mappings_count") or 0
+    resolved = diag.get("resolved_panel_actions_root")
+    error = diag.get("last_panel_mapping_load_error")
+    if count > 0:
+        detail = f"panel actions loaded ({count})"
+    elif resolved is None:
+        detail = "panel actions root not resolved"
+    elif error:
+        detail = f"panel actions load error: {error}"
+    else:
+        detail = "panel actions root missing or empty"
+    return _result(True, detail, data={"resolved_root": resolved, "count": count})
 
 
 def _check_outbox_path() -> Dict[str, Any]:
@@ -157,13 +174,14 @@ def _heartbeat_status(
     skip: bool = False,
 ) -> Dict[str, Any]:
     if skip:
-        return {"ok": True, "detail": "skipped (disabled)", "status": "skipped"}
+        return {"ok": True, "detail": "disabled (skipped)", "status": "disabled"}
 
     if not path.exists():
         return {
             "ok": False,
             "detail": f"{name} not running (no heartbeat)",
             "path": str(path),
+            "status": "missing",
         }
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -172,6 +190,7 @@ def _heartbeat_status(
             "ok": False,
             "detail": f"{name} heartbeat unreadable ({exc})",
             "path": str(path),
+            "status": "unreadable",
         }
     ts_raw = raw.get("ts")
     try:
@@ -181,6 +200,7 @@ def _heartbeat_status(
             "ok": False,
             "detail": f"{name} heartbeat missing timestamp",
             "path": str(path),
+            "status": "invalid",
         }
     freshness = max(0.0, now - ts_value)
     ok = freshness <= stale_seconds
@@ -205,6 +225,7 @@ def _heartbeat_status(
         "vault_path",
         "outbox_path",
         "processed_total",
+        "enqueue_failures_total",
         "status",
     ):
         if key in raw:
@@ -292,6 +313,64 @@ def _required_checks_ok(checks: dict[str, dict[str, Any]]) -> bool:
     return all(item.get("ok") for item in checks.values() if item.get("required", True))
 
 
+def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+
+    ffmpeg = checks.get("ffmpeg", {})
+    if ffmpeg.get("ok") is False:
+        actions.append(
+            {
+                "id": "ffmpeg_missing",
+                "severity": "optional",
+                "message": "ffmpeg missing; media transcription features disabled",
+                "command_hint": "",
+            }
+        )
+
+    try:
+        from app.index.doctor import diagnose_index
+
+        diag = diagnose_index()
+        issues = diag.get("issues") or []
+        if issues:
+            actions.append(
+                {
+                    "id": "index_rebuild",
+                    "severity": "required",
+                    "message": "Embedding/index identity mismatch detected",
+                    "command_hint": "python -m app.cli index rebuild --profile default",
+                }
+            )
+    except Exception:
+        pass
+
+    llm_providers = checks.get("llm_providers", {})
+    active_provider = (llm_providers.get("active_provider") or "").lower()
+    if active_provider == "mock":
+        actions.append(
+            {
+                "id": "llm_mock",
+                "severity": "optional",
+                "message": "LLM provider is mock; LLM features are deterministic only",
+                "command_hint": "LLM_PROVIDER=ollama",
+            }
+        )
+
+    watcher_runtime = runtime.get("watcher", {})
+    enqueue_failures = watcher_runtime.get("enqueue_failures_total")
+    if isinstance(enqueue_failures, int) and enqueue_failures > 0:
+        actions.append(
+            {
+                "id": "watcher_outbox_enqueue_failed",
+                "severity": "required",
+                "message": "Watcher failed to enqueue DB outbox events",
+                "command_hint": "Check DATABASE_URL and watcher logs",
+            }
+        )
+
+    return actions
+
+
 @span("health.check")
 def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     trace_id = with_trace_id(trace_id)
@@ -299,6 +378,7 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
         "ffmpeg": _annotate_required(_check_ffmpeg(), required=False),
         "yt_dlp": _annotate_required(_check_yt_dlp(), required=False),
         "index_outbox": _annotate_required(_check_outbox_path(), required=True),
+        "panel_actions": _annotate_required(_check_panel_actions(), required=False),
         "ollama": _annotate_required(_check_ollama(), required=_ollama_required()),
     }
     checks["llm_router"] = _annotate_required(_check_llm_router(), required=False)
@@ -314,7 +394,6 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     runtime_ok = _runtime_ok(runtime)
     ok = bool(checks_ok and runtime_ok)
     required_ok = bool(_required_checks_ok(checks) and runtime_ok)
-    return {"ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id}
-
-
+    suggested_actions = _suggested_actions(checks, runtime)
+    return {"ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions}
 __all__ = ["run_health"]

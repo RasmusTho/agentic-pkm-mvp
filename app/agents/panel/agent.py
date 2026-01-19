@@ -16,7 +16,7 @@ from .intents import PanelIntent, enrich_panel_intents
 from .parser import parse_panel
 from .schema import PanelState
 
-_ACTION_PATTERN = re.compile(r"^(\s*-\s*\[( |x|X)\]\s*)(.*?)(\s*<!--\s*ai:id=([A-Za-z0-9_-]+)\s*-->)?\s*$")
+_ACTION_PATTERN = re.compile(r"^(\s*-\s*\[( |x|X)\]\s*)(.*?)(\s*<!--\s*ai:id=([A-Za-z0-9_.-]+)\s*-->)?\s*$")
 _AI_STATUS_HEADER = "> [!info]- AI status"
 _MAX_RECEIPTS = 20
 _EXECUTED_FALLBACK: dict[str, set[str]] = {}

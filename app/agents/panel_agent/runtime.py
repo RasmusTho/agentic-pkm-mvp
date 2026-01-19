@@ -12,9 +12,10 @@ from app.agents.panel_agent.intent import PanelActionIntent
 from app.agents.panel_agent.planning import plan_panel_actions
 from app.agents.panel_agent.settings import get_panel_agent_decider, get_panel_agent_pipeline
 from app.agents.panel_agent.state import PanelAgentState
-from app.agents.panel_agent.wiring import get_default_action_wiring, load_action_wiring
+from app.agents.panel_agent.wiring import get_default_action_wiring
 from app.components.settings.panel_actions_loader import load_panel_action_catalog
 from app.events.panel import NoteRef, PanelIntentEvent, PanelLogEntry, PanelRuntimeActionResult
+from app.events.schema import OutboxEvent
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.store.object_store import ObjectStore
 
@@ -39,6 +40,70 @@ def _write_outbox_events(outbox_path: Path, events: Iterable[Any]) -> None:
             else:
                 continue
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _use_db_outbox() -> bool:
+    backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
+    db_url = os.getenv("DATABASE_URL") or os.getenv("DB_DSN")
+    return backend == "pg" or bool(db_url)
+
+
+def _event_source(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if hasattr(value, "component"):
+        return str(getattr(value, "component") or "panel_agent")
+    return "panel_agent.runtime"
+
+
+def _coerce_outbox_event(event: Any) -> OutboxEvent | None:
+    if isinstance(event, OutboxEvent):
+        return event
+    if not hasattr(event, "event"):
+        return None
+    if hasattr(event, "model_dump"):
+        payload = event.model_dump(mode="json")
+    elif isinstance(event, dict):
+        payload = dict(event)
+    else:
+        return None
+    kwargs: dict[str, Any] = {
+        "event": str(getattr(event, "event")),
+        "source": _event_source(getattr(event, "source", None)),
+        "payload": payload,
+    }
+    trace_id = getattr(event, "trace_id", None)
+    if trace_id:
+        kwargs["trace_id"] = str(trace_id)
+    event_id = getattr(event, "event_id", None)
+    if event_id:
+        kwargs["event_id"] = str(event_id)
+    timestamp = getattr(event, "timestamp", None)
+    if timestamp:
+        kwargs["timestamp"] = str(timestamp)
+    return OutboxEvent(**kwargs)
+
+
+def _write_db_outbox_events(events: Iterable[Any]) -> None:
+    if not _use_db_outbox():
+        return
+    try:
+        from app.services import outbox as outbox_service
+    except Exception as exc:
+        print(f"WARN: panel_agent DB outbox unavailable: {exc}")
+        return
+    try:
+        outbox_service.bootstrap()
+    except Exception:
+        pass
+    for event in events:
+        outbox_event = _coerce_outbox_event(event)
+        if outbox_event is None:
+            continue
+        try:
+            outbox_service.write_outbox_event(outbox_event, idempotency_key=outbox_event.event_id)
+        except Exception as exc:
+            print(f"WARN: failed to enqueue DB outbox event {outbox_event.event}: {exc}")
 
 
 def _persist_log(note: NoteRef, log_entry: PanelLogEntry) -> None:
@@ -112,6 +177,7 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
             plan_panel_actions(state.panel_action_intent, event_id=intent_event.event_id, trace_id=intent_event.trace_id)
 
     emitted_events = list(state.emitted_events or [])
+    _write_db_outbox_events(emitted_events)
     _write_outbox_events(resolved_outbox, emitted_events)
     if state.log_entry:
         _persist_log(intent_event.payload.note, state.log_entry)

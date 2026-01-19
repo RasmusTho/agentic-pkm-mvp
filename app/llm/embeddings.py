@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import os
 from functools import lru_cache
-from typing import List, Optional
+from typing import List, Mapping, Optional
 
 import httpx
 
 from app.embedding_config import assert_embed_dim, get_embed_dim, l2_normalize
+
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
 
@@ -38,6 +40,79 @@ def _mock_vector(text: str, *, dim: int) -> List[float]:
     return vec
 
 
+def _normalize_embedding_candidate(candidate: object | None) -> list[float] | None:
+    if candidate is None:
+        return None
+    if isinstance(candidate, (list, tuple)):
+        if not candidate:
+            return None
+        first = candidate[0]
+        if isinstance(first, (list, tuple)) and len(first) > 0 and all(isinstance(x, (int, float)) for x in first):
+            return [float(x) for x in first]
+        if all(isinstance(x, (int, float)) for x in candidate):
+            return [float(x) for x in candidate]
+    return None
+
+
+def _extract_vector_from_payload(payload: Mapping[str, object]) -> list[float] | None:
+    for key in ("embeddings", "embedding"):
+        candidate = _normalize_embedding_candidate(payload.get(key))
+        if candidate:
+            return candidate
+    data = payload.get("data")
+    if isinstance(data, list):
+        for entry in data:
+            if isinstance(entry, Mapping):
+                candidate = _normalize_embedding_candidate(entry.get("embedding"))
+                if candidate:
+                    return candidate
+    return None
+
+
+def _ollama_include_dimensions() -> bool:
+    raw = os.getenv("OLLAMA_EMBED_DIMENSIONS")
+    if raw is None:
+        return True
+    return raw.strip().lower() in _TRUE_VALUES
+
+
+def _ollama_payload(text: str, model: str, dim: int) -> dict[str, object]:
+    payload: dict[str, object] = {"model": model, "input": text, "truncate": True}
+    if _ollama_include_dimensions():
+        payload["dimensions"] = dim
+    return payload
+
+
+def _parse_vector(payload: Mapping[str, object], *, provider: str, model: str, expected_dim: int | None) -> tuple[float, ...]:
+    vector = _extract_vector_from_payload(payload)
+    if not vector:
+        raise ValueError(
+            f"{provider} embedding response missing vectors (model={model}, expected_dim={expected_dim})"
+        )
+    assert_embed_dim(vector, expected=expected_dim, name="embedding")
+    return tuple(vector)
+
+
+def _ollama_embed_api(text: str, model: str, dim: int, timeout: float) -> tuple[float, ...]:
+    payload = _ollama_payload(text, model, dim)
+    resp = httpx.post(f"{OLLAMA_URL}/api/embed", json=payload, timeout=timeout)
+    resp.raise_for_status()
+    data = resp.json()
+    if not isinstance(data, Mapping):
+        raise ValueError("Ollama /api/embed returned an unexpected payload")
+    return _parse_vector(data, provider="ollama", model=model, expected_dim=dim)
+
+
+def _ollama_openai_fallback(text: str, model: str, dim: int, timeout: float) -> tuple[float, ...]:
+    payload = {"model": model, "input": text}
+    resp = httpx.post(f"{OLLAMA_URL}/v1/embeddings", json=payload, timeout=timeout)
+    resp.raise_for_status()
+    data = resp.json()
+    if not isinstance(data, Mapping):
+        raise ValueError("Ollama fallback embeddings endpoint returned an unexpected payload")
+    return _parse_vector(data, provider="ollama", model=model, expected_dim=dim)
+
+
 @lru_cache(maxsize=2048)
 def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> tuple[float, ...]:
     if dim is None:
@@ -51,32 +126,20 @@ def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> t
 
     if provider == "ollama":
         timeout = float(os.getenv("LLM_TIMEOUT", "60"))
-        payload = {"model": model, "input": text, "truncate": True, "dimensions": dim}
         try:
-            resp = httpx.post(f"{OLLAMA_URL}/api/embed", json=payload, timeout=timeout)
-            resp.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise RuntimeError(
-                f"Ollama embedding request failed (provider={provider}, model={model}, expected_dim={dim}): {exc}"
-            ) from exc
-        data = resp.json()
-        embeddings = data.get("embeddings")
-        if embeddings is None:
-            fallback = data.get("embedding")
-            if fallback is not None:
-                embeddings = [fallback]
-        if not embeddings:
-            raise ValueError(
-                f"Ollama embedding response missing vectors (provider={provider}, model={model}, expected_dim={dim})"
-            )
-        vector = [float(x) for x in embeddings[0]]
-        try:
-            assert_embed_dim(vector, expected=dim, name="embedding")
+            return _ollama_embed_api(text, model, dim, timeout)
+        except httpx.HTTPError as primary_exc:
+            try:
+                return _ollama_openai_fallback(text, model, dim, timeout)
+            except httpx.HTTPError as fallback_exc:
+                raise RuntimeError(
+                    f"Ollama embedding requests failed (model={model}, expected_dim={dim}). "
+                    f"Primary error: {primary_exc}; fallback: {fallback_exc}"
+                ) from fallback_exc
         except ValueError as exc:
             raise ValueError(
-                f"Ollama embedding dim mismatch (provider={provider}, model={model}, expected_dim={dim}, actual_dim={len(vector)}): {exc}"
+                f"Ollama embedding parsing failed (model={model}, expected_dim={dim}): {exc}"
             ) from exc
-        return tuple(vector)
 
     raise ValueError(f"Unsupported embedding provider: {provider}")
 

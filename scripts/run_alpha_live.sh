@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+echo "DEPRECATED: use make alpha-up (scripts/start_full_system.sh) instead of scripts/run_alpha_live.sh" >&2
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VAULT="${VAULT:-${1:-${VAULT_ROOT:-}}}"
 
@@ -12,8 +14,9 @@ fi
 export POLICY_ENFORCE="${POLICY_ENFORCE:-1}"
 export WATCHER_ENABLE="${WATCHER_ENABLE:-1}"
 export WATCHER_VAULT_PATH="${WATCHER_VAULT_PATH:-$VAULT}"
+export VAULT_INBOX_DIR_REL="${VAULT_INBOX_DIR_REL:-Inbox}"
 
-export WATCHER_SCOPE_GLOB="${WATCHER_SCOPE_GLOB:-@Inbox/**}"
+export WATCHER_SCOPE_GLOB="${WATCHER_SCOPE_GLOB:-${VAULT_INBOX_DIR_REL}/**}"
 export WATCHER_DEBOUNCE_MS="${WATCHER_DEBOUNCE_MS:-1500}"
 export WATCHER_RATE_LIMIT_PER_MIN="${WATCHER_RATE_LIMIT_PER_MIN:-30}"
 export WATCHER_BACKOFF_SECONDS="${WATCHER_BACKOFF_SECONDS:-10}"

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from app.events.models import Event, new_event
+from app.events.schema import OutboxEvent
 
 # Optional DB helpers (tests kan ge FakeConn)
 try:
@@ -30,6 +31,7 @@ def _open_conn():
         raise RuntimeError("DATABASE_URL not set")
     try:
         from app.db.dsn import resolve_dsn
+
         url = resolve_dsn(url)
     except Exception:
         if url.startswith("postgresql+psycopg://"):
@@ -90,16 +92,42 @@ def bootstrap(conn: Any = None) -> None:
             conn.close()
 
 
-def write_outbox_event(event: Event, conn: Any = None) -> str:
+def _coerce_event(event: Event | OutboxEvent) -> Event:
+    if isinstance(event, Event):
+        return event
+    return new_event(
+        event_type=event.event,
+        payload=dict(event.payload),
+        trace_id=event.trace_id,
+        source=event.source,
+        event_id=event.event_id,
+        created_at=event.timestamp,
+    )
+
+
+def write_outbox_event(
+    event: Event | OutboxEvent,
+    conn: Any = None,
+    *,
+    idempotency_key: str | None = None,
+) -> str:
+    envelope = _coerce_event(event)
     conn, close = _use_conn(conn)
-    stored = event.model_dump_json()
-    created_at = datetime.now(timezone.utc)
+    stored = envelope.model_dump_json()
+    created_at = envelope.created_at or datetime.now(timezone.utc)
     try:
-        cur = _exec(
-            conn,
-            "insert into outbox (topic, payload, created_at, attempts) values (%s, %s::jsonb, %s, %s) returning id",
-            (event.event_type, stored, created_at, 0),
-        )
+        if idempotency_key:
+            cur = _exec(
+                conn,
+                "insert into outbox (id, topic, payload, created_at, attempts) values (%s, %s, %s::jsonb, %s, %s) on conflict (id) do nothing returning id",
+                (idempotency_key, envelope.event_type, stored, created_at, 0),
+            )
+        else:
+            cur = _exec(
+                conn,
+                "insert into outbox (topic, payload, created_at, attempts) values (%s, %s::jsonb, %s, %s) returning id",
+                (envelope.event_type, stored, created_at, 0),
+            )
         if hasattr(cur, "fetchone"):
             row = cur.fetchone()
             if row:
@@ -130,9 +158,11 @@ def insert_object_and_outbox(
     return write_outbox_event(event, conn=conn)
 
 
-def _coerce_event(raw_payload: Any, topic: str) -> Event:
+def _coerce_event_from_db(raw_payload: Any, topic: str) -> Event:
     if isinstance(raw_payload, Event):
         return raw_payload
+    if isinstance(raw_payload, OutboxEvent):
+        return _coerce_event(raw_payload)
     if isinstance(raw_payload, str):
         try:
             raw_payload = json.loads(raw_payload)
@@ -161,7 +191,7 @@ def poll_outbox_one(
         row = cur.fetchone()
         if not row:
             return None
-        event = _coerce_event(row[2], row[1])
+        event = _coerce_event_from_db(row[2], row[1])
         msg = {"id": str(row[0]), "topic": event.event_type, "payload": dict(event.payload), "event": event}
         if handler:
             try:

@@ -6,6 +6,9 @@ This document describes the event artifacts emitted by the system and recorded i
 
 Compatibility and evolution are governed by `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`.
 
+Connector/watcher/inbox action vocabulary and delta feed guardrails are captured in `docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md`, so the event catalog and the new connector terminology stay aligned.
+
+
 ## Outbox envelope (canonical)
 
 All Outbox records MUST include this minimal envelope:

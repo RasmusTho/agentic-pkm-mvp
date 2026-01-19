@@ -20,9 +20,9 @@ Scope: snapshot-based vault watcher CLI/daemon, policy-gated panel auto-runs, er
 
 ## Operational notes
 - Watcher remains polling/snapshot-based (no OS file events).
+- DB outbox is the authoritative queue; `index-outbox.jsonl` is telemetry only. The panel watcher enqueues intents/events to the DB outbox so the worker processes them.
 - Policy defaults to manual/skip; watcher only runs panels when explicitly allowed.
 - Summaries report changed, ingest_attempted/ingested, panel_candidates/runs, skipped_policy/limit, promotions, errors, dry_run flag.
-
 ## Links
 - Forward plan items: see `docs/ROADMAP.md` (Now/Next).
 - Human flow/UAT: `docs/HUMAN-FLOWS.md`.

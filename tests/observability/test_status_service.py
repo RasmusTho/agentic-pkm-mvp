@@ -14,6 +14,9 @@ def test_get_system_status_includes_ingest_and_ask_metrics(monkeypatch, tmp_path
     reset_store_backends()
     reset_ingest_meta()
     reset_ask_metrics()
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
     outbox_path = tmp_path / "status-outbox.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     status_service.INDEX_OUTBOX_PATH = outbox_path
@@ -73,8 +76,11 @@ def test_event_counts_from_outbox(monkeypatch, tmp_path):
     reset_store_backends()
     reset_ingest_meta()
     reset_ask_metrics()
-
     outbox = tmp_path / "outbox.jsonl"
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
     monkeypatch.setattr("app.observability.status_service.INDEX_OUTBOX_PATH", outbox)
 
     now = datetime.now(timezone.utc)

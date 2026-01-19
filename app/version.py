@@ -1,8 +1,6 @@
 SOT_BASELINE = "v4.10"
-SOT_FORWARD = "v5.4"
-SOT_LABEL = "baseline v4.10 (Reality-MVP), forward v5.4 (PanelAgent + Watchers)"
-
-# Backward-compatibility alias used by older callers; returns the locked baseline.
+SOT_FORWARD = "v5.5"
+SOT_LABEL = "baseline v4.10 (Reality-MVP), forward v5.5 (PanelAgent + Watchers)"
 SOT_VERSION = SOT_BASELINE
 
 

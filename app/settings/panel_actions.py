@@ -13,12 +13,19 @@ DEFAULT_PANEL_ACTIONS_ROOT = _BASE_DIR / "vault" / "_system" / "panel-actions"
 FALLBACK_PANEL_ACTIONS_ROOT = _BASE_DIR / "docs" / "settings" / "panel-actions"
 FALLBACK_PANEL_ACTIONS_FILE = _BASE_DIR / "docs" / "settings" / "panel-actions.md"
 
+_LAST_PANEL_ACTIONS_ERROR: str | None = None
+
 
 class PanelActionMapping(BaseModel):
     text: str
     event_type: str
     payload_template: Dict[str, Any] = Field(default_factory=dict)
     action_id: str | None = None
+
+
+def _set_last_error(message: str | None) -> None:
+    global _LAST_PANEL_ACTIONS_ERROR
+    _LAST_PANEL_ACTIONS_ERROR = message
 
 
 def _resolve_root(root: Optional[Path] = None) -> Optional[Path]:
@@ -34,6 +41,10 @@ def _resolve_root(root: Optional[Path] = None) -> Optional[Path]:
     if FALLBACK_PANEL_ACTIONS_FILE.exists():
         return FALLBACK_PANEL_ACTIONS_FILE
     return None
+
+
+def resolve_panel_actions_root(root: Optional[Path] = None) -> Optional[Path]:
+    return _resolve_root(root)
 
 
 def _normalize_entry(entry: Any) -> Dict[str, Any]:
@@ -112,4 +123,41 @@ def load_panel_action_mappings(root: Optional[Path] = None) -> Dict[str, PanelAc
     return mappings
 
 
-__all__ = ["PanelActionMapping", "load_panel_action_mappings"]
+def get_panel_actions_diagnostics(root: Optional[Path] = None) -> Dict[str, Any]:
+    _set_last_error(None)
+    resolved = _resolve_root(root)
+    resolved_abs = str(resolved.resolve()) if resolved is not None else None
+    mappings: Dict[str, PanelActionMapping] = {}
+    if resolved is not None:
+        if resolved.exists():
+            try:
+                mappings = load_panel_action_mappings(resolved)
+            except Exception as exc:
+                _set_last_error(f"{exc.__class__.__name__}: {exc}")
+                mappings = {}
+        else:
+            _set_last_error(f"missing: {resolved}")
+
+    ids_sample: list[str] = []
+    for mapping in mappings.values():
+        candidate = mapping.action_id or mapping.text
+        if candidate:
+            ids_sample.append(candidate)
+    ids_sample = ids_sample[:20]
+    has_promote_evergreen = any(mapping.action_id == "promote.evergreen" for mapping in mappings.values())
+
+    return {
+        "resolved_panel_actions_root": resolved_abs,
+        "panel_actions_mappings_count": len(mappings),
+        "panel_actions_ids_sample": ids_sample,
+        "has_promote_evergreen_mapping": has_promote_evergreen,
+        "last_panel_mapping_load_error": _LAST_PANEL_ACTIONS_ERROR,
+    }
+
+
+__all__ = [
+    "PanelActionMapping",
+    "load_panel_action_mappings",
+    "resolve_panel_actions_root",
+    "get_panel_actions_diagnostics",
+]

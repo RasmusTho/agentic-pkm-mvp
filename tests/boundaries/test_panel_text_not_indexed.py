@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.components.embeddings import EmbeddingIdentity
+from app.components.embeddings import get_embedding_identity
 from app.search.service import ingest_object
 from app.stores import get_vector_index, reset_store_backends
 
@@ -32,13 +32,8 @@ def test_panel_text_not_indexed(monkeypatch) -> None:
     )
 
     idx = get_vector_index()
-    identity = EmbeddingIdentity(
-        provider="search-service",
-        model="openai/text-embedding-3-large",
-        dim=1536,
-        normalize=True,
-    )
-    hits = idx.search(_query_vector(), k=5, identity=identity)
+    identity = get_embedding_identity()
+    hits = idx.search(_query_vector(identity.dim), k=5, identity=identity)
     assert hits, "expected indexed hits"
 
     texts = [str(getattr(hit, "payload", {}).get("text") or "") for hit in hits]

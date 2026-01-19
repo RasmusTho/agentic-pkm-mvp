@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,15 +12,20 @@ from app.observability.ingest_meta import get_ingest_status
 from app.observability.status_model import (
     AskStatus,
     EventCounters,
+    EventsLogStatus,
     IngestionStatus,
     IntentStatus,
+    IndexStatus,
+    PanelDiagnostics,
     OutboxLagStatus,
     StoreStatus,
     SystemStatus,
+    WorkerQueueStatus,
     WriteGuardStatus,
 )
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
+from app.settings.panel_actions import get_panel_actions_diagnostics
 from app.stores import get_object_store
 from app.version import SOT_FORWARD, get_sot_version, get_sot_metadata
 from app.health_contract import DEFAULT_CONTRACT
@@ -34,6 +40,9 @@ _ACTIVE_FEATURES = [
     "Config-driven panel action wiring",
 ]
 _WATCHER_EVENT_NAMES = {"watcher.run", "watcher.run.completed"}
+
+
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 def record_ask_query(latency_ms: float) -> None:
@@ -237,6 +246,74 @@ def _count_events(outbox_path: Path) -> EventCounters:
     )
 
 
+def _outbox_db_source() -> str:
+    return os.getenv("DATABASE_URL") or os.getenv("DB_DSN") or "outbox"
+
+
+def _count_events_db() -> EventCounters | None:
+    try:
+        from app.services import outbox as outbox_service
+    except Exception:
+        return None
+    try:
+        conn = outbox_service._open_conn()
+    except Exception:
+        return None
+    panel_total = panel_recent = promote_total = promote_recent = watcher_total = watcher_recent = 0
+    promotion_done_total = promotion_done_recent = 0
+    cutoff = datetime.now(timezone.utc) - _EVENT_WINDOW
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "select topic, count(*) as total, sum(case when created_at >= %s then 1 else 0 end) as recent from outbox group by topic",
+            (cutoff,),
+        )
+        rows = cur.fetchall() or []
+    except Exception:
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    for row in rows:
+        if isinstance(row, dict):
+            topic = row.get("topic")
+            total = row.get("total")
+            recent = row.get("recent")
+        else:
+            topic = row[0]
+            total = row[1] if len(row) > 1 else 0
+            recent = row[2] if len(row) > 2 else 0
+        topic = str(topic or "")
+        total = int(total or 0)
+        recent = int(recent or 0)
+        if topic == "panel.intent.executed":
+            panel_total += total
+            panel_recent += recent
+        if topic == PROMOTE_INTENT_CREATED:
+            promote_total += total
+            promote_recent += recent
+        if topic == PROMOTE_DONE:
+            promotion_done_total += total
+            promotion_done_recent += recent
+        if topic in _WATCHER_EVENT_NAMES:
+            watcher_total += total
+            watcher_recent += recent
+    return EventCounters(
+        watcher_runs_total=watcher_total,
+        watcher_runs_24h=watcher_recent,
+        panel_runs_total=panel_total,
+        panel_runs_24h=panel_recent,
+        promote_created_total=promote_total,
+        promote_created_24h=promote_recent,
+        promotion_executed_total=promotion_done_total,
+        promotion_executed_24h=promotion_done_recent,
+        ingest_runs_by_plane={},
+        source_path=_outbox_db_source(),
+    )
+
+
 def _fill_ingest_run_counts(counters: EventCounters, ingestion: IngestionStatus) -> EventCounters:
     per_plane: dict[str, int] = {}
     for plane in getattr(ingestion, "planes", []) or []:
@@ -246,12 +323,11 @@ def _fill_ingest_run_counts(counters: EventCounters, ingestion: IngestionStatus)
     return counters
 
 
-def _get_intent_status(outbox_path: Path) -> IntentStatus:
-    counts = _count_events(outbox_path)
+def _get_intent_status(counters: EventCounters) -> IntentStatus:
     return IntentStatus(
-        promote_created_total=counts.promote_created_total,
-        promote_created_24h=counts.promote_created_24h,
-        source_path=counts.source_path,
+        promote_created_total=counters.promote_created_total,
+        promote_created_24h=counters.promote_created_24h,
+        source_path=counters.source_path,
     )
 
 
@@ -277,11 +353,21 @@ def _count_outbox_events(path: Path) -> int | None:
 
 
 def _get_outbox_lag() -> OutboxLagStatus:
+    mode = _worker_queue_mode()
     heartbeat = _read_worker_heartbeat()
     processed_total = None
+    if heartbeat and isinstance(heartbeat.get("processed_total"), int):
+        processed_total = heartbeat.get("processed_total")
+    if mode == "db":
+        pending = _count_outbox_pending_db()
+        total = _count_outbox_total_db()
+        return OutboxLagStatus(
+            outbox_events=total,
+            worker_processed_total=processed_total,
+            pending_estimate=pending,
+        )
     outbox_path = Path(INDEX_OUTBOX_PATH)
     if heartbeat:
-        processed_total = heartbeat.get("processed_total")
         heartbeat_path = heartbeat.get("outbox_path")
         if heartbeat_path:
             outbox_path = Path(str(heartbeat_path))
@@ -307,16 +393,139 @@ def _get_write_guard_status() -> WriteGuardStatus:
     )
 
 
+def _get_index_status() -> IndexStatus | None:
+    try:
+        from app.index.doctor import diagnose_index
+    except Exception:
+        return None
+    try:
+        diag = diagnose_index()
+    except Exception:
+        return None
+    issues = diag.get("issues") or []
+    warnings = diag.get("warnings") or []
+    status = diag.get("status") or "unknown"
+    return IndexStatus(
+        status=status,
+        issues=[str(item) for item in issues],
+        warnings=[str(item) for item in warnings],
+        backend=diag.get("backend"),
+        expected_identity=diag.get("expected_identity"),
+        stored_identity=diag.get("stored_identity"),
+        rebuild_required=bool(issues),
+    )
+
+
+def _get_panel_diagnostics() -> PanelDiagnostics:
+    try:
+        diag = get_panel_actions_diagnostics()
+    except Exception:
+        return PanelDiagnostics()
+    return PanelDiagnostics(**diag)
+
+
+def _events_log_status() -> EventsLogStatus:
+    outbox_path = Path(INDEX_OUTBOX_PATH)
+    total_lines = _count_outbox_events(outbox_path)
+    return EventsLogStatus(path=str(outbox_path), total_lines=total_lines)
+
+
+def _worker_queue_mode() -> str:
+    raw_enabled = (os.getenv("WORKER_ENABLE") or "").strip().lower()
+    if raw_enabled and raw_enabled not in _TRUE_VALUES:
+        return "none"
+    backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
+    db_url = os.getenv("DATABASE_URL") or os.getenv("DB_DSN")
+    if backend == "pg" or db_url:
+        return "db"
+    if os.getenv("INDEX_OUTBOX_PATH"):
+        return "jsonl"
+    return "none"
+
+
+def _count_outbox_pending_db() -> int | None:
+    try:
+        from app.services import outbox as outbox_service
+    except Exception:
+        return None
+    try:
+        conn = outbox_service._open_conn()
+    except Exception:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("select count(*) from outbox where delivered_at is null")
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+    except Exception:
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _count_outbox_total_db() -> int | None:
+    try:
+        from app.services import outbox as outbox_service
+    except Exception:
+        return None
+    try:
+        conn = outbox_service._open_conn()
+    except Exception:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("select count(*) from outbox")
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+    except Exception:
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _get_worker_queue_status() -> WorkerQueueStatus:
+    mode = _worker_queue_mode()
+    heartbeat = _read_worker_heartbeat() or {}
+    processed_total = heartbeat.get("processed_total") if isinstance(heartbeat.get("processed_total"), int) else None
+    source_path = None
+    pending: int | None = None
+
+    if mode == "db":
+        source_path = os.getenv("DATABASE_URL") or os.getenv("DB_DSN") or "outbox"
+        pending = _count_outbox_pending_db()
+    elif mode == "jsonl":
+        source_path = os.getenv("INDEX_OUTBOX_PATH") or str(Path(INDEX_OUTBOX_PATH))
+        total_lines = _count_outbox_events(Path(source_path)) if source_path else None
+        if isinstance(total_lines, int) and isinstance(processed_total, int):
+            pending = max(total_lines - processed_total, 0)
+        elif isinstance(total_lines, int):
+            pending = total_lines
+
+    return WorkerQueueStatus(
+        mode=mode,
+        pending=pending,
+        processed_total=processed_total,
+        source_path=source_path,
+    )
+
+
 def get_system_status() -> SystemStatus:
     sot_meta = get_sot_metadata()
     ingestion = get_ingestion_status()
-    counters = _count_events(Path(INDEX_OUTBOX_PATH)) if INDEX_OUTBOX_PATH else EventCounters()
+    queue_mode = _worker_queue_mode()
+    counters: EventCounters | None = None
+    if queue_mode == "db":
+        counters = _count_events_db()
+    if counters is None:
+        counters = _count_events(Path(INDEX_OUTBOX_PATH)) if INDEX_OUTBOX_PATH else EventCounters()
     counters = _fill_ingest_run_counts(counters, ingestion)
-    intent_status = IntentStatus(
-        promote_created_total=counters.promote_created_total,
-        promote_created_24h=counters.promote_created_24h,
-        source_path=counters.source_path,
-    )
+    intent_status = _get_intent_status(counters)
     return SystemStatus(
         timestamp=datetime.now(timezone.utc),
         sot_version=get_sot_version(),
@@ -330,8 +539,12 @@ def get_system_status() -> SystemStatus:
         ask=get_ask_status(),
         intents=intent_status,
         events=counters,
+        index=_get_index_status(),
+        panel_diagnostics=_get_panel_diagnostics(),
         write_guard=_get_write_guard_status(),
         outbox_lag=_get_outbox_lag(),
+        events_log=_events_log_status(),
+        worker_queue=_get_worker_queue_status(),
     )
 
 

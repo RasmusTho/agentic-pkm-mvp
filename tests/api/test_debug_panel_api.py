@@ -1,0 +1,62 @@
+import textwrap
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from app.api.app import app
+
+
+def test_debug_panel_endpoint_parses_actions_and_returns_mapping_summary(tmp_path, monkeypatch) -> None:
+    vault_root = tmp_path / "vault"
+    note_rel = Path("Inbox/_alpha_e2e/test.md")
+    note_path = vault_root / note_rel
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(
+        textwrap.dedent(
+            """
+            ---
+            uuid: 1234567890abcdef1234567890abcdef
+            ---
+            # Alpha E2E Runtime
+            - [x] Make this note evergreen <!--ai:id=promote.evergreen-->
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+
+    actions_path = tmp_path / "panel-actions.md"
+    actions_path.write_text(
+        textwrap.dedent(
+            """
+            ---
+            mappings:
+              - id: "promote.evergreen"
+                labels:
+                  - "Make this note evergreen"
+                intent_type: "promotion"
+                downstream_event: "review.promote.evergreen"
+                params:
+                  maturity: evergreen
+            ---
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    monkeypatch.setenv("PANEL_ACTIONS_ROOT", str(actions_path))
+
+    client = TestClient(app)
+    resp = client.get("/api/debug/panel", params={"note_rel": str(note_rel)})
+    assert resp.status_code == 200
+    data = resp.json()
+
+    actions = data.get("parsed_actions") or []
+    assert len(actions) == 1
+    assert actions[0].get("action_id") == "promote.evergreen"
+    assert actions[0].get("checked") is True
+    assert actions[0].get("action_text") == "Make this note evergreen"
+
+    diag = data.get("panel_diagnostics") or {}
+    assert diag.get("panel_actions_mappings_count") == 1
+    assert diag.get("has_promote_evergreen_mapping") is True

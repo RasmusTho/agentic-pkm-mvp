@@ -1,0 +1,233 @@
+import copy
+import uuid
+
+from app.vault.paths import get_vault_inbox_dir_rel
+
+from scripts.alpha_e2e import (
+    _cleanup_runtime_notes,
+    _create_runtime_note,
+    _index_rebuild_command,
+    _maybe_auto_rebuild_index,
+    _maybe_teardown,
+    validate_runtime_progress,
+    validate_status_invariants,
+)
+
+
+def _base_payloads():
+    status = {
+        "events_log": {"path": "/tmp/index-outbox.jsonl", "total_lines": 5},
+        "worker_queue": {"mode": "file", "pending": 2, "processed_total": 3},
+    }
+    health = {"required_ok": True}
+    return status, health
+
+
+def test_invariants_require_required_ok() -> None:
+    status, health = _base_payloads()
+    health["required_ok"] = False
+    errors = validate_status_invariants(status, health)
+    assert errors
+    assert "health.required_ok" in errors[0]
+
+
+def test_invariants_db_mode_accepts_sqlalchemy_dsn() -> None:
+    status, health = _base_payloads()
+    status["worker_queue"] = {
+        "mode": "db",
+        "pending": 0,
+        "processed_total": 0,
+        "source_path": "postgresql+psycopg://app:app@db:5432/app",
+    }
+    errors = validate_status_invariants(status, health)
+    assert not errors
+
+
+def test_invariants_db_mode_does_not_require_events_log_math() -> None:
+    status, health = _base_payloads()
+    status["worker_queue"] = {"mode": "db", "pending": 0, "processed_total": 0, "source_path": "postgresql://app:app@db:5432/app"}
+    status["events_log"]["total_lines"] = 42
+    errors = validate_status_invariants(status, health)
+    assert not errors
+
+
+def test_invariants_db_mode_rejects_pending_from_events_log_sentinel() -> None:
+    status, health = _base_payloads()
+    status["worker_queue"] = {"mode": "db", "pending": 0, "processed_total": 0, "source_path": "postgresql://app:app@db:5432/app"}
+    status["pending_from_events_log"] = True
+    errors = validate_status_invariants(status, health)
+    assert errors
+    assert "pending_from_events_log" in errors[0]
+
+
+def test_invariants_file_mode_pending_matches_events_log() -> None:
+    status, health = _base_payloads()
+    errors = validate_status_invariants(status, health)
+    assert not errors
+
+
+def test_invariants_file_mode_pending_mismatch_fails() -> None:
+    status, health = _base_payloads()
+    status = copy.deepcopy(status)
+    status["worker_queue"]["pending"] = 4
+    errors = validate_status_invariants(status, health)
+    assert errors
+    assert "worker_queue.pending" in errors[0]
+
+
+def test_auto_rebuild_index_runs_once(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *, allow_fail: bool = False) -> None:
+        calls.append(cmd)
+
+    first_health = {
+        "required_ok": False,
+        "suggested_actions": [
+            {
+                "id": "index_rebuild",
+                "severity": "required",
+                "message": "Embedding/index identity mismatch detected",
+                "command_hint": "python -m app.cli index rebuild --profile default",
+            }
+        ],
+    }
+    refreshed_health = {"required_ok": True, "suggested_actions": []}
+
+    def fake_fetch(url: str, timeout: float = 5.0):
+        assert url.endswith("/api/health")
+        return refreshed_health
+
+    monkeypatch.setattr("scripts.alpha_e2e._run", fake_run)
+    monkeypatch.setattr("scripts.alpha_e2e._fetch_json", fake_fetch)
+
+    result = _maybe_auto_rebuild_index("http://example", first_health)
+    assert result == refreshed_health
+    assert calls == [_index_rebuild_command()]
+
+
+def test_runtime_progress_requires_processed_increment() -> None:
+    errors = validate_runtime_progress(
+        baseline_processed=3,
+        current_processed=3,
+        processed_by_event={"promote.intent.created": 1},
+        required_topic="promote.intent.created",
+        baseline_promote_created=0,
+        current_promote_created=0,
+        baseline_promotion_executed=0,
+        current_promotion_executed=0,
+    )
+    assert errors
+    assert "processed_total" in errors[0]
+
+
+def test_runtime_progress_requires_processing_topic() -> None:
+    errors = validate_runtime_progress(
+        baseline_processed=3,
+        current_processed=4,
+        processed_by_event={"other": 2},
+        required_topic="promote.intent.created",
+        baseline_promote_created=0,
+        current_promote_created=0,
+        baseline_promotion_executed=0,
+        current_promotion_executed=0,
+    )
+    assert errors
+    assert "promote.intent.created" in " ".join(errors)
+
+
+def test_runtime_progress_accepts_processed_increment_and_topic() -> None:
+    errors = validate_runtime_progress(
+        baseline_processed=1,
+        current_processed=2,
+        processed_by_event={"promote.intent.created": 1},
+        required_topic="promote.intent.created",
+        baseline_promote_created=0,
+        current_promote_created=0,
+        baseline_promotion_executed=0,
+        current_promotion_executed=0,
+    )
+    assert not errors
+
+
+def test_runtime_progress_accepts_processed_increment_without_topic() -> None:
+    errors = validate_runtime_progress(
+        baseline_processed=1,
+        current_processed=2,
+        processed_by_event=None,
+        required_topic="promote.intent.created",
+        baseline_promote_created=0,
+        current_promote_created=0,
+        baseline_promotion_executed=0,
+        current_promotion_executed=0,
+    )
+    assert not errors
+
+
+def test_runtime_progress_accepts_promote_created_increase() -> None:
+    errors = validate_runtime_progress(
+        baseline_processed=0,
+        current_processed=0,
+        processed_by_event=None,
+        required_topic="promote.intent.created",
+        baseline_promote_created=2,
+        current_promote_created=3,
+        baseline_promotion_executed=0,
+        current_promotion_executed=0,
+    )
+    assert not errors
+
+
+def test_runtime_progress_accepts_promotion_executed_increase() -> None:
+    errors = validate_runtime_progress(
+        baseline_processed=0,
+        current_processed=0,
+        processed_by_event=None,
+        required_topic="promote.intent.created",
+        baseline_promote_created=0,
+        current_promote_created=0,
+        baseline_promotion_executed=2,
+        current_promotion_executed=3,
+    )
+    assert not errors
+
+
+def test_runtime_note_path_and_content(tmp_path) -> None:
+    note_uuid = uuid.uuid4().hex
+    uuid.UUID(note_uuid)
+    inbox_dir_rel = get_vault_inbox_dir_rel(tmp_path)
+    note_path = _create_runtime_note(tmp_path, inbox_dir_rel, note_uuid)
+    assert note_path.exists()
+    assert f"{inbox_dir_rel}/_alpha_e2e" in str(note_path)
+    content = note_path.read_text(encoding="utf-8")
+    assert f"uuid: {note_uuid}" in content
+    assert note_uuid in note_path.name
+
+
+def test_cleanup_runtime_notes_removes_files(tmp_path) -> None:
+    note_path = tmp_path / "temp.md"
+    note_path.write_text("ok", encoding="utf-8")
+    _cleanup_runtime_notes([note_path])
+    assert not note_path.exists()
+
+
+def test_maybe_teardown_runs_alpha_down_when_requested(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *, allow_fail: bool = False) -> None:
+        calls.append(cmd)
+
+    monkeypatch.setattr("scripts.alpha_e2e._run", fake_run)
+    _maybe_teardown(True)
+    assert calls == [["make", "alpha-down"]]
+
+
+def test_maybe_teardown_is_noop_when_not_requested(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *, allow_fail: bool = False) -> None:
+        calls.append(cmd)
+
+    monkeypatch.setattr("scripts.alpha_e2e._run", fake_run)
+    _maybe_teardown(False)
+    assert calls == []
