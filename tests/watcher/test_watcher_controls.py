@@ -114,12 +114,12 @@ def test_rate_limit_blocks_after_threshold(tmp_path: Path) -> None:
     note.write_text("first", encoding="utf-8")
 
     state = WatcherState()
-    first = run_tick(cfg, state, now=0.0)
+    first = run_tick(cfg, state, now=1_500_000_000.0)
     assert first["emitted_in_tick"] == 1
 
     note.write_text("second", encoding="utf-8")
     os.utime(note, None)
-    second = run_tick(cfg, state, now=2.0)
+    second = run_tick(cfg, state, now=1_500_000_002.0)
     assert second["emitted_in_tick"] == 0
     assert second["rate_limited_in_tick"] == 1
 
