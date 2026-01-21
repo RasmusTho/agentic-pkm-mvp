@@ -10,10 +10,28 @@ from .base import ObjectStore, RelationIndex, VectorIndex
 from .memory import MemoryObjectStore, MemoryRelationIndex, MemoryVectorIndex
 
 
+def _pg_reachable(dsn: str) -> bool:
+    if not dsn:
+        return False
+    try:
+        import psycopg
+
+        conn = psycopg.connect(dsn, connect_timeout=1)
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
 def _resolve_backend() -> str:
     override = os.getenv("STORE_BACKEND")
     if override:
         return override.lower()
+
+    dsn = os.getenv("DATABASE_URL", "").strip()
+    if _pg_reachable(dsn):
+        return "pg"
+
     return getattr(settings, "store_backend", "memory").lower()
 
 
