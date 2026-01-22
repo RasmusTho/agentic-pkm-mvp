@@ -318,6 +318,13 @@ run_docker_compose() {
 run_preflight
 start_startup_watchdog "$STARTUP_TIMEOUT_SECONDS"
 
+llm_provider="${LLM_PROVIDER:-}"
+llm_provider="${llm_provider,,}"
+llm_requires_ollama=0
+if [ "$llm_provider" = "ollama" ]; then
+  llm_requires_ollama=1
+fi
+
 alpha_rebuild="${ALPHA_REBUILD:-0}"
 alpha_rebuild_pull="${ALPHA_REBUILD_PULL:-0}"
 if [ "$alpha_rebuild" -eq 1 ]; then
@@ -557,7 +564,7 @@ run_llm_check_container() {
     export LLM_LATENCY_MS=0
     write_startup_status 1 ""
     echo "LLM CHECK FAILED: url=<missing> error=api container not found" >&2
-    echo "Ollama unreachable. If Ollama runs on host, ensure it listens on a reachable interface (e.g., OLLAMA_HOST=0.0.0.0:11434) or point OLLAMA_URL to a reachable endpoint." >&2
+    echo "LLM endpoint unreachable. Ensure the api container is running and LLM_PROVIDER is configured." >&2
     return 1
   fi
   local llm_check_json=""
@@ -581,10 +588,10 @@ else:
 url = payload.get('url') or ''
 error = (payload.get('error') or '').replace('\n', ' ')
 latency = int(payload.get('latency_ms', 0) or 0)
-print(f"{ok_val}	{url}	{error}	{latency}")
+print(f"{ok_val}\t{url}\t{error}\t{latency}")
 PY
   )
-  IFS=$'	' read -r llm_ok llm_url llm_error llm_latency_ms <<<"$llm_check_info"
+  IFS=$'\t' read -r llm_ok llm_url llm_error llm_latency_ms <<<"$llm_check_info"
   llm_ok=${llm_ok:-0}
   llm_url=${llm_url:-}
   llm_error=${llm_error:-}
@@ -596,7 +603,7 @@ PY
   write_startup_status 1 ""
   if [ "$llm_ok" -ne 1 ] || [ "$llm_status" -ne 0 ]; then
     echo "LLM CHECK FAILED: url=${llm_url:-<missing>} error=${llm_error:-<no error>}" >&2
-    echo "Ollama unreachable. If Ollama runs on host, ensure it listens on a reachable interface (e.g., OLLAMA_HOST=0.0.0.0:11434) or point OLLAMA_URL to a reachable endpoint." >&2
+    echo "LLM endpoint unreachable. If LLM_PROVIDER=ollama and Ollama runs on host, ensure it listens on a reachable interface (e.g., OLLAMA_HOST=0.0.0.0:11434) or set OPENAI_BASE_URL for non-Ollama providers." >&2
     return 1
   fi
   return 0
@@ -711,7 +718,7 @@ fi
 
 
 
-if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ "$llm_requires_ollama" -eq 1 ]; then
   optional_check "Ollama preflight" run_ollama_preflight
 fi
 
@@ -1052,7 +1059,7 @@ if [ "$VERIFY_ACTIVE" -eq 1 ]; then
     echo "VERIFY: requires ingested objects; system is empty" >&2
     exit 1
   fi
-  if [ "$ollama_preflight_ok" -ne 1 ]; then
+  if [ "$llm_requires_ollama" -eq 1 ] && [ "$ollama_preflight_ok" -ne 1 ]; then
     echo "VERIFY: Ollama preflight must succeed (set OLLAMA_URL/LLM_PROVIDER)" >&2
     exit 1
   fi
