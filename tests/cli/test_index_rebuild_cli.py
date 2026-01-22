@@ -72,7 +72,7 @@ def test_index_rebuild_populates_index(monkeypatch) -> None:
     result = runner.invoke(cli, ["index", "rebuild"])
 
     assert result.exit_code == 0
-    assert "Rebuilt embeddings" in result.output
+    assert "total=1 processed=1 skipped=0 errors=0" in result.output
 
     idx = get_vector_index()
     embedder = get_embedding_client()
@@ -105,14 +105,15 @@ def test_index_rebuild_json_summary(monkeypatch) -> None:
     legacy_store._MEMORY_STORE.clear()
 
 
-def test_index_rebuild_strict_fails_on_error(monkeypatch) -> None:
+def test_index_rebuild_reports_failures(monkeypatch, tmp_path) -> None:
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("EMBED_DIM", "8")
 
-    _seed_object("will fail")
+    obj_uuid = _seed_object("failure object")
+    failures_path = tmp_path / "failures.jsonl"
 
     idx = get_vector_index()
     original_upsert = idx.upsert
@@ -121,15 +122,79 @@ def test_index_rebuild_strict_fails_on_error(monkeypatch) -> None:
         raise ValueError("boom")
 
     idx.upsert = _failing_upsert  # type: ignore[assignment]
-
     runner = CliRunner()
-    result = runner.invoke(cli, ["index", "rebuild", "--strict"])
+    try:
+        result = runner.invoke(
+            cli,
+            ["index", "rebuild", "--json", "--failures-path", str(failures_path)],
+        )
+    finally:
+        idx.upsert = original_upsert
 
-    idx.upsert = original_upsert  # restore
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["errors"]
+    error = data["errors"][0]
+    assert error["object_id"] == obj_uuid
+    assert error["source_ref"] == "tests"
+    assert error["stage"] == "upsert"
+    assert error["exception_type"] == "ValueError"
+    assert data["failures_path"] == str(failures_path)
+    assert failures_path.exists()
 
-    assert result.exit_code != 0
+    with open(failures_path, encoding="utf-8") as fh:
+        first_line = fh.readline().strip()
+    assert first_line
+    failure_entry = json.loads(first_line)
+    assert failure_entry["object_id"] == obj_uuid
+    assert failure_entry["stage"] == "upsert"
+    assert failure_entry["source_ref"] == "tests"
+    assert failure_entry["identity"]["provider"] == "mock"
+
     legacy_store._MEMORY_STORE.clear()
 
+
+def test_index_rebuild_strict_fails_on_error(monkeypatch, tmp_path) -> None:
+    reset_store_backends()
+    legacy_store._MEMORY_STORE.clear()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("EMBED_DIM", "8")
+
+    _seed_object("will fail")
+    failures_path = tmp_path / "strict-failures.jsonl"
+
+    idx = get_vector_index()
+    original_upsert = idx.upsert
+
+    def _failing_upsert(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise ValueError("boom")
+
+    idx.upsert = _failing_upsert  # type: ignore[assignment]
+    runner = CliRunner()
+    try:
+        result = runner.invoke(
+            cli,
+            [
+                "index",
+                "rebuild",
+                "--json",
+                "--strict",
+                "--failures-path",
+                str(failures_path),
+            ],
+        )
+    finally:
+        idx.upsert = original_upsert
+
+    assert result.exit_code != 0
+    data = json.loads(result.output)
+    assert data["failures_path"] == str(failures_path)
+    assert data["errors"]
+    assert data["errors"][0]["stage"] == "upsert"
+    assert failures_path.exists()
+
+    legacy_store._MEMORY_STORE.clear()
 
 @pytest.mark.pg
 def test_index_rebuild_sets_pg_meta(monkeypatch) -> None:
@@ -218,4 +283,3 @@ def test_index_rebuild_resets_missing_meta(monkeypatch) -> None:
 
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
-

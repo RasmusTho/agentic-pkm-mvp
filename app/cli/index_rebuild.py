@@ -3,15 +3,36 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Callable, Dict, List, Tuple, TypeVar
 from uuid import UUID
 
 import click
 
 from app.components.embeddings import EmbeddingIdentity, get_embedding_client
 from app.store import object_store as legacy_store
-from app.stores import get_vector_index
+from app.stores import get_vector_index, resolve_store_backend
+
+FAILURES_PATH_ENV = "INDEX_REBUILD_FAILURES_PATH"
+MAX_RETRIES_ENV = "INDEX_REBUILD_MAX_RETRIES"
+_DEFAULT_FAILURES_PATH = Path("/app/tmp/index-rebuild-failures.jsonl")
+_DEFAULT_MAX_RETRIES = 2
+_T = TypeVar("_T")
+_RETRYABLE_TYPES = (ConnectionError, TimeoutError)
+_RETRYABLE_KEYWORDS = {
+    "timeout",
+    "temporarily",
+    "temporary",
+    "rate limit",
+    "rate-limited",
+    "throttl",
+    "deadlock",
+    "locked",
+    "connection reset",
+    "429",
+}
+_RETRYABLE_NAMES = {"SerializationFailure", "DeadlockDetected", "TooManyRequests"}
 
 
 def _extract_text(payload: dict | None) -> str:
@@ -23,6 +44,17 @@ def _extract_text(payload: dict | None) -> str:
     return ""
 
 
+def _serialize_payload(value: Any) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return {}
+    return {}
+
+
 def _memory_objects(limit: int | None) -> List[legacy_store.DomainObject]:
     objs = list(legacy_store._MEMORY_STORE.values())
     if limit is not None:
@@ -30,52 +62,75 @@ def _memory_objects(limit: int | None) -> List[legacy_store.DomainObject]:
     return objs
 
 
-def _db_objects(limit: int | None) -> List[legacy_store.DomainObject]:
+def _db_objects(limit: int | None) -> Tuple[List[legacy_store.DomainObject], str]:
     if not legacy_store._pg_available():
-        return []
+        return [], "none"
     conn = legacy_store._db_connect()
     if conn is None:
-        return []
-    query = """
-        SELECT id, uuid, kind, source_ref, payload, created_at
-        FROM objects
+        return [], "none"
+    table = "objects"
+    try:
+        table = legacy_store.choose_object_table(conn)
+    except Exception:
+        table = "objects"
+    if table not in {"objects", "store_objects"}:
+        table = "objects"
+
+    if table == "store_objects":
+        uuid_expr = "object_id"
+        object_id_expr = "object_id"
+    else:
+        uuid_expr = "COALESCE(NULLIF(uuid::text, ''), id::text)"
+        object_id_expr = "id"
+
+    query = f"""
+        SELECT
+            {uuid_expr} AS uuid,
+            {object_id_expr} AS object_id,
+            kind,
+            source_ref,
+            payload,
+            created_at
+        FROM {table}
         ORDER BY created_at ASC
     """
-    params: tuple = ()
+    params: List[Any] = []
     if limit is not None:
         query += " LIMIT %s"
-        params = (limit,)
+        params.append(limit)
+
     records: List[legacy_store.DomainObject] = []
-    with conn:
+    try:
         with conn.cursor() as cur:
-            try:
-                cur.execute(query, params)
-            except Exception:
-                return []
+            cur.execute(query, tuple(params))
+            columns = [desc.name for desc in cur.description] if cur.description else []
             rows = cur.fetchall()
-            for row in rows:
-                payload = row[4]
-                if isinstance(payload, str):
-                    try:
-                        payload = json.loads(payload)
-                    except Exception:
-                        payload = {}
-                records.append(
-                    legacy_store.DomainObject(
-                        uuid=str(row[1] or row[0]),
-                        kind=row[2],
-                        payload=payload or {},
-                        source_ref=row[3],
-                        created_at=row[5],
-                    )
+        for row in rows:
+            record = dict(zip(columns, row)) if columns else {}
+            payload = _serialize_payload(record.get("payload"))
+            records.append(
+                legacy_store.DomainObject(
+                    uuid=str(record.get("uuid") or record.get("object_id") or ""),
+                    kind=str(record.get("kind") or "note"),
+                    payload=payload,
+                    source_ref=record.get("source_ref"),
+                    created_at=record.get("created_at"),
                 )
-    return records
+            )
+    except Exception:
+        return [], "none"
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return records, table
 
 
-def _load_objects(limit: int | None) -> List[legacy_store.DomainObject]:
+def _load_objects(limit: int | None) -> Tuple[List[legacy_store.DomainObject], str]:
     memory_objs = _memory_objects(limit)
     if memory_objs:
-        return memory_objs
+        return memory_objs, "none"
     return _db_objects(limit)
 
 
@@ -97,6 +152,124 @@ def _maybe_reset_pg_index(index_store, identity: EmbeddingIdentity, *, as_json: 
             click.echo(f"Warning: failed to reset pg vector index: {exc}")
 
 
+def _prepare_failures_path(path: Path) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+
+
+def _current_timestamp() -> str:
+    return datetime.now(timezone.utc).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _resolve_failures_path(path: Path | None) -> Path:
+    if path is not None:
+        return path
+    env_value = os.getenv(FAILURES_PATH_ENV)
+    if env_value:
+        return Path(env_value)
+    return _DEFAULT_FAILURES_PATH
+
+
+def _resolve_max_retries(value: int | None) -> int:
+    if value is not None:
+        return max(value, 0)
+    env_value = os.getenv(MAX_RETRIES_ENV)
+    if env_value:
+        try:
+            parsed = int(env_value)
+        except Exception:
+            return _DEFAULT_MAX_RETRIES
+        return max(parsed, 0)
+    return _DEFAULT_MAX_RETRIES
+
+
+def _identity_summary(identity: EmbeddingIdentity) -> Dict[str, object]:
+    return {
+        "provider": identity.provider,
+        "model": identity.model,
+        "dim": identity.dim,
+        "normalize": identity.normalize,
+    }
+
+
+def _is_retryable_exception(exc: Exception) -> bool:
+    if isinstance(exc, _RETRYABLE_TYPES):
+        return True
+    name = type(exc).__name__
+    if name in _RETRYABLE_NAMES:
+        return True
+    msg = str(exc).lower()
+    return any(keyword in msg for keyword in _RETRYABLE_KEYWORDS)
+
+
+def _attempt_with_retries(action: Callable[[], _T], max_retries: int) -> Tuple[_T | None, int, Exception | None, bool]:
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            return action(), attempts, None, False
+        except Exception as exc:
+            retryable = _is_retryable_exception(exc)
+            if not retryable or attempts > max_retries:
+                return None, attempts, exc, retryable
+
+
+def _write_failure_record(path: Path, payload: Dict[str, object]) -> None:
+    try:
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _record_failure(
+    summary: Dict[str, object],
+    path: Path,
+    identity: Dict[str, object],
+    domain_obj: legacy_store.DomainObject,
+    stage: str,
+    exc: Exception,
+    attempts: int,
+    retryable: bool,
+) -> None:
+    error_entry = {
+        "object_id": str(domain_obj.uuid),
+        "kind": str(domain_obj.kind or "note"),
+        "source_ref": str(domain_obj.source_ref or ""),
+        "stage": stage,
+        "exception_type": type(exc).__name__,
+        "message": str(exc),
+        "retryable": retryable,
+        "attempts": attempts,
+    }
+    summary.setdefault("errors", []).append(error_entry)
+    failure_record = {
+        "timestamp": _current_timestamp(),
+        "identity": identity,
+        **error_entry,
+    }
+    _write_failure_record(path, failure_record)
+
+
+def _emit_summary(summary: Dict[str, object], as_json: bool) -> None:
+    summary["error_count"] = len(summary.get("errors", []))
+    if as_json:
+        click.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+        return
+    if summary.get("message"):
+        click.echo(str(summary["message"]))
+    click.echo(
+        f"total={summary.get('total_objects', 0)} processed={summary.get('processed', 0)} skipped={summary.get('skipped', 0)} errors={summary['error_count']}"
+    )
+
+
 @click.group(help="Index maintenance commands.")
 def index() -> None:
     """Index maintenance command group."""
@@ -111,6 +284,8 @@ def index() -> None:
 @click.option("--dry-run", is_flag=True, default=False, help="Report counts without embedding")
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON summary")
 @click.option("--strict/--no-strict", default=False, help="Exit non-zero when errors occur")
+@click.option("--failures-path", type=click.Path(path_type=Path), default=None, help="Path to JSONL failure report (env INDEX_REBUILD_FAILURES_PATH)")
+@click.option("--max-retries", type=int, default=None, help="Max retry attempts for embed/upsert (env INDEX_REBUILD_MAX_RETRIES, default 2)")
 def rebuild(
     backend: str | None,
     outbox_path: Path | None,
@@ -120,6 +295,8 @@ def rebuild(
     dry_run: bool,
     as_json: bool,
     strict: bool,
+    failures_path: Path | None,
+    max_retries: int | None,
 ) -> None:
     if backend:
         os.environ["STORE_BACKEND"] = backend
@@ -128,27 +305,31 @@ def rebuild(
 
     os.environ.setdefault("LLM_PROVIDER", "mock")
 
-    objects = _load_objects(limit)
+    path = _resolve_failures_path(failures_path)
+    _prepare_failures_path(path)
+    retry_limit = _resolve_max_retries(max_retries)
+
+    objects, object_table = _load_objects(limit)
     summary: Dict[str, object] = {
         "total_objects": len(objects),
         "processed": 0,
         "skipped": 0,
         "errors": [],
+        "failures_path": str(path),
+        "object_table": object_table,
+        "backend": resolve_store_backend(),
     }
-
-    if not objects:
-        summary["message"] = "No objects available for indexing."
-        _emit_summary(summary, as_json)
-        return
 
     client = get_embedding_client(profile=profile, override_model=override_model)
     identity = client.identity
-    summary["identity"] = {
-        "provider": identity.provider,
-        "model": identity.model,
-        "dim": identity.dim,
-        "normalize": identity.normalize,
-    }
+    identity_info = _identity_summary(identity)
+    summary["identity"] = identity_info
+
+    if not objects:
+        summary["message"] = "No objects available for indexing."
+        summary["duration_ms"] = 0
+        _emit_summary(summary, as_json)
+        return
 
     if not as_json:
         click.echo(
@@ -157,6 +338,7 @@ def rebuild(
 
     if dry_run:
         summary["message"] = "Dry run complete; no embeddings written."
+        summary["duration_ms"] = 0
         _emit_summary(summary, as_json)
         return
 
@@ -169,8 +351,25 @@ def rebuild(
         if not text:
             summary["skipped"] = int(summary["skipped"]) + 1
             continue
-        try:
-            embedding = client.embed_text(text)
+
+        embedding, embed_attempts, embed_exc, embed_retryable = _attempt_with_retries(
+            lambda: client.embed_text(text),
+            retry_limit,
+        )
+        if embed_exc is not None:
+            _record_failure(
+                summary,
+                path,
+                identity_info,
+                domain_obj,
+                "embed",
+                embed_exc,
+                embed_attempts,
+                embed_retryable,
+            )
+            continue
+
+        def _upsert_action() -> None:
             index_store.upsert(
                 object_id=UUID(str(domain_obj.uuid)),
                 kind=str(domain_obj.kind or "note"),
@@ -180,32 +379,25 @@ def rebuild(
                 model=identity.model,
                 identity=identity,
             )
-            summary["processed"] = int(summary["processed"]) + 1
-        except Exception as exc:  # pragma: no cover - error path
-            summary.setdefault("errors", []).append(str(exc))
 
-    duration = time.perf_counter() - start
-    summary["duration_seconds"] = round(duration, 2)
-
-    if not as_json:
-        if summary.get("errors"):
-            click.echo(f"Completed with {len(summary['errors'])} error(s) after {duration:.2f}s")
-        else:
-            click.echo(
-                f"Rebuilt embeddings for {summary['processed']} objects in {duration:.2f}s"
+        _, upsert_attempts, upsert_exc, upsert_retryable = _attempt_with_retries(_upsert_action, retry_limit)
+        if upsert_exc is not None:
+            _record_failure(
+                summary,
+                path,
+                identity_info,
+                domain_obj,
+                "upsert",
+                upsert_exc,
+                upsert_attempts,
+                upsert_retryable,
             )
+            continue
 
+        summary["processed"] = int(summary["processed"]) + 1
+
+    duration_ms = int((time.perf_counter() - start) * 1000)
+    summary["duration_ms"] = duration_ms
     _emit_summary(summary, as_json)
-    if strict and summary.get("errors"):
+    if strict and summary.get("error_count", 0) > 0:
         raise SystemExit(2)
-
-
-def _emit_summary(summary: Dict[str, object], as_json: bool) -> None:
-    if as_json:
-        click.echo(json.dumps(summary, ensure_ascii=False, indent=2))
-    else:
-        if summary.get("message"):
-            click.echo(str(summary["message"]))
-        click.echo(
-            f"total={summary.get('total_objects', 0)} processed={summary.get('processed', 0)} skipped={summary.get('skipped', 0)} errors={len(summary.get('errors', []))}"
-        )
