@@ -34,14 +34,14 @@ def test_vault_alpha_ingest_skips_locked_files(tmp_path: Path, monkeypatch: pyte
 
     _write_layout(vault_root)
 
-    original_read_text = Path.read_text
+    original_read_bytes = Path.read_bytes
 
-    def _read_text(self: Path, *args, **kwargs):
+    def _read_bytes(self: Path, *args, **kwargs):
         if self.name == "Locked.md":
             raise OSError(35, "Resource deadlock avoided")
-        return original_read_text(self, *args, **kwargs)
+        return original_read_bytes(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_text", _read_text)
+    monkeypatch.setattr(Path, "read_bytes", _read_bytes)
 
     summary = run_vault_alpha_ingest(vault_root, max_notes=10, force=True)
     output = capsys.readouterr().out
@@ -70,14 +70,14 @@ def test_vault_alpha_locked_files_retry(tmp_path: Path, monkeypatch: pytest.Monk
     _write_layout(vault_root)
 
     locked = True
-    original_read_text = Path.read_text
+    original_read_bytes = Path.read_bytes
 
-    def _read_text(self: Path, *args, **kwargs):
+    def _read_bytes(self: Path, *args, **kwargs):
         if self.name == "Locked.md" and locked:
             raise OSError(35, "Resource deadlock avoided")
-        return original_read_text(self, *args, **kwargs)
+        return original_read_bytes(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_text", _read_text)
+    monkeypatch.setattr(Path, "read_bytes", _read_bytes)
 
     summary_first = run_vault_alpha_ingest(vault_root, max_notes=10, force=True)
     assert summary_first.skipped_locked == 1

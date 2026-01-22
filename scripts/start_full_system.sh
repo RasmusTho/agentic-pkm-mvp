@@ -90,6 +90,9 @@ payload = {
     "outbox_count": _coerce_int("OUTBOX_COUNT"),
     "index_rebuild_summary": _load_json("INDEX_REBUILD_SUMMARY"),
     "index_rebuild_failures_path": os.environ.get("INDEX_REBUILD_FAILURES_PATH") or None,
+    "ingest_skipped_invalid_count": _coerce_int("INGEST_SKIPPED_INVALID_COUNT"),
+    "ingest_invalid_report_path": os.environ.get("INGEST_INVALID_REPORT_PATH") or None,
+    "ingest_invalid_top": _load_json("INGEST_INVALID_TOP"),
     "llm_ok": _coerce_bool("LLM_OK"),
     "llm_url": os.environ.get("LLM_URL") or None,
     "llm_error": os.environ.get("LLM_ERROR") or None,
@@ -540,8 +543,8 @@ try:
         models = tags_resp.json().get("models") or []
         print(f"Ollama tags ok ({len(models)} models)")
         embed_resp = client.post(
-            f"{base}/api/embed",
-            json={"model": model, "input": ["startup-check"], "truncate": True},
+            f"{base}/api/embeddings",
+            json={"model": model, "prompt": "startup-check"},
         )
         embed_resp.raise_for_status()
         data = embed_resp.json()
@@ -1017,6 +1020,28 @@ PY
     fi
   fi
 fi
+
+ingest_invalid_meta=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
+import json, os
+raw = os.environ.get("INGEST_JSON", "")
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = {}
+count = payload.get("skipped_invalid") or 0
+report_path = payload.get("invalid_report_path") or ""
+top = payload.get("invalid_examples") or []
+print(f"{count}{report_path}{json.dumps(top[:5], ensure_ascii=False)}")
+PY
+)
+IFS=$'' read -r ingest_skipped_invalid_count ingest_invalid_report_path ingest_invalid_top_json <<<"$ingest_invalid_meta"
+ingest_skipped_invalid_count=${ingest_skipped_invalid_count:-0}
+ingest_invalid_report_path=${ingest_invalid_report_path:-}
+ingest_invalid_top_json=${ingest_invalid_top_json:-[]}
+export INGEST_SKIPPED_INVALID_COUNT="$ingest_skipped_invalid_count"
+export INGEST_INVALID_REPORT_PATH="$ingest_invalid_report_path"
+export INGEST_INVALID_TOP="$ingest_invalid_top_json"
+write_startup_status 1 ""
 
 ingested_count=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
 import json, os, sys

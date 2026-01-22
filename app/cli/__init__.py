@@ -494,6 +494,9 @@ def vault_alpha_ingest(
             "errors": summary.errors,
             "skipped_locked": summary.skipped_locked,
             "locked_examples": summary.locked_examples,
+            "skipped_invalid": summary.skipped_invalid,
+            "invalid_examples": summary.invalid_examples,
+            "invalid_report_path": summary.invalid_report_path,
         }
         _dump(payload, True)
         return

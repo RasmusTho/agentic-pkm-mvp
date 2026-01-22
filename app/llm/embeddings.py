@@ -77,7 +77,7 @@ def _ollama_include_dimensions() -> bool:
 
 
 def _ollama_payload(text: str, model: str, dim: int) -> dict[str, object]:
-    payload: dict[str, object] = {"model": model, "input": text, "truncate": True}
+    payload: dict[str, object] = {"model": model, "prompt": text}
     if _ollama_include_dimensions():
         payload["dimensions"] = dim
     return payload
@@ -95,11 +95,11 @@ def _parse_vector(payload: Mapping[str, object], *, provider: str, model: str, e
 
 def _ollama_embed_api(text: str, model: str, dim: int, timeout: float) -> tuple[float, ...]:
     payload = _ollama_payload(text, model, dim)
-    resp = httpx.post(f"{OLLAMA_URL}/api/embed", json=payload, timeout=timeout)
+    resp = httpx.post(f"{OLLAMA_URL}/api/embeddings", json=payload, timeout=timeout)
     resp.raise_for_status()
     data = resp.json()
     if not isinstance(data, Mapping):
-        raise ValueError("Ollama /api/embed returned an unexpected payload")
+        raise ValueError("Ollama /api/embeddings returned an unexpected payload")
     return _parse_vector(data, provider="ollama", model=model, expected_dim=dim)
 
 
