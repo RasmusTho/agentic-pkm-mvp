@@ -15,6 +15,14 @@ services:
       retries: 20
       start_period: 10s
 
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
   api:
     build: .
     image: workspace-app
@@ -32,8 +40,8 @@ services:
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
-      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_DIM: ${EMBED_DIM:-768}
@@ -69,8 +77,8 @@ services:
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
-      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_DIM: ${EMBED_DIM:-768}
@@ -104,8 +112,8 @@ services:
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
-      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_DIM: ${EMBED_DIM:-768}
@@ -126,3 +134,6 @@ services:
       interval: 5s
       timeout: 2s
       retries: 10
+
+volumes:
+  ollama:

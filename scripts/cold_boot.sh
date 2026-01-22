@@ -172,6 +172,7 @@ main() {
   bootstrap_state=$(STARTUP_STATUS_PATH="$startup_status_path" get_bootstrap_state)
   log "BOOTSTRAP_STATE=$bootstrap_state"
   if [ "$bootstrap_state" = "active" ]; then
+    run_docker_compose up -d ollama
     llm_check_json=""
     set +e
     llm_check_json=$(run_docker_compose exec -T api python -m app.cli llm check --json --strict)

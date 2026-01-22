@@ -297,6 +297,12 @@ export VAULT_ROOT="$vault_host_path"
 runtime_env_path="${RUNTIME_ENV_PATH:-tmp/runtime.env}"
 RUNTIME_ENV_PATH="$runtime_env_path"
 bash scripts/export_runtime_env.sh
+if [ -z "${OLLAMA_URL:-}" ]; then
+  printf "OLLAMA_URL=http://ollama:11434\n" >> "$runtime_env_path"
+fi
+if [ -z "${OLLAMA_HOST:-}" ]; then
+  printf "OLLAMA_HOST=http://ollama:11434\n" >> "$runtime_env_path"
+fi
 runtime_env="--env-file $runtime_env_path"
 
 latest_tick_log_path="$ROOT/tmp/latest_watcher_tick_log"
@@ -319,7 +325,7 @@ run_preflight
 start_startup_watchdog "$STARTUP_TIMEOUT_SECONDS"
 
 llm_provider="${LLM_PROVIDER:-}"
-llm_provider="${llm_provider,,}"
+llm_provider=$(printf "%s" "$llm_provider" | tr '[:upper:]' '[:lower:]')
 llm_requires_ollama=0
 if [ "$llm_provider" = "ollama" ]; then
   llm_requires_ollama=1
@@ -350,7 +356,11 @@ compose_up() {
     esac
     shift
   done
-  run_docker_compose up -d "${extra[@]}" "${services[@]}"
+  if [ "${#extra[@]}" -gt 0 ]; then
+    run_docker_compose up -d "${extra[@]}" "${services[@]}"
+  else
+    run_docker_compose up -d "${services[@]}"
+  fi
 }
 
 append_startup_log() {
@@ -588,10 +598,11 @@ else:
 url = payload.get('url') or ''
 error = (payload.get('error') or '').replace('\n', ' ')
 latency = int(payload.get('latency_ms', 0) or 0)
-print(f"{ok_val}\t{url}\t{error}\t{latency}")
+sep = "\x1f"
+print(f"{ok_val}{sep}{url}{sep}{error}{sep}{latency}")
 PY
   )
-  IFS=$'\t' read -r llm_ok llm_url llm_error llm_latency_ms <<<"$llm_check_info"
+  IFS=$'\x1f' read -r llm_ok llm_url llm_error llm_latency_ms <<<"$llm_check_info"
   llm_ok=${llm_ok:-0}
   llm_url=${llm_url:-}
   llm_error=${llm_error:-}
@@ -617,6 +628,9 @@ if [ "$START_MODE" = "diagnostic" ]; then
 fi
 
 compose_up --build db api
+if [ "${AUTO_BOOTSTRAP:-0}" -eq 1 ] && [ "$llm_requires_ollama" -eq 1 ]; then
+  compose_up ollama
+fi
 api_container_id=$(run_docker_compose ps -q api | head -n1 || true)
 run_db_probe
 wait_for_healthz
