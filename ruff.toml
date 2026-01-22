@@ -1,8 +1,8 @@
 line-length = 100
 target-version = "py311"
 
-lint.select = ["E", "F", "W", "I", "UP", "B"]
-lint.ignore = ["E203", "B008"]
+lint.select = ["F"]
+lint.ignore = ["F401", "F841"]
 
 format.quote-style = "double"
 format.indent-style = "space"
