@@ -18,7 +18,29 @@ def _dump(data: Dict[str, object], as_json: bool) -> None:
         click.echo(json.dumps(data, ensure_ascii=False, indent=2))
 
 
+def _normalize_provider(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    return value.strip().lower()
+
+
 def _resolve_endpoint() -> tuple[Optional[str], Optional[str]]:
+    provider = _normalize_provider(os.getenv("LLM_PROVIDER"))
+    if provider == "mock":
+        return None, "mock"
+    if provider == "ollama":
+        base = os.getenv("OLLAMA_URL")
+        if base:
+            return base.rstrip("/"), "ollama"
+        fallback = os.getenv("OPENAI_BASE_URL")
+        if fallback:
+            return fallback.rstrip("/"), "openai_compat"
+        return None, "ollama"
+    if provider:
+        base = os.getenv("OPENAI_BASE_URL")
+        if base:
+            return base.rstrip("/"), "openai_compat"
+        return None, provider
     base = os.getenv("OLLAMA_URL")
     if base:
         return base.rstrip("/"), "ollama"
@@ -52,8 +74,16 @@ def run_llm_check() -> Dict[str, object]:
         "error": None,
         "latency_ms": 0,
     }
+    if provider == "mock":
+        payload["ok"] = True
+        payload["error"] = None
+        payload["url"] = ""
+        return payload
     if not base or not provider:
-        payload["error"] = "OLLAMA_URL or OPENAI_BASE_URL must be configured"
+        if provider:
+            payload["error"] = f"{provider} endpoint is not configured"
+        else:
+            payload["error"] = "OLLAMA_URL or OPENAI_BASE_URL must be configured"
         return payload
 
     ok, error, latency, url = _ping_endpoint(base, provider)
