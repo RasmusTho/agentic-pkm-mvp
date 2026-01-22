@@ -38,10 +38,11 @@ index_rebuild_status="skipped"
 index_doctor_status="skipped"
 index_issue_count=0
 bootstrap_next="none"
+startup_watchdog_pid=""
 
 write_startup_status() {
-  local passed="$1"
-  local reason="$2"
+  local passed="${1:-${PRE_FLIGHT_PASSED:-0}}"
+  local reason="${2:-${PRE_FLIGHT_REASON:-}}"
   export START_MODE
   export PRE_FLIGHT_PASSED="$passed"
   export PRE_FLIGHT_REASON="${reason:-}"
@@ -97,6 +98,19 @@ payload = {
 print(json.dumps(payload, ensure_ascii=False))
 PY
 }
+
+cleanup() {
+  if [ -n "${startup_watchdog_pid:-}" ]; then
+    kill "$startup_watchdog_pid" >/dev/null 2>&1 || true
+  fi
+  if [ -n "${flight_recorder_pid:-}" ]; then
+    kill "$flight_recorder_pid" >/dev/null 2>&1 || true
+  fi
+  write_startup_status || true
+}
+
+trap cleanup EXIT
+trap 'PRE_FLIGHT_REASON=${PRE_FLIGHT_REASON:-terminated}; PRE_FLIGHT_PASSED=${PRE_FLIGHT_PASSED:-0}; write_startup_status "$PRE_FLIGHT_PASSED" "$PRE_FLIGHT_REASON" || true; exit 1' TERM INT
 
 fail_preflight() {
   local reason="$1"
@@ -169,6 +183,29 @@ optional_check() {
   return 0
 }
 
+start_startup_watchdog() {
+  local timeout="${1:-0}"
+  if [ "${VERIFY_ACTIVE:-0}" -ne 1 ]; then
+    return
+  fi
+  if ! [ "$timeout" -ge 0 ] 2>/dev/null; then
+    return
+  fi
+  if [ "$timeout" -le 0 ]; then
+    return
+  fi
+  local pid=$$
+  (
+    sleep "$timeout"
+    export PRE_FLIGHT_PASSED="${PRE_FLIGHT_PASSED:-0}"
+    export PRE_FLIGHT_REASON="${PRE_FLIGHT_REASON:-startup timeout after ${timeout}s}"
+    write_startup_status "$PRE_FLIGHT_PASSED" "$PRE_FLIGHT_REASON" || true
+    echo "ERROR: startup timeout after ${timeout}s" >&2
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+  ) &
+  startup_watchdog_pid=$!
+}
+
 
 START_WATCHERS="${START_WATCHERS:-0}"
 START_WORKER="${START_WORKER:-0}"
@@ -183,6 +220,7 @@ HEALTH_SLEEP_SECONDS="${HEALTH_SLEEP_SECONDS:-2}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-5}"
 WATCHER_HEARTBEAT_TIMEOUT="${WATCHER_HEARTBEAT_TIMEOUT:-30}"
 WORKER_HEARTBEAT_TIMEOUT="${WORKER_HEARTBEAT_TIMEOUT:-30}"
+STARTUP_TIMEOUT_SECONDS="${STARTUP_TIMEOUT_SECONDS:-120}"
 
 flight_recorder_log_path="$ROOT/tmp/flightrecorder-$(date -u +"%Y%m%d-%H%M%S").log"
 flight_recorder_pid=""
@@ -196,11 +234,6 @@ if [ "$START_FLIGHT_RECORDER" -eq 1 ]; then
     fi
     sleep 0.1
   done
-  trap '
-    if [ -n "${flight_recorder_pid:-}" ]; then
-      kill "$flight_recorder_pid" >/dev/null 2>&1 || true
-    fi
-  ' EXIT
 fi
 
 debug_dump() {
@@ -283,6 +316,7 @@ run_docker_compose() {
 }
 
 run_preflight
+start_startup_watchdog "$STARTUP_TIMEOUT_SECONDS"
 
 alpha_rebuild="${ALPHA_REBUILD:-0}"
 alpha_rebuild_pull="${ALPHA_REBUILD_PULL:-0}"
@@ -511,6 +545,63 @@ PY'; then
  fi
 }
 
+run_llm_check_container() {
+  local container_id="${1:-}"
+  if [ -z "$container_id" ]; then
+    container_id=$(run_docker_compose ps -q api | head -n1 || true)
+  fi
+  if [ -z "$container_id" ]; then
+    export LLM_OK=0
+    export LLM_URL=""
+    export LLM_ERROR="api container not found"
+    export LLM_LATENCY_MS=0
+    write_startup_status 1 ""
+    echo "LLM CHECK FAILED: url=<missing> error=api container not found" >&2
+    echo "Ollama unreachable. If Ollama runs on host, ensure it listens on a reachable interface (e.g., OLLAMA_HOST=0.0.0.0:11434) or point OLLAMA_URL to a reachable endpoint." >&2
+    return 1
+  fi
+  local llm_check_json=""
+  local llm_status=0
+  set +e
+  llm_check_json=$(docker exec "$container_id" python -m app.cli llm check --json --strict)
+  llm_status=$?
+  set -e
+  llm_check_info=$(LLM_CHECK_JSON="$llm_check_json" python - <<'PY'
+import json, os
+raw = os.environ.get('LLM_CHECK_JSON', '')
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = {}
+ok = payload.get('ok')
+if isinstance(ok, bool):
+    ok_val = 1 if ok else 0
+else:
+    ok_val = 1 if str(ok).lower() in {'1', 'true', 'yes', 'on'} else 0
+url = payload.get('url') or ''
+error = (payload.get('error') or '').replace('\n', ' ')
+latency = int(payload.get('latency_ms', 0) or 0)
+print(f"{ok_val}	{url}	{error}	{latency}")
+PY
+  )
+  IFS=$'	' read -r llm_ok llm_url llm_error llm_latency_ms <<<"$llm_check_info"
+  llm_ok=${llm_ok:-0}
+  llm_url=${llm_url:-}
+  llm_error=${llm_error:-}
+  llm_latency_ms=${llm_latency_ms:-0}
+  export LLM_OK="$llm_ok"
+  export LLM_URL="$llm_url"
+  export LLM_ERROR="$llm_error"
+  export LLM_LATENCY_MS="$llm_latency_ms"
+  write_startup_status 1 ""
+  if [ "$llm_ok" -ne 1 ] || [ "$llm_status" -ne 0 ]; then
+    echo "LLM CHECK FAILED: url=${llm_url:-<missing>} error=${llm_error:-<no error>}" >&2
+    echo "Ollama unreachable. If Ollama runs on host, ensure it listens on a reachable interface (e.g., OLLAMA_HOST=0.0.0.0:11434) or point OLLAMA_URL to a reachable endpoint." >&2
+    return 1
+  fi
+  return 0
+}
+
 
 if [ "$START_MODE" = "diagnostic" ]; then
   echo "START_MODE=diagnostic: running API in the foreground (no detach)"
@@ -519,6 +610,7 @@ if [ "$START_MODE" = "diagnostic" ]; then
 fi
 
 compose_up --build db api
+api_container_id=$(run_docker_compose ps -q api | head -n1 || true)
 run_db_probe
 wait_for_healthz
 
@@ -563,6 +655,12 @@ export OBJECTS_BEFORE="$objects_before"
 export VECTORS_BEFORE="$vectors_before"
 export OUTBOX_COUNT="$outbox_count"
 write_startup_status 1 ""
+
+if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ "$BOOTSTRAP_STATE" = "active" ]; then
+  if ! run_llm_check_container "$api_container_id"; then
+    exit 1
+  fi
+fi
 
 layout_json=""
 if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
@@ -962,42 +1060,10 @@ if [ "$VERIFY_ACTIVE" -eq 1 ]; then
     echo "VERIFY: index missing objects" >&2
     exit 1
   fi
-  llm_check_json=""
-  set +e
-  llm_check_json=$(run_docker_compose exec -T api python -m app.cli llm check --json --strict)
-  set -e
-  llm_check_info=$(LLM_CHECK_JSON="$llm_check_json" python - <<'PY'
-import json, os
-raw = os.environ.get('LLM_CHECK_JSON', '')
-try:
-    payload = json.loads(raw)
-except Exception:
-    payload = {}
-ok = payload.get('ok')
-if isinstance(ok, bool):
-    ok_val = 1 if ok else 0
-else:
-    ok_val = 1 if str(ok).lower() in {'1', 'true', 'yes', 'on'} else 0
-print(ok_val)
-print(payload.get('url') or '')
-print((payload.get('error') or '').replace('\n', ' '))
-print(int(payload.get('latency_ms', 0) or 0))
-PY
-  )
-  IFS=$'\n' read -r llm_ok llm_url llm_error llm_latency_ms <<<"$llm_check_info"
-  llm_ok=${llm_ok:-0}
-  llm_url=${llm_url:-}
-  llm_error=${llm_error:-}
-  llm_latency_ms=${llm_latency_ms:-0}
-  export LLM_OK="$llm_ok"
-  export LLM_URL="$llm_url"
-  export LLM_ERROR="$llm_error"
-  export LLM_LATENCY_MS="$llm_latency_ms"
-  write_startup_status 1 ""
-  if [ "$llm_ok" -ne 1 ]; then
-    echo "LLM CHECK FAILED: url=${llm_url:-<missing>} error=${llm_error:-<no error>}" >&2
-    echo "Ollama unreachable. If Ollama runs on host, ensure it listens on a reachable interface (e.g., OLLAMA_HOST=0.0.0.0:11434) or point OLLAMA_URL to a reachable endpoint." >&2
-    exit 1
+  if [ "${LLM_OK:-}" != "1" ]; then
+    if ! run_llm_check_container "$api_container_id"; then
+      exit 1
+    fi
   fi
   ask_status=$(curl -sS -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:18000/api/ask -H 'Content-Type: application/json' -d '{"query":"startup verify"}' || true)
   if [ "$ask_status" != "200" ]; then
