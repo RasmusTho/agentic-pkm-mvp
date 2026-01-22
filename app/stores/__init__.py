@@ -1,25 +1,33 @@
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from typing import Tuple
 
+from app.db.dsn import resolve_dsn
 from app.settings import settings
 
 from .base import ObjectStore, RelationIndex, VectorIndex
 from .memory import MemoryObjectStore, MemoryRelationIndex, MemoryVectorIndex
 
+logger = logging.getLogger(__name__)
+
 
 def _pg_reachable(dsn: str) -> bool:
     if not dsn:
         return False
+    normalized = resolve_dsn(dsn)
+    if not normalized:
+        return False
     try:
         import psycopg
 
-        conn = psycopg.connect(dsn, connect_timeout=1)
+        conn = psycopg.connect(normalized, connect_timeout=1)
         conn.close()
         return True
-    except Exception:
+    except Exception as exc:
+        logger.warning("Postgres unreachable during store auto-detect: %s", exc)
         return False
 
 

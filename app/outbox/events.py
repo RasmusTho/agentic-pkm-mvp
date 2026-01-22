@@ -8,7 +8,6 @@ from uuid import UUID
 
 from app.embedding_config import get_embed_dim
 from app.events.schema import make_outbox_event
-from app.events.types import INDEX_EMBEDDING_FAILED, INDEX_OBJECT_EMBEDDED
 from app.llm.embeddings import EMBED_MODEL
 
 

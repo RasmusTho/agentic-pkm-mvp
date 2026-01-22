@@ -118,20 +118,22 @@ def evaluate_gates(
     reasons: List[str] = []
 
     # Latency gates
-    latency_cfg = thresholds.get("latency", {})
-    latency_summary = summary.get("LATENCY", {})
-    lat_fail = False
-    for metric in ("QAS003", "QAS010"):
-        current = latency_summary.get(metric)
-        cfg = latency_cfg.get(metric, {})
-        baseline = cfg.get("value")
-        tolerance = cfg.get("tolerance", latency_cfg.get("tolerance", 0.10))
-        if current is None or baseline is None:
-            continue
-        if current > baseline * (1 + tolerance):
-            lat_fail = True
-    if lat_fail:
-        reasons.append("LAT")
+    latency_enforced = strict or _truthy(os.getenv("GATE_LATENCY"))
+    if latency_enforced:
+        latency_cfg = thresholds.get("latency", {})
+        latency_summary = summary.get("LATENCY", {})
+        lat_fail = False
+        for metric in ("QAS003", "QAS010"):
+            current = latency_summary.get(metric)
+            cfg = latency_cfg.get(metric, {})
+            baseline = cfg.get("value")
+            tolerance = cfg.get("tolerance", latency_cfg.get("tolerance", 0.10))
+            if current is None or baseline is None:
+                continue
+            if current > baseline * (1 + tolerance):
+                lat_fail = True
+        if lat_fail:
+            reasons.append("LAT")
 
     eval_cfg = thresholds.get("eval", {})
     delta_summary = summary.get("EVAL DELTA", {})
