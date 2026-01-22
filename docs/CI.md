@@ -48,6 +48,7 @@ Guardrailed continuous watcher for real vaults with kill switch, scope, and rate
 ## Conventions
 - All migrations must apply cleanly to an empty DB.
 - CI rejects commits that break black/ruff/mypy rules.
+- Lint/type checks are temporarily scoped to the current baseline (ruff F-level with per-file ignores for existing unused imports/vars; mypy ignores errors in legacy packages while missing stubs are allowed). Follow-up milestone: restore stricter enforcement.
 - Test artifacts (`.pytest_cache`, `__pycache__`) are ignored in git.
 
 ## Eval tests (opt-in / separate job)
