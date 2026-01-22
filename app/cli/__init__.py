@@ -23,6 +23,7 @@ from app.cli.panel import panel as panel_cli
 from app.cli.health_contract import emit_health_contract_status
 from app.cli.watcher import vault_watcher_run, vault_watcher_daemon, watcher_group
 from app.cli.index_rebuild import index as index_cli
+from app.cli.llm_doctor import llm as llm_cli
 from app.cli import index_doctor  # noqa: F401 -- register index doctor command
 from app.cli.events_doctor import events_doctor
 from app.cli.smoke import smoke as smoke_cli
@@ -229,6 +230,7 @@ def cli() -> None:
     ...
 
 cli.add_command(index_cli, name="index")
+cli.add_command(llm_cli)
 cli.add_command(events_doctor)
 cli.add_command(smoke_cli, name="smoke")
 

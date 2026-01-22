@@ -15,6 +15,8 @@ load_dotenv() {
 
 load_dotenv
 
+unset INDEX_REBUILD_SUMMARY INDEX_REBUILD_FAILURES_PATH
+
 BOOTSTRAP_STATE="${BOOTSTRAP_STATE:-pending}"
 BOOTSTRAP_REASON="${BOOTSTRAP_REASON:-preflight}"
 export BOOTSTRAP_STATE BOOTSTRAP_REASON
@@ -48,6 +50,32 @@ import datetime
 import json
 import os
 
+def _coerce_int(name):
+    val = os.environ.get(name)
+    if not val:
+        return None
+    try:
+        return int(val)
+    except Exception:
+        return None
+
+def _load_json(name):
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return raw
+
+
+
+def _coerce_bool(name):
+    val = os.environ.get(name)
+    if not val:
+        return None
+    return str(val).lower() in {"1", "true", "yes", "on"}
+
 payload = {
     "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
     "start_mode": os.environ.get("START_MODE"),
@@ -56,6 +84,15 @@ payload = {
     "failure_reason": os.environ.get("PRE_FLIGHT_REASON") or None,
     "bootstrap_state": os.environ.get("BOOTSTRAP_STATE") or None,
     "bootstrap_reason": os.environ.get("BOOTSTRAP_REASON") or None,
+    "objects_before": _coerce_int("OBJECTS_BEFORE"),
+    "vectors_before": _coerce_int("VECTORS_BEFORE"),
+    "outbox_count": _coerce_int("OUTBOX_COUNT"),
+    "index_rebuild_summary": _load_json("INDEX_REBUILD_SUMMARY"),
+    "index_rebuild_failures_path": os.environ.get("INDEX_REBUILD_FAILURES_PATH") or None,
+    "llm_ok": _coerce_bool("LLM_OK"),
+    "llm_url": os.environ.get("LLM_URL") or None,
+    "llm_error": os.environ.get("LLM_ERROR") or None,
+    "llm_latency_ms": _coerce_int("LLM_LATENCY_MS"),
 }
 print(json.dumps(payload, ensure_ascii=False))
 PY
@@ -522,6 +559,9 @@ else
   BOOTSTRAP_REASON="objects or outbox events detected"
 fi
 export BOOTSTRAP_STATE BOOTSTRAP_REASON
+export OBJECTS_BEFORE="$objects_before"
+export VECTORS_BEFORE="$vectors_before"
+export OUTBOX_COUNT="$outbox_count"
 write_startup_status 1 ""
 
 layout_json=""
@@ -800,15 +840,52 @@ if [ "$auto_bootstrap" -eq 1 ]; then
     if [ "$api_health_index_rebuild" -eq 1 ]; then
       echo "INDEX REBUILD: running"
       set +e
-      run_docker_compose exec -T api sh -lc "python -m app.cli index rebuild --profile default"
+      rebuild_summary=$(run_docker_compose exec -T api python -m app.cli index rebuild --json --strict)
       rebuild_status=$?
       set -e
-      if [ "$rebuild_status" -ne 0 ]; then
-        echo "INDEX REBUILD: failed (exit $rebuild_status)" >&2
+      index_rebuild_status="ran"
+      index_rebuild_meta=$(REBUILD_SUMMARY_JSON="$rebuild_summary" python - <<'PY'
+import json
+import os
+raw = os.environ.get("REBUILD_SUMMARY_JSON", "")
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = {}
+errors = payload.get("errors") or []
+top_errors = errors[:5]
+print(payload.get("error_count") or 0)
+print(payload.get("failures_path") or "")
+print(json.dumps(top_errors, ensure_ascii=False))
+PY
+)
+      IFS=$'\n' read -r index_rebuild_error_count index_rebuild_failures_path index_rebuild_errors_json <<<"$index_rebuild_meta"
+      index_rebuild_error_count=${index_rebuild_error_count:-0}
+      index_rebuild_failures_path=${index_rebuild_failures_path:-}
+      index_rebuild_errors_json=${index_rebuild_errors_json:-[]}
+      export INDEX_REBUILD_SUMMARY="$rebuild_summary"
+      export INDEX_REBUILD_FAILURES_PATH="$index_rebuild_failures_path"
+      write_startup_status 1 ""
+      failures_path_display="${index_rebuild_failures_path:-<missing>}"
+      if [ "$rebuild_status" -ne 0 ] || [ "$index_rebuild_error_count" -gt 0 ]; then
+        echo "INDEX REBUILD FAILED: status=$rebuild_status errors=$index_rebuild_error_count failures_path=$failures_path_display" >&2
+        if [ "$index_rebuild_errors_json" != "[]" ]; then
+          echo "INDEX REBUILD ERRORS:" >&2
+          REBUILD_ERRORS_JSON="$index_rebuild_errors_json" python - <<'PY'
+from __future__ import annotations
+import json, os
+errors = json.loads(os.environ.get("REBUILD_ERRORS_JSON", "[]"))
+for err in errors:
+    object_id = err.get("object_id") or "<unknown>"
+    stage = err.get("stage") or "<stage>"
+    exception_type = err.get("exception_type") or "<exception>"
+    source_ref = err.get("source_ref") or "<no source>"
+    print(f"  - object_id={object_id} stage={stage} exception={exception_type} source_ref={source_ref}")
+PY
+        fi
         debug_dump
         exit 1
       fi
-      index_rebuild_status="ran"
       api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
       update_health_state
       if [ "$api_health_index_rebuild" -eq 1 ]; then
@@ -883,6 +960,43 @@ if [ "$VERIFY_ACTIVE" -eq 1 ]; then
   fi
   if [ "$object_count" -le 0 ]; then
     echo "VERIFY: index missing objects" >&2
+    exit 1
+  fi
+  llm_check_json=""
+  set +e
+  llm_check_json=$(run_docker_compose exec -T api python -m app.cli llm check --json --strict)
+  set -e
+  llm_check_info=$(LLM_CHECK_JSON="$llm_check_json" python - <<'PY'
+import json, os
+raw = os.environ.get('LLM_CHECK_JSON', '')
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = {}
+ok = payload.get('ok')
+if isinstance(ok, bool):
+    ok_val = 1 if ok else 0
+else:
+    ok_val = 1 if str(ok).lower() in {'1', 'true', 'yes', 'on'} else 0
+print(ok_val)
+print(payload.get('url') or '')
+print((payload.get('error') or '').replace('\n', ' '))
+print(int(payload.get('latency_ms', 0) or 0))
+PY
+  )
+  IFS=$'\n' read -r llm_ok llm_url llm_error llm_latency_ms <<<"$llm_check_info"
+  llm_ok=${llm_ok:-0}
+  llm_url=${llm_url:-}
+  llm_error=${llm_error:-}
+  llm_latency_ms=${llm_latency_ms:-0}
+  export LLM_OK="$llm_ok"
+  export LLM_URL="$llm_url"
+  export LLM_ERROR="$llm_error"
+  export LLM_LATENCY_MS="$llm_latency_ms"
+  write_startup_status 1 ""
+  if [ "$llm_ok" -ne 1 ]; then
+    echo "LLM CHECK FAILED: url=${llm_url:-<missing>} error=${llm_error:-<no error>}" >&2
+    echo "Ollama unreachable. If Ollama runs on host, ensure it listens on a reachable interface (e.g., OLLAMA_HOST=0.0.0.0:11434) or point OLLAMA_URL to a reachable endpoint." >&2
     exit 1
   fi
   ask_status=$(curl -sS -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:18000/api/ask -H 'Content-Type: application/json' -d '{"query":"startup verify"}' || true)
