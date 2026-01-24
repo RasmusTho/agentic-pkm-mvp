@@ -580,6 +580,9 @@ capture_step() {
   fi
   local snippet
   snippet=$(printf "%s" "$output" | tail -c 400)
+  if printf "%s" "$step" | grep -qi "password"; then
+    snippet="[redacted]"
+  fi
   local key_step="${prefix_upper}_STEP"
   local key_cmd="${prefix_upper}_CMD"
   local key_rc="${prefix_upper}_RC"
