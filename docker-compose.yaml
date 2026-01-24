@@ -9,11 +9,21 @@ services:
       - "15432:5432"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d app -h 127.0.0.1 -p 5432"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U app -d app -h localhost"]
+      interval: 2s
       timeout: 3s
-      retries: 20
+      retries: 30
       start_period: 10s
+
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
 
   api:
     build: .
@@ -32,8 +42,7 @@ services:
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
-      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_DIM: ${EMBED_DIM:-768}
@@ -69,8 +78,7 @@ services:
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
-      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_DIM: ${EMBED_DIM:-768}
@@ -104,8 +112,7 @@ services:
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
-      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_DIM: ${EMBED_DIM:-768}
@@ -126,3 +133,6 @@ services:
       interval: 5s
       timeout: 2s
       retries: 10
+
+volumes:
+  ollama:

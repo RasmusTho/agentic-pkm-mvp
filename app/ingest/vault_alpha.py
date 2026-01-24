@@ -41,6 +41,9 @@ class VaultAlphaSummary:
     processed_notes: List[str] = field(default_factory=list)
     skipped_locked: int = 0
     locked_examples: List[str] = field(default_factory=list)
+    skipped_invalid: int = 0
+    invalid_examples: List[str] = field(default_factory=list)
+    invalid_report_path: str | None = None
 
 
 _TEST_NOTE_REL = Path("Test") / "Alpha-HumanFlows.md"
@@ -112,6 +115,54 @@ def _write_locked_paths(paths: list[str]) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     payload = "\n".join(json.dumps({"path": path}) for path in paths) + "\n"
     log_path.write_text(payload, encoding="utf-8")
+
+
+
+_INVALID_FILES_LOG_ENV = "INGEST_INVALID_REPORT_PATH"
+_INVALID_FILES_LOG_DEFAULT = Path("/app/tmp/ingest-invalid.jsonl")
+
+
+class InvalidNoteError(Exception):
+    def __init__(self, message: str, *, error_type: str) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+
+
+def _invalid_files_log_path() -> Path:
+    raw = os.getenv(_INVALID_FILES_LOG_ENV)
+    return Path(raw).expanduser() if raw else _INVALID_FILES_LOG_DEFAULT
+
+
+def _reset_invalid_files_log() -> None:
+    log_path = _invalid_files_log_path()
+    try:
+        log_path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _append_invalid_path(rel_display: str, exc: Exception) -> None:
+    log_path = _invalid_files_log_path()
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "path": rel_display,
+            "exception_type": getattr(exc, "error_type", type(exc).__name__),
+            "message": str(exc),
+        }
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _decode_note_text(raw_bytes: bytes) -> str:
+    if b"\x00" in raw_bytes:
+        raise InvalidNoteError("null byte detected", error_type="NullByteError")
+    try:
+        return raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise InvalidNoteError(f"unicode decode error: {exc}", error_type="UnicodeDecodeError") from exc
 
 
 def _is_ignored(rel_path: str, ignore_glob: Sequence[str]) -> bool:
@@ -369,7 +420,9 @@ def _store_object_count(store: ObjectStore) -> int:
 def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str | None = None) -> str:
     rel_path = path.relative_to(vault_root)
     if raw_text is None:
-        raw_text = path.read_text(encoding="utf-8")
+        raw_text = _decode_note_text(path.read_bytes())
+    if "\x00" in raw_text:
+        raise InvalidNoteError("null byte detected", error_type="NullByteError")
     frontmatter, body, _ = _load_frontmatter_with_reporting(raw_text, path)
     mirror_path, mirror_frontmatter, mirror_body = _load_mirror_frontmatter(vault_root, rel_path)
     frontmatter_uuid_raw = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
@@ -620,6 +673,10 @@ def _ingest_candidates(
     processed: Set[str] = set(resume_from or [])
     skipped_locked = 0
     locked_examples: List[str] = []
+    skipped_invalid = 0
+    invalid_examples: List[str] = []
+    invalid_report_path = _invalid_files_log_path()
+    _reset_invalid_files_log()
 
     def _record_locked(rel_display: str) -> None:
         nonlocal skipped_locked
@@ -629,6 +686,13 @@ def _ingest_candidates(
         if record_locked:
             _append_locked_path(rel_display)
 
+    def _record_invalid(rel_display: str, exc: Exception) -> None:
+        nonlocal skipped_invalid
+        skipped_invalid += 1
+        if len(invalid_examples) < 5:
+            invalid_examples.append(rel_display)
+        _append_invalid_path(rel_display, exc)
+
     for path in candidates:
         try:
             rel_path = path.relative_to(vault_root)
@@ -636,12 +700,17 @@ def _ingest_candidates(
             if rel_display in processed:
                 continue
             try:
-                raw_text = path.read_text(encoding="utf-8")
+                raw_bytes = path.read_bytes()
             except OSError as exc:
                 if _is_locked_error(exc):
                     _record_locked(rel_display)
                     continue
                 raise
+            try:
+                raw_text = _decode_note_text(raw_bytes)
+            except InvalidNoteError as exc:
+                _record_invalid(rel_display, exc)
+                continue
             frontmatter, body, fm_error = _load_frontmatter_with_reporting(raw_text, path)
             if fm_error:
                 malformed.append(rel_display)
@@ -698,6 +767,10 @@ def _ingest_candidates(
             errors.append(rel_display)
             click.echo(f"Error ingesting {rel_display}: {exc}", err=True)
             continue
+        except InvalidNoteError as exc:
+            rel_display = str(rel_path) if "rel_path" in locals() else str(path)
+            _record_invalid(rel_display, exc)
+            continue
         except Exception as exc:
             rel_display = str(rel_path) if "rel_path" in locals() else str(path)
             errors.append(rel_display)
@@ -715,10 +788,16 @@ def _ingest_candidates(
         processed_notes=sorted(processed),
         skipped_locked=skipped_locked,
         locked_examples=locked_examples,
+        skipped_invalid=skipped_invalid,
+        invalid_examples=invalid_examples,
+        invalid_report_path=str(invalid_report_path) if skipped_invalid > 0 else None,
     )
     if skipped_locked > 0:
         example = locked_examples[0] if locked_examples else "-"
         click.echo(f"Skipped {skipped_locked} locked files (errno=35). Example: {example}")
+    if skipped_invalid > 0:
+        example = invalid_examples[0] if invalid_examples else "-"
+        click.echo(f"Skipped {skipped_invalid} invalid files. Example: {example}")
     try:
         record_ingest_run(
             "vault",

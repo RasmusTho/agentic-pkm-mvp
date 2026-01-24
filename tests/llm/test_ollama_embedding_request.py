@@ -14,6 +14,9 @@ def test_ollama_embedding_calls_native_endpoint(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     class DummyResponse:
+        is_error = False
+        status_code = 200
+
         def raise_for_status(self) -> None:
             pass
 
@@ -31,11 +34,10 @@ def test_ollama_embedding_calls_native_endpoint(monkeypatch) -> None:
     vector = embed_text("test input", normalize=False)
 
     assert vector == [1.0, 2.0, 3.0]
-    assert captured["url"] == "https://ollama.local:11434/api/embed"
+    assert captured["url"] == "https://ollama.local:11434/api/embeddings"
     assert captured["json"] == {
         "model": "nomic-embed-text:latest",
-        "input": "test input",
+        "prompt": "test input",
         "dimensions": 3,
-        "truncate": True,
     }
-    assert "prompt" not in captured["json"]
+    assert "input" not in captured["json"]
