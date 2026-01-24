@@ -80,7 +80,8 @@ def test_debounce_blocks_rapid_retriggers(tmp_path: Path) -> None:
     assert first["emitted_in_tick"] == 1
 
     note.write_text("v2", encoding="utf-8")
-    os.utime(note, None)
+    updated_mtime = note.stat().st_mtime + 2
+    os.utime(note, (updated_mtime, updated_mtime))
     second = run_tick(cfg, state, now=0.5)
     assert second["emitted_in_tick"] == 0
 
@@ -118,7 +119,8 @@ def test_rate_limit_blocks_after_threshold(tmp_path: Path) -> None:
     assert first["emitted_in_tick"] == 1
 
     note.write_text("second", encoding="utf-8")
-    os.utime(note, None)
+    updated_mtime = note.stat().st_mtime + 2
+    os.utime(note, (updated_mtime, updated_mtime))
     second = run_tick(cfg, state, now=1_500_000_002.0)
     assert second["emitted_in_tick"] == 0
     assert second["rate_limited_in_tick"] == 1

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
+import pytest
+
 from app.agents.panel_agent.graph import run_panel_graph
 from app.agents.panel_agent.state import PanelAgentState
 from app.components.settings.panel_actions_loader import PanelActionCatalog, PanelActionDescriptor
@@ -16,6 +18,11 @@ from app.events.panel import (
     PanelLogEntry,
     PanelRuntimeActionResult,
 )
+
+
+@pytest.fixture(autouse=True)
+def _avoid_wiring_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.agents.panel_agent.graph.get_default_action_wiring", lambda: {})
 
 
 class _StubChatClient:
