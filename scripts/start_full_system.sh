@@ -22,6 +22,11 @@ BOOTSTRAP_REASON="${BOOTSTRAP_REASON:-preflight}"
 export BOOTSTRAP_STATE BOOTSTRAP_REASON
 
 START_MODE="${START_MODE:-runtime}"
+PHASE="${PHASE:-init}"
+LAST_OK_PHASE="${LAST_OK_PHASE:-}"
+EXIT_CODE="${EXIT_CODE:-}"
+EXIT_REASON="${EXIT_REASON:-}"
+export PHASE LAST_OK_PHASE EXIT_CODE EXIT_REASON
 startup_status_path="$ROOT/tmp/startup_status.json"
 mkdir -p "$ROOT/tmp"
 
@@ -46,10 +51,11 @@ write_startup_status() {
   export START_MODE
   export PRE_FLIGHT_PASSED="$passed"
   export PRE_FLIGHT_REASON="${reason:-}"
-  python - <<'PY' > "$startup_status_path"
+  STARTUP_STATUS_PATH="$startup_status_path" python - <<'PY'
 import datetime
 import json
 import os
+from pathlib import Path
 
 def _coerce_int(name):
     val = os.environ.get(name)
@@ -69,13 +75,52 @@ def _load_json(name):
     except Exception:
         return raw
 
-
-
 def _coerce_bool(name):
     val = os.environ.get(name)
     if not val:
         return None
     return str(val).lower() in {"1", "true", "yes", "on"}
+
+def _merge(existing, updated):
+    if not isinstance(existing, dict):
+        return updated
+    clearable = {
+        "failure_reason",
+        "exit_reason",
+        "exit_code",
+        "json_parse_failure",
+        "index_rebuild_summary",
+        "index_rebuild_failures_path",
+        "index_rebuild_errors_top",
+        "index_rebuild_log_tail",
+        "ingest_skipped_invalid_count",
+        "ingest_invalid_report_path",
+        "ingest_invalid_top",
+        "llm_ok",
+        "llm_url",
+        "llm_error",
+        "llm_latency_ms",
+    }
+    merged = dict(existing)
+    for key, value in updated.items():
+        if value is None:
+            if key in clearable:
+                merged[key] = None
+            elif key in merged and merged[key] is not None:
+                continue
+            else:
+                merged[key] = None
+        else:
+            merged[key] = value
+    return merged
+
+path = Path(os.environ["STARTUP_STATUS_PATH"])
+existing = {}
+if path.exists():
+    try:
+        existing = json.loads(path.read_text())
+    except Exception:
+        existing = {}
 
 payload = {
     "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
@@ -83,6 +128,11 @@ payload = {
     "llm_provider": os.environ.get("LLM_PROVIDER") or None,
     "preflight_passed": os.environ.get("PRE_FLIGHT_PASSED") == "1",
     "failure_reason": os.environ.get("PRE_FLIGHT_REASON") or None,
+    "phase": os.environ.get("PHASE") or None,
+    "last_ok_phase": os.environ.get("LAST_OK_PHASE") or None,
+    "exit_code": _coerce_int("EXIT_CODE"),
+    "exit_reason": os.environ.get("EXIT_REASON") or None,
+    "json_parse_failure": _load_json("JSON_PARSE_FAILURE"),
     "bootstrap_state": os.environ.get("BOOTSTRAP_STATE") or None,
     "bootstrap_reason": os.environ.get("BOOTSTRAP_REASON") or None,
     "objects_before": _coerce_int("OBJECTS_BEFORE"),
@@ -90,6 +140,8 @@ payload = {
     "outbox_count": _coerce_int("OUTBOX_COUNT"),
     "index_rebuild_summary": _load_json("INDEX_REBUILD_SUMMARY"),
     "index_rebuild_failures_path": os.environ.get("INDEX_REBUILD_FAILURES_PATH") or None,
+    "index_rebuild_errors_top": _load_json("INDEX_REBUILD_ERRORS_TOP"),
+    "index_rebuild_log_tail": os.environ.get("INDEX_REBUILD_LOG_TAIL") or None,
     "ingest_skipped_invalid_count": _coerce_int("INGEST_SKIPPED_INVALID_COUNT"),
     "ingest_invalid_report_path": os.environ.get("INGEST_INVALID_REPORT_PATH") or None,
     "ingest_invalid_top": _load_json("INGEST_INVALID_TOP"),
@@ -98,22 +150,42 @@ payload = {
     "llm_error": os.environ.get("LLM_ERROR") or None,
     "llm_latency_ms": _coerce_int("LLM_LATENCY_MS"),
 }
-print(json.dumps(payload, ensure_ascii=False))
+
+payload = _merge(existing, payload)
+
+path.parent.mkdir(parents=True, exist_ok=True)
+tmp_path = path.with_suffix(".tmp")
+tmp_path.write_text(json.dumps(payload, ensure_ascii=False))
+tmp_path.replace(path)
 PY
 }
 
+
 cleanup() {
+  local exit_status=$?
   if [ -n "${startup_watchdog_pid:-}" ]; then
     kill "$startup_watchdog_pid" >/dev/null 2>&1 || true
   fi
   if [ -n "${flight_recorder_pid:-}" ]; then
     kill "$flight_recorder_pid" >/dev/null 2>&1 || true
   fi
+  if [ -z "${EXIT_CODE:-}" ]; then
+    EXIT_CODE="$exit_status"
+    export EXIT_CODE
+  fi
+  if [ -z "${EXIT_REASON:-}" ] && [ -n "${PRE_FLIGHT_REASON:-}" ]; then
+    EXIT_REASON="$PRE_FLIGHT_REASON"
+    export EXIT_REASON
+  fi
+  if [ -z "${EXIT_REASON:-}" ] && [ "$exit_status" -ne 0 ]; then
+    EXIT_REASON="exit_${exit_status}"
+    export EXIT_REASON
+  fi
   write_startup_status || true
 }
 
 trap cleanup EXIT
-trap 'PRE_FLIGHT_REASON=${PRE_FLIGHT_REASON:-terminated}; PRE_FLIGHT_PASSED=${PRE_FLIGHT_PASSED:-0}; write_startup_status "$PRE_FLIGHT_PASSED" "$PRE_FLIGHT_REASON" || true; exit 1' TERM INT
+trap 'PRE_FLIGHT_REASON=${PRE_FLIGHT_REASON:-terminated}; PRE_FLIGHT_PASSED=${PRE_FLIGHT_PASSED:-0}; EXIT_REASON=${EXIT_REASON:-$PRE_FLIGHT_REASON}; EXIT_CODE=${EXIT_CODE:-1}; export EXIT_REASON EXIT_CODE; write_startup_status "$PRE_FLIGHT_PASSED" "$PRE_FLIGHT_REASON" || true; exit 1' TERM INT
 
 fail_preflight() {
   local reason="$1"
@@ -152,6 +224,8 @@ preflight_diagnostic() {
 }
 
 run_preflight() {
+  PHASE="preflight"
+  export PHASE
   case "$START_MODE" in
     infra)
       preflight_infra
@@ -166,7 +240,7 @@ run_preflight() {
       fail_preflight "Invalid START_MODE: $START_MODE"
       ;;
   esac
-  write_startup_status 1 ""
+  mark_phase_ok "preflight"
 }
 
 optional_check() {
@@ -184,6 +258,20 @@ optional_check() {
     echo "INFO: optional check '$label' failed (ignored for fast start)"
   fi
   return 0
+}
+
+set_phase() {
+  local phase="$1"
+  PHASE="$phase"
+  export PHASE
+  write_startup_status 1 ""
+}
+
+mark_phase_ok() {
+  local phase="$1"
+  LAST_OK_PHASE="$phase"
+  export LAST_OK_PHASE
+  write_startup_status 1 ""
 }
 
 start_startup_watchdog() {
@@ -224,6 +312,9 @@ HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-5}"
 WATCHER_HEARTBEAT_TIMEOUT="${WATCHER_HEARTBEAT_TIMEOUT:-30}"
 WORKER_HEARTBEAT_TIMEOUT="${WORKER_HEARTBEAT_TIMEOUT:-30}"
 STARTUP_TIMEOUT_SECONDS="${STARTUP_TIMEOUT_SECONDS:-120}"
+INDEX_REBUILD_TIMEOUT_SECONDS="${INDEX_REBUILD_TIMEOUT_SECONDS:-1800}"
+JSON_PARSE_ATTEMPTS="${JSON_PARSE_ATTEMPTS:-3}"
+JSON_PARSE_SLEEP_SECONDS="${JSON_PARSE_SLEEP_SECONDS:-1}"
 
 flight_recorder_log_path="$ROOT/tmp/flightrecorder-$(date -u +"%Y%m%d-%H%M%S").log"
 flight_recorder_pid=""
@@ -526,7 +617,7 @@ wait_for_healthz() {
 
 ollama_preflight_ok=0
 run_ollama_preflight() {
-  if run_docker_compose exec -T api sh -c 'python - <<'"'"'PY'"'"'
+  if run_docker_compose exec -T api python - <<'PY'
 from __future__ import annotations
 import os, sys
 import httpx
@@ -556,13 +647,14 @@ try:
 except Exception as exc:
     print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
     sys.exit(0)
-PY'; then
+PY
+  then
     echo "Ollama preflight succeeded"
     ollama_preflight_ok=1
- else
-   echo "WARNING: Ollama preflight failed; skipping /api/ask bootstrap" >&2
-   ollama_preflight_ok=0
- fi
+  else
+    echo "WARNING: Ollama preflight failed; skipping /api/ask bootstrap" >&2
+    ollama_preflight_ok=0
+  fi
 }
 
 run_llm_check_container() {
@@ -638,6 +730,7 @@ api_container_id=$(run_docker_compose ps -q api | head -n1 || true)
 run_db_probe
 wait_for_healthz
 
+set_phase "object_stats"
 store_stats_json=$(run_docker_compose exec -T api python -m app.cli store stats --json || true)
 extract_stat() {
   local key="$1"
@@ -651,6 +744,66 @@ except Exception:
 print(payload.get(os.environ.get("STAT_KEY", "")) or 0)
 PY
 }
+ensure_json_or_fail() {
+  local label="$1"
+  local raw="$2"
+  local command="$3"
+  local rc="${4:-0}"
+  local attempts="${JSON_PARSE_ATTEMPTS:-3}"
+  local sleep_s="${JSON_PARSE_SLEEP_SECONDS:-1}"
+  local last_error=""
+  local ok=0
+  for attempt in $(seq 1 "$attempts"); do
+    parse_error=$(JSON_RAW="$raw" python - <<'PY'
+import json
+import os
+import sys
+raw = os.environ.get("JSON_RAW", "")
+try:
+    json.loads(raw)
+    sys.exit(0)
+except Exception as exc:
+    print(str(exc))
+    sys.exit(1)
+PY
+    )
+    status=$?
+    if [ "$status" -eq 0 ]; then
+      ok=1
+      break
+    fi
+    last_error="$parse_error"
+    sleep "$sleep_s"
+  done
+  if [ "$ok" -eq 1 ]; then
+    return 0
+  fi
+  snippet=$(printf '%s' "$raw" | tail -c 400)
+  JSON_PARSE_FAILURE=$(PARSE_LABEL="$label" PARSE_COMMAND="$command" PARSE_RC="$rc" PARSE_ERROR="$last_error" PARSE_SNIPPET="$snippet" python - <<'PY'
+import json
+import os
+print(json.dumps({
+    "label": os.environ.get("PARSE_LABEL"),
+    "command": os.environ.get("PARSE_COMMAND"),
+    "rc": int(os.environ.get("PARSE_RC", "0") or 0),
+    "error": os.environ.get("PARSE_ERROR") or None,
+    "snippet": os.environ.get("PARSE_SNIPPET") or None,
+}, ensure_ascii=False))
+PY
+  )
+  export JSON_PARSE_FAILURE
+  if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+    EXIT_REASON="json_parse_failed:${label}"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    echo "ERROR: JSON parse failed for $label after $attempts attempts: $last_error" >&2
+    exit 1
+  fi
+  echo "INFO: optional preflight failed: $last_error" >&2
+  return 0
+}
+
 objects_before=$(extract_stat objects)
 vectors_before=$(extract_stat vectors)
 outbox_count=0
@@ -678,12 +831,20 @@ export BOOTSTRAP_STATE BOOTSTRAP_REASON
 export OBJECTS_BEFORE="$objects_before"
 export VECTORS_BEFORE="$vectors_before"
 export OUTBOX_COUNT="$outbox_count"
-write_startup_status 1 ""
+mark_phase_ok "object_stats"
+set_phase "bootstrap_determined"
+mark_phase_ok "bootstrap_determined"
 
 if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ "$BOOTSTRAP_STATE" = "active" ]; then
+  set_phase "llm_probe"
   if ! run_llm_check_container "$api_container_id"; then
+    EXIT_REASON="llm_probe_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
     exit 1
   fi
+  mark_phase_ok "llm_probe"
 fi
 
 layout_json=""
@@ -777,7 +938,6 @@ if [ "$START_WATCHERS" -eq 1 ]; then
     exit 1
   fi
 fi
-
 ready_payload=$(curl -sS http://127.0.0.1:18000/readyz || true)
 readiness_state=$(READY_JSON="$ready_payload" python - <<'PY'
 import json, os, sys
@@ -877,14 +1037,17 @@ bootstrap_next="none"
 index_doctor_status="skipped"
 index_issue_count=0
 
-if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
-  auto_bootstrap="${AUTO_BOOTSTRAP:-0}"
-if [ "$auto_bootstrap" -eq 1 ]; then
+auto_bootstrap="${AUTO_BOOTSTRAP:-0}"
+if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ "$auto_bootstrap" -eq 1 ]; then
   set +e
   settings_validate_json=$(run_docker_compose exec -T api python -m app.cli settings validate --json)
   settings_validate_status=$?
   set -e
   if [ "$settings_validate_status" -ne 0 ]; then
+    EXIT_REASON="settings_validate_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
     echo "ERROR: settings validate failed" >&2
     echo "$settings_validate_json" >&2
     echo "Run: docker compose exec -T api python -m app.cli settings validate --json" >&2
@@ -931,6 +1094,7 @@ max_notes="${BOOTSTRAP_INGEST_MAX_NOTES:-500}"
 object_count="$objects_before"
 vector_count="$vectors_before"
 ingest_summary_json="{}"
+ingest_status=0
 if [ "$objects_before" -le 0 ]; then
   ingest_run="yes"
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then
@@ -944,7 +1108,24 @@ if [ "$objects_before" -le 0 ]; then
       ingest_summary_json="{}"
     fi
   else
+    set +e
     ingest_summary_json=$(run_docker_compose exec -T api env STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@db:5432/app python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
+    ingest_status=$?
+    set -e
+    if [ "$ingest_status" -ne 0 ]; then
+      if [ "$VERIFY_ACTIVE" -eq 1 ]; then
+        EXIT_REASON="bootstrap_ingest_failed"
+        EXIT_CODE=1
+        export EXIT_REASON EXIT_CODE
+        write_startup_status 0 "$EXIT_REASON"
+        echo "ERROR: bootstrap ingest failed" >&2
+        exit 1
+      else
+        echo "INFO: bootstrap ingest failed (ignored for fast start)" >&2
+        ingest_run="no"
+        ingest_summary_json="{}"
+      fi
+    fi
   fi
   store_stats_json=$(run_docker_compose exec -T api python -m app.cli store stats --json || true)
   objects_after=$(extract_stat objects)
@@ -953,6 +1134,8 @@ if [ "$objects_before" -le 0 ]; then
   vector_count="$vectors_after"
 fi
 
+ensure_json_or_fail "vault-alpha-ingest" "$ingest_summary_json" "vault-alpha-ingest --json" "$ingest_status"
+
 if [ "$auto_bootstrap" -eq 1 ]; then
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then
     echo "INDEX: not required (no objects yet)"
@@ -960,13 +1143,68 @@ if [ "$auto_bootstrap" -eq 1 ]; then
     api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
     update_health_state
     if [ "$api_health_index_rebuild" -eq 1 ]; then
+      set_phase "index_rebuild"
       echo "INDEX REBUILD: running"
+      index_rebuild_stdout_path="$ROOT/tmp/index_rebuild.stdout"
+      : > "$index_rebuild_stdout_path"
+      rebuild_cmd="python -m app.cli index rebuild --json --strict --time-budget-seconds $INDEX_REBUILD_TIMEOUT_SECONDS"
       set +e
-      rebuild_summary=$(run_docker_compose exec -T api python -m app.cli index rebuild --json --strict)
+      run_docker_compose exec -T api sh -lc "$rebuild_cmd" > "$index_rebuild_stdout_path" 2>&1
       rebuild_status=$?
       set -e
       index_rebuild_status="ran"
-      index_rebuild_meta=$(REBUILD_SUMMARY_JSON="$rebuild_summary" python - <<'PY'
+      rebuild_snippet=$(tail -n 30 "$index_rebuild_stdout_path" || true)
+      index_rebuild_summary=$(INDEX_REBUILD_STDOUT_PATH="$index_rebuild_stdout_path" python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ.get("INDEX_REBUILD_STDOUT_PATH", ""))
+if not path.exists():
+    raise SystemExit(1)
+lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+for raw in reversed(lines):
+    raw = raw.strip()
+    if not raw:
+        continue
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        continue
+    if isinstance(payload, dict):
+        print(json.dumps(payload, ensure_ascii=False))
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+      )
+      summary_status=$?
+      if [ "$summary_status" -ne 0 ] || [ -z "$index_rebuild_summary" ]; then
+        JSON_PARSE_FAILURE=$(PARSE_LABEL="index_rebuild" PARSE_COMMAND="$rebuild_cmd" PARSE_RC="$rebuild_status" PARSE_ERROR="missing json summary" PARSE_SNIPPET="$rebuild_snippet" python - <<'PY'
+import json
+import os
+print(json.dumps({
+    "label": os.environ.get("PARSE_LABEL"),
+    "command": os.environ.get("PARSE_COMMAND"),
+    "rc": int(os.environ.get("PARSE_RC", "0") or 0),
+    "error": os.environ.get("PARSE_ERROR") or None,
+    "snippet": os.environ.get("PARSE_SNIPPET") or None,
+}, ensure_ascii=False))
+PY
+        )
+        export JSON_PARSE_FAILURE
+        EXIT_REASON="index_rebuild_parse_failed"
+        EXIT_CODE=1
+        export EXIT_REASON EXIT_CODE
+        export INDEX_REBUILD_LOG_TAIL="$rebuild_snippet"
+        write_startup_status 0 "$EXIT_REASON"
+        if [ "$VERIFY_ACTIVE" -eq 1 ]; then
+          echo "ERROR: index rebuild did not emit JSON summary" >&2
+          exit 1
+        else
+          echo "INFO: index rebuild summary missing (ignored for fast start)" >&2
+        fi
+      fi
+      index_rebuild_meta=$(REBUILD_SUMMARY_JSON="$index_rebuild_summary" python - <<'PY'
 import json
 import os
 raw = os.environ.get("REBUILD_SUMMARY_JSON", "")
@@ -979,18 +1217,26 @@ top_errors = errors[:5]
 print(payload.get("error_count") or 0)
 print(payload.get("failures_path") or "")
 print(json.dumps(top_errors, ensure_ascii=False))
+print(payload.get("exit_reason") or "")
 PY
 )
-      IFS=$'\n' read -r index_rebuild_error_count index_rebuild_failures_path index_rebuild_errors_json <<<"$index_rebuild_meta"
+      IFS=$'\n' read -r index_rebuild_error_count index_rebuild_failures_path index_rebuild_errors_json index_rebuild_exit_reason <<<"$index_rebuild_meta"
       index_rebuild_error_count=${index_rebuild_error_count:-0}
       index_rebuild_failures_path=${index_rebuild_failures_path:-}
       index_rebuild_errors_json=${index_rebuild_errors_json:-[]}
-      export INDEX_REBUILD_SUMMARY="$rebuild_summary"
+      index_rebuild_exit_reason=${index_rebuild_exit_reason:-}
+      export INDEX_REBUILD_SUMMARY="$index_rebuild_summary"
       export INDEX_REBUILD_FAILURES_PATH="$index_rebuild_failures_path"
+      export INDEX_REBUILD_ERRORS_TOP="$index_rebuild_errors_json"
+      export INDEX_REBUILD_LOG_TAIL="$rebuild_snippet"
       write_startup_status 1 ""
       failures_path_display="${index_rebuild_failures_path:-<missing>}"
-      if [ "$rebuild_status" -ne 0 ] || [ "$index_rebuild_error_count" -gt 0 ]; then
-        echo "INDEX REBUILD FAILED: status=$rebuild_status errors=$index_rebuild_error_count failures_path=$failures_path_display" >&2
+      if [ "$rebuild_status" -ne 0 ] || [ "$index_rebuild_error_count" -gt 0 ] || [ -n "$index_rebuild_exit_reason" ]; then
+        reason_suffix=""
+        if [ -n "$index_rebuild_exit_reason" ]; then
+          reason_suffix=" exit_reason=$index_rebuild_exit_reason"
+        fi
+        echo "INDEX REBUILD FAILED: status=$rebuild_status errors=$index_rebuild_error_count failures_path=$failures_path_display$reason_suffix" >&2
         if [ "$index_rebuild_errors_json" != "[]" ]; then
           echo "INDEX REBUILD ERRORS:" >&2
           REBUILD_ERRORS_JSON="$index_rebuild_errors_json" python - <<'PY'
@@ -1005,12 +1251,26 @@ for err in errors:
     print(f"  - object_id={object_id} stage={stage} exception={exception_type} source_ref={source_ref}")
 PY
         fi
+        if [ "$index_rebuild_exit_reason" = "time_budget_exceeded" ]; then
+          EXIT_REASON="index_rebuild_timeout"
+        else
+          EXIT_REASON="index_rebuild_failed"
+        fi
+        EXIT_CODE=1
+        export EXIT_REASON EXIT_CODE
+        export INDEX_REBUILD_LOG_TAIL="$rebuild_snippet"
+        write_startup_status 0 "$EXIT_REASON"
         debug_dump
         exit 1
       fi
+      mark_phase_ok "index_rebuild"
       api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
       update_health_state
       if [ "$api_health_index_rebuild" -eq 1 ]; then
+        EXIT_REASON="index_rebuild_still_required"
+        EXIT_CODE=1
+        export EXIT_REASON EXIT_CODE
+        write_startup_status 0 "$EXIT_REASON"
         echo "INDEX REBUILD: failed (still required)" >&2
         debug_dump
         exit 1
@@ -1020,7 +1280,6 @@ PY
     fi
   fi
 fi
-
 ingest_invalid_meta=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
 import json, os
 raw = os.environ.get("INGEST_JSON", "")
@@ -1044,38 +1303,27 @@ export INGEST_INVALID_TOP="$ingest_invalid_top_json"
 write_startup_status 1 ""
 
 ingested_count=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
-import json, os, sys
-try:
-    raw = os.environ.get("INGEST_JSON", "")
-    payload = json.loads(raw)
-    print(payload.get("ingested", 0) or 0)
-except Exception as exc:
-    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
-    sys.exit(0)
+import json, os
+raw = os.environ.get("INGEST_JSON", "")
+payload = json.loads(raw) if raw else {}
+print(payload.get("ingested", 0) or 0)
 PY
 )
 skipped_locked_count=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
-import json, os, sys
-try:
-    raw = os.environ.get("INGEST_JSON", "")
-    payload = json.loads(raw)
-    print(payload.get("skipped_locked", 0) or 0)
-except Exception as exc:
-    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
-    sys.exit(0)
+import json, os
+raw = os.environ.get("INGEST_JSON", "")
+payload = json.loads(raw) if raw else {}
+print(payload.get("skipped_locked", 0) or 0)
 PY
 )
 
 search_payload=$(curl -sS "http://127.0.0.1:18000/search?q=test&k=3" || true)
+ensure_json_or_fail "search" "$search_payload" "GET /search?q=test&k=3" "0"
 search_results=$(SEARCH_JSON="$search_payload" python - <<'PY'
-import json, os, sys
-try:
-    raw = os.environ.get("SEARCH_JSON", "")
-    payload = json.loads(raw)
-    print(len(payload.get("results") or []))
-except Exception as exc:
-    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
-    sys.exit(0)
+import json, os
+raw = os.environ.get("SEARCH_JSON", "")
+payload = json.loads(raw) if raw else {}
+print(len(payload.get("results") or []))
 PY
 )
 if [ "$BOOTSTRAP_STATE" = "active" ]; then
@@ -1095,27 +1343,49 @@ fi
 
 if [ "$VERIFY_ACTIVE" -eq 1 ]; then
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then
+    EXIT_REASON="verify_empty_system"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
     echo "VERIFY: requires ingested objects; system is empty" >&2
     exit 1
   fi
   if [ "$llm_requires_ollama" -eq 1 ] && [ "$ollama_preflight_ok" -ne 1 ]; then
+    EXIT_REASON="verify_ollama_preflight_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
     echo "VERIFY: Ollama preflight must succeed (set OLLAMA_URL/LLM_PROVIDER)" >&2
     exit 1
   fi
   if [ "$object_count" -le 0 ]; then
+    EXIT_REASON="verify_missing_objects"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
     echo "VERIFY: index missing objects" >&2
     exit 1
   fi
   if [ "${LLM_OK:-}" != "1" ]; then
     if ! run_llm_check_container "$api_container_id"; then
+      EXIT_REASON="verify_llm_probe_failed"
+      EXIT_CODE=1
+      export EXIT_REASON EXIT_CODE
+      write_startup_status 0 "$EXIT_REASON"
       exit 1
     fi
   fi
+  set_phase "verify_ask"
   ask_status=$(curl -sS -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:18000/api/ask -H 'Content-Type: application/json' -d '{"query":"startup verify"}' || true)
   if [ "$ask_status" != "200" ]; then
+    EXIT_REASON="verify_ask_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
     echo "VERIFY: /api/ask returned $ask_status" >&2
     exit 1
   fi
+  mark_phase_ok "verify_ask"
 fi
 
 alpha_bootstrap="${ALPHA_BOOTSTRAP:-0}"
@@ -1134,7 +1404,7 @@ except Exception as exc:
     print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
     sys.exit(0)
 PY
-)
+  )
   index_issue_count=$(INDEX_JSON="$index_doctor_json" python - <<'PY'
 import json, os, sys
 try:
@@ -1146,7 +1416,7 @@ except Exception as exc:
     print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
     sys.exit(0)
 PY
-)
+  )
   rebuild_safe=$(INDEX_JSON="$index_doctor_json" OBJECT_COUNT="$object_count" VECTOR_COUNT="$vector_count" python - <<'PY'
 import json, os, sys
 try:
@@ -1167,14 +1437,13 @@ except Exception as exc:
     print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
     sys.exit(0)
 PY
-)
+  )
   if [ "$rebuild_safe" -eq 1 ]; then
     run_docker_compose exec -T api python -m app.cli index rebuild --backend pg --json || true
     bootstrap_next="re-run: python -m app.cli index doctor --json"
   elif [ "$index_doctor_status" != "ok" ]; then
     bootstrap_next="python -m app.cli index rebuild --backend pg"
   fi
-fi
 fi
 
 if [ "$START_WATCHERS" -eq 1 ]; then
@@ -1193,6 +1462,8 @@ echo "Watcher tick log: ${WATCHER_TICK_LOG_PATH:-<not set>}"
 echo "Flight recorder log: ${flight_recorder_log_path:-<disabled>}"
 echo "Tail: docker compose exec watcher sh -lc 'tail -n 20 \"${WATCHER_TICK_LOG_PATH:-/app/tmp/watcher_tick.jsonl}\"'"
 
+set_phase "done"
+mark_phase_ok "done"
 echo "--- STARTUP COMPLETE ---"
 
 cat <<SUMMARY
