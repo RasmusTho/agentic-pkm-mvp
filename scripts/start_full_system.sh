@@ -135,7 +135,7 @@ if path.exists():
         existing = {}
 
 payload = {
-    "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
     "start_mode": os.environ.get("START_MODE"),
     "llm_provider": os.environ.get("LLM_PROVIDER") or None,
     "preflight_passed": os.environ.get("PRE_FLIGHT_PASSED") == "1",
