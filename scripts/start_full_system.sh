@@ -104,6 +104,14 @@ def _merge(existing, updated):
         "llm_probe_cmd",
         "llm_probe_rc",
         "llm_probe_output_snippet",
+        "db_probe_step",
+        "db_probe_cmd",
+        "db_probe_rc",
+        "db_probe_output_snippet",
+        "compose_up_step",
+        "compose_up_cmd",
+        "compose_up_rc",
+        "compose_up_output_snippet",
     }
     merged = dict(existing)
     for key, value in updated.items():
@@ -157,6 +165,14 @@ payload = {
     "llm_probe_cmd": os.environ.get("LLM_PROBE_CMD") or None,
     "llm_probe_rc": _coerce_int("LLM_PROBE_RC"),
     "llm_probe_output_snippet": os.environ.get("LLM_PROBE_OUTPUT_SNIPPET") or None,
+    "db_probe_step": os.environ.get("DB_PROBE_STEP") or None,
+    "db_probe_cmd": os.environ.get("DB_PROBE_CMD") or None,
+    "db_probe_rc": _coerce_int("DB_PROBE_RC"),
+    "db_probe_output_snippet": os.environ.get("DB_PROBE_OUTPUT_SNIPPET") or None,
+    "compose_up_step": os.environ.get("COMPOSE_UP_STEP") or None,
+    "compose_up_cmd": os.environ.get("COMPOSE_UP_CMD") or None,
+    "compose_up_rc": _coerce_int("COMPOSE_UP_RC"),
+    "compose_up_output_snippet": os.environ.get("COMPOSE_UP_OUTPUT_SNIPPET") or None,
 }
 
 payload = _merge(existing, payload)
@@ -541,6 +557,43 @@ capture_startup_logs() {
   append_startup_log "startup log available at: $startup_log_path"
 }
 
+
+capture_step() {
+  local prefix="$1"
+  local step="$2"
+  shift 2
+  local output rc
+  local cmd_str="$*"
+  local prefix_upper
+  local had_errexit=0
+  prefix_upper=$(printf "%s" "$prefix" | tr '[:lower:]' '[:upper:]')
+  case $- in
+    *e*) had_errexit=1 ;;
+  esac
+  set +e
+  output=$("$@" 2>&1)
+  rc=$?
+  if [ "$had_errexit" -eq 1 ]; then
+    set -e
+  else
+    set +e
+  fi
+  local snippet
+  snippet=$(printf "%s" "$output" | tail -c 400)
+  local key_step="${prefix_upper}_STEP"
+  local key_cmd="${prefix_upper}_CMD"
+  local key_rc="${prefix_upper}_RC"
+  local key_out="${prefix_upper}_OUTPUT_SNIPPET"
+  printf -v "$key_step" "%s" "$step"
+  printf -v "$key_cmd" "%s" "$cmd_str"
+  printf -v "$key_rc" "%s" "$rc"
+  printf -v "$key_out" "%s" "$snippet"
+  export "$key_step" "$key_cmd" "$key_rc" "$key_out"
+  write_startup_status 1 ""
+  printf "%s" "$output"
+  return "$rc"
+}
+
 run_db_probe() {
   local skip="${SKIP_DB_PROBE:-0}"
   if [ "$skip" -eq 1 ]; then
@@ -548,20 +601,60 @@ run_db_probe() {
   fi
   echo "--- DB PROBE ---"
   local db_cid
-  db_cid=$(run_docker_compose ps -q db)
-  if [ -z "$db_cid" ]; then
+  local ps_rc
+  set +e
+  db_cid=$(capture_step db_probe "compose_ps_db" run_docker_compose ps -q db)
+  ps_rc=$?
+  set -e
+  if [ "$ps_rc" -ne 0 ] || [ -z "$db_cid" ]; then
+    EXIT_REASON="db_probe_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
     echo "ERROR: db container not found" >&2
-    run_docker_compose ps
+    run_docker_compose ps || true
     exit 1
   fi
   local db_user
   local db_name
   local db_pwd
-  db_user=$(docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_USER"')
-  db_name=$(docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_DB"')
-  db_pwd=$(docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_PASSWORD"')
+  local env_attempts=3
+  local env_sleep=1
+  local env_try=1
+  local env_ok=0
+  while [ "$env_try" -le "$env_attempts" ]; do
+    local rc_user=0
+    local rc_name=0
+    local rc_pwd=0
+    set +e
+    db_user=$(capture_step db_probe "db_env_user" docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_USER"')
+    rc_user=$?
+    db_name=$(capture_step db_probe "db_env_name" docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_DB"')
+    rc_name=$?
+    db_pwd=$(capture_step db_probe "db_env_password" docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_PASSWORD"')
+    rc_pwd=$?
+    set -e
+    if [ "$rc_user" -eq 0 ] && [ "$rc_name" -eq 0 ] && [ "$rc_pwd" -eq 0 ]; then
+      env_ok=1
+      break
+    fi
+    if [ "$env_try" -lt "$env_attempts" ]; then
+      sleep "$env_sleep"
+    fi
+    env_try=$((env_try + 1))
+  done
+  if [ "$env_ok" -ne 1 ]; then
+    EXIT_REASON="db_probe_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    echo "ERROR: DB probe failed to read database env after ${env_attempts} attempts" >&2
+    run_docker_compose ps || true
+    exit 1
+  fi
   db_user=${db_user:-app}
   db_name=${db_name:-app}
+  echo "DB credentials: user=$db_user db=$db_name"
   local max_attempts="${DB_PROBE_MAX_ATTEMPTS:-30}"
   local sleep_seconds="${DB_PROBE_SLEEP_SECONDS:-2}"
   local attempt=1
@@ -592,6 +685,10 @@ run_db_probe() {
     break
   done
   if [ "$ok" -ne 1 ]; then
+    EXIT_REASON="db_probe_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
     echo "ERROR: DB probe failed after ${max_attempts} attempts" >&2
     if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ -n "$last_error" ]; then
       echo "$last_error" >&2
@@ -600,8 +697,7 @@ run_db_probe() {
     run_docker_compose logs --tail=200 db || true
     exit 1
   fi
-  echo "DB credentials: user=$db_user db=$db_name"
-  printf '%s\n' "$psql_output"
+  echo "$psql_output"
 }
 
 run_worker_probe() {
@@ -873,12 +969,21 @@ if [ "$START_MODE" = "diagnostic" ]; then
   exit $?
 fi
 
-compose_up --build db api
+if ! capture_step compose_up "db_api" compose_up --build db api; then
+  EXIT_REASON="compose_up_failed"
+  EXIT_CODE=1
+  export EXIT_REASON EXIT_CODE
+  write_startup_status 0 "$EXIT_REASON"
+  echo "ERROR: compose_up failed for db/api" >&2
+  exit 1
+fi
 if [ "${AUTO_BOOTSTRAP:-0}" -eq 1 ] && [ "$llm_requires_ollama" -eq 1 ]; then
   compose_up ollama
 fi
 api_container_id=$(run_docker_compose ps -q api | head -n1 || true)
+set_phase "db_probe"
 run_db_probe
+mark_phase_ok "db_probe"
 wait_for_healthz
 
 set_phase "object_stats"
