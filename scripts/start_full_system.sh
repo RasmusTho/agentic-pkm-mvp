@@ -100,6 +100,10 @@ def _merge(existing, updated):
         "llm_url",
         "llm_error",
         "llm_latency_ms",
+        "llm_probe_step",
+        "llm_probe_cmd",
+        "llm_probe_rc",
+        "llm_probe_output_snippet",
     }
     merged = dict(existing)
     for key, value in updated.items():
@@ -149,6 +153,10 @@ payload = {
     "llm_url": os.environ.get("LLM_URL") or None,
     "llm_error": os.environ.get("LLM_ERROR") or None,
     "llm_latency_ms": _coerce_int("LLM_LATENCY_MS"),
+    "llm_probe_step": os.environ.get("LLM_PROBE_STEP") or None,
+    "llm_probe_cmd": os.environ.get("LLM_PROBE_CMD") or None,
+    "llm_probe_rc": _coerce_int("LLM_PROBE_RC"),
+    "llm_probe_output_snippet": os.environ.get("LLM_PROBE_OUTPUT_SNIPPET") or None,
 }
 
 payload = _merge(existing, payload)
@@ -636,7 +644,8 @@ wait_for_healthz() {
 
 ollama_preflight_ok=0
 run_ollama_preflight() {
-  if run_docker_compose exec -T api env VERIFY_ACTIVE="${VERIFY_ACTIVE:-0}" python - <<'PY'
+  local output rc
+  output=$(run_docker_compose exec -T api env VERIFY_ACTIVE="${VERIFY_ACTIVE:-0}" python - <<'PYOLLAMA'
 from __future__ import annotations
 import os
 import sys
@@ -730,17 +739,73 @@ with httpx.Client(timeout=10.0) as client:
         _fail("INFO: Ollama preflight failed: embeddings payload missing vectors", verbose)
     if verbose:
         print(f"Ollama embed dim: {len(embedding)}")
-PY
-  then
+PYOLLAMA
+  )
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    if [ -n "$output" ]; then
+      printf "%s\n" "$output"
+    fi
     echo "Ollama preflight succeeded"
     ollama_preflight_ok=1
   else
+    export LLM_PROBE_STEP="ollama_preflight"
+    export LLM_PROBE_CMD="run_docker_compose exec -T api env VERIFY_ACTIVE=${VERIFY_ACTIVE:-0} python - <ollama preflight>"
+    export LLM_PROBE_RC="$rc"
+    export LLM_PROBE_OUTPUT_SNIPPET="$(printf "%s" "$output" | head -c 400)"
+    write_startup_status 1 ""
     echo "WARNING: Ollama preflight failed; skipping /api/ask bootstrap" >&2
     ollama_preflight_ok=0
     if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
       return 1
     fi
   fi
+}
+
+
+run_and_capture_json() {
+  local step="$1"
+  shift
+  local output rc json_ok
+  local cmd_str="$*"
+  output=$("$@" 2>&1)
+  rc=$?
+  export LLM_PROBE_STEP="$step"
+  export LLM_PROBE_CMD="$cmd_str"
+  export LLM_PROBE_RC="$rc"
+  export LLM_PROBE_OUTPUT_SNIPPET="$(printf "%s" "$output" | head -c 400)"
+  write_startup_status 1 ""
+  if [ "$rc" -ne 0 ]; then
+    if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+      echo "ERROR: $step failed (rc=$rc)" >&2
+      printf "%s\n" "$LLM_PROBE_OUTPUT_SNIPPET" >&2
+      exit 1
+    fi
+    echo "INFO: optional check '$step' failed (ignored for fast start)" >&2
+  fi
+  json_ok=0
+  JSON_RAW="$output" python - <<'PYJSON'
+import json, os, sys
+raw = os.environ.get("JSON_RAW", "")
+try:
+    json.loads(raw)
+except Exception:
+    sys.exit(1)
+sys.exit(0)
+PYJSON
+  if [ "$?" -eq 0 ]; then
+    json_ok=1
+  fi
+  if [ "$json_ok" -ne 1 ]; then
+    if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+      echo "ERROR: $step returned non-JSON output" >&2
+      printf "%s\n" "$LLM_PROBE_OUTPUT_SNIPPET" >&2
+      exit 1
+    fi
+    echo "INFO: optional check '$step' returned non-JSON output (ignored for fast start)" >&2
+  fi
+  RUN_CAPTURE_OUTPUT="$output"
+  return "$rc"
 }
 
 run_llm_check_container() {
@@ -761,8 +826,9 @@ run_llm_check_container() {
   local llm_check_json=""
   local llm_status=0
   set +e
-  llm_check_json=$(docker exec "$container_id" python -m app.cli llm check --json --strict)
+  run_and_capture_json "llm_check" docker exec "$container_id" python -m app.cli llm check --json --strict
   llm_status=$?
+  llm_check_json="$RUN_CAPTURE_OUTPUT"
   set -e
   llm_check_info=$(LLM_CHECK_JSON="$llm_check_json" python - <<'PY'
 import json, os
@@ -930,6 +996,9 @@ if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ "$BOOTSTRAP_STATE" = "active" ]; then
     exit 1
   fi
   mark_phase_ok "llm_probe"
+fi
+if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+  set_phase "vault_layout"
 fi
 
 layout_json=""
