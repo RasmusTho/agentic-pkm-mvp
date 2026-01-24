@@ -65,6 +65,10 @@ Example commands (placeholders until tests land):
   - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
   - pytest -q tests/agents/panel_agent/test_panel_wiring.py -m "not pg"
 
+## Debugging hanging tests
+- Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONFAULTHANDLER=1 pytest -vv -m "not pg" -p faulthandler --faulthandler-timeout 60`
+- The faulthandler dump shows where the test is stuck; re-run with a narrower path or `-k` to isolate.
+
 ## Reality-MVP pipeline sanity
 - Scenario: `tests/e2e/test_reality_mvp_pipeline.py` runs the canonical note → ingest/normalize/classify → store/outbox/index → hybrid search warm-load → `/api/ask` flow against `tests/fixtures/reality_mvp/demo_note.md` (see `docs/scenarios/REALITY_MVP.md`).
 - Command: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/e2e/test_reality_mvp_pipeline.py --maxfail=1`
