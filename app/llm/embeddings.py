@@ -36,7 +36,20 @@ def _extract_error_detail(response: httpx.Response) -> str | None:
     return None
 
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
+def _normalize_ollama_url(url: str) -> str:
+    clean = (url or "").rstrip("/")
+    if clean.endswith("/v1"):
+        clean = clean[:-3]
+    return clean
+
+
+OLLAMA_URL = _normalize_ollama_url(
+    os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434"))
+)
+
+
+def _ollama_base_url() -> str:
+    return _normalize_ollama_url(OLLAMA_URL)
 
 
 def get_embed_model() -> str:
@@ -120,7 +133,8 @@ def _parse_vector(payload: Mapping[str, object], *, provider: str, model: str, e
 
 def _ollama_embed_api(text: str, model: str, dim: int, timeout: float) -> tuple[float, ...]:
     payload = _ollama_payload(text, model, dim)
-    resp = httpx.post(f"{OLLAMA_URL}/api/embeddings", json=payload, timeout=timeout)
+    base = _ollama_base_url()
+    resp = httpx.post(f"{base}/api/embeddings", json=payload, timeout=timeout)
     if resp.is_error:
         detail = _extract_error_detail(resp)
         message = f"Ollama /api/embeddings returned HTTP {resp.status_code}"
@@ -135,7 +149,8 @@ def _ollama_embed_api(text: str, model: str, dim: int, timeout: float) -> tuple[
 
 def _ollama_openai_fallback(text: str, model: str, dim: int, timeout: float) -> tuple[float, ...]:
     payload = {"model": model, "input": text}
-    resp = httpx.post(f"{OLLAMA_URL}/v1/embeddings", json=payload, timeout=timeout)
+    base = _ollama_base_url()
+    resp = httpx.post(f"{base}/v1/embeddings", json=payload, timeout=timeout)
     if resp.is_error:
         detail = _extract_error_detail(resp)
         message = f"Ollama /v1/embeddings returned HTTP {resp.status_code}"

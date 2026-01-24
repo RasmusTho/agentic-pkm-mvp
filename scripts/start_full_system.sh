@@ -247,7 +247,7 @@ optional_check() {
   shift
   if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
     "$@"
-    return 0
+    return $?
   fi
   set +e
   "$@"
@@ -673,10 +673,37 @@ def _fail(message: str, verbose: bool) -> None:
     raise SystemExit(1)
 
 
+def _normalize_base(url: str) -> str:
+    clean = url.rstrip("/")
+    if clean.endswith("/v1"):
+        clean = clean[:-3]
+    return clean
+
+
+def _resolve_base() -> str | None:
+    base = os.environ.get("OLLAMA_URL") or os.environ.get("OLLAMA_HOST")
+    if not base:
+        return None
+    return _normalize_base(base)
+
+
+def _extract_embedding(payload: dict) -> list[float] | None:
+    value = payload.get("embeddings") or payload.get("embedding")
+    if isinstance(value, list):
+        if not value:
+            return None
+        first = value[0]
+        if isinstance(first, list):
+            return first
+        if isinstance(first, (int, float)):
+            return value
+    return None
+
+
 verbose = os.environ.get("VERIFY_ACTIVE") == "1"
-base = os.environ.get("OLLAMA_URL")
+base = _resolve_base()
 if not base:
-    _fail("INFO: Ollama preflight failed: OLLAMA_URL missing", verbose)
+    _fail("INFO: Ollama preflight failed: OLLAMA_URL/OLLAMA_HOST missing", verbose)
 model = os.environ.get("OLLAMA_EMBED_MODEL") or os.environ.get("EMBED_MODEL", "nomic-embed-text:latest")
 with httpx.Client(timeout=10.0) as client:
     tags_resp = client.get(f"{base}/api/tags")
@@ -701,12 +728,11 @@ with httpx.Client(timeout=10.0) as client:
             message = f"{message}: {detail}"
         _fail(message, verbose)
     data = embed_resp.json() if embed_resp.headers.get("Content-Type", "").startswith("application/json") else {}
-    embeddings = data.get("embeddings") or data.get("embedding") if isinstance(data, dict) else None
-    if not embeddings:
+    embedding = _extract_embedding(data) if isinstance(data, dict) else None
+    if not embedding:
         _fail("INFO: Ollama preflight failed: embeddings payload missing vectors", verbose)
-    entry = embeddings[0] if isinstance(embeddings, list) and embeddings else embeddings
     if verbose:
-        print(f"Ollama embed dim: {len(entry)}")
+        print(f"Ollama embed dim: {len(embedding)}")
 PY
   then
     echo "Ollama preflight succeeded"
@@ -714,6 +740,9 @@ PY
   else
     echo "WARNING: Ollama preflight failed; skipping /api/ask bootstrap" >&2
     ollama_preflight_ok=0
+    if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+      return 1
+    fi
   fi
 }
 
