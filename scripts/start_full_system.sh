@@ -393,10 +393,10 @@ export VAULT_ROOT="$vault_host_path"
 runtime_env_path="${RUNTIME_ENV_PATH:-tmp/runtime.env}"
 RUNTIME_ENV_PATH="$runtime_env_path"
 bash scripts/export_runtime_env.sh
-if [ -z "${OLLAMA_URL:-}" ]; then
+if [ -z "${OLLAMA_URL:-}" ] && ! grep -q '^OLLAMA_URL=' "$runtime_env_path"; then
   printf "OLLAMA_URL=http://ollama:11434\n" >> "$runtime_env_path"
 fi
-if [ -z "${OLLAMA_HOST:-}" ]; then
+if [ -z "${OLLAMA_HOST:-}" ] && ! grep -q '^OLLAMA_HOST=' "$runtime_env_path"; then
   printf "OLLAMA_HOST=http://ollama:11434\n" >> "$runtime_env_path"
 fi
 runtime_env="--env-file $runtime_env_path"
