@@ -160,7 +160,6 @@ tmp_path.replace(path)
 PY
 }
 
-
 cleanup() {
   local exit_status=$?
   if [ -n "${startup_watchdog_pid:-}" ]; then
@@ -273,7 +272,6 @@ mark_phase_ok() {
   export LAST_OK_PHASE
   write_startup_status 1 ""
 }
-
 start_startup_watchdog() {
   local timeout="${1:-0}"
   if [ "${VERIFY_ACTIVE:-0}" -ne 1 ]; then
@@ -776,7 +774,6 @@ PY
   fi
   return 0
 }
-
 
 if [ "$START_MODE" = "diagnostic" ]; then
   echo "START_MODE=diagnostic: running API in the foreground (no detach)"
