@@ -17,6 +17,8 @@ services:
 
   ollama:
     image: ollama/ollama:latest
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
     ports:
       - "11434:11434"
     volumes:
@@ -40,7 +42,6 @@ services:
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text:latest}
@@ -77,7 +78,6 @@ services:
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text:latest}
@@ -112,7 +112,6 @@ services:
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text:latest}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text:latest}
