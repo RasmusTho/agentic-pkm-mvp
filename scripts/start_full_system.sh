@@ -315,6 +315,8 @@ STARTUP_TIMEOUT_SECONDS="${STARTUP_TIMEOUT_SECONDS:-120}"
 INDEX_REBUILD_TIMEOUT_SECONDS="${INDEX_REBUILD_TIMEOUT_SECONDS:-1800}"
 JSON_PARSE_ATTEMPTS="${JSON_PARSE_ATTEMPTS:-3}"
 JSON_PARSE_SLEEP_SECONDS="${JSON_PARSE_SLEEP_SECONDS:-1}"
+DB_PROBE_MAX_ATTEMPTS="${DB_PROBE_MAX_ATTEMPTS:-30}"
+DB_PROBE_SLEEP_SECONDS="${DB_PROBE_SLEEP_SECONDS:-2}"
 
 flight_recorder_log_path="$ROOT/tmp/flightrecorder-$(date -u +"%Y%m%d-%H%M%S").log"
 flight_recorder_pid=""
@@ -557,24 +559,46 @@ run_db_probe() {
   db_pwd=$(docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_PASSWORD"')
   db_user=${db_user:-app}
   db_name=${db_name:-app}
-  local db_start
-  db_start=$SECONDS
-  local db_ready=0
-  while [ $((SECONDS - db_start)) -lt 30 ]; do
-    if docker exec "$db_cid" env PGPASSWORD="$db_pwd" pg_isready -U "$db_user" -d "$db_name" >/dev/null 2>&1; then
-      db_ready=1
+  local max_attempts="${DB_PROBE_MAX_ATTEMPTS:-30}"
+  local sleep_seconds="${DB_PROBE_SLEEP_SECONDS:-2}"
+  local attempt=1
+  local last_error=""
+  local ok=0
+  local psql_output=""
+  while [ "$attempt" -le "$max_attempts" ]; do
+    psql_output=$(docker exec "$db_cid" env PGPASSWORD="$db_pwd" psql -U "$db_user" -d "$db_name" -c "select current_user, current_database();" 2>&1)
+    status=$?
+    if [ "$status" -eq 0 ]; then
+      ok=1
       break
     fi
-    sleep 1
+    last_error="$psql_output"
+    if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+      echo "DB probe attempt ${attempt}/${max_attempts} failed"
+    fi
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      if printf '%s' "$psql_output" | grep -Eqi "shutting down|could not connect|connection refused|the database system is starting up|terminating connection"; then
+        sleep "$sleep_seconds"
+        attempt=$((attempt + 1))
+        continue
+      fi
+      sleep "$sleep_seconds"
+      attempt=$((attempt + 1))
+      continue
+    fi
+    break
   done
-  if [ "$db_ready" -ne 1 ]; then
-    echo "ERROR: PostgreSQL did not become ready in 30 seconds" >&2
+  if [ "$ok" -ne 1 ]; then
+    echo "ERROR: DB probe failed after ${max_attempts} attempts" >&2
+    if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ -n "$last_error" ]; then
+      echo "$last_error" >&2
+    fi
     run_docker_compose ps
     run_docker_compose logs --tail=200 db || true
     exit 1
   fi
   echo "DB credentials: user=$db_user db=$db_name"
-  docker exec "$db_cid" env PGPASSWORD="$db_pwd" psql -U "$db_user" -d "$db_name" -c "select current_user, current_database();"
+  printf '%s\n' "$psql_output"
 }
 
 run_worker_probe() {
