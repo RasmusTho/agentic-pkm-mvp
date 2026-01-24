@@ -71,8 +71,8 @@ def test_ollama_embeddings_hits_native_path(monkeypatch) -> None:
 
 def test_ollama_embeddings_404_reports_actionable_error(monkeypatch) -> None:
     responses = {
-        "/api/embeddings": (404, {"error": "missing"}),
-        "/v1/embeddings": (404, {"error": "missing"}),
+        "/api/embeddings": (404, {"error": "model \"nomic-embed-text:latest\" not found, try pulling it first"}),
+        "/v1/embeddings": (404, {"error": {"message": "model \"nomic-embed-text:latest\" not found, try pulling it first"}}),
     }
     server, thread = _start_server(responses)
     try:
@@ -85,7 +85,7 @@ def test_ollama_embeddings_404_reports_actionable_error(monkeypatch) -> None:
 
         message = str(excinfo.value)
         assert "Ollama embedding requests failed" in message
-        assert "Primary error" in message
-        assert "fallback" in message
+        assert "HTTP 404" in message
+        assert "try pulling it first" in message
     finally:
         _stop_server(server, thread)

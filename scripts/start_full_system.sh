@@ -641,36 +641,74 @@ wait_for_healthz() {
 
 ollama_preflight_ok=0
 run_ollama_preflight() {
-  if run_docker_compose exec -T api python - <<'PY'
+  if run_docker_compose exec -T api env VERIFY_ACTIVE="${VERIFY_ACTIVE:-0}" python - <<'PY'
 from __future__ import annotations
-import os, sys
+import os
+import sys
 import httpx
 
-try:
-    base = os.environ.get("OLLAMA_URL")
-    if not base:
-        print("INFO: optional preflight failed: OLLAMA_URL missing", file=sys.stderr)
-        raise SystemExit(0)
-    model = os.environ.get("OLLAMA_EMBED_MODEL") or os.environ.get("EMBED_MODEL", "nomic-embed-text:latest")
-    with httpx.Client(timeout=10.0) as client:
-        tags_resp = client.get(f"{base}/api/tags")
-        tags_resp.raise_for_status()
-        models = tags_resp.json().get("models") or []
-        print(f"Ollama tags ok ({len(models)} models)")
-        embed_resp = client.post(
-            f"{base}/api/embeddings",
-            json={"model": model, "prompt": "startup-check"},
-        )
-        embed_resp.raise_for_status()
-        data = embed_resp.json()
-        embeddings = data.get("embeddings") or data.get("embedding")
-        if not embeddings:
-            raise SystemExit(0)
-        entry = embeddings[0] if isinstance(embeddings, list) and isinstance(embeddings[0], (list, tuple)) else embeddings
+
+def _error_detail(response: httpx.Response) -> str | None:
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        err = payload.get("error")
+        if isinstance(err, dict):
+            detail = err.get("message") or err.get("error")
+        else:
+            detail = err or payload.get("message")
+    else:
+        detail = None
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()
+    text = response.text.strip()
+    if text:
+        return text
+    return None
+
+
+def _fail(message: str, verbose: bool) -> None:
+    if verbose:
+        print(message, file=sys.stderr)
+    raise SystemExit(1)
+
+
+verbose = os.environ.get("VERIFY_ACTIVE") == "1"
+base = os.environ.get("OLLAMA_URL")
+if not base:
+    _fail("INFO: Ollama preflight failed: OLLAMA_URL missing", verbose)
+model = os.environ.get("OLLAMA_EMBED_MODEL") or os.environ.get("EMBED_MODEL", "nomic-embed-text:latest")
+with httpx.Client(timeout=10.0) as client:
+    tags_resp = client.get(f"{base}/api/tags")
+    if tags_resp.is_error:
+        detail = _error_detail(tags_resp)
+        message = f"INFO: Ollama preflight failed: /api/tags returned HTTP {tags_resp.status_code}"
+        if detail:
+            message = f"{message}: {detail}"
+        _fail(message, verbose)
+    tags_payload = tags_resp.json() if tags_resp.headers.get("Content-Type", "").startswith("application/json") else {}
+    models = tags_payload.get("models") if isinstance(tags_payload, dict) else None
+    if verbose:
+        print(f"Ollama tags ok ({len(models or [])} models)")
+    embed_resp = client.post(
+        f"{base}/api/embeddings",
+        json={"model": model, "prompt": "startup-check"},
+    )
+    if embed_resp.is_error:
+        detail = _error_detail(embed_resp)
+        message = f"INFO: Ollama preflight failed: /api/embeddings returned HTTP {embed_resp.status_code}"
+        if detail:
+            message = f"{message}: {detail}"
+        _fail(message, verbose)
+    data = embed_resp.json() if embed_resp.headers.get("Content-Type", "").startswith("application/json") else {}
+    embeddings = data.get("embeddings") or data.get("embedding") if isinstance(data, dict) else None
+    if not embeddings:
+        _fail("INFO: Ollama preflight failed: embeddings payload missing vectors", verbose)
+    entry = embeddings[0] if isinstance(embeddings, list) and embeddings else embeddings
+    if verbose:
         print(f"Ollama embed dim: {len(entry)}")
-except Exception as exc:
-    print(f"INFO: optional preflight failed: {exc}", file=sys.stderr)
-    sys.exit(0)
 PY
   then
     echo "Ollama preflight succeeded"

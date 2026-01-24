@@ -11,6 +11,31 @@ from app.embedding_config import assert_embed_dim, get_embed_dim, l2_normalize
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
+
+def _extract_error_detail(response: httpx.Response) -> str | None:
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, Mapping):
+        if "error" in payload:
+            err = payload.get("error")
+            if isinstance(err, Mapping):
+                detail = err.get("message") or err.get("error")
+            else:
+                detail = err
+        else:
+            detail = payload.get("message")
+    else:
+        detail = None
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()
+    text = response.text.strip()
+    if text:
+        return text
+    return None
+
+
 OLLAMA_URL = os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
 
 
@@ -96,7 +121,12 @@ def _parse_vector(payload: Mapping[str, object], *, provider: str, model: str, e
 def _ollama_embed_api(text: str, model: str, dim: int, timeout: float) -> tuple[float, ...]:
     payload = _ollama_payload(text, model, dim)
     resp = httpx.post(f"{OLLAMA_URL}/api/embeddings", json=payload, timeout=timeout)
-    resp.raise_for_status()
+    if resp.is_error:
+        detail = _extract_error_detail(resp)
+        message = f"Ollama /api/embeddings returned HTTP {resp.status_code}"
+        if detail:
+            message = f"{message}: {detail}"
+        raise httpx.HTTPStatusError(message, request=resp.request, response=resp)
     data = resp.json()
     if not isinstance(data, Mapping):
         raise ValueError("Ollama /api/embeddings returned an unexpected payload")
@@ -106,7 +136,12 @@ def _ollama_embed_api(text: str, model: str, dim: int, timeout: float) -> tuple[
 def _ollama_openai_fallback(text: str, model: str, dim: int, timeout: float) -> tuple[float, ...]:
     payload = {"model": model, "input": text}
     resp = httpx.post(f"{OLLAMA_URL}/v1/embeddings", json=payload, timeout=timeout)
-    resp.raise_for_status()
+    if resp.is_error:
+        detail = _extract_error_detail(resp)
+        message = f"Ollama /v1/embeddings returned HTTP {resp.status_code}"
+        if detail:
+            message = f"{message}: {detail}"
+        raise httpx.HTTPStatusError(message, request=resp.request, response=resp)
     data = resp.json()
     if not isinstance(data, Mapping):
         raise ValueError("Ollama fallback embeddings endpoint returned an unexpected payload")

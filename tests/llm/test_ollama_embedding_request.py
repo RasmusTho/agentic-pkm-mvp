@@ -14,6 +14,9 @@ def test_ollama_embedding_calls_native_endpoint(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     class DummyResponse:
+        is_error = False
+        status_code = 200
+
         def raise_for_status(self) -> None:
             pass
 
