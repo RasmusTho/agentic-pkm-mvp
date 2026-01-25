@@ -42,6 +42,10 @@ Example commands (placeholders until tests land):
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/runtime/test_optimistic_locking.py -m "not pg"`
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/ops/test_event_idempotency.py -m "not pg"`
 
+## Hermetic test environment
+- The test suite clears VAULT_ROOT and PANEL_ACTION_WIRING_PATH by default to prevent accidentally reading a user’s real vault (often iCloud-backed) which can block and hang tests.
+- Tests that require vault wiring overrides must set VAULT_ROOT explicitly (use monkeypatch + temp vault containing System/Config/panel-action-wiring.yaml) or set PANEL_ACTION_WIRING_PATH explicitly.
+
 ## Commands
 - Repo-root deterministic run (memory backend; plugin autoload disabled):
   - STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"
@@ -80,8 +84,8 @@ Example commands (placeholders until tests land):
   - pytest -q tests/agents/panel_agent/test_panel_wiring.py -m "not pg"
 
 ## Debugging hanging tests
-- Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONFAULTHANDLER=1 pytest -vv -m "not pg" -p faulthandler --faulthandler-timeout 60`
-- The faulthandler dump shows where the test is stuck; re-run with a narrower path or `-k` to isolate.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONFAULTHANDLER=1 pytest -vv -m "not pg" --faulthandler-timeout 60`
+- Note: the dump shows where the test is blocked (e.g. filesystem read / iCloud / background threads).
 
 ## Reality-MVP pipeline sanity
 - Scenario: `tests/e2e/test_reality_mvp_pipeline.py` runs the canonical note → ingest/normalize/classify → store/outbox/index → hybrid search warm-load → `/api/ask` flow against `tests/fixtures/reality_mvp/demo_note.md` (see `docs/scenarios/REALITY_MVP.md`).
