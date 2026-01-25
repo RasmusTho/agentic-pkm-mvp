@@ -22,6 +22,7 @@ def test_force_override_affects_ask_api(monkeypatch) -> None:
     monkeypatch.setenv("LLM_FORCE_MODEL", "mock-forced-test")
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("REASONING_ENABLE", "1")
+    monkeypatch.setenv("REASONING_PROVIDER", "llm")
     monkeypatch.setenv("EMBED_PROFILE", "deterministic")
 
     hybrid = get_store()
