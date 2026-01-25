@@ -73,6 +73,7 @@ class PanelIntentExecutedPayload(BaseModel):
     note: NoteRef
     panel: PanelInfo
     actions: list[PanelRuntimeActionResult] = Field(default_factory=list)
+    executed_action_ids: list[str] = Field(default_factory=list)
 
 
 class PanelIntentExecutedEvent(BaseModel):

@@ -4,25 +4,17 @@ State: v5.0 – PanelAgent runtime V1 (promotion fan-out + in-note receipts on R
 Purpose: translate human-driven AI panels in vault notes into structured intents/events while keeping the panel simple, optional, and human-first.
 
 ## PanelAgent Runtime V1 (current baseline)
-- SoT v5.0 baseline built on top of the locked v4.10 Reality-MVP.
 - Runtime V1 uses a fixed mapping from panel actions to follow-up events (e.g., promotion intents) and writes receipts into an in-note AI status callout; the panel stays a small working set with no history.
 - This is a simplified bridge/runtime loop, not the final agentic design; it keeps watcher and manual panel flows working while the agent migrates to LangGraph.
 - Internal implementation now runs through a LangGraph-based control flow (`PanelAgentState`), but external behaviour and emitted events remain identical.
-- v5.5C decider hardening is in progress; rule remains the default while LLM mode stays opt-in.
 - Planner pipeline (opt-in, `PANEL_AGENT_PIPELINE=planner`): PanelAgent builds a `PanelActionIntent` and asks the Planner to create a plan for the selected actions. Plans can now be executed via the Orchestrator using the CLI (`python -m app.cli panel-orchestrate-plan --plan-id <plan_id>`), while the default direct path remains unchanged.
 - Action catalog (`docs/settings/panel-actions.md`) is the canonical list of actions (id, kind, labels/synonyms, description/llm_hint, downstream event, params). Rule-mode matches checkbox labels deterministically; LLM-mode is opt-in and uses the catalog + panel/note context with checkboxes as hints.
-
-## Human-first semantics
-- Freeform commands may auto-execute when confidently mapped to a canonical action, but the runtime still leaves an explicit receipt in the AI status callout so the human sees what ran.
-- Uncertainty should surface as suggested checkboxes (explicit confirmation) rather than silent execution.
 - Checkboxes are treated as explicit consent; executed items remove their checkbox from the panel working set.
 - Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
-- Idempotency keys: each checkbox gets a hidden `ai:id=...`; auto-executed freeform actions use stable ids (e.g., `auto:promote.evergreen`) recorded in `executed_action_ids` to prevent re-runs across ticks.
 
 ## PanelAgent 2.0 (planned v5.6)
 - Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `graph.py`).
 - LLM-based reasoning decides which panel actions to execute (and in what order) rather than relying on fixed mappings.
-- Planner/Orchestrator integration (A2A/plan objects) executes chosen actions (promotion, summaries, hygiene) with the same guardrails as other agents.
 - PanelAgent Runtime V1 remains the baseline until this LangGraph-driven 2.0 path is implemented and proven in production.
 - LangGraph control flow now supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `rule` remains the default to preserve current behaviour, while `llm` is an opt-in, experimental action selector using the shared LLM provider.
 - LLM-driven contract tests live under `tests/e2e/test_panel_llm_e2e.py` (gated by `@pytest.mark.panel_llm_e2e` and `PANEL_AGENT_LLM_E2E=1`) to validate end-to-end promotion/non-promotion scenarios using the real decider.
@@ -30,21 +22,20 @@ Purpose: translate human-driven AI panels in vault notes into structured intents
 ## Panel syntax (Markdown)
 - Panels are delimited by tolerant AI fences: any `%% ...ai... %%` (case-insensitive) line opens/closes a panel. First fence opens, second closes, third opens the next, etc.
 - Inside a panel:
-  - `## AI-instruktion` — free-text instruction from the human.
-  - `## AI-åtgärder` — markdown checkboxes (`- [ ] ...` / `- [x] ...`) for discrete actions; each line carries a hidden `<!--ai:id=...-->` so the runtime can execute deltas idempotently.
-  - Label-based variants are tolerated: `Instruction:` / `Actions:` / `Log:` also parse, and checkboxes are still detected even without an explicit actions heading.
+  - Instruction heading: `## AI-instruktion` (localized variants supported)
+  - Actions heading: `## AI-åtgärder` (localized variants supported)
+  - Checkboxes: `- [ ]` or `- [x]` (checked means run the action)
 - AI status callout (foldable, outside the panel): `> [!info]- AI status` with receipt lines (`- ✅ ...`, `- ⚠️ ...`, `- ⏳ ...`). The runtime appends receipts for executed/failed actions and trims to the last 20; already-executed IDs remove their checkbox from the panel on re-run.
 - Legacy notes that only use the headings without fences are still parsed; new panels should use fences.
 - Panel content is not indexed or used as knowledge.
 
-Example:
-```
+### Example
+```markdown
 %% AI:Start %%
 ## AI-instruktion
-Please promote this note after verifying the summary.
+Make this note evergreen
 ## AI-åtgärder
-- [ ] Promote this note
-- [x] Re-classify as Concept
+- [ ] Gör denna anteckning evergreen
 %% AI:End %%
 
 > [!info]- AI status
@@ -108,7 +99,7 @@ Please promote this note after verifying the summary.
 ```
 
 ### Derived runtime events
-- `panel.intent.executed` — payload `{note, panel, actions:[{id,label,checked,status,emitted_events}]}` (source `panel_agent` / trigger `runtime`).
+- `panel.intent.executed` — payload `{note, panel, actions:[{id,label,checked,status,emitted_events}], executed_action_ids:[...]}` (source `panel_agent` / trigger `runtime`).
 - `panel.action.triggered` — payload `{note, panel_id, action:{id,label}, target_event}` for handled actions.
 - `panel.action.logged` — payload `{note, panel_id, action:{id,label,checked}, reason, mapping?}` for unmapped/unimplemented actions.
 - `promote.intent.created` — payload includes `{note, panel, action, instruction, maturity}` plus `{action_id, intent_source="panel.note", note.path}`; emitted when a checked action has `intent_type: promotion`; downstream consumer uses `note.path` to patch the vault note frontmatter (e.g., `review_state: evergreen`).

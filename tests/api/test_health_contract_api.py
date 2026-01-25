@@ -1,6 +1,12 @@
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.health_contract import HealthContract, HealthStateMachine
 
 
 def _mock_snapshot(state: str, reason: str) -> dict[str, object]:
@@ -72,3 +78,35 @@ def test_readyz_unhealthy(monkeypatch) -> None:
     assert resp.status_code == 503
     assert resp.json()["detail"]["state"] == "boot"
     assert resp.json()["detail"]["class"] == "active"
+
+
+def test_health_contract_degrades_on_stale_outbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    old_ts = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    record = {
+        "event": "watcher.run",
+        "timestamp": old_ts.isoformat().replace("+00:00", "Z"),
+        "trace_id": "trace-health",
+        "source": "test",
+        "payload": {},
+    }
+    outbox_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setattr("app.outbox.events.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+    monkeypatch.setattr("app.events.outbox.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+
+    now = datetime(2025, 1, 1, 0, 0, 30, tzinfo=timezone.utc)
+    contract = HealthContract(
+        state_machine=HealthStateMachine(),
+        now_fn=lambda: now,
+        vault_root_fn=lambda: tmp_path,
+    )
+    snapshot = None
+    for _ in range(3):
+        snapshot = contract.evaluate()
+
+    assert snapshot is not None
+    assert snapshot["state"] == "degraded"
+    assert "outbox idle" in snapshot["reason"]
+    assert any("events-doctor" in action for action in snapshot["suggested_actions"])

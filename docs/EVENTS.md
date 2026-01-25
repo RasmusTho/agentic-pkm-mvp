@@ -115,6 +115,7 @@ Emitted after the runtime interprets and handles a parsed panel.
 Payload highlights:
 - `note`, `panel`
 - `actions[]`: `id`, `label`, `checked`, `status` (e.g. triggered/logged/skipped), optional `intent_type`, `emitted_events[]`
+- `executed_action_ids[]`: stable `ai:id` values recorded for idempotency
 
 ### `promote.intent.created`
 
