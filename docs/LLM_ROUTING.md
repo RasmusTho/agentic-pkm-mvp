@@ -30,6 +30,8 @@ Routing is intentionally deterministic and single-source:
 
 Until vault-first routing is wired, use env vars to control routes in the runtime and CI.
 
+Tests: `tests/components/llm/test_router.py::test_router_respects_env_defaults`
+
 ## Supported environment variables
 
 Core routing:
@@ -49,6 +51,8 @@ Optional tuning:
 - `LLM_TEMPERATURE` — chat temperature for Ollama/native calls.
 - `LLM_MAX_TOKENS` — token budget used by the fabric caller.
 - `LLM_MOCK_RESPONSE` — deterministic mock response payload for `mock` provider.
+
+Tests: `tests/components/llm/test_router.py::test_router_respects_model_env_defaults`
 
 ### Examples
 
@@ -76,11 +80,15 @@ export LLM_FORCE_MODEL=llama3.1:8b-instruct
 - **Alpha status output** (`scripts/alpha_status.py`)
   - Prints `llm routes` and `llm providers` summaries for human operators.
 
+Tests: `tests/e2e/test_llm_routing_e2e.py::test_force_override_affects_ask_api`
+
 ## Future: task-aware routing
 
 Task-aware routing will eventually use `task_kind` and `complexity_hint` to pick providers/models.
 The routing policy will live in the vault-first settings compiler once that integration ships.
 This is **not implemented today**; the current router remains env-driven and deterministic.
+
+Tests: `tests/components/llm/test_router_failures.py::test_router_degrades_to_mock_on_invalid_provider`
 
 ## Non-goals / future work
 

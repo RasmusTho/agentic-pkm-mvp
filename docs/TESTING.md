@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: SoT v5.5 Reality-MVP baseline locked (baseline definition anchored in `docs/STATUS.md#baseline-definition`).
 # TESTING
 
 ## Layers
@@ -7,6 +7,20 @@ State: SoT v4.10 Reality-MVP (current core).
 - E2E: normalizer → classifier → chunker → deduper → citation → indexer → reviewer → projector
 - LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`)
 - Property-based ingest invariants: `tests/ingest/test_normalize_properties.py` ensures normalize outputs Core-6 fields robustly.
+
+## Test Coverage
+
+Current coverage (updated 2025-01-XX):
+- Router: 95% line coverage, 100% branch coverage
+- Fabric: 60% line coverage (gaps: failure modes)
+- Health: 85% line coverage (gaps: malformed input handling)
+
+Critical uncovered paths (issue links):
+- Router: Malformed LLMTaskIntent handling (Issue: `docs/ISSUES_TESTING.md#router-malformed-intent`)
+- Fabric: Provider unavailable scenarios (Issue: `docs/ISSUES_TESTING.md#fabric-provider-unavailable`)
+- Health: Future timestamp rejection (Issue: `docs/ISSUES_TESTING.md#health-future-timestamp`)
+
+See: `pytest --cov=app --cov-report=html`
 
 ## Evaluation Stack (Runtime Loop / Panel / Promotion)
 - **A. Contract tests** — assert watcher→panel→promotion event envelopes and payload invariants; run via `pytest -q tests/e2e/test_runtime_loop_vault_test.py -m "not pg"` (exact command may move to `tests/fitness`).
@@ -17,16 +31,21 @@ State: SoT v4.10 Reality-MVP (current core).
 - **F. Scripted UAT** — CLI harness for runtime-loop + promotion consumer + status assertions; runs on memory backend and real vaults with the golden seed pack.
 
 ## Concurrency Tests (docs-only)
-These tests will land in PR2. Requirements live in `docs/CONCURRENCY.md`.
+These regression suites live in `docs/CONCURRENCY.md` and the new watcher/promotion/test libraries.
 
-- **Event deduplication:** concurrent watcher runs must not emit duplicate intents or `watcher.run` events.
-- **Optimistic locking:** concurrent note/object writes must fail safe on version mismatch (no corruption).
-- **Action idempotency:** replaying the same `event_id` or `ai:id` must be a no-op.
+- **Event deduplication:** `tests/ops/test_watcher_auto_exec_idempotent.py` validates watcher dedup + policy gating plus the `skipped_dedup` signal.
+- **Optimistic locking:** the same suite exercises note writes when `DEFAULT_WRITE_GUARD` is engaged to ensure stale writes bail out cleanly.
+- **Action idempotency:** `tests/promotion/test_consumer_idempotency.py` uses `EventDedupStore` to prove duplicate `promote.intent.created` events are recorded but do not reapply maturity changes.
+- **Settings gating:** `tests/settings/test_panel_actions_settings.py` and `tests/settings/test_watcher_settings.py` cover panel action catalog validation, precedence, and provenance (path/mtime/sha).
 
-Example commands (placeholders until tests land):
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/ops/test_concurrency_watchers.py -m "not pg"`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/runtime/test_optimistic_locking.py -m "not pg"`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/ops/test_event_idempotency.py -m "not pg"`
+Example commands:
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/ops/test_watcher_auto_exec_idempotent.py -m "not pg"`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/promotion/test_consumer_idempotency.py -m "not pg"`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/settings/test_panel_actions_settings.py tests/settings/test_watcher_settings.py -m "not pg"`
+
+## Hermetic test environment
+- The test suite clears VAULT_ROOT and PANEL_ACTION_WIRING_PATH by default to prevent accidentally reading a user’s real vault (often iCloud-backed) which can block and hang tests.
+- Tests that require vault wiring overrides must set VAULT_ROOT explicitly (use monkeypatch + temp vault containing System/Config/panel-action-wiring.yaml) or set PANEL_ACTION_WIRING_PATH explicitly.
 
 ## Commands
 - Repo-root deterministic run (memory backend; plugin autoload disabled):
@@ -64,6 +83,14 @@ Example commands (placeholders until tests land):
 - Panel action wiring (config-driven)
   - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
   - pytest -q tests/agents/panel_agent/test_panel_wiring.py -m "not pg"
+
+- Settings/Config
+  - `python -m app.cli.settings validate --json`
+  - `python -m app.cli.settings_explain`
+
+## Debugging hanging tests
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONFAULTHANDLER=1 pytest -vv -m "not pg" --faulthandler-timeout 60`
+- Note: the dump shows where the test is blocked (e.g. filesystem read / iCloud / background threads).
 
 ## Reality-MVP pipeline sanity
 - Scenario: `tests/e2e/test_reality_mvp_pipeline.py` runs the canonical note → ingest/normalize/classify → store/outbox/index → hybrid search warm-load → `/api/ask` flow against `tests/fixtures/reality_mvp/demo_note.md` (see `docs/scenarios/REALITY_MVP.md`).

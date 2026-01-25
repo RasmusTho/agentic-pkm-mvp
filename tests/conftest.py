@@ -87,6 +87,32 @@ def stub_index(monkeypatch) -> StubVectorIndex:
     return index
 
 
+@pytest.fixture
+def clean_llm_env(monkeypatch):
+    """
+    Ensure clean LLM environment for each test.
+
+    Guarantees cleanup even if test crashes.
+    See: docs/LLM_ROUTING.md §Configuration precedence
+    """
+    keys = [
+        "LLM_PROVIDER",
+        "LLM_MODEL",
+        "EMBED_MODEL",
+        "LLM_FORCE_PROVIDER",
+        "LLM_FORCE_MODEL",
+        "OLLAMA_HOST",
+        "OLLAMA_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE",
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_BASE",
+    ]
+    for key in keys:
+        monkeypatch.delenv(key, raising=False)
+    yield monkeypatch
+
+
 def pytest_addoption(parser) -> None:
     """Provide minimal timeout flags when pytest-timeout is unavailable."""
 

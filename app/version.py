@@ -1,6 +1,6 @@
-SOT_BASELINE = "v4.10"
-SOT_FORWARD = "v5.5"
-SOT_LABEL = "baseline v4.10 (Reality-MVP), forward v5.5 (PanelAgent + Watchers)"
+SOT_BASELINE = "v5.5"
+SOT_FORWARD = "v5.6"
+SOT_LABEL = "baseline v5.5 (Reality-MVP), forward v5.6 (LangGraph + Reasoning)"
 SOT_VERSION = SOT_BASELINE
 
 

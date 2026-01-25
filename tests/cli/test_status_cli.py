@@ -18,10 +18,10 @@ def test_status_cli_prints_snapshot(monkeypatch):
     snapshot = SystemStatus(
         timestamp=datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
         sot_version="vX",
-        sot_baseline_version="v4.10",
-        sot_forward_line_version="v5.4",
-        sot_label="baseline v4.10 (Reality-MVP), forward v5.4 (PanelAgent + Watchers)",
-        feature_line_version="v5.4",
+        sot_baseline_version="v5.5",
+        sot_forward_line_version="v5.6",
+        sot_label="baseline v5.5 (Reality-MVP), forward v5.6 (LangGraph + Reasoning)",
+        feature_line_version="v5.6",
         active_features=["PanelAgent runtime", "Watcher"],
         stores=[
             StoreStatus(name="vault", object_count=2, last_ingest_at=datetime(2025, 1, 1, tzinfo=timezone.utc)),
@@ -77,8 +77,8 @@ def test_status_cli_prints_snapshot(monkeypatch):
     result = runner.invoke(cli, ["status"])
 
     assert result.exit_code == 0, result.output
-    assert "SoT baseline: v4.10" in result.output
-    assert "SoT forward line: v5.4" in result.output
+    assert "SoT baseline: v5.5" in result.output
+    assert "SoT forward line: v5.6" in result.output
     assert "Active features:" in result.output
     assert "panelagent runtime" in result.output.lower()
     assert "vault: 2 objects" in result.output

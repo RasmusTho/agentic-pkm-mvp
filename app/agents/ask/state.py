@@ -24,5 +24,6 @@ class AgentState(BaseModel):
     hits: List[RetrievedHit] = Field(default_factory=list)
     answer: Optional[str] = None
     reasoning: Optional[List[str]] = None
+    llm_route: dict[str, Any] | None = None
 
     model_config = {"arbitrary_types_allowed": True}

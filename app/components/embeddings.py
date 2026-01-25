@@ -114,6 +114,9 @@ def resolve_embedding_identity(profile: str | None = None, override_model: str |
     if spec:
         candidates.append(spec)
     env_profile = _normalize_name(os.getenv("EMBED_PROFILE"))
+    if env_profile in {"deterministic", "test", "offline"} and (spec in {None, "default"}):
+        dim = get_embed_dim()
+        return EmbeddingIdentity(provider="deterministic", model="deterministic-hash", dim=dim, normalize=True)
     if env_profile:
         candidates.append(env_profile)
     bundle = None
@@ -195,4 +198,3 @@ __all__ = [
     "resolve_embedding_identity",
     "EMBED_MODEL",
 ]
-

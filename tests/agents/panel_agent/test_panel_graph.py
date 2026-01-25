@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
-from uuid import uuid4
+
+import pytest
 
 from app.agents.panel_agent.graph import run_panel_graph
 from app.agents.panel_agent.state import PanelAgentState
+from app.components.concurrency import IdempotencyGuard
 from app.components.settings.panel_actions_loader import PanelActionCatalog, PanelActionDescriptor
 from app.events.panel import (
     NoteRef,
@@ -17,6 +19,20 @@ from app.events.panel import (
     PanelRuntimeActionResult,
 )
 
+TEST_NOTE_UUID = "panel-test-00000000-0000-4000-8000-000000000001"
+TEST_NOTE_PATH = "vault/Note.md"
+TEST_NOTE_ORIGIN = "vault"
+
+
+@pytest.fixture(autouse=True)
+def _avoid_wiring_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.agents.panel_agent.graph.get_default_action_wiring", lambda: {})
+
+
+@pytest.fixture(autouse=True)
+def _reset_idempotency_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.agents.panel_agent.graph._IDEMPOTENCY_GUARD", IdempotencyGuard(ttl_seconds=86400.0))
+
 
 class _StubChatClient:
     def __init__(self, response: str) -> None:
@@ -27,7 +43,7 @@ class _StubChatClient:
 
 
 def _intent_event_with_action(action: PanelIntentAction, *, trace_id: str = "trace-graph") -> PanelIntentEvent:
-    note = NoteRef(uuid=str(uuid4()), path="vault/Note.md", origin="vault")
+    note = NoteRef(uuid=TEST_NOTE_UUID, path=TEST_NOTE_PATH, origin=TEST_NOTE_ORIGIN)
     panel = PanelInfo(panel_id="panel-1", instruction="Promote please.", raw_block=None)
     payload = PanelIntentPayload(note=note, panel=panel, actions=[action])
     return PanelIntentEvent(payload=payload, trace_id=trace_id)
@@ -194,3 +210,26 @@ def test_panel_graph_llm_can_select_unchecked(monkeypatch) -> None:
     result = run_panel_graph(state, decider_mode="llm")
     statuses = {r.id: r.status for r in result.action_results}
     assert statuses["promote.evergreen"] == "triggered"
+
+
+def test_panel_graph_skips_idempotent_duplicate() -> None:
+    mapping = PanelActionMapping(
+        id="promote.evergreen",
+        intent_type="promotion",
+        downstream_event="review.promote.evergreen",
+        params={"maturity": "evergreen"},
+    )
+    action = PanelIntentAction(id=mapping.id, label="Promote", checked=True, mapping=mapping)
+    intent = _intent_event_with_action(action, trace_id="trace-graph-idem")
+
+    first = run_panel_graph(_state_from_intent(intent))
+    first_events = {getattr(evt, "event", None) for evt in first.emitted_events}
+    assert "promote.intent.created" in first_events
+    executed = next(evt for evt in first.emitted_events if getattr(evt, "event", None) == "panel.intent.executed")
+    assert action.id in (executed.payload.executed_action_ids or [])
+
+    second = run_panel_graph(_state_from_intent(intent))
+    second_events = {getattr(evt, "event", None) for evt in second.emitted_events}
+    assert "promote.intent.created" not in second_events
+    assert second.action_results[0].status == "skipped"
+    assert second.action_results[0].details.get("reason") == "idempotent_duplicate"

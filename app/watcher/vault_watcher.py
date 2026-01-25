@@ -16,6 +16,7 @@ from app.components.concurrency import DedupTaskQueue, OptimisticWriteGuard, Sys
 from app.ingest import vault_alpha as vault_alpha
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
+from app.settings.watcher_settings import load_watcher_settings
 from app.store.object_store import ObjectStore
 from app.watcher.events import emit_watcher_run_event
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
@@ -165,6 +166,65 @@ def _content_hash(markdown: str) -> str:
     return hashlib.sha256(markdown.encode("utf-8")).hexdigest()
 
 
+def _executed_action_ids_by_label(panel_result) -> dict[str, str]:
+    executed_by_label: dict[str, str] = {}
+    for event in getattr(panel_result, 'events', []):
+        event_type = getattr(event, 'event', getattr(event, 'event_type', ''))
+        if event_type != 'panel.intent.executed':
+            continue
+        payload = getattr(event, 'payload', {}) or {}
+        for action in payload.get('actions', []):
+            label = action.get('label')
+            action_id = action.get('id')
+            if label and action_id:
+                executed_by_label[label] = action_id
+    return executed_by_label
+
+
+def _canonical_action_ids_by_text(panel_result) -> dict[str, str]:
+    canonical: dict[str, str] = {}
+    for event in getattr(panel_result, 'events', []):
+        event_type = getattr(event, 'event', getattr(event, 'event_type', ''))
+        if event_type != 'promote.intent.created':
+            continue
+        payload = getattr(event, 'payload', {}) or {}
+        action_text = payload.get('action_text')
+        if not action_text:
+            action = payload.get('action') or {}
+            action_text = action.get('label')
+        action_id = payload.get('action_id') or (payload.get('action') or {}).get('id')
+        if action_text and action_id:
+            canonical[action_text] = action_id
+    return canonical
+
+
+def _disallowed_actions(
+    panel_result,
+    mappings,
+    allowed_action_ids,
+) -> list[tuple[str, str | None]]:
+    executed_ids = _executed_action_ids_by_label(panel_result)
+    canonical_ids = _canonical_action_ids_by_text(panel_result)
+    disallowed: list[tuple[str, str | None]] = []
+    state_actions = getattr(getattr(panel_result, 'state', None), 'actions', [])
+    for action in state_actions:
+        if not getattr(action, 'checked', False) or not getattr(action, 'text', None):
+            continue
+        action_id: str | None = None
+        if action.text and mappings:
+            mapping = mappings.get(action.text)
+            if mapping:
+                action_id = getattr(mapping, 'action_id', None)
+        if not action_id and action.text:
+            action_id = executed_ids.get(action.text)
+        if not action_id and action.text:
+            action_id = canonical_ids.get(action.text)
+        canonical_id = action_id if action_id and '.' in action_id else None
+        if canonical_id and canonical_id not in allowed_action_ids:
+            disallowed.append((action.text, canonical_id))
+    return disallowed
+
+
 def _build_dedup_key(policy_id: str, rel_path: Path, content_hash: str) -> str:
     return f"watcher:{policy_id}:{rel_path.as_posix()}:{content_hash}"
 
@@ -262,6 +322,8 @@ def run_watcher_tick(
             "Outbox path is required for watcher runs; set INDEX_OUTBOX_PATH or pass --outbox-path."
         )
     action_mappings = load_panel_action_mappings()
+    watcher_settings = load_watcher_settings(vault_root)
+    allowed_action_ids = {aid for aid in watcher_settings.allowed_actions if aid}
     if not action_mappings:
         fallback_mapping = PanelActionMapping(
             text="Make this note evergreen",
@@ -284,6 +346,7 @@ def run_watcher_tick(
         "panel_skipped_policy": 0,
         "panel_skipped_limit": 0,
         "panel_skipped_auto_exec": 0,
+        "panel_skipped_allowed_actions": 0,
         "applied_actions": 0,
         "skipped_dedup": 0,
         "skipped_idempotent": 0,
@@ -297,11 +360,13 @@ def run_watcher_tick(
 
     policy_allowed_paths: list[Path] = []
     for path in result.changed:
+        rel_path = path.relative_to(vault_root)
         frontmatter = _read_frontmatter(path)
         if watcher_may_run_panel(frontmatter):
             policy_allowed_paths.append(path)
         else:
             summary["panel_skipped_policy"] += 1
+            messages.append(f"Watcher policy denies auto-run for {rel_path}")
 
     summary["panel_candidates"] = len(policy_allowed_paths)
 
@@ -419,6 +484,22 @@ def run_watcher_tick(
                     action_mappings=action_mappings,
                     note_path=str(note_path),
                 )
+
+                disallowed_actions = _disallowed_actions(
+                    panel_result,
+                    action_mappings,
+                    allowed_action_ids,
+                )
+                if disallowed_actions:
+                    summary['panel_skipped_allowed_actions'] += len(disallowed_actions)
+                    disallowed_desc = ', '.join(
+                        f"{text}({aid or 'unspecified'})" for text, aid in disallowed_actions
+                    )
+                    allowed_list = sorted(allowed_action_ids)
+                    messages.append(
+                        f"Watcher auto-run blocked for {rel_path}: actions {disallowed_desc} not in allowed set {allowed_list}."
+                    )
+                    continue
 
                 if panel_result.state.actions or panel_result.intents or panel_result.events:
                     summary["panel_runs"] += 1

@@ -28,5 +28,6 @@ class ReasoningRun(BaseModel):
     object_uuids: list[str] = []
     steps: list[ReasoningStep] = []
     result: Any | None = None
+    llm_route: dict[str, Any] | None = None
     status: Literal["ok", "failed"] = "ok"
     error: str | None = None

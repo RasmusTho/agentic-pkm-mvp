@@ -39,6 +39,8 @@ Deprecated:
 - `db`: `ok` when Postgres reachable (`pg_isready`/ping via health).
 - `llm`: `mock`/`skipped` unless `LLM_PROVIDER=ollama`.
 
+Tests: `tests/e2e/test_operator_workflows.py::test_operator_can_diagnose_stale_worker`
+
 ## Heartbeat locations and freshness
 - Watcher: `/app/tmp/watcher_heartbeat.json` (override with `WATCHER_HEARTBEAT_PATH`).
 - Worker: `/app/tmp/worker_heartbeat.json` (override with `WORKER_HEARTBEAT_PATH`).

@@ -1,5 +1,5 @@
-State: SoT v4.10 Reality-MVP (baseline locked) with the active forward line tracked at v5.5 (PanelAgent planner pipeline + CLI-first orchestration with watcher track).
-# Architecture — SoT v4.10 Reality-MVP
+State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency hardening).
+# Architecture — SoT v5.5 Reality-MVP baseline
 
 Historic SoT snapshots and older plans live in `docs/archive/`; the 4.x ladder history is in `docs/history/SOT_4X_HISTORY.md`. Forward-looking plan lives in `docs/ROADMAP.md`.
 They are kept for reference but are not considered active truth for the current SoT v4.10 Reality-MVP.
@@ -56,10 +56,13 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 - Agents MUST preserve external event contracts and Outbox envelopes during migrations.
 - Implementation details will live in `docs/AGENT_IMPLEMENTATION.md` (placeholder for later).
 
+Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_boundary_tests_dont_allow_escape_hatches`
+
 ## Concurrency & Idempotency
-- Concurrency guards are a v5.5D gate for watcher auto-exec and orchestration.
-- Events MUST carry `event_id` and consumers MUST deduplicate; note writes MUST fail safe on version mismatch.
-- See `docs/CONCURRENCY.md` for the required patterns and testing strategy.
+- DedupTaskQueue keeps watcher auto-run tasks keyed by note+hash, feeding the `skipped_dedup` telemetry and preventing duplicate panel executions.
+- Event idempotency plus an EventDedupStore in the promotion consumer ensure `promote.intent.created` replays are no-ops; consumers still emit diagnostics when skipping duplicates.
+- Optimistic write guard and `DEFAULT_WRITE_GUARD` combined with the policy-backed `ai_panel_auto_run` keep note updates deterministic and fail safe on version mismatches.
+- See `docs/CONCURRENCY.md`, `docs/EVENTS.md`, and `app/promotion/consumer.py` for the enacted guardrails and testing strategy.
 
 ## Boundary Enforcement
 - Domain-scoped retrieval defaults to excluding cross-domain results; set `ASK_DOMAIN_SCOPE` to the active domain and use `bridge_domains` for explicit inclusion.
@@ -111,6 +114,7 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 3) **ASK API** — FastAPI endpoint returning answer text plus sources `{uuid, title, origin (vault/external), zone overlay if known, path/source_ref}` and latency; uses hybrid retrieval over both planes with an in-process HybridStore warmed from `store_objects` on first use. Zone overlays are planned but not yet populated in responses.
 4) **Observability backend** — status service that aggregates per-store object counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency; exposed via CLI and interim GUI.
 5) **Interim GUI** — simple FastAPI-served page (root `/`) that shows status (object counts, last ingest, ASK stats) and an ASK input with answers + visible sources; explicitly a temporary observability/interaction surface.
+6) **Panel action catalog & watcher settings** — the canonical action catalog (`docs/settings/panel-actions.md`) + `vault/@Settings/watchers.md` describe allowed `watcher_allowed` actions, auto-run env (`WATCHER_AUTO_EXEC`), and outbox paths; `python -m app.cli.settings_explain` (and `settings validate`) emits provenance (path/mtime/sha) for reviews.
 All Reality-MVP components run on the existing PER-loop agents (Normalizer, Classifier, Chunker, CitationChecker, Indexer, Reviewer, Promotion Agent) and Store abstraction (ObjectStore, VectorIndex, RelationIndex) with Outbox-driven events and Projector/Planner/Reasoning layers kept as additive overlays.
 Advanced zone logic, reflection workflows, serendipity, and collaboration are deferred until the Reality-MVP foundation is solid.
 

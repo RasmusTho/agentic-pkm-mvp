@@ -304,6 +304,13 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
         )
         actions.append(result)
         emitted.extend(new_events)
+    handled_ids: set[str] = set()
+    for result in actions:
+        if result.status in {"triggered", "logged"}:
+            handled_ids.add(result.id)
+        elif result.status == "skipped" and result.details.get("reason") == "idempotent_duplicate":
+            handled_ids.add(result.id)
+    state.executed_action_ids = sorted(executed_ids | handled_ids)
     state.selected_action_ids = list(selected_ids or [])
     state.selected_action_reasons = reasons or {}
     state.action_results = actions
@@ -328,7 +335,12 @@ def _emit_events(state: PanelAgentState) -> PanelAgentState:
     executed_event = PanelIntentExecutedEvent(
         trace_id=state.intent_event.trace_id,
         source=_build_panel_source(),
-        payload=PanelIntentExecutedPayload(note=state.note, panel=state.panel, actions=state.action_results),
+        payload=PanelIntentExecutedPayload(
+            note=state.note,
+            panel=state.panel,
+            actions=state.action_results,
+            executed_action_ids=list(state.executed_action_ids or []),
+        ),
     )
 
     log_entry = PanelLogEntry(

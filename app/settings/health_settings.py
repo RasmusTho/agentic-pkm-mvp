@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from app.settings.source import SettingsSource, build_source
 
 import yaml
 
@@ -18,19 +18,6 @@ def _settings_rel_path(vault_root: Path) -> Path:
     system_dir_rel = get_vault_system_dir_rel(vault_root)
     return Path(system_dir_rel) / "Settings" / "health.md"
 
-
-@dataclass(frozen=True)
-class SettingsSource:
-    path: str
-    mtime: str | None
-    sha256: str | None
-
-    def to_payload(self) -> dict[str, Any]:
-        return {
-            "path": self.path,
-            "mtime": self.mtime,
-            "sha256": self.sha256,
-        }
 
 
 @dataclass(frozen=True)
@@ -121,7 +108,7 @@ def load_health_settings(
 ) -> HealthSettingsLoadResult:
     vault_root = vault_root or resolve_vault_root()
     target = vault_root / _settings_rel_path(vault_root)
-    source = _build_source(target)
+    source = build_source(target)
     if not target.exists():
         return HealthSettingsLoadResult(
             status="missing",
@@ -163,16 +150,6 @@ def load_health_settings(
         errors=errors,
     )
 
-
-def _build_source(path: Path) -> SettingsSource:
-    if path.exists():
-        stat = path.stat()
-        mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat()
-        sha = hashlib.sha256(path.read_bytes()).hexdigest()
-    else:
-        mtime = None
-        sha = None
-    return SettingsSource(path=str(path), mtime=mtime, sha256=sha)
 
 
 def _read_frontmatter(path: Path) -> tuple[dict[str, Any], list[str]]:

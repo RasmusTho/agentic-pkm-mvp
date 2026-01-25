@@ -10,6 +10,8 @@ import yaml
 from pydantic import ValidationError
 
 from app.events.bus import emit
+from app.settings.panel_actions_settings import PanelActionsSettings, load_panel_actions_settings
+from app.settings.watcher_settings import WatcherSettings, load_watcher_settings
 from .constraints import as_bool, clamp_int, enum_or_default
 from .docs import inject_reference, render_reference
 from .loader import read_text, split_sections
@@ -105,19 +107,33 @@ def _normalize_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         else:
             normalized[key] = value
     if "timeout_ms" in normalized:
-        normalized["timeout_ms"] = clamp_int(normalized["timeout_ms"], lo=100, hi=120000, default=8000)
+        normalized["timeout_ms"] = clamp_int(
+            normalized["timeout_ms"], lo=100, hi=120000, default=8000
+        )
     if "max_retries" in normalized:
-        normalized["max_retries"] = clamp_int(normalized["max_retries"], lo=0, hi=10, default=3)
+        normalized["max_retries"] = clamp_int(
+            normalized["max_retries"], lo=0, hi=10, default=3
+        )
     if "batch_size" in normalized:
-        normalized["batch_size"] = clamp_int(normalized["batch_size"], lo=1, hi=1000, default=100)
+        normalized["batch_size"] = clamp_int(
+            normalized["batch_size"], lo=1, hi=1000, default=100
+        )
     if "search_k" in normalized:
-        normalized["search_k"] = clamp_int(normalized["search_k"], lo=1, hi=20, default=8)
+        normalized["search_k"] = clamp_int(
+            normalized["search_k"], lo=1, hi=20, default=8
+        )
     if "context_docs" in normalized:
-        normalized["context_docs"] = clamp_int(normalized["context_docs"], lo=1, hi=10, default=5)
+        normalized["context_docs"] = clamp_int(
+            normalized["context_docs"], lo=1, hi=10, default=5
+        )
     if "cooldown_seconds" in normalized:
-        normalized["cooldown_seconds"] = clamp_int(normalized["cooldown_seconds"], lo=0, hi=86400, default=90)
+        normalized["cooldown_seconds"] = clamp_int(
+            normalized["cooldown_seconds"], lo=0, hi=86400, default=90
+        )
     if "require_idle_seconds" in normalized:
-        normalized["require_idle_seconds"] = clamp_int(normalized["require_idle_seconds"], lo=0, hi=3600, default=30)
+        normalized["require_idle_seconds"] = clamp_int(
+            normalized["require_idle_seconds"], lo=0, hi=3600, default=30
+        )
     if "enable" in normalized:
         normalized["enable"] = as_bool(normalized["enable"], default=True)
     if "dry_run" in normalized:
@@ -127,6 +143,32 @@ def _normalize_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             normalized["log_level"], {"DEBUG", "INFO", "WARNING", "ERROR"}, "INFO"
         )
     return normalized
+
+
+def _panel_actions_payload(settings: PanelActionsSettings) -> Dict[str, Any]:
+    return {
+        "paths": [str(path) for path in settings.paths],
+        "sources": [source.to_payload() for source in settings.sources],
+        "combined_sha": settings.combined_sha,
+        "action_ids": sorted(settings.catalog.ids()),
+    }
+
+
+def _watcher_settings_payload(settings: WatcherSettings) -> Dict[str, Any]:
+    return {
+        "auto_exec_env": settings.auto_exec_env,
+        "auto_exec_default": settings.auto_exec_default,
+        "allowed_actions": list(settings.allowed_actions),
+        "paths": {
+            "index_outbox": str(settings.paths.index_outbox),
+            "watcher_tick_log": str(settings.paths.watcher_tick_log),
+            "panel_event_log": str(settings.paths.panel_event_log),
+        },
+        "source": settings.source.to_payload(),
+    }
+
+
+
 
 
 def _hydrate_model(
@@ -261,6 +303,11 @@ def compile_all(*, auto_heal: bool | None = None) -> SettingsBundle:
     for name, settings in bundle.agents.items():
         payload = settings.model_dump() if hasattr(settings, "model_dump") else settings
         dump(f"agents/{name}.yaml", payload)
+
+    panel_actions_settings = load_panel_actions_settings()
+    dump("panel_actions.yaml", _panel_actions_payload(panel_actions_settings))
+    watcher_settings = load_watcher_settings()
+    dump("watchers.yaml", _watcher_settings_payload(watcher_settings))
 
     fingerprint = hashlib.sha256(
         yaml.safe_dump(bundle.model_dump(), sort_keys=True).encode("utf-8")

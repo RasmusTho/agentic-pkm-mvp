@@ -10,6 +10,7 @@ from app.events.types import PROMOTE_DONE, PROMOTE_ERROR, PROMOTE_INTENT_CREATED
 from app.events.models import new_event
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.note_update import apply_promotion_frontmatter
+from app.components.concurrency import EventDedupStore
 from app.store.object_store import DomainObject, ObjectStore
 from app.services.outbox import write_outbox_event
 
@@ -58,6 +59,8 @@ def _save_cursor(cursor_path: Path | None, outbox_path: Path, line_index: int) -
     payload = {"outbox_path": str(outbox_path), "line_index": line_index}
     cursor_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
+_PROMOTION_DEDUP = EventDedupStore()
+
 
 def _apply_promotion_to_store(note_uuid: str, desired_state: str, trace_id: str | None, note_path: Path | None) -> None:
     store = ObjectStore()
@@ -101,7 +104,10 @@ def _handle_promotion_payload(
     event_id: str | None,
     emit,
 ) -> dict:
-    summary = {"intents_seen": 1, "applied": 0, "errors": 0, "emitted": 0}
+    summary = {"intents_seen": 1, "applied": 0, "errors": 0, "emitted": 0, "skipped_duplicates": 0}
+    if event_id and _PROMOTION_DEDUP.seen(event_id):
+        summary["skipped_duplicates"] += 1
+        return summary
 
     note = payload.get("note") or {}
     note_uuid = str(note.get("uuid") or "").strip() if isinstance(note, dict) else ""
@@ -205,7 +211,7 @@ def consume_promotion_intents(
             continue
 
     emitted: list[OutboxEvent] = []
-    summary = {"intents_seen": 0, "applied": 0, "errors": 0, "emitted": 0}
+    summary = {"intents_seen": 0, "applied": 0, "errors": 0, "emitted": 0, "skipped_duplicates": 0}
 
     for rec in records:
         if rec.get("event") != PROMOTE_INTENT_CREATED:
@@ -225,6 +231,7 @@ def consume_promotion_intents(
         summary["applied"] += result.get("applied", 0)
         summary["errors"] += result.get("errors", 0)
         summary["emitted"] += result.get("emitted", 0)
+        summary["skipped_duplicates"] += result.get("skipped_duplicates", 0)
 
     if emitted:
         _write_outbox(resolved_outbox, emitted)
@@ -233,4 +240,8 @@ def consume_promotion_intents(
     return summary
 
 
-__all__ = ["consume_promotion_intents", "consume_promotion_intent_payload"]
+
+def reset_promotion_dedup_store() -> None:
+    _PROMOTION_DEDUP.clear()
+
+__all__ = ["consume_promotion_intents", "consume_promotion_intent_payload", "reset_promotion_dedup_store"]

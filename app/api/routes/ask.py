@@ -104,6 +104,7 @@ class AskResponse(BaseModel):
     answer: str
     sources: list[AskSource]
     latency_ms: int
+    llm_route: dict[str, Any] | None = None
 
 
 def _to_source(hit: Any) -> AskSource:
@@ -147,7 +148,12 @@ async def ask(req: AskRequest) -> AskResponse:
     latency_ms = int((time.perf_counter() - start) * 1000)
     record_ask_query(float(latency_ms))
     sources = [_to_source(hit) for hit in top_hits]
-    return AskResponse(answer=answer_text, sources=sources, latency_ms=latency_ms)
+    return AskResponse(
+        answer=answer_text,
+        sources=sources,
+        latency_ms=latency_ms,
+        llm_route=getattr(state, "llm_route", None),
+    )
 
 
 __all__ = ["router", "AskRequest", "AskResponse"]

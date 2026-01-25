@@ -82,7 +82,7 @@ def build_ask_context(question: str, hits: List[dict[str, Any]], ask_settings: A
     return "\n".join(parts).strip()
 
 
-def llm_answer(question: str, context: str, ask_settings: AskSettings) -> str | None:
+def llm_answer(question: str, context: str, ask_settings: AskSettings) -> tuple[str | None, dict[str, Any] | None]:
     try:
         run = run_reasoning(
             ReasoningMode.ASK_ANSWER,
@@ -95,15 +95,16 @@ def llm_answer(question: str, context: str, ask_settings: AskSettings) -> str | 
             kind="ask.answer",
         )
     except Exception:
-        return None
+        return None, None
+    route = run.llm_route if hasattr(run, "llm_route") else None
     if run.status != "ok":
-        return None
+        return None, route
     result = run.result
     if isinstance(result, dict):
         answer = result.get("answer")
     else:
         answer = result
-    return str(answer) if answer else None
+    return (str(answer) if answer else None), route
 
 
 __all__ = [

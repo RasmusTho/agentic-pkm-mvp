@@ -31,14 +31,25 @@ def _normalize(value: str | None) -> str:
     return value.strip().lower()
 
 
-def _default_provider() -> str:
-    raw = os.getenv("LLM_PROVIDER")
-    value = _normalize(raw)
-    if not value:
-        return "mock"
-    if value == "llm":
+_KNOWN_PROVIDERS = {"mock", "ollama", "openai", "deepseek"}
+
+
+def _normalize_provider(value: str | None) -> str:
+    normalized = _normalize(value)
+    if normalized == "llm":
         return "ollama"
-    return value
+    if normalized == "fake":
+        return "mock"
+    return normalized
+
+
+def _resolve_provider(value: str | None) -> tuple[str, bool, str]:
+    normalized = _normalize_provider(value)
+    if not normalized:
+        return "mock", False, "default"
+    if normalized not in _KNOWN_PROVIDERS:
+        return "mock", True, f"invalid provider: {normalized}"
+    return normalized, False, "default"
 
 
 def _default_chat_model() -> str:
@@ -55,7 +66,10 @@ def _default_mode(task_kind: str) -> str:
 
 class LLMRouter:
     def __init__(self) -> None:
-        self._default_provider = _default_provider()
+        provider, degraded, reason = _resolve_provider(os.getenv("LLM_PROVIDER"))
+        self._default_provider = provider
+        self._default_degraded = degraded
+        self._default_reason = reason
 
     def _route_candidates(self, intent: LLMTaskIntent) -> list[LLMRoute]:
         provider = self._default_provider
@@ -67,8 +81,8 @@ class LLMRouter:
             provider=provider,
             model=model,
             mode=_default_mode(intent.task_kind),
-            reason="default",
-            degraded=False,
+            reason=self._default_reason,
+            degraded=self._default_degraded,
         )
         candidates = [route]
         if provider != "mock":
@@ -84,10 +98,25 @@ class LLMRouter:
         return candidates
 
     def route(self, intent: LLMTaskIntent) -> LLMRoute:
+        if not isinstance(intent, LLMTaskIntent):
+            raise TypeError("intent must be an LLMTaskIntent")
         forced_provider = os.getenv("LLM_FORCE_PROVIDER")
         forced_model = os.getenv("LLM_FORCE_MODEL")
         if forced_provider or forced_model:
-            provider = _normalize(forced_provider) or self._default_provider
+            if forced_provider:
+                normalized = _normalize_provider(forced_provider)
+                if normalized and normalized not in _KNOWN_PROVIDERS:
+                    provider = "mock"
+                    degraded = True
+                    reason = f"invalid provider: {normalized}"
+                else:
+                    provider = normalized or self._default_provider
+                    degraded = False
+                    reason = "forced"
+            else:
+                provider = self._default_provider
+                degraded = self._default_degraded
+                reason = "forced" if not degraded else self._default_reason
             model = forced_model or (
                 _default_embed_model() if intent.task_kind == "embed" else _default_chat_model()
             )
@@ -95,8 +124,8 @@ class LLMRouter:
                 provider=provider,
                 model=model,
                 mode=_default_mode(intent.task_kind),
-                reason="forced",
-                degraded=False,
+                reason=reason,
+                degraded=degraded,
             )
 
         candidates = self._route_candidates(intent)

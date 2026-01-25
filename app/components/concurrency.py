@@ -54,7 +54,6 @@ class DedupTaskQueue:
         for key in expired:
             self._entries.pop(key, None)
 
-
 class EventDedupStore:
     def __init__(self, clock: Clock | None = None, ttl_seconds: float = 3600.0) -> None:
         self._clock = clock or SystemClock()
@@ -76,6 +75,9 @@ class EventDedupStore:
         expired = [key for key, expires_at in self._entries.items() if expires_at <= now]
         for key in expired:
             self._entries.pop(key, None)
+
+    def clear(self) -> None:
+        self._entries.clear()
 
 
 class IdempotencyGuard:

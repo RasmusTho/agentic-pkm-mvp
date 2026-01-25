@@ -20,6 +20,26 @@ def _prime_store(monkeypatch: pytest.MonkeyPatch):
     return get_object_store()
 
 
+def _preview_has_content(preview) -> bool:
+    """Return True if an LLM trace preview represents non-empty content.
+
+    Historically, tests assumed response_preview was a string. The trace layer now uses
+    safe_preview() which returns a dict (e.g., {"sha256": ..., "chars": N}). We accept both
+    shapes to keep the live LLM assertions stable across preview implementations.
+    """
+    if preview is None:
+        return False
+    if isinstance(preview, dict):
+        try:
+            return int(preview.get("chars", 0)) > 0
+        except Exception:
+            return False
+    try:
+        return bool(str(preview).strip()) and str(preview).strip() != "{}"
+    except Exception:
+        return False
+
+
 @pytest.mark.alpha_llm_live
 def test_reasoning_single_note_live_llm_has_non_empty_response_preview(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     if os.getenv("ALPHA_LLM_LIVE", "0") != "1":
@@ -45,7 +65,7 @@ def test_reasoning_single_note_live_llm_has_non_empty_response_preview(monkeypat
     assert reasoning_records, "Expected at least one reasoning trace record"
     assert any("reasoning.claims" in r.kind for r in reasoning_records)
     previews = [r.response_preview for r in reasoning_records]
-    assert not all(p.strip() == "{}" for p in previews), previews
+    assert any(_preview_has_content(p) for p in previews), previews
 
 
 @pytest.mark.alpha_llm_live
@@ -73,7 +93,7 @@ def test_set_evaluator_live_llm_has_non_empty_response_preview(monkeypatch: pyte
     assert set_eval_records, "Expected at least one set_evaluator trace record"
     assert any("reasoning.ranking" in r.kind or "set_eval" in r.kind for r in set_eval_records)
     previews = [r.response_preview for r in set_eval_records]
-    assert not all(p.strip() == "{}" for p in previews), previews
+    assert any(_preview_has_content(p) for p in previews), previews
 
     reset_reasoning_store()
     reset_memory_stores()

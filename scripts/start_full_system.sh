@@ -100,6 +100,18 @@ def _merge(existing, updated):
         "llm_url",
         "llm_error",
         "llm_latency_ms",
+        "llm_probe_step",
+        "llm_probe_cmd",
+        "llm_probe_rc",
+        "llm_probe_output_snippet",
+        "db_probe_step",
+        "db_probe_cmd",
+        "db_probe_rc",
+        "db_probe_output_snippet",
+        "compose_up_step",
+        "compose_up_cmd",
+        "compose_up_rc",
+        "compose_up_output_snippet",
     }
     merged = dict(existing)
     for key, value in updated.items():
@@ -123,7 +135,7 @@ if path.exists():
         existing = {}
 
 payload = {
-    "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
     "start_mode": os.environ.get("START_MODE"),
     "llm_provider": os.environ.get("LLM_PROVIDER") or None,
     "preflight_passed": os.environ.get("PRE_FLIGHT_PASSED") == "1",
@@ -149,6 +161,18 @@ payload = {
     "llm_url": os.environ.get("LLM_URL") or None,
     "llm_error": os.environ.get("LLM_ERROR") or None,
     "llm_latency_ms": _coerce_int("LLM_LATENCY_MS"),
+    "llm_probe_step": os.environ.get("LLM_PROBE_STEP") or None,
+    "llm_probe_cmd": os.environ.get("LLM_PROBE_CMD") or None,
+    "llm_probe_rc": _coerce_int("LLM_PROBE_RC"),
+    "llm_probe_output_snippet": os.environ.get("LLM_PROBE_OUTPUT_SNIPPET") or None,
+    "db_probe_step": os.environ.get("DB_PROBE_STEP") or None,
+    "db_probe_cmd": os.environ.get("DB_PROBE_CMD") or None,
+    "db_probe_rc": _coerce_int("DB_PROBE_RC"),
+    "db_probe_output_snippet": os.environ.get("DB_PROBE_OUTPUT_SNIPPET") or None,
+    "compose_up_step": os.environ.get("COMPOSE_UP_STEP") or None,
+    "compose_up_cmd": os.environ.get("COMPOSE_UP_CMD") or None,
+    "compose_up_rc": _coerce_int("COMPOSE_UP_RC"),
+    "compose_up_output_snippet": os.environ.get("COMPOSE_UP_OUTPUT_SNIPPET") or None,
 }
 
 payload = _merge(existing, payload)
@@ -533,6 +557,46 @@ capture_startup_logs() {
   append_startup_log "startup log available at: $startup_log_path"
 }
 
+
+capture_step() {
+  local prefix="$1"
+  local step="$2"
+  shift 2
+  local output rc
+  local cmd_str="$*"
+  local prefix_upper
+  local had_errexit=0
+  prefix_upper=$(printf "%s" "$prefix" | tr '[:lower:]' '[:upper:]')
+  case $- in
+    *e*) had_errexit=1 ;;
+  esac
+  set +e
+  output=$("$@" 2>&1)
+  rc=$?
+  if [ "$had_errexit" -eq 1 ]; then
+    set -e
+  else
+    set +e
+  fi
+  local snippet
+  snippet=$(printf "%s" "$output" | tail -c 400)
+  if printf "%s" "$step" | grep -qi "password"; then
+    snippet="[redacted]"
+  fi
+  local key_step="${prefix_upper}_STEP"
+  local key_cmd="${prefix_upper}_CMD"
+  local key_rc="${prefix_upper}_RC"
+  local key_out="${prefix_upper}_OUTPUT_SNIPPET"
+  printf -v "$key_step" "%s" "$step"
+  printf -v "$key_cmd" "%s" "$cmd_str"
+  printf -v "$key_rc" "%s" "$rc"
+  printf -v "$key_out" "%s" "$snippet"
+  export "$key_step" "$key_cmd" "$key_rc" "$key_out"
+  write_startup_status 1 ""
+  printf "%s" "$output"
+  return "$rc"
+}
+
 run_db_probe() {
   local skip="${SKIP_DB_PROBE:-0}"
   if [ "$skip" -eq 1 ]; then
@@ -540,20 +604,60 @@ run_db_probe() {
   fi
   echo "--- DB PROBE ---"
   local db_cid
-  db_cid=$(run_docker_compose ps -q db)
-  if [ -z "$db_cid" ]; then
+  local ps_rc
+  set +e
+  db_cid=$(capture_step db_probe "compose_ps_db" run_docker_compose ps -q db)
+  ps_rc=$?
+  set -e
+  if [ "$ps_rc" -ne 0 ] || [ -z "$db_cid" ]; then
+    EXIT_REASON="db_probe_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
     echo "ERROR: db container not found" >&2
-    run_docker_compose ps
+    run_docker_compose ps || true
     exit 1
   fi
   local db_user
   local db_name
   local db_pwd
-  db_user=$(docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_USER"')
-  db_name=$(docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_DB"')
-  db_pwd=$(docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_PASSWORD"')
+  local env_attempts=3
+  local env_sleep=1
+  local env_try=1
+  local env_ok=0
+  while [ "$env_try" -le "$env_attempts" ]; do
+    local rc_user=0
+    local rc_name=0
+    local rc_pwd=0
+    set +e
+    db_user=$(capture_step db_probe "db_env_user" docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_USER"')
+    rc_user=$?
+    db_name=$(capture_step db_probe "db_env_name" docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_DB"')
+    rc_name=$?
+    db_pwd=$(capture_step db_probe "db_env_password" docker exec "$db_cid" sh -lc 'printf "%s" "$POSTGRES_PASSWORD"')
+    rc_pwd=$?
+    set -e
+    if [ "$rc_user" -eq 0 ] && [ "$rc_name" -eq 0 ] && [ "$rc_pwd" -eq 0 ]; then
+      env_ok=1
+      break
+    fi
+    if [ "$env_try" -lt "$env_attempts" ]; then
+      sleep "$env_sleep"
+    fi
+    env_try=$((env_try + 1))
+  done
+  if [ "$env_ok" -ne 1 ]; then
+    EXIT_REASON="db_probe_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    echo "ERROR: DB probe failed to read database env after ${env_attempts} attempts" >&2
+    run_docker_compose ps || true
+    exit 1
+  fi
   db_user=${db_user:-app}
   db_name=${db_name:-app}
+  echo "DB credentials: user=$db_user db=$db_name"
   local max_attempts="${DB_PROBE_MAX_ATTEMPTS:-30}"
   local sleep_seconds="${DB_PROBE_SLEEP_SECONDS:-2}"
   local attempt=1
@@ -584,6 +688,10 @@ run_db_probe() {
     break
   done
   if [ "$ok" -ne 1 ]; then
+    EXIT_REASON="db_probe_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
     echo "ERROR: DB probe failed after ${max_attempts} attempts" >&2
     if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ -n "$last_error" ]; then
       echo "$last_error" >&2
@@ -592,8 +700,7 @@ run_db_probe() {
     run_docker_compose logs --tail=200 db || true
     exit 1
   fi
-  echo "DB credentials: user=$db_user db=$db_name"
-  printf '%s\n' "$psql_output"
+  echo "$psql_output"
 }
 
 run_worker_probe() {
@@ -636,7 +743,8 @@ wait_for_healthz() {
 
 ollama_preflight_ok=0
 run_ollama_preflight() {
-  if run_docker_compose exec -T api env VERIFY_ACTIVE="${VERIFY_ACTIVE:-0}" python - <<'PY'
+  local output rc
+  output=$(run_docker_compose exec -T api env VERIFY_ACTIVE="${VERIFY_ACTIVE:-0}" python - <<'PYOLLAMA'
 from __future__ import annotations
 import os
 import sys
@@ -730,17 +838,73 @@ with httpx.Client(timeout=10.0) as client:
         _fail("INFO: Ollama preflight failed: embeddings payload missing vectors", verbose)
     if verbose:
         print(f"Ollama embed dim: {len(embedding)}")
-PY
-  then
+PYOLLAMA
+  )
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    if [ -n "$output" ]; then
+      printf "%s\n" "$output"
+    fi
     echo "Ollama preflight succeeded"
     ollama_preflight_ok=1
   else
+    export LLM_PROBE_STEP="ollama_preflight"
+    export LLM_PROBE_CMD="run_docker_compose exec -T api env VERIFY_ACTIVE=${VERIFY_ACTIVE:-0} python - <ollama preflight>"
+    export LLM_PROBE_RC="$rc"
+    export LLM_PROBE_OUTPUT_SNIPPET="$(printf "%s" "$output" | head -c 400)"
+    write_startup_status 1 ""
     echo "WARNING: Ollama preflight failed; skipping /api/ask bootstrap" >&2
     ollama_preflight_ok=0
     if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
       return 1
     fi
   fi
+}
+
+
+run_and_capture_json() {
+  local step="$1"
+  shift
+  local output rc json_ok
+  local cmd_str="$*"
+  output=$("$@" 2>&1)
+  rc=$?
+  export LLM_PROBE_STEP="$step"
+  export LLM_PROBE_CMD="$cmd_str"
+  export LLM_PROBE_RC="$rc"
+  export LLM_PROBE_OUTPUT_SNIPPET="$(printf "%s" "$output" | head -c 400)"
+  write_startup_status 1 ""
+  if [ "$rc" -ne 0 ]; then
+    if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+      echo "ERROR: $step failed (rc=$rc)" >&2
+      printf "%s\n" "$LLM_PROBE_OUTPUT_SNIPPET" >&2
+      exit 1
+    fi
+    echo "INFO: optional check '$step' failed (ignored for fast start)" >&2
+  fi
+  json_ok=0
+  JSON_RAW="$output" python - <<'PYJSON'
+import json, os, sys
+raw = os.environ.get("JSON_RAW", "")
+try:
+    json.loads(raw)
+except Exception:
+    sys.exit(1)
+sys.exit(0)
+PYJSON
+  if [ "$?" -eq 0 ]; then
+    json_ok=1
+  fi
+  if [ "$json_ok" -ne 1 ]; then
+    if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+      echo "ERROR: $step returned non-JSON output" >&2
+      printf "%s\n" "$LLM_PROBE_OUTPUT_SNIPPET" >&2
+      exit 1
+    fi
+    echo "INFO: optional check '$step' returned non-JSON output (ignored for fast start)" >&2
+  fi
+  RUN_CAPTURE_OUTPUT="$output"
+  return "$rc"
 }
 
 run_llm_check_container() {
@@ -761,8 +925,9 @@ run_llm_check_container() {
   local llm_check_json=""
   local llm_status=0
   set +e
-  llm_check_json=$(docker exec "$container_id" python -m app.cli llm check --json --strict)
+  run_and_capture_json "llm_check" docker exec "$container_id" python -m app.cli llm check --json --strict
   llm_status=$?
+  llm_check_json="$RUN_CAPTURE_OUTPUT"
   set -e
   llm_check_info=$(LLM_CHECK_JSON="$llm_check_json" python - <<'PY'
 import json, os
@@ -807,12 +972,21 @@ if [ "$START_MODE" = "diagnostic" ]; then
   exit $?
 fi
 
-compose_up --build db api
+if ! capture_step compose_up "db_api" compose_up --build db api; then
+  EXIT_REASON="compose_up_failed"
+  EXIT_CODE=1
+  export EXIT_REASON EXIT_CODE
+  write_startup_status 0 "$EXIT_REASON"
+  echo "ERROR: compose_up failed for db/api" >&2
+  exit 1
+fi
 if [ "${AUTO_BOOTSTRAP:-0}" -eq 1 ] && [ "$llm_requires_ollama" -eq 1 ]; then
   compose_up ollama
 fi
 api_container_id=$(run_docker_compose ps -q api | head -n1 || true)
+set_phase "db_probe"
 run_db_probe
+mark_phase_ok "db_probe"
 wait_for_healthz
 
 set_phase "object_stats"
@@ -930,6 +1104,9 @@ if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ "$BOOTSTRAP_STATE" = "active" ]; then
     exit 1
   fi
   mark_phase_ok "llm_probe"
+fi
+if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+  set_phase "vault_layout"
 fi
 
 layout_json=""

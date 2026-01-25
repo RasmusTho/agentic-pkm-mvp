@@ -1,5 +1,5 @@
-State: SoT v4.10 Reality-MVP (current core).
-# Continuous Integration — SoT v4.2
+State: SoT v5.5 Reality-MVP baseline locked (watcher/panel safety) with fitness gates enforced in CI.
+# Continuous Integration — SoT v5.5
 
 ## CI Stack
 - GitHub Actions: `.github/workflows/ci.yml`
@@ -10,6 +10,11 @@ State: SoT v4.10 Reality-MVP (current core).
   4. Lint: ruff, mypy
   5. Fast tests: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not eval"` (unit/contract/e2e without eval)
   6. Validate migrations: alembic upgrade head --sql
+
+## Fitness gates
+- `python -m app.fitness.report` emits the standard summary lines, including `CI SUMMARY GATES ok=<bool>` and named labels, after the smoke/pytest runs.
+- `.github/workflows/ci.yaml`, `.github/workflows/ci-smoke.yaml`, and `.github/workflows/ci-lite.yml` parse those summary lines and exit non-zero whenever `GATES.ok != true`, making them the enforced gate jobs for baseline stability.
+- `tests/ci/test_gates_enforcement.py` proves the parser raises when `CI SUMMARY GATES ok=false` so regressions fail fast.
 
 ## Local lint/test
 ruff check app tests

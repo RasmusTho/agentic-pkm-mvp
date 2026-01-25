@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -62,3 +63,38 @@ def test_status_counts_watcher_runs(tmp_path: Path, monkeypatch) -> None:
 
     events_log = data.get("events_log") or {}
     assert events_log.get("total_lines") == 1
+
+
+def test_status_counts_align_with_events(tmp_path: Path, monkeypatch) -> None:
+    outbox = tmp_path / "outbox.jsonl"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    events = [
+        {"event": "watcher.run", "timestamp": now},
+        {"event": "panel.intent.executed", "timestamp": now},
+        {"event": "promote.intent.created", "timestamp": now},
+        {"event": "promote.done", "timestamp": now},
+    ]
+    outbox.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    status_service.INDEX_OUTBOX_PATH = str(outbox)
+
+    client = TestClient(app)
+    resp = client.get("/api/status")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    event_counts = data.get("events") or {}
+    assert event_counts.get("watcher_runs_total") == 1
+    assert event_counts.get("panel_runs_total") == 1
+    assert event_counts.get("promote_created_total") == 1
+    assert event_counts.get("promotion_executed_total") == 1
+
+    intents = data.get("intents") or {}
+    assert intents.get("promote_created_total") == 1
+
+    events_log = data.get("events_log") or {}
+    assert events_log.get("total_lines") == len(events)
