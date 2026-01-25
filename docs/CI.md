@@ -12,8 +12,8 @@ State: SoT v5.5 Reality-MVP baseline locked (watcher/panel safety) with fitness 
   6. Validate migrations: alembic upgrade head --sql
 
 ## Fitness gates
-- `python -m app.fitness.report` produces the `CI SUMMARY GATES` line after the smoke/pytest runs and writes every summary line to `tmp/ci_summary.log`.
-- CI enforcement occurs in `.github/workflows/ci-smoke.yaml` and `.github/workflows/ci-lite.yml`, which parse `tmp/ci_summary.log` and exit non-zero when `GATES.ok != true`.
+- `python -m app.fitness.report` emits the standard summary lines, including `CI SUMMARY GATES ok=<bool>` and named labels, after the smoke/pytest runs.
+- `.github/workflows/ci.yaml`, `.github/workflows/ci-smoke.yaml`, and `.github/workflows/ci-lite.yml` parse those summary lines and exit non-zero whenever `GATES.ok != true`, making them the enforced gate jobs for baseline stability.
 - `tests/ci/test_gates_enforcement.py` proves the parser raises when `CI SUMMARY GATES ok=false` so regressions fail fast.
 
 ## Local lint/test

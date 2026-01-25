@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x forward line currently tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration).
+State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard) with the forward line exploring v5.6 LangGraph/Reasoning improvements.
 Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, watcher runs, ingest runs by plane) for UAT visibility.
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
@@ -15,24 +15,32 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - CI legs assert `docs/ARCHITECTURE.md` contains fitness guard statements, confirm CLI health smoke commands pass, and verify the worker logs show `worker starting`.
 - The runbook ensures `pytest -q -m "not pg and not alpha_llm"` plus curated fitness gates keep the SoT baseline stable before merges.
 
+## Baseline Definition (SoT v5.5)
+- Default safety mode: watcher auto-run stays off unless `WATCHER_AUTO_EXEC=1` and the note frontmatter explicitly allows it (`ai_panel_auto_run: watcher`); when enabled, candidate actions are filtered through the allowlisted `watcher_settings.allowed_actions`, and disallowed intents result in skipped receipts that are persisted for audit, while manual CLI panel runs remain available.
+- Required contracts: event compatibility/outbox envelope (`docs/EVENTS.md`), trust semantics, config-as-product, and PanelAgent wiring (`docs/PANEL_AGENT.md` + `docs/settings/panel-actions.md`).
+- Minimal concurrency guarantees: DedupTaskQueue + event_id dedup guard watcher runs, optimistic writes protect note updates, and the promotion consumer uses an EventDedupStore to skip duplicate intents (`docs/CONCURRENCY.md`, `app/promotion/consumer.py`).
+- Settings compiler scope: panel action catalog, watcher settings, and outbox paths now compile with provenance (path/mtime/sha) via `vault/@Settings/watchers.md`, `docs/settings/panel-actions.md`, `python -m app.cli.settings validate`, and `python -m app.cli.settings_explain`.
+- Required tests: `ruff check app tests`, `mypy app`, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`, plus `python -m app.cli.settings validate --json` and the new concurrency/promote/settings regression suites.
+- CI gate workflows: `.github/workflows/ci-smoke.yaml` and `.github/workflows/ci-lite.yml` parse the fitness report summary lines (including `CI SUMMARY GATES ok=<bool>`) and exit non-zero when `GATES.ok != true`, making them the enforced gate jobs that must pass before merges to main.
+
 ## Status fields (baseline vs forward line)
-- `sot_baseline_version`: locked Reality-MVP baseline (v4.10).
+- `sot_baseline_version`: locked SoT v5.5 Reality-MVP baseline.
 - `sot_forward_line_version` / `feature_line_version`: active forward line (v5.x features on top of v4.10).
 - `active_features`: human-readable list of forward-line capabilities (PanelAgent runtime, watcher track, config-driven wiring).
 - Counters (totals + 24h window): `watcher_runs`, `panel_runs` (`panel.intent.executed`), `promote.intent.created`, `promotion_executed` (`promote.done`), and ingest run counts per plane. Use these in UAT to confirm watcher/panel flows; if promotion intents increment but notes do not change, the promotion consumer is not running.
 
 ## Current / Next up
-- v5.5D is blocked on Concurrency & Idempotency Guards before watcher auto-exec is enabled.
+- v5.5 baseline is now locked with concurrency/idempotency guards (watcher dedup, promote dedup, optimistic writes) keeping auto-exec safe while the forward line stabilizes.
 - v5.6 sequencing: ReasoningFacade + basic graph builder first, then LangGraph Phase 1, then Orchestrator V2 (flagged via `ORCHESTRATOR_VERSION=v1|v2`).
 
-## Concurrency & Safety (v5.5D gate)
-- DedupTaskQueue: planned; required before watcher auto-exec.
-- Optimistic locking: planned; concurrent note/object writes must fail safe.
-- Event idempotency: normative; `event_id` required and dedup enforced (`docs/EVENTS.md`, `docs/CONCURRENCY.md`).
+## Concurrency & Safety (v5.5 gate)
+- DedupTaskQueue now guards watcher auto-runs and powers the `skipped_dedup` signal before releasing keys.
+- Optimistic locking keeps note writes safe; stale writes surface recoverable warnings instead of corrupting vault files.
+- Event idempotency (watcher events + promotion intents) leverages deterministic `event_id`s and an EventDedupStore so repeated `promote.intent.created` lines are no-ops (`docs/EVENTS.md`, `docs/CONCURRENCY.md`, `app/promotion/consumer.py`).
 
 ## Migration tracking (forward line)
 
-| Area | v5.5D | v5.6 | Notes |
+| Area | v5.5 baseline | v5.6 | Notes |
 | --- | --- | --- | --- |
 | Watcher auto-exec | Blocked on concurrency guards | — | Gate: dedup + optimistic locking + idempotency |
 | LangGraph rollout | ASK + PanelAgent only | Phase 1 pilots after ReasoningFacade | Phased adoption per ROADMAP |

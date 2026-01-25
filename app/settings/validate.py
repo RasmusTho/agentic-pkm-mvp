@@ -11,6 +11,8 @@ from app.components.settings.agents_loader import load_agents
 from app.components.settings.graphs_loader import load_graphs
 from app.components.settings.models_loader import load_models
 from app.components.settings.events_loader import load_events
+from app.settings.panel_actions_settings import load_panel_actions_settings, panel_action_ids
+from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_settings
 
 
 @dataclass(frozen=True)
@@ -133,6 +135,26 @@ def validate_settings() -> List[ValidationIssue]:
                     )
                 )
 
+    panel_actions_settings = None
+    try:
+        panel_actions_settings = load_panel_actions_settings()
+    except Exception as exc:
+        issues.append(ValidationIssue(code="panel_actions.invalid", message=str(exc), ref="panel_actions"))
+    watcher_settings = None
+    try:
+        watcher_settings = load_watcher_settings()
+    except Exception as exc:
+        issues.append(ValidationIssue(code="watcher_settings.invalid", message=str(exc), ref="watcher_settings"))
+    if panel_actions_settings and watcher_settings:
+        invalid_actions = invalid_allowed_actions(watcher_settings, panel_action_ids(panel_actions_settings))
+        if invalid_actions:
+            issues.append(
+                ValidationIssue(
+                    code="watcher_settings.unknown_action",
+                    message=f"watcher settings reference unknown actions: {invalid_actions}",
+                    ref="watcher_settings:auto_run",
+                )
+            )
     return issues
 
 
@@ -141,3 +163,4 @@ def issues_to_json(issues: List[ValidationIssue]) -> Dict[str, Any]:
         "ok": len(issues) == 0,
         "issues": [{"code": i.code, "message": i.message, "ref": i.ref} for i in issues],
     }
+

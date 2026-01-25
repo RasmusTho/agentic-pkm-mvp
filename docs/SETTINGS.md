@@ -14,6 +14,8 @@ Primary source folder:
 Compiler:
 - `python -m app.cli settings compile`
 
+Runtime settings now cover the panel action catalog, watcher auto-run policy, and canonical outbox path; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli.settings validate`/`python -m app.cli.settings_explain`.
+
 ## Repo settings artifacts (non-compiled)
 
 Some settings live as **repository artifacts** because they are:
