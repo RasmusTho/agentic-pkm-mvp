@@ -1,5 +1,5 @@
-State: SoT v5.x forward line (tracked through v5.5: PanelAgent planner pipeline + CLI-first orchestration) built on the locked v4.10 Reality-MVP baseline.
-# Documentation Review Index — SoT v5.x forward line
+State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency guardrails); forward-line v5.x tracking LangGraph and reasoning rollouts while referencing `docs/STATUS.md#baseline-definition`.
+# Documentation Review Index — SoT v5.5 baseline + v5.x forward line
 
 Central map of documentation and markdown artifacts in this repo. Review status values:
 - `Unreviewed` — not yet aligned in this total-review pass.
@@ -46,13 +46,13 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-12-28 | Clarifies Core-6 contract, state axes, note kind policies, and derived overlays. |
 | docs/CONCURRENCY.md | Concurrency + idempotency guardrails | Aligned (forward line v5.x) | 2025-03-14 | Normative concurrency/idempotency requirements and test placeholders. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
-| docs/STATUS.md | Operational snapshot | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-12-17 | Notes that layering/portability/archive/trust/event/config are anchored by concept contracts and highlights the heartbeat-driven health spine plus gap-test verification scripts. |
-| docs/ROADMAP.md | Strategic roadmap | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-14 | Forward line tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration); Quality Wave (Runtime Loop Evaluation Stack) defined with A–F deliverables, exit criteria, and explicit module map; v5.6 LangGraph rollout planned; v4.10 baseline referenced only as foundation. |
+| docs/STATUS.md | Operational snapshot | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2025-12-17 | Notes the Baseline Definition section (v5.5) describing watcher/panel settings provenance and concurrency guards plus the heartbeat/gap-test verification. |
+| docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2025-03-14 | Forward line now leans on the v5.5 baseline (watcher safety, panel action provenance, settings compiler) while v5.6 LangGraph/Reasoning stages are planned; v4.10 remains reference foundation. |
 | docs/tracks/TRACK_WATCHER.md | Watcher track (v5.1–v5.4) | Aligned (forward line v5.x) | 2025-03-12 | Snapshot watcher track details, policy gating, daemon/ergonomics. |
 | docs/tracks/TRACK_PANELAGENT_LANGGRAPH.md | PanelAgent LangGraph track (v5.5) | Aligned (forward line v5.x) | 2025-03-12 | PanelAgent catalog/decider modes, planner/orchestrator pipeline, promotion consumer. |
 | docs/tracks/TRACK_AGENTOPS_A2A_MCP.md | AgentOps / A2A / MCP track | Aligned (analysis) | 2025-03-12 | Pattern harvest themes for events/A2A/tools/ops; A2A/MCP scaffolding. |
 | docs/tracks/TRACK_FITNESS_CI_CONTRACT.md | Fitness / CI contract | Aligned (forward line v5.x) | 2025-03-14 | Fitness gates, contract tests, and CI enforcement details. |
-| docs/ROADMAP.md | Strategic roadmap | Aligned (forward line v5.x + v5.5/v5.6 planned) | 2025-03-14 | Forward-looking, skimmable; links to history and track docs under docs/tracks/; includes Quality Wave: Runtime Loop Evaluation Stack (A–F deliverables + module list + exit criteria). |
+| docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2025-03-14 | Forward-looking, skimmable; links to history and track docs under docs/tracks/; calls out the Quality Wave/Runtime Loop Evaluation Stack plus settings compiler provenance for watcher/panel actions. |
 | docs/ROADMAP.md | Quality Wave (Runtime Loop Evaluation Stack) section | Aligned (forward line v5.x) | 2025-03-14 | Contract tests, golden vault, metamorphic + cold rebuild runs, fitness gates, scripted UAT; modules/files explicitly mapped for upcoming implementation. |
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-12-17 | Consolidates a single maturity taxonomy across the catalog. |
 | docs/EMBEDDINGS.md | Embedding spec | Aligned (forward line v5.x) | 2025-12-17 | Normative spec for provider-aware embeddings (identity, dims, outbox events, rebuild rules). |
@@ -61,7 +61,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/EVENTS.md | Outbox/event contracts | Aligned (forward line v5.x) | 2025-12-17 | Canonical Outbox envelope + selected event meanings; compatibility anchored in EVENT_COMPATIBILITY_CONTRACT. |
 | docs/DIAGRAMS.md | C4 diagrams | Baseline-only (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
 | docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2025-12-17 | Adds the trust semantics reference while keeping flow guidance. |
-| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-14 | Adds Evaluation Stack (Runtime Loop / Panel / Promotion) A–F layers (contracts, golden vault, metamorphic, cold rebuild, fitness gates, scripted UAT) with placeholder commands. |
+| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-14 | Adds Evaluation Stack (Runtime Loop / Panel / Promotion) A–F layers plus the new concurrency/regression suites covering watcher dedup, promotion consumer idempotency, and settings validation. |
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x + planned v5.5 LangGraph) | 2025-03-14 | Adds human-first semantics (freeform may execute with receipts, uncertainty becomes suggested checkboxes, receipts stay outside panel); intent vs mutation and wiring precedence documented. |
 | docs/UAT_PANEL_WATCHER.md | UAT guide (panel + watcher) | Aligned | 2025-12-10 | Human-facing UAT flow for PanelAgent + Vault Watcher (prep notes, targeted ingest, panel run-many, watcher dry-run/run, observations). |
 | docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Baseline-only (v4.10) | 2025-12-07 | High-level module map reviewed; Reality-MVP scope noted. |

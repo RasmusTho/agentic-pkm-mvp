@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import yaml
 import pytest
+from pathlib import Path
+
 
 from app.events import bus
 from app.settings import compiler
@@ -49,3 +51,22 @@ def test_compile_removes_stale_agent_yaml(tmp_path, monkeypatch):
     compiler.compile_all()
 
     assert not stale_file.exists()
+
+
+def test_compile_includes_panel_and_watcher_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime_dir = tmp_path / "runtime/settings"
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+    compiler.compile_all()
+
+    panel_yaml = yaml.safe_load((runtime_dir / "panel_actions.yaml").read_text())
+    assert panel_yaml["paths"]
+    assert any("panel-actions.md" in path for path in panel_yaml["paths"])
+    assert panel_yaml["combined_sha"]
+    assert panel_yaml["action_ids"]
+
+    watchers_yaml = yaml.safe_load((runtime_dir / "watchers.yaml").read_text())
+    assert watchers_yaml["allowed_actions"]
+    assert watchers_yaml["auto_exec_env"] == "WATCHER_AUTO_EXEC"
+    source = watchers_yaml["source"]
+    assert source.get("path", "").endswith("watchers.md")
+    assert source.get("sha256")

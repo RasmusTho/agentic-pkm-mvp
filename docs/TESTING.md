@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: SoT v5.5 Reality-MVP baseline locked (baseline definition anchored in `docs/STATUS.md#baseline-definition`).
 # TESTING
 
 ## Layers
@@ -31,16 +31,17 @@ See: `pytest --cov=app --cov-report=html`
 - **F. Scripted UAT** — CLI harness for runtime-loop + promotion consumer + status assertions; runs on memory backend and real vaults with the golden seed pack.
 
 ## Concurrency Tests (docs-only)
-These tests will land in PR2. Requirements live in `docs/CONCURRENCY.md`.
+These regression suites live in `docs/CONCURRENCY.md` and the new watcher/promotion/test libraries.
 
-- **Event deduplication:** concurrent watcher runs must not emit duplicate intents or `watcher.run` events.
-- **Optimistic locking:** concurrent note/object writes must fail safe on version mismatch (no corruption).
-- **Action idempotency:** replaying the same `event_id` or `ai:id` must be a no-op.
+- **Event deduplication:** `tests/ops/test_watcher_auto_exec_idempotent.py` validates watcher dedup + policy gating plus the `skipped_dedup` signal.
+- **Optimistic locking:** the same suite exercises note writes when `DEFAULT_WRITE_GUARD` is engaged to ensure stale writes bail out cleanly.
+- **Action idempotency:** `tests/promotion/test_consumer_idempotency.py` uses `EventDedupStore` to prove duplicate `promote.intent.created` events are recorded but do not reapply maturity changes.
+- **Settings gating:** `tests/settings/test_panel_actions_settings.py` and `tests/settings/test_watcher_settings.py` cover panel action catalog validation, precedence, and provenance (path/mtime/sha).
 
-Example commands (placeholders until tests land):
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/ops/test_concurrency_watchers.py -m "not pg"`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/runtime/test_optimistic_locking.py -m "not pg"`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/ops/test_event_idempotency.py -m "not pg"`
+Example commands:
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/ops/test_watcher_auto_exec_idempotent.py -m "not pg"`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/promotion/test_consumer_idempotency.py -m "not pg"`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/settings/test_panel_actions_settings.py tests/settings/test_watcher_settings.py -m "not pg"`
 
 ## Hermetic test environment
 - The test suite clears VAULT_ROOT and PANEL_ACTION_WIRING_PATH by default to prevent accidentally reading a user’s real vault (often iCloud-backed) which can block and hang tests.
@@ -82,6 +83,10 @@ Example commands (placeholders until tests land):
 - Panel action wiring (config-driven)
   - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
   - pytest -q tests/agents/panel_agent/test_panel_wiring.py -m "not pg"
+
+- Settings/Config
+  - `python -m app.cli.settings validate --json`
+  - `python -m app.cli.settings_explain`
 
 ## Debugging hanging tests
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONFAULTHANDLER=1 pytest -vv -m "not pg" --faulthandler-timeout 60`

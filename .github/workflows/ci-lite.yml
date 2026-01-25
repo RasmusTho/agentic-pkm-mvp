@@ -41,6 +41,32 @@ jobs:
         run: alembic upgrade head || true
       - name: Run unit tests (fast)
         run: pytest -q -m "not alpha_llm" | tee pytest.log
+      - name: Run fitness report
+        run: |
+          set -euo pipefail
+          mkdir -p tmp
+          python -m app.fitness.report | tee tmp/ci_summary.log
+
+      - name: Verify CI gates
+        run: |
+          python - <<'PY
+          from pathlib import Path
+          from app.fitness.report import parse_summary_lines, SUMMARY_LABELS
+
+          lines = Path("tmp/ci_summary.log").read_text(encoding="utf-8").splitlines()
+          parsed = parse_summary_lines(lines, required=SUMMARY_LABELS)
+          if set(parsed.keys()) != set(SUMMARY_LABELS):
+              missing = set(SUMMARY_LABELS) - set(parsed.keys())
+              extra = set(parsed.keys()) - set(SUMMARY_LABELS)
+              raise SystemExit(f"Unexpected CI summary labels. Missing: {missing}, extra: {extra}")
+          gates = parsed.get("GATES") or {}
+          ok_status = str(gates.get("ok", "false")).lower()
+          reasons = gates.get("reasons")
+          print(f"CI gates status: {ok_status} reasons={reasons}")
+          if ok_status != "true":
+              raise SystemExit(f"CI gates failed: {gates}")
+          PY
+
       - name: Upload unit test log
         if: always()
         uses: actions/upload-artifact@v4
