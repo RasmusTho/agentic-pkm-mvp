@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Tuple
 from uuid import UUID
 
 from app.components.llm.fabric import LLMTaskIntent, get_chat_client
+from app.components.llm.router import LLMRoute
 from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.reasoning.schema import ReasoningInput, ReasoningOutput, ReasoningValidationError, validate_output
 from app.reasoning.models import ReasoningMode, ReasoningRun
@@ -24,14 +25,43 @@ def _call_chat(
     kind: str | None,
     trace_id: str | None,
 ) -> str:
+    response, _ = _call_chat_with_route(
+        task_kind=task_kind,
+        pack=pack,
+        agent=agent,
+        kind=kind,
+        trace_id=trace_id,
+    )
+    return response
+
+
+def _route_payload(route: LLMRoute) -> dict[str, object]:
+    return {
+        "provider": route.provider,
+        "model": route.model,
+        "mode": route.mode,
+        "reason": route.reason,
+        "degraded": route.degraded,
+    }
+
+
+def _call_chat_with_route(
+    *,
+    task_kind: str,
+    pack: Dict[str, Any],
+    agent: str | None,
+    kind: str | None,
+    trace_id: str | None,
+) -> tuple[str, dict[str, object]]:
     client = get_chat_client(LLMTaskIntent(task_kind=task_kind, risk="high"))
-    return client.chat(
+    response = client.chat(
         task_kind,
         pack,
         agent=agent,
         kind=kind,
         trace_id=trace_id,
     )
+    return response, _route_payload(client.route)
 
 
 class BaseDeliberationAgent:
@@ -370,8 +400,9 @@ def run_reasoning(
         sys_prompt = system_prompt or (
             "You answer questions using only the provided sources. Prefer vault-origin and hot-zone items when present."
         )
+        route_payload: dict[str, object] | None = None
         try:
-            raw = _call_chat(
+            raw, route_payload = _call_chat_with_route(
                 task_kind="ask",
                 pack={"system": sys_prompt, "user": user_prompt},
                 agent=agent_name,
@@ -387,6 +418,7 @@ def run_reasoning(
                 status="failed",
                 error=str(exc),
                 result={"answer": ""},
+                llm_route=route_payload,
             )
         status_val = "ok" if answer_text else "failed"
         err_val = None if status_val == "ok" else "empty answer"
@@ -397,6 +429,7 @@ def run_reasoning(
             result={"answer": answer_text},
             status=status_val,
             error=err_val,
+            llm_route=route_payload,
         )
     return ReasoningRun(
         mode=mode,

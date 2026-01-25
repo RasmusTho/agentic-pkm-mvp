@@ -72,6 +72,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | --- | --- | --- | --- | --- |
 | docs/CI.md | CI overview | Baseline-only (v4.10) | 2025-12-07 | ci-smoke/fitness gates documented; reality + ASK smokes noted (scripts/reality_smoke.sh, scripts/ask_smoke.sh); live watcher script (`scripts/run_live_watcher.sh`) with kill switch/scope defaults documented. |
 | docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-14 | Adds Evaluation Stack (Runtime Loop / Panel / Promotion) A–F layers (contracts, golden vault, metamorphic, cold rebuild, fitness gates, scripted UAT) with placeholder commands. |
+| docs/ISSUES_TESTING.md | Testing coverage issues | Unreviewed | — | Tracks coverage gaps referenced by docs/TESTING.md; update when issues close. |
 | docs/QUALITY.md | Quality gates | Baseline-only (v4.10) | 2025-12-07 | QA agent scope vs /api/ask; CI fitness gates noted. |
 | docs/guardrails.md | Guardrails | Baseline-only (v4.10) | 2025-12-07 | Runtime guardrails + CI fitness gates; removed legacy thresholds. |
 | docs/SECURITY.md | Security | Baseline-only (v4.10) | 2025-12-07 | Single-user/local; auth not wired; key handling guidance. |

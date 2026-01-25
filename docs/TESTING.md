@@ -8,6 +8,20 @@ State: SoT v4.10 Reality-MVP (current core).
 - LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`)
 - Property-based ingest invariants: `tests/ingest/test_normalize_properties.py` ensures normalize outputs Core-6 fields robustly.
 
+## Test Coverage
+
+Current coverage (updated 2025-01-XX):
+- Router: 95% line coverage, 100% branch coverage
+- Fabric: 60% line coverage (gaps: failure modes)
+- Health: 85% line coverage (gaps: malformed input handling)
+
+Critical uncovered paths (issue links):
+- Router: Malformed LLMTaskIntent handling (Issue: `docs/ISSUES_TESTING.md#router-malformed-intent`)
+- Fabric: Provider unavailable scenarios (Issue: `docs/ISSUES_TESTING.md#fabric-provider-unavailable`)
+- Health: Future timestamp rejection (Issue: `docs/ISSUES_TESTING.md#health-future-timestamp`)
+
+See: `pytest --cov=app --cov-report=html`
+
 ## Evaluation Stack (Runtime Loop / Panel / Promotion)
 - **A. Contract tests** — assert watcher→panel→promotion event envelopes and payload invariants; run via `pytest -q tests/e2e/test_runtime_loop_vault_test.py -m "not pg"` (exact command may move to `tests/fitness`).
 - **B. Golden vault** — seeded vault + snapshots under `docs/examples/vault_test_seed/`; deterministic diff harness to prove no unintended note mutations.

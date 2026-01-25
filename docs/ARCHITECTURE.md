@@ -56,6 +56,8 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 - Agents MUST preserve external event contracts and Outbox envelopes during migrations.
 - Implementation details will live in `docs/AGENT_IMPLEMENTATION.md` (placeholder for later).
 
+Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_boundary_tests_dont_allow_escape_hatches`
+
 ## Concurrency & Idempotency
 - Concurrency guards are a v5.5D gate for watcher auto-exec and orchestration.
 - Events MUST carry `event_id` and consumers MUST deduplicate; note writes MUST fail safe on version mismatch.

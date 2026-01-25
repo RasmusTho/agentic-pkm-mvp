@@ -188,9 +188,9 @@ def _heartbeat_status(
     except Exception as exc:
         return {
             "ok": False,
-            "detail": f"{name} heartbeat unreadable ({exc})",
+            "detail": f"{name} heartbeat malformed ({exc})",
             "path": str(path),
-            "status": "unreadable",
+            "status": "malformed",
         }
     ts_raw = raw.get("ts")
     try:
@@ -201,6 +201,13 @@ def _heartbeat_status(
             "detail": f"{name} heartbeat missing timestamp",
             "path": str(path),
             "status": "invalid",
+        }
+    if ts_value > now:
+        return {
+            "ok": False,
+            "detail": f"{name} heartbeat timestamp is in the future",
+            "path": str(path),
+            "status": "future",
         }
     freshness = max(0.0, now - ts_value)
     ok = freshness <= stale_seconds
@@ -216,6 +223,7 @@ def _heartbeat_status(
         "path": str(path),
         "freshness_seconds": freshness,
         "paused": paused_value,
+        "status": "ok" if ok else "stale",
     }
     for key in (
         "pid",
@@ -226,7 +234,6 @@ def _heartbeat_status(
         "outbox_path",
         "processed_total",
         "enqueue_failures_total",
-        "status",
     ):
         if key in raw:
             payload[key] = raw[key]
@@ -365,6 +372,18 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
                 "severity": "required",
                 "message": "Watcher failed to enqueue DB outbox events",
                 "command_hint": "Check DATABASE_URL and watcher logs",
+            }
+        )
+
+    worker_runtime = runtime.get("worker", {})
+    worker_status = str(worker_runtime.get("status") or "").lower()
+    if worker_status in {"missing", "stale", "invalid", "malformed", "future"}:
+        actions.append(
+            {
+                "id": "worker_restart",
+                "severity": "required",
+                "message": "Worker heartbeat unhealthy; restart the worker service",
+                "command": "docker compose restart worker",
             }
         )
 

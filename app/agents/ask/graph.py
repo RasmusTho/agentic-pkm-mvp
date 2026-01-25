@@ -81,9 +81,11 @@ def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
 
     if reasoning_enabled():
         context = build_ask_context(state.query, [h.model_dump() for h in state.hits], ask_settings)
-        llm = llm_answer(state.query, context, ask_settings)
+        llm, route = llm_answer(state.query, context, ask_settings)
         if llm:
             answer_text = llm
+        if route:
+            state.llm_route = route
 
     state.answer = answer_text
     return state

@@ -5,6 +5,14 @@ State: SoT v4.10 Reality-MVP (current core).
 - Deprecated host scripts (`scripts/run_alpha_live.sh`, `scripts/run_alpha_stack.sh`) and Docker Compose now export `WATCHER_HEARTBEAT_PATH` and `INDEX_OUTBOX_PATH` to the same absolute locations so containers and the host view the same files.
 - If you point a watcher or worker at a different vault or temporary directory, make sure those two env vars reference the shared path so the dashboard and health checks see the live heartbeat.
 
+## Heartbeat locations and freshness
+- Watcher heartbeat default: `tmp/watcher_heartbeat.json` (override with `WATCHER_HEARTBEAT_PATH`).
+- Worker heartbeat default: `tmp/worker_heartbeat.json` (override with `WORKER_HEARTBEAT_PATH`).
+- Freshness thresholds: `WATCHER_HEARTBEAT_STALE_SECONDS` / `WORKER_HEARTBEAT_STALE_SECONDS` (defaults: 60s).
+- Heartbeats with malformed JSON or future timestamps are treated as invalid and surface `status` values like `malformed`/`future`.
+
+Tests: `tests/api/test_health_failures.py::test_health_handles_malformed_heartbeat_json`, `tests/api/test_health_failures.py::test_health_handles_future_heartbeat_timestamp`
+
 
 Logs are the primary tracing surface; no external APM is required for the current MVP.
 
