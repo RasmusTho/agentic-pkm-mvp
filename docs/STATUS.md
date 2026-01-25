@@ -23,6 +23,22 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - Required tests: `ruff check app tests`, `mypy app`, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`, plus `python -m app.cli.settings validate --json` and the new concurrency/promote/settings regression suites.
 - CI gate workflows: `.github/workflows/ci-smoke.yaml` and `.github/workflows/ci-lite.yml` parse the fitness report summary lines (including `CI SUMMARY GATES ok=<bool>`) and exit non-zero when `GATES.ok != true`, making them the enforced gate jobs that must pass before merges to main.
 
+## Forward line: SoT v5.6 (Now / Next / Later)
+### Now
+- Ground the v5.6 objectives in a docs-first kickoff: the detailed plan in `docs/V56_FORWARD_LINE.md` captures the pillars, acceptance criteria, and immediate signal checks the forward line needs to ship.
+- Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, and skipped receipts are surfaced in status, events, and the new CLI `settings explain` output before any runtime gate opens.
+- Harden the PanelAgent LangGraph pilot (panel action catalog + planner pipeline + promotion consumer) so its telemetry, provenance, and gating sensors stay deterministic while remaining opt-in.
+### Next
+- Sequence the ReasoningFacade + LangGraph rollout for one additional agent pool, ensuring instrumentation feeds into the fitness gates and the orchestrator V2 experiment flag remains gated until stability signals arrive.
+- Expand the vault-as-GUI settings compiler (panel actions, watcher settings, outbox paths, plus any new connectors) so the forward line can describe runtime topology with complete provenance and precedence.
+- Align CLI/docs runbooks with the v5.6 narrative: update `docs/ROADMAP.md`, status snapshots, and the new forward-line doc so operators know what signals (watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe.
+### Later
+- Extend LangGraph adoption across more agents (Promotion, Reviewer, Hygiene) and the orchestrator V2 control plane once the v5.6A pilot stabilizes.
+- Surface LangGraph/Reasoning rollouts in the evaluation stack (golden vault, metamorphic runs, cold rebuild, fitness gates) so the forward line has measurable acceptance per contract.
+- Begin planning multi-user and external sync guardrails that rely on the v5.6 safe mode (watcher gating + plan audits) before the next forward milestone.
+**Out of scope for the v5.6 kickoff PR**: no runtime behavior changes are merged yet—watcher auto-run remains disabled by default, and the orchestrator/langgraph plumbing stays opt-in until the defined gates pass.
+
+
 ## Status fields (baseline vs forward line)
 - `sot_baseline_version`: locked SoT v5.5 Reality-MVP baseline.
 - `sot_forward_line_version` / `feature_line_version`: active forward line (v5.x features on top of v4.10).
