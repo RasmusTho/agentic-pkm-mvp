@@ -15,14 +15,8 @@ Purpose: practical, low-risk UAT flow for exercising PanelAgent runtime and the 
 ## 2) Prepare test notes
 - Pick a handful of notes (3–10) for UAT; keep the rest untouched.
 - Add an AI panel block to each test note (per `docs/PANEL_AGENT.md`).
-- Set explicit auto-run policy in frontmatter:
-  ```yaml
-  ai_panel_auto_run: watcher   # allows watcher auto-run
-  # or
-  # ai_panel:
-  #   auto_run: watcher
-  ```
-- Leave other notes at default/manual (`ai_panel_auto_run` missing) or `never` to avoid accidental runs.
+- The watcher treats any fenced note as a candidate once the global arm switch `WATCHER_AUTO_EXEC=1` is set; only add `ai_panel_auto_run: never` (or `ai_panel: { auto_run: never }`) when you explicitly want to skip a watcher run.
+- Leave notes without AI fences or with the `never` opt-out untouched to avoid accidental automation.
 
 ## 3) Manual ingest + panel runs (sanity)
 1. Ingest the test notes by path:

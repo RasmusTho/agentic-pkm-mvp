@@ -49,7 +49,7 @@ def test_runtime_loop_run_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     assert summary.watcher.get("ingested", 0) >= 1
     assert summary.watcher.get("panel_promotions", 0) >= 1
-    assert summary.watcher.get("panel_skipped_policy", 0) >= 1
+    assert summary.watcher.get("panel_skipped_policy", 0) == 0
     assert summary.promotion.get("applied", 0) >= 1
 
     note_path = vault_root / DEFAULT_TARGET_SUBDIR / "AgenticPKM-UAT" / "evergreen-strategy.md"

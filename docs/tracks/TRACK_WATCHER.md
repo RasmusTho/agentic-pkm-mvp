@@ -7,7 +7,7 @@ Scope: snapshot-based vault watcher CLI/daemon, policy-gated panel auto-runs, er
 - Targeted ingest: `ingest-vault-paths` ingests specific markdown files (reused by watcher) — v5.1.
 - Panel run-many CLI: `panel run-many` runs parse/runtime for multiple notes; watcher uses the same entrypoint — v5.1.
 - Watcher MVP: `vault-watcher-run` performs snapshot diff, runs ingest for changed notes, optionally panel runtime, prints summary, refreshes snapshot — v5.2.
-- Auto-panel policy: frontmatter `ai_panel_auto_run: watcher` (or `ai_panel: { auto_run: watcher }`) gates watcher-driven panel runs; manual CLI is always allowed — v5.3.
+- Auto-panel policy: v5.3 watchers treat any note with an AI panel fence as a candidate once `WATCHER_AUTO_EXEC=1` is armed; frontmatter only blocks via `ai_panel_auto_run: never` (nested form accepted), while manual CLI is always allowed.
 - Hardening & ergonomics: `--dry-run`, `--max-notes` + `--force`, structured summaries, policy skip counters — v5.4.
 - Deployment: `vault-watcher-daemon` for Docker-first polling with snapshot at `/state/vault_watcher_state.json`; host service fallback (launchd/systemd) for unreliable mounts.
 

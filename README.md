@@ -245,10 +245,10 @@ Claims, Evidence, and Inferences are schema-validated structures that feed the r
 A deterministic MockDeliberationAgent keeps CI runs reproducible.
 
 ## Watcher readiness and panel flows
-- Vault Watcher (v5.1–v5.5) watches Obsidian files, batches edits, ingests changed notes, and triggers PanelAgent runtime when frontmatter policies allow it.
+- Vault Watcher (v5.1–v5.5) watches Obsidian files, batches edits, ingests changed notes, and triggers PanelAgent runtime on notes with AI panel fences once `WATCHER_AUTO_EXEC=1` is armed; `ai_panel_auto_run: never` (or `ai_panel: { auto_run: never }`) is the only per-note opt-out.
 - `vault-watcher-run` (v5.2 CLI) polls snapshots, runs ingest/panel flows, emits summaries, and respects dry-run / `--max-notes` guards.
-- Frontmatter controls (`ai_panel_auto_run` / `ai_panel: { auto_run: watcher|manual|never }`) gate watcher automation.
-- Watchers remain opt-in and auditable; they reuse CLI entrypoints rather than inventing new pipelines.
+- Manual CLI runs remain available; watcher automation only runs when the note contains an AI panel fence and `WATCHER_AUTO_EXEC=1`, with `ai_panel_auto_run: never` blocking it.
+- Watchers remain auditable and reuse CLI entrypoints rather than inventing new pipelines.
 
 ## Promotion and relations
 The promotion consumer uses typed relations to decide when to promote or block notes.

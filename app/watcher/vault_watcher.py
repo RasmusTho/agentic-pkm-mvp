@@ -11,7 +11,7 @@ from pathlib import Path
 
 from app.agents.panel.agent import handle_note_update
 from app.agents.panel.filters import strip_ai_panels
-from app.agents.panel_agent.policy import watcher_may_run_panel
+from app.agents.panel_agent.policy import watcher_panel_candidate
 from app.components.concurrency import DedupTaskQueue, OptimisticWriteGuard, SystemClock, VersionMismatch
 from app.ingest import vault_alpha as vault_alpha
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
@@ -75,16 +75,6 @@ def _scan_md_files(vault_root: Path) -> dict[str, float]:
         except Exception:
             continue
     return current
-
-
-def _read_frontmatter(note_path: Path) -> dict:
-    try:
-        frontmatter, _ = load_frontmatter(note_path.read_text(encoding="utf-8"))
-        if not isinstance(frontmatter, dict):
-            return {}
-        return frontmatter
-    except Exception:
-        return {}
 
 
 def _note_uuid_from_frontmatter(
@@ -361,8 +351,21 @@ def run_watcher_tick(
     policy_allowed_paths: list[Path] = []
     for path in result.changed:
         rel_path = path.relative_to(vault_root)
-        frontmatter = _read_frontmatter(path)
-        if watcher_may_run_panel(frontmatter):
+        try:
+            raw_markdown = path.read_text(encoding="utf-8")
+        except Exception:
+            summary["errors"] += 1
+            messages.append(f"Warning: unable to read {rel_path}; skipping watcher policy evaluation.")
+            continue
+
+        try:
+            frontmatter, _ = load_frontmatter(raw_markdown)
+        except Exception:
+            frontmatter = {}
+        if not isinstance(frontmatter, dict):
+            frontmatter = {}
+
+        if watcher_panel_candidate(frontmatter, raw_markdown):
             policy_allowed_paths.append(path)
         else:
             summary["panel_skipped_policy"] += 1
