@@ -16,10 +16,17 @@ mkdir -p "$runtime_env_dir"
 local_uid="${LOCAL_UID:-$(id -u)}"
 local_gid="${LOCAL_GID:-$(id -g)}"
 
+default_db_url="postgresql+psycopg://app:app@db:5432/app"
+DATABASE_URL="${DATABASE_URL:-$default_db_url}"
+DB_DSN="${DB_DSN:-$DATABASE_URL}"
+export DATABASE_URL DB_DSN
+
 cat > "$runtime_env_path" <<ENV
 VAULT_ROOT=$VAULT_ROOT
 LOCAL_UID=$local_uid
 LOCAL_GID=$local_gid
+DATABASE_URL=$DATABASE_URL
+DB_DSN=$DB_DSN
 ENV
 
 if [ -n "${LLM_PROVIDER:-}" ]; then

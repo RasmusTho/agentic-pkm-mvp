@@ -1,12 +1,12 @@
 Agentic PKM — Second-Brain Engine
 
 System-of-Truth baseline: v4.10 (Reality-MVP, locked)
-System-of-Truth forward line: v5.5 (PanelAgent Runtime + Watchers)
+System-of-Truth forward line: v5.5 (PanelAgent Runtime + Registry Watcher)
 
 Agentic PKM is an agentic, event-driven, CI-guarded system for personal knowledge management.
 It treats the human writing surface (a Markdown vault) and the cold archive brain (source artifacts) as canonical, portable artifacts.
 Operational stores, indexes, outbox events, and receipts are rebuildable mirrors and audit trails — they must never become the only copy of meaning.
-SoT v4.10 is the locked Reality-MVP baseline. Ongoing development happens on the v5.x forward line (PanelAgent / Watchers / Satellite Sync / Yggdrasil).
+SoT v4.10 is the locked Reality-MVP baseline. Ongoing development happens on the v5.x forward line (PanelAgent / Registry Watcher / Satellite Sync / Yggdrasil).
 
 <!-- DOCS-LINKS:BEGIN -->
 - [Architecture](docs/ARCHITECTURE.md)
@@ -97,7 +97,7 @@ Note: `/api/health` can report `ok=false` when optional tools are missing; in Al
 
 ## Alpha Compose Runtime
 
-The canonical Alpha Compose Runtime runs `db`, `api`, `watcher`, and `worker` in Docker Compose. The watcher writes audit events (JSONL) and enqueues DB outbox events. The worker consumes the DB outbox to perform ingest and promotion side effects, while the API surfaces status and health.
+The canonical Alpha Compose Runtime runs `db`, `api`, `watcher`, and `worker` in Docker Compose. The watcher runs the registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`), writes audit events (JSONL), and enqueues DB outbox events. The worker consumes the DB outbox to perform ingest and promotion side effects, while the API surfaces status and health.
 In pg-mode, the DB outbox is the canonical queue; `INDEX_OUTBOX_PATH` is an audit log only (surfaced as `events_log` in `/api/status`) and should not drive lag estimates.
 
 
@@ -245,10 +245,11 @@ Claims, Evidence, and Inferences are schema-validated structures that feed the r
 A deterministic MockDeliberationAgent keeps CI runs reproducible.
 
 ## Watcher readiness and panel flows
-- Vault Watcher (v5.1–v5.5) watches Obsidian files, batches edits, ingests changed notes, and triggers PanelAgent runtime on notes with AI panel fences once `WATCHER_AUTO_EXEC=1` is armed; `ai_panel_auto_run: never` (or `ai_panel: { auto_run: never }`) is the only per-note opt-out.
-- `vault-watcher-run` (v5.2 CLI) polls snapshots, runs ingest/panel flows, emits summaries, and respects dry-run / `--max-notes` guards.
-- Manual CLI runs remain available; watcher automation only runs when the note contains an AI panel fence and `WATCHER_AUTO_EXEC=1`, with `ai_panel_auto_run: never` blocking it.
-- Watchers remain auditable and reuse CLI entrypoints rather than inventing new pipelines.
+- Registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`) is the runtime default. It scans the inbox scope, emits `ingest.vault.changed` and `panel.scan.requested`, and writes heartbeat + tick logs.
+- DB outbox is canonical in runtime; JSONL (`INDEX_OUTBOX_PATH`) is audit-only.
+- Panel candidacy: any note with an AI fence (`%% ...ai... %%`) is a candidate by default once `WATCHER_AUTO_EXEC=1` is armed; `ai_panel_auto_run: never` (or `ai_panel: { auto_run: never }`) is the only per-note opt-out.
+- `WATCHER_AUTO_EXEC` is the global arm switch; when off, watcher computes candidacy and emits summaries but does not execute panel mutations.
+- Inbox UUID healing happens during watcher/ingest runs so inbox notes do not linger without a `uuid`.
 
 ## Promotion and relations
 The promotion consumer uses typed relations to decide when to promote or block notes.

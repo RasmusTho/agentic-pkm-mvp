@@ -10,6 +10,7 @@ make alpha-up
 ```
 2. The script:
    - `scripts/start_full_system.sh` runs `docker compose up -d db api worker watcher`
+   - fails fast if `DATABASE_URL`/`DB_DSN` is missing (DB outbox is required for runtime)
    - waits for `/api/status` then `/api/health` to report runtime `db`/`worker`/`watcher` as ok (timeout 60s)
    - optional checks like `ffmpeg` are ignored by default via `STARTUP_IGNORE_CHECKS=ffmpeg` (set to `""` for strict mode)
    - on failure, prints `docker compose ps`, tails api/worker/watcher logs, and dumps `/api/health`

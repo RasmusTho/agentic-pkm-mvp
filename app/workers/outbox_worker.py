@@ -1,65 +1,58 @@
+from __future__ import annotations
+
 import logging
 import os
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from app.components.concurrency import EventDedupStore, SystemClock
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_VAULT_CHANGED, PROMOTE_INTENT_CREATED
+from app.observability.tracer import start_span
 from app.promotion.consumer import consume_promotion_intent_payload
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
 from app.services.indexer import handle_ingest_object_created
+from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import ack_outbox, bootstrap, poll_outbox_one
-from app.observability import setup_logging
-from app.observability.tracer import start_span
+from app.vault.paths import get_vault_inbox_dir_rel
 from scripts.yaml_roundtrip import load_frontmatter
 
-_EVENT_DEDUP = EventDedupStore(SystemClock(), ttl_seconds=3600.0)
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class WorkerIngestSummary:
     ingested: int
-    errors: int = 0
 
 
 def _ensure_logging_configured() -> None:
-    root = logging.getLogger()
-    for handler in root.handlers:
-        formatter = getattr(handler, "formatter", None)
-        if (
-            isinstance(handler, logging.StreamHandler)
-            and handler.stream is sys.stdout
-            and formatter is not None
-            and formatter.__class__.__name__ == "JsonFormatter"
-        ):
-            return
-    setup_logging()
+    if logger.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 
 def _resolve_vault_root(vault_root: Path | None = None) -> Path:
     if vault_root is not None:
-        return vault_root
-    env_value = os.getenv("VAULT_PATH") or os.getenv("VAULT_ROOT")
-    if env_value:
-        return Path(env_value).expanduser()
-    return Path("vault")
+        return vault_root.expanduser().resolve()
+    env_root = os.getenv("VAULT_ROOT")
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+    return Path("vault").expanduser().resolve()
 
 
 def _note_path_from_payload(payload: Mapping[str, Any], *, vault_root: Path) -> Path:
-    candidate = payload.get("vault_path")
-    if candidate:
-        note_path = Path(candidate)
-        if not note_path.is_absolute():
-            note_path = vault_root / note_path
-    else:
-        rel_value = payload.get("relative_path")
-        if not rel_value:
-            raise ValueError("missing relative_path in ingest payload")
-        note_path = vault_root / Path(rel_value)
+    raw = payload.get("vault_path")
+    if raw:
+        return Path(str(raw)).expanduser()
+    rel_value = payload.get("relative_path")
+    if not rel_value:
+        raise ValueError("missing relative_path in ingest payload")
+    note_path = vault_root / Path(str(rel_value))
     return note_path.expanduser()
 
 
@@ -88,15 +81,36 @@ def _event_id_from_message(message: Mapping[str, Any]) -> str:
     return ""
 
 
+def _maybe_heal_uuid(note_path: Path, vault_root: Path) -> str:
+    rel_path = None
+    try:
+        rel_path = note_path.relative_to(vault_root)
+    except Exception:
+        rel_path = None
+    if rel_path is None:
+        return ""
+    inbox = get_vault_inbox_dir_rel(vault_root)
+    if not str(rel_path).startswith(str(Path(inbox))):
+        return ""
+    try:
+        return ensure_note_uuid(note_path)
+    except Exception as exc:
+        logger.warning("failed to ensure uuid for %s: %s", note_path, exc)
+        return ""
+
+
 def handle_ingest_vault_changed(
     payload: Mapping[str, Any], *, vault_root: Path | None = None
 ) -> WorkerIngestSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
+    healed_uuid = _maybe_heal_uuid(note_path, resolved_root)
     raw_text = note_path.read_text(encoding="utf-8")
     frontmatter, body = load_frontmatter(raw_text)
     content = (body or raw_text).strip()
     note_uuid = _normalize_uuid_value(frontmatter.get("uuid") or frontmatter.get("id"))
+    if not note_uuid and healed_uuid:
+        note_uuid = healed_uuid
     ingest_obj: dict[str, Any] = {
         "uuid": note_uuid,
         "content": content,
@@ -142,11 +156,6 @@ def run(
             )
             time.sleep(retry_delay)
 
-    ticks_total = 0
-    errors_total = 0
-    processed_total = 0
-    last_heartbeat = 0.0
-    last_log = 0.0
     heartbeat_interval = heartbeat_interval if heartbeat_interval is not None else float(
         os.getenv("WORKER_HEARTBEAT_INTERVAL", "1")
     )
@@ -171,6 +180,11 @@ def run(
         outbox_path,
     )
     last_log = time.time()
+
+    ticks_total = 0
+    processed_total = 0
+    errors_total = 0
+    last_heartbeat = 0.0
 
     while True:
         ticks_total += 1
@@ -231,6 +245,24 @@ def run(
             break
 
         time.sleep(interval)
+
+
+class _EventDedup:
+    def __init__(self) -> None:
+        self._seen: set[str] = set()
+
+    def seen(self, event_id: str) -> bool:
+        if not event_id:
+            return False
+        if event_id in self._seen:
+            return True
+        self._seen.add(event_id)
+        if len(self._seen) > 2048:
+            self._seen = set(list(self._seen)[-1024:])
+        return False
+
+
+_EVENT_DEDUP = _EventDedup()
 
 
 if __name__ == "__main__":

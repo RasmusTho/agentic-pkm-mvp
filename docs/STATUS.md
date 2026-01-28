@@ -1,5 +1,5 @@
 State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard) with the forward line exploring v5.6 LangGraph/Reasoning improvements.
-Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, watcher runs, ingest runs by plane) for UAT visibility.
+Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, ingest runs by plane). `watcher_runs` refers to legacy snapshot watchers only; registry watcher health is via heartbeat + tick logs.
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
 
@@ -7,8 +7,8 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - HealthContract + WriteGuard + incident logging now form the deterministic spine for startup readiness; this snapshot is the baseline for initial go-live visibility.
 
 ## Runtime verification
-- `/api/health` now reports watcher and worker heartbeat freshness plus the runtime DB/LLM probes so operators see deterministic health signals.
-- `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the watcher→worker→index→/api/ask chain, emit `index.object.embedded` / `index.embedding.failed`, and log diagnostics when sources are missing.
+- `/api/health` reports watcher and worker heartbeat freshness plus the runtime DB/LLM probes so operators see deterministic health signals.
+- `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the registry watcher → DB outbox → worker → index → `/api/ask` chain, emit `index.object.embedded` / `index.embedding.failed`, and log diagnostics when sources are missing.
 - The interim GUI and Status service consume these heartbeats/events so the dashboard shows ingest health, counts, and incidents in one place.
 
 ## CI & Test Markers
@@ -16,7 +16,9 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - The runbook ensures `pytest -q -m "not pg and not alpha_llm"` plus curated fitness gates keep the SoT baseline stable before merges.
 
 ## Baseline Definition (SoT v5.5)
+- Runtime watcher: registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`) is the default; legacy snapshot watchers are dev-only.
 - Default safety mode: watcher auto-run stays off unless `WATCHER_AUTO_EXEC=1` is armed; once enabled, any note with an AI panel fence is treated as a candidate and actions are filtered through the allowlisted `watcher_settings.allowed_actions`, while the only per-note opt-out is `ai_panel_auto_run: never` (nested form accepted) and manual CLI panel runs remain available.
+- DB outbox is canonical in runtime; JSONL (`INDEX_OUTBOX_PATH`) is audit only and should not be used as the worker queue.
 - Required contracts: event compatibility/outbox envelope (`docs/EVENTS.md`), trust semantics, config-as-product, and PanelAgent wiring (`docs/PANEL_AGENT.md` + `docs/settings/panel-actions.md`).
 - Minimal concurrency guarantees: DedupTaskQueue + event_id dedup guard watcher runs, optimistic writes protect note updates, and the promotion consumer uses an EventDedupStore to skip duplicate intents (`docs/CONCURRENCY.md`, `app/promotion/consumer.py`).
 - Settings compiler scope: panel action catalog, watcher settings, and outbox paths now compile with provenance (path/mtime/sha) via `vault/@Settings/watchers.md`, `docs/settings/panel-actions.md`, `python -m app.cli.settings validate`, and `python -m app.cli.settings_explain`.
@@ -43,7 +45,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - `sot_baseline_version`: locked SoT v5.5 Reality-MVP baseline.
 - `sot_forward_line_version` / `feature_line_version`: active forward line (v5.x features on top of v4.10).
 - `active_features`: human-readable list of forward-line capabilities (PanelAgent runtime, watcher track, config-driven wiring).
-- Counters (totals + 24h window): `watcher_runs`, `panel_runs` (`panel.intent.executed`), `promote.intent.created`, `promotion_executed` (`promote.done`), and ingest run counts per plane. Use these in UAT to confirm watcher/panel flows; if promotion intents increment but notes do not change, the promotion consumer is not running.
+- Counters (totals + 24h window): `panel_runs` (`panel.intent.executed`), `promote.intent.created`, `promotion_executed` (`promote.done`), and ingest run counts per plane. `watcher_runs` only increments for legacy snapshot watchers; registry watcher health is via heartbeat + tick logs.
 
 ## Current / Next up
 - v5.5 baseline is now locked with concurrency/idempotency guards (watcher dedup, promote dedup, optimistic writes) keeping auto-exec safe while the forward line stabilizes.
@@ -79,16 +81,16 @@ Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and 
 | v4.10 | Orchestrator Runtime (LangGraph execution engine) | Runtime delivered — plan validation + audit + internal tool execution (external ingest) + MCP/A2A mocks; CLI dual-run available | Extend to LangGraph/parallel scheduling + richer MCP tool providers (post-MVP) | Validate planner playback + CLI parity; fold into Reality-MVP interim GUI/ASK path | Flag: `ORCHESTRATOR_ENABLE`; Reality-MVP consumes skeleton |
 | v5.0 | PanelAgent Runtime V1 baseline on SoT v4.10 | Delivered — step 1 parse/map emits `panel.intent.created`; runtime interprets it, fans out promotion via `promote.intent.created`, emits `panel.intent.executed` + `panel.action.*` + `panel.log.created`, writes `panel_logs`; CLI default runs runtime, `--emit-only` keeps step 1 | Follow-on PanelAgent flows live under v5.x forward line | Extend runtime/action coverage in v5.x without altering v4.10 | Baseline locked for PanelAgent runtime V1 once merged to main |
 | v5.1 | Watcher-ready ingest & panel flows | Planned v5.x — CLI ingest for single/changed notes + multi-note panel runtime CLI; watcher-compatible docs | None | Prepare CLI + docs for watcher readiness | Builds on v5.0 PanelAgent runtime baseline |
-| v5.2 | Vault Watcher MVP (CLI, polling) | Delivered — snapshot-based CLI watcher (`vault-watcher-run`) polls vault, detects changes, ingests changed notes, optionally runs panel runtime; logs summary/metrics; no auto-panel policy yet | None | Wire into schedulers/ops; prep policy hooks for v5.3 | Manual/background, additive to existing CLI |
+| v5.2 | Vault Watcher MVP (legacy snapshot CLI) | Delivered — snapshot-based CLI watcher (`vault-watcher-run`) polls vault, detects changes, ingests changed notes, optionally runs panel runtime; logs summary/metrics; no auto-panel policy yet | Legacy/dev-only | Registry watcher replaces runtime usage | Historical reference only |
 | v5.3 | Auto-panel as explicit policy | Delivered — watchers treat fenced notes as candidates once `WATCHER_AUTO_EXEC=1` is armed and only `ai_panel_auto_run: never` / `ai_panel.auto_run: never` blocks auto runs; AI logs/events remain and manual CLI is unaffected | None | Prepare further policy refinements for v5.4 | Default is AI-fence candidacy with per-note opt-out. |
-| v5.4 | Watcher hardening & ergonomics | Delivered — dry-run mode, max-notes guard (with force override), structured watcher summaries; manual/cron ready | None | Prepare further ops polish if needed | Builds on v5.2–v5.3 |
+| v5.4 | Watcher hardening & ergonomics | Delivered — dry-run mode, max-notes guard (with force override), structured watcher summaries; manual/cron ready | Legacy/dev-only | Registry watcher replaces runtime usage | Historical reference only |
 | v5.5 | PanelAgent 2.0 (LangGraph inner) | In-progress (v5.5B) — `PanelActionIntent` + opt-in planner pipeline (`PANEL_AGENT_PIPELINE=planner`) create plans from panel actions; CLI-first execution via Orchestrator now available (promotion tool emits `promote.intent.created`) | Wire watcher auto-exec + extend action coverage; broaden action mapping | Design schema/graph; keep Runtime V1 baseline in place until 2.0 is proven | Bridges to the “LangGraph inner per agent” principle |
 | v5.6 | ReasoningFacade + LangGraph rollout | Planned — ReasoningFacade + basic graph builder; LangGraph rollout Phase 1 for 1–2 agents (Promotion, Reviewer, Hygiene); Orchestrator V2 flagged (`ORCHESTRATOR_VERSION=v1|v2`) | None | Sequence ReasoningFacade → Phase 1 → Orchestrator V2 | Extends LangGraph inner model beyond PanelAgent |
 | v5.x | Symbolic reasoning + reflexive agents | Governance concepts, Agent Memory Graph sketches | RDF/OWL/SHACL enforcement, logic gates | Define policy bundles + knowledge graph API | Dependent on v4.6 telemetry |
 
 Pattern Harvest (Outer/Inner agent architecture) — In progress (docs-first); see docs/research/pattern-harvest-agentic-architecture.md.
 
-Watcher deployment note: `vault-watcher-daemon` offers a Docker-first polling service with snapshot storage outside the vault (e.g., `/state`); host services (launchd/systemd) remain the fallback when mounts are unreliable.
+Watcher deployment note: runtime uses the registry watcher (`python -m app.cli watcher run`) with `configs/watchers.yaml`. Legacy snapshot daemons (`vault-watcher-daemon`) are dev-only and not used in start-system flows.
 
 Eval baseline: DeepEval ASK + Ragas RAG suites are available under `@pytest.mark.eval` (seed cases; opt-in, diagnostics only).
 

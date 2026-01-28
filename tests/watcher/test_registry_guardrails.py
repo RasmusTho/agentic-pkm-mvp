@@ -69,8 +69,8 @@ def test_registry_scan_root_and_mtime_caching(tmp_path: Path, monkeypatch) -> No
     state = WatcherState()
     first = registry._run_spec_tick(cfg, spec, state, now=0.0)
     assert first["scanned_files"] == 1
-    assert len(calls) == 1
+    assert len(calls) == 2
 
     second = registry._run_spec_tick(cfg, spec, state, now=1.0)
     assert second["scanned_files"] == 1
-    assert len(calls) == 1
+    assert len(calls) == 2

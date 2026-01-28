@@ -4,8 +4,8 @@ State: draft
 Use this checklist to validate a deployment before enabling full ingest + panel actions. All steps are safe-by-default and should be run from the `work` branch.
 
 ## 1) Backups and prerequisites
-- Back up the vault and outbox location (snapshots or git tag).
-- Confirm environment variables are set for the target environment (at minimum: `VAULT_ROOT`, `INDEX_OUTBOX_PATH`, provider credentials, tracing/observability endpoints if used).
+- Back up the vault and DB outbox (snapshots or git tag).
+- Confirm environment variables are set for the target environment (at minimum: `VAULT_ROOT`, `DATABASE_URL`/`DB_DSN`, provider credentials, tracing/observability endpoints if used).
 - Ensure networked dependencies (LLM provider, database) are reachable from the host.
 
 ## 2) Dry-run health checks
@@ -14,15 +14,18 @@ Use this checklist to validate a deployment before enabling full ingest + panel 
 - Review the watcher summary; address any errors before proceeding.
 
 ## 3) Small-scope UAT
-- Run `python -m app.cli vault-watcher-run --dry-run --max-notes 10` to sample a small set of changes.
-- Inspect emitted messages and ensure classification/panel policies match expectations.
+- Run a single registry watcher tick with panel auto-exec disabled:
+  ```bash
+  WATCHER_ENABLE=1 WATCHER_VAULT_PATH=<vault> WATCHER_AUTO_EXEC=0 python -m app.cli watcher run --max-ticks 1
+  ```
+- Inspect emitted messages and ensure classification/panel policies match expectations. (DB outbox is canonical; JSONL is audit only.)
 
 ## 4) Gradual rollout
-- Start runtime with a low `max-notes` and `--force` disabled to prevent bulk ingestion surprises.
-- Increase scope incrementally only after observing clean runs (no errors, no limit-exceeded).
+- Start runtime with a conservative scope (`WATCHER_SCOPE_GLOB`) and `WATCHER_AUTO_EXEC=0` until you confirm the ingest path is clean.
+- Enable `WATCHER_AUTO_EXEC=1` only after observing clean runs (no errors, no limit-exceeded).
 
 ## 5) Rollback posture
-- If ingest produces incorrect outputs, pause watcher runs and restore from the vault/outbox backups.
+- If ingest produces incorrect outputs, pause watcher runs and restore from the vault/DB backups.
 - Re-run `go-live-check` after any rollback to ensure settings and paths are still valid.
 
 ## 6) Post-go-live hygiene
@@ -40,7 +43,7 @@ All FastAPI routes listen on `http://127.0.0.1:18000` (docker compose maps host 
 - `GET /search?q=...&k=...` – realtime hybrid search. Example: `curl -sS "http://127.0.0.1:18000/search?q=warm%20content&k=3"`.
 - `POST /api/ask` – question endpoint returning answer + sources. Example: `curl -sS http://127.0.0.1:18000/api/ask -H "Content-Type: application/json" -d '{"question":"warm content"}'`.
 
-There is no `/health` route in the Reality-MVP API; use `/healthz` for simple liveness and `/api/health` for the full contract. Swagger UI lives at `http://127.0.0.1:18000/docs` and the OpenAPI document is the source of truth (`/openapi.json`). If you are unsure which paths exist, run `curl -sS http://127.0.0.1:18000/openapi.json | python -c 'import sys,json; j=json.load(sys.stdin); print(\"\\n\".join(sorted(j[\"paths\"].keys())))'`.
+There is no `/health` route in the Reality-MVP API; use `/healthz` for simple liveness and `/api/health` for the full contract. Swagger UI lives at `http://127.0.0.1:18000/docs` and the OpenAPI document is the source of truth (`/openapi.json`). If you are unsure which paths exist, run `curl -sS http://127.0.0.1:18000/openapi.json | python -c 'import sys,json; j=json.load(sys.stdin); print("\n".join(sorted(j["paths"].keys())))'`.
 
 Note: `/api/health` may report `ok=false` when optional tools (for example, `ffmpeg`) are missing. Treat this as a degraded feature signal, not a full system outage, if `/healthz`, `/readyz`, search, and ask are healthy.
 
