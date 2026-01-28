@@ -7,7 +7,7 @@ from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 
-def ensure_note_uuid(path: Path) -> str:
+def ensure_note_uuid(path: Path, *, preferred_uuid: str | None = None) -> str:
     resolved = Path(path).resolve()
     text = resolved.read_text(encoding="utf-8")
     frontmatter, body = load_frontmatter(text)
@@ -15,11 +15,13 @@ def ensure_note_uuid(path: Path) -> str:
     if existing:
         return existing
 
-    new_uuid = str(uuid.uuid4())
-    frontmatter["uuid"] = new_uuid
+    candidate = str(preferred_uuid or "").strip()
+    if not candidate:
+        candidate = str(uuid.uuid4())
+    frontmatter["uuid"] = candidate
     DEFAULT_WRITE_GUARD.assert_writes_allowed("ensure uuid")
     resolved.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
-    return new_uuid
+    return candidate
 
 
 __all__ = ["ensure_note_uuid"]

@@ -717,14 +717,7 @@ def _ingest_candidates(
                 malformed.append(rel_display)
                 continue
             frontmatter_uuid_raw = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
-            if not frontmatter_uuid_raw:
-                ensure_note_uuid(path)
-                raw_text = path.read_text(encoding="utf-8")
-                frontmatter, body, fm_error = _load_frontmatter_with_reporting(raw_text, path)
-                if fm_error:
-                    malformed.append(rel_display)
-                    continue
-                frontmatter_uuid_raw = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
+            needs_uuid_write = not bool(frontmatter_uuid_raw)
             title = _frontmatter_title(frontmatter) or _derive_title(body, path)
             stripped_text = strip_ai_panels(body).strip()
             ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
@@ -743,6 +736,8 @@ def _ingest_candidates(
                 note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid, rel_path, invalid_frontmatter=True)
             else:
                 note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
+            if needs_uuid_write and note_uuid:
+                ensure_note_uuid(path, preferred_uuid=note_uuid)
             should_skip = False
             if note_uuid and not force and not cold_rebuild:
                 parsed_uuid = None
