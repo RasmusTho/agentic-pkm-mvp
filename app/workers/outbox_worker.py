@@ -9,7 +9,6 @@ from typing import Any, Mapping
 
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_VAULT_CHANGED, PROMOTE_INTENT_CREATED
 from app.observability.tracer import start_span
-from app.promotion.consumer import consume_promotion_intent_payload
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
 from app.services.indexer import handle_ingest_object_created
 from app.services.note_uuid import ensure_note_uuid
@@ -207,6 +206,8 @@ def run(
                     elif topic == INGEST_VAULT_CHANGED:
                         handle_ingest_vault_changed(message["payload"])
                     elif topic == PROMOTE_INTENT_CREATED:
+                        from app.promotion.consumer import consume_promotion_intent_payload
+
                         consume_promotion_intent_payload(
                             message["payload"],
                             trace_id=trace_id,
