@@ -237,15 +237,53 @@ require_db_outbox_env() {
 }
 
 preflight_runtime() {
-  require_vars LLM_PROVIDER OPENAI_BASE_URL LLM_MODEL
+  require_vars LLM_PROVIDER LLM_MODEL
   if [ "${LLM_PROVIDER_ENFORCE:-}" != "1" ]; then
     fail_preflight "runtime mode requires LLM_PROVIDER_ENFORCE=1"
+  fi
+  llm_validation_json=$(python - <<'PYLLM'
+import json
+import os
+from app.runtime.startup_env import validate_llm_env
+
+result = validate_llm_env(os.environ)
+print(json.dumps(result, ensure_ascii=False))
+PYLLM
+)
+  export LLM_ENV_VALIDATION="$llm_validation_json"
+  llm_ok=$(python - <<'PYLLM'
+import json
+import os
+
+payload = json.loads(os.environ.get("LLM_ENV_VALIDATION", "{}"))
+print("1" if payload.get("ok") else "0")
+PYLLM
+)
+  if [ "$llm_ok" != "1" ]; then
+    llm_missing_msg=$(python - <<'PYLLM'
+import json
+import os
+
+payload = json.loads(os.environ.get("LLM_ENV_VALIDATION", "{}"))
+missing_any = payload.get("missing_any_of") or []
+missing_all = payload.get("missing_all_of") or []
+parts = []
+if missing_all:
+    parts.append("missing required vars: " + ", ".join(missing_all))
+if missing_any:
+    groups = ["/".join(group) for group in missing_any]
+    parts.append("missing any-of: " + "; ".join(groups))
+print("; ".join(parts) if parts else "missing LLM env requirements")
+PYLLM
+)
+    fail_preflight "runtime mode LLM env invalid: $llm_missing_msg"
   fi
   if [ "${START_WATCHERS:-0}" -eq 1 ] || [ "${START_WORKER:-0}" -eq 1 ]; then
     require_db_outbox_env
   fi
   export LLM_PROVIDER_ENFORCE=1
 }
+
 
 preflight_infra() {
   if [ "${LLM_PROVIDER_ENFORCE:-}" != "0" ]; then

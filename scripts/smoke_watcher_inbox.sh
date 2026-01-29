@@ -14,11 +14,94 @@ if [ ! -d "$VAULT_ROOT" ]; then
   exit 1
 fi
 
+print_diagnostics() {
+  echo "--- docker compose ps ---"
+  docker compose ps || true
+  echo "--- docker compose logs watcher (tail=200) ---"
+  docker compose logs --tail=200 watcher || true
+  echo "--- docker compose logs api (tail=200) ---"
+  docker compose logs --tail=200 api || true
+  echo "--- outbox rows matching note ---"
+  docker compose exec -T api python - <<'PY'
+import os
+from psycopg import connect
+
+note = os.environ.get("SMOKE_NOTE_NAME", "")
+pattern = f"%{note}%"
+url = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
+if not url:
+    print("DATABASE_URL/DB_DSN missing in container")
+    raise SystemExit(1)
+
+with connect(url) as conn:
+    with conn.cursor() as cur:
+        cur.execute(
+            "select created_at, delivered_at, topic, payload::text from outbox "
+            "where payload::text ilike %s order by created_at desc limit 10",
+            (pattern,),
+        )
+        rows = cur.fetchall()
+        for created_at, delivered_at, topic, payload in rows:
+            payload_snip = str(payload)[:120]
+            print(created_at, delivered_at, topic, payload_snip)
+PY
+}
+
+fail() {
+  local reason="$1"
+  echo "ERROR: $reason" >&2
+  print_diagnostics
+  exit 1
+}
+
+query_outbox_count() {
+  docker compose exec -T api python - <<'PY'
+import os
+from psycopg import connect
+
+note = os.environ.get("SMOKE_NOTE_NAME", "")
+pattern = f"%{note}%"
+url = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
+if not url:
+    print("0")
+    raise SystemExit(0)
+
+with connect(url) as conn:
+    with conn.cursor() as cur:
+        cur.execute(
+            "select count(*) from outbox where delivered_at is null and payload::text ilike %s",
+            (pattern,),
+        )
+        count = cur.fetchone()[0]
+        print(count)
+PY
+}
+
+assert_uuid_written() {
+  python - <<'PY'
+import sys
+from pathlib import Path
+from scripts.yaml_roundtrip import load_frontmatter
+
+path = Path(sys.argv[1])
+raw = path.read_text(encoding="utf-8")
+frontmatter, _ = load_frontmatter(raw)
+value = ""
+if isinstance(frontmatter, dict):
+    value = str(frontmatter.get("uuid") or "").strip()
+if not value:
+    raise SystemExit(2)
+PY
+  "$1"
+}
+
 echo "Ensuring vault layout for: $VAULT_ROOT"
 layout_json=$(python -m app.cli vault-layout-ensure --vault-root "$VAULT_ROOT" --json)
 
 inbox_dir=$(python - <<'PY'
-import json, sys
+import json
+import sys
+
 try:
     payload = json.loads(sys.stdin.read() or "{}")
 except Exception:
@@ -28,14 +111,12 @@ PY
 <<<"$layout_json")
 
 if [ -z "$inbox_dir" ]; then
-  echo "ERROR: inbox_folder missing from layout output" >&2
-  exit 1
+  fail "inbox_folder missing from layout output"
 fi
 
 inbox_base="$VAULT_ROOT/$inbox_dir"
 if [ ! -d "$inbox_base" ]; then
-  echo "ERROR: inbox directory missing: $inbox_base" >&2
-  exit 1
+  fail "inbox directory missing: $inbox_base"
 fi
 
 smoke_dir="$inbox_base/@Smoke"
@@ -51,89 +132,40 @@ title: Watcher Inbox Smoke
 tags: [watcher, smoke]
 ---
 
-Generated at $(date -u +"%Y-%m-%dT%H:%M:%SZ"). This note is used to exercise the watcher inbox scan.
+%% AI:Start %%
+- action: summarize
+%% AI:End %%
+
+Generated at $(date -u +"%Y-%m-%dT%H:%M:%SZ"). This note exercises watcher inbox scan, uuid healing, and DB outbox enqueue.
 EOF
 
-relative_path=$(python - <<'PY'
-import pathlib, sys
-inbox = pathlib.Path(sys.argv[1])
-note = pathlib.Path(sys.argv[2])
-print(str(inbox / note))
-PY
-  "$inbox_dir" "$note_name")
+relative_path="$inbox_dir/@Smoke/$note_name"
+export SMOKE_NOTE_NAME="$note_name"
 
-index_outbox="${INDEX_OUTBOX_PATH:-tmp/index-outbox.jsonl}"
-touch "$index_outbox"
+echo "Smoke note: $note_path"
+echo "Relative path: $relative_path"
 
-echo "Waiting for watcher to emit panel.scan.requested for $relative_path"
-found=0
-deadline=$((SECONDS + 45))
-while [ $SECONDS -lt $deadline ]; do
-  if python - <<'PY'
-import json, pathlib, os, sys
-target = os.environ["TARGET_REL"]
-path = pathlib.Path(os.environ["INDEX_OUTBOX_PATH"])
-if not path.exists():
-    sys.exit(1)
-with path.open("r", encoding="utf-8") as fh:
-    for line in fh:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        payload = obj.get("payload") or {}
-        if obj.get("event") == "panel.scan.requested" and payload.get("relative_path") == target:
-            sys.exit(0)
-sys.exit(1)
-PY
-    TARGET_REL="$relative_path" INDEX_OUTBOX_PATH="$index_outbox"
-  then
-    found=1
+before_count=$(query_outbox_count)
+
+if ! docker compose exec -T watcher env WATCHER_AUTO_EXEC=1 python -m app.cli watcher run --max-ticks 30; then
+  fail "watcher run failed"
+fi
+
+after_count="$before_count"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  after_count=$(query_outbox_count)
+  if [ "$after_count" -gt "$before_count" ]; then
     break
   fi
   sleep 1
 done
 
-if [ "$found" -ne 1 ]; then
-  echo "ERROR: Did not observe panel.scan.requested for $relative_path after 45s" >&2
-  exit 1
+if ! assert_uuid_written "$note_path"; then
+  fail "uuid not written to smoke note"
 fi
 
-tick_log_default="/app/tmp/watcher_tick.jsonl"
-tick_log_env="${WATCHER_TICK_LOG_PATH:-}"
-tick_log_path="${tick_log_env:-$(cat tmp/latest_watcher_tick_log 2>/dev/null || echo "$tick_log_default")}"
-host_tick_log="$tick_log_path"
-if [[ "$host_tick_log" == /app/* ]]; then
-  host_tick_log=".${host_tick_log#/app}"
-fi
-
-if [ ! -f "$host_tick_log" ]; then
-  echo "ERROR: watcher tick log missing at $host_tick_log" >&2
-  exit 1
-fi
-
-echo "Watcher tick log ($host_tick_log) tail:"
-tail -n 10 "$host_tick_log"
-
-scanned_files=$(python - <<'PY'
-import json, pathlib, sys
-path = pathlib.Path(sys.argv[1])
-lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-if not lines:
-    print(0)
-    sys.exit(0)
-payload = json.loads(lines[-1])
-print(int(payload.get("scanned_files") or 0))
-PY
-  "$host_tick_log")
-
-printf "Last tick scanned_files=%s bytes\n" "$scanned_files"
-if [ "$scanned_files" -ge 5000 ]; then
-  echo "ERROR: scanned_files ($scanned_files) is too large" >&2
-  exit 1
+if [ "$after_count" -le "$before_count" ]; then
+  fail "DB outbox did not enqueue new event for $note_name (before=$before_count after=$after_count)"
 fi
 
 echo "Watcher inbox smoke succeeded for $note_path"
