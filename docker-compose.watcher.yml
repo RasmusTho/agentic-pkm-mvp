@@ -13,6 +13,7 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER}
       LLM_PROVIDER_ENFORCE: "1"
       WATCHER_ENABLE: "1"
+      WATCHER_AUTO_EXEC: "${WATCHER_AUTO_EXEC-1}"
       WATCHER_VAULT_PATH: /app/vault
       WATCHER_STATE_DIR: /state
       WATCHER_HEARTBEAT_PATH: /app/tmp/watcher_heartbeat.json

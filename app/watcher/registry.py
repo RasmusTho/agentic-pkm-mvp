@@ -3,6 +3,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import logging
 import os
 import time
 from collections.abc import Iterable, Mapping
@@ -33,6 +34,8 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 MIN_TICK_SLEEP_SECONDS = 0.05
 
 _WRITE_GUARD = OptimisticWriteGuard()
+
+logger = logging.getLogger(__name__)
 
 
 def _detect_inbox_dir(vault_root: Path) -> str:
@@ -291,9 +294,15 @@ def _process_panel_note(
     for event in result.events:
         try:
             write_outbox_event(event)
-        except Exception as exc:
+        except Exception:
             state.enqueue_failures_total += 1
-            print(f"WARN: failed to enqueue DB outbox event {event.event}: {exc}")
+            logger.exception(
+                "watcher db outbox enqueue failed topic=%s trace_id=%s note_path=%s relative_path=%s",
+                event.event,
+                getattr(event, "trace_id", ""),
+                str(note_path),
+                str(rel_path),
+            )
         try:
             _write_jsonl_event(event, outbox_path)
         except Exception as exc:
@@ -682,11 +691,17 @@ def _emit_watch_event(
                     trace_id=trace_id,
                     source="watcher.registry",
                 )
-            except Exception as exc:
+            except Exception:
                 state.enqueue_failures_total += 1
                 if require_db:
                     raise
-                print(f"WARN: watcher failed to enqueue DB outbox event: {exc}")
+                logger.exception(
+                    "watcher db outbox enqueue failed topic=%s trace_id=%s note_path=%s relative_path=%s",
+                    spec.emit_event,
+                    trace_id,
+                    str(vault_root / rel_path),
+                    str(rel_path),
+                )
     return trace_id
 
 

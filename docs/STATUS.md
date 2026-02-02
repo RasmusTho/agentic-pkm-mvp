@@ -17,7 +17,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 
 ## Baseline Definition (SoT v5.5)
 - Runtime watcher: registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`) is the default; legacy snapshot watchers are dev-only.
-- Default safety mode: watcher auto-run stays off unless `WATCHER_AUTO_EXEC=1` is armed; once enabled, any note with an AI panel fence is treated as a candidate and actions are filtered through the allowlisted `watcher_settings.allowed_actions`, while the only per-note opt-out is `ai_panel_auto_run: never` (nested form accepted) and manual CLI panel runs remain available.
+- Runtime default: `scripts/start_full_system.sh` sets `WATCHER_AUTO_EXEC=1` unless explicitly set by the operator; set `WATCHER_AUTO_EXEC=0` to run watchers in emit-only mode. Once armed, any note with an AI panel fence is treated as a candidate and actions are filtered through the allowlisted `watcher_settings.allowed_actions`, while the only per-note opt-out is `ai_panel_auto_run: never` (nested form accepted) and manual CLI panel runs remain available.
 - DB outbox is canonical in runtime; JSONL (`INDEX_OUTBOX_PATH`) is audit only and should not be used as the worker queue.
 - Required contracts: event compatibility/outbox envelope (`docs/EVENTS.md`), trust semantics, config-as-product, and PanelAgent wiring (`docs/PANEL_AGENT.md` + `docs/settings/panel-actions.md`).
 - Minimal concurrency guarantees: DedupTaskQueue + event_id dedup guard watcher runs, optimistic writes protect note updates, and the promotion consumer uses an EventDedupStore to skip duplicate intents (`docs/CONCURRENCY.md`, `app/promotion/consumer.py`).
@@ -38,7 +38,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - Extend LangGraph adoption across more agents (Promotion, Reviewer, Hygiene) and the orchestrator V2 control plane once the v5.6A pilot stabilizes.
 - Surface LangGraph/Reasoning rollouts in the evaluation stack (golden vault, metamorphic runs, cold rebuild, fitness gates) so the forward line has measurable acceptance per contract.
 - Begin planning multi-user and external sync guardrails that rely on the v5.6 safe mode (watcher gating + plan audits) before the next forward milestone.
-**Out of scope for the v5.6 kickoff PR**: no runtime behavior changes are merged yet—watcher auto-run remains disabled by default, and the orchestrator/langgraph plumbing stays opt-in until the defined gates pass.
+**Out of scope for the v5.6 kickoff PR**: orchestrator/langgraph plumbing stays opt-in until the defined gates pass; watcher auto-run is controlled by `WATCHER_AUTO_EXEC` (set `WATCHER_AUTO_EXEC=0` for emit-only/safe mode).
 
 
 ## Status fields (baseline vs forward line)

@@ -15,6 +15,9 @@ load_dotenv() {
 
 load_dotenv
 
+source "scripts/lib/start_full_system_env.sh"
+apply_start_full_system_defaults
+
 default_db_url="postgresql+psycopg://app:app@db:5432/app"
 DATABASE_URL="${DATABASE_URL:-$default_db_url}"
 DB_DSN="${DB_DSN:-$DATABASE_URL}"

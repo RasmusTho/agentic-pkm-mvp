@@ -19,6 +19,8 @@ print_diagnostics() {
   docker compose ps || true
   echo "--- docker compose logs watcher (tail=200) ---"
   docker compose logs --tail=200 watcher || true
+  echo "--- docker compose logs worker (tail=200) ---"
+  docker compose logs --tail=200 worker || true
   echo "--- docker compose logs api (tail=200) ---"
   docker compose logs --tail=200 api || true
   echo "--- outbox rows matching note ---"
@@ -32,18 +34,25 @@ url = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
 if not url:
     print("DATABASE_URL/DB_DSN missing in container")
     raise SystemExit(1)
+try:
+    from app.db.dsn import resolve_dsn
+
+    url = resolve_dsn(url)
+except Exception:
+    if url.startswith("postgresql+psycopg://"):
+        url = "postgresql://" + url.split("postgresql+psycopg://", 1)[1]
 
 with connect(url) as conn:
     with conn.cursor() as cur:
         cur.execute(
-            "select created_at, delivered_at, topic, payload::text from outbox "
+            "select id, created_at, delivered_at, topic, payload::text from outbox "
             "where payload::text ilike %s order by created_at desc limit 10",
             (pattern,),
         )
         rows = cur.fetchall()
-        for created_at, delivered_at, topic, payload in rows:
-            payload_snip = str(payload)[:120]
-            print(created_at, delivered_at, topic, payload_snip)
+        for row_id, created_at, delivered_at, topic, payload in rows:
+            payload_snip = str(payload)[:160]
+            print(row_id, created_at, delivered_at, topic, payload_snip)
 PY
 }
 
@@ -54,7 +63,7 @@ fail() {
   exit 1
 }
 
-query_outbox_count() {
+query_outbox_total() {
   docker compose exec -T api python - <<'PY'
 import os
 from psycopg import connect
@@ -65,15 +74,51 @@ url = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
 if not url:
     print("0")
     raise SystemExit(0)
+try:
+    from app.db.dsn import resolve_dsn
+
+    url = resolve_dsn(url)
+except Exception:
+    if url.startswith("postgresql+psycopg://"):
+        url = "postgresql://" + url.split("postgresql+psycopg://", 1)[1]
 
 with connect(url) as conn:
     with conn.cursor() as cur:
         cur.execute(
-            "select count(*) from outbox where delivered_at is null and payload::text ilike %s",
+            "select count(*) from outbox where payload::text ilike %s",
             (pattern,),
         )
-        count = cur.fetchone()[0]
-        print(count)
+        print(cur.fetchone()[0])
+PY
+}
+
+query_latest_delivered() {
+  docker compose exec -T api python - <<'PY'
+import os
+from psycopg import connect
+
+note = os.environ.get("SMOKE_NOTE_NAME", "")
+pattern = f"%{note}%"
+url = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
+if not url:
+    print("0")
+    raise SystemExit(0)
+try:
+    from app.db.dsn import resolve_dsn
+
+    url = resolve_dsn(url)
+except Exception:
+    if url.startswith("postgresql+psycopg://"):
+        url = "postgresql://" + url.split("postgresql+psycopg://", 1)[1]
+
+with connect(url) as conn:
+    with conn.cursor() as cur:
+        cur.execute(
+            "select delivered_at is not null from outbox where payload::text ilike %s order by created_at desc limit 1",
+            (pattern,),
+        )
+        row = cur.fetchone()
+        print("1" if row and row[0] else "0")
 PY
 }
 
@@ -81,6 +126,7 @@ assert_uuid_written() {
   python - <<'PY'
 import sys
 from pathlib import Path
+
 from scripts.yaml_roundtrip import load_frontmatter
 
 path = Path(sys.argv[1])
@@ -126,7 +172,7 @@ timestamp="$(date -u +"%Y%m%dT%H%M%SZ")"
 note_name="watcher-smoke-$timestamp.md"
 note_path="$smoke_dir/$note_name"
 
-cat <<EOF > "$note_path"
+cat <<EOFNOTE > "$note_path"
 ---
 title: Watcher Inbox Smoke
 tags: [watcher, smoke]
@@ -137,7 +183,7 @@ tags: [watcher, smoke]
 %% AI:End %%
 
 Generated at $(date -u +"%Y-%m-%dT%H:%M:%SZ"). This note exercises watcher inbox scan, uuid healing, and DB outbox enqueue.
-EOF
+EOFNOTE
 
 relative_path="$inbox_dir/@Smoke/$note_name"
 export SMOKE_NOTE_NAME="$note_name"
@@ -145,16 +191,17 @@ export SMOKE_NOTE_NAME="$note_name"
 echo "Smoke note: $note_path"
 echo "Relative path: $relative_path"
 
-before_count=$(query_outbox_count)
+before_total=$(query_outbox_total)
 
-if ! docker compose exec -T watcher env WATCHER_AUTO_EXEC=1 python -m app.cli watcher run --max-ticks 30; then
+echo "Running watcher ticks (max=30)"
+if ! docker compose exec -T watcher python -m app.cli watcher run --max-ticks 30; then
   fail "watcher run failed"
 fi
 
-after_count="$before_count"
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  after_count=$(query_outbox_count)
-  if [ "$after_count" -gt "$before_count" ]; then
+after_total="$before_total"
+for _ in 1 2 3 4 5 6 7 8; do
+  after_total=$(query_outbox_total)
+  if [ "$after_total" -gt "$before_total" ]; then
     break
   fi
   sleep 1
@@ -164,8 +211,21 @@ if ! assert_uuid_written "$note_path"; then
   fail "uuid not written to smoke note"
 fi
 
-if [ "$after_count" -le "$before_count" ]; then
-  fail "DB outbox did not enqueue new event for $note_name (before=$before_count after=$after_count)"
+if [ "$after_total" -le "$before_total" ]; then
+  fail "DB outbox did not enqueue a new event for $note_name (before_total=$before_total after_total=$after_total)"
+fi
+
+delivered="0"
+for _ in 1 2 3 4 5; do
+  delivered=$(query_latest_delivered)
+  if [ "$delivered" = "1" ]; then
+    break
+  fi
+  sleep 1
+done
+
+if [ "$delivered" != "1" ]; then
+  fail "outbox row for $note_name was not marked delivered within 5s"
 fi
 
 echo "Watcher inbox smoke succeeded for $note_path"

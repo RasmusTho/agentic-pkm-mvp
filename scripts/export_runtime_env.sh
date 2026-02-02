@@ -33,6 +33,10 @@ if [ -n "${LLM_PROVIDER:-}" ]; then
   printf "%s\n" "LLM_PROVIDER=$LLM_PROVIDER" >> "$runtime_env_path"
 fi
 
+if [ -n "${WATCHER_AUTO_EXEC+x}" ]; then
+  printf "%s\n" "WATCHER_AUTO_EXEC=${WATCHER_AUTO_EXEC}" >> "$runtime_env_path"
+fi
+
 if [ "${LLM_PROVIDER:-}" = "ollama" ]; then
   python - <<'PY' >> "$runtime_env_path"
 from __future__ import annotations
