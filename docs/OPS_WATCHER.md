@@ -6,6 +6,11 @@ The runtime watcher is registry-based (config-driven) and runs via `python -m ap
 ## Docker-first deployment
 1) Set `VAULT_ROOT` to your local vault path (quotes allow spaces):
    `export VAULT_ROOT="/Users/you/PKM - Alpha"`
+- Note (macOS + iCloud vaults): set container uid/gid mapping so watchers/workers can write UUID heals back into the vault:
+  - `export LOCAL_UID=$(id -u)`
+  - `export LOCAL_GID=$(id -g)`
+  - If you change these, recreate services: `docker compose up -d --force-recreate watcher worker api`
+
 2) Start the watcher service:
    ```bash
    docker compose -f docker-compose.watcher.yml up -d watcher

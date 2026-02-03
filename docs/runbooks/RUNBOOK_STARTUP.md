@@ -4,6 +4,10 @@ State: SoT v4.10 Reality-MVP (work branch prep).
 
 ## 1. Config prerequisites
 1. Expose the vault root: `export VAULT_ROOT=/path/to/vault` (or set in docker compose env file).
+   - macOS + iCloud vault mounts: set uid/gid mapping so containers can write UUID heals back into the vault:
+     - `export LOCAL_UID=$(id -u)`
+     - `export LOCAL_GID=$(id -g)`
+     - If you change these, recreate services: `docker compose up -d --force-recreate api watcher worker`
 2. Seed `${VAULT_SYSTEM_DIR_REL}/Settings/health.md` so guided thresholds/incident logging exist (see `docs/HEALTH.md`).
 3. Optional overrides: `INDEX_OUTBOX_PATH`, `HEALTH_THRESHOLDS_*` and `HEALTH_INCIDENT_CAPTURE_*` can guard tuning; keep `incident_log_path` in the vault to a known location you can tail.
 4. LLM preflight: `LLM_PROVIDER` + `LLM_MODEL` are required for runtime. `LLM_PROVIDER=mock` requires no endpoint vars. `LLM_PROVIDER=ollama` accepts `OLLAMA_URL` or `OPENAI_BASE_URL`. Other providers require `OPENAI_BASE_URL`.

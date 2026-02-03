@@ -119,26 +119,36 @@ def _maybe_heal_uuid(note_path: Path, vault_root: Path) -> str:
     except Exception:
         return ""
 
-    try:
-        healed = ensure_note_uuid(note_path)
-        if healed:
-            logger.info("healed uuid for inbox note note_path=%s", note_path)
-        return healed
-    except OSError as exc:
-        if exc.errno in {errno.EPERM, errno.EACCES, errno.EROFS}:
-            _warn_once(
-                f"uuid_heal_perm:{note_path}",
-                "uuid heal skipped (permission) note_path=%s errno=%s",
-                note_path,
-                exc.errno,
-            )
-            return ""
-        logger.warning("failed to ensure uuid for %s: %s", note_path, exc)
-        return ""
-    except Exception as exc:
-        logger.warning("failed to ensure uuid for %s: %s", note_path, exc)
-        return ""
+    # iCloud File Provider paths can transiently deny writes (EPERM/EACCES) even when
+    # the file later becomes writable; retry briefly to avoid leaving inbox notes uuid-less.
+    max_attempts = 5
+    base_sleep = 0.2
 
+    for attempt in range(max_attempts):
+        try:
+            healed = ensure_note_uuid(note_path)
+            if healed:
+                logger.info("healed uuid for inbox note note_path=%s", note_path)
+            return healed
+        except OSError as exc:
+            if exc.errno in {errno.EPERM, errno.EACCES, errno.EROFS}:
+                if attempt + 1 < max_attempts:
+                    time.sleep(base_sleep * (2**attempt))
+                    continue
+                _warn_once(
+                    f"uuid_heal_perm:{note_path}",
+                    "uuid heal skipped (permission) note_path=%s errno=%s",
+                    note_path,
+                    exc.errno,
+                )
+                return ""
+            logger.warning("failed to ensure uuid for %s: %s", note_path, exc)
+            return ""
+        except Exception as exc:
+            logger.warning("failed to ensure uuid for %s: %s", note_path, exc)
+            return ""
+
+    return ""
 
 def handle_ingest_vault_changed(
     payload: Mapping[str, Any], *, vault_root: Path | None = None
