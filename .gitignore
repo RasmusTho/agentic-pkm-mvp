@@ -41,3 +41,4 @@ tmp/index-outbox.jsonl
 *.jsonl
 tmp/index.jsonl
 runtime/settings/
+verification_report.md

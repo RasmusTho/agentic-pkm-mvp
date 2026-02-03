@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -7,11 +8,32 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import pytest
+
+
+def _marker_expr(argv: list[str]) -> str:
+    for i, arg in enumerate(argv):
+        if arg == "-m" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("-m") and len(arg) > 2:
+            return arg[2:]
+    return ""
+
+
+# Keep the repo's default unit-test run deterministic even if the developer has
+# DATABASE_URL/DB_DSN exported in their shell.
+#
+# This is intentionally evaluated before importing app modules.
+_mark_expr = _marker_expr(sys.argv).strip().lower()
+if "not pg" in _mark_expr:
+    os.environ["STORE_BACKEND"] = "memory"
+    os.environ.pop("DATABASE_URL", None)
+    os.environ.pop("DB_DSN", None)
+
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-import pytest  # noqa: E402
 
 import app.search as search_module  # noqa: E402
 import app.search.service as search_service_module  # noqa: E402
@@ -66,15 +88,13 @@ class StubVectorIndex:
             if filters and not all(stored.payload.get(k) == v for k, v in filters.items()):
                 continue
             score = sum(a * b for a, b in zip(query_vec, stored.embedding, strict=False))
-            results.append(
-                VectorResult(object_id=object_id, score=score, payload=stored.payload)
-            )
+            results.append(VectorResult(object_id=object_id, score=score, payload=stored.payload))
         results.sort(key=lambda item: item.score, reverse=True)
         return results[:k]
 
 
 @pytest.fixture
-def stub_index(monkeypatch) -> StubVectorIndex:
+def stub_index(monkeypatch: pytest.MonkeyPatch) -> StubVectorIndex:
     index = StubVectorIndex()
 
     def _get_index() -> StubVectorIndex:
@@ -88,13 +108,9 @@ def stub_index(monkeypatch) -> StubVectorIndex:
 
 
 @pytest.fixture
-def clean_llm_env(monkeypatch):
-    """
-    Ensure clean LLM environment for each test.
+def clean_llm_env(monkeypatch: pytest.MonkeyPatch):
+    """Ensure a clean LLM environment for each test."""
 
-    Guarantees cleanup even if test crashes.
-    See: docs/LLM_ROUTING.md §Configuration precedence
-    """
     keys = [
         "LLM_PROVIDER",
         "LLM_MODEL",
@@ -114,11 +130,22 @@ def clean_llm_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def force_memory_store_for_non_pg(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    """Keep non-pg tests independent of DATABASE_URL/DB_DSN."""
+
+    if request.node.get_closest_marker("pg") is None:
+        monkeypatch.setenv("STORE_BACKEND", "memory")
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("DB_DSN", raising=False)
+    yield monkeypatch
+
+
+@pytest.fixture(autouse=True)
 def default_vault_layout_env(monkeypatch: pytest.MonkeyPatch):
     """Provide explicit test defaults for vault layout env.
 
-    Runtime code must not assume folder names; tests set explicit defaults to keep
-    behavior deterministic and avoid implicit fallbacks.
+    Runtime code must not assume folder names; tests set explicit defaults to
+    keep behavior deterministic and avoid implicit fallbacks.
 
     This fixture never overrides a value that is already set.
     """
@@ -158,10 +185,7 @@ def pytest_addoption(parser) -> None:
         )
     except ValueError:
         pass
-import os
 
-def pytest_sessionstart(session):
-    os.environ.setdefault("STORE_BACKEND", "memory")
-def pytest_configure(config):
-    # Ensure the 'pg' marker exists even when pytest.ini is ignored (e.g. -c /dev/null)
+
+def pytest_configure(config) -> None:
     config.addinivalue_line("markers", "pg: marks tests requiring Postgres")

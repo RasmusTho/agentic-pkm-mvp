@@ -11,6 +11,8 @@ import yaml
 LAYOUT_NOTE_NAME = "vault.layout.md"
 SYSTEM_NOTE_TITLE = "Vault Structure – Human-First Orientation (Mimer)"
 
+_SETTINGS_REL_PATH = Path("_system") / "settings" / "system-settings.yaml"
+
 
 @dataclass(frozen=True)
 class VaultLayout:
@@ -78,6 +80,36 @@ def _coerce_str(value: object | None) -> str:
     return str(value).strip()
 
 
+def _read_system_settings(vault_root: Path) -> dict[str, Any]:
+    path = vault_root / _SETTINGS_REL_PATH
+    if not path.exists():
+        return {}
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _system_dir_hint(vault_root: Path) -> str:
+    env_value = (os.getenv("VAULT_SYSTEM_DIR_REL") or "").strip()
+    if env_value:
+        return env_value
+
+    settings = _read_system_settings(vault_root)
+    raw_paths = settings.get("paths")
+    if isinstance(raw_paths, dict):
+        value = raw_paths.get("system_dir_rel")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    value2 = settings.get("system_dir_rel")
+    if isinstance(value2, str) and value2.strip():
+        return value2.strip()
+
+    return ""
+
+
 def _find_layout_note_candidates(vault_root: Path) -> list[Path]:
     explicit_rel = os.getenv("VAULT_LAYOUT_NOTE_REL")
     filename = _layout_note_filename()
@@ -86,13 +118,12 @@ def _find_layout_note_candidates(vault_root: Path) -> list[Path]:
         candidate = (vault_root / explicit_rel.strip()).expanduser()
         return [candidate]
 
-    system_dir = os.getenv("VAULT_SYSTEM_DIR_REL")
-    if system_dir and system_dir.strip():
-        candidate = vault_root / system_dir.strip() / filename
+    system_hint = _system_dir_hint(vault_root)
+    if system_hint:
+        candidate = vault_root / system_hint / filename
         if candidate.exists():
             return [candidate]
 
-    # Deterministic, shallow scan: layout note should live under a top-level folder.
     matches: list[Path] = []
     try:
         children = sorted([p for p in vault_root.iterdir() if p.is_dir()])
@@ -107,6 +138,14 @@ def _find_layout_note_candidates(vault_root: Path) -> list[Path]:
     return matches
 
 
+def _has_required_fields(frontmatter: dict[str, Any]) -> bool:
+    return bool(
+        _coerce_str(frontmatter.get("system_folder"))
+        and _coerce_str(frontmatter.get("inbox_folder"))
+        and _coerce_str(frontmatter.get("desk_folder"))
+    )
+
+
 def load_layout(vault_root: Path) -> VaultLayout:
     vault_root = vault_root.expanduser()
     matches = _find_layout_note_candidates(vault_root)
@@ -119,6 +158,23 @@ def load_layout(vault_root: Path) -> VaultLayout:
         )
 
     existing = [p for p in matches if p.exists()]
+
+    # If multiple candidates exist, prefer ones with parseable required fields.
+    if len(existing) > 1:
+        valid = [p for p in existing if _has_required_fields(_load_frontmatter(p))]
+        if len(valid) == 1:
+            existing = valid
+        elif len(valid) > 1:
+            existing = valid
+
+    # If still ambiguous, attempt deterministic selection using system_dir_rel.
+    if len(existing) > 1:
+        system_hint = _system_dir_hint(vault_root)
+        if system_hint:
+            preferred = vault_root / system_hint / _layout_note_filename()
+            if preferred.exists() and preferred in existing:
+                existing = [preferred]
+
     if len(existing) > 1:
         rels = ", ".join(str(p.relative_to(vault_root)) for p in sorted(existing))
         raise ValueError(
@@ -239,7 +295,6 @@ def ensure_vault_layout_report(vault_root: Path) -> tuple[VaultLayout, bool, lis
     layout = load_or_create_layout(vault_root)
     warnings: list[str] = []
 
-    # Ensure layout folders exist.
     folders = set(layout.root_folders)
     folders.update({layout.system_folder, layout.inbox_folder, layout.desk_folder})
     if layout.include_folders:
