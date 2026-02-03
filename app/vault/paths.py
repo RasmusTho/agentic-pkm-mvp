@@ -54,12 +54,48 @@ def _paths_data(vault_root: Path | None = None) -> Dict[str, str]:
     return _extract_paths(settings)
 
 
+def _layout_frontmatter(path: Path) -> dict[str, Any]:
+    raw = path.read_text(encoding="utf-8")
+    if not raw.startswith("---"):
+        return {}
+    parts = raw.split("---", 2)
+    if len(parts) < 3:
+        return {}
+    block = parts[1]
+    try:
+        payload = yaml.safe_load(block) or {}
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _inbox_dir_from_vault_layout(vault_root: Path) -> str:
+    candidates = [
+        vault_root / "⚙️ System" / "vault.layout.md",
+        vault_root / "System" / "vault.layout.md",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        fm = _layout_frontmatter(path)
+        value = fm.get("inbox_folder")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def get_vault_inbox_dir_rel(vault_root: Path | None = None) -> str:
     env_value = os.getenv("VAULT_INBOX_DIR_REL")
     if env_value:
         return env_value
-    paths = _paths_data(vault_root)
-    return paths.get("inbox_dir_rel", _DEFAULT_INBOX_DIR)
+    root = _resolve_vault_root(vault_root)
+    paths = _paths_data(root)
+    if paths.get("inbox_dir_rel"):
+        return paths["inbox_dir_rel"]
+    layout_inbox = _inbox_dir_from_vault_layout(root)
+    if layout_inbox:
+        return layout_inbox
+    return _DEFAULT_INBOX_DIR
 
 
 def get_vault_runtime_dir_rel(vault_root: Path | None = None) -> str:
