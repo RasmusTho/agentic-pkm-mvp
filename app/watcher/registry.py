@@ -23,7 +23,7 @@ from app.outbox.events import get_index_outbox_path
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import write_outbox_event
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
-from app.vault.layout import ensure_vault_layout
+from app.vault.layout import load_layout
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
 from app.watcher.state import WatcherState
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -44,7 +44,7 @@ def _detect_inbox_dir(vault_root: Path) -> str:
         return env_value
     if not vault_root.exists():
         raise FileNotFoundError(f"Vault root not found: {vault_root}")
-    layout = ensure_vault_layout(vault_root)
+    layout = load_layout(vault_root)
     return layout.inbox_folder
 
 
@@ -92,7 +92,7 @@ def _scope_prefix(scope_glob: str) -> str:
 
 
 def _inbox_prefix_from_layout(vault_root: Path) -> str:
-    layout = ensure_vault_layout(vault_root)
+    layout = load_layout(vault_root)
     return layout.inbox_folder
 
 
@@ -314,7 +314,10 @@ def _default_scope_glob() -> str:
     scope_env = os.getenv("WATCHER_SCOPE_GLOB")
     if scope_env:
         return scope_env
-    vault_path = Path(os.getenv("WATCHER_VAULT_PATH", "vault")).expanduser()
+    vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
+    if not vault_raw:
+        raise ValueError("WATCHER_VAULT_PATH is required to derive default watcher scope")
+    vault_path = Path(vault_raw).expanduser()
     inbox = _detect_inbox_dir(vault_path)
     return f"{inbox}/**"
 
@@ -369,7 +372,10 @@ class RegistryConfig:
         debounce_ms = _as_int(os.getenv("WATCHER_DEBOUNCE_MS"), fallback=1500)
         rate_limit_per_min = _as_int(os.getenv("WATCHER_RATE_LIMIT_PER_MIN"), fallback=30)
         outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH", get_index_outbox_path()))
-        vault_path = Path(os.getenv("WATCHER_VAULT_PATH", "vault")).expanduser()
+        vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
+        if enable and not vault_raw:
+            raise ValueError("WATCHER_VAULT_PATH is required when WATCHER_ENABLE=1")
+        vault_path = Path(vault_raw or ".").expanduser()
         state_dir = Path(os.getenv("WATCHER_STATE_DIR", "tmp")).expanduser()
         heartbeat_path = Path(os.getenv("WATCHER_HEARTBEAT_PATH", resolve_heartbeat_path()))
         summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), fallback=60)

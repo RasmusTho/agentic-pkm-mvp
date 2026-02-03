@@ -7,24 +7,24 @@ from pathlib import Path
 
 import yaml
 
-from app.vault.layout import DEFAULT_SYSTEM_FOLDER, LAYOUT_NOTE_NAME
+from app.vault.layout import LAYOUT_NOTE_NAME
 from app.watcher import registry
 
 
-def _write_layout_note(vault: Path, inbox: str) -> None:
-    system_dir = vault / DEFAULT_SYSTEM_FOLDER
+def _write_layout_note(vault: Path, inbox: str, *, system_folder: str = "⚙️ System") -> None:
+    system_dir = vault / system_folder
     system_dir.mkdir(parents=True, exist_ok=True)
     note_path = system_dir / LAYOUT_NOTE_NAME
     frontmatter = {
         "version": "1",
-        "system_folder": DEFAULT_SYSTEM_FOLDER,
+        "system_folder": system_folder,
         "inbox_folder": inbox,
         "desk_folder": "🛠️ Workbench",
-        "root_folders": [inbox],
+        "root_folders": [system_folder, inbox, "🛠️ Workbench"],
         "include_folders": [],
         "ignore_glob": [],
     }
-    body = f"---\n{yaml.safe_dump(frontmatter, sort_keys=False)}---\n"
+    body = f"---\n{yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True)}---\n"
     note_path.write_text(body, encoding="utf-8")
 
 
@@ -34,7 +34,7 @@ def test_detect_inbox_from_layout(tmp_path: Path, monkeypatch) -> None:
     assert registry._detect_inbox_dir(tmp_path) == "Custom Inbox"
 
 
-def test_detect_inbox_ignores_legacy_scopes(tmp_path: Path, monkeypatch) -> None:
+def test_detect_inbox_ignores_other_folders(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("VAULT_INBOX_DIR_REL", raising=False)
     _write_layout_note(tmp_path, "Safe Inbox")
     (tmp_path / "Inbox").mkdir()

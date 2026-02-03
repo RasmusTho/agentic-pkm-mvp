@@ -19,7 +19,6 @@ services:
       WATCHER_HEARTBEAT_PATH: /app/tmp/watcher_heartbeat.json
       WATCHER_STOP_FILE: /app/tmp/WATCHER_STOP
       INDEX_OUTBOX_PATH: /app/tmp/index-outbox.jsonl
-      VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-Inbox}
     restart: unless-stopped
 
 volumes:

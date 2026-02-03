@@ -19,7 +19,7 @@ import urllib.request
 import uuid
 from typing import Any, Sequence
 
-from app.vault.paths import ensure_vault_path_env_defaults, get_vault_inbox_dir_rel
+from app.vault.paths import get_vault_inbox_dir_rel
 
 _DEFAULT_API_BASE = "http://127.0.0.1:18000"
 _REQUIRED_TOPIC = "promote.intent.created"
@@ -379,7 +379,6 @@ def main(argv: list[str] | None = None) -> int:
 
     api_base = os.getenv("API_BASE_URL") or _DEFAULT_API_BASE
     vault_root = Path(vault_root_raw).expanduser()
-    ensure_vault_path_env_defaults(vault_root)
     inbox_dir_rel = get_vault_inbox_dir_rel(vault_root)
     note_paths: list[Path] = []
 

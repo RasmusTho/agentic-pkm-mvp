@@ -113,6 +113,26 @@ def clean_llm_env(monkeypatch):
     yield monkeypatch
 
 
+@pytest.fixture(autouse=True)
+def default_vault_layout_env(monkeypatch: pytest.MonkeyPatch):
+    """Provide explicit test defaults for vault layout env.
+
+    Runtime code must not assume folder names; tests set explicit defaults to keep
+    behavior deterministic and avoid implicit fallbacks.
+
+    This fixture never overrides a value that is already set.
+    """
+
+    if os.getenv("VAULT_SYSTEM_DIR_REL") is None:
+        monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "⚙️ System")
+    if os.getenv("VAULT_INBOX_DIR_REL") is None:
+        monkeypatch.setenv("VAULT_INBOX_DIR_REL", "📥 Inbox")
+    if os.getenv("VAULT_DESK_DIR_REL") is None:
+        monkeypatch.setenv("VAULT_DESK_DIR_REL", "🛠️ Workbench")
+
+    yield monkeypatch
+
+
 def pytest_addoption(parser) -> None:
     """Provide minimal timeout flags when pytest-timeout is unavailable."""
 

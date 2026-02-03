@@ -6,10 +6,10 @@ This document defines the end-to-end runtime contract for Alpha: the watcher det
 
 ## Preconditions
 - `VAULT_ROOT` points at the live vault.
-- Optional path overrides:
-  - `VAULT_INBOX_DIR_REL` (default: `Inbox`)
-  - `VAULT_RUNTIME_DIR_REL` (default: `System/Runtime`)
-  - `VAULT_SYSTEM_DIR_REL` (default: `System`)
+- Optional path overrides (no repo defaults):
+  - `VAULT_INBOX_DIR_REL` (if unset, resolved from `vault.layout.md`)
+  - `VAULT_SYSTEM_DIR_REL` (if unset, resolved from `vault.layout.md` or system settings)
+  - `VAULT_RUNTIME_DIR_REL` (if unset, resolved from system settings)
 
 ## Canonical Flow
 Run these in order:

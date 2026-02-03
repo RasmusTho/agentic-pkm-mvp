@@ -3,24 +3,76 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 from urllib.parse import quote
 
-
-def append_change(message: str, inbox: str = "Inbox/System-changes.md", *, vault_path: Path | str | None = None, uri: str | None = None) -> None:
-    _append_line(inbox, message, vault_path=vault_path, uri=uri)
+from app.vault.paths import get_vault_inbox_dir_rel
 
 
-def append_conflict(message: str, inbox: str = "Inbox/Conflicts.md", *, vault_path: Path | str | None = None, uri: str | None = None) -> None:
-    _append_line(inbox, message, vault_path=vault_path, uri=uri)
+def append_change(
+    message: str,
+    note_rel_path: str | None = None,
+    *,
+    vault_root: Path | str | None = None,
+    vault_path: Path | str | None = None,
+    uri: str | None = None,
+) -> None:
+    rel = note_rel_path or os.getenv("VAULT_CHANGE_LOG_NOTE_REL")
+    if not rel:
+        rel = _default_change_log_rel(vault_root)
+    _append_line(rel, message, vault_root=vault_root, vault_path=vault_path, uri=uri)
 
 
-def _append_line(path: str, message: str, *, vault_path: Path | str | None = None, uri: str | None = None) -> None:
-    target = Path(path)
+def append_conflict(
+    message: str,
+    note_rel_path: str | None = None,
+    *,
+    vault_root: Path | str | None = None,
+    vault_path: Path | str | None = None,
+    uri: str | None = None,
+) -> None:
+    rel = note_rel_path or os.getenv("VAULT_CONFLICT_LOG_NOTE_REL")
+    if not rel:
+        rel = _default_conflict_log_rel(vault_root)
+    _append_line(rel, message, vault_root=vault_root, vault_path=vault_path, uri=uri)
+
+
+def _resolve_vault_root(vault_root: Path | str | None) -> Path:
+    if vault_root is None:
+        env_root = os.getenv("VAULT_ROOT")
+        if env_root:
+            return Path(env_root).expanduser()
+        return Path("vault").expanduser()
+    return Path(vault_root).expanduser()
+
+
+def _default_change_log_rel(vault_root: Path | str | None) -> str:
+    root = _resolve_vault_root(vault_root)
+    inbox_rel = get_vault_inbox_dir_rel(root)
+    return str(Path(inbox_rel) / "_system_changes.md")
+
+
+def _default_conflict_log_rel(vault_root: Path | str | None) -> str:
+    root = _resolve_vault_root(vault_root)
+    inbox_rel = get_vault_inbox_dir_rel(root)
+    return str(Path(inbox_rel) / "_conflicts.md")
+
+
+def _append_line(
+    note_rel_path: str,
+    message: str,
+    *,
+    vault_root: Path | str | None = None,
+    vault_path: Path | str | None = None,
+    uri: str | None = None,
+) -> None:
+    root = _resolve_vault_root(vault_root)
+    target = root / Path(note_rel_path)
     target.parent.mkdir(parents=True, exist_ok=True)
+
     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     action_link = uri or _build_uri(vault_path)
     suffix = f" | {action_link}" if action_link else ""
+
     with target.open("a", encoding="utf-8") as handle:
         handle.write(f"- [{timestamp}] {message}{suffix}\n")
 

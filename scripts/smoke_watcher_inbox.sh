@@ -141,6 +141,10 @@ PY
   "$1"
 }
 
+echo "--- watcher env ---"
+docker compose exec -T watcher env | egrep 'WATCHER|VAULT|DATABASE_URL|DB_DSN|STORE_BACKEND' || true
+echo "--- worker env ---"
+docker compose exec -T worker env | egrep 'WATCHER|VAULT|DATABASE_URL|DB_DSN|STORE_BACKEND' || true
 echo "Ensuring vault layout for: $VAULT_ROOT"
 layout_json=$(python -m app.cli vault-layout-ensure --vault-root "$VAULT_ROOT" --json)
 
@@ -174,7 +178,7 @@ note_path="$smoke_dir/$note_name"
 
 cat <<EOFNOTE > "$note_path"
 ---
-title: Watcher Inbox Smoke
+title: Watcher Capture Smoke
 tags: [watcher, smoke]
 ---
 
@@ -182,8 +186,11 @@ tags: [watcher, smoke]
 - action: summarize
 %% AI:End %%
 
-Generated at $(date -u +"%Y-%m-%dT%H:%M:%SZ"). This note exercises watcher inbox scan, uuid healing, and DB outbox enqueue.
+Generated at $(date -u +"%Y-%m-%dT%H:%M:%SZ"). This note exercises watcher scan, uuid healing, and DB outbox enqueue.
 EOFNOTE
+
+marker_line="SMOKE_MARKER: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+echo "$marker_line" >> "$note_path"
 
 relative_path="$inbox_dir/@Smoke/$note_name"
 export SMOKE_NOTE_NAME="$note_name"

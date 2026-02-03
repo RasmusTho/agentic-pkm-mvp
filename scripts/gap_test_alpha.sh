@@ -2,10 +2,7 @@
 set -euo pipefail
 
 API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"
-VAULT_INBOX_DIR_REL="${VAULT_INBOX_DIR_REL:-Inbox}"
-NOTE_REL="${NOTE_REL:-${VAULT_INBOX_DIR_REL}/_gap_test.md}"
 VAULT_ROOT="${VAULT_ROOT:-$(pwd)/vault}"
-NOTE_PATH="${NOTE_PATH:-$VAULT_ROOT/$NOTE_REL}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-60}"
 ASK_RETRIES="${ASK_RETRIES:-6}"
 ASK_RETRY_SLEEP="${ASK_RETRY_SLEEP:-1}"
@@ -18,6 +15,32 @@ fi
 pretty_json() {
   "$JSON_TOOL_PYTHON" -m json.tool
 }
+
+resolve_inbox_dir() {
+  if [ -n "${VAULT_INBOX_DIR_REL:-}" ]; then
+    printf '%s\n' "${VAULT_INBOX_DIR_REL}"
+    return
+  fi
+
+  python -m app.cli vault-layout-ensure --vault-root "$VAULT_ROOT" --json \
+    | python - <<'PY'
+import json, sys
+try:
+    payload = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    payload = {}
+print((payload.get("inbox_folder") or "").strip())
+PY
+}
+
+inbox_dir_rel="$(resolve_inbox_dir)"
+if [ -z "$inbox_dir_rel" ]; then
+  echo "ERROR: could not resolve inbox folder; set VAULT_INBOX_DIR_REL or ensure vault.layout.md exists" >&2
+  exit 1
+fi
+
+NOTE_REL="${NOTE_REL:-${inbox_dir_rel}/_gap_test.md}"
+NOTE_PATH="${NOTE_PATH:-$VAULT_ROOT/$NOTE_REL}"
 
 note_dir="$(dirname "$NOTE_PATH")"
 mkdir -p "$note_dir"
@@ -75,6 +98,7 @@ def relative_path(entry):
         rel = ''
     rel = rel or entry.get('relative_path') or entry.get('path') or ''
     return rel
+
 note_rel = os.environ.get('NOTE_REL_ENV', '')
 for entry in collect(data):
     if not isinstance(entry, dict):

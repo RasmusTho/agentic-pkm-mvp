@@ -2,15 +2,22 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
 
 import yaml
 
-_DEFAULT_INBOX_DIR = "Inbox"
-_DEFAULT_RUNTIME_DIR = "System/Runtime"
-_DEFAULT_SYSTEM_DIR = "System"
+from app.vault.layout import load_layout
+
+
 _SETTINGS_REL_PATH = Path("_system") / "settings" / "system-settings.yaml"
+
+
+@dataclass(frozen=True)
+class VaultPathValue:
+    value: str
+    provenance: str
 
 
 def _resolve_vault_root(vault_root: Path | None = None) -> Path:
@@ -19,6 +26,7 @@ def _resolve_vault_root(vault_root: Path | None = None) -> Path:
     env_root = os.getenv("VAULT_ROOT")
     if env_root:
         return Path(env_root).expanduser()
+    # Keep the historical fallback for non-runtime contexts.
     return Path("vault").expanduser()
 
 
@@ -37,92 +45,114 @@ def _extract_paths(settings: Dict[str, Any]) -> Dict[str, str]:
     raw = settings.get("paths")
     if isinstance(raw, dict):
         for key, value in raw.items():
-            if isinstance(value, str) and value:
-                out[key] = value
+            if isinstance(value, str) and value.strip():
+                out[key] = value.strip()
     for key in ("inbox_dir_rel", "runtime_dir_rel", "system_dir_rel"):
         if key in out:
             continue
         value = settings.get(key)
-        if isinstance(value, str) and value:
-            out[key] = value
+        if isinstance(value, str) and value.strip():
+            out[key] = value.strip()
     return out
 
 
-def _paths_data(vault_root: Path | None = None) -> Dict[str, str]:
-    root = _resolve_vault_root(vault_root)
-    settings = _read_system_settings(root / _SETTINGS_REL_PATH)
+def _paths_data(vault_root: Path) -> Dict[str, str]:
+    settings = _read_system_settings(vault_root / _SETTINGS_REL_PATH)
     return _extract_paths(settings)
 
 
-def _layout_frontmatter(path: Path) -> dict[str, Any]:
-    raw = path.read_text(encoding="utf-8")
-    if not raw.startswith("---"):
-        return {}
-    parts = raw.split("---", 2)
-    if len(parts) < 3:
-        return {}
-    block = parts[1]
+def resolve_vault_inbox_dir_rel(vault_root: Path) -> VaultPathValue:
+    env_value = (os.getenv("VAULT_INBOX_DIR_REL") or "").strip()
+    if env_value:
+        return VaultPathValue(env_value, "env:VAULT_INBOX_DIR_REL")
+
+    paths = _paths_data(vault_root)
+    value = paths.get("inbox_dir_rel", "").strip()
+    if value:
+        return VaultPathValue(value, "system-settings.yaml:paths.inbox_dir_rel")
+
+    layout = load_layout(vault_root)
+    if layout.inbox_folder:
+        return VaultPathValue(layout.inbox_folder, f"vault.layout.md:{layout.note_path}")
+
+    raise ValueError(
+        "inbox folder could not be resolved. Set VAULT_INBOX_DIR_REL, or ensure vault.layout.md has inbox_folder."
+    )
+
+
+def resolve_vault_system_dir_rel(vault_root: Path) -> VaultPathValue:
+    env_value = (os.getenv("VAULT_SYSTEM_DIR_REL") or "").strip()
+    if env_value:
+        return VaultPathValue(env_value, "env:VAULT_SYSTEM_DIR_REL")
+
+    paths = _paths_data(vault_root)
+    value = paths.get("system_dir_rel", "").strip()
+    if value:
+        return VaultPathValue(value, "system-settings.yaml:paths.system_dir_rel")
+
+    layout = load_layout(vault_root)
+    if layout.system_folder:
+        return VaultPathValue(layout.system_folder, f"vault.layout.md:{layout.note_path}")
+
+    raise ValueError(
+        "System folder could not be resolved. Set VAULT_SYSTEM_DIR_REL, or ensure vault.layout.md has system_folder."
+    )
+
+
+def resolve_vault_runtime_dir_rel(vault_root: Path) -> VaultPathValue:
+    env_value = (os.getenv("VAULT_RUNTIME_DIR_REL") or "").strip()
+    if env_value:
+        return VaultPathValue(env_value, "env:VAULT_RUNTIME_DIR_REL")
+
+    paths = _paths_data(vault_root)
+    value = paths.get("runtime_dir_rel", "").strip()
+    if value:
+        return VaultPathValue(value, "system-settings.yaml:paths.runtime_dir_rel")
+
+    layout = load_layout(vault_root)
+    fm: dict[str, Any]
     try:
-        payload = yaml.safe_load(block) or {}
+        raw = layout.note_path.read_text(encoding="utf-8")
     except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+        raw = ""
+    if raw.startswith("---"):
+        parts = raw.split("---", 2)
+        if len(parts) >= 3:
+            try:
+                fm = yaml.safe_load(parts[1]) or {}
+            except Exception:
+                fm = {}
+            if isinstance(fm, dict):
+                value2 = fm.get("runtime_dir_rel")
+                if isinstance(value2, str) and value2.strip():
+                    return VaultPathValue(value2.strip(), f"vault.layout.md:{layout.note_path}")
 
-
-def _inbox_dir_from_vault_layout(vault_root: Path) -> str:
-    candidates = [
-        vault_root / "⚙️ System" / "vault.layout.md",
-        vault_root / "System" / "vault.layout.md",
-    ]
-    for path in candidates:
-        if not path.exists():
-            continue
-        fm = _layout_frontmatter(path)
-        value = fm.get("inbox_folder")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+    raise ValueError(
+        "Runtime folder could not be resolved. Set VAULT_RUNTIME_DIR_REL or configure paths.runtime_dir_rel in system-settings.yaml."
+    )
 
 
 def get_vault_inbox_dir_rel(vault_root: Path | None = None) -> str:
-    env_value = os.getenv("VAULT_INBOX_DIR_REL")
-    if env_value:
-        return env_value
     root = _resolve_vault_root(vault_root)
-    paths = _paths_data(root)
-    if paths.get("inbox_dir_rel"):
-        return paths["inbox_dir_rel"]
-    layout_inbox = _inbox_dir_from_vault_layout(root)
-    if layout_inbox:
-        return layout_inbox
-    return _DEFAULT_INBOX_DIR
-
-
-def get_vault_runtime_dir_rel(vault_root: Path | None = None) -> str:
-    env_value = os.getenv("VAULT_RUNTIME_DIR_REL")
-    if env_value:
-        return env_value
-    paths = _paths_data(vault_root)
-    return paths.get("runtime_dir_rel", _DEFAULT_RUNTIME_DIR)
+    return resolve_vault_inbox_dir_rel(root).value
 
 
 def get_vault_system_dir_rel(vault_root: Path | None = None) -> str:
-    env_value = os.getenv("VAULT_SYSTEM_DIR_REL")
-    if env_value:
-        return env_value
-    paths = _paths_data(vault_root)
-    return paths.get("system_dir_rel", _DEFAULT_SYSTEM_DIR)
+    root = _resolve_vault_root(vault_root)
+    return resolve_vault_system_dir_rel(root).value
 
 
-def ensure_vault_path_env_defaults(vault_root: Path | None = None) -> None:
-    os.environ.setdefault("VAULT_INBOX_DIR_REL", get_vault_inbox_dir_rel(vault_root))
-    os.environ.setdefault("VAULT_RUNTIME_DIR_REL", get_vault_runtime_dir_rel(vault_root))
-    os.environ.setdefault("VAULT_SYSTEM_DIR_REL", get_vault_system_dir_rel(vault_root))
+def get_vault_runtime_dir_rel(vault_root: Path | None = None) -> str:
+    root = _resolve_vault_root(vault_root)
+    return resolve_vault_runtime_dir_rel(root).value
 
 
 __all__ = [
+    "VaultPathValue",
     "get_vault_inbox_dir_rel",
     "get_vault_runtime_dir_rel",
     "get_vault_system_dir_rel",
-    "ensure_vault_path_env_defaults",
+    "resolve_vault_inbox_dir_rel",
+    "resolve_vault_runtime_dir_rel",
+    "resolve_vault_system_dir_rel",
 ]

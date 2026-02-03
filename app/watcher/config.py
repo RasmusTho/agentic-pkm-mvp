@@ -5,18 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.index.outbox import DEFAULT_OUTBOX_PATH
-from app.vault.paths import ensure_vault_path_env_defaults, get_vault_inbox_dir_rel
+from app.vault.paths import get_vault_inbox_dir_rel
 from app.watcher.heartbeat import DEFAULT_HEARTBEAT_PATH, resolve_heartbeat_path
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
-
-ensure_vault_path_env_defaults()
-
-
-def _default_scope_glob() -> str:
-    inbox = os.getenv("VAULT_INBOX_DIR_REL") or get_vault_inbox_dir_rel()
-    return f"{inbox}/**"
 
 
 def _as_bool(value: str | None) -> bool:
@@ -39,11 +32,16 @@ def _as_float(value: str | None, *, fallback: float) -> float:
         return fallback
 
 
+def _default_scope_glob(vault_root: Path) -> str:
+    inbox = get_vault_inbox_dir_rel(vault_root)
+    return f"{inbox}/**"
+
+
 @dataclass
 class WatcherConfig:
     enable: bool
     vault_path: Path
-    scope_glob: str = _default_scope_glob()
+    scope_glob: str
     debounce_ms: int = 1500
     rate_limit_per_min: int = 30
     backoff_seconds: int = 10
@@ -61,14 +59,16 @@ class WatcherConfig:
     bad_tick_backoff_seconds: float = 2.0
 
     @classmethod
-    def from_env(cls) -> WatcherConfig:
+    def from_env(cls) -> "WatcherConfig":
         enable = _as_bool(os.getenv("WATCHER_ENABLE", "0"))
-        vault_raw = os.getenv("WATCHER_VAULT_PATH") or ""
-        if enable and not vault_raw.strip():
+        vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
+        if enable and not vault_raw:
             raise ValueError("WATCHER_VAULT_PATH is required when WATCHER_ENABLE=1")
         vault_path = Path(vault_raw or ".").expanduser()
 
-        scope_glob = os.getenv("WATCHER_SCOPE_GLOB", _default_scope_glob())
+        scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()
+        scope_glob = scope_env if scope_env else _default_scope_glob(vault_path)
+
         debounce_ms = _as_int(os.getenv("WATCHER_DEBOUNCE_MS"), fallback=1500)
         rate_limit_per_min = _as_int(os.getenv("WATCHER_RATE_LIMIT_PER_MIN"), fallback=30)
         backoff_seconds = _as_int(os.getenv("WATCHER_BACKOFF_SECONDS"), fallback=10)
@@ -76,7 +76,7 @@ class WatcherConfig:
         state_path = Path(os.getenv("WATCHER_STATE_PATH", "tmp/watcher_state.json")).expanduser()
         stop_file = Path(os.getenv("WATCHER_STOP_FILE", "tmp/WATCHER_STOP")).expanduser()
         heartbeat_path = resolve_heartbeat_path()
-        tick_sleep_seconds = float(os.getenv("WATCHER_TICK_SLEEP_SECONDS", "1.0"))
+        tick_sleep_seconds = _as_float(os.getenv("WATCHER_TICK_SLEEP_SECONDS"), fallback=1.0)
         tick_log_env = os.getenv("WATCHER_TICK_LOG_PATH")
         tick_log_path = Path(tick_log_env) if tick_log_env else Path("/app/tmp/watcher_tick.jsonl")
         max_scanned_files_per_tick = _as_int(os.getenv("WATCHER_MAX_SCANNED_FILES_PER_TICK"), fallback=500)
