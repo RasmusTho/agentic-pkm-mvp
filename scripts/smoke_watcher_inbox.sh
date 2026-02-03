@@ -84,10 +84,7 @@ except Exception:
 
 with connect(url) as conn:
     with conn.cursor() as cur:
-        cur.execute(
-            "select count(*) from outbox where payload::text ilike %s",
-            (pattern,),
-        )
+        cur.execute("select count(*) from outbox where payload::text ilike %s", (pattern,))
         print(cur.fetchone()[0])
 PY
 }
@@ -123,45 +120,40 @@ PY
 }
 
 assert_uuid_written() {
-  python - <<'PY'
-import sys
+  local container_note_path="$1"
+  docker compose exec -T api env NOTE_PATH="$container_note_path" python - <<'PY'
+import os
 from pathlib import Path
 
 from scripts.yaml_roundtrip import load_frontmatter
 
-path = Path(sys.argv[1])
-raw = path.read_text(encoding="utf-8")
+note_path = Path(os.environ["NOTE_PATH"])
+raw = note_path.read_text(encoding="utf-8")
 frontmatter, _ = load_frontmatter(raw)
-value = ""
+uuid = ""
 if isinstance(frontmatter, dict):
-    value = str(frontmatter.get("uuid") or "").strip()
-if not value:
+    uuid = str(frontmatter.get("uuid") or "").strip()
+if not uuid:
     raise SystemExit(2)
+print(uuid)
 PY
-  "$1"
+}
+
+resolve_inbox_dir() {
+  python -m app.cli vault-layout-ensure --vault-root "$VAULT_ROOT" --json \
+    | python -c 'import json,sys; print((json.load(sys.stdin) or {}).get("inbox_folder") or "")'
 }
 
 echo "--- watcher env ---"
 docker compose exec -T watcher env | egrep 'WATCHER|VAULT|DATABASE_URL|DB_DSN|STORE_BACKEND' || true
 echo "--- worker env ---"
 docker compose exec -T worker env | egrep 'WATCHER|VAULT|DATABASE_URL|DB_DSN|STORE_BACKEND' || true
+
 echo "Ensuring vault layout for: $VAULT_ROOT"
-layout_json=$(python -m app.cli vault-layout-ensure --vault-root "$VAULT_ROOT" --json)
-
-inbox_dir=$(python - <<'PY'
-import json
-import sys
-
-try:
-    payload = json.loads(sys.stdin.read() or "{}")
-except Exception:
-    payload = {}
-print(payload.get("inbox_folder") or "")
-PY
-<<<"$layout_json")
+inbox_dir="$(resolve_inbox_dir)"
 
 if [ -z "$inbox_dir" ]; then
-  fail "inbox_folder missing from layout output"
+  fail "inbox_folder missing from vault layout output"
 fi
 
 inbox_base="$VAULT_ROOT/$inbox_dir"
@@ -193,28 +185,31 @@ marker_line="SMOKE_MARKER: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 echo "$marker_line" >> "$note_path"
 
 relative_path="$inbox_dir/@Smoke/$note_name"
+container_note_path="/app/vault/$relative_path"
 export SMOKE_NOTE_NAME="$note_name"
 
 echo "Smoke note: $note_path"
 echo "Relative path: $relative_path"
 
-before_total=$(query_outbox_total)
+echo "Container note: $container_note_path"
+
+before_total="$(query_outbox_total)"
 
 echo "Running watcher ticks (max=30)"
-if ! docker compose exec -T watcher python -m app.cli watcher run --max-ticks 30; then
+if ! docker compose exec -T watcher env WATCHER_AUTO_EXEC=1 python -m app.cli watcher run --max-ticks 30; then
   fail "watcher run failed"
 fi
 
 after_total="$before_total"
 for _ in 1 2 3 4 5 6 7 8; do
-  after_total=$(query_outbox_total)
+  after_total="$(query_outbox_total)"
   if [ "$after_total" -gt "$before_total" ]; then
     break
   fi
   sleep 1
 done
 
-if ! assert_uuid_written "$note_path"; then
+if ! assert_uuid_written "$container_note_path"; then
   fail "uuid not written to smoke note"
 fi
 
@@ -224,7 +219,7 @@ fi
 
 delivered="0"
 for _ in 1 2 3 4 5; do
-  delivered=$(query_latest_delivered)
+  delivered="$(query_latest_delivered)"
   if [ "$delivered" = "1" ]; then
     break
   fi
