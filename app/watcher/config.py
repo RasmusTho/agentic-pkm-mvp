@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import os
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.index.outbox import DEFAULT_OUTBOX_PATH
-from app.vault.paths import get_vault_inbox_dir_rel
 from app.watcher.heartbeat import DEFAULT_HEARTBEAT_PATH, resolve_heartbeat_path
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+
+DEFAULT_SCOPE_GLOB = "**/*.md"
+
+logger = logging.getLogger(__name__)
 
 
 def _as_bool(value: str | None) -> bool:
@@ -33,8 +37,8 @@ def _as_float(value: str | None, *, fallback: float) -> float:
 
 
 def _default_scope_glob(vault_root: Path) -> str:
-    inbox = get_vault_inbox_dir_rel(vault_root)
-    return f"{inbox}/**"
+    del vault_root
+    return DEFAULT_SCOPE_GLOB
 
 
 @dataclass
@@ -67,7 +71,14 @@ class WatcherConfig:
         vault_path = Path(vault_raw or ".").expanduser()
 
         scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()
+        scope_source = "env" if scope_env else "default"
         scope_glob = scope_env if scope_env else _default_scope_glob(vault_path)
+        logger.info(
+            "watcher scope resolved vault_path=%s scope_glob=%s provenance=%s",
+            vault_path,
+            scope_glob,
+            scope_source,
+        )
 
         debounce_ms = _as_int(os.getenv("WATCHER_DEBOUNCE_MS"), fallback=1500)
         rate_limit_per_min = _as_int(os.getenv("WATCHER_RATE_LIMIT_PER_MIN"), fallback=30)

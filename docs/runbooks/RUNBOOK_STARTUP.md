@@ -34,7 +34,7 @@ This sequence keeps watchers/workers off the grid while still validating `/healt
 export VAULT_ROOT=/path/to/vault
 scripts/start_full_system.sh
 ```
-Runtime defaults to watchers + worker after layout detection so they can begin scanning the layout-derived inbox scope. Set `START_WATCHERS=0` or `START_WORKER=0` if you need to disable either service.
+Runtime defaults to watchers + worker so they can begin scanning vault-wide markdown (`**/*.md` under `WATCHER_VAULT_PATH`). Set `START_WATCHERS=0` or `START_WORKER=0` if you need to disable either service.
 
 ## 3. Health verification
 1. `python -m app.cli health status --json` -> expect `state` running/catch_up, `writes_allowed=true`, doctor statuses non-fail, and `catch_up_progress`/`suggested_actions` reported. Repeat after any manual ingest or injection so `outbox_recent_age_s` shrinks again.
@@ -45,7 +45,7 @@ Runtime defaults to watchers + worker after layout detection so they can begin s
 ## 4. What good looks like
 - `health status` returns `state` running (or transient catch_up) with `writes_allowed` true and doctor statuses at `pass`. `suggested_actions` can be empty when stable.
 - After ingesting a vault snapshot, `health status` should report `state` running (or transient catch_up) with `writes_allowed` true, `catch_up_progress` idle, and a short `outbox_recent_age_s`.
-- The watcher resolves its scan root from the layout note, keeps scope to `${INBOX_FOLDER}/**`, and hashes notes only when their modification time actually changes; every tick records a compact JSON line in `${WATCHER_TICK_LOG_PATH:-/app/tmp/watcher_tick.jsonl}` so you can inspect `scanned_files`, `hashed_files`, `bytes_read`, etc. after a hard reset.
+- The watcher defaults to vault-wide scope (`**/*.md`) and hashes notes only when their modification time actually changes; every tick records a compact JSON line in `${WATCHER_TICK_LOG_PATH:-/app/tmp/watcher_tick.jsonl}` so you can inspect `scanned_files`, `hashed_files`, `bytes_read`, etc. after a hard reset.
 
 ## DB sanity & worker verification
 - `scripts/start_full_system.sh` probes the DB container using `POSTGRES_USER`/`POSTGRES_DB` from inside the container (defaults: `app`/`app`) so it never assumes a `postgres` superuser. After readiness it runs `psql -c "select current_user, current_database();"` for a quick sanity check.

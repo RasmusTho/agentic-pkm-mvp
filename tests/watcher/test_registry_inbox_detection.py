@@ -54,9 +54,9 @@ def test_default_scope_glob_from_layout(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("WATCHER_SCOPE_GLOB", raising=False)
 
     scope, source, inbox_source = registry._resolve_scope_glob(tmp_path)
-    assert scope == "Only Inbox/**"
-    assert source == "vault_layout"
-    assert inbox_source == "vault_layout"
+    assert scope == "**/*.md"
+    assert source == "default"
+    assert inbox_source == ""
 
 
 def test_import_does_not_mutate_env(monkeypatch) -> None:

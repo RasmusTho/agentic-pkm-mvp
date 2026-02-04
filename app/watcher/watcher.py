@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from app.vault.layout import ensure_vault_layout
 from app.watcher.config import WatcherConfig
 from app.watcher.heartbeat import write_heartbeat
 from app.watcher.state import WatcherState
@@ -30,17 +29,10 @@ def _scope_prefix(scope_glob: str) -> str:
     return prefix
 
 
-def _inbox_prefix_from_layout(vault_root: Path) -> str:
-    layout = ensure_vault_layout(vault_root)
-    return layout.inbox_folder
-
-
 def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
     prefix = _scope_prefix(scope_glob)
     if not prefix:
-        prefix = _inbox_prefix_from_layout(vault_root)
-    if not prefix:
-        raise ValueError("Watcher scope_glob must specify a folder prefix before wildcards")
+        return vault_root
     candidate = vault_root / prefix
     if not candidate.exists() or not candidate.is_dir():
         raise FileNotFoundError(f"Scan root missing: {candidate}")

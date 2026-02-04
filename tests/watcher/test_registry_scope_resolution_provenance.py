@@ -72,12 +72,11 @@ def test_registry_scope_defaults_to_vault_layout_inbox(tmp_path: Path, monkeypat
     caplog.set_level(logging.INFO, logger="app.watcher.registry")
 
     cfg = RegistryConfig.from_env(_make_specs(), config_path=tmp_path / "watchers.yaml")
-    assert cfg.scope_glob == "Input/**"
+    assert cfg.scope_glob == "**/*.md"
 
     joined = "\n".join(r.message for r in caplog.records)
     assert "watcher scope resolved" in joined
-    assert "provenance=vault_layout" in joined
-    assert "inbox_source=vault_layout" in joined
+    assert "provenance=default" in joined
 
 
 def test_registry_scope_blank_is_treated_as_unset(tmp_path: Path, monkeypatch, caplog) -> None:
@@ -94,18 +93,18 @@ def test_registry_scope_blank_is_treated_as_unset(tmp_path: Path, monkeypatch, c
     caplog.set_level(logging.INFO, logger="app.watcher.registry")
 
     cfg = RegistryConfig.from_env(_make_specs(), config_path=tmp_path / "watchers.yaml")
-    assert cfg.scope_glob == "Input/**"
+    assert cfg.scope_glob == "**/*.md"
 
     joined = "\n".join(r.message for r in caplog.records)
     assert "watcher scope resolved" in joined
-    assert "provenance=vault_layout" in joined
+    assert "provenance=default" in joined
 
 
 @pytest.mark.parametrize(
     "env_value",
     ["", "   ", "\t\n"],
 )
-def test_registry_scope_blank_vault_inbox_override_still_works(
+def test_registry_scope_blank_ignores_vault_inbox_override(
     tmp_path: Path, monkeypatch, caplog, env_value: str
 ) -> None:
     vault_root = tmp_path / "vault"
@@ -121,8 +120,7 @@ def test_registry_scope_blank_vault_inbox_override_still_works(
     caplog.set_level(logging.INFO, logger="app.watcher.registry")
 
     cfg = RegistryConfig.from_env(_make_specs(), config_path=tmp_path / "watchers.yaml")
-    assert cfg.scope_glob == "AltInput/**"
+    assert cfg.scope_glob == "**/*.md"
 
     joined = "\n".join(r.message for r in caplog.records)
-    assert "provenance=vault_layout" in joined
-    assert "inbox_source=env" in joined
+    assert "provenance=default" in joined

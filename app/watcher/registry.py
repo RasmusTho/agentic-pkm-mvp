@@ -15,7 +15,7 @@ from uuid import uuid4
 import yaml
 
 from app.agents.panel.agent import handle_note_update
-from app.agents.panel_agent.policy import watcher_panel_candidate
+from app.agents.panel_agent.policy import watcher_panel_candidate_for_path
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_VAULT_CHANGED
@@ -30,6 +30,8 @@ from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import load_frontmatter
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+
+DEFAULT_SCOPE_GLOB = "**/*.md"
 
 MIN_TICK_SLEEP_SECONDS = 0.05
 
@@ -52,25 +54,16 @@ def _resolve_scope_glob(vault_root: Path) -> tuple[str, str, str]:
     """Resolve watcher scope_glob with explicit provenance.
 
     Returns: (scope_glob, scope_source, inbox_source)
-    - scope_source: env | vault_layout
-    - inbox_source: env | vault_layout
+    - scope_source: env | default
+    - inbox_source: unused (kept for backwards-compatible logs/tests)
     """
 
     scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()
     if scope_env:
         return scope_env, "env", ""
 
-    inbox_env = (os.getenv("VAULT_INBOX_DIR_REL") or "").strip()
-    if inbox_env:
-        inbox = inbox_env
-        inbox_source = "env"
-    else:
-        if not vault_root.exists():
-            raise FileNotFoundError(f"Vault root not found: {vault_root}")
-        inbox = load_layout(vault_root).inbox_folder
-        inbox_source = "vault_layout"
-
-    return f"{inbox}/**", "vault_layout", inbox_source
+    del vault_root
+    return DEFAULT_SCOPE_GLOB, "default", ""
 
 
 def _now_iso() -> str:
@@ -116,17 +109,10 @@ def _scope_prefix(scope_glob: str) -> str:
     return prefix
 
 
-def _inbox_prefix_from_layout(vault_root: Path) -> str:
-    layout = load_layout(vault_root)
-    return layout.inbox_folder
-
-
 def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
     prefix = _scope_prefix(scope_glob)
     if not prefix:
-        prefix = _inbox_prefix_from_layout(vault_root)
-    if not prefix:
-        raise ValueError("Watcher scope_glob must specify a folder prefix before wildcards")
+        return vault_root
     candidate = vault_root / prefix
     if not candidate.exists() or not candidate.is_dir():
         raise FileNotFoundError(f"Scan root missing: {candidate}")
@@ -304,6 +290,7 @@ def _process_panel_note(
             new_markdown=markdown,
             action_mappings=action_mappings,
             note_path=str(note_path),
+            proactive_assist=True,
         )
     except Exception as exc:
         state.errors += 1
@@ -387,7 +374,8 @@ class RegistryConfig:
         vault_path = Path(vault_raw or ".").expanduser()
         scope_glob, scope_source, inbox_source = _resolve_scope_glob(vault_path)
         logger.info(
-            "watcher scope resolved scope_glob=%s provenance=%s inbox_source=%s",
+            "watcher scope resolved vault_path=%s scope_glob=%s provenance=%s inbox_source=%s",
+            vault_path,
             scope_glob,
             scope_source,
             inbox_source,
@@ -584,7 +572,7 @@ def _panel_candidate_for_path(note_path: Path) -> tuple[bool, bool]:
         frontmatter = {}
     if not isinstance(frontmatter, dict):
         frontmatter = {}
-    return watcher_panel_candidate(frontmatter, markdown), True
+    return watcher_panel_candidate_for_path(note_path, frontmatter, markdown), True
 
 
 def _should_heal_inbox_uuid(cfg: RegistryConfig, rel_path: Path) -> bool:
