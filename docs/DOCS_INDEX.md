@@ -74,17 +74,17 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | docs/CI.md | CI overview | Aligned (forward line v5.x) | 2026-02-04 | Updated for v5.5 baseline gates, smoke flows, and watcher controls. |
 | docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-14 | Adds Evaluation Stack (Runtime Loop / Panel / Promotion) A–F layers (contracts, golden vault, metamorphic, cold rebuild, fitness gates, scripted UAT) with placeholder commands. |
 | docs/ISSUES_TESTING.md | Testing coverage issues | Unreviewed | — | Tracks coverage gaps referenced by docs/TESTING.md; update when issues close. |
-| docs/QUALITY.md | Quality gates | Baseline-only (v4.10) | 2025-12-07 | QA agent scope vs /api/ask; CI fitness gates noted. |
-| docs/guardrails.md | Guardrails | Baseline-only (v4.10) | 2025-12-07 | Runtime guardrails + CI fitness gates; removed legacy thresholds. |
-| docs/SECURITY.md | Security | Baseline-only (v4.10) | 2025-12-07 | Single-user/local; auth not wired; key handling guidance. |
-| docs/PRIVACY.md | Privacy | Baseline-only (v4.10) | 2025-12-07 | Local-first, outbound only on optional remote LLMs. |
+| docs/QUALITY.md | Quality gates | Aligned (forward line v5.x) | 2026-02-04 | QA guardrails + fitness gates aligned with v5.5 baseline. |
+| docs/guardrails.md | Guardrails | Aligned (forward line v5.x) | 2026-02-04 | Runtime guardrails + concurrency safety aligned with v5.5 baseline. |
+| docs/SECURITY.md | Security | Aligned (forward line v5.x) | 2026-02-04 | Local-first security posture; keys/env handling aligned with v5.5 baseline. |
+| docs/PRIVACY.md | Privacy | Aligned (forward line v5.x) | 2026-02-04 | Local-first, outbound only on optional remote LLMs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Baseline-only (v4.10) | 2025-12-18 | Local dev targets 3.14, CI smoke floor 3.12 with Docker tripwires and scripts. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-02-04 | Updated for v5.5 baseline + v5.6 forward line counters and watcher payload metadata. |
-| docs/OBSERVABILITY_STACK.md | Local observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
-| docs/OPERATIONS.md | Operations playbook | Baseline-only (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
+| docs/OBSERVABILITY_STACK.md | Local observability stack | Aligned (forward line v5.x) | 2026-02-04 | Prometheus/Grafana compose scrape `/metrics`. |
+| docs/OPERATIONS.md | Operations playbook | Aligned (forward line v5.x) | 2026-02-04 | Compose stack (api/worker/watcher/db) + v5.5 runtime runbooks. |
 | docs/INFRASTRUCTURE.md | Infrastructure notes | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
-| docs/HEALTH.md | Health checks | Baseline-only (v4.10) | 2025-12-07 | CLI health checks (ffmpeg/yt-dlp/outbox/ollama) + ci-smoke reference. |
+| docs/HEALTH.md | Health checks | Aligned (forward line v5.x) | 2026-02-04 | CLI health checks (ffmpeg/yt-dlp/outbox/ollama) + ci-smoke reference. |
 | docs/CLI.md | CLI reference | Baseline-only (v4.10) | 2025-12-07 | Updated commands (ingest/ask flows, alpha demos, health). |
 | docs/LLM_ROUTING.md | LLM routing contract (router + fabric) | Aligned (forward line v5.x) | 2025-03-14 | Canonical routing/fabric contract; documents env precedence and debug surfaces. |
 | docs/LLM.md | LLM integration | Baseline-only (v4.10) | 2025-12-07 | Providers/env defaults (mock/Ollama/OpenAI/DeepSeek). |
@@ -105,24 +105,24 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | docs/MEMORY.md | Memory (legacy overview) | Legacy (archived) | 2025-12-07 | Historical memory-layer description; not used in Reality-MVP. |
 | docs/AI_DEVELOPMENT.md | AI-assisted development policy | Aligned (forward line v5.x) | 2025-12-28 | Dev-layer policy tied to Core-6 guardrails and vault policy constraints. |
 | docs/DEV_WORKFLOW.md | Developer workflow | Aligned (forward line v5.x) | 2026-02-04 | TDD/docs-first workflow aligned with the v5.5 baseline. |
-| docs/OPERATIONS.md | Operations playbook | Baseline-only (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
+| docs/OPERATIONS.md | Operations playbook | Aligned (forward line v5.x) | 2026-02-04 | Compose stack (api/worker/watcher/db) + v5.5 runtime runbooks. |
 | docs/OPS_WATCHER.md | Watcher operations (Docker + host) | Aligned (forward line v5.x) | 2025-03-10 | Docker-first watcher daemon with `/state` snapshot storage and host-service fallback; cooldown guidance for iCloud/Obsidian mounts. |
 | docs/INVENTORY.md | Runtime inventory | Baseline-only (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
 | docs/GLOSSARY.md | Glossary | Baseline-only (v4.10) | 2025-12-07 | Updated definitions for hybrid/rerank/outbox/health. |
-| docs/QUALITY.md | Quality | Baseline-only (v4.10) | 2025-12-07 | QA guardrails vs ASK graph clarified; CI fitness gates noted. |
+| docs/QUALITY.md | Quality | Aligned (forward line v5.x) | 2026-02-04 | QA guardrails + fitness gates aligned with v5.5 baseline. |
 | docs/CONTRIBUTING.md | Contributing guide | Partially outdated | 2025-12-07 | Setup/tests template; defer to DEV_WORKFLOW/CI for current practice. |
 | docs/CHANGELOG.md | Docs changelog | Baseline-only (v4.10, with known debt) | 2025-12-07 | Tracks doc updates; may lag implementations. |
-| docs/PRIVACY.md | Privacy | Unreviewed | — |  |
-| docs/HEALTH.md | Health checks | Baseline-only (v4.10) | 2025-12-07 | CLI health checks (ffmpeg/yt-dlp/outbox/ollama) + ci-smoke reference. |
+| docs/PRIVACY.md | Privacy | Aligned (forward line v5.x) | 2026-02-04 | Local-first, outbound only on optional remote LLMs. |
+| docs/HEALTH.md | Health checks | Aligned (forward line v5.x) | 2026-02-04 | CLI health checks (ffmpeg/yt-dlp/outbox/ollama) + ci-smoke reference. |
 | docs/LLM_BACKENDS.md | LLM backends | Baseline-only (v4.10) | 2025-12-07 | Providers mock/ollama/openai/deepseek; timeouts/keys noted. |
 | docs/INFRASTRUCTURE.md | Infrastructure | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
-| docs/OPERATIONS.md | Operations | Baseline-only (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
+| docs/OPERATIONS.md | Operations | Aligned (forward line v5.x) | 2026-02-04 | Compose stack (api/worker/watcher/db) + v5.5 runtime runbooks. |
 | docs/INVENTORY.md | Inventory | Baseline-only (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
 | docs/OVERVIEW_WS.md | Overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Baseline-only (v4.10) | 2025-12-18 | Local dev targets 3.14, CI smoke floor 3.12 with Docker tripwires and scripts. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-02-04 | Updated for v5.5 baseline + v5.6 forward line counters and watcher payload metadata. |
-| docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
+| docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (forward line v5.x) | 2026-02-04 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development | Aligned (forward line v5.x) | 2025-12-28 | Current dev-layer AI policy aligned to Core-6 guardrails and vault settings. |
 | docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-02-04 | TDD/docs-first workflow aligned with the v5.5 baseline. |
 | docs/PROJECTOR.md | Projector | Baseline-only (v4.10) | 2025-12-07 | Promotion projector emits audit/membership; no filesystem projection. |
@@ -181,7 +181,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | --- | --- | --- | --- | --- |
 | docs/eval.md | Eval stack | Baseline-only (v4.10) | 2025-12-07 | Opt-in DeepEval/Ragas suites; skips when deps/LLM missing. |
 | docs/SCORECARDS.md | Scorecards | Partially outdated | 2025-12-07 | Draft targets only; not enforced in Reality-MVP. |
-| docs/QUALITY.md | Quality | Baseline-only (v4.10) | 2025-12-07 | QA guardrails vs ASK graph clarified; CI fitness gates noted. |
+| docs/QUALITY.md | Quality | Aligned (forward line v5.x) | 2026-02-04 | QA guardrails + fitness gates aligned with v5.5 baseline. |
 
 ## Agents / Codex Guidance
 | Path | Scope | Review status | Last reviewed | Notes |
@@ -230,7 +230,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Baseline-only (v4.10) | 2025-12-18 | Local dev targets 3.14, CI smoke floor 3.12 with Docker tripwires and scripts. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-02-04 | Updated for v5.5 baseline + v5.6 forward line counters and watcher payload metadata. |
-| docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
+| docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (forward line v5.x) | 2026-02-04 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development | Aligned (forward line v5.x) | 2025-12-28 | Current dev-layer AI policy aligned to Core-6 guardrails and vault settings. |
 | docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-02-04 | TDD/docs-first workflow aligned with the v5.5 baseline. |
 | docs/PROJECTOR.md | Projector | Baseline-only (v4.10) | 2025-12-07 | Promotion projector emits audit/membership; no filesystem projection. |

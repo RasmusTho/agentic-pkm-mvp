@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (current).
+State: SoT v5.5 Reality-MVP baseline locked.
 # Health CLI & Contract
 
 Fast way to verify local dependencies (`health`) and the runtime health contract snapshot that drives the worker write guard.
@@ -24,12 +24,12 @@ python -m app.cli health --json
 python -m app.cli health status --json
 ```
 - Emits the `HealthContract` snapshot (`state`, `reason`, `outbox_recent_age_s`, `catch_up_progress`, etc.).
-- `catch_up_progress` reports how the worker interprets `INDEX_OUTBOX_PATH`: it is the append-only JSONL log that records events/ingests, not a queue.
+- `catch_up_progress` reports how the worker interprets its active queue (DB outbox when `STORE_BACKEND=pg`, JSONL log only when explicitly wired).
 - The worker heartbeat file (`$WORKER_HEARTBEAT_PATH`) is the signal the Docker healthcheck verifies; the contract observes the latest heartbeat timestamp too.
 
 - `catch_up_progress` now leans on `outbox_recent_age_s`, which is computed from the newest timestamp in the JSONL log. `catch_up` therefore means the worker has not seen new events within the configured thresholds rather than being stuck on the oldest record.
 - When the newest outbox event age exceeds `outbox_degrade_oldest_age_s` for the configured sample count, the contract transitions to `degraded` with reason `outbox idle ...` and suggests running `events-doctor`.
-- The Postgres/memory outbox tables mirror those events for diagnostics, but `INDEX_OUTBOX_PATH` (a JSONL audit log under `tmp/index-outbox.jsonl`) is the canonical work queue that the worker consumes. Clearing that file resets the backlog without touching the DB mirror.
+- The JSONL outbox (`INDEX_OUTBOX_PATH`) is an append-only audit log by default; DB outbox is the canonical queue in the compose runtime. Clearing the JSONL file does not clear the DB queue.
 - There is no `health explain` command in this release; use `python -m app.cli health status --json` (plus the health incident log) to understand why a state transition occurred.
 
 ## Span + logging

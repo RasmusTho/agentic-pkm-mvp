@@ -1,4 +1,4 @@
-State: SoT v4.10 (current; details may lag ARCHITECTURE).
+State: SoT v5.5 baseline (details align with ARCHITECTURE/STATUS).
 # Security
 
 Lightweight policy for local and CI runs.
@@ -10,8 +10,8 @@ Lightweight policy for local and CI runs.
 - If `OLLAMA_URL` is exposed on a network interface, secure the port via SSH tunnel or VPN; default assumption is localhost.
 
 ## Least privilege
-- The Postgres account (`DATABASE_URL`) uses `app:app` with minimal privileges. In production create a dedicated role with only the required `INSERT/SELECT`.
-- CLI commands only write to `INDEX_OUTBOX_PATH`; run them under a user with limited rights to minimize blast radius.
+- The Postgres account (`DATABASE_URL`) uses `app:app` for local dev. In production create a dedicated role with only the required `INSERT/SELECT/UPDATE`.
+- CLI commands write to `INDEX_OUTBOX_PATH` (audit log) and may write to the DB outbox; run under a user with limited rights to minimize blast radius.
 
 ## Secrets in CI
 - GitHub Actions workflow does not require secrets today. If future jobs do, add them through `secrets.*` and never hardcode fallbacks.
