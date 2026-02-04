@@ -1,15 +1,15 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency guardrails); forward-line v5.x tracking LangGraph and reasoning rollouts while referencing `docs/STATUS.md#baseline-definition`.
+State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency guardrails); forward line v5.6 tracking LangGraph and reasoning rollouts while referencing `docs/STATUS.md#baseline-definition`.
 # Documentation Review Index — SoT v5.5 baseline + v5.x forward line
 
 Central map of documentation and markdown artifacts in this repo. Review status values:
 - `Unreviewed` — not yet aligned in this total-review pass.
-- `Aligned (forward line v5.x)` — matches the active SoT forward line (currently v5.4) on top of the locked v4.10 baseline.
+- `Aligned (forward line v5.x)` — matches the active SoT forward line (currently v5.6) on top of the locked v5.5 baseline.
 - `Aligned (forward line v5.x, with known debt)` — mostly aligned to v5.x; see Notes for drift.
 - `Baseline-only (v4.10)` — reflects the locked baseline; forward-line review pending.
 - `Legacy (archived)` — historical snapshot; not current truth.
 - `Deprecated` — kept only for reference; avoid for current work.
 
-Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Baseline-only (v4.10)` and queued for forward-line review; the forward line is the active SoT.
+Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foundation-only and queued for baseline/forward-line review; the active SoT baseline is v5.5.
 
 ## SoT Notes
 - v4.10 — locked Reality-MVP baseline (foundation only).
@@ -43,10 +43,10 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/CORE_CONTRACT.md | Core-6 contract (canonical) | Aligned (forward line v5.x) | 2025-12-28 | Canonical Core-6 semantic contract, ownership, and projection rules. |
 | docs/CORE6_CONTRACT.md | Core-6 contract (compat alias) | Deprecated | 2025-12-28 | Superseded by `docs/CORE_CONTRACT.md`. |
 | docs/NOTE_KIND_POLICIES.md | Note kind policies | Aligned (forward line v5.x) | 2025-12-28 | Policy profiles for kind routing and state-axis enablement. |
-| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v4.10 base) | Aligned (forward line v5.x) | 2025-12-28 | Clarifies Core-6 contract, state axes, note kind policies, and derived overlays. |
+| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v5.5 base) | Aligned (forward line v5.x) | 2026-02-04 | Clarifies Core-6 contract, state axes, note kind policies, and derived overlays. |
 | docs/CONCURRENCY.md | Concurrency + idempotency guardrails | Aligned (forward line v5.x) | 2025-03-14 | Normative concurrency/idempotency requirements and test placeholders. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
-| docs/STATUS.md | Operational snapshot | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2025-12-17 | Notes the Baseline Definition section (v5.5) describing watcher/panel settings provenance and concurrency guards plus the heartbeat/gap-test verification. |
+| docs/STATUS.md | Operational snapshot | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2026-02-04 | Baseline definition (v5.5) covers watcher/panel settings provenance and concurrency guards plus the heartbeat/gap-test verification. |
 | docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2025-03-14 | Forward line now leans on the v5.5 baseline (watcher safety, panel action provenance, settings compiler) while v5.6 LangGraph/Reasoning stages are planned; v4.10 remains reference foundation. |
 | docs/V56_FORWARD_LINE.md | v5.6 forward line kickoff plan | Aligned (SoT v5.6 forward line) | 2026-01-01 | Now/Next/Later plan with acceptance criteria for watchers auto-run, LangGraph rollout, and orchestrator V2; links STATUS/ROADMAP for traceability. |
 | docs/tracks/TRACK_WATCHER.md | Watcher track (v5.1–v5.4) | Aligned (forward line v5.x) | 2025-03-12 | Snapshot watcher track details, policy gating, daemon/ergonomics. |
@@ -57,13 +57,13 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/ROADMAP.md | Quality Wave (Runtime Loop Evaluation Stack) section | Aligned (forward line v5.x) | 2025-03-14 | Contract tests, golden vault, metamorphic + cold rebuild runs, fitness gates, scripted UAT; modules/files explicitly mapped for upcoming implementation. |
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-12-17 | Consolidates a single maturity taxonomy across the catalog. |
 | docs/EMBEDDINGS.md | Embedding spec | Aligned (forward line v5.x) | 2025-12-17 | Normative spec for provider-aware embeddings (identity, dims, outbox events, rebuild rules). |
-| docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2025-03-10 | Design principle set to LangGraph inner + events/A2A outer; PanelAgent exemplifies the pattern with a catalog-driven decider and planner pipeline opt-in plus CLI-first orchestration; SoT wording calls out forward line through v5.5 with v4.10 as locked base. |
+| docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2026-02-04 | LangGraph inner + events/A2A outer; PanelAgent exemplifies the pattern with catalog decider + planner pipeline opt-in; SoT wording updated to v5.5 baseline and v5.6 forward line. |
 | docs/PLANNER.md | Planner contract | Baseline-only (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
-| docs/EVENTS.md | Outbox/event contracts | Aligned (forward line v5.x) | 2025-12-17 | Canonical Outbox envelope + selected event meanings; compatibility anchored in EVENT_COMPATIBILITY_CONTRACT. |
+| docs/EVENTS.md | Outbox/event contracts | Aligned (forward line v5.x) | 2026-02-04 | Canonical Outbox envelope + selected event meanings; compatibility anchored in EVENT_COMPATIBILITY_CONTRACT. |
 | docs/DIAGRAMS.md | C4 diagrams | Baseline-only (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
 | docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2025-12-17 | Adds the trust semantics reference while keeping flow guidance. |
 | docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-14 | Adds Evaluation Stack (Runtime Loop / Panel / Promotion) A–F layers plus the new concurrency/regression suites covering watcher dedup, promotion consumer idempotency, and settings validation. |
-| docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x + planned v5.5 LangGraph) | 2025-03-14 | Adds human-first semantics (freeform may execute with receipts, uncertainty becomes suggested checkboxes, receipts stay outside panel); intent vs mutation and wiring precedence documented. |
+| docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x) | 2026-02-04 | Runtime V1 baseline + planner pipeline opt-in; human-first semantics, intent vs mutation, wiring precedence. |
 | docs/UAT_PANEL_WATCHER.md | UAT guide (panel + watcher) | Aligned | 2025-12-10 | Human-facing UAT flow for PanelAgent + Vault Watcher (prep notes, targeted ingest, panel run-many, watcher dry-run/run, observations). |
 | docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Baseline-only (v4.10) | 2025-12-07 | High-level module map reviewed; Reality-MVP scope noted. |
 | docs/research/pattern-harvest-agentic-architecture.md | Research synthesis (outer/inner agent architecture) | Aligned (analysis, docs-only) | 2025-03-10 | Pattern harvest of events/A2A/tools/observability/config; backlog + Mermaid diagram; no runtime wiring. |
@@ -71,7 +71,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 ## Supporting Docs (Quality, Ops, Flows, Data)
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/CI.md | CI overview | Baseline-only (v4.10) | 2025-12-07 | ci-smoke/fitness gates documented; reality + ASK smokes noted (scripts/reality_smoke.sh, scripts/ask_smoke.sh); live watcher script (`scripts/run_live_watcher.sh`) with kill switch/scope defaults documented. |
+| docs/CI.md | CI overview | Aligned (forward line v5.x) | 2026-02-04 | Updated for v5.5 baseline gates, smoke flows, and watcher controls. |
 | docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-14 | Adds Evaluation Stack (Runtime Loop / Panel / Promotion) A–F layers (contracts, golden vault, metamorphic, cold rebuild, fitness gates, scripted UAT) with placeholder commands. |
 | docs/ISSUES_TESTING.md | Testing coverage issues | Unreviewed | — | Tracks coverage gaps referenced by docs/TESTING.md; update when issues close. |
 | docs/QUALITY.md | Quality gates | Baseline-only (v4.10) | 2025-12-07 | QA agent scope vs /api/ask; CI fitness gates noted. |
@@ -80,7 +80,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/PRIVACY.md | Privacy | Baseline-only (v4.10) | 2025-12-07 | Local-first, outbound only on optional remote LLMs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Baseline-only (v4.10) | 2025-12-18 | Local dev targets 3.14, CI smoke floor 3.12 with Docker tripwires and scripts. |
-| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-14 | Adds observability-as-tests gates (counters/events as fitness), runtime tick latency budget (p95), and clarifies watcher/panel/promotion counters. |
+| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-02-04 | Updated for v5.5 baseline + v5.6 forward line counters and watcher payload metadata. |
 | docs/OBSERVABILITY_STACK.md | Local observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/OPERATIONS.md | Operations playbook | Baseline-only (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
 | docs/INFRASTRUCTURE.md | Infrastructure notes | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
@@ -104,7 +104,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/MEMORY.md | Memory (legacy overview) | Legacy (archived) | 2025-12-07 | Historical memory-layer description; not used in Reality-MVP. |
 | docs/AI_DEVELOPMENT.md | AI-assisted development policy | Aligned (forward line v5.x) | 2025-12-28 | Dev-layer policy tied to Core-6 guardrails and vault policy constraints. |
-| docs/DEV_WORKFLOW.md | Developer workflow | Baseline-only (v4.10) | 2025-12-07 | Current TDD/docs-first workflow aligned with v4.10. |
+| docs/DEV_WORKFLOW.md | Developer workflow | Aligned (forward line v5.x) | 2026-02-04 | TDD/docs-first workflow aligned with the v5.5 baseline. |
 | docs/OPERATIONS.md | Operations playbook | Baseline-only (v4.10) | 2025-12-07 | Reality-MVP stack (uvicorn/compose), CLI runbooks, targets noted. |
 | docs/OPS_WATCHER.md | Watcher operations (Docker + host) | Aligned (forward line v5.x) | 2025-03-10 | Docker-first watcher daemon with `/state` snapshot storage and host-service fallback; cooldown guidance for iCloud/Obsidian mounts. |
 | docs/INVENTORY.md | Runtime inventory | Baseline-only (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
@@ -121,10 +121,10 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/OVERVIEW_WS.md | Overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Baseline-only (v4.10) | 2025-12-18 | Local dev targets 3.14, CI smoke floor 3.12 with Docker tripwires and scripts. |
-| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-14 | Adds observability-as-tests gates (counters/events as fitness), runtime tick latency budget (p95), and clarifies watcher/panel/promotion counters. |
+| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-02-04 | Updated for v5.5 baseline + v5.6 forward line counters and watcher payload metadata. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development | Aligned (forward line v5.x) | 2025-12-28 | Current dev-layer AI policy aligned to Core-6 guardrails and vault settings. |
-| docs/DEV_WORKFLOW.md | Dev workflow | Baseline-only (v4.10) | 2025-12-07 | TDD/docs-first workflow aligned with SoT v4.10. |
+| docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-02-04 | TDD/docs-first workflow aligned with the v5.5 baseline. |
 | docs/PROJECTOR.md | Projector | Baseline-only (v4.10) | 2025-12-07 | Promotion projector emits audit/membership; no filesystem projection. |
 | docs/ALIGNMENT.md | Alignment | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
 | docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2025-12-07 | Historical v4.2 overview; superseded by SoT v4.10 docs. |
@@ -229,10 +229,10 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as `Bas
 | docs/OVERVIEW_WS.md | Overview workspace | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Baseline-only (v4.10) | 2025-12-18 | Local dev targets 3.14, CI smoke floor 3.12 with Docker tripwires and scripts. |
-| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2025-03-14 | Adds observability-as-tests gates (counters/events as fitness), runtime tick latency budget (p95), and clarifies watcher/panel/promotion counters. |
+| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-02-04 | Updated for v5.5 baseline + v5.6 forward line counters and watcher payload metadata. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Baseline-only (v4.10) | 2025-12-07 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development | Aligned (forward line v5.x) | 2025-12-28 | Current dev-layer AI policy aligned to Core-6 guardrails and vault settings. |
-| docs/DEV_WORKFLOW.md | Dev workflow | Baseline-only (v4.10) | 2025-12-07 | TDD/docs-first workflow aligned with SoT v4.10. |
+| docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-02-04 | TDD/docs-first workflow aligned with the v5.5 baseline. |
 | docs/PROJECTOR.md | Projector | Baseline-only (v4.10) | 2025-12-07 | Promotion projector emits audit/membership; no filesystem projection. |
 | docs/ALIGNMENT.md | Alignment | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
 | docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2025-12-07 | Historical v4.2 overview; superseded by SoT v4.10 docs. |

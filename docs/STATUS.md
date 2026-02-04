@@ -41,7 +41,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 
 ## Status fields (baseline vs forward line)
 - `sot_baseline_version`: locked SoT v5.5 Reality-MVP baseline.
-- `sot_forward_line_version` / `feature_line_version`: active forward line (v5.x features on top of v4.10).
+- `sot_forward_line_version` / `feature_line_version`: active forward line (v5.6 features on top of the v5.5 baseline).
 - `active_features`: human-readable list of forward-line capabilities (PanelAgent runtime, watcher track, config-driven wiring).
 - Counters (totals + 24h window): `watcher_runs`, `panel_runs` (`panel.intent.executed`), `promote.intent.created`, `promotion_executed` (`promote.done`), and ingest run counts per plane. Use these in UAT to confirm watcher/panel flows; if promotion intents increment but notes do not change, the promotion consumer is not running.
 
@@ -64,7 +64,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 
 ## Status — Operational Snapshot
 
-Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and deployment topology for this SoT.
+Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the foundation deployment topology still used by the v5.5 baseline.
 
 | Version | Goal | Delivered | Open | Next | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -82,7 +82,7 @@ Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the external dependencies and 
 | v5.2 | Vault Watcher MVP (CLI, polling) | Delivered — snapshot-based CLI watcher (`vault-watcher-run`) polls vault, detects changes, ingests changed notes, optionally runs panel runtime; logs summary/metrics; no auto-panel policy yet | None | Wire into schedulers/ops; prep policy hooks for v5.3 | Manual/background, additive to existing CLI |
 | v5.3 | Auto-panel as explicit policy | Delivered — frontmatter policy (`ai_panel_auto_run` or `ai_panel.auto_run`) gates watcher-triggered `panel run-many`/note-update after ingest; AI logs/events remain; manual CLI unaffected | None | Prepare further policy refinements for v5.4 | Must be opt-in and auditable |
 | v5.4 | Watcher hardening & ergonomics | Delivered — dry-run mode, max-notes guard (with force override), structured watcher summaries; manual/cron ready | None | Prepare further ops polish if needed | Builds on v5.2–v5.3 |
-| v5.5 | PanelAgent 2.0 (LangGraph inner) | In-progress (v5.5B) — `PanelActionIntent` + opt-in planner pipeline (`PANEL_AGENT_PIPELINE=planner`) create plans from panel actions; CLI-first execution via Orchestrator now available (promotion tool emits `promote.intent.created`) | Wire watcher auto-exec + extend action coverage; broaden action mapping | Design schema/graph; keep Runtime V1 baseline in place until 2.0 is proven | Bridges to the “LangGraph inner per agent” principle |
+| v5.5 | Baseline lock (watcher/panel safety + concurrency guards) | Delivered — watcher auto-run gate, panel action provenance, IdempotencyGuard + EventDedupStore, optimistic writes; PanelAgent runtime + opt-in planner pipeline (`PANEL_AGENT_PIPELINE=planner`) available | Watcher auto-exec remains gated; expand action coverage | Keep baseline stable; drive v5.6 rollouts via forward line | Baseline locked; bugfixes only |
 | v5.6 | ReasoningFacade + LangGraph rollout | Planned — ReasoningFacade + basic graph builder; LangGraph rollout Phase 1 for 1–2 agents (Promotion, Reviewer, Hygiene); Orchestrator V2 flagged (`ORCHESTRATOR_VERSION=v1|v2`) | None | Sequence ReasoningFacade → Phase 1 → Orchestrator V2 | Extends LangGraph inner model beyond PanelAgent |
 | v5.x | Symbolic reasoning + reflexive agents | Governance concepts, Agent Memory Graph sketches | RDF/OWL/SHACL enforcement, logic gates | Define policy bundles + knowledge graph API | Dependent on v4.6 telemetry |
 
@@ -92,13 +92,13 @@ Watcher deployment note: `vault-watcher-daemon` offers a Docker-first polling se
 
 Eval baseline: DeepEval ASK + Ragas RAG suites are available under `@pytest.mark.eval` (seed cases; opt-in, diagnostics only).
 
-## v5.0 Snapshot (PanelAgent Runtime V1 on the v4.10 baseline)
-- SoT v4.10 Reality-MVP remains the locked baseline for ingestion, ASK, observability, and orchestrator runtime V1.
+## v5.0 Snapshot (PanelAgent Runtime V1 on the v5.5 baseline)
+- SoT v5.5 Reality-MVP is the locked baseline for ingestion, ASK, observability, watcher policy, and orchestrator runtime V1.
 - SoT v5.0 formalizes PanelAgent runtime V1 delivered on top of v4.10: step 1 parse/map emits `panel.intent.created`, the runtime interprets it, fans promotion actions to `promote.intent.created`, emits `panel.intent.executed` + `panel.action.*` + `panel.log.created`, and writes AI-log entries (`panel_logs`) onto note payloads.
 - CLI defaults run the full panel parse + runtime; `--emit-only` preserves a step-1-only path.
 - v5.0 is baseline locked for PanelAgent runtime V1 once merged to main; later v5.x versions extend into Satellite Sync, Yggdrasil modules, and Orchestrator/Reasoning 2.0.
 
-## Reality-MVP Snapshot (SoT v4.10 baseline)
+## Reality-MVP Foundation Snapshot (SoT v4.10 — historical)
 - Implemented: PER-loop ingestion against vault objects with Core-6 projection + Stores/Outbox; ASK CLI/API baseline over the vault plane; zones/planes defined with `external_raw` schema for non-vault objects; Planner/Reasoning layers remain optional overlays.
 - Malformed frontmatter is now handled gracefully in vault ingest (skip + warning + summary counters), preventing crashes on bad YAML; ingest errors are recorded with counts/paths and runs can resume to finish remaining notes.
 - ASK API returns sources with plane/origin tags and latency alongside answers.

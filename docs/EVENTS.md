@@ -1,4 +1,4 @@
-State: v5.x — Outbox JSONL envelope + event catalog (contract-level).
+State: v5.5 baseline + v5.6 forward line — Outbox JSONL envelope + event catalog (contract-level).
 
 # Events
 
@@ -23,7 +23,7 @@ All Outbox records MUST include this minimal envelope:
 Notes:
 
 - Producers MAY add additional top-level fields for compatibility or convenience; consumers MUST ignore unknown fields (see `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`).
-- Some older producers emit a richer `source` object (e.g. `{component, trigger, sot}`) instead of a string. That shape is legacy; new producers should emit the canonical `source` string. Consumers should degrade safely by extracting a string attribution (typically `source.component`) when present.
+- Some producers emit a richer `source` object (e.g. `{component, trigger, sot}`) instead of a string, especially for watcher/panel runtime events. Consumers MUST support both shapes and degrade safely by extracting a string attribution (typically `source.component`) when present. New event producers should prefer a string unless the `component/trigger/sot` trio is required for auditability.
 
 ## Event Idempotency (normative)
 
@@ -77,12 +77,11 @@ Example:
 }
 ```
 
-### Legacy: `index.object.embedded`
+### `index.object.embedded` (current emission)
 
-`index.object.embedded` is a legacy alias for `index.embedding.created`.
+`index.object.embedded` is the event currently emitted by the indexer. Treat it as equivalent to `index.embedding.created` for compatibility.
 
-- Legacy producers sometimes included an `embedding` vector field.
-- New producers must not include embedding vectors in outbox events.
+- Producers must not include embedding vectors in outbox events.
 
 ### `watcher.run`
 

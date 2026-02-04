@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (baseline locked) with the v5.x Agentic PKM forward line currently tracked through v5.5 (PanelAgent planner pipeline + CLI-first orchestration).
+State: SoT v5.5 Reality-MVP baseline locked (watcher/panel safety + concurrency guardrails) with the forward line now tracking v5.6 (LangGraph + Reasoning rollouts).
 # 6.0 Agent loop (deterministic)
 
 ## Design principle
@@ -28,7 +28,7 @@ Flow: `query → retrieve (hybrid search) → rerank (ask_score + reranker) → 
 - `Summary`
 - `Sources` (list: doc_id + timestamps when relevant)
 
-## Agent Matrix (Reality-MVP + forward line v5.x)
+## Agent Matrix (v5.5 baseline + forward line v5.6)
 
 | Agent | Role | Primary Human Flow | AgentState / LangGraph | Coordination (events/A2A) | State (active/parked) |
 | --- | --- | --- | --- | --- | --- |

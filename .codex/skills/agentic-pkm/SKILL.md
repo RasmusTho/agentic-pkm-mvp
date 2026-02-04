@@ -1,6 +1,6 @@
 ---
 name: agentic-pkm
-description: "Dev-time work in the agentic-pkm-mvp repo (Agentic PKM / Yggdrasil). Use when editing code, tests, or docs in this repo and following SoT v4.10 hierarchy, dev workflow, and architecture constraints."
+description: "Dev-time work in the agentic-pkm-mvp repo (Agentic PKM / Yggdrasil). Use when editing code, tests, or docs in this repo and following SoT v5.5 baseline hierarchy, dev workflow, and architecture constraints."
 ---
 
 # Agentic PKM Dev Skill

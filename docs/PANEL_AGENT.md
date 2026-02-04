@@ -1,4 +1,4 @@
-State: v5.0 – PanelAgent runtime V1 (promotion fan-out + in-note receipts on Reality-MVP base).
+State: v5.5 baseline — PanelAgent runtime V1 (v5.0) with planner pipeline opt-in.
 # PanelAgent / NoteInteractionAgent (Runtime v5.0)
 
 Purpose: translate human-driven AI panels in vault notes into structured intents/events while keeping the panel simple, optional, and human-first.
