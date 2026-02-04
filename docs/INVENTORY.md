@@ -18,7 +18,7 @@ Single source of truth for configuration, dependencies, and operational contract
 | `OPENAI_API_KEY`, `OPENAI_BASE` | app/llm/adapter.py:26-33 | – / `https://api.openai.com/v1/chat/completions` | Required when `LLM_PROVIDER=openai`. |
 | `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE` | app/llm/adapter.py:38-44 | – / `https://api.deepseek.com/chat/completions` | Required when `LLM_PROVIDER=deepseek`. |
 | `LLM_TEMPERATURE` | app/services/llm.py:69 | `0` | Temperature for `app/services/llm.py` callers outside QA. |
-| `INDEX_OUTBOX_PATH` | app/index/outbox.py:12-20, app/cli.py:76 | `./tmp/index-outbox.jsonl` | File receiving ingestion/index events; must be writable (see health CLI). |
+| `INDEX_OUTBOX_PATH` | app/index/outbox.py:12-20, app/cli.py:76 | `./tmp/index-outbox.jsonl` | Append-only audit log for ingest/index events (health checks + diagnostics). Runtime worker consumes the DB outbox. |
 | `STORE_BACKEND` | app/cli.py:21, app/stores/provider.py:39 | `memory` | Selects ObjectStore backend (`memory` or `pg`). |
 | `DATABASE_URL` | app/memory/store.py:16, app/stores/pg.py:21 | `postgresql+psycopg://app:app@127.0.0.1:15432/app` | Primary DSN for stores/agents/tests. |
 | `MEMORY_ENABLED` | app/memory/store.py:23 | `true` | Disables the memory store when `false`. |
@@ -44,8 +44,8 @@ All commands run via `python -m app.cli <command>` (Click). `--json` switches to
 | --- | --- | --- | --- |
 | `normalize SOURCE [--json --trace-id]` | app/cli/__init__.py:34-55 | Materialize file/URL, run the normalizer, emit the core object. | 0 on success, `FileNotFoundError` bubbles → exit 1. |
 | `classify OBJECT_ID [--json --trace-id]` | app/cli/__init__.py:57-74 | Classify an existing normalized object. | 0 on success, exception if object missing. |
-| `transcribe SOURCE [--json --trace-id]` | app/cli/__init__.py:76-94 | yt-dlp → ffmpeg → faster-whisper; writes an index-outbox entry (`kind=transcript`). | 0 on success, ffmpeg/yt-dlp errors → 1. |
-| `pipe SOURCE [--json --trace-id]` | app/cli/__init__.py:96-133 | Normalize → classify (+transcribe when audio/URL) and write aggregated JSONL. | 0 on success, exit 1/2 on missing sources. |
+| `transcribe SOURCE [--json --trace-id]` | app/cli/__init__.py:76-94 | yt-dlp → ffmpeg → faster-whisper; writes an index-outbox audit entry (`kind=transcript`). | 0 on success, ffmpeg/yt-dlp errors → 1. |
+| `pipe SOURCE [--json --trace-id]` | app/cli/__init__.py:96-133 | Normalize → classify (+transcribe when audio/URL) and write aggregated JSONL audit log. | 0 on success, exit 1/2 on missing sources. |
 | `health [--json --trace-id]` | app/cli/__init__.py:135-147, app/cli/health.py | Local dependency checks (ffmpeg, yt-dlp, INDEX_OUTBOX_PATH, Ollama reachability). | 0 when `ok=true`, otherwise 1. |
 
 ## External tools and network calls

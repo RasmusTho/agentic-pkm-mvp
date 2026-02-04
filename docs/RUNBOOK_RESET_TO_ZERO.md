@@ -15,13 +15,13 @@ This stops every service and removes the docker volumes so state is not reused a
 scripts/reset_to_zero.sh
 ```
 The script stops the stack (same as step 1), lists the runtime files it will delete, and removes:
-- `tmp/index-outbox.jsonl` (the append-only events log read by the worker)
+- `tmp/index-outbox.jsonl` (append-only audit log for ingest/panel events)
 - Heartbeat files: `tmp/worker_heartbeat.json`, `tmp/watcher_heartbeat.json`, plus watcher state files under `tmp/watcher_state*.json` and `tmp/watcher_states`
 - `tmp/health_incidents.jsonl`
 
 It prompts for confirmation unless you run `RESET_FORCE=1 scripts/reset_to_zero.sh`.
 
-> **Note:** The JSONL log at `INDEX_OUTBOX_PATH` is not a queue table; it is the append-only audit trail of events that the worker drains. The Postgres or memory "DB outbox" is a separate persistence layer (managed by `app.events.outbox`) that mirrors the same events for indexing decisions. Clearing `INDEX_OUTBOX_PATH` is the vital step to remove sticky backlog while the database state is cleaned via `docker compose down -v`.
+> **Note:** The JSONL log at `INDEX_OUTBOX_PATH` is an audit trail. Runtime processing is driven by the DB outbox. Clearing `INDEX_OUTBOX_PATH` only affects audit/diagnostics, while `docker compose down -v` wipes the DB queue.
 
 ## 3. Start the stack deterministically
 Before bringing the stack up, pick the desired LLM provider and embed configuration so the guardrail in `app.config.llm` can assert explicit intent.
@@ -39,8 +39,8 @@ If you point at a live Ollama daemon, make sure `OLLAMA_HOST`/`OLLAMA_URL` is se
 - Confirm containers are healthy: `docker compose ps`
 - Check health status: `python -m app.cli health status --json`
 - Tail the worker log (`docker compose logs --tail=50 worker` or `tail tmp/watchdog.log`)
-- Inspect the outbox log tail: `tail -n 20 tmp/index-outbox.jsonl`
-- Use `python -m app.cli status --json` or `python -m app.cli events-doctor --path $INDEX_OUTBOX_PATH` to understand pending events
+- Inspect the outbox audit tail: `tail -n 20 tmp/index-outbox.jsonl`
+- Use `python -m app.cli status --json` or `python -m app.cli events-doctor --path $INDEX_OUTBOX_PATH` to understand recent events
 
 ## 5. Mini E2E smoke
 1. Create a tiny runtime note under your vault:
@@ -54,12 +54,12 @@ If you point at a live Ollama daemon, make sure `OLLAMA_HOST`/`OLLAMA_URL` is se
    This is a confirmation note for the alpha smoke.
    NOTE
    ```
-2. Run the pipe stage to normalize/classify and append a line to the `INDEX_OUTBOX_PATH` log:
+2. Run the pipe stage to normalize/classify and append a line to the `INDEX_OUTBOX_PATH` audit log:
    ```bash
    python -m app.cli pipe "$NOTE"
    ```
-3. Wait for the worker to read the log (check `docker compose logs --tail=20 worker`).
-4. Verify the event recorded in the log: `tail -n 5 tmp/index-outbox.jsonl` should show your event with the new timestamp.
+3. Wait for the worker to process the corresponding DB outbox row (check `docker compose logs --tail=20 worker`).
+4. Verify the event recorded in the audit log: `tail -n 5 tmp/index-outbox.jsonl` should show your event with the new timestamp.
 4.1. Confirm the DB outbox row (the table uses `delivered_at`, not `processed_at`).
    ```bash
    docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select topic, created_at, delivered_at from outbox order by created_at desc limit 5;"'

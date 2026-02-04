@@ -15,39 +15,49 @@ if [ ! -d "$vault_root" ]; then
   exit 1
 fi
 
-inbox_candidates=("📥 Inbox" "Inbox")
-detect_inbox_dir() {
+resolve_inbox_dir() {
   if [ -n "${VAULT_INBOX_DIR_REL:-}" ]; then
-    echo "${VAULT_INBOX_DIR_REL}"
+    printf '%s\n' "${VAULT_INBOX_DIR_REL}"
     return
   fi
-  for candidate in "${inbox_candidates[@]}"; do
-    if [ -d "$vault_root/$candidate" ]; then
-      echo "$candidate"
-      return
-    fi
-  done
-  echo "${inbox_candidates[0]}"
+
+  python -m app.cli vault-layout-ensure --vault-root "$vault_root" --json \
+    | python - <<'PY'
+import json, sys
+try:
+    payload = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    payload = {}
+print((payload.get("inbox_folder") or "").strip())
+PY
 }
 
-inbox_rel=$(detect_inbox_dir)
+inbox_rel="$(resolve_inbox_dir)"
+if [ -z "$inbox_rel" ]; then
+  echo "ERROR: could not resolve inbox folder; set VAULT_INBOX_DIR_REL or ensure vault.layout.md exists" >&2
+  exit 1
+fi
+
 inbox_path="$vault_root/$inbox_rel"
 if [ ! -d "$inbox_path" ]; then
-  echo "ERROR: Inbox directory not found: $inbox_path" >&2
+  echo "ERROR: inbox folder not found: $inbox_path" >&2
   exit 1
 fi
 
 smoke_dir="$inbox_path/@Smoke"
 mkdir -p "$smoke_dir"
+
 note_uuid=$(python - <<'PY'
 from __future__ import annotations
 import uuid
 print(uuid.uuid4())
 PY
 )
+
 note_name="smoke-$(date +%s)-${note_uuid}.md"
 note_path="$smoke_dir/$note_name"
 container_note_path="/app/vault/$inbox_rel/@Smoke/$note_name"
+
 cat > "$note_path" <<NOTE
 ---
 uuid: $note_uuid

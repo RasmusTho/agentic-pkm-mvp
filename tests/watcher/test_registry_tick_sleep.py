@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -14,7 +13,7 @@ def _write_config(path: Path) -> None:
     payload = (
         "watchers:\n"
         "  - name: panel\n"
-        "    scope_glob: \"${VAULT_INBOX_DIR_REL}/**\"\n"
+        '    scope_glob: "${VAULT_INBOX_DIR_REL}/**"\n'
         "    debounce_ms: 1500\n"
         "    rate_limit_per_min: 30\n"
         "    backoff_seconds: 10\n"
@@ -35,6 +34,28 @@ def _base_env(tmp_path: Path, *, tick_sleep: str, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
     return vault_path
+
+
+def _write_layout_note(vault_path: Path, *, inbox_folder: str) -> None:
+    system_folder = "⚙️ System"
+    desk_folder = "🛠️ Workbench"
+
+    layout_dir = vault_path / system_folder
+    layout_dir.mkdir(parents=True, exist_ok=True)
+    layout_path = layout_dir / "vault.layout.md"
+    layout_path.write_text(
+        "---\n"
+        f"system_folder: '{system_folder}'\n"
+        f"inbox_folder: '{inbox_folder}'\n"
+        f"desk_folder: '{desk_folder}'\n"
+        "root_folders:\n"
+        f"  - '{system_folder}'\n"
+        f"  - '{inbox_folder}'\n"
+        f"  - '{desk_folder}'\n"
+        "---\n\n"
+        "Layout note.\n",
+        encoding="utf-8",
+    )
 
 
 def test_registry_tick_sleep_seconds_from_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,7 +115,7 @@ def test_registry_scope_glob_uses_env(tmp_path: Path, monkeypatch: pytest.Monkey
     config_path = tmp_path / "watchers.yaml"
     _write_config(config_path)
 
-    vault_path = _base_env(tmp_path, tick_sleep="0.5", monkeypatch=monkeypatch)
+    _base_env(tmp_path, tick_sleep="0.5", monkeypatch=monkeypatch)
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "CustomInbox")
 
     cfg = registry.load_registry_config(config_path)
@@ -106,8 +127,11 @@ def test_registry_scope_glob_defaults_to_inbox(tmp_path: Path, monkeypatch: pyte
     config_path = tmp_path / "watchers.yaml"
     _write_config(config_path)
 
-    _base_env(tmp_path, tick_sleep="0.5", monkeypatch=monkeypatch)
+    vault_path = _base_env(tmp_path, tick_sleep="0.5", monkeypatch=monkeypatch)
     monkeypatch.delenv("VAULT_INBOX_DIR_REL", raising=False)
 
+    _write_layout_note(vault_path, inbox_folder="LayoutInbox")
+
     cfg = registry.load_registry_config(config_path)
-    assert cfg.scope_glob.endswith("Inbox/**")
+    assert cfg.scope_glob == "LayoutInbox/**"
+    assert cfg.specs[0].scope_glob == "LayoutInbox/**"

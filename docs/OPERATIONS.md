@@ -6,13 +6,21 @@ State: SoT v5.5 Reality-MVP baseline locked.
 - Commit the bump with `chore(version): bump to X.Y.Z`, then create an annotated tag using `python scripts/tag_release.py [--dry-run|--push]` (tags default to `v<version>`).
 - Share noteworthy changes after tagging; the bump script already appends to the decision log.
 
+## Runtime prerequisites (registry watcher)
+- `DATABASE_URL` or `DB_DSN` is required in runtime; startup must fail fast if missing.
+- DB outbox is canonical in runtime; the worker consumes the DB outbox.
+- JSONL outbox (`INDEX_OUTBOX_PATH`) is audit/diagnostic only and must not be used as the worker queue.
+- Registry watcher is the single runtime watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`). Legacy snapshot watchers are dev-only.
+
 ## Runtime Compose Stack
+- Canonical runtime compose stack: `db`, `api`, `watcher`, `worker`.
 - `docker-compose.yaml` starts FastAPI (`api`), `worker`, `watcher`, and Postgres for local development.
 - Ensure `.env` contains the desired secrets before running `docker compose up --build`.
 - Postgres data lives in the `postgres-data` volume; `docker compose down -v` wipes it.
 - The API container runs `scripts/start_api.sh` (migrations + `uvicorn`).
 - The worker runs `python -m app.workers.outbox_worker` (consumes DB outbox).
 - The watcher runs `python -m app.cli watcher run` (registry loop; emits `ingest.vault.changed` or `panel.scan.requested` to outbox).
+- Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.
 
 ## Storage Maintenance
 - The FastAPI service writes DuckDB artifacts to `storage/agent.duckdb` and provenance trails to `provenance.jsonl`.
@@ -46,6 +54,12 @@ State: SoT v5.5 Reality-MVP baseline locked.
 - Metrics: enable `METRICS_ENABLED=1` to expose Prometheus metrics under `/metrics` using `prometheus-fastapi-instrumentator` (secure access appropriately).
 - Local Prometheus+Grafana recipe lives in `docs/OBSERVABILITY_STACK.md` (Docker Compose).
 
+## Runtime health: watcher → DB outbox → worker
+- Watcher heartbeat: `WATCHER_HEARTBEAT_PATH` (default `/app/tmp/watcher_heartbeat.json` in containers, `tmp/watcher_heartbeat.json` on host).
+- Worker heartbeat: `WORKER_HEARTBEAT_PATH` (default `/app/tmp/worker_heartbeat.json`).
+- DB outbox: check the `outbox` table for recent `ingest.vault.changed` and `panel.*` events; the worker should mark `delivered_at`.
+- JSONL audit: `INDEX_OUTBOX_PATH` should append lines, but it is not the worker queue.
+- Status: `python -m app.cli status` reports `worker_queue` vs `events_log` to distinguish DB vs JSONL.
 
 ## Startup telemetry (startup_status.json)
 - Location: `tmp/startup_status.json` (workspace root on the host).
@@ -73,7 +87,7 @@ State: SoT v5.5 Reality-MVP baseline locked.
 ## SLO / SLA
 | Level | Target | Measurement |
 | --- | --- | --- |
-| Ingestion latency | < 5 s from CLI start to JSONL entry | Compare CLI start with `transcribe` / `agent.answer` spans. |
+| Ingestion latency | < 5 s from CLI start to DB outbox entry | Compare CLI start with `transcribe` / `agent.answer` spans. |
 | Retrieval p95 | < 250 ms | `jq 'select(.node=="agent.answer") | .latency_ms'`. |
 | ASR wall time | < 30 s for a 5-minute clip | `transcribe` span. |
 | Health CLI | 100 % coverage before every release | Smoke step fails otherwise. |
@@ -82,14 +96,14 @@ State: SoT v5.5 Reality-MVP baseline locked.
 1. **Identify** – use `health` + `jq` to find the failing node.
 2. **Stabilize** – set `LLM_PROVIDER=mock` or `STORE_BACKEND=memory` to keep working while debugging.
 3. **Communicate** – add a short note to `docs/CHANGELOG.md` under “Unreleased incidents”.
-4. **Restore** – restart Ollama/ffmpeg/CLI depending on the root cause. Restore `tmp/index-outbox.jsonl` from backup if corrupt.
+4. **Restore** – restart Ollama/ffmpeg/CLI depending on the root cause. Restore `tmp/index-outbox.jsonl` from backup if corrupt (audit only).
 
-## Backup / restore for index-outbox
+## Backup / restore for index-outbox (audit log)
 - Default path is `tmp/index-outbox.jsonl`. Simple rotation:
   ```bash
   cp tmp/index-outbox.jsonl "tmp/index-outbox.$(date +%Y%m%d%H%M%S).jsonl"
   truncate -s 0 tmp/index-outbox.jsonl
   ```
 - In CI, archive the file as an artifact when needed.
-- Restore: copy the file back and rerun the indexer (future CLI) or inspect via `python -m json.tool`.
+- Restore: copy the file back and inspect via `python -m json.tool` (audit only; worker queue remains in DB).
 <!-- SECTION:OPS-RUNBOOKS:END -->

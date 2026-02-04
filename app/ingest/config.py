@@ -8,7 +8,7 @@ import yaml
 
 from app.config.paths import resolve_system_settings_path
 from app.services import settings as settings_service
-from app.vault.layout import DEFAULT_INBOX_FOLDER, VaultLayout, load_or_create_layout, normalize_md_filename
+from app.vault.layout import VaultLayout, load_or_create_layout, normalize_md_filename
 
 DEFAULT_VAULT_ROOT = Path("vault")
 
@@ -42,9 +42,7 @@ def _normalize_include_folders(raw: object | None) -> List[str]:
 
 def _finalize_include_folders(raw: object | None, fallback: List[str]) -> List[str]:
     values = _normalize_include_folders(raw)
-    if values:
-        return values
-    return fallback
+    return values if values else fallback
 
 
 def _load_frontmatter(path: Path) -> dict:
@@ -79,8 +77,7 @@ def _resolve_override(vault_root: Path, system_folder: str) -> dict:
 
 def _append_universal_ignores(ignore_glob: List[str]) -> List[str]:
     merged = list(ignore_glob)
-    safe_ignores = list(_BASE_IGNORES)
-    for pattern in safe_ignores:
+    for pattern in _BASE_IGNORES:
         if pattern not in merged:
             merged.append(pattern)
     return merged
@@ -89,7 +86,9 @@ def _append_universal_ignores(ignore_glob: List[str]) -> List[str]:
 def _fallback_include_folders(layout: VaultLayout) -> List[str]:
     values = [layout.inbox_folder, layout.desk_folder]
     values = [value for value in values if value]
-    return values if values else [DEFAULT_INBOX_FOLDER]
+    if not values:
+        raise ValueError("vault layout is missing required folder fields")
+    return values
 
 
 def resolve_ingest_config(vault_root: Path) -> IngestConfig:
@@ -114,13 +113,13 @@ def resolve_ingest_config(vault_root: Path) -> IngestConfig:
     fallback_include = _fallback_include_folders(layout)
 
     if override_include is not None:
-        include = _finalize_include_folders(override_include, [DEFAULT_INBOX_FOLDER])
+        include = _finalize_include_folders(override_include, fallback_include)
     elif layout.include_folders is not None:
-        include = _finalize_include_folders(layout.include_folders, [DEFAULT_INBOX_FOLDER])
+        include = _finalize_include_folders(layout.include_folders, fallback_include)
     elif include_folders is None or not _normalize_list(include_folders):
-        include = _finalize_include_folders(fallback_include, [DEFAULT_INBOX_FOLDER])
+        include = fallback_include
     else:
-        include = _finalize_include_folders(include_folders, [DEFAULT_INBOX_FOLDER])
+        include = _finalize_include_folders(include_folders, fallback_include)
 
     if override_ignore is not None:
         ignore = _normalize_list(override_ignore)

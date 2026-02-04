@@ -118,7 +118,7 @@ services:
       EMBED_DIM: ${EMBED_DIM:-768}
       EMBED_NORMALIZE: ${EMBED_NORMALIZE:-1}
       WATCHER_ENABLE: "1"
-      WATCHER_SCOPE_GLOB: "${VAULT_INBOX_DIR_REL:-Inbox}/**"
+      WATCHER_AUTO_EXEC: "${WATCHER_AUTO_EXEC-1}"
       WATCHER_VAULT_PATH: /app/vault
       WATCHER_HEARTBEAT_PATH: /app/tmp/watcher_heartbeat.json
       WATCHER_STATE_PATH: /app/tmp/watcher_state.json

@@ -20,7 +20,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 - `docs/EMBEDDINGS.md` — Normative embeddings spec (identity, guardrails, rebuild policy).
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| README.md | Top-level overview | Aligned (forward line v5.x) | 2025-12-17 | Highlights canonical warm/cold artifacts, rebuildable mirrors, and quickstart details. |
+| README.md | Top-level overview | Aligned (forward line v5.x) | 2026-01-28 | Registry watcher runtime default, DB outbox canonical, JSONL audit log only. |
 | CHANGELOG.md | Repo change log (root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/CHANGELOG.md. |
 | .github/ISSUE_TEMPLATE/v4.6-objective.md | Issue template (historical, root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/ISSUE_TEMPLATE_v4.6-objective.md. |
 | .github/pull_request_template.md | PR template (historical, root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/pull_request_template.md. |
@@ -43,28 +43,28 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | docs/CORE_CONTRACT.md | Core-6 contract (canonical) | Aligned (forward line v5.x) | 2025-12-28 | Canonical Core-6 semantic contract, ownership, and projection rules. |
 | docs/CORE6_CONTRACT.md | Core-6 contract (compat alias) | Deprecated | 2025-12-28 | Superseded by `docs/CORE_CONTRACT.md`. |
 | docs/NOTE_KIND_POLICIES.md | Note kind policies | Aligned (forward line v5.x) | 2025-12-28 | Policy profiles for kind routing and state-axis enablement. |
-| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v5.5 base) | Aligned (forward line v5.x) | 2026-02-04 | Clarifies Core-6 contract, state axes, note kind policies, and derived overlays. |
+| docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v5.5 base) | Aligned (forward line v5.x) | 2026-02-04 | Adds runtime watcher choice, DB outbox canonical queue, registry watcher topology; clarifies Core-6 contract, state axes, note kind policies, and derived overlays. |
 | docs/CONCURRENCY.md | Concurrency + idempotency guardrails | Aligned (forward line v5.x) | 2025-03-14 | Normative concurrency/idempotency requirements and test placeholders. |
 | docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2025-12-07 | Matches deployment topology and local surfaces. |
-| docs/STATUS.md | Operational snapshot | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2026-02-04 | Baseline definition (v5.5) covers watcher/panel settings provenance and concurrency guards plus the heartbeat/gap-test verification. |
-| docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2025-03-14 | Forward line now leans on the v5.5 baseline (watcher safety, panel action provenance, settings compiler) while v5.6 LangGraph/Reasoning stages are planned; v4.10 remains reference foundation. |
+| docs/STATUS.md | Operational snapshot | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2026-02-04 | Baseline definition (v5.5) covers watcher/panel settings provenance and concurrency guards; registry watcher default + DB outbox canonical queue noted. |
+| docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2026-02-04 | Forward line leans on the v5.5 baseline while v5.6 LangGraph/Reasoning stages are planned; runtime loop evaluation stack updated for registry watcher + DB outbox. |
 | docs/V56_FORWARD_LINE.md | v5.6 forward line kickoff plan | Aligned (SoT v5.6 forward line) | 2026-01-01 | Now/Next/Later plan with acceptance criteria for watchers auto-run, LangGraph rollout, and orchestrator V2; links STATUS/ROADMAP for traceability. |
-| docs/tracks/TRACK_WATCHER.md | Watcher track (v5.1–v5.4) | Aligned (forward line v5.x) | 2025-03-12 | Snapshot watcher track details, policy gating, daemon/ergonomics. |
+| docs/tracks/TRACK_WATCHER.md | Watcher track (v5.1–v5.4) | Aligned (forward line v5.x) | 2026-01-28 | Adds registry watcher as runtime standard; legacy snapshot watcher noted. |
 | docs/tracks/TRACK_PANELAGENT_LANGGRAPH.md | PanelAgent LangGraph track (v5.5) | Aligned (forward line v5.x) | 2025-03-12 | PanelAgent catalog/decider modes, planner/orchestrator pipeline, promotion consumer. |
 | docs/tracks/TRACK_AGENTOPS_A2A_MCP.md | AgentOps / A2A / MCP track | Aligned (analysis) | 2025-03-12 | Pattern harvest themes for events/A2A/tools/ops; A2A/MCP scaffolding. |
 | docs/tracks/TRACK_FITNESS_CI_CONTRACT.md | Fitness / CI contract | Aligned (forward line v5.x) | 2025-03-14 | Fitness gates, contract tests, and CI enforcement details. |
-| docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2025-03-14 | Forward-looking, skimmable; links to history and track docs under docs/tracks/; calls out the Quality Wave/Runtime Loop Evaluation Stack plus settings compiler provenance for watcher/panel actions. |
-| docs/ROADMAP.md | Quality Wave (Runtime Loop Evaluation Stack) section | Aligned (forward line v5.x) | 2025-03-14 | Contract tests, golden vault, metamorphic + cold rebuild runs, fitness gates, scripted UAT; modules/files explicitly mapped for upcoming implementation. |
+| docs/ROADMAP.md | Strategic roadmap | Aligned (forward line v5.x) | 2026-01-28 | Forward-looking, skimmable; links to history and track docs under docs/tracks/; calls out registry watcher evaluation stack and settings compiler provenance. |
+| docs/ROADMAP.md | Quality Wave (Runtime Loop Evaluation Stack) section | Aligned (forward line v5.x) | 2026-01-28 | Contract tests, golden vault, metamorphic + cold rebuild runs, fitness gates, scripted UAT; registry watcher focus. |
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (SoT v4.10 locked) | 2025-12-17 | Consolidates a single maturity taxonomy across the catalog. |
 | docs/EMBEDDINGS.md | Embedding spec | Aligned (forward line v5.x) | 2025-12-17 | Normative spec for provider-aware embeddings (identity, dims, outbox events, rebuild rules). |
 | docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2026-02-04 | LangGraph inner + events/A2A outer; PanelAgent exemplifies the pattern with catalog decider + planner pipeline opt-in; SoT wording updated to v5.5 baseline and v5.6 forward line. |
 | docs/PLANNER.md | Planner contract | Baseline-only (v4.10) | 2025-12-07 | Planner/PlanStep schema, guardrail layer, hierarchical planning loop. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (forward line v5.x) | 2026-02-04 | Canonical Outbox envelope + selected event meanings; compatibility anchored in EVENT_COMPATIBILITY_CONTRACT. |
 | docs/DIAGRAMS.md | C4 diagrams | Baseline-only (v4.10) | 2025-12-07 | Diagrams reflect current topology. |
-| docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2025-12-17 | Adds the trust semantics reference while keeping flow guidance. |
-| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-14 | Adds Evaluation Stack (Runtime Loop / Panel / Promotion) A–F layers plus the new concurrency/regression suites covering watcher dedup, promotion consumer idempotency, and settings validation. |
+| docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2026-02-04 | Registry watcher runtime path, AI fence policy, UUID healing, and trust semantics reference. |
+| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2026-02-04 | Evaluation stack updated for registry watcher + DB outbox contracts; covers watcher dedup, promotion idempotency, settings validation. |
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x) | 2026-02-04 | Runtime V1 baseline + planner pipeline opt-in; human-first semantics, intent vs mutation, wiring precedence. |
-| docs/UAT_PANEL_WATCHER.md | UAT guide (panel + watcher) | Aligned | 2025-12-10 | Human-facing UAT flow for PanelAgent + Vault Watcher (prep notes, targeted ingest, panel run-many, watcher dry-run/run, observations). |
+| docs/UAT_PANEL_WATCHER.md | UAT guide (panel + watcher) | Aligned (forward line v5.x) | 2026-02-04 | Registry watcher UAT flow with AI fence policy and UUID healing. |
 | docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Baseline-only (v4.10) | 2025-12-07 | High-level module map reviewed; Reality-MVP scope noted. |
 | docs/research/pattern-harvest-agentic-architecture.md | Research synthesis (outer/inner agent architecture) | Aligned (analysis, docs-only) | 2025-03-10 | Pattern harvest of events/A2A/tools/observability/config; backlog + Mermaid diagram; no runtime wiring. |
 
@@ -72,7 +72,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/CI.md | CI overview | Aligned (forward line v5.x) | 2026-02-04 | Updated for v5.5 baseline gates, smoke flows, and watcher controls. |
-| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2025-03-14 | Adds Evaluation Stack (Runtime Loop / Panel / Promotion) A–F layers (contracts, golden vault, metamorphic, cold rebuild, fitness gates, scripted UAT) with placeholder commands. |
+| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2026-02-04 | Evaluation stack updated for registry watcher + DB outbox contracts; runtime loop UAT coverage. |
 | docs/ISSUES_TESTING.md | Testing coverage issues | Unreviewed | — | Tracks coverage gaps referenced by docs/TESTING.md; update when issues close. |
 | docs/QUALITY.md | Quality gates | Aligned (forward line v5.x) | 2026-02-04 | QA guardrails + fitness gates aligned with v5.5 baseline. |
 | docs/guardrails.md | Guardrails | Aligned (forward line v5.x) | 2026-02-04 | Runtime guardrails + concurrency safety aligned with v5.5 baseline. |
@@ -100,13 +100,13 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | docs/SETTINGS.md | Settings | Baseline-only (v4.10) | 2025-12-07 | Core env vars (STORE_BACKEND/LLM/metrics flags) documented. |
 | docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Partially outdated | 2025-12-07 | Planned API key + slowapi; not implemented in Reality-MVP. |
 | docs/ingest.md | Ingest (historical/current) | Baseline-only (v4.10) | 2025-12-07 | Vault-first ingest (CLI, UUID healing, mirror, HybridStore); legacy commands noted. |
-| docs/OBSIDIANSYNC.md | Obsidian sync | Baseline-only (v4.10) | 2025-03-10 | Reality-MVP: git watcher primary, filesystem watcher fallback; describes Obsidian → watcher → ingest/update → outbox → indexer; notes Docker-first watcher daemon (`vault-watcher-daemon`) with host fallback. |
+| docs/OBSIDIANSYNC.md | Obsidian sync | Aligned (forward line v5.x) | 2026-01-28 | Registry watcher runtime + DB outbox canonical queue. |
 | docs/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/MEMORY.md | Memory (legacy overview) | Legacy (archived) | 2025-12-07 | Historical memory-layer description; not used in Reality-MVP. |
 | docs/AI_DEVELOPMENT.md | AI-assisted development policy | Aligned (forward line v5.x) | 2025-12-28 | Dev-layer policy tied to Core-6 guardrails and vault policy constraints. |
 | docs/DEV_WORKFLOW.md | Developer workflow | Aligned (forward line v5.x) | 2026-02-04 | TDD/docs-first workflow aligned with the v5.5 baseline. |
-| docs/OPERATIONS.md | Operations playbook | Aligned (forward line v5.x) | 2026-02-04 | Compose stack (api/worker/watcher/db) + v5.5 runtime runbooks. |
-| docs/OPS_WATCHER.md | Watcher operations (Docker + host) | Aligned (forward line v5.x) | 2025-03-10 | Docker-first watcher daemon with `/state` snapshot storage and host-service fallback; cooldown guidance for iCloud/Obsidian mounts. |
+| docs/OPERATIONS.md | Operations playbook | Aligned (forward line v5.x) | 2026-02-04 | Compose stack (api/worker/watcher/db) + v5.5 runtime runbooks; DB outbox canonical queue. |
+| docs/OPS_WATCHER.md | Watcher operations (Docker + host) | Aligned (forward line v5.x) | 2026-02-04 | Registry watcher operations, config-driven scope, DB outbox requirement; legacy snapshot watcher noted. |
 | docs/INVENTORY.md | Runtime inventory | Baseline-only (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
 | docs/GLOSSARY.md | Glossary | Baseline-only (v4.10) | 2025-12-07 | Updated definitions for hybrid/rerank/outbox/health. |
 | docs/QUALITY.md | Quality | Aligned (forward line v5.x) | 2026-02-04 | QA guardrails + fitness gates aligned with v5.5 baseline. |
@@ -116,19 +116,19 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | docs/HEALTH.md | Health checks | Aligned (forward line v5.x) | 2026-02-04 | CLI health checks (ffmpeg/yt-dlp/outbox/ollama) + ci-smoke reference. |
 | docs/LLM_BACKENDS.md | LLM backends | Baseline-only (v4.10) | 2025-12-07 | Providers mock/ollama/openai/deepseek; timeouts/keys noted. |
 | docs/INFRASTRUCTURE.md | Infrastructure | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
-| docs/OPERATIONS.md | Operations | Aligned (forward line v5.x) | 2026-02-04 | Compose stack (api/worker/watcher/db) + v5.5 runtime runbooks. |
+| docs/OPERATIONS.md | Operations | Aligned (forward line v5.x) | 2026-02-04 | Compose stack (api/worker/watcher/db) + v5.5 runtime runbooks; DB outbox canonical queue. |
 | docs/INVENTORY.md | Inventory | Baseline-only (v4.10) | 2025-12-07 | Key env vars/CLI surfaces; defaults mock/ollama. |
 | docs/OVERVIEW_WS.md | Overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
-| docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
+| docs/DEPENDENCIES.md | Dependencies | Aligned (forward line v5.x) | 2026-01-28 | Env matrix updated with DATABASE_URL + audit log note. |
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Baseline-only (v4.10) | 2025-12-18 | Local dev targets 3.14, CI smoke floor 3.12 with Docker tripwires and scripts. |
-| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-02-04 | Updated for v5.5 baseline + v5.6 forward line counters and watcher payload metadata. |
+| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-02-04 | Updated for v5.5 baseline + v5.6 forward line counters; registry watcher health + DB outbox canonical queue clarified. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (forward line v5.x) | 2026-02-04 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development | Aligned (forward line v5.x) | 2025-12-28 | Current dev-layer AI policy aligned to Core-6 guardrails and vault settings. |
 | docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-02-04 | TDD/docs-first workflow aligned with the v5.5 baseline. |
 | docs/PROJECTOR.md | Projector | Baseline-only (v4.10) | 2025-12-07 | Promotion projector emits audit/membership; no filesystem projection. |
 | docs/ALIGNMENT.md | Alignment | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
 | docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2025-12-07 | Historical v4.2 overview; superseded by SoT v4.10 docs. |
-| docs/GLOSSARY.md | Glossary | Baseline-only (v4.10) | 2025-12-07 | Updated definitions for hybrid/rerank/outbox/health. |
+| docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-01-28 | Outbox definition updated for DB outbox + JSONL audit log. |
 
 ## Historical / Archived (Architecture Deep Dives)
 | Path | Scope | Review status | Last reviewed | Notes |
@@ -155,11 +155,11 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/runbooks/ingest.md | Runbook: ingest | Baseline-only (v4.10, with known debt) | 2025-12-07 | Troubleshooting vault ingest/outbox; matches current CLI path. |
-| docs/runbooks/RUNBOOK_GO_LIVE.md | Runbook: go-live checklist | Aligned (forward line v5.x) | 2025-12-18 | Dry-run go-live preflight (vault/outbox/settings), small-scope UAT, rollout and rollback posture. |
-| docs/runbooks/RUNBOOK_STARTUP.md | Runbook: startup checklist | Baseline-only (v4.10) | 2025-12-21 | Command-first startup checklist: vault/health config, docker compose bring-up, health status/explain/incidents tail, and go-live signals. |
-| docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md | Runbook: full-system startup | Aligned (forward line v5.x) | 2025-12-23 | Brings up db/api/worker/watcher via scripts/start_full_system.sh; documents watcher registry + heartbeat checks. |
+| docs/runbooks/RUNBOOK_GO_LIVE.md | Runbook: go-live checklist | Aligned (forward line v5.x) | 2026-01-28 | Go-live preflight updated for registry watcher + DB outbox. |
+| docs/runbooks/RUNBOOK_STARTUP.md | Runbook: startup checklist | Baseline-only (v4.10) | 2026-01-28 | Startup defaults to watcher+worker in runtime; documents opt-out flags, DB outbox, and audit log semantics. |
+| docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md | Runbook: full-system startup | Aligned (forward line v5.x) | 2026-01-28 | Brings up db/api/worker/watcher via scripts/start_full_system.sh; documents registry watcher + DB outbox requirement. |
 | docs/runbooks/RUNBOOK_RUNTIME_GAP_TEST.md | Runbook: runtime gap test | Aligned (forward line v5.x) | 2025-12-23 | Verifies watcher registry ingest.vault.changed → worker heartbeat → /api/ask via scripts/gap_test_alpha.sh. |
-| docs/RUNBOOK_RESET_TO_ZERO.md | Runbook: reset to zero | Aligned (forward line v5.x) | 2026-01-10 | Steps to stop the stack, wipe tmp/index-outbox/heartbeats, and restart with an explicit LLM_PROVIDER so the worker guardrail stays deterministic. |
+| docs/RUNBOOK_RESET_TO_ZERO.md | Runbook: reset to zero | Aligned (forward line v5.x) | 2026-01-28 | Reset flow updated for DB outbox canonical queue + JSONL audit log. |
 | docs/E2E_ALPHA.md | Alpha E2E contract | Aligned (forward line v5.x) | 2026-01-02 | Canonical alpha-up → alpha_e2e → alpha-smoke flow, runtime note cleanup, and status semantics. |
 | docs/howto/memory.md | How-to: memory | Legacy (archived) | 2025-12-07 | Agent-memory guide superseded by ObjectStore/decisions in v4.10. |
 | docs/settings/sample-flows/ingest.flow.md | Sample flow | Partially outdated | 2025-12-07 | Template for future planner/orchestrator ingest; not loaded in v4.10. |
@@ -225,15 +225,15 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/LLM_BACKENDS.md | LLM backends | Baseline-only (v4.10) | 2025-12-07 | Providers mock/ollama/openai/deepseek; timeouts/keys noted. |
-| docs/INFRASTRUCTURE.md | Infrastructure | Baseline-only (v4.10) | 2025-12-07 | Compose stack (db/api/worker) for Reality-MVP. |
+| docs/INFRASTRUCTURE.md | Infrastructure | Aligned (forward line v5.x) | 2026-01-28 | Compose stack; DB outbox canonical, JSONL audit only. |
 | docs/OVERVIEW_WS.md | Overview workspace | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
-| docs/DEPENDENCIES.md | Dependencies | Baseline-only (v4.10) | 2025-12-07 | System deps + env matrix; ci-smoke defaults noted. |
+| docs/DEPENDENCIES.md | Dependencies | Aligned (forward line v5.x) | 2026-01-28 | Env matrix updated with DATABASE_URL + audit log note. |
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Baseline-only (v4.10) | 2025-12-18 | Local dev targets 3.14, CI smoke floor 3.12 with Docker tripwires and scripts. |
-| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-02-04 | Updated for v5.5 baseline + v5.6 forward line counters and watcher payload metadata. |
+| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-02-04 | Updated for v5.5 baseline + v5.6 forward line counters; registry watcher health + DB outbox canonical queue clarified. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (forward line v5.x) | 2026-02-04 | Prometheus/Grafana compose scrape `/metrics`. |
 | docs/AI_DEVELOPMENT.md | AI development | Aligned (forward line v5.x) | 2025-12-28 | Current dev-layer AI policy aligned to Core-6 guardrails and vault settings. |
 | docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-02-04 | TDD/docs-first workflow aligned with the v5.5 baseline. |
 | docs/PROJECTOR.md | Projector | Baseline-only (v4.10) | 2025-12-07 | Promotion projector emits audit/membership; no filesystem projection. |
 | docs/ALIGNMENT.md | Alignment | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
 | docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2025-12-07 | Historical v4.2 overview; superseded by SoT v4.10 docs. |
-| docs/GLOSSARY.md | Glossary | Baseline-only (v4.10) | 2025-12-07 | Updated definitions for hybrid/rerank/outbox/health. |
+| docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-01-28 | Outbox definition updated for DB outbox + JSONL audit log. |

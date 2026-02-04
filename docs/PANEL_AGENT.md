@@ -55,12 +55,7 @@ Make this note evergreen
   - removes executed checkboxes from the panel working set, writes a receipt into the AI status callout, and records the hidden `ai:id` in `executed_action_ids` on the note payload to prevent re-execution.
 - No LangGraph/planner/tool calls; this remains a lightweight runtime loop on top of Reality-MVP.
 - Markdown mutations (panel cleanup, receipts, promotion frontmatter) flow through the note writer; agents emit intents, and the writer/consumer apply deterministic file updates.
-- Auto-run policy (SoT v5.3, watcher-facing): watchers only auto-run panels when the note explicitly allows it via frontmatter, e.g.:
-  - `ai_panel_auto_run: watcher` (watcher may auto-run panel runtime)
-  - `ai_panel_auto_run: manual` or missing (default, watcher skips; manual CLI still allowed)
-  - `ai_panel_auto_run: never` (watcher must not auto-run; manual CLI still allowed)
-  - Nested form also supported: `ai_panel: { auto_run: watcher|manual|never }`
-  Manual CLI commands (`panel run`, `panel run-many`) ignore the policy; it gates watcher-driven automation only.
+- Auto-run policy (SoT v5.3, watcher-facing): watchers treat any note that contains an AI panel fence (`%% ...ai... %%`, case-insensitive) as a candidate once the global arm switch `WATCHER_AUTO_EXEC=1` is set. The only per-note opt-out is `ai_panel_auto_run: never` (nested `ai_panel: { auto_run: never }` also works); other modes (`watcher`/`manual`) remain metadata for manual CLI contexts but no longer gate watcher eligibility. Manual CLI commands (`panel run`, `panel run-many`) ignore this policy.
 
 ### Planner pipeline (opt-in)
 - `PANEL_AGENT_PIPELINE=planner` keeps the external runtime behaviour the same and also builds a `PanelActionIntent` for triggered actions, storing a plan via Planner (`plan_panel_actions`).

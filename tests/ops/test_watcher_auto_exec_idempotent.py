@@ -88,11 +88,11 @@ def test_auto_exec_disabled_no_mutation(tmp_path: Path, monkeypatch: pytest.Monk
     assert "promote.intent.created" not in topics
 
 
-def test_auto_exec_policy_denied_manual(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_auto_exec_policy_denied_never(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reset_store_backends()
     vault = tmp_path / "vault"
     note_path = vault / "Notes" / "Manual.md"
-    _write(note_path, _panel_note("Manual", auto_run="manual"))
+    _write(note_path, _panel_note("Manual", auto_run="never"))
 
     outbox = tmp_path / "outbox.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))

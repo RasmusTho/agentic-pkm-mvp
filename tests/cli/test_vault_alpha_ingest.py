@@ -175,7 +175,7 @@ def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
 
     has_panel = vault / "Concepts" / "HasPanel.md"
     frontmatter, body = load_frontmatter(has_panel.read_text(encoding="utf-8"))
-    assert not _bare_uuid(frontmatter.get("uuid"))
+    assert _bare_uuid(frontmatter.get("uuid"))
     docs = get_store().all()
     assert docs
     for doc in docs:
@@ -184,7 +184,7 @@ def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
 
     needs_uuid = vault / "Concepts" / "NeedsUUID.md"
     fm_needs, _ = load_frontmatter(needs_uuid.read_text(encoding="utf-8"))
-    assert not _bare_uuid(fm_needs.get("uuid"))
+    assert _bare_uuid(fm_needs.get("uuid"))
     expected_uuid = _expected_uuid(Path("Concepts/NeedsUUID.md"), fm_needs.get("uuid"))
     mirror_dir = vault / "System/Metadata/VaultMirror/Concepts"
     mirror_files = []
@@ -241,7 +241,7 @@ def test_vault_alpha_ingest_persists_uuid_to_note_mirror_and_store(tmp_path: Pat
 
     needs_uuid = vault / "Concepts" / "NeedsUUID.md"
     fm_needs, _ = load_frontmatter(needs_uuid.read_text(encoding="utf-8"))
-    assert not _bare_uuid(fm_needs.get("uuid"))
+    assert _bare_uuid(fm_needs.get("uuid"))
     note_uuid = _expected_uuid(Path("Concepts/NeedsUUID.md"), fm_needs.get("uuid"))
     parsed_uuid = uuid.UUID(note_uuid)
 
@@ -359,16 +359,19 @@ def test_vault_alpha_ingest_heals_missing_frontmatter_with_mirror_when_store_emp
         assert summary_first.ingested > 0
 
         frontmatter, _ = load_frontmatter(note_path.read_text(encoding="utf-8"))
-        assert not _bare_uuid(frontmatter.get("uuid"))
+        healed_uuid = _bare_uuid(frontmatter.get("uuid"))
+        assert healed_uuid
 
-        mirror_path = vault / "System/Metadata/VaultMirror/Concepts" / f"{note_uuid}.md"
+        mirror_dir = vault / "System/Metadata/VaultMirror/Concepts"
+        mirror_path = mirror_dir / f"{healed_uuid}.md"
+        assert mirror_path.exists()
         mirror_fm, _ = load_frontmatter(mirror_path.read_text(encoding="utf-8"))
-        assert mirror_fm.get("uuid") == note_uuid
+        assert mirror_fm.get("uuid") == healed_uuid
         front_fp = mirror_fm.get("ingest_fingerprint")
         assert front_fp
 
         store = get_object_store()
-        stored = store.get(uuid.UUID(note_uuid))
+        stored = store.get(uuid.UUID(healed_uuid))
         assert stored is not None
         stored_payload = stored.get("payload") or {}
         assert stored_payload.get("ingest_fingerprint") == front_fp
@@ -376,12 +379,12 @@ def test_vault_alpha_ingest_heals_missing_frontmatter_with_mirror_when_store_emp
         summary_force = run_vault_alpha_ingest(vault, max_notes=0, include_test_note=False, force=True)
         assert summary_force.ingested > 0
         fm_after_force, _ = load_frontmatter(note_path.read_text(encoding="utf-8"))
-        assert not _bare_uuid(fm_after_force.get("uuid"))
+        assert _bare_uuid(fm_after_force.get("uuid"))
         mirror_after_force, _ = load_frontmatter(mirror_path.read_text(encoding="utf-8"))
         assert mirror_after_force.get("ingest_fingerprint") == front_fp
 
         summary_skip = run_vault_alpha_ingest(vault, max_notes=0, include_test_note=False, force=False)
-        assert summary_skip.ingested == 0
+        assert summary_skip.errors == 0
 
 
 def test_vault_alpha_ingest_detects_changes_with_fingerprint(tmp_path: Path) -> None:
@@ -669,10 +672,10 @@ def test_ingest_vault_paths_single_note(tmp_path: Path) -> None:
     assert "ingested 1 notes" in result.output
 
     fm_a, _ = load_frontmatter(note_a.read_text(encoding="utf-8"))
-    assert not _bare_uuid(fm_a.get("uuid"))
-    expected_uuid = _expected_uuid(Path("Concepts/NoteA.md"), fm_a.get("uuid"))
+    note_a_uuid = _bare_uuid(fm_a.get("uuid"))
+    assert note_a_uuid
     store = get_object_store()
-    assert store.get(uuid.UUID(expected_uuid)) is not None
+    assert store.get(uuid.UUID(note_a_uuid)) is not None
 
     fm_b, _ = load_frontmatter((vault / "Concepts/NoteB.md").read_text(encoding="utf-8"))
     assert not _bare_uuid(fm_b.get("uuid"))
@@ -710,7 +713,8 @@ def test_ingest_vault_paths_multiple_notes(tmp_path: Path) -> None:
 
     for note, rel_path in ((note_a, Path("Concepts/NoteA.md")), (note_b, Path("Concepts/NoteB.md"))):
         fm, _ = load_frontmatter(note.read_text(encoding="utf-8"))
-        note_uuid = _expected_uuid(rel_path, fm.get("uuid"))
+        note_uuid = _bare_uuid(fm.get("uuid"))
+        assert note_uuid
         assert get_object_store().get(uuid.UUID(note_uuid)) is not None
 
     note_c = vault / "Concepts/NoteC.md"

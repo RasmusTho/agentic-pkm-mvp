@@ -34,7 +34,7 @@ API and worker share the same Python image built from the repo.
   - Containers: `LLM_PROVIDER=mock` for deterministic startup.
   - Host CLI (e.g. alpha ingest): typically `LLM_PROVIDER=ollama`, `OLLAMA_MODEL=llama3.1:8b`, `OLLAMA_EMBED_MODEL=nomic-embed-text:latest`.
 - Extensions: `pgcrypto` and `vector` ensured by startup scripts.
-- Outbox: Backed by the `outbox` table in Postgres; worker polls it continuously.
+- Outbox: Backed by the `outbox` table in Postgres; worker polls it continuously. JSONL (`INDEX_OUTBOX_PATH`) remains audit-only.
 
 ## Startup Flow
 1. Ensure Colima/Docker is running.
@@ -57,7 +57,7 @@ API and worker share the same Python image built from the repo.
 
 ## Relation to Alpha Vault & Ingest
 - Ingest/ASK flows talk to the same Postgres DSN used by compose (`127.0.0.1:15432`).
-- Alpha ingest from the host typically runs with Ollama embeddings and `STORE_BACKEND=pg`, emitting outbox events consumed by the worker.
+- Alpha ingest from the host typically runs with Ollama embeddings and `STORE_BACKEND=pg`, emitting DB outbox events consumed by the worker.
 
 ## Recovery: Re-index from Alpha vault
 Use this when `/api/status` reports `vault` object_count = 0 and `vault-alpha-ingest` reports `ingested 0 notes` even though Concepts/Test contain content or mirrors.
@@ -81,4 +81,4 @@ python -m app.cli vault-alpha-ingest \
     --include-test-note \
     --force
 ```
-Ensure `docker compose up -d` (or `scripts/dev_bootstrap.sh`) is running so the worker consumes new outbox events and re-indexes the vault.
+`INDEX_OUTBOX_PATH` is used for the JSONL audit log only; the worker consumes DB outbox rows. Ensure `docker compose up -d` (or `scripts/dev_bootstrap.sh`) is running so the worker processes new outbox events and re-indexes the vault.

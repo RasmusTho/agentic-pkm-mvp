@@ -86,9 +86,12 @@ def test_paths_defaults_without_settings(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("VAULT_RUNTIME_DIR_REL", raising=False)
     monkeypatch.delenv("VAULT_SYSTEM_DIR_REL", raising=False)
 
-    assert get_vault_inbox_dir_rel(tmp_path) == "Inbox"
-    assert get_vault_runtime_dir_rel(tmp_path) == "System/Runtime"
-    assert get_vault_system_dir_rel(tmp_path) == "System"
+    with pytest.raises(FileNotFoundError):
+        get_vault_inbox_dir_rel(tmp_path)
+    with pytest.raises(FileNotFoundError):
+        get_vault_runtime_dir_rel(tmp_path)
+    with pytest.raises(FileNotFoundError):
+        get_vault_system_dir_rel(tmp_path)
 
 
 def test_paths_use_settings_when_present(monkeypatch, tmp_path: Path) -> None:

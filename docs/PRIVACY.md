@@ -16,7 +16,7 @@ The pipeline processes personal material (notes, audio), so logs and storage mus
 ## PII redaction
 - Before sharing logs: run `jq 'del(.extra)'` or anonymize `trace_id`.
 - Agent answers should keep `sources` limited to references (`doc_id`, `source_ref`), not verbatim text.
-- Transcribe output (`payload.segments`) resides in `INDEX_OUTBOX_PATH` (audit log). Move the file to encrypted storage if it contains sensitive material.
+- Transcribe output (`payload.segments`) resides in the JSONL audit log at `INDEX_OUTBOX_PATH`. Move the file to encrypted storage if it contains sensitive material.
 
 ## Retention
 - `tmp/index-outbox.jsonl` is a working file. Rotate per `docs/OPERATIONS.md` and delete copies older than 30 days unless policy states otherwise.

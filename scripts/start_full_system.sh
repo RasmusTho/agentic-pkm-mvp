@@ -15,6 +15,14 @@ load_dotenv() {
 
 load_dotenv
 
+source "scripts/lib/start_full_system_env.sh"
+apply_start_full_system_defaults
+
+default_db_url="postgresql+psycopg://app:app@db:5432/app"
+DATABASE_URL="${DATABASE_URL:-$default_db_url}"
+DB_DSN="${DB_DSN:-$DATABASE_URL}"
+export DATABASE_URL DB_DSN
+
 unset INDEX_REBUILD_SUMMARY INDEX_REBUILD_FAILURES_PATH
 
 BOOTSTRAP_STATE="${BOOTSTRAP_STATE:-pending}"
@@ -225,13 +233,60 @@ require_vars() {
   done
 }
 
+require_db_outbox_env() {
+  if [ -z "${DATABASE_URL:-}" ] && [ -z "${DB_DSN:-}" ]; then
+    fail_preflight "runtime mode requires DATABASE_URL or DB_DSN for db outbox"
+  fi
+}
+
 preflight_runtime() {
-  require_vars LLM_PROVIDER OPENAI_BASE_URL LLM_MODEL
+  require_vars LLM_PROVIDER LLM_MODEL
   if [ "${LLM_PROVIDER_ENFORCE:-}" != "1" ]; then
     fail_preflight "runtime mode requires LLM_PROVIDER_ENFORCE=1"
   fi
+  llm_validation_json=$(python - <<'PYLLM'
+import json
+import os
+from app.runtime.startup_env import validate_llm_env
+
+result = validate_llm_env(os.environ)
+print(json.dumps(result, ensure_ascii=False))
+PYLLM
+)
+  export LLM_ENV_VALIDATION="$llm_validation_json"
+  llm_ok=$(python - <<'PYLLM'
+import json
+import os
+
+payload = json.loads(os.environ.get("LLM_ENV_VALIDATION", "{}"))
+print("1" if payload.get("ok") else "0")
+PYLLM
+)
+  if [ "$llm_ok" != "1" ]; then
+    llm_missing_msg=$(python - <<'PYLLM'
+import json
+import os
+
+payload = json.loads(os.environ.get("LLM_ENV_VALIDATION", "{}"))
+missing_any = payload.get("missing_any_of") or []
+missing_all = payload.get("missing_all_of") or []
+parts = []
+if missing_all:
+    parts.append("missing required vars: " + ", ".join(missing_all))
+if missing_any:
+    groups = ["/".join(group) for group in missing_any]
+    parts.append("missing any-of: " + "; ".join(groups))
+print("; ".join(parts) if parts else "missing LLM env requirements")
+PYLLM
+)
+    fail_preflight "runtime mode LLM env invalid: $llm_missing_msg"
+  fi
+  if [ "${START_WATCHERS:-0}" -eq 1 ] || [ "${START_WORKER:-0}" -eq 1 ]; then
+    require_db_outbox_env
+  fi
   export LLM_PROVIDER_ENFORCE=1
 }
+
 
 preflight_infra() {
   if [ "${LLM_PROVIDER_ENFORCE:-}" != "0" ]; then
@@ -320,8 +375,22 @@ start_startup_watchdog() {
 }
 
 
-START_WATCHERS="${START_WATCHERS:-0}"
-START_WORKER="${START_WORKER:-0}"
+START_WATCHERS="${START_WATCHERS:-}"
+START_WORKER="${START_WORKER:-}"
+if [ -z "${START_WATCHERS:-}" ]; then
+  if [ "$START_MODE" = "runtime" ]; then
+    START_WATCHERS=1
+  else
+    START_WATCHERS=0
+  fi
+fi
+if [ -z "${START_WORKER:-}" ]; then
+  if [ "$START_MODE" = "runtime" ]; then
+    START_WORKER=1
+  else
+    START_WORKER=0
+  fi
+fi
 START_FLIGHT_RECORDER="${START_FLIGHT_RECORDER:-1}"
 FLIGHT_RECORDER_INTERVAL="${FLIGHT_RECORDER_INTERVAL:-5}"
 FLIGHT_RECORDER_DURATION="${FLIGHT_RECORDER_DURATION:-0}"
@@ -415,6 +484,21 @@ export VAULT_ROOT="$vault_host_path"
 runtime_env_path="${RUNTIME_ENV_PATH:-tmp/runtime.env}"
 RUNTIME_ENV_PATH="$runtime_env_path"
 bash scripts/export_runtime_env.sh
+scope_glob_raw="${WATCHER_SCOPE_GLOB:-}"
+scope_glob_raw="${scope_glob_raw#"${scope_glob_raw%%[![:space:]]*}"}"
+scope_glob_raw="${scope_glob_raw%"${scope_glob_raw##*[![:space:]]}"}"
+if [ -z "$scope_glob_raw" ] && grep -qE "^WATCHER_SCOPE_GLOB=" "$runtime_env_path" 2>/dev/null; then
+  tmpfile="$(mktemp)"
+  grep -vE "^WATCHER_SCOPE_GLOB=" "$runtime_env_path" > "$tmpfile"
+  mv "$tmpfile" "$runtime_env_path"
+  echo "NOTE: ignoring WATCHER_SCOPE_GLOB from runtime env file (not explicitly set by operator)"
+fi
+if [ -n "$scope_glob_raw" ]; then
+  echo "Watcher scope_glob: from env (WATCHER_SCOPE_GLOB set)"
+else
+  echo "Watcher scope_glob: computed at runtime from vault layout inbox"
+fi
+unset scope_glob_raw
 if ! grep -qE '^OLLAMA_URL=' "$runtime_env_path" 2>/dev/null; then
   printf 'OLLAMA_URL=http://ollama:11434\n' >> "$runtime_env_path"
 fi

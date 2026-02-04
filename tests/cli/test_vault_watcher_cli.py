@@ -177,10 +177,11 @@ mappings:
 
     assert result.exit_code == 0, result.output
     events = [e for e in _read_events(outbox_path) if e]
-    assert "panel.intent.created" not in events
-    assert "panel.intent.executed" not in events
+    assert "panel.intent.created" in events
+    assert "panel.intent.executed" in events
     assert "Watcher summary:" in result.output
-    assert "panel_runs=0" in result.output
+    assert "panel_runs=1" in result.output
+    assert "skipped_policy=0" in result.output
 
 
 def test_vault_watcher_cli_bad_root_exits_nonzero(tmp_path: Path) -> None:

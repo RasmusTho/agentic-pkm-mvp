@@ -16,14 +16,34 @@ mkdir -p "$runtime_env_dir"
 local_uid="${LOCAL_UID:-$(id -u)}"
 local_gid="${LOCAL_GID:-$(id -g)}"
 
+default_db_url="postgresql+psycopg://app:app@db:5432/app"
+DATABASE_URL="${DATABASE_URL:-$default_db_url}"
+DB_DSN="${DB_DSN:-$DATABASE_URL}"
+export DATABASE_URL DB_DSN
+
 cat > "$runtime_env_path" <<ENV
 VAULT_ROOT=$VAULT_ROOT
 LOCAL_UID=$local_uid
 LOCAL_GID=$local_gid
+DATABASE_URL=$DATABASE_URL
+DB_DSN=$DB_DSN
 ENV
 
 if [ -n "${LLM_PROVIDER:-}" ]; then
   printf "%s\n" "LLM_PROVIDER=$LLM_PROVIDER" >> "$runtime_env_path"
+fi
+
+if [ -n "${WATCHER_AUTO_EXEC+x}" ]; then
+  printf "%s\n" "WATCHER_AUTO_EXEC=${WATCHER_AUTO_EXEC}" >> "$runtime_env_path"
+fi
+
+# Only include WATCHER_SCOPE_GLOB if explicitly set by the operator.
+# If unset or blank, the watcher computes a vault-layout-derived default at runtime.
+scope_glob_raw="${WATCHER_SCOPE_GLOB:-}"
+scope_glob_raw="${scope_glob_raw#"${scope_glob_raw%%[![:space:]]*}"}"
+scope_glob_raw="${scope_glob_raw%"${scope_glob_raw##*[![:space:]]}"}"
+if [ -n "$scope_glob_raw" ]; then
+  printf "%s\n" "WATCHER_SCOPE_GLOB=$scope_glob_raw" >> "$runtime_env_path"
 fi
 
 if [ "${LLM_PROVIDER:-}" = "ollama" ]; then
