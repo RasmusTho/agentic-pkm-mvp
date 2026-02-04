@@ -37,6 +37,15 @@ if [ -n "${WATCHER_AUTO_EXEC+x}" ]; then
   printf "%s\n" "WATCHER_AUTO_EXEC=${WATCHER_AUTO_EXEC}" >> "$runtime_env_path"
 fi
 
+# Only include WATCHER_SCOPE_GLOB if explicitly set by the operator.
+# If unset or blank, the watcher computes a vault-layout-derived default at runtime.
+scope_glob_raw="${WATCHER_SCOPE_GLOB:-}"
+scope_glob_raw="${scope_glob_raw#"${scope_glob_raw%%[![:space:]]*}"}"
+scope_glob_raw="${scope_glob_raw%"${scope_glob_raw##*[![:space:]]}"}"
+if [ -n "$scope_glob_raw" ]; then
+  printf "%s\n" "WATCHER_SCOPE_GLOB=$scope_glob_raw" >> "$runtime_env_path"
+fi
+
 if [ "${LLM_PROVIDER:-}" = "ollama" ]; then
   python - <<'PY' >> "$runtime_env_path"
 from __future__ import annotations

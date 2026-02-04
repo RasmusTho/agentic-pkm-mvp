@@ -484,6 +484,21 @@ export VAULT_ROOT="$vault_host_path"
 runtime_env_path="${RUNTIME_ENV_PATH:-tmp/runtime.env}"
 RUNTIME_ENV_PATH="$runtime_env_path"
 bash scripts/export_runtime_env.sh
+scope_glob_raw="${WATCHER_SCOPE_GLOB:-}"
+scope_glob_raw="${scope_glob_raw#"${scope_glob_raw%%[![:space:]]*}"}"
+scope_glob_raw="${scope_glob_raw%"${scope_glob_raw##*[![:space:]]}"}"
+if [ -z "$scope_glob_raw" ] && grep -qE "^WATCHER_SCOPE_GLOB=" "$runtime_env_path" 2>/dev/null; then
+  tmpfile="$(mktemp)"
+  grep -vE "^WATCHER_SCOPE_GLOB=" "$runtime_env_path" > "$tmpfile"
+  mv "$tmpfile" "$runtime_env_path"
+  echo "NOTE: ignoring WATCHER_SCOPE_GLOB from runtime env file (not explicitly set by operator)"
+fi
+if [ -n "$scope_glob_raw" ]; then
+  echo "Watcher scope_glob: from env (WATCHER_SCOPE_GLOB set)"
+else
+  echo "Watcher scope_glob: computed at runtime from vault layout inbox"
+fi
+unset scope_glob_raw
 if ! grep -qE '^OLLAMA_URL=' "$runtime_env_path" 2>/dev/null; then
   printf 'OLLAMA_URL=http://ollama:11434\n' >> "$runtime_env_path"
 fi

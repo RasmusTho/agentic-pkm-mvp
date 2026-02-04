@@ -48,6 +48,31 @@ def _detect_inbox_dir(vault_root: Path) -> str:
     return layout.inbox_folder
 
 
+def _resolve_scope_glob(vault_root: Path) -> tuple[str, str, str]:
+    """Resolve watcher scope_glob with explicit provenance.
+
+    Returns: (scope_glob, scope_source, inbox_source)
+    - scope_source: env | vault_layout
+    - inbox_source: env | vault_layout
+    """
+
+    scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()
+    if scope_env:
+        return scope_env, "env", ""
+
+    inbox_env = (os.getenv("VAULT_INBOX_DIR_REL") or "").strip()
+    if inbox_env:
+        inbox = inbox_env
+        inbox_source = "env"
+    else:
+        if not vault_root.exists():
+            raise FileNotFoundError(f"Vault root not found: {vault_root}")
+        inbox = load_layout(vault_root).inbox_folder
+        inbox_source = "vault_layout"
+
+    return f"{inbox}/**", "vault_layout", inbox_source
+
+
 def _now_iso() -> str:
     return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
 
@@ -310,18 +335,6 @@ def _process_panel_note(
 
 
 
-def _default_scope_glob() -> str:
-    scope_env = os.getenv("WATCHER_SCOPE_GLOB")
-    if scope_env:
-        return scope_env
-    vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
-    if not vault_raw:
-        raise ValueError("WATCHER_VAULT_PATH is required to derive default watcher scope")
-    vault_path = Path(vault_raw).expanduser()
-    inbox = _detect_inbox_dir(vault_path)
-    return f"{inbox}/**"
-
-
 @dataclass
 class WatcherSpec:
     name: str
@@ -368,14 +381,20 @@ class RegistryConfig:
     @classmethod
     def from_env(cls, specs: list[WatcherSpec], config_path: Path) -> "RegistryConfig":
         enable = _as_bool(os.getenv("WATCHER_ENABLE", "1"))
-        scope_glob = os.getenv("WATCHER_SCOPE_GLOB", _default_scope_glob())
-        debounce_ms = _as_int(os.getenv("WATCHER_DEBOUNCE_MS"), fallback=1500)
-        rate_limit_per_min = _as_int(os.getenv("WATCHER_RATE_LIMIT_PER_MIN"), fallback=30)
-        outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH", get_index_outbox_path()))
         vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
         if enable and not vault_raw:
             raise ValueError("WATCHER_VAULT_PATH is required when WATCHER_ENABLE=1")
         vault_path = Path(vault_raw or ".").expanduser()
+        scope_glob, scope_source, inbox_source = _resolve_scope_glob(vault_path)
+        logger.info(
+            "watcher scope resolved scope_glob=%s provenance=%s inbox_source=%s",
+            scope_glob,
+            scope_source,
+            inbox_source,
+        )
+        debounce_ms = _as_int(os.getenv("WATCHER_DEBOUNCE_MS"), fallback=1500)
+        rate_limit_per_min = _as_int(os.getenv("WATCHER_RATE_LIMIT_PER_MIN"), fallback=30)
+        outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH", get_index_outbox_path()))
         state_dir = Path(os.getenv("WATCHER_STATE_DIR", "tmp")).expanduser()
         heartbeat_path = Path(os.getenv("WATCHER_HEARTBEAT_PATH", resolve_heartbeat_path()))
         summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), fallback=60)
