@@ -3,7 +3,7 @@ services:
     build: .
     image: workspace-app
     working_dir: /app
-    command: ["python", "-m", "app.cli", "vault-watcher-daemon", "--vault-root", "/app/vault", "--poll-seconds", "5", "--cooldown-seconds", "10", "--max-notes", "20"]
+    command: ["python", "-m", "app.cli", "watcher", "run"]
     volumes:
       - ./:/app
       - "${VAULT_ROOT:-./vault}:/app/vault"
@@ -12,7 +12,12 @@ services:
       STORE_BACKEND: memory
       LLM_PROVIDER: ${LLM_PROVIDER}
       LLM_PROVIDER_ENFORCE: "1"
+      WATCHER_ENABLE: "1"
+      WATCHER_AUTO_EXEC: "${WATCHER_AUTO_EXEC-1}"
+      WATCHER_VAULT_PATH: /app/vault
+      WATCHER_STATE_DIR: /state
       WATCHER_HEARTBEAT_PATH: /app/tmp/watcher_heartbeat.json
+      WATCHER_STOP_FILE: /app/tmp/WATCHER_STOP
       INDEX_OUTBOX_PATH: /app/tmp/index-outbox.jsonl
     restart: unless-stopped
 

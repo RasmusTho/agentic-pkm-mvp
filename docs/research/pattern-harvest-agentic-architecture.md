@@ -20,7 +20,7 @@ State: offline synthesis (system not online); repo-grounded analysis only.
 
 ### Configuration & Governance
 - Panel action catalog mappings defined in docs/settings/panel-actions.md (ids, intent_type, downstream_event, params). Evidence: docs/settings/panel-actions.md.
-- Watcher auto-run policy driven by frontmatter (`ai_panel_auto_run`/nested form). Evidence: docs/HUMAN-FLOWS.md §PanelAgent runtime + watcher integration (policy gating).
+- Watcher auto-run policy treats AI-fenced notes as candidates once `WATCHER_AUTO_EXEC=1` is armed; only `ai_panel_auto_run: never` / `ai_panel: { auto_run: never }` blocks the automation. Evidence: docs/HUMAN-FLOWS.md §PanelAgent runtime + watcher integration (policy gating).
 - CLI flags/environment documented for ingest/panel/watcher settings. Evidence: docs/CLI.md (command tables) and docs/OBSIDIANSYNC.md (watcher notes).
 - Panel action wiring now config-driven via YAML (`docs/settings/panel-action-wiring.yaml`), defaulting to promotion events; override with `PANEL_ACTION_WIRING_PATH`. Evidence: app/agents/panel_agent/wiring.py; docs/settings/panel-action-wiring.yaml.
 

@@ -6,13 +6,17 @@ State: SoT v4.10 Reality-MVP (current core).
 - Commit the bump with `chore(version): bump to X.Y.Z`, then create an annotated tag using `python scripts/tag_release.py [--dry-run|--push]` (tags default to `v<version>`).
 - Share noteworthy changes after tagging; the bump script already appends to the decision log.
 
+## Runtime prerequisites (registry watcher)
+- `DATABASE_URL` or `DB_DSN` is required in runtime; startup must fail fast if missing.
+- DB outbox is canonical in runtime; the worker consumes the DB outbox.
+- JSONL outbox (`INDEX_OUTBOX_PATH`) is audit/diagnostic only and must not be used as the worker queue.
+- Registry watcher is the single runtime watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`). Legacy snapshot watchers are dev-only.
+
 ## Runtime Compose Stack
-- `docker-compose.yaml` starts FastAPI (`api`), the background agent (`agent`), Postgres, and Redis for local development.
-- Ensure `.env` contains the desired secrets before running `docker compose up --build`.
-- Postgres data lives in the `postgres-data` volume; `docker compose down -v` wipes it.
-- The API container runs `scripts/start_api.sh`, which performs `alembic -c app/alembic.ini upgrade head` before launching `uvicorn`.
-- The agent container runs `python scripts/start_agent_service.py`; the script loads `.env`, skips Alembic when `alembic current` already reports `(head)`, and executes `python -u run_agent.py` in a 30 s restart loop.
-- Supervisor logs land in `/tmp/agent.log` (stdout/stderr) and agent output appends to `/tmp/agent_app.log`; secure volumes or log shipping if the container is recreated.
+- Canonical runtime compose stack: `db`, `api`, `watcher`, `worker`.
+- The watcher runs the registry watcher and emits DB outbox events for ingest/panel flows; JSONL outbox is audit only.
+- The worker consumes the DB outbox and performs ingest + promotion side effects.
+- Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.
 
 ## Storage Maintenance
 - The FastAPI service writes DuckDB artifacts to `storage/agent.duckdb` and provenance trails to `provenance.jsonl`.
@@ -30,7 +34,7 @@ State: SoT v4.10 Reality-MVP (current core).
 3. **Agent loop** – supervisor runs `python -u run_agent.py` and restarts it after 30 s whenever the exit code is non-zero.
 4. **Logs** – tail `/tmp/agent.log` for supervisor events and `/tmp/agent_app.log` for agent stdout/stderr. Rotate via logrotate or cron to prevent unbounded growth.
 5. **Stop signal** – SIGINT/SIGTERM sets an internal flag, waits for the active `run_agent.py` to finish, and stops further restarts. Sends SIGKILL after 10 s if shutdown stalls.
-6. **Alerting** – page when the same host logs `"Agent exited with code"` more than three times within ten minutes; indicates `run_agent.py` needs investigation or lacks input data.
+6. **Alerting** – page when the same host logs "Agent exited with code" more than three times within ten minutes; indicates `run_agent.py` needs investigation or lacks input data.
 
 ## Ingestion Review Runbook
 1. **Prepare payload** – gather metadata in a JSON-compatible dict plus raw text under `text`.
@@ -50,6 +54,12 @@ State: SoT v4.10 Reality-MVP (current core).
 - Metrics: enable `METRICS_ENABLED=1` to expose Prometheus metrics under `/metrics` using `prometheus-fastapi-instrumentator` (secure access appropriately).
 - Local Prometheus+Grafana recipe lives in `docs/OBSERVABILITY_STACK.md` (Docker Compose).
 
+## Runtime health: watcher → DB outbox → worker
+- Watcher heartbeat: `WATCHER_HEARTBEAT_PATH` (default `/app/tmp/watcher_heartbeat.json` in containers, `tmp/watcher_heartbeat.json` on host).
+- Worker heartbeat: `WORKER_HEARTBEAT_PATH` (default `/app/tmp/worker_heartbeat.json`).
+- DB outbox: check the `outbox` table for recent `ingest.vault.changed` and `panel.*` events; the worker should mark `delivered_at`.
+- JSONL audit: `INDEX_OUTBOX_PATH` should append lines, but it is not the worker queue.
+- Status: `python -m app.cli status` reports `worker_queue` vs `events_log` to distinguish DB vs JSONL.
 
 ## Startup telemetry (startup_status.json)
 - Location: `tmp/startup_status.json` (workspace root on the host).
@@ -72,12 +82,12 @@ State: SoT v4.10 Reality-MVP (current core).
 | yt-dlp 403/429 | Health passes but `transcribe` fails with `DownloadError` | Run `yt-dlp -v URL`, add cookies (`--cookies-from-browser`), or download via a piped host (see `docs/DEPENDENCIES.md`). |
 | Missing ffmpeg | Health `ffmpeg=false`, CLI raises `CalledProcessError` | Install the package, verify with `which ffmpeg`. |
 | Ollama offline | Health `ollama=false`, agent replies “Insufficient evidence” | Start `ollama serve`, `ollama pull <model>`, confirm via `curl $OLLAMA_URL/api/tags`. |
-| `INDEX_OUTBOX_PATH` write failure | Health `index_outbox=false`, CLI raises `ValueError: index-outbox entry missing ...` | Fix filesystem permissions or point env to a writable directory. |
+| `INDEX_OUTBOX_PATH` write failure | Health `events_log=false`, audit log not appended | Fix filesystem permissions or point env to a writable directory. |
 
 ## SLO / SLA
 | Level | Target | Measurement |
 | --- | --- | --- |
-| Ingestion latency | < 5 s from CLI start to JSONL entry | Compare CLI start with `transcribe` / `agent.answer` spans. |
+| Ingestion latency | < 5 s from CLI start to DB outbox entry | Compare CLI start with `transcribe` / `agent.answer` spans. |
 | Retrieval p95 | < 250 ms | `jq 'select(.node=="agent.answer") | .latency_ms'`. |
 | ASR wall time | < 30 s for a 5-minute clip | `transcribe` span. |
 | Health CLI | 100 % coverage before every release | Smoke step fails otherwise. |
@@ -86,14 +96,14 @@ State: SoT v4.10 Reality-MVP (current core).
 1. **Identify** – use `health` + `jq` to find the failing node.
 2. **Stabilize** – set `LLM_PROVIDER=mock` or `STORE_BACKEND=memory` to keep working while debugging.
 3. **Communicate** – add a short note to `docs/CHANGELOG.md` under “Unreleased incidents”.
-4. **Restore** – restart Ollama/ffmpeg/CLI depending on the root cause. Restore `tmp/index-outbox.jsonl` from backup if corrupt.
+4. **Restore** – restart Ollama/ffmpeg/CLI depending on the root cause. Restore `tmp/index-outbox.jsonl` from backup if corrupt (audit only).
 
-## Backup / restore for index-outbox
+## Backup / restore for index-outbox (audit log)
 - Default path is `tmp/index-outbox.jsonl`. Simple rotation:
   ```bash
   cp tmp/index-outbox.jsonl "tmp/index-outbox.$(date +%Y%m%d%H%M%S).jsonl"
   truncate -s 0 tmp/index-outbox.jsonl
   ```
 - In CI, archive the file as an artifact when needed.
-- Restore: copy the file back and rerun the indexer (future CLI) or inspect via `python -m json.tool`.
+- Restore: copy the file back and inspect via `python -m json.tool` (audit only; worker queue remains in DB).
 <!-- SECTION:OPS-RUNBOOKS:END -->

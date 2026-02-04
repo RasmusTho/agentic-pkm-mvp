@@ -3,6 +3,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import logging
 import os
 import time
 from collections.abc import Iterable, Mapping
@@ -14,6 +15,7 @@ from uuid import uuid4
 import yaml
 
 from app.agents.panel.agent import handle_note_update
+from app.agents.panel_agent.policy import watcher_panel_candidate
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_VAULT_CHANGED
@@ -21,7 +23,7 @@ from app.outbox.events import get_index_outbox_path
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import write_outbox_event
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
-from app.vault.layout import ensure_vault_layout
+from app.vault.layout import load_layout
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
 from app.watcher.state import WatcherState
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -33,14 +35,42 @@ MIN_TICK_SLEEP_SECONDS = 0.05
 
 _WRITE_GUARD = OptimisticWriteGuard()
 
+logger = logging.getLogger(__name__)
+
+
 def _detect_inbox_dir(vault_root: Path) -> str:
     env_value = os.getenv("VAULT_INBOX_DIR_REL")
     if env_value:
         return env_value
     if not vault_root.exists():
         raise FileNotFoundError(f"Vault root not found: {vault_root}")
-    layout = ensure_vault_layout(vault_root)
+    layout = load_layout(vault_root)
     return layout.inbox_folder
+
+
+def _resolve_scope_glob(vault_root: Path) -> tuple[str, str, str]:
+    """Resolve watcher scope_glob with explicit provenance.
+
+    Returns: (scope_glob, scope_source, inbox_source)
+    - scope_source: env | vault_layout
+    - inbox_source: env | vault_layout
+    """
+
+    scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()
+    if scope_env:
+        return scope_env, "env", ""
+
+    inbox_env = (os.getenv("VAULT_INBOX_DIR_REL") or "").strip()
+    if inbox_env:
+        inbox = inbox_env
+        inbox_source = "env"
+    else:
+        if not vault_root.exists():
+            raise FileNotFoundError(f"Vault root not found: {vault_root}")
+        inbox = load_layout(vault_root).inbox_folder
+        inbox_source = "vault_layout"
+
+    return f"{inbox}/**", "vault_layout", inbox_source
 
 
 def _now_iso() -> str:
@@ -85,9 +115,11 @@ def _scope_prefix(scope_glob: str) -> str:
     prefix = scope_glob[:limit].rstrip("/")
     return prefix
 
+
 def _inbox_prefix_from_layout(vault_root: Path) -> str:
-    layout = ensure_vault_layout(vault_root)
+    layout = load_layout(vault_root)
     return layout.inbox_folder
+
 
 def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
     prefix = _scope_prefix(scope_glob)
@@ -104,8 +136,10 @@ def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
         raise ValueError(f"Scan root {resolved_candidate} must live under vault root {resolved_vault}")
     return candidate
 
+
 def _now_iso_from_timestamp(value: float) -> str:
     return datetime.fromtimestamp(value, tz=UTC).isoformat().replace("+00:00", "Z")
+
 
 def _log_tick_diagnostics_registry(
     cfg: RegistryConfig,
@@ -124,6 +158,9 @@ def _log_tick_diagnostics_registry(
         "changed_files": summary.get("changed_in_tick", 0),
         "emitted_events": summary.get("emitted_in_tick", 0),
         "elapsed_ms": summary.get("tick_ms"),
+        "panel_candidates": summary.get("panel_candidates", 0),
+        "panel_skipped_policy": summary.get("panel_skipped_policy", 0),
+        "panel_skipped_auto_exec": summary.get("panel_skipped_auto_exec", 0),
         "bad_tick": summary.get("bad_tick", False),
         "bad_reason": summary.get("bad_tick_reason"),
         "chosen_sleep_seconds": summary.get("chosen_sleep_seconds"),
@@ -139,6 +176,7 @@ def _log_tick_diagnostics_registry(
     except Exception:
         return
 
+
 def _trip_stop_file(cfg: RegistryConfig, summary: dict[str, object]) -> None:
     msg = (
         "WATCHER_STOP_TRIPPED: "
@@ -152,6 +190,7 @@ def _trip_stop_file(cfg: RegistryConfig, summary: dict[str, object]) -> None:
         cfg.stop_file.parent.mkdir(parents=True, exist_ok=True)
         cfg.stop_file.write_text(msg + "\n", encoding="utf-8")
     summary["stop_reason"] = msg
+
 
 def _apply_guardrails_registry(cfg: RegistryConfig, state: WatcherState, summary: dict[str, object]) -> None:
     thresholds = {
@@ -191,6 +230,7 @@ def _apply_guardrails_registry(cfg: RegistryConfig, state: WatcherState, summary
         summary["bad_tick_reason"] = None
         state.dynamic_sleep_seconds = None
         summary["chosen_sleep_seconds"] = cfg.tick_sleep_seconds
+
 
 def _finalize_spec_tick(
     cfg: RegistryConfig,
@@ -279,24 +319,21 @@ def _process_panel_note(
     for event in result.events:
         try:
             write_outbox_event(event)
-        except Exception as exc:
+        except Exception:
             state.enqueue_failures_total += 1
-            print(f"WARN: failed to enqueue DB outbox event {event.event}: {exc}")
+            logger.exception(
+                "watcher db outbox enqueue failed topic=%s trace_id=%s note_path=%s relative_path=%s",
+                event.event,
+                getattr(event, "trace_id", ""),
+                str(note_path),
+                str(rel_path),
+            )
         try:
             _write_jsonl_event(event, outbox_path)
         except Exception as exc:
             print(f"WARN: failed to append JSONL outbox event {event.event}: {exc}")
 
 
-
-
-def _default_scope_glob() -> str:
-    scope_env = os.getenv("WATCHER_SCOPE_GLOB")
-    if scope_env:
-        return scope_env
-    vault_path = Path(os.getenv("WATCHER_VAULT_PATH", "vault")).expanduser()
-    inbox = _detect_inbox_dir(vault_path)
-    return f"{inbox}/**"
 
 @dataclass
 class WatcherSpec:
@@ -344,11 +381,20 @@ class RegistryConfig:
     @classmethod
     def from_env(cls, specs: list[WatcherSpec], config_path: Path) -> "RegistryConfig":
         enable = _as_bool(os.getenv("WATCHER_ENABLE", "1"))
-        scope_glob = os.getenv("WATCHER_SCOPE_GLOB", _default_scope_glob())
+        vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
+        if enable and not vault_raw:
+            raise ValueError("WATCHER_VAULT_PATH is required when WATCHER_ENABLE=1")
+        vault_path = Path(vault_raw or ".").expanduser()
+        scope_glob, scope_source, inbox_source = _resolve_scope_glob(vault_path)
+        logger.info(
+            "watcher scope resolved scope_glob=%s provenance=%s inbox_source=%s",
+            scope_glob,
+            scope_source,
+            inbox_source,
+        )
         debounce_ms = _as_int(os.getenv("WATCHER_DEBOUNCE_MS"), fallback=1500)
         rate_limit_per_min = _as_int(os.getenv("WATCHER_RATE_LIMIT_PER_MIN"), fallback=30)
         outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH", get_index_outbox_path()))
-        vault_path = Path(os.getenv("WATCHER_VAULT_PATH", "vault")).expanduser()
         state_dir = Path(os.getenv("WATCHER_STATE_DIR", "tmp")).expanduser()
         heartbeat_path = Path(os.getenv("WATCHER_HEARTBEAT_PATH", resolve_heartbeat_path()))
         summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), fallback=60)
@@ -417,6 +463,7 @@ def _expand_env_values(value: object) -> object:
     if isinstance(value, dict):
         return {key: _expand_env_values(val) for key, val in value.items()}
     return value
+
 
 def load_registry_config(config_path: Path) -> RegistryConfig:
     config_path = config_path.expanduser()
@@ -502,11 +549,79 @@ def _as_int(value: str | None, fallback: int) -> int:
     except Exception:
         return fallback
 
+
 def _as_float(value: str | None, *, fallback: float) -> float:
     try:
         return float(value) if value is not None else fallback
     except Exception:
         return fallback
+
+
+def _auto_exec_enabled() -> bool:
+    raw = os.getenv("WATCHER_AUTO_EXEC", "0")
+    return str(raw).strip().lower() in _TRUE_VALUES
+
+
+def _db_outbox_required() -> bool:
+    if _as_bool(os.getenv("WATCHER_REQUIRE_DB_OUTBOX", "0")):
+        return True
+    backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
+    return backend == "pg"
+
+
+def _has_db_outbox_env() -> bool:
+    return bool(os.getenv("DATABASE_URL") or os.getenv("DB_DSN"))
+
+
+def _panel_candidate_for_path(note_path: Path) -> tuple[bool, bool]:
+    try:
+        markdown = note_path.read_text(encoding="utf-8")
+    except Exception:
+        return False, False
+    try:
+        frontmatter, _ = load_frontmatter(markdown)
+    except Exception:
+        frontmatter = {}
+    if not isinstance(frontmatter, dict):
+        frontmatter = {}
+    return watcher_panel_candidate(frontmatter, markdown), True
+
+
+def _should_heal_inbox_uuid(cfg: RegistryConfig, rel_path: Path) -> bool:
+    inbox_rel = Path(_detect_inbox_dir(cfg.vault_path))
+    try:
+        rel_path.relative_to(inbox_rel)
+        return True
+    except Exception:
+        return False
+
+
+def _maybe_heal_ingest_uuid(
+    cfg: RegistryConfig,
+    state: WatcherState,
+    rel_path: Path,
+    mtime: float,
+    digest: str,
+) -> tuple[float, str]:
+    if not _should_heal_inbox_uuid(cfg, rel_path):
+        return mtime, digest
+    note_path = cfg.vault_path / rel_path
+    try:
+        ensure_note_uuid(note_path)
+    except Exception as exc:
+        state.errors += 1
+        print(f"WARN: failed to ensure uuid for {note_path}: {exc}")
+        return mtime, digest
+    new_mtime = mtime
+    try:
+        new_mtime = note_path.stat().st_mtime
+    except Exception:
+        new_mtime = mtime
+    hashed = _hash_file(note_path)
+    if hashed is None:
+        return new_mtime, digest
+    new_digest, _ = hashed
+    return new_mtime, new_digest
 
 
 def _emit_panel_events(
@@ -588,48 +703,32 @@ def _emit_watch_event(
         handle.write("\n")
 
     if spec.emit_event == INGEST_VAULT_CHANGED:
-        try:
-            from app.services.outbox import insert_object_and_outbox
+        require_db = _db_outbox_required()
+        if require_db and not _has_db_outbox_env():
+            raise RuntimeError("DATABASE_URL or DB_DSN required for watcher DB outbox")
+        if require_db or _has_db_outbox_env():
+            try:
+                from app.services.outbox import insert_object_and_outbox
 
-            insert_object_and_outbox(
-                payload,
-                spec.emit_event,
-                trace_id=trace_id,
-                source="watcher.registry",
-            )
-        except Exception as exc:
-            state.enqueue_failures_total += 1
-            print(f"WARN: watcher failed to enqueue DB outbox event: {exc}")
+                insert_object_and_outbox(
+                    payload,
+                    spec.emit_event,
+                    trace_id=trace_id,
+                    source="watcher.registry",
+                )
+            except Exception:
+                state.enqueue_failures_total += 1
+                if require_db:
+                    raise
+                logger.exception(
+                    "watcher db outbox enqueue failed topic=%s trace_id=%s note_path=%s relative_path=%s",
+                    spec.emit_event,
+                    trace_id,
+                    str(vault_root / rel_path),
+                    str(rel_path),
+                )
     return trace_id
 
-
-def _warn_once_per_minute(state: WatcherState, message: str, *, now: float) -> None:
-    if state.last_stop_warning is None or now - state.last_stop_warning >= 60:
-        print(message)
-        state.last_stop_warning = now
-
-
-def _summary_line(
-    name: str,
-    state: WatcherState,
-    *,
-    backoff_active: bool,
-    tick_sleep_seconds: float,
-) -> str:
-    parts = [
-        f"name={name}",
-        f"ticks={state.ticks_run}",
-        f"changed={state.changed_detected}",
-        f"emitted={state.intents_emitted}",
-        f"errors={state.errors}",
-        f"rate_limited={state.rate_limited}",
-        f"enqueue_failures={state.enqueue_failures_total}",
-        f"backoff={backoff_active}",
-        f"tick_sleep={tick_sleep_seconds}",
-    ]
-    if state.last_trace_id:
-        parts.append(f"trace_id={state.last_trace_id}")
-    return "watcher summary: " + " ".join(parts)
 
 
 def _run_spec_tick(
@@ -660,6 +759,9 @@ def _run_spec_tick(
         "hashed_files": 0,
         "bytes_read": 0,
         "scope_glob": spec.scope_glob,
+        "panel_candidates": 0,
+        "panel_skipped_policy": 0,
+        "panel_skipped_auto_exec": 0,
     }
 
     if not cfg.enable:
@@ -721,6 +823,25 @@ def _run_spec_tick(
             state.rate_limited += 1
             rate_limited_in_tick += 1
             continue
+        if spec.emit_event == "panel.scan.requested":
+            candidate, ok = _panel_candidate_for_path(cfg.vault_path / rel)
+            if not ok:
+                state.errors += 1
+                continue
+            if candidate:
+                summary["panel_candidates"] = int(summary.get("panel_candidates", 0)) + 1
+            else:
+                summary["panel_skipped_policy"] = int(summary.get("panel_skipped_policy", 0)) + 1
+                continue
+            if not _auto_exec_enabled():
+                summary["panel_skipped_auto_exec"] = int(summary.get("panel_skipped_auto_exec", 0)) + 1
+                continue
+        current_mtime = mtime
+        current_digest = digest or ""
+        if spec.emit_event == INGEST_VAULT_CHANGED:
+            current_mtime, current_digest = _maybe_heal_ingest_uuid(
+                cfg, state, rel, current_mtime, current_digest
+            )
         try:
             trace_id = _emit_watch_event(
                 spec=spec,
@@ -728,15 +849,15 @@ def _run_spec_tick(
                 outbox_path=cfg.outbox_path,
                 vault_root=cfg.vault_path,
                 rel_path=rel,
-                mtime=mtime,
-                content_hash=digest,
+                mtime=current_mtime,
+                content_hash=current_digest,
                 state=state,
             )
             state.last_trace_id = trace_id
             state.intents_emitted += 1
             emitted_in_tick += 1
             state.record_rate_event(now)
-            state.update_file_state(str(rel), mtime=mtime, content_hash=digest, emitted_at=now)
+            state.update_file_state(str(rel), mtime=current_mtime, content_hash=current_digest, emitted_at=now)
         except Exception:
             state.errors += 1
             state.backoff_until = now + spec.backoff_seconds
@@ -758,6 +879,7 @@ def _run_spec_tick(
     _apply_guardrails_registry(cfg, state, summary)
 
     return _finalize_spec_tick(cfg, state, summary, tick_start, scan_root, spec.name)
+
 
 def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
     cfg = load_registry_config(config_path)

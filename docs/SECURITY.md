@@ -11,7 +11,7 @@ Lightweight policy for local and CI runs.
 
 ## Least privilege
 - The Postgres account (`DATABASE_URL`) uses `app:app` with minimal privileges. In production create a dedicated role with only the required `INSERT/SELECT`.
-- CLI commands only write to `INDEX_OUTBOX_PATH`; run them under a user with limited rights to minimize blast radius.
+- CLI smoke commands append to the JSONL audit log (`INDEX_OUTBOX_PATH`). Runtime watcher/worker flows use the DB outbox; keep database permissions minimal and scoped to the outbox/index tables.
 
 ## Secrets in CI
 - GitHub Actions workflow does not require secrets today. If future jobs do, add them through `secrets.*` and never hardcode fallbacks.

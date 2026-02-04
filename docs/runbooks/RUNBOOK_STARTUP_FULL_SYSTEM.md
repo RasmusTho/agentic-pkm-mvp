@@ -10,6 +10,8 @@ make alpha-up
 ```
 2. The script:
    - `scripts/start_full_system.sh` runs `docker compose up -d db api worker watcher`
+   - fails fast if `DATABASE_URL`/`DB_DSN` is missing (DB outbox is required for runtime)
+   - requires `LLM_PROVIDER` + `LLM_MODEL`; mock requires no endpoint, Ollama accepts `OLLAMA_URL` or `OPENAI_BASE_URL`, other providers require `OPENAI_BASE_URL`
    - waits for `/api/status` then `/api/health` to report runtime `db`/`worker`/`watcher` as ok (timeout 60s)
    - optional checks like `ffmpeg` are ignored by default via `STARTUP_IGNORE_CHECKS=ffmpeg` (set to `""` for strict mode)
    - on failure, prints `docker compose ps`, tails api/worker/watcher logs, and dumps `/api/health`
@@ -18,6 +20,7 @@ make alpha-up
 - Services: `db`, `api`, `watcher`, `worker`.
 - The watcher writes audit JSONL events and enqueues DB outbox events (`ingest.vault.changed`, `promote.intent.created`).
 - The worker consumes the DB outbox to perform ingest and promotion side effects, emitting `promote.done` on success.
+- Inbox UUID healing is performed by the worker on `ingest.vault.changed` for notes under the inbox scope (a note should not remain without `uuid:` after a worker pass).
 - Status/health surfaces should be used for operator gating (`required_ok` is the primary signal).
 
 Deprecated:

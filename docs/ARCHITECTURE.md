@@ -1,5 +1,5 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency hardening).
-# Architecture — SoT v5.5 Reality-MVP baseline
+State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency hardening) with the forward line now entering v5.6 LangGraph/Reasoning rollouts.
+# Architecture — SoT v5.5 Reality-MVP baseline (forward line v5.6)
 
 Historic SoT snapshots and older plans live in `docs/archive/`; the 4.x ladder history is in `docs/history/SOT_4X_HISTORY.md`. Forward-looking plan lives in `docs/ROADMAP.md`.
 They are kept for reference but are not considered active truth for the current SoT v4.10 Reality-MVP.
@@ -41,7 +41,12 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 ## SoT lines
 - **SoT v4.10 Reality-MVP (baseline locked)** — single-user PKM with stable vault ingest, minimal external ingest, hybrid retrieval + ASK with sources/latency, observability/status surfaces (CLI/API/GUI), and orchestrator runtime V1. Operational acceptance: soak vault ingest and external newsletter/PDF samples. Collaboration/multi-user deferred.
 - **SoT v5.0 PanelAgent Runtime V1 (first v5.x baseline)** — sits on top of the locked v4.10 baseline; Panel runtime interprets `panel.intent.created`, fans promotion actions to `promote.intent.created`, emits `panel.intent.executed`/`panel.action.*`/`panel.log.created`, and writes AI panel logs (`panel_logs`) that connect the note UI to internal intents.
-- **SoT v5.x Agentic PKM (active forward line, currently through v5.5)** — Agentic flows (PanelAgent v5+), Satellite Sync (`docs/PROTOCOL_SATELLITE_SYNC.md`), and Yggdrasil modules (Munin/Brokkr/Tyr/Heimdall) that extend the v4.10 backbone; richer orchestration (LangGraph + MCP ToolProvider) and reasoning live here. The forward line now includes a watcher/agent infra track that builds on v5.0: v5.1 watcher-ready ingest/panel flows (including targeted ingest via `ingest-vault-paths` and multi-note panel CLI), v5.2 snapshot-based CLI polling watcher MVP (`vault-watcher-run` driving ingest + panel), v5.3 explicit policy for auto-panel via frontmatter gating watcher runs, v5.4 watcher hardening/ergonomics (dry-run, max-notes guard, structured summaries), and v5.5 planner pipeline + CLI-first orchestration.
+- **SoT v5.x Agentic PKM (active forward line, currently entering v5.6)** — Agentic flows (PanelAgent v5+), Satellite Sync (`docs/PROTOCOL_SATELLITE_SYNC.md`), and Yggdrasil modules (Munin/Brokkr/Tyr/Heimdall) that extend the v4.10 backbone; richer orchestration (LangGraph + MCP ToolProvider) and reasoning live here. The forward line includes a watcher/agent infra track that builds on v5.0: v5.1 watcher-ready ingest/panel flows (including targeted ingest via `ingest-vault-paths` and multi-note panel CLI), v5.2 legacy snapshot watcher CLI (dev-only), v5.3 explicit policy for auto-panel that treats AI-fenced notes as candidates once `WATCHER_AUTO_EXEC=1` is armed and only `ai_panel_auto_run: never` / `ai_panel.auto_run: never` opts out, v5.4 watcher hardening/ergonomics, and v5.5 planner pipeline + CLI-first orchestration. Runtime uses the registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`).
+
+### Runtime watcher choice
+- Registry watcher is the runtime default; start-system flows and Docker compose use `python -m app.cli watcher run` with `configs/watchers.yaml`.
+- Legacy snapshot watchers (`vault-watcher-run`, `vault-watcher-daemon`, runtime-loop) are dev-only and not used in runtime start-system flows.
+- DB outbox is canonical in runtime; JSONL outbox is audit/diagnostic only.
 
 ### Architecture Statement: Multi-agent outer, LangGraph inner
 - Outer architecture: many autonomous agents coordinate via events/A2A envelopes; the Orchestrator routes/executes plans but does not embed each agent’s internal reasoning or decision logic.
@@ -61,7 +66,7 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 ## Concurrency & Idempotency
 - DedupTaskQueue keeps watcher auto-run tasks keyed by note+hash, feeding the `skipped_dedup` telemetry and preventing duplicate panel executions.
 - Event idempotency plus an EventDedupStore in the promotion consumer ensure `promote.intent.created` replays are no-ops; consumers still emit diagnostics when skipping duplicates.
-- Optimistic write guard and `DEFAULT_WRITE_GUARD` combined with the policy-backed `ai_panel_auto_run` keep note updates deterministic and fail safe on version mismatches.
+- Optimistic write guard and `DEFAULT_WRITE_GUARD` combined with the per-note opt-out (`ai_panel_auto_run: never` / `ai_panel.auto_run: never`) keep note updates deterministic and fail safe on version mismatches.
 - See `docs/CONCURRENCY.md`, `docs/EVENTS.md`, and `app/promotion/consumer.py` for the enacted guardrails and testing strategy.
 
 ## Boundary Enforcement
@@ -108,8 +113,9 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 ## Reality-MVP Architecture Components
 1) **Vault ingestion** — CLI/agent path to ingest selected Obsidian folders, normalize into Core-6 envelopes, persist in ObjectStore, emit Outbox events, chunk/index into VectorIndex, and keep provenance intact.
    - Targeted ingest is available via `ingest-vault-paths` for specific markdown files (reuses the same pipeline; first v5.1 watcher-ready step and the entrypoint watchers will call).
-   - Panel/runtime watcher entrypoint: `panel run-many` runs the same PanelAgent parse/runtime for multiple notes (emit-only supported) and will be the panel-side hook for Vault Watcher batches; watcher auto-run is gated by frontmatter policy (`ai_panel_auto_run`).
-   - Vault Watcher CLI: `vault-watcher-run` (v5.2) performs snapshot-based change detection, calls `ingest-vault-paths` for changed notes, optionally runs `panel run-many`, then refreshes the snapshot for polling/scheduler use; v5.4 adds dry-run and max-notes guard plus structured summaries.
+   - Panel/runtime entrypoint: `panel run-many` runs the same PanelAgent parse/runtime for multiple notes (emit-only supported) and remains the manual CLI hook for multi-note runs. Watcher auto-run treats AI-fenced notes as candidates once `WATCHER_AUTO_EXEC=1` is armed and only `ai_panel_auto_run: never` (`ai_panel: { auto_run: never }`) blocks the run.
+   - Registry watcher: config-driven loop (`configs/watchers.yaml`, `python -m app.cli watcher run`) emits `panel.scan.requested` and `ingest.vault.changed`, writes heartbeat + tick logs, and enqueues DB outbox events. JSONL outbox is audit-only.
+   - Legacy snapshot watcher (`vault-watcher-run`) is dev-only and not used in runtime start-system flows.
 2) **External corpus ingest (minimal)** — a small drop folder/pipeline for real external documents ingested as `external_raw` objects, stored in ObjectStore and indexed without surfacing as vault notes (txt/md drop-folder CLI implemented; newsletters/PDFs can extend the same path).
 3) **ASK API** — FastAPI endpoint returning answer text plus sources `{uuid, title, origin (vault/external), zone overlay if known, path/source_ref}` and latency; uses hybrid retrieval over both planes with an in-process HybridStore warmed from `store_objects` on first use. Zone overlays are planned but not yet populated in responses.
 4) **Observability backend** — status service that aggregates per-store object counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency; exposed via CLI and interim GUI.
@@ -238,188 +244,25 @@ A2A runs as an internal message bus over the same Stores + Events + the PER loop
 
 ### Envelope Events
 - `agent.request.created` — emitted when an agent wants follow-up work from another agent; carries `request_id`, `trace_id`, desired capability, and payload summary.
-- `agent.response.created` — produced when the receiving agent completes the requested action and publishes outputs or state diffs in an append-only fashion.
-- `agent.error` — emitted when the receiving agent cannot complete the requested action; includes retry hints and failure metadata so the Orchestrator can branch deterministically.
-- `agent.critique.created` — optional critique or blocker event that lets downstream reviewers see peer feedback before a promotion decision.
-Envelopes reuse Core-6 metadata and append an `a2a.intent` field so determinism and replay remain intact.
+- `agent.response.created` — emitted when the responding agent finishes work; includes `request_id`, `trace_id`, and a summarized response payload.
+- `agent.error.created` — emitted when a follow-up request fails; includes error details, stack trace, and metadata for audit replay.
 
-### Pipeline Hooks
-Agents subscribe to A2A messages through the same PER scheduler: Plan inspects incoming envelopes (if enabled), Execute performs the requested action, and Reflect emits the response event plus standard audit spans. A2A never replaces Store interactions; it simply allows agents to chain themselves without introducing side channels. Hooks remain inert unless the flag is set, ensuring default CI paths stay unchanged.
-
-### Sample Chain
-Classifier can request deeper deliberation by emitting `agent.request.created(intent="reason")` for DeliberationAgent; once processed, DeliberationAgent answers via `agent.response.created` and can critique via `agent.critique.created`. PromotionAgent or Projector may then issue a follow-up request to Projector for packaging, giving a deterministic Classifier → DeliberationAgent → Projector chain that is fully audited yet optional, even though structured reasoning is a cross-cutting capability every agent uses.
-
-## A2A Message Flow
-The A2A protocol is intentionally narrow and mediated entirely by the Orchestrator. Envelopes remain internal:
-- `agent.request.created` describes the capability being requested, the payload summary, and the Core-6 identifier/trace.
-- `agent.response.created` captures deterministic outputs or state diffs in an append-only fashion.
-- `agent.error` communicates blocked work plus retry metadata so the Orchestrator can branch or halt safely.
-Agents never exchange envelopes peer-to-peer; the Orchestrator inspects the active plan, routes envelopes via `handle_agent_message()`, persists audit spans, and guarantees deterministic replays for CI. Flags keep orchestration inert until `A2A_ENABLE=1`, preserving the legacy ingest flow by default.
-
-## MCP Integration Layer — v4.9
+## MCP (Model Context Protocol) Surface (v4.9)
 The PKM runtime exposes itself as an MCP server so external tools can orchestrate ingest/search flows without bespoke adapters. MCP endpoints mirror the internal Store/Agent APIs (e.g., `pipe_note`, `search_notes`, `get_claims`, `promote_object`, `list_relations`) and sit behind the same auth + audit envelope as the CLI.
-
-### MCP Server Surface
 Running with `MCP_ENABLE=1` starts an MCP server process bound to the local runtime; tool metadata describes inputs/outputs using the canonical schema so editors like Obsidian or ChatGPT can call them directly. Deterministic mocks remain available for CI so MCP startup is a no-op unless explicitly toggled.
 
-### MCP Client Inside the Act Phase
-Agents gain an optional ToolProvider wrapper that can dispatch MCP tool calls from within the Act phase. Calls remain synchronous, respect retry budgets, and emit `mcp.tool.invoked` audit lines. When disabled, the ToolProvider reverts to a no-op stub, keeping the act phase identical to current behaviour.
-
-### Orchestrator-driven MCP Calls
-When plans contain MCP tool steps, the Orchestrator invokes those tools through the ToolProvider on behalf of the currently scheduled agent, captures results, and resumes the workflow. Supported actions include vault writes/file ops, search, ingestion/normalization helpers, analytics routines, or curated external API queries. These calls either replace or complement the historical CLI commands while sharing the same audit envelope. Every invocation is audited with the originating plan step and is fully mocked under CI so the Planner Agent can rely on tool access without sacrificing determinism.
-
-### Deterministic Tool Chains
-`ToolProvider` abstracts whether calls hit the local MCP server, a mock provider, or an injected client. CI defaults to the mock provider so planners and agents can validate tool choreography without sockets. The abstraction keeps MCP additive: enable it to let external editors drive ingestion, search, relation updates, or promotion checks; leave it off to continue CLI-only execution.
-
-### Compatibility Note
-Legacy CLI workflows (`python -m app.cli pipe ...`) remain supported until the LangGraph-based Orchestrator runtime becomes the default surface. Operators can keep `PLANNER_ENABLE`, `A2A_ENABLE`, and `MCP_ENABLE` unset to preserve historical behaviour, then progressively opt into Planner Agent + Orchestrator + MCP flows without breaking scripted ingestion.
-
-### ASK CLI flow
-The `python -m app.cli ask "..."` command emits an `ask.query.received` event, optionally lets FlowProfiles pick a pattern, and routes the resulting plan through the Orchestrator. The CLI injects tool settings so MCP vault writes stay mocked by default, but operators can opt in via `--enable-mcp-vault`/`MCP_VAULT_ENABLE` plus a `VAULT_ROOT`. After execution it prints the selected flow/pattern, the plan summary, and any resulting `mcp.vault.append_note` paths so teams can demo the full question -> plan -> agent/tool -> vault pipeline without bespoke glue.
-
-## LLM-Driven Planning Layer — v4.9
-Planning is embedded directly into the PER loop, turning “Plan → Act → Reflect” into a concretely orchestrated, LLM-generated step. When `PLANNER_ENABLE=1`, the planner executes before each agent cycle, producing a structured plan that lists which agent should run, which MCP tools to call, and whether any A2A requests must be issued.
-
-### Planner Inputs
-The planner consumes the current object context (Core-6 + latest payload), a RelationIndex snapshot, declared agent capabilities, and the backlog of recent A2A envelopes. These inputs are encoded as JSON per the existing Reasoning Provider schema to keep prompts deterministic. `PlannerInput` (defined in `app/planner/provider.py`) mirrors this bundle and is the canonical payload handed to any planner backend.
-
-### Plan Schema & Tool Descriptors
-`app/planner/schema.py` defines the persisted plan contract: `Plan` (with `PlanMetadata`), `PlanStep`, and `ToolDescriptor`. Steps carry `kind=agent_call|tool_call|decision|note`, optional `agent/intent`, MCP tool names (e.g., `mcp.vault.append_note`) plus structured `tool_args`, dependencies, and metadata so plans replay deterministically. MCP tool descriptors live under `app/planner/tools.py` as a static registry (`MCP_TOOL_DESCRIPTORS`) the Planner Agent references when suggesting tool steps; each descriptor ships with a JSON-schema-like shape, explicit `allowed_args`, and a deterministic `mock_result` so the executor can validate payloads without touching real MCP tools. Tests assert that plan steps referencing those names remain valid even before we wire actual MCP execution.
-
-### Planner Outputs & Execution
-Planner responses must validate against the Plan schema, so downstream executors see a uniform structure regardless of backend. Plans may include `tool_call` and `agent_call` steps so multi-agent workflows chain without bespoke glue, and they can reference MCP tools by name through the ToolProvider abstraction. If the planner is disabled, the classical round-robin PER scheduler runs unchanged. When `PLANNER_ENABLE=1`, `app.agents.pipeline.maybe_plan_for_object()` emits a plan plus `planner.plan.created`, and when `ORCHESTRATOR_ENABLE=1` the same pipeline calls `maybe_execute_plan()` so the Orchestrator replays the plan immediately after ingest (deterministically mocked in CI). The runtime can also be invoked directly via `orchestrate-external`, which builds and executes a plan using the same executor contract.
-
-### Deterministic Backends & Flags
-`app/planner/provider.py` exposes `MockPlanner` (deterministic fixtures for CI) and `LLMPlanner` (Ollama-backed when `PLANNER_PROVIDER=llm` and `LLM_PROVIDER!=mock`). The provider falls back to the mock backend and emits `planner.plan.fallback` when misconfigured or when LLM output fails validation. `PLANNER_ENABLE=0` keeps the planner inert; when enabled, planner calls are audited via `planner.plan.created` (intake) plus `planner.plan.error`/`planner.plan.fallback` when issues occur so reviewers can trace every orchestrated decision alongside MCP and A2A traces.
-
-## Planner Agent vs Orchestrator
-### Planner Agent (LLM-driven)
-An LLM-powered Planner Agent ingests the requested goal or intent, Core-6 metadata, the latest object text, a RelationIndex snapshot, recent reasoning outputs (`claims`, `evidence`, `inferences`), and the agent capability graph. It emits a structured plan object that enumerates execution steps, target agents, required A2A envelopes, any MCP tool invocations, dependencies, preconditions, and stop conditions. CI always runs the mock backend so the resulting plan remains deterministic, and the entire stage is gated behind `PLANNER_ENABLE`.
-
-### Orchestrator (deterministic executor)
-The Orchestrator is the deterministic execution layer (current PER-loop derivative with a LangGraph runtime on the horizon) that consumes the plan, schedules referenced agents, persists state transitions, and delivers A2A messages. It coordinates branching, retries, and structured state transitions while remaining backward compatible with the CLI `pipe` workflow until operators opt into the new runtime. Whenever the plan references MCP tools or additional agents, the Orchestrator sequences the calls, records audit spans, and guarantees replayability.
-
-### Orchestrator Runtime — Execution Model (v4.10A)
-AgentConfigs now guard agent_call steps: before invoking an agent, the orchestrator resolves its vault-defined AgentConfig and enforces enabled/flow/event boundaries. Misconfigured or disabled agents yield structured permission errors instead of crashes, keeping human-declared constraints in control while tool/decision steps remain unchanged.
-
-`app/orchestrator/runtime.py` hosts the Orchestrator class plus an executor. Plans are validated up front (unique IDs, dependency order, required agent/tool metadata). Each step emits `orchestrator.step.started|finished|error` with the plan/step identifiers so auditing can reconstruct the control flow. Execution defaults to deterministic MCP/A2A mocks, but now supports internal tools with side effects:
-- `agent_call` steps dispatch via `send_agent_request` (emitting `agent.request.created`) and immediately route through the default Agent handler, which responds with `agent.error.created` / `error_type=not_implemented`.
-- MCP tool calls validate descriptors/args, emitting `mcp.tool.call.started|finished` and returning `mock_result` unless explicitly enabled (vault append).
-- Internal tools include `internal.ingest_external` which runs the external drop-folder ingest pipeline and returns a summary; this powers the `orchestrate-external` CLI dual-run path alongside the direct `ingest-external` command.
-- Decision/note steps remain structured audit payloads without mutating stores.
-
-The current choreography is serialized and flag-gated (`PLANNER_ENABLE` + `ORCHESTRATOR_ENABLE`). Future LangGraph/parallel scheduling layers can reuse the same executor contract while preserving determinism.
-
-```
-Planner Agent
-      │
-      │ plan (Plan/PlanStep schema)
-      ▼
-Orchestrator.run_plan()
-      ├─ agent_call → send_agent_request() → Agent.handle_agent_request() → agent.error.created (default stub)
-      └─ tool_call  → MCP descriptor validation → mcp.tool.call.started/finished (mock_result, no side effects)
-```
-
-### Planner ↔ Reasoning Layer
-Planner prompts reuse Reasoning Layer payloads so the Planner Agent stays grounded in deterministic state. The Planner inspects `ReasoningInput` bundles plus Core-6 frontmatter and relation graphs before proposing any step, which makes downstream audits straightforward and keeps plan generation tightly coupled to earlier reasoning outputs.
-
-### Vault-first Flow & Agent Settings
-
-Flow profiles now live in the vault under `vault/_system/flows/*.md`. Each Markdown file exposes YAML frontmatter parsed by `app.settings.flow_profiles` into a `FlowProfile` that focuses on intent, suggested agent/tool patterns, planner mode hints, and available prompt templates:
-
-```yaml
----
-flow_id: ingest
-name: Ingest pipeline
-event_triggers:
-  - ingest.object.created
-intent: Turn new raw text into structured, searchable knowledge.
-suggested_patterns:
-  - name: standard_ingest
-    steps:
-      - agent:normalizer
-      - agent:classifier
-planner_mode:
-  strictness: advisory
-  max_steps: 8
-prompt_profiles:
-  - id: ingest-default
-    prompt_template_ref: prompts/planner/ingest-default.md
----
-```
-
-FlowProfiles express a human-defined strategy rather than a rigid plan: intent documents the goal, `suggested_patterns` lists example sequences the planner may follow, `planner_mode` sets advisory limits/strictness, and `prompt_profiles` enumerates the planner prompts available for that flow. Planner/Orchestrator remain unchanged in this PR; these profiles are read-only guidance until wired in.
-
-Agent definitions follow the same docs-as-code contract in `vault/_system/agents/*.md`, loaded via
-`app.settings.agents` into `AgentConfig` instances:
-
-```yaml
----
-agent_id: planner
-agent_type: planner
-flows:
-  - ingest
-  - promotion
-tools:
-  - summarize
-  - planner.scratchpad
-prompt_template_ref: planner.prompts.default
----
-```
-
-For this slice the Planner and Orchestrator keep their previous behaviour; the new loaders simply make
-the vault-backed configuration available for upcoming integrations.
-
-## AI panel: human-first note interaction
-Notes may optionally expose a lightweight AI panel so humans drive intent directly in Markdown without custom syntax. Panels are delimited by forgiving AI comment fences (`%% ...AI... %%` after trimming spaces), where the first fence opens a panel, the second closes it, the third opens the next, etc. Inside a panel the schema is:
-- **AI instruction** — free-text instructions that describe what the human wants from the system for this note.
-- **AI actions** — markdown checkbox actions (`- [ ] ...` / `- [x] ...`) that the human can tick to request a discrete move.
-- **AI log** — chronological bullet log of what the system already executed for the note.
-
-Example:
-```
-%% AI:Start %%
-## AI instruction
-...
-## AI actions
-...
-## AI log
-...
-%% AI:End %%
-```
-
-Fences are tolerant to label variations (any `%%` line containing `ai`); legacy notes that only use the headings without fences are still parsed as panels, but new panels should use fences. Panel content is not part of the knowledge base and must not be indexed or used for QA.
-
-`PanelState` (pydantic) normalises these sections so agents can diff old vs. new states deterministically. The `PanelAgent` parses prior/current note bodies, emits `PanelIntent` records for newly-checked actions or instruction edits, and proposes updated Markdown by removing one-shot actions and appending a simple log entry (e.g., `- Action: "..."`). The agent remains local/in-memory for now: it is not wired to Planner/Orchestrator yet, but its output objects are ready for the future event pipeline.
-
-Vault-first mappings under `vault/_system/panel-actions/*.md` (with docs fallback `docs/settings/panel-actions.md`) translate checkbox text into canonical event types. When PanelAgent detects a newly checked action it enriches the `PanelIntent` with that mapping and synthesizes structured `OutboxEvent` envelopes (see `app/events/schema.py` for the canonical `event/trace_id/source/timestamp/payload/meta` shape) so upcoming wiring can hand intents to Planner/Orchestrator deterministically.
-
-`handle_panel_update()` wraps this flow: it parses the panel, applies mappings, and when `PANEL_EVENTS_ENABLE=1` it dispatches each PanelAgent event through `handle_event()` so the existing Planner/Orchestrator pipeline runs (down to mock MCP tool calls in tests). With the flag disabled the integration stays dry-run and only returns rewritten markdown plus intent metadata, keeping panel edits local until the operator opts in.
-
-`python -m app.cli panel-update path/to/note.md --old-path path/to/old.md` exposes this in the CLI for manual runs: it reads the note, executes `handle_panel_update()`, writes back the AI actions/log updates, and reports how many panel events were created/dispatched (respecting `PANEL_EVENTS_ENABLE` and `EVENT_ORCHESTRATOR_ENABLE`).
-
+## Note Update Path (Panel Runtime + UUID integrity)
 `NoteUpdateService` builds on that by treating the note UUID as the durable identity: `process_note_update()` loads the note, checks an optional expected path (stale detection), hydrates prior snapshots from `tmp/note_update_snapshots`, and runs `handle_panel_update()` before writing the updated markdown + snapshot. The `note-update` CLI batches this over one or more files (`python -m app.cli note-update vault/Inbox --glob '*.md'`), emits per-note status, and summarizes processed/changed/dispatch counts. This is the same entrypoint future filesystem watchers will call when they notice edited notes, so behaviour stays deterministic whether triggered manually or automatically.
-
-### Panel update vs Note update — when to use which
 Two commands exist on purpose: `panel-update` runs the AI panel in isolation for a single note (instruction/actions/logg) without snapshots, stale detection, or watcher orchestration, while `note-update` runs the canonical UUID-first pipeline with snapshots, stale detection, and panel + event dispatch that note-scan and future watchers rely on. Use this quick guide to pick the right tool.
-
-**Use `panel-update` when…**
-- you want to test the AI panel behaviour directly,
-- you are debugging checkbox mapping, instruction parsing, or log formatting,
+- use `panel-update` when:
 - you only want to operate on a single file without invoking snapshots, stale detection, watcher logic, or UUID holistic update logic,
-- you want fast iteration on panel designs.
-
-**Use `note-update` when…**
-- you want the system to update the note "for real",
-- you want snapshot-aware, UUID-first safe writes with stale detection,
-- you want panel output + event dispatch + orchestrator plans,
+- you are developing panel actions and want a tight feedback loop.
+- use `note-update` when:
+- you need deterministic UUID-first behaviour consistent with watcher-triggered runs,
+- you want stale detection and snapshots with `tmp/note_update_snapshots`,
 - you want behaviour consistent with note-scan and future watchers.
 
-## Runtime & Infrastructure
-- Compose/ports/startup details live in docs/INFRASTRUCTURE.md.
-- The compose stack runs db (pgvector), api (FastAPI on 8000 mapped to 18000), and worker (outbox consumer) on Colima-backed Docker.
-
-## Health & heartbeats
+## Runtime Topology (Reality-MVP)
+- The compose stack runs db (pgvector), api (FastAPI on 8000 mapped to 18000), watcher (registry watcher), and worker (DB outbox consumer) on Colima-backed Docker.
 - `/api/health` now surfaces watcher heartbeats, worker heartbeats, and DB/LLM readiness checks so the Status service can report liveliness with deterministic probes.
-- The Outbox now publishes `index.object.embedded` and `index.embedding.failed` events; dashboards, gap tests, and fitness gates read those events to confirm the embedding pipeline is working end to end.
 - Operator scripts (`scripts/start_full_system.sh`, `scripts/gap_test_alpha.sh`) wrap the watcher→worker→index→/api/ask loop, log diagnostics, and guard against missing sources so the architecture is observable without manual digging.

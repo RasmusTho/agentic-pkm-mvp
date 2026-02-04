@@ -9,8 +9,6 @@ from typing import Any, Optional
 import psycopg
 from psycopg.rows import dict_row
 
-from app.db import conn_rw
-
 MemoryKey = tuple[str, str, str | None]
 MemoryEntry = tuple[datetime, dict[str, Any]]
 
@@ -19,7 +17,15 @@ MEMORY_ENABLED = os.getenv("MEMORY_ENABLED", "true").lower() not in ("0", "false
 
 
 def _dsn() -> str:
-    v = os.environ.get("DATABASE_URL") or "postgresql+psycopg://app:app@127.0.0.1:15432/app"
+    """Return a psycopg-compatible DSN if explicitly configured.
+
+    We intentionally avoid a local Postgres fallback: unit tests (and dev runs)
+    must not implicitly couple to a DB that happens to be running.
+    """
+
+    v = (os.environ.get("DATABASE_URL") or "").strip()
+    if not v:
+        return ""
     return v.replace("postgresql+psycopg://", "postgresql://")
 
 
@@ -28,10 +34,13 @@ def _enabled() -> bool:
 
 
 def _safe_connect(rowed: bool = False):
+    dsn = _dsn()
+    if not dsn:
+        return None
     try:
         if rowed:
-            return psycopg.connect(_dsn(), row_factory=dict_row)
-        return psycopg.connect(_dsn())
+            return psycopg.connect(dsn, row_factory=dict_row)
+        return psycopg.connect(dsn)
     except Exception:
         return None
 
@@ -44,8 +53,29 @@ def _memory_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _remember_in_memory(agent: str, kind: str, object_id: Optional[str], trace_id: str, data: dict) -> None:
+    payload = dict(data or {})
+    payload["trace_id"] = trace_id
+
+    key = _memory_key(agent, kind, object_id)
+    bucket = _IN_MEMORY_STORE.setdefault(key, [])
+    bucket.insert(0, (_memory_now(), payload))
+    _IN_MEMORY_STORE[key] = bucket[:200]
+
+
+def _recall_in_memory(agent: str, kind: str, object_id: Optional[str], limit: int) -> list[dict]:
+    key = _memory_key(agent, kind, object_id)
+    entries = _IN_MEMORY_STORE.get(key, [])
+    return [dict(entry[1]) for entry in entries[:limit]]
+
+
 def remember(agent: str, kind: str, object_id: Optional[str], trace_id: str, data: dict) -> None:
     if not _enabled():
+        return
+
+    conn = _safe_connect(rowed=False)
+    if conn is None:
+        _remember_in_memory(agent, kind, object_id, trace_id, data)
         return
 
     payload = dict(data or {})
@@ -54,14 +84,6 @@ def remember(agent: str, kind: str, object_id: Optional[str], trace_id: str, dat
     provenance: dict[str, Any] = {"agent": agent, "kind": kind}
     if object_id is not None:
         provenance["object_id"] = object_id
-
-    conn = _safe_connect(rowed=False)
-    if conn is None:
-        key = _memory_key(agent, kind, object_id)
-        bucket = _IN_MEMORY_STORE.setdefault(key, [])
-        bucket.insert(0, (_memory_now(), payload))
-        _IN_MEMORY_STORE[key] = bucket[:200]
-        return
 
     try:
         with conn:
@@ -79,6 +101,8 @@ def remember(agent: str, kind: str, object_id: Optional[str], trace_id: str, dat
                         json.dumps(provenance),
                     ),
                 )
+    except psycopg.errors.UndefinedTable:
+        _remember_in_memory(agent, kind, object_id, trace_id, data)
     finally:
         conn.close()
 
@@ -108,9 +132,7 @@ def recall(agent: str, kind: str, *, object_id: Optional[str] = None, limit: int
 
     conn = _safe_connect(rowed=True)
     if conn is None:
-        key = _memory_key(agent, kind, object_id)
-        entries = _IN_MEMORY_STORE.get(key, [])
-        return [dict(entry[1]) for entry in entries[: limit]]
+        return _recall_in_memory(agent, kind, object_id, limit)
 
     try:
         with conn:
@@ -118,6 +140,8 @@ def recall(agent: str, kind: str, *, object_id: Optional[str] = None, limit: int
                 cur.execute(sql, args)
                 rows = cur.fetchall()
                 return [r["payload"] for r in rows]
+    except psycopg.errors.UndefinedTable:
+        return _recall_in_memory(agent, kind, object_id, limit)
     finally:
         conn.close()
 
@@ -157,5 +181,7 @@ def decay(agent: str, kind: str, *, before_ts: Optional[datetime] = None) -> int
                     (agent, kind, before_ts),
                 )
                 return cur.rowcount or 0
+    except psycopg.errors.UndefinedTable:
+        return 0
     finally:
         conn.close()

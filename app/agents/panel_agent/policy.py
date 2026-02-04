@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 AutoRunMode = str  # "manual" | "watcher" | "never"
+
+_AI_PANEL_FENCE_RE = re.compile(r"%%[^%\n]*ai[^%\n]*%%", re.IGNORECASE)
 
 
 def _extract_mode(frontmatter: Mapping[str, Any]) -> str | None:
@@ -26,6 +29,23 @@ def get_auto_run_mode(frontmatter: Mapping[str, Any]) -> AutoRunMode:
     return "manual"
 
 
+def contains_ai_panel_fence(markdown: str | None) -> bool:
+    """Detects whether the markdown contains an AI fence that can trigger the watcher."""
+    if not markdown:
+        return False
+    return bool(_AI_PANEL_FENCE_RE.search(markdown))
+
+
+def watcher_panel_candidate(
+    frontmatter: Mapping[str, Any], markdown: str | None
+) -> bool:
+    """True when the watcher should consider this note for panel runtime."""
+    mode = _extract_mode(frontmatter)
+    if mode == "never":
+        return False
+    return contains_ai_panel_fence(markdown)
+
+
 def watcher_may_run_panel(frontmatter: Mapping[str, Any]) -> bool:
     """
     True when watcher-driven panel runtime is allowed for this note.
@@ -34,4 +54,9 @@ def watcher_may_run_panel(frontmatter: Mapping[str, Any]) -> bool:
     return get_auto_run_mode(frontmatter) == "watcher"
 
 
-__all__ = ["get_auto_run_mode", "watcher_may_run_panel"]
+__all__ = [
+    "get_auto_run_mode",
+    "watcher_may_run_panel",
+    "contains_ai_panel_fence",
+    "watcher_panel_candidate",
+]

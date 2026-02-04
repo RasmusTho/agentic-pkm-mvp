@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
-from app.vault.layout import DEFAULT_ROOT_FOLDERS, ensure_vault_layout, load_or_create_layout, normalize_md_filename
+from app.vault.layout import LAYOUT_NOTE_NAME, ensure_vault_layout, load_layout, normalize_md_filename
 
 
 def _load_frontmatter(path: Path) -> dict:
@@ -13,49 +14,140 @@ def _load_frontmatter(path: Path) -> dict:
     return yaml.safe_load(parts[1]) if len(parts) > 2 else {}
 
 
-def test_load_layout_defaults(tmp_path: Path) -> None:
-    vault_root = tmp_path / "vault"
-    vault_root.mkdir()
-    layout_dir = vault_root / "⚙️ System"
-    layout_dir.mkdir()
-    layout_path = layout_dir / "vault.layout.md"
-    layout_path.write_text(
-        """---\nversion: "1"\ninbox_folder: "📥 Inbox"\n---\n\nLayout note.\n""",
+def _write_layout_note(path: Path, *, system_folder: str, inbox_folder: str, desk_folder: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\n"
+        "version: '1'\n"
+        f"system_folder: '{system_folder}'\n"
+        f"inbox_folder: '{inbox_folder}'\n"
+        f"desk_folder: '{desk_folder}'\n"
+        "root_folders:\n"
+        f"  - '{system_folder}'\n"
+        f"  - '{inbox_folder}'\n"
+        f"  - '{desk_folder}'\n"
+        "---\n\nLayout note.\n",
         encoding="utf-8",
     )
 
-    layout = load_or_create_layout(vault_root)
 
-    assert layout.inbox_folder == "📥 Inbox"
-    assert layout.desk_folder == "🛠️ Workbench"
-    assert layout.system_folder == "⚙️ System"
-    assert layout.include_folders is None
-    assert layout.root_folders == DEFAULT_ROOT_FOLDERS
-    assert layout.note_path == layout_path
-
-
-def test_ensure_vault_layout_creates_note_and_folders(tmp_path: Path) -> None:
+def test_load_layout_reads_required_fields(tmp_path: Path) -> None:
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
 
+    system_folder = "⚙️ System"
+    inbox_folder = "📥 Inbox"
+    desk_folder = "🛠️ Workbench"
+
+    layout_path = vault_root / system_folder / LAYOUT_NOTE_NAME
+    _write_layout_note(
+        layout_path,
+        system_folder=system_folder,
+        inbox_folder=inbox_folder,
+        desk_folder=desk_folder,
+    )
+
+    layout = load_layout(vault_root)
+
+    assert layout.inbox_folder == inbox_folder
+    assert layout.desk_folder == desk_folder
+    assert layout.system_folder == system_folder
+    assert layout.root_folders == [system_folder, inbox_folder, desk_folder]
+    assert layout.note_path == layout_path
+
+
+def test_load_layout_disambiguates_multiple_by_system_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+
+    a = "A"
+    b = "B"
+
+    layout_a = vault_root / a / LAYOUT_NOTE_NAME
+    layout_b = vault_root / b / LAYOUT_NOTE_NAME
+
+    _write_layout_note(layout_a, system_folder=a, inbox_folder="Inbox-A", desk_folder="Desk-A")
+    _write_layout_note(layout_b, system_folder=b, inbox_folder="Inbox-B", desk_folder="Desk-B")
+
+    settings_path = vault_root / "_system" / "settings" / "system-settings.yaml"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        yaml.safe_dump({"paths": {"system_dir_rel": b}}, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("VAULT_SYSTEM_DIR_REL", raising=False)
+
+    layout = load_layout(vault_root)
+    assert layout.note_path == layout_b
+    assert layout.system_folder == b
+    assert layout.inbox_folder == "Inbox-B"
+
+
+def test_load_layout_ignores_invalid_frontmatter_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+
+    bad_dir = vault_root / "bad"
+    bad_dir.mkdir(parents=True)
+    bad_note = bad_dir / LAYOUT_NOTE_NAME
+    bad_note.write_text(
+        "---\n"
+        "system_folder: bad\n"
+        "inbox_folder: bad\n"
+        "desk_folder: bad\n"
+        "ignore_glob:\n"
+        "  - [\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    good_dir = vault_root / "good"
+    good_note = good_dir / LAYOUT_NOTE_NAME
+    _write_layout_note(good_note, system_folder="good", inbox_folder="Inbox", desk_folder="Desk")
+
+    monkeypatch.delenv("VAULT_SYSTEM_DIR_REL", raising=False)
+
+    layout = load_layout(vault_root)
+    assert layout.note_path == good_note
+    assert layout.system_folder == "good"
+
+
+def test_ensure_vault_layout_creates_note_and_folders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+
+    system_folder = "⚙️ System"
+    inbox_folder = "📥 Inbox"
+    desk_folder = "🛠️ Workbench"
+
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", system_folder)
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", inbox_folder)
+    monkeypatch.setenv("VAULT_DESK_DIR_REL", desk_folder)
+
     layout = ensure_vault_layout(vault_root)
 
-    assert (vault_root / "⚙️ System" / "vault.layout.md").exists()
+    assert layout.system_folder == system_folder
+    assert layout.inbox_folder == inbox_folder
+    assert layout.desk_folder == desk_folder
+
+    assert (vault_root / system_folder / LAYOUT_NOTE_NAME).exists()
     assert (vault_root / layout.inbox_folder).is_dir()
     assert (vault_root / layout.desk_folder).is_dir()
     assert (vault_root / layout.system_folder).is_dir()
 
-    for folder in DEFAULT_ROOT_FOLDERS:
-        assert (vault_root / folder).is_dir()
-
     layout_second = ensure_vault_layout(vault_root)
     assert layout_second == layout
 
-    frontmatter = _load_frontmatter(vault_root / "⚙️ System" / "vault.layout.md")
-    assert frontmatter.get("system_folder") == "⚙️ System"
-    assert frontmatter.get("inbox_folder") == "📥 Inbox"
-    assert frontmatter.get("desk_folder") == "🛠️ Workbench"
-    assert frontmatter.get("root_folders") == DEFAULT_ROOT_FOLDERS
+    frontmatter = _load_frontmatter(vault_root / system_folder / LAYOUT_NOTE_NAME)
+    assert frontmatter.get("system_folder") == system_folder
+    assert frontmatter.get("inbox_folder") == inbox_folder
+    assert frontmatter.get("desk_folder") == desk_folder
+    assert frontmatter.get("root_folders") == [system_folder, inbox_folder, desk_folder]
 
 
 def test_normalize_md_filename_does_not_double_extension() -> None:

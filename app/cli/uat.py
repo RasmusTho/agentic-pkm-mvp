@@ -127,8 +127,6 @@ def _assert_uat_expectations(summary: UATSummary) -> None:
         failures.append("Expected at least one promote.intent.created")
     if summary.promotion.get("applied", 0) < 1:
         failures.append("Expected at least one promotion to be applied by consumer")
-    if summary.watcher.get("panel_skipped_policy", 0) < 1:
-        failures.append("Expected at least one panel skip due to policy (manual/never)")
     if failures:
         raise UATAssertionError("; ".join(failures))
 

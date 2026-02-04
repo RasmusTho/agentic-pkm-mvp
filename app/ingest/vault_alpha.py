@@ -22,6 +22,7 @@ from app.obs.log import with_trace_id
 from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
 from app.services.note_log import note_log_path
+from app.services.note_uuid import ensure_note_uuid
 from app.store.object_store import DomainObject, ObjectStore
 from app.stores import get_object_store
 from app.vault.layout import ensure_vault_layout
@@ -715,10 +716,11 @@ def _ingest_candidates(
             if fm_error:
                 malformed.append(rel_display)
                 continue
+            frontmatter_uuid_raw = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
+            needs_uuid_write = not bool(frontmatter_uuid_raw)
             title = _frontmatter_title(frontmatter) or _derive_title(body, path)
             stripped_text = strip_ai_panels(body).strip()
             ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
-            frontmatter_uuid_raw = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
             frontmatter_uuid, frontmatter_invalid = _sanitize_uuid(frontmatter_uuid_raw)
             mirror_path, mirror_frontmatter, _ = _load_mirror_frontmatter(vault_root, rel_path)
             mirror_uuid_raw = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
@@ -734,6 +736,8 @@ def _ingest_candidates(
                 note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid, rel_path, invalid_frontmatter=True)
             else:
                 note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
+            if needs_uuid_write and note_uuid:
+                ensure_note_uuid(path, preferred_uuid=note_uuid)
             should_skip = False
             if note_uuid and not force and not cold_rebuild:
                 parsed_uuid = None

@@ -22,13 +22,13 @@ Critical uncovered paths (issue links):
 
 See: `pytest --cov=app --cov-report=html`
 
-## Evaluation Stack (Runtime Loop / Panel / Promotion)
-- **A. Contract tests** — assert watcher→panel→promotion event envelopes and payload invariants; run via `pytest -q tests/e2e/test_runtime_loop_vault_test.py -m "not pg"` (exact command may move to `tests/fitness`).
+## Evaluation Stack (Registry Watcher / Panel / Promotion)
+- **A. Contract tests** — assert watcher→panel→promotion event envelopes and payload invariants; run via `pytest -q tests/e2e/test_watcher_registry_e2e.py -m "not pg"` (exact command may move to `tests/fitness`).
 - **B. Golden vault** — seeded vault + snapshots under `docs/examples/vault_test_seed/`; deterministic diff harness to prove no unintended note mutations.
-- **C. Metamorphic runs** — vary `--interval`, `--dry-run`, `--max-notes`, and wiring/policy flags; expect identical receipts/intents where applicable.
-- **D. Cold rebuild** — start from empty Store + existing mirrors/snapshots; prove ingest + panel/promotion chain reconstructs counters/events without dupes.
-- **E. Fitness gates** — status/outbox counters checked post-run (watcher_runs, panel_runs, promote.intent.created/done) with idempotence (no duplicate intents on rerun) enforced in CI (`app/fitness/*`, `ops/quality/baselines.yaml`).
-- **F. Scripted UAT** — CLI harness for runtime-loop + promotion consumer + status assertions; runs on memory backend and real vaults with the golden seed pack.
+- **C. Metamorphic runs** — vary `WATCHER_AUTO_EXEC`, `WATCHER_SCOPE_GLOB`, `WATCHER_TICK_SLEEP_SECONDS`, and `--max-ticks`; expect identical receipts/intents where applicable.
+- **D. Cold rebuild** — start from empty Store + existing mirrors; prove ingest + panel/promotion chain reconstructs counters/events without dupes.
+- **E. Fitness gates** — status/outbox counters checked post-run (`panel_runs`, `promote.intent.created/done`) with idempotence (no duplicate intents on rerun) enforced in CI (`app/fitness/*`, `ops/quality/baselines.yaml`).
+- **F. Scripted UAT** — CLI harness for registry watcher + promotion consumer + status assertions; runs on memory backend and real vaults with the golden seed pack.
 
 ## Concurrency Tests (docs-only)
 These regression suites live in `docs/CONCURRENCY.md` and the new watcher/promotion/test libraries.
@@ -68,15 +68,14 @@ Example commands:
   - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
   - pytest -q tests/cli/test_panel_orchestrator_cli.py -m "not pg"
   - Planner pipeline remains opt-in (`PANEL_AGENT_PIPELINE=planner`); CLI execution is available via `panel-orchestrate-plan`.
-- Runtime Loop V1 (deterministic E2E, memory backend):
+- Registry watcher (deterministic E2E, memory backend):
   - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 INDEX_OUTBOX_PATH=$(mktemp)
-  - pytest -q tests/e2e/test_runtime_loop_vault_test.py -m "not pg"
-  - Contract: second tick with unchanged snapshot should report promotion applied=0 and errors=0 (outbox cursor prevents replays).
-- Optional manual run: `python -m app.cli runtime-loop --vault-root "<vault>" --interval 0` with the UAT seed pack.
+  - pytest -q tests/e2e/test_watcher_registry_e2e.py -m "not pg"
+- Optional manual run: `WATCHER_ENABLE=1 WATCHER_VAULT_PATH="<vault>" WATCHER_AUTO_EXEC=0 python -m app.cli watcher run --max-ticks 1`.
 - Watcher/Panel UAT CLI pack (deterministic, memory backend)
   - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 INDEX_OUTBOX_PATH=$(mktemp)
   - pytest -q tests/cli/test_uat_seed_cli.py tests/cli/test_uat_run_cli.py -m "not pg"
-  - Real vault: `python -m app.cli uat-seed-vault-test --vault-root "<vault>"` then `python -m app.cli uat-run-vault-test --vault-root "<vault>" --assert`.
+  - Real vault: `python -m app.cli uat-seed-vault-test --vault-root "<vault>"` then `WATCHER_ENABLE=1 WATCHER_VAULT_PATH="<vault>" WATCHER_SCOPE_GLOB="Test/**" WATCHER_AUTO_EXEC=1 python -m app.cli watcher run --max-ticks 1`.
 - Architecture guardrails
   - export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
   - pytest -q tests/architecture/test_outer_inner_boundaries.py -m "not pg"

@@ -8,9 +8,13 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 VAULT = ROOT / "vault"
 
-INBOX_DIR = os.getenv("VAULT_INBOX_DIR_REL", "Inbox")
-WORKBENCH_DIR = os.getenv("VAULT_WORKBENCH_DIR_REL", "Workbench")
+INBOX_DIR = (os.getenv("VAULT_INBOX_DIR_REL") or "").strip()
+if not INBOX_DIR:
+    raise SystemExit("Set VAULT_INBOX_DIR_REL to initialize a dev vault without hardcoded inbox defaults.")
 
+WORKBENCH_DIR = (os.getenv("VAULT_WORKBENCH_DIR_REL") or "").strip()
+if not WORKBENCH_DIR:
+    raise SystemExit("Set VAULT_WORKBENCH_DIR_REL to initialize a dev vault without hardcoded defaults.")
 STRUCTURE = [
     "vault/0_Atlas",
     "vault/1_Calendar/Daily",

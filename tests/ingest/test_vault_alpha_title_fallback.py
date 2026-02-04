@@ -10,6 +10,7 @@ from app.ingest.vault_alpha import run_vault_alpha_ingest
 from app.retrieval.hybrid import get_store
 from app.search import get_vector_index
 from app.stores import get_object_store, reset_store_backends
+from scripts.yaml_roundtrip import load_frontmatter
 
 
 def _write_layout(vault_root: Path) -> None:
@@ -19,10 +20,6 @@ def _write_layout(vault_root: Path) -> None:
         """---\ninclude_folders:\n  - "."\n---\n\nLayout note.\n""",
         encoding="utf-8",
     )
-
-
-def _expected_uuid(rel_path: Path) -> uuid.UUID:
-    return uuid.UUID(str(uuid.uuid5(vault_alpha._VAULT_NOTE_UUID_NAMESPACE, rel_path.as_posix())))
 
 
 def _clear_vector_index() -> None:
@@ -53,9 +50,18 @@ def test_vault_alpha_title_fallbacks_and_search_titles(tmp_path: Path, monkeypat
     assert summary.ingested >= 3
 
     store = get_object_store()
-    heading_payload = store.get(_expected_uuid(Path("Heading.md")))
-    line_payload = store.get(_expected_uuid(Path("LineOnly.md")))
-    filename_payload = store.get(_expected_uuid(Path("NoHeading.md")))
+
+    heading_fm, _ = load_frontmatter((vault_root / "Heading.md").read_text(encoding="utf-8"))
+    line_fm, _ = load_frontmatter((vault_root / "LineOnly.md").read_text(encoding="utf-8"))
+    filename_fm, _ = load_frontmatter((vault_root / "NoHeading.md").read_text(encoding="utf-8"))
+
+    heading_uuid = uuid.UUID(str(heading_fm.get("uuid") or ""))
+    line_uuid = uuid.UUID(str(line_fm.get("uuid") or ""))
+    filename_uuid = uuid.UUID(str(filename_fm.get("uuid") or ""))
+
+    heading_payload = store.get(heading_uuid)
+    line_payload = store.get(line_uuid)
+    filename_payload = store.get(filename_uuid)
 
     assert (heading_payload.get("payload") or {}).get("title") == "Heading Title"
     assert (line_payload.get("payload") or {}).get("title") == "First line title"

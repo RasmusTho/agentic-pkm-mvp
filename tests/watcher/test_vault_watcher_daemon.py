@@ -87,3 +87,37 @@ content
     assert summaries[0]["changed"] == 1
     assert summaries[1]["changed"] == 0
     assert sleeps == [7]
+
+
+def test_watcher_counts_panel_candidate_for_ai_fence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    reset_store_backends()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    vault = tmp_path / "Vault"
+    _write_note(
+        vault,
+        "Notes/Panel.md",
+        """---
+uuid: 00000000-0000-0000-0000-000000000000
+---
+%% AI:Start %%
+## AI-instruction
+- [ ] Run this action
+%% AI:End %%
+""",
+    )
+    snapshot = tmp_path / "state" / "panel-candidate.json"
+
+    summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=tmp_path / "outbox.jsonl",
+    )
+
+    assert summary["panel_candidates"] == 1
+    assert summary["panel_skipped_policy"] == 0
