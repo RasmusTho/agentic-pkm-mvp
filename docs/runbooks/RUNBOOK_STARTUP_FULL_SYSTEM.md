@@ -20,7 +20,7 @@ make alpha-up
 - Services: `db`, `api`, `watcher`, `worker`.
 - The watcher writes audit JSONL events and enqueues DB outbox events (`ingest.vault.changed`, `promote.intent.created`).
 - The worker consumes the DB outbox to perform ingest and promotion side effects, emitting `promote.done` on success.
-- Inbox UUID healing is performed by the worker on `ingest.vault.changed` for notes under the inbox scope (a note should not remain without `uuid:` after a worker pass).
+- Inbox UUID healing is performed by the worker on `ingest.vault.changed` for notes under the inbox folder (from `vault.layout.md` or `VAULT_INBOX_DIR_REL`) so notes do not linger without `uuid:` after a worker pass.
 - Status/health surfaces should be used for operator gating (`required_ok` is the primary signal).
 
 Deprecated:

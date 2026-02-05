@@ -16,6 +16,12 @@ State: SoT v5.5 Reality-MVP baseline locked (watcher/panel safety) with fitness 
 - `.github/workflows/ci.yml`, `.github/workflows/ci-smoke.yaml`, and `.github/workflows/ci-lite.yml` parse those summary lines and exit non-zero whenever `GATES.ok != true`, making them the enforced gate jobs for baseline stability.
 - `tests/ci/test_gates_enforcement.py` proves the parser raises when `CI SUMMARY GATES ok=false` so regressions fail fast.
 
+## Vaultwide panel gate
+- CI Smoke enforces `bash scripts/verify_vaultwide_panel.sh` using a temp vault mounted via `VAULT_ROOT=tmp/ci-vault` (no secrets).
+- Local equivalent:
+  - `VAULT_ROOT=tmp/ci-vault docker compose up -d --build db api watcher worker && bash scripts/verify_vaultwide_panel.sh`
+  - `docker compose down -v`
+
 ## Local lint/test
 ruff check app tests
 mypy app
@@ -40,7 +46,7 @@ Deterministic ASK slice with POLICY_ENFORCE=1, seeded corpus, ASK graph run, and
 ## Live watcher (local)
 Guardrailed continuous watcher for real vaults with kill switch, scope, and rate limiting:
 - Feature flags (defaults in parentheses):
-  - `WATCHER_ENABLE` (0), `WATCHER_VAULT_PATH` (required when enabled), `WATCHER_SCOPE_GLOB` (defaults to `<inbox>/**` where `<inbox>` is read from `vault.layout.md` or `VAULT_INBOX_DIR_REL`)
+  - `WATCHER_ENABLE` (0), `WATCHER_VAULT_PATH` (required when enabled), `WATCHER_SCOPE_GLOB` (defaults to `**/*.md`, vault-wide)
   - `WATCHER_DEBOUNCE_MS` (1500), `WATCHER_RATE_LIMIT_PER_MIN` (30), `WATCHER_BACKOFF_SECONDS` (10)
   - Kill switch: `tmp/WATCHER_STOP` (or override via `WATCHER_STOP_FILE`) pauses the loop with a once-per-minute warning.
 - Script: `VAULT=/path/to/vault scripts/run_live_watcher.sh` (sets POLICY_ENFORCE=1, WATCHER_ENABLE=1, and prints outbox/stopfile locations).

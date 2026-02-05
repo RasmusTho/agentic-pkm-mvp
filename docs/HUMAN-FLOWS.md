@@ -16,16 +16,15 @@ State: SoT v4.10 Reality-MVP (baseline locked) with v5.x forward line extending 
 - Keep frontmatter lean: `title`, `uuid`, optional `type/category/facets`.
 - Ingest via `vault-alpha-ingest` (or `ingest-vault-paths` for targeted notes).
 - UUID healing is automatic and logged; malformed frontmatter is skipped with a warning, not a crash.
-- Ingest writes objects to the Store, emits DB outbox events (`index.object.*`), and maintains VaultMirror copies under `System/Metadata/VaultMirror/...`.
+- Ingest writes objects to the Store, keeps derived indexes rebuildable, and maintains VaultMirror copies under `System/Metadata/VaultMirror/...`.
 - External ingest (drop folder) is opt-in; ingested objects carry `origin: external_raw` and surface in ASK/status alongside vault entries.
 
 ## 4. Human Flow: ASK (Reality-MVP)
 - `/api/ask` and `python -m app.cli ask` query the HybridStore (BM25 + embeddings) warmed from Store objects. Answers cite sources with origin/plane tags.
 - Default LLM provider is mock; set `LLM_PROVIDER` + credentials to enable LLM drafting/self-check. Errors surface in ASK status metrics.
 - Cite-before-trust: answers show source IDs/paths; rerank hooks/critique are optional overlays.
-- `ASK_DOMAIN_SCOPE` (when set) limits retrieval to a single domain; default behavior excludes cross-domain results.
-- `bridge_domains` explicitly allows inclusion across domains when needed (no implicit bridges).
-- Contract tests enforce the scope boundary to prevent regressions.
+- ASK is currently kept primarily for dev/operator purposes and is not yet fully speced as the long-term UX.
+- Forward line intent: ASK becomes a RAG agent that other agents call (tool/agent interface), not only a human-facing endpoint.
 
 ## 5. Design Principles (Human-first constraints)
 - The human is the ultimate authority for classification and meaning; the system proposes but never silently overrides.
@@ -66,9 +65,10 @@ State: v5.x forward line. Runtime automation uses the registry watcher (`configs
 - I can see what ran: ingest and panel runs emit the usual events, AI-log entries, and status metrics; nothing rewrites my note body.
 
 ### Mental model (system, high level)
-- Registry watcher scans the inbox scope derived from `WATCHER_VAULT_PATH` + `VAULT_INBOX_DIR_REL` (or `WATCHER_SCOPE_GLOB` override), emits `ingest.vault.changed` and `panel.scan.requested`, and writes heartbeat + tick logs for observability.
-- DB outbox is canonical; JSONL (`INDEX_OUTBOX_PATH`) is audit/diagnostic only.
-- The watcher does not rewrite note content; it only calls the existing ingest/update pipelines. Ingest heals missing UUIDs in inbox notes so they do not linger without a `uuid` after a watcher pass.
+- Recommended operator posture (safe-by-default): run the registry watcher on an inbox-bounded scope and expand only when the guardrails are proven on your vault.
+  - Set `WATCHER_SCOPE_GLOB="<inbox>/**"` (where `<inbox>` matches your vault layout) to bound scanning.
+  - Note: the current code default is vault-wide markdown (`**/*.md`) unless `WATCHER_SCOPE_GLOB` is set; this doc recommends inbox-scoped operation for daily usage.
+- The watcher may rewrite note content in narrow, human-first ways: it can heal missing UUIDs for inbox notes and it can update AI panels (add proposals/questions, annotate action IDs, append receipts). It does not perform side-effecting actions unless policy/allowlists plus explicit intent (for example, checked actions) allow it.
 
 ### Cooldown and batching
 - Watchers are not per-keystroke. They collect file changes during a short cooldown/batch window, then run ingest/panel once per batch. The human experience is “after a short while the system catches up,” not “agents fire on every save.”
@@ -77,7 +77,7 @@ State: v5.x forward line. Runtime automation uses the registry watcher (`configs
 - PanelAgent Runtime V1 uses its fixed mapping from checked actions to follow-up events; behavior matches the v5.x baseline.
 - PanelAgent now consults a catalog of canonical actions (`docs/settings/panel-actions.md`) and can run in either rule-mode (default, deterministic label→action mapping) or optional LLM-mode, which uses the catalog plus panel/note context; checkbox states are treated as hints rather than hard gates in LLM-mode.
 - Panel action wiring can be overridden per vault via `<vault>/System/Config/panel-action-wiring.yaml` (vault-relative path); resolution order: `PANEL_ACTION_WIRING_PATH` env > vault override file > repo default (`docs/settings/panel-action-wiring.yaml`). Invalid configs emit a warning and fall back to the default wiring without changing behavior.
-- Auto-panel policy: any note containing an AI fence (`%% ...ai... %%`, case-insensitive) is a candidate by default. The only per-note opt-out is `ai_panel_auto_run: never` or nested `ai_panel: { auto_run: never }`. Manual CLI (`panel run` / `panel run-many`) is always allowed.
+- Auto-panel policy: any note containing an AI fence (`%% ...ai... %%`, case-insensitive) is a candidate by default. Eligible notes without a fence may also get a panel created with proposals/questions (proactive assist); disable with `PANEL_PROACTIVE_ASSIST=0`. The per-note opt-out remains `ai_panel_auto_run: never` (or nested `ai_panel: { auto_run: never }`). Manual CLI (`panel run` / `panel run-many`) is always allowed.
 - `WATCHER_AUTO_EXEC` is the global arm switch: when off, watchers compute candidacy and emit summaries but do not execute panel mutations.
 - Panel runtime emits `panel.intent.created`, `panel.intent.executed`, `panel.action.*`, emits `promote.intent.created` for mapped promotion actions, and writes receipts into the in-note AI status callout (panel stays as the working set; receipts live outside the panel).
 - Promotion consumer updates the note file (frontmatter `review_state`) using the path in `promote.intent.created`; Store metadata can lag, but the vault note is the source of truth.
@@ -88,7 +88,7 @@ State: v5.x forward line. Runtime automation uses the registry watcher (`configs
 - Run the end-to-end flow with the registry watcher:
   - `WATCHER_ENABLE=1 WATCHER_VAULT_PATH="<vault_root>" WATCHER_SCOPE_GLOB="Test/**" WATCHER_AUTO_EXEC=1 python -m app.cli watcher run --max-ticks 1`
 - Verify status: `python -m app.cli status` and confirm counters increased: `panel_runs`, `promote.intent.created`, `promotion_executed`, and ingest run counts. Use DB outbox as the ground truth.
-- Policy gating: watcher summary reports notes without AI fences as policy skips, and the only per-note block is `ai_panel_auto_run: never` (nested form supported); otherwise, any fenced note becomes a candidate when `WATCHER_AUTO_EXEC=1` is armed.
+- Policy gating: the only per-note block is `ai_panel_auto_run: never` (nested form supported). Fenced notes become candidates when `WATCHER_AUTO_EXEC=1` is armed; proactive assist may also create panels for eligible non-fenced notes unless disabled.
 - Intent vs mutation: panel runtime emits intents (`promote.intent.created`), while `promote.done` comes from the promotion consumer; note mutation requires the consumer to run (included by default in runtime).
 
 ### Legacy/dev-only tools

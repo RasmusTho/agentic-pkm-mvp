@@ -23,15 +23,27 @@ CREATE TABLE IF NOT EXISTS public.agent_memories(
 CREATE INDEX IF NOT EXISTS agent_memories_created_at_idx ON public.agent_memories (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS public.objects(
-  uuid uuid PRIMARY KEY,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  uuid uuid,
   kind text NOT NULL,
   path text,
   source_ref text,
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS id uuid;
+ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS uuid uuid;
 ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS source_ref text;
 ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS path text;
+
+-- Backfill/migrate legacy schemas that used uuid as the only identifier.
+UPDATE public.objects SET id = uuid WHERE id IS NULL AND uuid IS NOT NULL;
+UPDATE public.objects SET id = gen_random_uuid() WHERE id IS NULL;
+UPDATE public.objects SET uuid = id WHERE uuid IS NULL;
+
+ALTER TABLE public.objects DROP CONSTRAINT IF EXISTS objects_pkey;
+ALTER TABLE public.objects ADD CONSTRAINT objects_pkey PRIMARY KEY (id);
+CREATE UNIQUE INDEX IF NOT EXISTS objects_uuid_idx ON public.objects(uuid);
 CREATE INDEX IF NOT EXISTS objects_created_at_idx ON public.objects (created_at DESC);
 CREATE INDEX IF NOT EXISTS objects_source_ref_idx ON public.objects (source_ref);
 
@@ -50,51 +62,7 @@ DROP VIEW IF EXISTS public.view_objects_ready_for_projection;
 DROP VIEW IF EXISTS public.view_objects_missing_review;
 DROP VIEW IF EXISTS public.view_chunks_missing_embeddings;
 DROP VIEW IF EXISTS public.view_objects_missing_chunks;
-
-CREATE VIEW public.view_objects_missing_chunks AS
-SELECT o.id::text AS object_id
-FROM public.objects o
-WHERE NOT EXISTS (
-    SELECT 1 FROM public.chunks c WHERE c.object_id = o.id
-);
-
-CREATE VIEW public.view_chunks_missing_embeddings AS
-SELECT o.id::text AS object_id,
-       COUNT(DISTINCT c.id) AS chunk_count,
-       COALESCE(
-           (
-               SELECT COUNT(*) FROM public.embeddings e WHERE e.object_id = o.id
-           ),
-           0
-       ) AS embedding_count
-FROM public.objects o
-JOIN public.chunks c ON c.object_id = o.id
-GROUP BY o.id
-HAVING COUNT(DISTINCT c.id) > COALESCE(
-    (
-        SELECT COUNT(*) FROM public.embeddings e WHERE e.object_id = o.id
-    ),
-    0
-);
-
-CREATE VIEW public.view_objects_missing_review AS
-SELECT o.id::text AS object_id
-FROM public.objects o
-WHERE NOT EXISTS (
-    SELECT 1 FROM public.decisions d
-    WHERE d.object_id = o.id
-      AND d.key = 'review'
-);
-
-CREATE VIEW public.view_objects_ready_for_projection AS
-SELECT d.object_id::text AS object_id,
-       COALESCE((d.value ->> 'score')::numeric, 0) AS score,
-       COALESCE((d.value ->> 'threshold')::numeric, 0) AS threshold
-FROM public.decisions d
-WHERE d.key = 'evaluate'
-  AND COALESCE((d.value ->> 'promote')::boolean, false) = true
-  AND NOT EXISTS (
-      SELECT 1
-      FROM public.membership m
-      WHERE m.object_id = d.object_id
-  );
+-- NOTE (SoT v5.5): keep this file limited to "always safe" schema bootstraps.
+-- Legacy v4.x views depended on tables/columns that are not part of the v5.5 baseline
+-- and caused startup failures in fresh DBs. The DROP statements above intentionally
+-- remove any lingering legacy views without recreating them here.

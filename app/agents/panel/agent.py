@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, Iterable, List
 
 from pydantic import BaseModel, Field
 
+from app.agents.panel_agent.policy import contains_ai_panel_fence, proactive_assist_enabled
 from app.events.schema import OutboxEvent
 from app.store.object_store import DomainObject, ObjectStore
 from app.settings.panel_actions import PanelActionMapping
@@ -20,6 +22,22 @@ _ACTION_PATTERN = re.compile(r"^(\s*-\s*\[( |x|X)\]\s*)(.*?)(\s*<!--\s*ai:id=([A
 _AI_STATUS_HEADER = "> [!info]- AI status"
 _MAX_RECEIPTS = 20
 _EXECUTED_FALLBACK: dict[str, set[str]] = {}
+
+_SUGGESTED_ACTIONS = [
+    "Make this note evergreen",
+    "Create a separate summary note",
+    "Archive this note",
+]
+_SUGGESTED_ACTIONS_START = "<!--ai:suggested_actions:start-->"
+_SUGGESTED_ACTIONS_END = "<!--ai:suggested_actions:end-->"
+_ASSIST_START = "<!--ai:assist:start-->"
+_ASSIST_END = "<!--ai:assist:end-->"
+
+_ACTION_KEYWORDS = {
+    "promote.evergreen": ("evergreen",),
+    "note.archive": ("archive", "arkivera"),
+    "ingest.summary.create": ("summary", "sammanfatt"),
+}
 
 
 class PanelAgentResult(BaseModel):
@@ -95,6 +113,224 @@ def _write_receipts(markdown: str, new_receipts: list[str], *, clear: bool, pref
         lines[start:end] = block
     return "\n".join(lines)
 
+def _split_frontmatter(markdown: str) -> tuple[list[str], list[str]]:
+    lines = markdown.splitlines()
+    if not lines:
+        return [], []
+    if lines[0].strip() != "---":
+        return [], lines
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            return lines[: idx + 1], lines[idx + 1 :]
+    return [], lines
+
+
+def _upsert_block(
+    lines: list[str],
+    *,
+    search_start: int,
+    search_end: int,
+    insert_at: int,
+    marker_start: str,
+    marker_end: str,
+    block: list[str],
+) -> None:
+    s = e = None
+    for idx in range(search_start, search_end):
+        if lines[idx].strip() == marker_start:
+            s = idx
+            break
+    if s is not None:
+        for j in range(s + 1, search_end):
+            if lines[j].strip() == marker_end:
+                e = j
+                break
+    if s is not None and e is not None and e >= s:
+        lines[s : e + 1] = block
+        return
+    lines[insert_at:insert_at] = block
+
+
+def _existing_suggested_action_checks(panel: list[str]) -> tuple[dict[str, bool], dict[str, bool], list[str]]:
+    start = end = None
+    for idx, line in enumerate(panel):
+        if line.strip() == _SUGGESTED_ACTIONS_START:
+            start = idx + 1
+            break
+    if start is None:
+        return {}, {}, []
+    for idx in range(start, len(panel)):
+        if panel[idx].strip() == _SUGGESTED_ACTIONS_END:
+            end = idx
+            break
+    if end is None or end < start:
+        return {}, {}, []
+
+    existing_by_id: dict[str, bool] = {}
+    existing_by_label: dict[str, bool] = {}
+    extra_lines: list[str] = []
+    default_ids = {_stable_action_id(label) for label in _SUGGESTED_ACTIONS}
+
+    for raw in panel[start:end]:
+        match = _ACTION_PATTERN.match(raw)
+        if not match:
+            continue
+        checked = (match.group(2) or "").strip().lower() == "x"
+        label = (match.group(3) or "").strip()
+        if not label:
+            continue
+        action_id = (match.group(5) or "").strip() or _stable_action_id(label)
+
+        existing_by_id[action_id] = checked
+        existing_by_label[label] = checked
+
+        if action_id not in default_ids:
+            mark = "x" if checked else " "
+            extra_lines.append(f"- [{mark}] {label} <!--ai:id={action_id}-->")
+
+    return existing_by_id, existing_by_label, extra_lines
+
+
+def _ensure_heading(lines: list[str], heading: str) -> int:
+    target = heading.strip().lower()
+    for idx, raw in enumerate(lines):
+        if raw.strip().lower() == target:
+            return idx
+    lines.append(heading)
+    return len(lines) - 1
+
+
+def _ensure_panel_assist(markdown: str, *, create_if_missing: bool) -> str:
+    if not markdown:
+        markdown = ""
+    state = parse_panel(markdown)
+    if not state.fenced:
+        if not create_if_missing:
+            return markdown
+        fm, rest = _split_frontmatter(markdown)
+        panel_lines = [
+            "%% AI %%",  # tolerant fence (parser matches any %%...ai...%% line)
+            "## AI-instruktion",
+            "",
+            "## AI-åtgärder",
+            _SUGGESTED_ACTIONS_START,
+            *[f"- [ ] {label}" for label in _SUGGESTED_ACTIONS],
+            _SUGGESTED_ACTIONS_END,
+            "## AI-logg",
+            _ASSIST_START,
+            "- 💡 Suggested next actions are in the checklist above. Tick any you want me to run.",
+            "- ❓ What kind of help do you want with this note?",
+            _ASSIST_END,
+            "%% AI %%",
+            "",
+        ]
+        out: list[str] = []
+        if fm:
+            out.extend(fm)
+            if out and out[-1].strip() != "":
+                out.append("")
+        out.extend(panel_lines)
+        out.extend(rest)
+        return "\n".join(out).rstrip("\n") + "\n"
+
+    if not state.spans:
+        return markdown
+    start, end = state.spans[0]
+    lines = markdown.splitlines()
+    if start < 0 or end >= len(lines) or end <= start:
+        return markdown
+
+    panel = lines[start + 1 : end]
+
+    actions_idx = _ensure_heading(panel, "## AI-åtgärder")
+    logs_idx = _ensure_heading(panel, "## AI-logg")
+    if logs_idx < actions_idx:
+        logs_idx = _ensure_heading(panel, "## AI-logg")
+
+    # Suggested actions block: insert right after actions heading.
+    actions_insert_at = min(actions_idx + 1, len(panel))
+    if actions_insert_at < len(panel) and panel[actions_insert_at].strip() != "":
+        panel.insert(actions_insert_at, "")
+        actions_insert_at += 1
+    existing_by_id, existing_by_label, extras = _existing_suggested_action_checks(panel)
+    suggested_block = [
+        _SUGGESTED_ACTIONS_START,
+        *[
+            (
+                f"- [{'x' if (existing_by_id.get(_stable_action_id(label)) or existing_by_label.get(label)) else ' '}] "
+                f"{label} <!--ai:id={_stable_action_id(label)}-->"
+            )
+            for label in _SUGGESTED_ACTIONS
+        ],
+        *extras,
+        _SUGGESTED_ACTIONS_END,
+        "",
+    ]
+    _upsert_block(
+        panel,
+        search_start=0,
+        search_end=len(panel),
+        insert_at=actions_insert_at,
+        marker_start=_SUGGESTED_ACTIONS_START,
+        marker_end=_SUGGESTED_ACTIONS_END,
+        block=suggested_block,
+    )
+
+    # Assist/Q block: insert right after logs heading.
+    logs_idx = next((i for i, raw in enumerate(panel) if raw.strip().lower() == "## ai-logg"), logs_idx)
+    logs_insert_at = min(logs_idx + 1, len(panel))
+    if logs_insert_at < len(panel) and panel[logs_insert_at].strip() != "":
+        panel.insert(logs_insert_at, "")
+        logs_insert_at += 1
+    assist_block = [
+        _ASSIST_START,
+        "- 💡 Suggested next actions are in the checklist above. Tick any you want me to run.",
+        "- ❓ What kind of help do you want with this note?",
+        _ASSIST_END,
+        "",
+    ]
+    _upsert_block(
+        panel,
+        search_start=0,
+        search_end=len(panel),
+        insert_at=logs_insert_at,
+        marker_start=_ASSIST_START,
+        marker_end=_ASSIST_END,
+        block=assist_block,
+    )
+
+    lines[start + 1 : end] = panel
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def _proactive_note_eligible(note_path: str | None) -> bool:
+    if not note_path:
+        return False
+    path = Path(note_path)
+    parts = set(path.parts)
+    if ".obsidian" in parts:
+        return False
+    lowered = {p.lower() for p in parts}
+    if "templates" in lowered:
+        return False
+    return True
+
+
+def _infer_mapping_for_action_text(action_text: str, mappings: Dict[str, PanelActionMapping]) -> PanelActionMapping | None:
+    direct = mappings.get(action_text)
+    if direct is not None:
+        return direct
+    lowered = action_text.strip().lower()
+    if not lowered:
+        return None
+    for action_id, keywords in _ACTION_KEYWORDS.items():
+        if not any(k in lowered for k in keywords):
+            continue
+        for mapping in mappings.values():
+            if mapping.action_id == action_id:
+                return mapping
+    return None
+
 
 def _remove_actions_from_markdown(markdown: str, action_ids: set[str]) -> str:
     if not action_ids:
@@ -145,8 +381,22 @@ def handle_note_update(
     new_markdown: str,
     action_mappings: Dict[str, PanelActionMapping] | None = None,
     note_path: str | None = None,
+    *,
+    proactive_assist: bool = False,
 ) -> PanelAgentResult:
-    annotated_markdown = _annotate_action_ids(new_markdown or "")
+    base_markdown = new_markdown or ""
+    has_ai = contains_ai_panel_fence(base_markdown)
+    has_existing_panel = bool(parse_panel(base_markdown).spans)
+    proactive_ok = proactive_assist and proactive_assist_enabled()
+    create_panel = (
+        (not has_ai)
+        and proactive_ok
+        and (not has_existing_panel)
+        and _proactive_note_eligible(note_path)
+    )
+    assisted_markdown = _ensure_panel_assist(base_markdown, create_if_missing=create_panel)
+
+    annotated_markdown = _annotate_action_ids(assisted_markdown)
     old_state = parse_panel(old_markdown or "")
     new_state = parse_panel(annotated_markdown)
     mappings = dict(action_mappings or {})
@@ -170,46 +420,18 @@ def handle_note_update(
         if action_id in executed_ids:
             remove_ids.add(action_id)
             continue
+        inferred = _infer_mapping_for_action_text(action.text, mappings) if mappings else None
         intents.append(PanelIntent(kind="action_triggered", action_text=action.text, action_id=action_id))
+        if inferred is not None and inferred.event_type:
+            intents[-1] = intents[-1].model_copy(update={"event_type": inferred.event_type})
+            if inferred.text and inferred.text not in mappings:
+                mappings[inferred.text] = inferred
         receipts.append(f"✅ {action.text}")
         executed_now.append(action_id)
 
     # Freeform commands: clear status
     instruction_lower = (new_state.instruction_text or "").lower()
     clear_status = "clear status" in instruction_lower or "clear ai status" in instruction_lower
-
-    def _resolve_promotion_mapping() -> PanelActionMapping | None:
-        for key, mapping in mappings.items():
-            if mapping.event_type == "promote.intent.created" or mapping.event_type.startswith("review.promote"):
-                return mapping
-            if mapping.action_id and mapping.action_id == "promote.evergreen":
-                return mapping
-            if key.lower() in {"gör denna anteckning evergreen", "make this note evergreen"}:
-                return mapping
-        return None
-
-    auto_promote_id = "auto:promote.evergreen"
-    if any(phrase in instruction_lower for phrase in ("promote this", "make evergreen", "make this note evergreen")):
-        if auto_promote_id not in executed_ids:
-            mapping = _resolve_promotion_mapping()
-            if mapping is None:
-                mapping = PanelActionMapping(
-                    text="Make this note evergreen",
-                    event_type="promote.intent.created",
-                    payload_template={"maturity": "evergreen"},
-                    action_id="promote.evergreen",
-                )
-                mappings[mapping.text] = mapping
-            intents.append(
-                PanelIntent(
-                    kind="action_triggered",
-                    action_text=mapping.text or "Make this note evergreen",
-                    action_id=auto_promote_id,
-                    event_type=mapping.event_type,
-                )
-            )
-            receipts.append("✅ auto-executed: promote")
-            executed_now.append(auto_promote_id)
 
     if mappings:
         intents = enrich_panel_intents(intents, mappings)

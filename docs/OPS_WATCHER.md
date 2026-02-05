@@ -18,7 +18,7 @@ The runtime watcher is registry-based (config-driven) and runs via `python -m ap
    - Command: `python -m app.cli watcher run`
    - Config path defaults to `configs/watchers.yaml` (override with `WATCHER_CONFIG_PATH` or CLI `--config`).
    - State dir: `/state` via `WATCHER_STATE_DIR` (kept outside the vault).
-   - Inbox scope: resolved from `vault.layout.md` (or `VAULT_INBOX_DIR_REL` env override); the watcher defaults the scope to `<inbox>/**` when `WATCHER_SCOPE_GLOB` is unset.
+   - Default scan scope is vault-wide markdown: `**/*.md` relative to `WATCHER_VAULT_PATH` (override with `WATCHER_SCOPE_GLOB`).
    - DB outbox: required when `STORE_BACKEND=pg` (set `DATABASE_URL` or `DB_DSN`).
    - JSONL outbox (`INDEX_OUTBOX_PATH`) remains an audit log; the worker consumes the DB outbox.
 3) Logs:
@@ -40,12 +40,13 @@ The runtime watcher is registry-based (config-driven) and runs via `python -m ap
 ## Key env and defaults
 - `WATCHER_ENABLE=1` arms the registry watcher.
 - `WATCHER_VAULT_PATH` (default `vault`) points at the vault root.
-- `VAULT_INBOX_DIR_REL` optionally overrides the inbox folder name; if unset, it is read from `vault.layout.md` (supports emoji paths).
-- `WATCHER_SCOPE_GLOB` can override the scan scope (default: `<inbox>/**` where `<inbox>` comes from `vault.layout.md` or `VAULT_INBOX_DIR_REL`).
+- `WATCHER_SCOPE_GLOB` can override the scan scope (default: `**/*.md`).
+- `VAULT_INBOX_DIR_REL` optionally overrides the inbox folder name for inbox-only behaviors (e.g., UUID healing); if unset, it is read from `vault.layout.md`.
 - `WATCHER_STATE_DIR` stores registry watcher state (`/state` in Docker).
 - `WATCHER_HEARTBEAT_PATH` defaults to `/app/tmp/watcher_heartbeat.json`.
 - `WATCHER_TICK_LOG_PATH` defaults to `/app/tmp/watcher_tick.jsonl`.
 - `WATCHER_AUTO_EXEC=1` arms panel auto-exec; `ai_panel_auto_run: never` opt-outs per note.
+- `PANEL_PROACTIVE_ASSIST` (default `1`) allows creating an AI panel with proposals for eligible notes that have no `%%ai` fence yet. Set `PANEL_PROACTIVE_ASSIST=0` to disable proactive panel creation.
 - `WATCHER_STOP_FILE` (default `/app/tmp/WATCHER_STOP`) pauses scanning when present.
 
 ## Notes and caveats

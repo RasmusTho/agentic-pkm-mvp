@@ -117,3 +117,33 @@ def test_panel_parser_accepts_label_sections_and_checkbox_fallback():
     assert state.instruction_text.startswith("Please do the thing")
     assert state.actions
     assert state.actions[0].text == "Make this note evergreen"
+
+
+def test_suggested_actions_preserve_checked_state_and_trigger_intent():
+    old_markdown = textwrap.dedent(
+        """
+        %% AI %%
+        ## AI-åtgärder
+        <!--ai:suggested_actions:start-->
+        - [ ] Make this note evergreen <!--ai:id=651d3ca5-->
+        - [ ] Create a separate summary note <!--ai:id=aad175cb-->
+        - [ ] Archive this note <!--ai:id=da676f7d-->
+        <!--ai:suggested_actions:end-->
+        %% AI %%
+        """
+    )
+    new_markdown = textwrap.dedent(
+        """
+        %% AI %%
+        ## AI-åtgärder
+        <!--ai:suggested_actions:start-->
+        - [x] Make this note evergreen <!--ai:id=651d3ca5-->
+        - [ ] Create a separate summary note <!--ai:id=aad175cb-->
+        - [ ] Archive this note <!--ai:id=da676f7d-->
+        <!--ai:suggested_actions:end-->
+        %% AI %%
+        """
+    )
+
+    result = handle_note_update("note-checked", old_markdown, new_markdown)
+    assert any(intent.kind == "action_triggered" and intent.action_text == "Make this note evergreen" for intent in result.intents)

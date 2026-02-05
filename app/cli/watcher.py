@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import click
@@ -58,6 +59,13 @@ def watcher_once() -> None:
     if not cfg.enable:
         raise click.ClickException("WATCHER_ENABLE=1 required; export env and try again.")
 
+    scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()
+    provenance = "env:WATCHER_SCOPE_GLOB" if scope_env else "default:vaultwide"
+    click.echo(
+        "watcher scope resolved "
+        f"vault_path={cfg.vault_path} scope_glob={cfg.scope_glob} provenance={provenance} inbox_source="
+    )
+
     summary = watcher_run_once(cfg)
     click.echo(json.dumps(summary, ensure_ascii=False, indent=2))
     if summary.get("kill_switch") or summary.get("backoff_active") or summary.get("errors"):
@@ -89,6 +97,13 @@ def watcher_run(config: Path, max_ticks: int | None) -> None:
 
     if not cfg.enable:
         raise click.ClickException("WATCHER_ENABLE=1 required; export env and try again.")
+
+    scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()
+    provenance = "env:WATCHER_SCOPE_GLOB" if scope_env else "default:vaultwide"
+    click.echo(
+        "watcher scope resolved "
+        f"vault_path={cfg.vault_path} scope_glob={cfg.scope_glob} provenance={provenance} inbox_source="
+    )
 
     watcher_names = ", ".join(spec.name for spec in cfg.specs)
     click.echo(
