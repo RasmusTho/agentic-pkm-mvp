@@ -126,7 +126,7 @@ For each object:
 - produce one or more vectors (depending on chunking/view)
 - upsert vectors into VectorIndex
 - purge the previous vectors for the UUID+view before writing when the same note is re-ingested with changed content, so duplicates can never remain
-- emit `index.object.embedded` with:
+- emit `index.embedding.created` with (legacy alias: `index.object.embedded`):
   - object id
   - counts (vectors)
   - provenance (provider/model/identity)

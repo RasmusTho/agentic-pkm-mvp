@@ -42,7 +42,7 @@ State: SoT v5.5 Reality-MVP baseline locked.
 ## Ingestion Review Runbook
 1. **Prepare payload** – gather metadata in a JSON-compatible dict plus raw text under `text`.
 2. **Ingest** – `python -m app.cli pipe <note.md>` or watcher-driven ingest via `vault-watcher-run`.
-3. **Validate** – check `/api/status` + `/api/health` and confirm `index.object.embedded` events in outbox.
+3. **Validate** – check `/api/status` + `/api/health` and confirm `index.embedding.created` events in outbox (legacy alias: `index.object.embedded`).
 4. **Maintain** – run `python -m app.fitness.report` after major imports to watch latency and gate regressions.
 
 ## Auth & Rate Limiting

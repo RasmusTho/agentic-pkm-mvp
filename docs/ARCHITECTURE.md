@@ -164,7 +164,7 @@ This table supersedes the prior `docs/PORTS.md` listing.
 - Chunker — segments normalized text into retrieval-ready spans plus embedding metadata stubs.
 - Deduper — compares against prior hashes and emits relation records for duplicates or merges.
 - CitationChecker — validates outbound references and attaches citation debt metrics.
-- Indexer — materializes embeddings, syncs ObjectStore + VectorIndex, and raises `index.object.embedded`.
+- Indexer — materializes embeddings, syncs ObjectStore + VectorIndex, and raises `index.embedding.created` (legacy alias: `index.object.embedded`).
 - Reviewer — enforces maturity gates, toggles trust levels, and prepares Projector contracts.
 - Projector — publishes curated packets to downstream surfaces (docs, API, knowledge packs).
 - PromotionAgent — final arbiter that commits promotion decisions to audit + Outbox while coordinating cooldowns.
@@ -175,7 +175,7 @@ ObjectStore persists object envelopes and agent decisions; VectorIndex stores ch
 ### Event Choreography
 1. `ingest.object.created` records capture acceptance and seeds the PER loop.
 2. `ingest.object.normalized`, `.classified`, `.chunked`, `.deduped`, `.citation_checked` mark completion of each agent and carry `trace_id` plus payload diff.
-3. `index.object.embedded` signals VectorIndex writes and unlocks the Reviewer.
+3. `index.embedding.created` signals VectorIndex writes and unlocks downstream consumers (legacy alias: `index.object.embedded`).
 4. `promote.pending` captures Reviewer approval; `promote.done` finalizes PromotionAgent moves and informs subscribers such as search indexing or set sync.
 - All events carry `instance_id` from `SettingsBundle.instance.id` (default `home`) so audit/Outbox can mark which runtime emitted the event and prepare master/satellite without changing the vault UX.
 
