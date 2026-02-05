@@ -16,16 +16,15 @@ State: SoT v4.10 Reality-MVP (baseline locked) with v5.x forward line extending 
 - Keep frontmatter lean: `title`, `uuid`, optional `type/category/facets`.
 - Ingest via `vault-alpha-ingest` (or `ingest-vault-paths` for targeted notes).
 - UUID healing is automatic and logged; malformed frontmatter is skipped with a warning, not a crash.
-- Ingest writes objects to the Store, emits DB outbox events (`index.object.*`), and maintains VaultMirror copies under `System/Metadata/VaultMirror/...`.
+- Ingest writes objects to the Store, keeps derived indexes rebuildable, and maintains VaultMirror copies under `System/Metadata/VaultMirror/...`.
 - External ingest (drop folder) is opt-in; ingested objects carry `origin: external_raw` and surface in ASK/status alongside vault entries.
 
 ## 4. Human Flow: ASK (Reality-MVP)
 - `/api/ask` and `python -m app.cli ask` query the HybridStore (BM25 + embeddings) warmed from Store objects. Answers cite sources with origin/plane tags.
 - Default LLM provider is mock; set `LLM_PROVIDER` + credentials to enable LLM drafting/self-check. Errors surface in ASK status metrics.
 - Cite-before-trust: answers show source IDs/paths; rerank hooks/critique are optional overlays.
-- `ASK_DOMAIN_SCOPE` (when set) limits retrieval to a single domain; default behavior excludes cross-domain results.
-- `bridge_domains` explicitly allows inclusion across domains when needed (no implicit bridges).
-- Contract tests enforce the scope boundary to prevent regressions.
+- ASK is currently kept primarily for dev/operator purposes and is not yet fully speced as the long-term UX.
+- Forward line intent: ASK becomes a RAG agent that other agents call (tool/agent interface), not only a human-facing endpoint.
 
 ## 5. Design Principles (Human-first constraints)
 - The human is the ultimate authority for classification and meaning; the system proposes but never silently overrides.
@@ -66,8 +65,9 @@ State: v5.x forward line. Runtime automation uses the registry watcher (`configs
 - I can see what ran: ingest and panel runs emit the usual events, AI-log entries, and status metrics; nothing rewrites my note body.
 
 ### Mental model (system, high level)
-- Registry watcher scans a bounded inbox-derived scope by default (from `WATCHER_VAULT_PATH` + `VAULT_INBOX_DIR_REL` / `vault.layout.md`; override via `WATCHER_SCOPE_GLOB`), emits `ingest.vault.changed` and `panel.scan.requested`, and writes heartbeat + tick logs for observability.
-- DB outbox is canonical; JSONL (`INDEX_OUTBOX_PATH`) is audit/diagnostic only.
+- Recommended operator posture (safe-by-default): run the registry watcher on an inbox-bounded scope and expand only when the guardrails are proven on your vault.
+  - Set `WATCHER_SCOPE_GLOB="<inbox>/**"` (where `<inbox>` matches your vault layout) to bound scanning.
+  - Note: the current code default is vault-wide markdown (`**/*.md`) unless `WATCHER_SCOPE_GLOB` is set; this doc recommends inbox-scoped operation for daily usage.
 - The watcher may rewrite note content in narrow, human-first ways: it can heal missing UUIDs for inbox notes and it can update AI panels (add proposals/questions, annotate action IDs, append receipts). It does not perform side-effecting actions unless policy/allowlists plus explicit intent (for example, checked actions) allow it.
 
 ### Cooldown and batching
