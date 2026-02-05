@@ -50,51 +50,7 @@ DROP VIEW IF EXISTS public.view_objects_ready_for_projection;
 DROP VIEW IF EXISTS public.view_objects_missing_review;
 DROP VIEW IF EXISTS public.view_chunks_missing_embeddings;
 DROP VIEW IF EXISTS public.view_objects_missing_chunks;
-
-CREATE VIEW public.view_objects_missing_chunks AS
-SELECT o.id::text AS object_id
-FROM public.objects o
-WHERE NOT EXISTS (
-    SELECT 1 FROM public.chunks c WHERE c.object_id = o.id
-);
-
-CREATE VIEW public.view_chunks_missing_embeddings AS
-SELECT o.id::text AS object_id,
-       COUNT(DISTINCT c.id) AS chunk_count,
-       COALESCE(
-           (
-               SELECT COUNT(*) FROM public.embeddings e WHERE e.object_id = o.id
-           ),
-           0
-       ) AS embedding_count
-FROM public.objects o
-JOIN public.chunks c ON c.object_id = o.id
-GROUP BY o.id
-HAVING COUNT(DISTINCT c.id) > COALESCE(
-    (
-        SELECT COUNT(*) FROM public.embeddings e WHERE e.object_id = o.id
-    ),
-    0
-);
-
-CREATE VIEW public.view_objects_missing_review AS
-SELECT o.id::text AS object_id
-FROM public.objects o
-WHERE NOT EXISTS (
-    SELECT 1 FROM public.decisions d
-    WHERE d.object_id = o.id
-      AND d.key = 'review'
-);
-
-CREATE VIEW public.view_objects_ready_for_projection AS
-SELECT d.object_id::text AS object_id,
-       COALESCE((d.value ->> 'score')::numeric, 0) AS score,
-       COALESCE((d.value ->> 'threshold')::numeric, 0) AS threshold
-FROM public.decisions d
-WHERE d.key = 'evaluate'
-  AND COALESCE((d.value ->> 'promote')::boolean, false) = true
-  AND NOT EXISTS (
-      SELECT 1
-      FROM public.membership m
-      WHERE m.object_id = d.object_id
-  );
+-- NOTE (SoT v5.5): keep this file limited to "always safe" schema bootstraps.
+-- Legacy v4.x views depended on tables/columns that are not part of the v5.5 baseline
+-- and caused startup failures in fresh DBs. The DROP statements above intentionally
+-- remove any lingering legacy views without recreating them here.
