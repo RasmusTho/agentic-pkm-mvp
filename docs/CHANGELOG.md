@@ -1,4 +1,6 @@
-State: Historical (not authoritative SoT; prefer `docs/STATUS.md` for current baseline + `docs/ROADMAP.md` for forward line).
+State: Historical (not authoritative SoT; kept for reference only).
+
+Prefer `docs/STATUS.md` for the current baseline and `docs/ROADMAP.md` for the forward plan.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.

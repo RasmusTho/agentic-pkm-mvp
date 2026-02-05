@@ -194,7 +194,7 @@ Every agent follows Plan → Execute → Reflect. Plan inspects the latest event
 - `note_moves_enable` defaults to false in runtime/global settings; Planner demotes move/rename/re-file steps to log-only and Promotion logs `promote.skip.move` instead of moving files.
 - Malformed frontmatter is tolerated: invalid YAML is skipped with a warning and reported in the ingest summary rather than crashing the run.
 - Ingest errors are recorded (counts + paths) in the ingest summary; reruns can resume from already-processed notes (via `resume_from` in code paths) while finishing remaining items.
-- Operators can enable moves later by setting `note_moves_enable: true` in `vault/@Settings/global` (propagates into generated `runtime/settings/global.yaml` after `python -m app.cli settings compile`).
+- Operators can enable moves later by setting `note_moves_enable: true` in `vault/@Settings/global` (propagates into generated runtime settings after `python -m app.cli settings compile`; the `runtime/settings/` directory is generated and not committed).
 
 ### Diarization-aware Chunking (v4.6-C)
 When `DIARIZE_ENABLE=1`, the ingestion pipeline now feeds diarization metadata (speaker, start, end) into `speaker_aware_chunks()` so spans are cut on speaker changes or size boundaries (O(n) over segment length). Each emitted chunk carries `{speaker,start,end,speaker_segments}` metadata that flows through `ingest_and_chunk()` to indexing, and the audit stream (`text.chunk.created`) records `speaker_count` so reviewers can trace diarization coverage. With the flag disabled, `build_chunks()` preserves the legacy token/character splitter to keep defaults inert and deterministic.
