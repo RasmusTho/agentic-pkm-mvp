@@ -1,4 +1,4 @@
-State: v5.5 baseline aligned (legacy sections retained where noted; registry watcher default, DB outbox canonical, JSONL audit log non-canonical; watcher auto-run gated; LangGraph planner opt-in).
+State: Historical (SoT v4.10). Ingest path has evolved (registry watcher + DB outbox canonical). Keep as reference; prefer `docs/HUMAN-FLOWS.md` + `docs/OPERATIONS.md` for current runbooks.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.

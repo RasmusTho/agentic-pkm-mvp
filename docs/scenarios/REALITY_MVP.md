@@ -1,4 +1,4 @@
-State: v5.5 baseline aligned (legacy sections retained where noted; registry watcher default, DB outbox canonical, JSONL audit log non-canonical; watcher auto-run gated; LangGraph planner opt-in).
+State: Historical (SoT v4.10). Scenario doc retained for reference; current baseline is tracked in `docs/STATUS.md`.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.

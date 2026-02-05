@@ -1,4 +1,4 @@
-State: v5.5 baseline aligned (legacy sections retained where noted; registry watcher default, DB outbox canonical, JSONL audit log non-canonical; watcher auto-run gated; LangGraph planner opt-in).
+State: SoT v5.5 baseline (descriptive). Settings exist both as vault-backed compiled artifacts and as repo settings-as-code (registries).
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -21,7 +21,7 @@ Primary source folder:
 Compiler:
 - `python -m app.cli settings compile`
 
-Runtime settings now cover the panel action catalog, watcher auto-run policy, and canonical outbox path; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli.settings validate`/`python -m app.cli.settings_explain`.
+Runtime settings cover the panel action catalog and watcher policy; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli settings-validate` / `python -m app.cli settings-explain`.
 
 ## Repo settings artifacts (non-compiled)
 

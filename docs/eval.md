@@ -1,4 +1,4 @@
-State: v5.5 baseline aligned (legacy sections retained where noted; registry watcher default, DB outbox canonical, JSONL audit log non-canonical; watcher auto-run gated; LangGraph planner opt-in).
+State: SoT v5.5 baseline (descriptive, opt-in). Eval suites are optional and may call external/local LLM endpoints.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -6,7 +6,7 @@ State: v5.5 baseline aligned (legacy sections retained where noted; registry wat
 - Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
-# Eval — LLM quality checks (SoT v4.10)
+# Eval — LLM Quality Checks (Opt-in)
 
 ## Eval stack overview
 - Primary LLM eval framework: **DeepEval** (pytest-integrated).
@@ -25,10 +25,13 @@ State: v5.5 baseline aligned (legacy sections retained where noted; registry wat
   ```bash
   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "eval"
   ```
-- Eval tests rely on a configured LLM backend (e.g., local Ollama via OpenAI-compatible endpoint):
-  - `OPENAI_BASE_URL` (default: `http://127.0.0.1:11434/v1`)
-  - `OPENAI_API_KEY` (default: `sk-local`)
-  - Set `EVAL_LLM_MODE=skip` to skip if no LLM is available.
+- Eval tests rely on a configured OpenAI-compatible endpoint (typically Ollama):
+  - `EVAL_LLM_MODE=run|skip` (default: `skip`)
+  - `EVAL_LLM_BASE_URL` (default: `http://127.0.0.1:11434/v1`)
+  - `EVAL_LLM_API_KEY` (default: `sk-local`)
+  - `EVAL_LLM_MODEL` (default: `llama3.1:8b`)
+
+Implementation note: the eval harness configures `OPENAI_BASE_URL` / `OPENAI_API_KEY` for DeepEval/Ragas compatibility (see `app/eval/llm_client.py`).
 
 ## Golden cases for ASK
 - Seed cases live in `docs/eval/ask_cases.yaml` plus `docs/eval/ask_cases_bilingual.yaml` (English + Swedish probes).

@@ -1,18 +1,12 @@
-State: v5.5 baseline aligned (legacy sections retained where noted; registry watcher default, DB outbox canonical, JSONL audit log non-canonical; watcher auto-run gated; LangGraph planner opt-in).
+State: Dev-layer system prompt (SoT v5.5). This file is a contributor policy for coding agents; it is not a runtime spec.
 
-## v5.5 Baseline Delta (Current Reality)
-- Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
-- DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
-- Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
-- See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
-
-# Workspace System Prompt — Agentic PKM / Yggdrasil (Dev Layer, SoT v4.10 Reality-MVP)
+# Workspace System Prompt — Agentic PKM / Yggdrasil (Dev Layer, SoT v5.5 baseline)
 
 You are the development-time assistant (“Codex”) for this repository.
 
 Your scope is **strictly**:
 - editing and creating code, tests, and documentation,
-- maintaining alignment with the current System-of-Truth (SoT v4.10 Reality-MVP),
+- maintaining alignment with the current System-of-Truth (SoT v5.5 baseline),
 - proposing SoT changes in a controlled, documented way.
 
 You do **not**:
@@ -145,7 +139,7 @@ For every non-trivial change, follow this sequence:
 5. **Update docs in the same change**
    - If behavior, contracts, or boundaries change, you MUST:
      - update the appropriate doc(s),
-     - keep `State:` headers accurate (e.g. still SoT v4.10 vs planned v5.x),
+     - keep `State:` headers accurate (e.g. SoT v5.5 vs planned forward-line changes),
      - ensure examples and descriptions match the new reality.
 
    Docs are not optional; they are part of the change set.

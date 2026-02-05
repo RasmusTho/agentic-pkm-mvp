@@ -1,4 +1,4 @@
-State: v5.5 baseline aligned (legacy sections retained where noted; registry watcher default, DB outbox canonical, JSONL audit log non-canonical; watcher auto-run gated; LangGraph planner opt-in).
+State: SoT v5.5 baseline (descriptive). This lists practical external dependencies used by the current code paths.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -15,10 +15,10 @@ Overview of tools and libraries required in each environment.
 | Component | Purpose | Installation hint |
 | --- | --- | --- |
 | Python ≥ 3.12 | Primary runtime for CLI/agents. | `pyenv install 3.12.6`, `python -m venv .venv`. |
-| ffmpeg | Converts audio to 16 kHz wav (`app/media/transcribe.py:47-65`). | `brew install ffmpeg` / `apt-get install ffmpeg`. |
-| yt-dlp | Downloads YouTube/audio sources (`app/media/transcribe.py:22-39`). | `pip install -r requirements.txt`. |
+| ffmpeg | Converts audio to 16 kHz wav (`app/media/transcribe.py`). | `brew install ffmpeg` / `apt-get install ffmpeg`. |
+| yt-dlp | Downloads YouTube/audio sources (`app/media/transcribe.py`). | `pip install -r requirements.txt`. |
 | faster-whisper | Local ASR. | Install via pip; GPU builds need a C++ toolchain. |
-| Ollama | LLM + embeddings (`app/agents/qa/agent.py`, `app/llm/embeddings.py`). | `brew install ollama && ollama serve`. |
+| Ollama | LLM + embeddings (`app/llm/adapter.py`, `app/llm/embeddings.py`). | `brew install ollama && ollama serve`. |
 | mmdc (optional) | Mermaid export (`docs/DIAGRAMS.md`). | `npm install -g @mermaid-js/mermaid-cli`. |
 
 ## Python packages (selection)

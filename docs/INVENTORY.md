@@ -1,4 +1,4 @@
-State: v5.5 baseline aligned (legacy sections retained where noted; registry watcher default, DB outbox canonical, JSONL audit log non-canonical; watcher auto-run gated; LangGraph planner opt-in).
+State: SoT v5.5 baseline (descriptive). This is a reference inventory; if any row drifts from code, prefer the code and update this doc.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -8,41 +8,39 @@ State: v5.5 baseline aligned (legacy sections retained where noted; registry wat
 
 # Runtime Inventory
 
-Single source of truth for configuration, dependencies, and operational contracts. Update in the same PR as related code or CI changes.
+Reference inventory for configuration, dependencies, and operational contracts. Update in the same PR as related code or CI changes.
 
 <!-- SECTION:INVENTORY:BEGIN -->
 ## Environment variables
-| Variable | Location (file:line) | Default | Effect |
+| Variable | Used in (module) | Default | Effect |
 | --- | --- | --- | --- |
-| `LLM_PROVIDER` | app/agents/qa/agent.py:20, app/llm/adapter.py:4 | `ollama` (CLI fallback in `app/cli.py:24` sets `mock`) | Selects QA-agent / embedding / CLI backend (`ollama`, `mock`, `openai`, `deepseek`). |
-| `LLM_MOCK_RESPONSE` | app/agents/qa/agent.py:27, app/cli.py:25 | `Mock response [#1]` or CLI default JSON | Response returned whenever `LLM_PROVIDER=mock`. |
-| `LLM_MAX_TOKENS` | app/agents/qa/agent.py:13 | `512` | Caps QA answers when Ollama is active. |
-| `LLM_TIMEOUT` | app/agents/qa/agent.py:41, app/llm/embeddings.py:37, app/llm/adapter.py:20 | `120` s (chat); `60` s (embeddings / other HTTP) | HTTP timeout for Ollama / OpenAI / DeepSeek. |
-| `OLLAMA_HOST` / `OLLAMA_URL` | app/agents/qa/agent.py:31, app/llm/embeddings.py:10 | `http://127.0.0.1:11434` | Base URL for `/api/chat` and `/api/embeddings`; `OLLAMA_URL` overrides host. |
-| `OLLAMA_MODEL` | app/agents/qa/agent.py:32 | `llama3.1:8b-instruct` | Default QA model. |
-| `OLLAMA_EMBED_MODEL` / `EMBED_MODEL` | app/llm/embeddings.py:11 | `nomic-embed-text:latest` | Embedding model for `/api/embeddings`. |
-| `LLM_MODEL` / `LLM_REASONING_MODEL` | app/llm/adapter.py:5-6 | `llama3.1:8b` | Used by the classifier adapter; reasoning flavor via `LLM_REASONING_MODEL`. |
-| `OPENAI_API_KEY`, `OPENAI_BASE` | app/llm/adapter.py:26-33 | – / `https://api.openai.com/v1/chat/completions` | Required when `LLM_PROVIDER=openai`. |
-| `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE` | app/llm/adapter.py:38-44 | – / `https://api.deepseek.com/chat/completions` | Required when `LLM_PROVIDER=deepseek`. |
-| `LLM_TEMPERATURE` | app/services/llm.py:69 | `0` | Temperature for `app/services/llm.py` callers outside QA. |
-| `INDEX_OUTBOX_PATH` | app/index/outbox.py:12-20, app/cli.py:76 | `./tmp/index-outbox.jsonl` | Append-only audit log for ingest/index events (health checks + diagnostics). Runtime worker consumes the DB outbox. |
-| `STORE_BACKEND` | app/cli.py:21, app/stores/provider.py:39 | `memory` | Selects ObjectStore backend (`memory` or `pg`). |
-| `DATABASE_URL` | app/memory/store.py:16, app/stores/pg.py:21 | `postgresql+psycopg://app:app@127.0.0.1:15432/app` | Primary DSN for stores/agents/tests. |
-| `MEMORY_ENABLED` | app/memory/store.py:23 | `true` | Disables the memory store when `false`. |
-| `ASR_MODEL`, `ASR_DEVICE` | app/media/transcribe.py:71-72 | `base`, `auto` | faster-whisper model/device. |
-| `ASR_COMPUTE_TYPE` | (hard-coded `int8` in app/media/transcribe.py:75) | `int8` | Not configurable yet (gap). |
-| `EVENT_LOG` | app/services/events.py:4 | `events.jsonl` | Default audit/event log file. |
-| `TRACE_LOG_PATH` | app/observability/trace_log.py:2 | `/tmp/trace.jsonl` | Output path when trace logging is enabled. |
+| `VAULT_ROOT` | worker/watcher/cli | (none) | Path to the live vault root for watcher/ingest flows. |
+| `VAULT_LAYOUT_NOTE_REL` | `app/vault/layout.py` | (none) | Disambiguate which `vault.layout.md` to load when multiple exist. |
+| `VAULT_SYSTEM_DIR_REL` / `VAULT_INBOX_DIR_REL` / `VAULT_DESK_DIR_REL` | `app/vault/layout.py`, `app/vault/paths.py` | (none) | Folder hints; used when generating/validating layout or resolving paths. |
+| `LLM_PROVIDER` | `app/llm/adapter.py`, `app/llm/embeddings.py` | `ollama` | Selects chat/embedding backend (`ollama`, `mock`, `openai`, `deepseek`). |
+| `LLM_MODEL` / `LLM_REASONING_MODEL` | `app/llm/adapter.py` | `llama3.1:8b` | Chat model; reasoning flavor via `LLM_REASONING_MODEL`. |
+| `LLM_MOCK_RESPONSE` | `app/llm/adapter.py` | `UNSURE` | Returned when `LLM_PROVIDER=mock`. |
+| `LLM_TIMEOUT` | `app/llm/adapter.py`, `app/llm/embeddings.py` | `120` s (chat); `60` s (embeddings) | HTTP timeouts for provider calls. |
+| `OLLAMA_HOST` / `OLLAMA_URL` | `app/llm/adapter.py`, `app/llm/embeddings.py` | `http://127.0.0.1:11434` | Base URL for Ollama chat + embeddings. |
+| `OLLAMA_EMBED_MODEL` / `EMBED_MODEL` | `app/llm/embeddings.py` | `nomic-embed-text:latest` | Embedding model for `/api/embeddings`. |
+| `EMBED_DIM` | `app/embedding_config.py` | `1536` | Expected embedding dimension (identity). |
+| `OPENAI_API_KEY`, `OPENAI_BASE` | `app/llm/adapter.py` | – / OpenAI chat URL | Required when `LLM_PROVIDER=openai`. |
+| `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE` | `app/llm/adapter.py` | – / DeepSeek chat URL | Required when `LLM_PROVIDER=deepseek`. |
+| `INDEX_OUTBOX_PATH` | watcher/cli (`app/outbox/events.py`, `app/index/outbox.py`) | `tmp/index-outbox.jsonl` | JSONL audit log (non-canonical); watcher may append for diagnostics. |
+| `DATABASE_URL` / `DB_DSN` | `app/services/outbox.py`, runtime | (none) | DB connection string (required when DB outbox is enabled/required). |
+| `STORE_BACKEND` | watcher/runtime (`app/watcher/registry.py`) | `memory` | Controls some watcher gating/requirements. |
+| `WATCHER_SCOPE_GLOB` | `app/watcher/registry.py` | `<inbox>/**` | Restricts watcher scanning scope. |
+| `WATCHER_AUTO_EXEC` | `app/watcher/registry.py` | `0` | Auto-exec kill switch (watcher safe automation). |
+| `WATCHER_REQUIRE_DB_OUTBOX` | `app/watcher/registry.py` | `0` | When true, watcher refuses to run without DB outbox env present. |
+| `WATCHER_RATE_LIMIT_PER_MIN` | `app/watcher/registry.py` | `30` | Rate limit for events emitted per minute. |
+| `WATCHER_DEBOUNCE_MS` | `app/watcher/registry.py` | `1500` | Debounce window before scanning again. |
 
 ## Span nodes (`@span`)
-| Node | Location | Purpose | Extra fields |
+| Node | Location (module) | Purpose | Extra fields |
 | --- | --- | --- | --- |
-| `transcribe` | app/media/transcribe.py:122 | Audio transcription (yt-dlp + ffmpeg + faster-whisper). | `extra` only populated on failure (e.g. `CalledProcessError`). |
-| `agent.draft` | app/agents/qa/agent.py:59 | First LLM response + citation enforcement. | `_token_in/out` optional. |
-| `agent.self_check` | app/agents/qa/agent.py:82 | Post-draft validation (references, length). | `extra` carries exception info. |
-| `agent.finalize` | app/agents/qa/agent.py:109 | Adjustments before returning the answer. | None today. |
-| `agent.answer` | app/agents/qa/agent.py:117 | Whole QA pipeline: retrieval → draft → self-check → finalize. | Logs retrieval failures in `extra`. |
-| `health.check` | app/cli/health.py:49 | Local dependency checks + JSON output. | `extra.error` on exception; CLI contains full `checks`. |
+| `transcribe` | `app/media/transcribe.py` | Audio transcription (yt-dlp + ffmpeg + faster-whisper). | `extra` only populated on failure. |
+| `agent.answer` | `app/agents/qa/agent.py` | QA pipeline: retrieval → draft → self-check → finalize. | Logs retrieval failures in `extra`. |
+| `health.check` | `app/cli/health.py` | Local dependency checks + JSON output. | `extra.error` on exception. |
 
 ## CLI surfaces
 All commands run via `python -m app.cli <command>` (Click). `--json` switches to machine-readable output; `--trace-id` can be set manually.
@@ -63,7 +61,7 @@ All commands run via `python -m app.cli <command>` (Click). `--json` switches to
 - **httpx / requests** – also used for OpenAI/DeepSeek (`app/llm/adapter.py:16-47`).
 
 ## Index-outbox JSONL schema
-Defined in `app/index/outbox.py:28-58`. Each line contains at least:
+Defined in `app/index/outbox.py`. Each line contains at least:
 ```json
 {
   "object_id": "uuid4",
@@ -78,20 +76,20 @@ Defined in `app/index/outbox.py:28-58`. Each line contains at least:
   "topic": null
 }
 ```
-Transcribe entries (`app/media/transcribe.py:102-134`) also include `trace_id` before returning. `append_jsonl` always writes a newline and attempts to fan text into the in-memory retrieval store (`app/retrieval/hybrid.py:28-112`).
+Transcribe entries (`app/media/transcribe.py`) also include `trace_id` before returning. `append_jsonl` always writes a newline and attempts to fan text into the in-memory retrieval store (`app/retrieval/hybrid.py`).
 
 ## Errors & edge cases
-- **YouTube anti-bot (403/429)** – `YoutubeDL.extract_info` raises `DownloadError`; CLI surfaces the exception. Use cookies or alternate hosts (see `docs/DEPENDENCIES.md`). (`app/media/transcribe.py:36-38`)
-- **Missing ffmpeg** – `subprocess.run(..., check=True)` raises `CalledProcessError`; health CLI flags the same issue (`app/media/transcribe.py:54-65`, `app/cli/health.py:20-28`).
-- **Missing yt-dlp** – Import error during module load; health CLI signals it (`app/media/transcribe.py:10-15`, `app/cli/health.py:30-36`).
-- **ASR model not installed** – `faster-whisper` raises; message instructs how to install (`app/media/transcribe.py:68-82`).
-- **Ollama offline** – QA and health CLI report `requests.ConnectionError` / `httpx` failures with host info (`app/agents/qa/agent.py:31-48`, `app/cli/health.py:38-49`).
-- **`INDEX_OUTBOX_PATH` unwritable** – `append_jsonl` raises and the health CLI test write fails (`app/index/outbox.py:28-58`, `app/cli/health.py:30-36`).
+- **YouTube anti-bot (403/429)** – `YoutubeDL.extract_info` raises `DownloadError`; CLI surfaces the exception. Use cookies or alternate hosts (see `docs/DEPENDENCIES.md`). (`app/media/transcribe.py`)
+- **Missing ffmpeg** – `subprocess.run(..., check=True)` raises `CalledProcessError`; health CLI flags the same issue (`app/media/transcribe.py`, `app/cli/health.py`).
+- **Missing yt-dlp** – Import error during module load; health CLI signals it (`app/media/transcribe.py`, `app/cli/health.py`).
+- **ASR model not installed** – `faster-whisper` raises; message instructs how to install (`app/media/transcribe.py`).
+- **Ollama offline** – QA and health CLI report HTTP failures with host info (`app/agents/qa/agent.py`, `app/cli/health.py`).
+- **`INDEX_OUTBOX_PATH` unwritable** – `append_jsonl` raises and the health CLI test write fails (`app/index/outbox.py`, `app/cli/health.py`).
 
 ## Cache, timeout, and breaker policy
-- `_MODEL_CACHE` keeps `(ASR_MODEL, ASR_DEVICE)` → `WhisperModel` (`app/media/transcribe.py:19-76`). No eviction; restart to free memory.
-- `_embed_single` is `@lru_cache(maxsize=512)` and reuses embeddings per text/provider/model (`app/llm/embeddings.py:27-43`).
+- `_MODEL_CACHE` keeps `(ASR_MODEL, ASR_DEVICE)` → `WhisperModel` (`app/media/transcribe.py`). No eviction; restart to free memory.
+- `_embed_single` is `@lru_cache(maxsize=2048)` and reuses embeddings per text/provider/model (`app/llm/embeddings.py`).
 - `LLM_TIMEOUT` governs Ollama/OpenAI/DeepSeek HTTP calls (60–120 s). No automatic retry yet; see `docs/LLM_BACKENDS.md`.
-- `CircuitBreaker` and `timeout_wrapper` live in `app/quality/guardrails.py:32-61`; mostly used outside QA today (gap documented).
-- Span logging always includes latency in ms and `status` (`app/obs/log.py:20-58`), powering the `jq` recipes in `docs/OBSERVABILITY.md`.
+- `CircuitBreaker` and `timeout_wrapper` live in `app/quality/guardrails.py`; usage varies by subsystem.
+- Span logging includes latency and status (`app/obs/log.py`), powering the `jq` recipes in `docs/OBSERVABILITY.md`.
 <!-- SECTION:INVENTORY:END -->

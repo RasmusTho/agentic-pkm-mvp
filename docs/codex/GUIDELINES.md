@@ -1,4 +1,4 @@
-State: v5.5 baseline aligned (legacy sections retained where noted; registry watcher default, DB outbox canonical, JSONL audit log non-canonical; watcher auto-run gated; LangGraph planner opt-in).
+State: Dev-layer guidelines (historical). This file may lag the current architecture; prefer `docs/DEV_WORKFLOW.md` + `docs/AI_DEVELOPMENT.md` and the repo tests/contracts.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.

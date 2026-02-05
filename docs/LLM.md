@@ -1,4 +1,4 @@
-State: v5.5 baseline aligned (legacy sections retained where noted; registry watcher default, DB outbox canonical, JSONL audit log non-canonical; watcher auto-run gated; LangGraph planner opt-in).
+State: SoT v5.5 baseline (descriptive). This doc describes the env vars and endpoints used by the current LLM + embeddings adapters.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -6,61 +6,68 @@ State: v5.5 baseline aligned (legacy sections retained where noted; registry wat
 - Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
-# LLM
+# LLM (Chat + Embeddings)
 
-This doc describes how the system selects and configures the LLM provider(s) used for **chat/completions** and **embeddings**.
+This document describes how the system selects/configures the LLM provider(s) used for:
+- **Chat/completions** (classification, answering, panel helpers, etc.)
+- **Embeddings** (retrieval/indexing)
 
-For the detailed, end-to-end embedding contract (identity, dimensions, failure events, rebuild rules), see:
-- `docs/EMBEDDINGS.md`
+For the normative embedding identity + rebuild contract, see `docs/EMBEDDINGS.md`.
 
-## Providers
+## Providers (Current)
+`LLM_PROVIDER` controls both chat and embeddings.
 
-Supported `LLM_PROVIDER` values:
+- `ollama` (default): chat via Ollama `/api/chat`; embeddings via Ollama `/api/embeddings` with fallback to `/v1/embeddings`.
+- `mock`: deterministic, no network calls.
+- `openai`: chat via OpenAI-compatible Chat Completions API.
+- `deepseek`: chat via DeepSeek API.
 
-- `ollama` (default in local/dev): uses `OLLAMA_HOST`
-- `mock`: deterministic mock behavior for tests/CI
-
-## Core configuration
+## Core Environment Variables (Current Reality)
 
 ### Common
+- `LLM_PROVIDER` (default: `ollama`)
+- `LLM_MODEL` (default: `llama3.1:8b`) used for chat/completions
+- `LLM_REASONING_MODEL` (default: `LLM_MODEL`) used when callers request reasoning mode
+- `LLM_TIMEOUT` (seconds)
+  - chat defaults to 120s in `app/llm/adapter.py`
+  - embeddings defaults to 60s in `app/llm/embeddings.py`
 
-- `LLM_PROVIDER`
-  - Example: `ollama`
+### Ollama (Chat)
+- `OLLAMA_HOST` (default: `http://127.0.0.1:11434`)
+  - Chat endpoint: `${OLLAMA_HOST}/api/chat`
 
-### Ollama
+### Ollama (Embeddings)
+Embeddings are handled by `app/llm/embeddings.py`.
 
-- `OLLAMA_HOST`
-  - Example: `http://host.docker.internal:11434`
-- `LLM_MODEL` (chat)
-  - Example: `llama3.1:8b`
+- Base URL:
+  - `OLLAMA_URL` (preferred) or `OLLAMA_HOST` (fallback)
+  - Both support an OpenAI-compat suffix; `.../v1` is normalized internally.
+- Model:
+  - `OLLAMA_EMBED_MODEL` or `EMBED_MODEL` (default: `nomic-embed-text:latest`)
+- Dimensions:
+  - `EMBED_DIM` (default: `1536`, pulled from settings when available)
+  - `OLLAMA_EMBED_DIMENSIONS` controls whether we include `dimensions` in the payload (default: included).
+- Endpoint:
+  - Primary: `${OLLAMA_URL}/api/embeddings`
+  - Fallback: `${OLLAMA_URL}/v1/embeddings`
+- Normalization:
+  - `app/embedding_config.py` applies L2 normalization by default in `embed_text()` unless callers opt out.
 
-### Embeddings
+### Mock
+- `LLM_MOCK_RESPONSE` controls the content returned by the chat adapter when `LLM_PROVIDER=mock`.
 
-Embeddings configuration is separate from chat;
-- Default local plan:
-  - `EMBED_MODEL=nomic-embed-text:latest`
-  - `EMBED_DIM=768`
-  - `EMBED_NORMALIZE=1` (normalized vectors by default)
-- `EMBED_MODEL`
-  - Example: `nomic-embed-text:latest`
-- `EMBED_DIM`
-  - Example: `768`
-  - Must match the provider’s actual output dimension. If this changes, the embedding identity changes and the VectorIndex must be rebuilt.
-- When `LLM_PROVIDER=ollama`, the runtime posts to the Ollama-native `/api/embed` endpoint with `{model, input, dimensions, truncate: true}`; the OpenAI-compatible `/api/embeddings` path is only used when that compatibility layer is explicitly enabled on the daemon.
+### OpenAI / DeepSeek (Chat)
+- `OPENAI_API_KEY` (+ optional `OPENAI_BASE`, default `https://api.openai.com/v1/chat/completions`)
+- `DEEPSEEK_API_KEY` (+ optional `DEEPSEEK_BASE`, default `https://api.deepseek.com/chat/completions`)
 
-Optional:
-- `EMBED_NORMALIZE`
-  - Default behavior is normalized vectors; disabling it changes the embedding identity.
+## Delta / Known Limits
+- Embeddings are implemented for `mock` and `ollama` in the current code; `openai`/`deepseek` embeddings are not wired here today.
+- Diagnostics note: `python -m app.cli llm check` uses `OPENAI_BASE_URL` (OpenAI-compatible base) rather than `OPENAI_BASE` (chat completions URL) when probing non-Ollama providers.
+- If you change `EMBED_DIM`, you must treat it as an embedding identity change and rebuild any derived embedding stores (see `docs/EMBEDDINGS.md`).
 
-## Runtime contract
-
-- Chat calls should go through the LLM adapter layer.
-- Embedding calls must go through the provider-aware embedding helper (see `docs/EMBEDDINGS.md`).
-
-## Quick sanity checks
-
-- `/api/health` should confirm ollama is reachable and lists models.
-- If you see `index.embedding.failed` with a dim mismatch, validate:
-  - `EMBED_MODEL` is pointing at `nomic-embed-text:latest` (or the chosen model)
-  - `EMBED_DIM` matches the provider output (768 for the default model)
-  - You are calling the intended `OLLAMA_HOST` instance
+## Quick Checks
+- With Ollama running locally:
+  - `OLLAMA_URL=http://127.0.0.1:11434 LLM_PROVIDER=ollama python -m app.cli llm check --strict`
+- If embeddings fail:
+  - confirm `EMBED_DIM` matches the provider output and that the model supports the requested dimension behavior
+  - confirm the endpoint is reachable (`OLLAMA_URL` / `OLLAMA_HOST`)
