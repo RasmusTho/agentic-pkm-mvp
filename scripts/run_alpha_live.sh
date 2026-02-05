@@ -27,7 +27,7 @@ export INDEX_OUTBOX_PATH="${INDEX_OUTBOX_PATH:-$ROOT/tmp/index-outbox.jsonl}"
 mkdir -p "$ROOT/tmp"
 
 echo "Vault: $WATCHER_VAULT_PATH"
-echo "Scope: ${WATCHER_SCOPE_GLOB:-<default: **/*.md>}"
+echo "Scope: ${WATCHER_SCOPE_GLOB:-<default: *.md,**/*.md>}"
 echo "Policy: POLICY_ENFORCE=$POLICY_ENFORCE"
 echo "Stop:   touch $ROOT/tmp/WATCHER_STOP   (resume: rm $ROOT/tmp/WATCHER_STOP)"
 echo

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import fnmatch
+from app.watcher.scope import matches_scope
 import hashlib
 import json
 import time
@@ -44,8 +44,7 @@ def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
 
 
 def _matches_scope(rel_path: Path, scope_glob: str) -> bool:
-    rel_str = str(rel_path)
-    return fnmatch.fnmatch(rel_str, scope_glob)
+    return matches_scope(rel_path, scope_glob)
 
 
 def _scan_markdown(vault_root: Path, scan_root: Path, scope_glob: str) -> Iterable[tuple[Path, float, Path]]:

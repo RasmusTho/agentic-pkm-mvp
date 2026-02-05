@@ -54,8 +54,8 @@ def test_default_scope_glob_from_layout(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("WATCHER_SCOPE_GLOB", raising=False)
 
     scope, source, inbox_source = registry._resolve_scope_glob(tmp_path)
-    assert scope == "**/*.md"
-    assert source == "default"
+    assert scope == "*.md,**/*.md"
+    assert source == "default:vaultwide"
     assert inbox_source == ""
 
 

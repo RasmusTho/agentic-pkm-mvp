@@ -11,7 +11,7 @@ from app.watcher.heartbeat import DEFAULT_HEARTBEAT_PATH, resolve_heartbeat_path
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
-DEFAULT_SCOPE_GLOB = "**/*.md"
+DEFAULT_SCOPE_GLOB = "*.md,**/*.md"
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ class WatcherConfig:
         vault_path = Path(vault_raw or ".").expanduser()
 
         scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()
-        scope_source = "env" if scope_env else "default"
+        scope_source = "env:WATCHER_SCOPE_GLOB" if scope_env else "default:vaultwide"
         scope_glob = scope_env if scope_env else _default_scope_glob(vault_path)
         logger.info(
             "watcher scope resolved vault_path=%s scope_glob=%s provenance=%s",

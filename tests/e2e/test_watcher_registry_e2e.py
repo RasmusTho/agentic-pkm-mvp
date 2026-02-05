@@ -145,8 +145,8 @@ def test_watcher_registry_uses_env_paths_heals_uuid_and_applies_panel_policy(
 
     cfg = registry.load_registry_config(config_path)
     assert cfg.vault_path == vault_root
-    assert cfg.scope_glob == "**/*.md"
-    assert all(spec.scope_glob == "**/*.md" for spec in cfg.specs)
+    assert cfg.scope_glob == "*.md,**/*.md"
+    assert all(spec.scope_glob == "*.md,**/*.md" for spec in cfg.specs)
 
     registry.run_registry_forever(config_path, max_ticks=2)
 

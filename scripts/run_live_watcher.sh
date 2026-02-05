@@ -22,7 +22,7 @@ export INDEX_OUTBOX_PATH="${INDEX_OUTBOX_PATH:-$ROOT/tmp/index-outbox.jsonl}"
 mkdir -p "$ROOT/tmp"
 
 echo "Vault: $WATCHER_VAULT_PATH"
-echo "Scope: ${WATCHER_SCOPE_GLOB:-<default: **/*.md>}"
+echo "Scope: ${WATCHER_SCOPE_GLOB:-<default: *.md,**/*.md>}"
 echo "Outbox: $INDEX_OUTBOX_PATH"
 echo "Stop:   touch $ROOT/tmp/WATCHER_STOP"
 echo

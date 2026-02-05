@@ -109,5 +109,5 @@ def test_registry_scope_glob_defaults_vaultwide(tmp_path: Path, monkeypatch: pyt
     monkeypatch.delenv("WATCHER_SCOPE_GLOB", raising=False)
 
     cfg = registry.load_registry_config(config_path)
-    assert cfg.scope_glob == "**/*.md"
-    assert cfg.specs[0].scope_glob == "**/*.md"
+    assert cfg.scope_glob == "*.md,**/*.md"
+    assert cfg.specs[0].scope_glob == "*.md,**/*.md"

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import fnmatch
+from app.watcher.scope import matches_scope
 import hashlib
 import json
 import logging
@@ -31,7 +31,7 @@ from scripts.yaml_roundtrip import load_frontmatter
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
-DEFAULT_SCOPE_GLOB = "**/*.md"
+DEFAULT_SCOPE_GLOB = "*.md,**/*.md"
 
 MIN_TICK_SLEEP_SECONDS = 0.05
 
@@ -60,10 +60,10 @@ def _resolve_scope_glob(vault_root: Path) -> tuple[str, str, str]:
 
     scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()
     if scope_env:
-        return scope_env, "env", ""
+        return scope_env, "env:WATCHER_SCOPE_GLOB", ""
 
     del vault_root
-    return DEFAULT_SCOPE_GLOB, "default", ""
+    return DEFAULT_SCOPE_GLOB, "default:vaultwide", ""
 
 
 def _now_iso() -> str:
@@ -79,8 +79,7 @@ def _hash_file(path: Path) -> tuple[str, int] | None:
 
 
 def _matches_scope(rel_path: Path, scope_glob: str) -> bool:
-    rel_str = str(rel_path)
-    return fnmatch.fnmatch(rel_str, scope_glob)
+    return matches_scope(rel_path, scope_glob)
 
 
 def _scan_markdown(vault_root: Path, scan_root: Path, scope_glob: str) -> Iterable[tuple[Path, float, Path]]:
