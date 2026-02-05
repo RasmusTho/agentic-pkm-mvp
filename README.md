@@ -11,6 +11,10 @@ Start here:
 - `docs/STATUS.md` — current baseline reality (v5.5) + forward line (v5.6)
 - `docs/ARCHITECTURE.md` — runtime architecture + contracts (v5.5 baseline)
 
+Prereqs:
+- Python **>= 3.12** (see `docs/PYTHON_VERSION_POLICY.md`).
+- For full runtime: Docker + Docker Compose.
+
 ## What Works Today (SoT v5.5 Baseline)
 - **Registry watcher (runtime default)** scans a bounded scope and enqueues events.
 - **DB outbox is canonical** (worker queue). JSONL (`INDEX_OUTBOX_PATH`) is audit/diagnostic only.
@@ -62,6 +66,23 @@ Common safety switches:
 - `WATCHER_AUTO_EXEC=0` keeps watcher in emit-only mode.
 - `WATCHER_SCOPE_GLOB="<inbox>/**"` restricts watcher scanning (default derives from vault layout/inbox).
 
-## History
-SoT v4.10 is the historical Reality-MVP foundation snapshot. The current baseline is v5.5; forward-line work for v5.6 is tracked in `docs/V56_FORWARD_LINE.md`.
+## Golden Path (Alpha E2E)
+The canonical “does the whole chain work?” contract lives in `docs/E2E_ALPHA.md`.
 
+```bash
+export VAULT_ROOT="/path/to/vault"
+make alpha-up
+python -m scripts.alpha_e2e
+make alpha-smoke
+```
+
+## CI Gates (Fitness Summary)
+CI jobs parse `CI SUMMARY …` lines and fail merges when `GATES.ok != true`.
+See `docs/CI.md` and `docs/tracks/TRACK_FITNESS_CI_CONTRACT.md`.
+
+## History
+SoT v4.10 is the historical Reality-MVP foundation snapshot (not current runtime truth). References:
+- `docs/SYSTEM_DESIGN_v4.10.md`
+- `docs/history/SOT_4X_HISTORY.md`
+
+The current baseline is v5.5; forward-line work for v5.6 is tracked in `docs/V56_FORWARD_LINE.md`.
