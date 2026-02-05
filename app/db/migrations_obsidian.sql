@@ -23,15 +23,27 @@ CREATE TABLE IF NOT EXISTS public.agent_memories(
 CREATE INDEX IF NOT EXISTS agent_memories_created_at_idx ON public.agent_memories (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS public.objects(
-  uuid uuid PRIMARY KEY,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  uuid uuid,
   kind text NOT NULL,
   path text,
   source_ref text,
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS id uuid;
+ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS uuid uuid;
 ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS source_ref text;
 ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS path text;
+
+-- Backfill/migrate legacy schemas that used uuid as the only identifier.
+UPDATE public.objects SET id = uuid WHERE id IS NULL AND uuid IS NOT NULL;
+UPDATE public.objects SET id = gen_random_uuid() WHERE id IS NULL;
+UPDATE public.objects SET uuid = id WHERE uuid IS NULL;
+
+ALTER TABLE public.objects DROP CONSTRAINT IF EXISTS objects_pkey;
+ALTER TABLE public.objects ADD CONSTRAINT objects_pkey PRIMARY KEY (id);
+CREATE UNIQUE INDEX IF NOT EXISTS objects_uuid_idx ON public.objects(uuid);
 CREATE INDEX IF NOT EXISTS objects_created_at_idx ON public.objects (created_at DESC);
 CREATE INDEX IF NOT EXISTS objects_source_ref_idx ON public.objects (source_ref);
 
