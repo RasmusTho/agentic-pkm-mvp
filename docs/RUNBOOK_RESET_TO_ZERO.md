@@ -28,7 +28,7 @@ Before bringing the stack up, pick the desired LLM provider and embed configurat
 ```
 export LLM_PROVIDER=<ollama|mock|openai>
 export EMBED_MODEL=nomic-embed-text:latest
-export EMBED_DIM=768
+export EMBED_DIM=1536
 docker compose up -d --build db api worker watcher
 ```
 

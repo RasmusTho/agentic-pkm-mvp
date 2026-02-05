@@ -28,7 +28,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 ## Forward line: SoT v5.6 (Now / Next / Later)
 ### Now
 - Ground the v5.6 objectives in a docs-first kickoff: the detailed plan in `docs/V56_FORWARD_LINE.md` captures the pillars, acceptance criteria, and immediate signal checks the forward line needs to ship.
-- Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, and skipped receipts are surfaced in status, events, and the new CLI `settings explain` output before any runtime gate opens.
+- Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, and skipped receipts are surfaced in status, events, and the new CLI `settings-explain` output before any runtime gate opens.
 - Harden the PanelAgent LangGraph pilot (panel action catalog + planner pipeline + promotion consumer) so its telemetry, provenance, and gating sensors stay deterministic while remaining opt-in.
 ### Next
 - Sequence the ReasoningFacade + LangGraph rollout for one additional agent pool, ensuring instrumentation feeds into the fitness gates and the orchestrator V2 experiment flag remains gated until stability signals arrive.
