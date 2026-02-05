@@ -151,6 +151,46 @@ def _upsert_block(
     lines[insert_at:insert_at] = block
 
 
+def _existing_suggested_action_checks(panel: list[str]) -> tuple[dict[str, bool], dict[str, bool], list[str]]:
+    start = end = None
+    for idx, line in enumerate(panel):
+        if line.strip() == _SUGGESTED_ACTIONS_START:
+            start = idx + 1
+            break
+    if start is None:
+        return {}, {}, []
+    for idx in range(start, len(panel)):
+        if panel[idx].strip() == _SUGGESTED_ACTIONS_END:
+            end = idx
+            break
+    if end is None or end < start:
+        return {}, {}, []
+
+    existing_by_id: dict[str, bool] = {}
+    existing_by_label: dict[str, bool] = {}
+    extra_lines: list[str] = []
+    default_ids = {_stable_action_id(label) for label in _SUGGESTED_ACTIONS}
+
+    for raw in panel[start:end]:
+        match = _ACTION_PATTERN.match(raw)
+        if not match:
+            continue
+        checked = (match.group(2) or "").strip().lower() == "x"
+        label = (match.group(3) or "").strip()
+        if not label:
+            continue
+        action_id = (match.group(5) or "").strip() or _stable_action_id(label)
+
+        existing_by_id[action_id] = checked
+        existing_by_label[label] = checked
+
+        if action_id not in default_ids:
+            mark = "x" if checked else " "
+            extra_lines.append(f"- [{mark}] {label} <!--ai:id={action_id}-->")
+
+    return existing_by_id, existing_by_label, extra_lines
+
+
 def _ensure_heading(lines: list[str], heading: str) -> int:
     target = heading.strip().lower()
     for idx, raw in enumerate(lines):
@@ -212,9 +252,17 @@ def _ensure_panel_assist(markdown: str, *, create_if_missing: bool) -> str:
     if actions_insert_at < len(panel) and panel[actions_insert_at].strip() != "":
         panel.insert(actions_insert_at, "")
         actions_insert_at += 1
+    existing_by_id, existing_by_label, extras = _existing_suggested_action_checks(panel)
     suggested_block = [
         _SUGGESTED_ACTIONS_START,
-        *[f"- [ ] {label}" for label in _SUGGESTED_ACTIONS],
+        *[
+            (
+                f"- [{'x' if (existing_by_id.get(_stable_action_id(label)) or existing_by_label.get(label)) else ' '}] "
+                f"{label} <!--ai:id={_stable_action_id(label)}-->"
+            )
+            for label in _SUGGESTED_ACTIONS
+        ],
+        *extras,
         _SUGGESTED_ACTIONS_END,
         "",
     ]
