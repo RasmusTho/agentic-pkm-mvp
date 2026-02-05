@@ -93,12 +93,12 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | docs/FRONTMATTER.md | Frontmatter rules | Aligned (forward line v5.x) | 2025-12-28 | Defines metadata layers, ownership, and the warm-surface write contract. |
 | docs/DATA_MODEL.md | Data model | Aligned (forward line v5.x) | 2025-12-28 | DB mirror of the Core-6 contract; derived overlays are rebuildable. |
 | docs/DATA_GOVERNANCE.md | Data governance | Aligned (forward line v5.x) | 2025-12-17 | Clarifies canonical vs derived artifacts, trust semantics, and auditable persistence. |
-| docs/DB_SCHEMA.md | DB schema | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Current store_* tables documented; legacy AMG tables retained as historical. |
-| docs/SCORECARDS.md | Scorecards | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Draft targets only; not enforced in Reality-MVP. |
+| docs/DB_SCHEMA.md | DB schema | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Snapshot of current tables/views + DB outbox bootstrap; notes multiple historical Alembic heads. |
+| docs/SCORECARDS.md | Scorecards | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Spec only (not enforced by runtime unless tests/gates consume it). |
 | docs/PROJECTOR.md | Projector | Aligned (forward line v5.x, with known debt) | 2026-02-04 | Promotion projector emits audit/membership; no filesystem projection. |
 | docs/ALIGNMENT.md | Alignment guide | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
 | docs/SETTINGS.md | Settings | Aligned (forward line v5.x, with known debt) | 2026-02-04 | Core env vars (STORE_BACKEND/LLM/metrics flags) documented. |
-| docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Planned API key + slowapi; not implemented in Reality-MVP. |
+| docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Implemented for key routers (API key + SlowAPI); doc lists remaining wiring gaps. |
 | docs/ingest.md | Ingest (historical/current) | Aligned (forward line v5.x, with known debt) | 2026-02-04 | Vault-first ingest (CLI, UUID healing, mirror, HybridStore); legacy commands noted. |
 | docs/OBSIDIANSYNC.md | Obsidian sync | Aligned (forward line v5.x) | 2026-01-28 | Registry watcher runtime + DB outbox canonical queue. |
 | docs/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
@@ -110,8 +110,8 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | docs/INVENTORY.md | Runtime inventory | Aligned (forward line v5.x, with known debt) | 2026-02-04 | Key env vars/CLI surfaces; defaults mock/ollama. |
 | docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x, with known debt) | 2026-02-04 | Updated definitions for hybrid/rerank/outbox/health. |
 | docs/QUALITY.md | Quality | Aligned (forward line v5.x) | 2026-02-04 | QA guardrails + fitness gates aligned with v5.5 baseline. |
-| docs/CONTRIBUTING.md | Contributing guide | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Setup/tests template; defer to DEV_WORKFLOW/CI for current practice. |
-| docs/CHANGELOG.md | Docs changelog | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Tracks doc updates; may lag implementations. |
+| docs/CONTRIBUTING.md | Contributing guide | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Practical quickstart; defers deep workflow to DEV_WORKFLOW/TESTING. |
+| docs/CHANGELOG.md | Docs changelog | Legacy (archived) | 2026-02-05 | Historical; prefer STATUS/ROADMAP for current baseline and forward line. |
 | docs/PRIVACY.md | Privacy | Aligned (forward line v5.x) | 2026-02-04 | Local-first, outbound only on optional remote LLMs. |
 | docs/HEALTH.md | Health checks | Aligned (forward line v5.x) | 2026-02-04 | CLI health checks (ffmpeg/yt-dlp/outbox/ollama) + ci-smoke reference. |
 | docs/LLM_BACKENDS.md | LLM backends | Aligned (forward line v5.x, with known debt) | 2026-02-04 | Providers mock/ollama/openai/deepseek; timeouts/keys noted. |
@@ -180,7 +180,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/eval.md | Eval stack | Aligned (forward line v5.x, with known debt) | 2026-02-04 | Opt-in DeepEval/Ragas suites; skips when deps/LLM missing. |
-| docs/SCORECARDS.md | Scorecards | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Draft targets only; not enforced in Reality-MVP. |
+| docs/SCORECARDS.md | Scorecards | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Spec only (not enforced by runtime unless tests/gates consume it). |
 | docs/QUALITY.md | Quality | Aligned (forward line v5.x) | 2026-02-04 | QA guardrails + fitness gates aligned with v5.5 baseline. |
 
 ## Agents / Codex Guidance

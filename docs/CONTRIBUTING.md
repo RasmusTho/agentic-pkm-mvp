@@ -1,4 +1,4 @@
-State: v5.5 baseline aligned (legacy sections retained where noted; registry watcher default, DB outbox canonical, JSONL audit log non-canonical; watcher auto-run gated; LangGraph planner opt-in).
+State: SoT v5.5 baseline (practical contributor guide; if steps drift, update this file or defer explicitly to DEV_WORKFLOW/CI).
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -9,22 +9,24 @@ State: v5.5 baseline aligned (legacy sections retained where noted; registry wat
 # Contributing
 
 ## Toolchain
-- Python 3.11+
-- Poetry or venv + pip
+- Python: see `docs/PYTHON_VERSION_POLICY.md` (CI smoke currently uses 3.12; local dev may be newer).
+- venv + pip (repo supports editable installs via `pyproject.toml`).
 - Docker and Docker Compose
-- Postgres 16 with pgvector
+- Postgres (used for DB outbox + store in runtime mode)
 - Optional: Ollama for local LLMs
 
 ## Setup
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-docker compose -f docker-compose.yaml up -d postgres
-export DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app"
-PYTHONPATH="$(pwd)" alembic upgrade head
+python -m pip install -U pip
+if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
 
 ## Running tests
-PYTHONPATH="$(pwd)" DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" pytest -q
+- Default quick run:
+  - `make smoke`
+- Deeper runs:
+  - see `docs/TESTING.md` and `docs/DEV_WORKFLOW.md`
 
 ## Branching and commits
 - Branch format: feature/<slug>, chore/<slug>, fix/<slug>
@@ -38,9 +40,8 @@ PYTHONPATH="$(pwd)" DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/a
 - Deterministic functions for agents; no non-reproducible sleeps or random seeds
 
 ## Database
-- Never edit existing migrations; write a new one
-- Idempotent writes (UPSERT)
-- Include trace_id in all audit rows
+- Store schema is managed via Alembic migrations in `app/alembic/`.
+- DB outbox table is ensured at runtime by `app/services/outbox.py:bootstrap()` (not via Alembic).
 
 ## Review checklist
 - Tests pass locally
