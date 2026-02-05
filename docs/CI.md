@@ -16,6 +16,12 @@ State: SoT v5.5 Reality-MVP baseline locked (watcher/panel safety) with fitness 
 - `.github/workflows/ci.yml`, `.github/workflows/ci-smoke.yaml`, and `.github/workflows/ci-lite.yml` parse those summary lines and exit non-zero whenever `GATES.ok != true`, making them the enforced gate jobs for baseline stability.
 - `tests/ci/test_gates_enforcement.py` proves the parser raises when `CI SUMMARY GATES ok=false` so regressions fail fast.
 
+## Vaultwide panel gate
+- CI Smoke enforces `bash scripts/verify_vaultwide_panel.sh` using a temp vault mounted via `VAULT_ROOT=tmp/ci-vault` (no secrets).
+- Local equivalent:
+  - `VAULT_ROOT=tmp/ci-vault docker compose up -d --build db api watcher worker && bash scripts/verify_vaultwide_panel.sh`
+  - `docker compose down -v`
+
 ## Local lint/test
 ruff check app tests
 mypy app
