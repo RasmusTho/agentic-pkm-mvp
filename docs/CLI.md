@@ -1,30 +1,53 @@
-State: SoT v4.10 (current; details may lag ARCHITECTURE).
+State: SoT v5.5 baseline (descriptive, partial). The CLI evolves quickly; prefer `python -m app.cli --help` for the authoritative command list.
+
+## v5.5 Baseline Delta (Current Reality)
+- Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
+- DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
+- Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
+- See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
+
 # CLI Reference
 
-Click-based CLI surfaces ingestion, transcription, and health checks via `python -m app.cli`.
+Click-based CLI surfaces ingest, watcher/runtime loop controls, settings tools, and diagnostics via `python -m app.cli`.
+
+Authoritative discovery:
+- `python -m app.cli --help`
+- `python -m app.cli <command> --help`
 
 <!-- SECTION:CLI:BEGIN -->
-## Commands
-| Command | Description | Key flags |
-| --- | --- | --- |
-| `normalize SOURCE` | Materialize file/URL and run the normalizer agent. | `--json`, `--trace-id`. |
-| `classify OBJECT_ID` | Classify a previously normalized object. | `--json`, `--trace-id`. |
-| `transcribe SOURCE` | yt-dlp → ffmpeg → faster-whisper (URL or file). | `--json`, `--trace-id`. |
-| `pipe SOURCE` | normalize → classify (auto-transcribe for audio candidates). | `--json`, `--trace-id`. |
-| `health` | Local dependency checks. | `--json`, `--trace-id`. |
+## Common Commands (Stable Workflows)
+| Command | Description |
+| --- | --- |
+| `health` | Local dependency checks (ffmpeg/yt-dlp/outbox/LLM reachability). |
+| `smoke` | Quick repo smoke tests / checks (CI-oriented). |
+| `watcher daemon` | Run the registry watcher daemon (scope, debounce, guardrails). |
+| `runtime-loop` | Run watcher→panel→promotion loop once or continuously (operator entrypoint). |
+| `settings-validate` | Validate settings artifacts and compiled settings. |
+| `settings-explain` | Explain settings provenance / resolution. |
+| `llm check` | Probe LLM/embedding endpoint reachability. |
 
 ## Commands → Human Flows
 
 | Command | Human Flow | Description |
 | --- | --- | --- |
-| `python -m app.cli pipe` | Capture & Ingest | Normalize and ingest files/notes (with auto-transcribe for audio) |
-| `python -m app.cli ask` | ASK | Ask questions against the indexed store |
+| `python -m app.cli runtime-loop` | Runtime Loop | Watcher tick → panel parse → promotion consumer (opt-in). |
+| `python -m app.cli watcher daemon` | Watcher | Continuous vault scan inside scope with guardrails. |
+| `python -m app.cli ask` | ASK | Ask questions via the orchestrator pipeline. |
 
-See `docs/HUMAN-FLOWS.md` for flow semantics and `docs/SYSTEM_DESIGN_v4.10.md` for how the CLI fits into the surfaces/topology.
+See `docs/HUMAN-FLOWS.md` for flow semantics and `docs/OPERATIONS.md` for operator runbooks.
 
 ## Examples
 ```bash
-# Normalize a file and return the object_id
+# Health check before a run
+LLM_PROVIDER=mock python -m app.cli health --json
+
+# Run the runtime loop once (operator entrypoint)
+python -m app.cli runtime-loop --once
+
+# Run watcher daemon (scan + emit)
+python -m app.cli watcher daemon
+
+# Normalize a file and return the object_id (legacy-ish utility; still supported)
 python -m app.cli normalize notes/idea.md --json
 
 # Transcribe a YouTube clip with an explicit trace id
@@ -33,8 +56,8 @@ python -m app.cli transcribe https://youtu.be/ID --json --trace-id yt123
 # Run the full pipeline with optional auto-transcribe
 python -m app.cli pipe notes/meeting.md
 
-# Health check before a release
-LLM_PROVIDER=mock python -m app.cli health --json
+# Inspect settings provenance
+python -m app.cli settings-explain --json
 ```
 
 ## Exit codes

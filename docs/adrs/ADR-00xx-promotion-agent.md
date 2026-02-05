@@ -1,10 +1,15 @@
+State: ADR (historical).
 # ADR-00xx: Promotion Agent – Event-Driven Human-First Lifecycle
 
 ## Status
 Accepted — SoT v4.4 baseline
 
+## Delta vs SoT v5.5 baseline (current)
+- The DB outbox is the canonical queue; JSONL is audit/diagnostic only.
+- Promotion is driven by `promote.intent.created` events consumed from the DB outbox and guarded by idempotency/dedup stores; file moves remain policy-gated and may be disabled by default.
+
 ## Context
-The previous workflow exposed “processed” and “promoted” states to users, requiring manual actions or plugins to move notes through the lifecycle. This caused unnecessary cognitive load and UI noise in Obsidian, while promotion itself was a purely mechanical transition. The system already implements event-driven agents, JSONL outbox logging, and a PER (Plan-Execute-Reflect) loop shared across all agents.
+The previous workflow exposed “processed” and “promoted” states to users, requiring manual actions or plugins to move notes through the lifecycle. This caused unnecessary cognitive load and UI noise in Obsidian, while promotion itself was a purely mechanical transition. The system already implements event-driven agents, a canonical DB outbox (plus JSONL audit logging), and a PER (Plan-Execute-Reflect) loop shared across many agents.
 
 ## Decision
 Introduce a Promotion Agent that executes human intent to promote files, expressed as lightweight frontmatter or checkbox intents inside the vault. The agent runs as a worker in the existing PER-loop ecosystem, consuming `promote.intent.created` events and producing `promote.done` or `promote.pending_move` outcomes.

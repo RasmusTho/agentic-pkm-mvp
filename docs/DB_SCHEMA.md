@@ -1,64 +1,81 @@
-State: Historical / partially outdated (e.g. SoT v4.2). See ARCHITECTURE SoT v4.10 for current intent.
-# DB SCHEMA
+State: SoT v5.5 baseline (descriptive of current DB schema + runtime bootstrap; if this doc and migrations disagree, treat the code as source of truth and record the delta here).
 
-## objects
-- id uuid pk
-- kind text
-- source_ref text
-- ts timestamptz default now()
-- payload jsonb
-- search_vector tsvector (generated from payload fields)
+## v5.5 Baseline Delta (Current Reality)
+- Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
+- DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
+- Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
+- See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
-## chunks
-- id uuid pk
-- object_id uuid fk→objects(id) on delete cascade
-- idx int
-- offset_start int
-- offset_end int
-- text text
+# DB Schema (Current Reality)
 
-## embeddings
-- id uuid pk (equals object_id for object-level, or chunk uuid if per-chunk)
-- object_id uuid fk→objects(id)
-- model text
-- dim int
-- vec vector
+## Source Of Truth
+- Alembic migrations under `app/alembic/versions/` define the **store** tables/views.
+- `app/services/outbox.py` (`bootstrap()`) defines the **DB outbox** table (canonical queue) at runtime.
 
-## relations
-- id uuid pk
-- src uuid
-- dst uuid
-- kind text
-- payload jsonb
+This document is a human-readable snapshot of what the code creates/uses in the v5.5 baseline. If you change the schema, update this doc in the same PR.
 
-## sets
-- id uuid pk
-- name text
-- payload jsonb
+## Core Tables (Store)
 
-## membership
-- set_id uuid fk→sets(id)
-- object_id uuid fk→objects(id)
-- role text
-- payload jsonb
+### `objects`
+- `id` (`uuid`, PK)
+- `kind` (`text`)
+- `source_ref` (`text`, optional in some historical migrations)
+- `payload` (`jsonb`, default `{}`)
+- `created_at` / `updated_at` (`timestamptz`, default `now()`)
+- Notes:
+  - Some historical branches add an optional `uuid` column + index; do not rely on it unless your migration head includes it.
 
-## decisions
-- id uuid pk
-- object_id uuid fk→objects(id)
-- key text
-- value jsonb
-- created_at timestamptz default now()
+### `chunks`
+- `id` (`uuid`, PK)
+- `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
+- `idx` (`int`)
+- `offset_start` / `offset_end` (`int`)
+- `text` (`text`)
+- `created_at` (`timestamptz`, default `now()`)
 
-## audit
-- id uuid pk
-- object_id uuid nullable
-- agent text
-- action text
-- ts timestamptz default now()
-- trace_id text
-- details jsonb
+### `embeddings`
+- `id` (`uuid`, PK; default varies by migration)
+- `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
+- `chunk_id` (`uuid`, nullable FK → `chunks.id`, `ON DELETE CASCADE`)
+- `provider` (`text`, default `mock`)
+- `dim` (`int`, default `1536`)
+- `embedding` (either `double precision[]` with a cardinality check, or `vector` when vector extension is enabled in older branches)
+- `created_at` (`timestamptz`, default `now()`)
 
-## indexes
-- GIN on objects.search_vector
-- ivfflat/hnsw on embeddings.vec (pgvector)
-- helpful btree indexes on (object_id), (key), (set_id)
+### `decisions`
+- `id` (`uuid`, PK; default varies by migration)
+- `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
+- `agent` (`text`, optional)
+- `kind` (`text`, optional)
+- `key` (`text`)
+- `value` (`jsonb`)
+- `created_at` (`timestamptz`, default `now()`)
+- Typical indexes:
+  - `decisions_object_id_idx`, `decisions_key_idx`
+  - `(object_id, key, created_at desc)` for “latest decision” reads
+
+### `membership`
+The v4.5 baseline uses a **composite** key form:
+- `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
+- `set_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`) (sets are stored as objects in this baseline)
+- `created_at` (`timestamptz`, default `now()`)
+- `PRIMARY KEY (object_id, set_id)`
+
+### Views / Helpers
+- `view_chunks_missing_embeddings`
+- `view_objects_ready_for_projection`
+- `latest_decision(object_id uuid, key text) -> jsonb`
+
+## Canonical Queue (DB Outbox)
+Created/ensured by `app/services/outbox.py:bootstrap()`:
+- `outbox`
+  - `id` (`uuid`, PK, default `gen_random_uuid()`)
+  - `topic` (`text`)
+  - `payload` (`jsonb`) (stores the serialized event envelope)
+  - `created_at` (`timestamptz`, default `now()`)
+  - `delivered_at` (`timestamptz`, nullable)
+  - `attempts` (`int`, default `0`)
+  - Indexes: `outbox_created_idx`, `outbox_delivered_idx`
+
+## Explicit Deltas / Known Gaps
+- This repo contains multiple historical Alembic “heads” (separate bootstrap paths). If you’re running into head conflicts or unexpected columns, inspect `app/alembic/versions/*` and document which head is your intended baseline for v5.5.

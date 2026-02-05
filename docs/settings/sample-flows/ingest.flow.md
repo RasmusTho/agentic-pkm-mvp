@@ -45,6 +45,8 @@ prompt_profiles:
     prompt_template_ref: prompts/planner/ingest-fast.md
 ---
 
+Note: This is a sample flow settings document used for validation/tests; it is not authoritative runtime truth.
+
 # Ingest Flow Profile
 
 Sample profile that lives in `vault/_system/flows/ingest.flow.md` when running against a live

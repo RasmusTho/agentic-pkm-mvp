@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (baseline locked; v5.x Agentic PKM is the forward line).
+State: SoT v5.5 baseline (descriptive component catalog; update alongside wiring changes).
 # Components Catalog (Reality-MVP + forward line)
 
 Canonical list of current modular building blocks.
@@ -20,7 +20,7 @@ Use one label consistently:
 | ObjectStore | Postgres / in-memory | Durable object records + payloads (operational mirror over canonical artifacts) |
 | VectorIndex | pgvector / in-memory | Embeddings + similarity search (derived, rebuildable) |
 | RelationIndex | in-memory / Postgres (if enabled) | Relations graph (may be present even if not fully exploited in every flow) |
-| Outbox | JSONL | Event/intent emission stream (audit + coordination artifact) |
+| Outbox | Postgres (canonical) + JSONL audit | Canonical queue is DB outbox (`outbox` table). JSONL (`INDEX_OUTBOX_PATH`) is audit/diagnostic only. |
 
 - **ObjectStore (memory/pg)** — Persists object envelopes + payloads; access via store APIs. Maturity: Baseline.
 - **VectorIndex (memory/pg)** — Embedding storage + similarity search. Maturity: Baseline. See `docs/EMBEDDINGS.md` for the embedding contract.
@@ -58,16 +58,16 @@ Changing embedding profiles safely: 1) sanity-check with `python -m app.cli embe
 
 ## Infra & observability
 
-- **Outbox/events** — Event emission stream for coordination and audit. Maturity: Baseline.
+- **Outbox/events** — DB outbox queue + JSONL audit log. Maturity: Baseline.
 - **Status/metrics** — Runtime counters and status snapshots surfaced to humans. Maturity: Baseline.
 - **Logging/audit** — Structured logs and receipts for actions and runs. Maturity: Baseline.
 - **HealthContract + WriteGuard + incident snapshots** — Health state machine + write guard ensures safe transitions, emits `state/reason/since` snapshots, and logs incident JSONL entries (`tmp/health-incidents.jsonl` or vault overrides). Sidecar CLI surface: `python -m app.cli health --json` and `python -m app.cli health status --json`, plus the index/events doctor commands (baseline readiness checks). Maturity: Baseline.
 
 ## Concurrency & safety
 
-- **DedupTaskQueue** — Idempotent task queue for watcher/orchestrator retries. Maturity: Planned.
-- **OptimisticLocking** — Version-checked note/object writes to prevent corruption. Maturity: Planned.
-- **IdempotencyGuard** — Dedup by `event_id` and action IDs in consumers. Maturity: Planned.
+- **DedupTaskQueue** — TTL-based in-process dedup queue (`app/components/concurrency.py`). Maturity: Baseline.
+- **Optimistic writes** — Version-checked note writes (`OptimisticWriteGuard`) to prevent corruption. Maturity: Baseline.
+- **Idempotency guards** — `EventDedupStore` / `IdempotencyGuard` for event/action dedup in consumers. Maturity: Baseline.
 
 ## Dev-layer helpers & governance
 

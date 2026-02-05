@@ -2,7 +2,7 @@ State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action proven
 # Architecture — SoT v5.5 Reality-MVP baseline (forward line v5.6)
 
 Historic SoT snapshots and older plans live in `docs/archive/`; the 4.x ladder history is in `docs/history/SOT_4X_HISTORY.md`. Forward-looking plan lives in `docs/ROADMAP.md`.
-They are kept for reference but are not considered active truth for the current SoT v4.10 Reality-MVP.
+They are kept for reference but are not considered active truth for the current SoT v5.5 Reality-MVP baseline.
 External dependencies, deployment topology, and human-facing surfaces are captured in `docs/SYSTEM_DESIGN_v4.10.md`; this document focuses on internal architecture and runtime contracts.
 
 System map: `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md` covers the high-level Yggdrasil modules and flows; this document remains the detailed technical architecture.
@@ -39,9 +39,9 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 - The outbox/event system uses a common envelope (`event`, `trace_id`, `source`, `timestamp`, `payload`, `meta`) defined in `app/events/schema.py` and enforced by architecture tests; emitters should write via outbox helpers to preserve the contract.
 
 ## SoT lines
-- **SoT v4.10 Reality-MVP (baseline locked)** — single-user PKM with stable vault ingest, minimal external ingest, hybrid retrieval + ASK with sources/latency, observability/status surfaces (CLI/API/GUI), and orchestrator runtime V1. Operational acceptance: soak vault ingest and external newsletter/PDF samples. Collaboration/multi-user deferred.
-- **SoT v5.0 PanelAgent Runtime V1 (first v5.x baseline)** — sits on top of the locked v4.10 baseline; Panel runtime interprets `panel.intent.created`, fans promotion actions to `promote.intent.created`, emits `panel.intent.executed`/`panel.action.*`/`panel.log.created`, and writes AI panel logs (`panel_logs`) that connect the note UI to internal intents.
-- **SoT v5.x Agentic PKM (active forward line, currently entering v5.6)** — Agentic flows (PanelAgent v5+), Satellite Sync (`docs/PROTOCOL_SATELLITE_SYNC.md`), and Yggdrasil modules (Munin/Brokkr/Tyr/Heimdall) that extend the v4.10 backbone; richer orchestration (LangGraph + MCP ToolProvider) and reasoning live here. The forward line includes a watcher/agent infra track that builds on v5.0: v5.1 watcher-ready ingest/panel flows (including targeted ingest via `ingest-vault-paths` and multi-note panel CLI), v5.2 legacy snapshot watcher CLI (dev-only), v5.3 explicit policy for auto-panel that treats AI-fenced notes as candidates once `WATCHER_AUTO_EXEC=1` is armed and only `ai_panel_auto_run: never` / `ai_panel.auto_run: never` opts out, v5.4 watcher hardening/ergonomics, and v5.5 planner pipeline + CLI-first orchestration. Runtime uses the registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`).
+- **SoT v5.5 Reality-MVP baseline (locked)** — watcher auto-run gate + panel action provenance + concurrency/idempotency guardrails on top of the stable vault ingest, hybrid retrieval/ASK, observability/status surfaces, and orchestrator runtime V1.
+- **SoT v4.10 Reality-MVP (foundation snapshot)** — single-user PKM with stable vault ingest, minimal external ingest, hybrid retrieval + ASK with sources/latency, observability/status surfaces (CLI/API/GUI), and orchestrator runtime V1. Retained as the foundation history; superseded by the v5.5 baseline.
+- **SoT v5.x Agentic PKM (active forward line, currently entering v5.6)** — Agentic flows (PanelAgent v5+), Satellite Sync (`docs/PROTOCOL_SATELLITE_SYNC.md`), and Yggdrasil modules (Munin/Brokkr/Tyr/Heimdall) that extend the v5.5 baseline; richer orchestration (LangGraph + MCP ToolProvider) and reasoning live here. The forward line includes the watcher/agent infra track: v5.1 watcher-ready ingest/panel flows (including targeted ingest via `ingest-vault-paths` and multi-note panel CLI), v5.2 snapshot-based CLI polling watcher MVP (`vault-watcher-run` driving ingest + panel), v5.3 explicit policy for auto-panel via frontmatter gating watcher runs, v5.4 watcher hardening/ergonomics (dry-run, max-notes guard, structured summaries), and v5.5 planner pipeline + CLI-first orchestration.
 
 ### Runtime watcher choice
 - Registry watcher is the runtime default; start-system flows and Docker compose use `python -m app.cli watcher run` with `configs/watchers.yaml`.
@@ -120,7 +120,7 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 3) **ASK API** — FastAPI endpoint returning answer text plus sources `{uuid, title, origin (vault/external), zone overlay if known, path/source_ref}` and latency; uses hybrid retrieval over both planes with an in-process HybridStore warmed from `store_objects` on first use. Zone overlays are planned but not yet populated in responses.
 4) **Observability backend** — status service that aggregates per-store object counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency; exposed via CLI and interim GUI.
 5) **Interim GUI** — simple FastAPI-served page (root `/`) that shows status (object counts, last ingest, ASK stats) and an ASK input with answers + visible sources; explicitly a temporary observability/interaction surface.
-6) **Panel action catalog & watcher settings** — the canonical action catalog (`docs/settings/panel-actions.md`) + `vault/@Settings/watchers.md` describe allowed `watcher_allowed` actions, auto-run env (`WATCHER_AUTO_EXEC`), and outbox paths; `python -m app.cli.settings_explain` (and `settings validate`) emits provenance (path/mtime/sha) for reviews.
+6) **Panel action catalog & watcher settings** — the canonical action catalog (`docs/settings/panel-actions.md`) + `vault/@Settings/watchers.md` describe allowed `watcher_allowed` actions, auto-run env (`WATCHER_AUTO_EXEC`), and outbox paths; `python -m app.cli settings-explain` and `python -m app.cli settings-validate` emit provenance + validation output for reviews.
 All Reality-MVP components run on the existing PER-loop agents (Normalizer, Classifier, Chunker, CitationChecker, Indexer, Reviewer, Promotion Agent) and Store abstraction (ObjectStore, VectorIndex, RelationIndex) with Outbox-driven events and Projector/Planner/Reasoning layers kept as additive overlays.
 Advanced zone logic, reflection workflows, serendipity, and collaboration are deferred until the Reality-MVP foundation is solid.
 
@@ -164,7 +164,7 @@ This table supersedes the prior `docs/PORTS.md` listing.
 - Chunker — segments normalized text into retrieval-ready spans plus embedding metadata stubs.
 - Deduper — compares against prior hashes and emits relation records for duplicates or merges.
 - CitationChecker — validates outbound references and attaches citation debt metrics.
-- Indexer — materializes embeddings, syncs ObjectStore + VectorIndex, and raises `index.object.embedded`.
+- Indexer — materializes embeddings, syncs ObjectStore + VectorIndex, and raises `index.embedding.created` (legacy alias: `index.object.embedded`).
 - Reviewer — enforces maturity gates, toggles trust levels, and prepares Projector contracts.
 - Projector — publishes curated packets to downstream surfaces (docs, API, knowledge packs).
 - PromotionAgent — final arbiter that commits promotion decisions to audit + Outbox while coordinating cooldowns.
@@ -175,7 +175,7 @@ ObjectStore persists object envelopes and agent decisions; VectorIndex stores ch
 ### Event Choreography
 1. `ingest.object.created` records capture acceptance and seeds the PER loop.
 2. `ingest.object.normalized`, `.classified`, `.chunked`, `.deduped`, `.citation_checked` mark completion of each agent and carry `trace_id` plus payload diff.
-3. `index.object.embedded` signals VectorIndex writes and unlocks the Reviewer.
+3. `index.embedding.created` signals VectorIndex writes and unlocks downstream consumers (legacy alias: `index.object.embedded`).
 4. `promote.pending` captures Reviewer approval; `promote.done` finalizes PromotionAgent moves and informs subscribers such as search indexing or set sync.
 - All events carry `instance_id` from `SettingsBundle.instance.id` (default `home`) so audit/Outbox can mark which runtime emitted the event and prepare master/satellite without changing the vault UX.
 
@@ -194,7 +194,7 @@ Every agent follows Plan → Execute → Reflect. Plan inspects the latest event
 - `note_moves_enable` defaults to false in runtime/global settings; Planner demotes move/rename/re-file steps to log-only and Promotion logs `promote.skip.move` instead of moving files.
 - Malformed frontmatter is tolerated: invalid YAML is skipped with a warning and reported in the ingest summary rather than crashing the run.
 - Ingest errors are recorded (counts + paths) in the ingest summary; reruns can resume from already-processed notes (via `resume_from` in code paths) while finishing remaining items.
-- Operators can enable moves later by setting `note_moves_enable: true` in `vault/@Settings/global` (propagates into `runtime/settings/global.yaml`).
+- Operators can enable moves later by setting `note_moves_enable: true` in `vault/@Settings/global` (propagates into generated runtime settings after `python -m app.cli settings compile`; the `runtime/settings/` directory is generated and not committed).
 
 ### Diarization-aware Chunking (v4.6-C)
 When `DIARIZE_ENABLE=1`, the ingestion pipeline now feeds diarization metadata (speaker, start, end) into `speaker_aware_chunks()` so spans are cut on speaker changes or size boundaries (O(n) over segment length). Each emitted chunk carries `{speaker,start,end,speaker_segments}` metadata that flows through `ingest_and_chunk()` to indexing, and the audit stream (`text.chunk.created`) records `speaker_count` so reviewers can trace diarization coverage. With the flag disabled, `build_chunks()` preserves the legacy token/character splitter to keep defaults inert and deterministic.

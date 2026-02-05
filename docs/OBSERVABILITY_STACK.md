@@ -1,8 +1,8 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: SoT v5.5 Reality-MVP baseline locked.
 # Local Observability Stack
 
 This repo already emits structured logs (JSON) and exposes Prometheus metrics when `METRICS_ENABLED=1`. The steps below give a lightweight single-developer setup to inspect those signals locally.
-See `docs/SYSTEM_DESIGN_v4.10.md` for how observability ties into the full system design.
+See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for how observability ties into the baseline system design.
 
 ## Prerequisites
 - Docker Desktop (or any Docker engine)

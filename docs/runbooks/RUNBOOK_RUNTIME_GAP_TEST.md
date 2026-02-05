@@ -28,7 +28,7 @@ scripts/gap_test_alpha.sh
 If the script exits with `1` or `2`, the printed diagnostics include:
 - `/api/status` and `/api/health` pretty-printed via `python3 -m json.tool` (or `python` fallback).
 - `/api/events/tail?topic=panel.scan.requested&limit=50` for the watcher signal.
-- `/api/events/tail?topic=index.object.embedded&limit=50` for downstream index events.
+- `/api/events/tail?topic=index.embedding.created&limit=50` for downstream index events (legacy alias: `index.object.embedded`).
 
 ## Exit codes
 - `0` — success: `/api/ask` reported the marker note path as a source and echoed the marker line.

@@ -1,4 +1,11 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: Historical (SoT v4.10). The orchestrator/planner pipeline has evolved; treat this doc as reference and prefer `docs/tracks/TRACK_PANELAGENT_LANGGRAPH.md` + `docs/STATUS.md` for current behavior.
+
+## v5.5 Baseline Delta (Current Reality)
+- Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
+- DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
+- Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
+- See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
+
 # Planner & Hierarchical Plans — Agentic PKM
 
 Planner is the central orchestration agent inside Hugin. It turns high-level goals into explicit, structured plans, executes those plans through domain agents (Normalizer, Classifier, Indexer, Promotion, PanelAgent, etc.), evaluates outcomes, and re-plans when needed. Plans are hierarchical: complex goals are decomposed into sub-goals with their own sub-plans so work stays traceable and bounded.

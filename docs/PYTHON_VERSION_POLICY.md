@@ -1,18 +1,22 @@
-State: SoT v4.10 (policy)
+State: SoT v5.5 baseline (descriptive). The repo targets Python >=3.12; CI smoke is pinned to 3.12 as the floor.
 
-# Python Version Policy
+## v5.5 Baseline Delta (Current Reality)
+- Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
+- DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
+- Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
+- See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
+
+
+# Python Version Policy (Current Reality)
 
 ## Targets
-- **Primary local runtime target:** Python **3.14**
-  - This is the main development environment.
-  - Local tests and workflows should assume 3.14 unless explicitly stated otherwise.
-
+- **Repo minimum:** Python **3.12**
+  - Enforced by `pyproject.toml` (`requires-python = ">=3.12"`).
 - **CI smoke floor:** Python **3.12**
-  - CI uses 3.12 as a compatibility guardrail.
-  - CI is not the primary runtime target; it is a “tripwire” to avoid accidentally relying on 3.13/3.14-only syntax or behavior.
+  - CI uses 3.12 as the compatibility guardrail / floor.
 
 ## Guardrails
-- Keep core code compatible with 3.12 unless a feature is explicitly scoped to 3.14+ and gated (feature flag, isolated module, or excluded from CI).
+- Keep core code compatible with 3.12.
 - Use the local scripts below to validate compatibility when needed.
 
 ## Local checks (optional, on demand)

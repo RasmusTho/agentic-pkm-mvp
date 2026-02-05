@@ -1,3 +1,4 @@
+State: Legacy (archived).
 # Decision Log Archive – October 2025 (Early Updates)
 
 - 2025-10-18: Context loader added exposing repo memory through `/context`.

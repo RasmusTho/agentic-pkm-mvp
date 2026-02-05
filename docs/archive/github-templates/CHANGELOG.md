@@ -1,3 +1,4 @@
+State: Legacy (archived).
 # Changelog
 
 ## v4.6 — Retrieval Quality & Reasoning Prep (in progress)

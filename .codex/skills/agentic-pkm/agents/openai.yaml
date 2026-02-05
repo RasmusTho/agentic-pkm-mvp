@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentic PKM Dev"
+  short_description: "Work in agentic-pkm-mvp with SoT rules"
+  default_prompt: "Use $agentic-pkm to work in agentic-pkm-mvp following the SoT v5.5 baseline and dev workflow."

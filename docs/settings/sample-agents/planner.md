@@ -23,6 +23,8 @@ tools:
 prompt_template_ref: planner.prompts.default
 ---
 
+Note: This is a sample agent settings document used for validation/tests; it is not authoritative runtime truth.
+
 # Planner Agent Configuration
 
 This sample mirrors the `vault/_system/agents/planner.md` document that will ship with

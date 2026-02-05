@@ -1,4 +1,4 @@
-State: v5.0 – PanelAgent runtime V1 (promotion fan-out + in-note receipts on Reality-MVP base).
+State: v5.5 baseline — PanelAgent runtime V1 (v5.0) with planner pipeline opt-in.
 # PanelAgent / NoteInteractionAgent (Runtime v5.0)
 
 Purpose: translate human-driven AI panels in vault notes into structured intents/events while keeping the panel simple, optional, and human-first.
@@ -13,7 +13,7 @@ Purpose: translate human-driven AI panels in vault notes into structured intents
 - Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
 
 ## PanelAgent 2.0 (planned v5.6)
-- Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `graph.py`).
+- Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `app/agents/panel_agent/graph.py`).
 - LLM-based reasoning decides which panel actions to execute (and in what order) rather than relying on fixed mappings.
 - PanelAgent Runtime V1 remains the baseline until this LangGraph-driven 2.0 path is implemented and proven in production.
 - LangGraph control flow now supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `rule` remains the default to preserve current behaviour, while `llm` is an opt-in, experimental action selector using the shared LLM provider.
@@ -101,7 +101,7 @@ Make this note evergreen
 
 ## Wiring configuration
 - Default wiring: `docs/settings/panel-action-wiring.yaml` (maps canonical action ids to target events).
-- Resolution order: `PANEL_ACTION_WIRING_PATH` env override > `VAULT_ROOT/System/Config/panel-action-wiring.yaml` > repo default.
+- Resolution order: `PANEL_ACTION_WIRING_PATH` env override > `<vault>/System/Config/panel-action-wiring.yaml` (vault override) > repo default.
 - Validation: config must define an `actions` list with `id`, `kind` (event|intent, defaults to event), and `event_type`/`target_event` (or `intent_type`). Unknown/invalid configs emit a warning and fall back to the default wiring; runtime behaviour stays unchanged.
 - CLI/Watcher use the same wiring; panel decider (rule/LLM) still selects actions, wiring only controls emitted events.
 

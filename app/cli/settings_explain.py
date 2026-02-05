@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import json
-from typing import Sequence
+from typing import Any, Sequence
 
 from app.settings.panel_actions_settings import load_panel_actions_settings
 from app.settings.watcher_settings import load_watcher_settings
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def build_settings_explain_payload() -> dict[str, Any]:
     panel_settings = load_panel_actions_settings()
     watcher_settings = load_watcher_settings()
-    payload = {
+    return {
         "panel_actions": {
             "action_count": len(panel_settings.catalog.actions),
             "action_ids": sorted(panel_settings.catalog.ids()),
@@ -30,7 +30,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             "source": watcher_settings.source.to_payload(),
         },
     }
-    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def emit_settings_explain(payload: dict[str, Any], *, pretty: bool = True) -> None:
+    kwargs: dict[str, Any] = {"sort_keys": True}
+    if pretty:
+        kwargs["indent"] = 2
+    print(json.dumps(payload, **kwargs))
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    payload = build_settings_explain_payload()
+    emit_settings_explain(payload, pretty=True)
     return 0
 
 

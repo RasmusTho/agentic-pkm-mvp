@@ -28,6 +28,7 @@ from app.cli import index_doctor  # noqa: F401 -- register index doctor command
 from app.cli.events_doctor import events_doctor
 from app.cli.smoke import smoke as smoke_cli
 from app.cli.settings_validate import run_settings_validate
+from app.cli.settings_explain import build_settings_explain_payload, emit_settings_explain
 
 
 from app.config.paths import resolve_system_settings_path, resolve_vault_root
@@ -1161,6 +1162,21 @@ def promote_consume(limit: int | None) -> None:
 @cli.group(help="Settings commands (Vault-as-GUI).")
 def settings() -> None:
     ...
+
+@cli.command("settings-validate", help="Validate settings registries and cross-references.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON output.")
+def settings_validate_alias(as_json: bool) -> None:
+    exit_code = run_settings_validate(as_json=as_json)
+    raise SystemExit(exit_code)
+
+
+@cli.command("settings-explain", help="Explain settings provenance / resolution (JSON).")
+@click.option("--json", "as_json", is_flag=True, help="(Deprecated) Always emits JSON; kept for compatibility.")
+@click.option("--compact", is_flag=True, help="Emit compact JSON (no indentation).")
+def settings_explain_alias(as_json: bool, compact: bool) -> None:
+    del as_json
+    payload = build_settings_explain_payload()
+    emit_settings_explain(payload, pretty=not compact)
 
 
 @settings.command("compile", help="Compile vault/@Settings into runtime/settings.")

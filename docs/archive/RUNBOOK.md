@@ -1,3 +1,4 @@
+State: Legacy (archived).
 # RUNBOOK — SoT v4.3 Ingestion & Vault Lifecycle
 
 ## 0. Snabbguide (TL;DR)

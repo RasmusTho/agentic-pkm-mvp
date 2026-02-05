@@ -1,3 +1,4 @@
+State: Legacy (archived).
 # VERSIONING
 
 ## SoT Schema Version

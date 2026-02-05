@@ -1,5 +1,5 @@
 ---
-State: SoT v4.10 (prompt contracts)
+State: SoT v5.5 baseline (prompt contract; settings-backed).
 prompt_id: ask.answer.v1
 version: 1
 status: active

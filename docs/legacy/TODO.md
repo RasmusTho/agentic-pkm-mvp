@@ -1,3 +1,4 @@
+State: Legacy (archived).
 > **DEPRECATED (WS)** This document reflects a previous iteration (FastAPI/SQLAlchemy/LangGraph integrated). It is kept for reference. The WS overview is in docs/OVERVIEW_WS.md and policies in data/context/*.yaml.
 
 # TODO Backlog

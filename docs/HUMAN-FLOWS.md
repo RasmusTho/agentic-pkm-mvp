@@ -66,9 +66,9 @@ State: v5.x forward line. Runtime automation uses the registry watcher (`configs
 - I can see what ran: ingest and panel runs emit the usual events, AI-log entries, and status metrics; nothing rewrites my note body.
 
 ### Mental model (system, high level)
-- Registry watcher scans vault-wide markdown by default (`**/*.md` under `WATCHER_VAULT_PATH`, override via `WATCHER_SCOPE_GLOB`), emits `ingest.vault.changed` and `panel.scan.requested`, and writes heartbeat + tick logs for observability.
+- Registry watcher scans a bounded inbox-derived scope by default (from `WATCHER_VAULT_PATH` + `VAULT_INBOX_DIR_REL` / `vault.layout.md`; override via `WATCHER_SCOPE_GLOB`), emits `ingest.vault.changed` and `panel.scan.requested`, and writes heartbeat + tick logs for observability.
 - DB outbox is canonical; JSONL (`INDEX_OUTBOX_PATH`) is audit/diagnostic only.
-- The watcher may rewrite note content in narrow, human-first ways: it can heal missing UUIDs for inbox notes and it can update AI panels (add proposals/questions, annotate action IDs, append receipts). It does not perform side-effecting actions unless an explicit checkbox/action is checked.
+- The watcher may rewrite note content in narrow, human-first ways: it can heal missing UUIDs for inbox notes and it can update AI panels (add proposals/questions, annotate action IDs, append receipts). It does not perform side-effecting actions unless policy/allowlists plus explicit intent (for example, checked actions) allow it.
 
 ### Cooldown and batching
 - Watchers are not per-keystroke. They collect file changes during a short cooldown/batch window, then run ingest/panel once per batch. The human experience is “after a short while the system catches up,” not “agents fire on every save.”
@@ -76,7 +76,7 @@ State: v5.x forward line. Runtime automation uses the registry watcher (`configs
 ### PanelAgent runtime + watcher integration
 - PanelAgent Runtime V1 uses its fixed mapping from checked actions to follow-up events; behavior matches the v5.x baseline.
 - PanelAgent now consults a catalog of canonical actions (`docs/settings/panel-actions.md`) and can run in either rule-mode (default, deterministic label→action mapping) or optional LLM-mode, which uses the catalog plus panel/note context; checkbox states are treated as hints rather than hard gates in LLM-mode.
-- Panel action wiring can be overridden per vault via `System/Config/panel-action-wiring.yaml`; resolution order: `PANEL_ACTION_WIRING_PATH` env > vault System/Config > repo default (`docs/settings/panel-action-wiring.yaml`). Invalid configs emit a warning and fall back to the default wiring without changing behavior.
+- Panel action wiring can be overridden per vault via `<vault>/System/Config/panel-action-wiring.yaml` (vault-relative path); resolution order: `PANEL_ACTION_WIRING_PATH` env > vault override file > repo default (`docs/settings/panel-action-wiring.yaml`). Invalid configs emit a warning and fall back to the default wiring without changing behavior.
 - Auto-panel policy: any note containing an AI fence (`%% ...ai... %%`, case-insensitive) is a candidate by default. Eligible notes without a fence may also get a panel created with proposals/questions (proactive assist); disable with `PANEL_PROACTIVE_ASSIST=0`. The per-note opt-out remains `ai_panel_auto_run: never` (or nested `ai_panel: { auto_run: never }`). Manual CLI (`panel run` / `panel run-many`) is always allowed.
 - `WATCHER_AUTO_EXEC` is the global arm switch: when off, watchers compute candidacy and emit summaries but do not execute panel mutations.
 - Panel runtime emits `panel.intent.created`, `panel.intent.executed`, `panel.action.*`, emits `promote.intent.created` for mapped promotion actions, and writes receipts into the in-note AI status callout (panel stays as the working set; receipts live outside the panel).
