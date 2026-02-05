@@ -1,3 +1,4 @@
+State: Legacy (archived).
 # Agent Service Component Overview
 
 ```mermaid

@@ -1,3 +1,4 @@
+State: ADR (historical).
 # ADR-00xx: Promotion Agent – Event-Driven Human-First Lifecycle
 
 ## Status

@@ -1,6 +1,5 @@
+State: SoT v5.5 baseline (normative embedding spec).
 # Embeddings
-
-State: Active (current).
 
 This document is the **normative specification** for how embeddings are produced, validated, recorded, and stored in the system.
 

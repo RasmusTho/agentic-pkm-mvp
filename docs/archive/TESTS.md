@@ -1,3 +1,4 @@
+State: Legacy (archived).
 # Tester (Given/When/Then)
 ## 4.1 Normalizer
 Given: råfil sample.md utan frontmatter

@@ -1,3 +1,4 @@
+State: ADR (historical).
 # ADR 0004: Control outbox-to-index latency <= 2s
 
 Date: 2025-10-25

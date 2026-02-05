@@ -1,3 +1,4 @@
+State: ADR (historical).
 # ADR 0005: Standardize PER-loop agent base
 
 Date: 2025-10-25

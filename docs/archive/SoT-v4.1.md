@@ -1,3 +1,4 @@
+State: Legacy (archived).
 # SoT v4.1 – MVP Ingestion
 ## Mål
 1. End-to-end: Ingestor → Normalizer → Classifier → Chunker → Deduper → CitationChecker → Indexer → Reviewer → SetEvaluator → Projector på litet korpusprov.

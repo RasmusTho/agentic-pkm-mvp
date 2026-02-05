@@ -1,5 +1,5 @@
+State: SoT v5.5 (operator checklist; safe-by-default; update alongside startup scripts and compose).
 # Go-Live Checklist (P0)
-State: draft
 
 Use this checklist to validate a deployment before enabling full ingest + panel actions. All steps are safe-by-default and should be run from the `work` branch.
 
