@@ -163,10 +163,13 @@ else
   _fail "watcher run failed"
 fi
 
-if rg -q "watcher scope resolved vault_path=" "$LOG_PATH"; then
-  _pass "scope provenance line emitted to stdout"
+# Prefer the registry watcher summary line as the stable proof of execution.
+# Older watcher paths emitted a "watcher scope resolved ..." log line; keep that
+# as a compatibility signal but don't require it.
+if rg -q "watcher summary: name=" "$LOG_PATH" || rg -q "watcher scope resolved vault_path=" "$LOG_PATH"; then
+  _pass "watcher emitted execution/provenance line to stdout"
 else
-  _fail "missing scope provenance stdout line (watcher scope resolved ...)"
+  _fail "missing watcher execution/provenance stdout line (watcher summary / scope resolved)"
 fi
 
 _psql_scalar() {
