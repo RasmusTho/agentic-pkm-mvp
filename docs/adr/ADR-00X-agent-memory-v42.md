@@ -1,3 +1,4 @@
+State: ADR (historical).
 # ADR: Agentminne v4.2
 Beslut: Postgres-baserat minneslager med namngivna scopes, unified adapter API, transaktionell reflektion, minneskanter.
 Motiv: enhetlig SoT, determinism, enkel TDD, lätt att gate:a promotion och routing.

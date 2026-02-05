@@ -1,4 +1,4 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: SoT v5.5 Reality-MVP baseline locked.
 # Operations Playbook
 
 ## Version & Release Workflow
@@ -14,8 +14,12 @@ State: SoT v4.10 Reality-MVP (current core).
 
 ## Runtime Compose Stack
 - Canonical runtime compose stack: `db`, `api`, `watcher`, `worker`.
-- The watcher runs the registry watcher and emits DB outbox events for ingest/panel flows; JSONL outbox is audit only.
-- The worker consumes the DB outbox and performs ingest + promotion side effects.
+- `docker-compose.yaml` starts FastAPI (`api`), `worker`, `watcher`, and Postgres for local development.
+- Ensure `.env` contains the desired secrets before running `docker compose up --build`.
+- Postgres data lives in the `postgres-data` volume; `docker compose down -v` wipes it.
+- The API container runs `scripts/start_api.sh` (migrations + `uvicorn`).
+- The worker runs `python -m app.workers.outbox_worker` (consumes DB outbox).
+- The watcher runs `python -m app.cli watcher run` (registry loop; emits `ingest.vault.changed` or `panel.scan.requested` to outbox).
 - Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.
 
 ## Storage Maintenance
@@ -28,26 +32,22 @@ State: SoT v4.10 Reality-MVP (current core).
 - Run `pre-commit install` locally so lint/type/test hooks run automatically before each commit.
 - Vector data now lives in Postgres (`objects` + `embeddings`); ensure the `pgvector` extension is installed and run `VACUUM ANALYZE embeddings` periodically as the cluster grows.
 
-## Agent Supervisor Runbook
-1. **Start locally** – `python scripts/start_agent_service.py` (add `--dry-run` to validate migrations without executing). The script loads `.env` if `python-dotenv` exists; otherwise it uses the current environment.
-2. **Migrations** – runs `alembic -c app/alembic.ini current`. If `(head)` is already present it logs `Detected Alembic at HEAD — skipping migrations`; otherwise executes `upgrade head` with a 180 s timeout (failures exit 1).
-3. **Agent loop** – supervisor runs `python -u run_agent.py` and restarts it after 30 s whenever the exit code is non-zero.
-4. **Logs** – tail `/tmp/agent.log` for supervisor events and `/tmp/agent_app.log` for agent stdout/stderr. Rotate via logrotate or cron to prevent unbounded growth.
-5. **Stop signal** – SIGINT/SIGTERM sets an internal flag, waits for the active `run_agent.py` to finish, and stops further restarts. Sends SIGKILL after 10 s if shutdown stalls.
-6. **Alerting** – page when the same host logs "Agent exited with code" more than three times within ten minutes; indicates `run_agent.py` needs investigation or lacks input data.
+## Runtime Loop Runbook
+1. **Start locally (compose)** – `make alpha-up` (requires `VAULT_ROOT`), or `docker compose up --build`.
+2. **Health** – `python -m app.cli health --json` and `python -m app.cli status --json`.
+3. **Watcher** – verify `WATCHER_ENABLE=1`, `WATCHER_VAULT_PATH`, and `INDEX_OUTBOX_PATH` in env; check `tmp/watcher_heartbeat.json`.
+4. **Worker** – confirm `tmp/worker_heartbeat.json` updates and `processed_total` increases.
+5. **Stop** – `docker compose down` or `make alpha-down`.
 
 ## Ingestion Review Runbook
 1. **Prepare payload** – gather metadata in a JSON-compatible dict plus raw text under `text`.
-2. **Ingest** – `POST /ingest` with `{id?, kind?, source_ref?, payload, text}`. Response returns `object_id` + model/dimensions.
-3. **Validate** – call `POST /search`:
-   - `query_text` only for lexical shape.
-   - Combine `query_text` + `query_embedding` (if an external embedding generator is used) for hybrid RRF.
-4. **Maintain** – run `scripts/bench.py` after major data imports to watch latency (p50/p95) and adjust `ivfflat` parameters.
+2. **Ingest** – `python -m app.cli pipe <note.md>` or watcher-driven ingest via `vault-watcher-run`.
+3. **Validate** – check `/api/status` + `/api/health` and confirm `index.embedding.created` events in outbox (legacy alias: `index.object.embedded`).
+4. **Maintain** – run `python -m app.fitness.report` after major imports to watch latency and gate regressions.
 
 ## Auth & Rate Limiting
 - Refer to `docs/AUTH_RATE_LIMITING.md` for implementation guidance (API key dependency + `slowapi` limiter).
 - Store the API key in environment or secret manager; rotate by updating deployments and monitoring logs for legacy usage.
-- Run Redis (or alternative backend) alongside FastAPI to support shared rate-limit counters; configure via env in future work.
 
 ## Observability
 - Logs: JSON-formatted via `app/observability.setup_logging()`. Hook into your logging stack (CloudWatch, ELK, etc.).
@@ -82,7 +82,7 @@ State: SoT v4.10 Reality-MVP (current core).
 | yt-dlp 403/429 | Health passes but `transcribe` fails with `DownloadError` | Run `yt-dlp -v URL`, add cookies (`--cookies-from-browser`), or download via a piped host (see `docs/DEPENDENCIES.md`). |
 | Missing ffmpeg | Health `ffmpeg=false`, CLI raises `CalledProcessError` | Install the package, verify with `which ffmpeg`. |
 | Ollama offline | Health `ollama=false`, agent replies “Insufficient evidence” | Start `ollama serve`, `ollama pull <model>`, confirm via `curl $OLLAMA_URL/api/tags`. |
-| `INDEX_OUTBOX_PATH` write failure | Health `events_log=false`, audit log not appended | Fix filesystem permissions or point env to a writable directory. |
+| `INDEX_OUTBOX_PATH` write failure | Health `index_outbox=false` | Fix filesystem permissions or point env to a writable directory. |
 
 ## SLO / SLA
 | Level | Target | Measurement |

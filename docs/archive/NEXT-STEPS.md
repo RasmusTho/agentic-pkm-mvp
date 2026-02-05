@@ -1,3 +1,4 @@
+State: Legacy (archived).
 # Next Steps — Sprint Bridge v4.4 → v4.5
 
 _Tactical actions to complete active release._

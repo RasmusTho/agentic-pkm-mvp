@@ -1,4 +1,11 @@
-State: SoT v4.10 Reality-MVP (current core).
+State: Historical (SoT v4.10). Module map retained for reference; it may not reflect the v5.5 baseline wiring.
+
+## v5.5 Baseline Delta (Current Reality)
+- Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
+- DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
+- Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
+- See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
+
 # Yggdrasil: Modules and Flows
 
 High-level map of modules and how material moves between them. This orients intent and responsibilities; detailed technical design, data contracts, and runtime specifics live in `docs/ARCHITECTURE.md`.

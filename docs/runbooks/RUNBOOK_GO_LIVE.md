@@ -1,5 +1,5 @@
+State: SoT v5.5 (operator checklist; safe-by-default; update alongside startup scripts and compose).
 # Go-Live Checklist (P0)
-State: draft
 
 Use this checklist to validate a deployment before enabling full ingest + panel actions. All steps are safe-by-default and should be run from the `work` branch.
 
@@ -30,7 +30,7 @@ Use this checklist to validate a deployment before enabling full ingest + panel 
 
 ## 6) Post-go-live hygiene
 - Keep `LLM_TRACE_ENABLE=1` only when troubleshooting; traces are now hashed (no raw prompts/responses).
-- Document any environment-specific overrides in the settings surface (vault `_system/settings/system-settings.yaml`).
+- Document any environment-specific overrides in the settings surface (vault `<vault>/_system/settings/system-settings.yaml`).
 
 ## HTTP endpoints
 
@@ -58,11 +58,15 @@ Note: `/api/health` may report `ok=false` when optional tools (for example, `ffm
 
 Use `scripts/start_full_system.sh` to bring the full stack up, check that `/app/vault` is mounted inside the api container, and perform the deterministic baseline ingest when the store is empty. Watchers run incrementally and do not sweep the whole vault, so this script explicitly drives the first job, runs the bootstrap `vault-alpha-ingest`, and verifies `/search` plus `/api/ask` before handing off to the live watcher. Re-run it only when you need a fresh baseline, then rely on watcher/worker increments for day-to-day updates.
 
-## Stage 0 (Ollama OpenAI-compatible embeddings)
-During Stage 0 we run the worker against the Ollama OpenAI-compatible `/v1/embeddings` path.  Add a `docker-compose.override.yml` that overrides the worker's environment so every embedding request is routed through the OpenAI-style client:
-- `OPENAI_BASE_URL=http://host.docker.internal:11434/v1`
-- `OPENAI_API_KEY=sk-local`
-- `EMBED_MODEL=nomic-embed-text:latest`
-- `EMBED_DIM=768`
-- `EMBED_NORMALIZE=1`
-This keeps `OLLAMA_HOST` available for chat while ensuring the embeddings helper targets `/v1/embeddings` via the OpenAI-compatible interface.
+## Stage 0 (Ollama embeddings: current default)
+In the v5.5 baseline, embeddings default to Ollama via `app/llm/embeddings.py`:
+- Primary endpoint: `${OLLAMA_URL}/api/embeddings`
+- Fallback: `${OLLAMA_URL}/v1/embeddings` (OpenAI-compatible)
+
+Recommended environment for local go-live:
+- `LLM_PROVIDER=ollama`
+- `OLLAMA_URL=http://host.docker.internal:11434` (inside Docker) or `http://127.0.0.1:11434` (host)
+- `OLLAMA_EMBED_MODEL=nomic-embed-text:latest`
+- `EMBED_DIM=1536` (or your configured dimension; must match provider output)
+
+Note: eval tooling uses `OPENAI_BASE_URL` for OpenAI-compatible probes (DeepEval/Ragas), but the runtime embedding helper does not require that variable.

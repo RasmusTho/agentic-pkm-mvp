@@ -1,3 +1,4 @@
+State: Legacy (archived).
 # Archive — historical and parked docs
 
 This folder contains historical System-of-Truth snapshots, parked plans, and retired docs.

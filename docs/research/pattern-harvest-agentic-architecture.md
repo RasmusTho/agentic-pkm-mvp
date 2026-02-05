@@ -7,7 +7,7 @@ State: offline synthesis (system not online); repo-grounded analysis only.
 
 ## 2) Current Baseline Snapshot (Repo-grounded)
 ### Outer Architecture
-- Outbox envelope carries `event`, `trace_id`, `timestamp`, `payload`, `meta` for JSONL outbox writing. Evidence: app/events/schema.py (OutboxEvent model).
+- Outbox envelope carries `event`, `trace_id`, `timestamp`, `payload`, `meta` and is used for both the canonical DB outbox and the JSONL audit log. Evidence: app/events/schema.py (OutboxEvent model), app/services/outbox.py, app/index/outbox.py.
 - Event catalogue includes panel/runtime events (`panel.intent.created`, `panel.intent.executed`, `panel.action.*`, `promote.intent.created`). Evidence: docs/EVENTS.md §PanelAgent events; docs/ARCHITECTURE.md SoT v5.0 PanelAgent Runtime V1 bullet.
 - A2A message schema exists (request/response/error with sender/recipient/correlation/trace). Evidence: app/a2a/schema.py (AgentRequest/AgentResponse/AgentError).
 - Audit logging used by orchestrator and agents via `audit_log(object_id, agent, action, trace_id, details)`. Evidence: app/agents/base/audit.py; app/orchestrator/events.py (audit_log in emit_step_started/finished/error).

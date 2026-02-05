@@ -1,4 +1,4 @@
-State: SoT v4.10 (current; details may lag ARCHITECTURE).
+State: SoT v5.5 baseline (details align with ARCHITECTURE/STATUS).
 # Privacy & PII
 
 The pipeline processes personal material (notes, audio), so logs and storage must remain conservative.

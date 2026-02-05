@@ -19,6 +19,8 @@ tools:
 prompt_template_ref: normalizer.prompts.default
 ---
 
+Note: This is a sample agent settings document used for validation/tests; it is not authoritative runtime truth.
+
 # Normalizer Agent Configuration
 
 A worker that tidies new notes before downstream flows act on them. The YAML frontmatter is

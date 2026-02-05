@@ -1,4 +1,11 @@
-State: SoT v4.10 (current; details may lag ARCHITECTURE).
+State: SoT v5.5 baseline (descriptive). Settings exist both as vault-backed compiled artifacts and as repo settings-as-code (registries).
+
+## v5.5 Baseline Delta (Current Reality)
+- Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
+- DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
+- Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
+- See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
+
 # Settings
 
 This repo uses a **settings-as-artifacts** approach. “Settings” are not only runtime knobs; they are also
@@ -14,7 +21,7 @@ Primary source folder:
 Compiler:
 - `python -m app.cli settings compile`
 
-Runtime settings now cover the panel action catalog, watcher auto-run policy, and canonical outbox path; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli.settings validate`/`python -m app.cli.settings_explain`.
+Runtime settings cover the panel action catalog and watcher policy; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli settings-validate` / `python -m app.cli settings-explain`.
 
 ## Repo settings artifacts (non-compiled)
 

@@ -1,3 +1,4 @@
+State: Legacy (archived).
 # UML Reference & Known Gaps
 
 | Document | Purpose |

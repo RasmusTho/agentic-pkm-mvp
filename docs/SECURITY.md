@@ -1,4 +1,4 @@
-State: SoT v4.10 (current; details may lag ARCHITECTURE).
+State: SoT v5.5 baseline (details align with ARCHITECTURE/STATUS).
 # Security
 
 Lightweight policy for local and CI runs.
@@ -10,7 +10,7 @@ Lightweight policy for local and CI runs.
 - If `OLLAMA_URL` is exposed on a network interface, secure the port via SSH tunnel or VPN; default assumption is localhost.
 
 ## Least privilege
-- The Postgres account (`DATABASE_URL`) uses `app:app` with minimal privileges. In production create a dedicated role with only the required `INSERT/SELECT`.
+- The Postgres account (`DATABASE_URL`) uses `app:app` for local dev. In production create a dedicated role with only the required `INSERT/SELECT/UPDATE`.
 - CLI smoke commands append to the JSONL audit log (`INDEX_OUTBOX_PATH`). Runtime watcher/worker flows use the DB outbox; keep database permissions minimal and scoped to the outbox/index tables.
 
 ## Secrets in CI

@@ -1,3 +1,4 @@
+State: Legacy (archived).
 # Arbetsplan (Codex-synkbar)
 
 ## Status per steg

@@ -1,3 +1,4 @@
+State: Legacy (archived).
 ---
 name: v4.6 Objective
 about: Track work for a single v4.6 objective (A–D)

@@ -1,4 +1,11 @@
-State: Historical / partially outdated (e.g. SoT v4.2). See ARCHITECTURE SoT v4.10 for current intent.
+State: Historical (SoT v4.10). Ingest path has evolved (registry watcher + DB outbox canonical). Keep as reference; prefer `docs/HUMAN-FLOWS.md` + `docs/OPERATIONS.md` for current runbooks.
+
+## v5.5 Baseline Delta (Current Reality)
+- Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
+- DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
+- Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
+- See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
+
 # 4.5 Ingest (MVP)
 **Mål:** få in fil/URL/ljud robust, normalisera, skriva `index-outbox.jsonl`.
 

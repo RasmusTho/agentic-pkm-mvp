@@ -1,3 +1,4 @@
+State: Legacy (archived).
 # Walking Skeleton (WS) — Overview
 This repo follows the Canvas “AI-assisterat Second Brain — Konsoliderad grund”, Section 29.
 Scope (v4.3): single node, few users, Obsidian vault connectivity.

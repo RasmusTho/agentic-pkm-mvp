@@ -1,3 +1,4 @@
+State: Legacy (archived).
 # 5.0 Transkribering (YouTube/ljud)
 
 ## Pipeline
