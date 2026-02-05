@@ -77,9 +77,9 @@ Example:
 }
 ```
 
-### `index.object.embedded` (current emission)
+### `index.embedding.created` (current emission)
 
-`index.object.embedded` is the event currently emitted by the indexer. Treat it as equivalent to `index.embedding.created` for compatibility.
+`index.embedding.created` is the event currently emitted by the indexer. Treat `index.object.embedded` as a legacy alias for compatibility with older consumers.
 
 - Producers must not include embedding vectors in outbox events.
 
