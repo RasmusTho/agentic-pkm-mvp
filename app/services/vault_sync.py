@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,8 @@ from app.db import conn_rw, ensure_schema
 
 from app.events.models import new_trace_id
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_METADATA, INGEST_OBJECT_UPDATED
+from app.knowledge.contracts import NoteLocator
+from app.knowledge.service import resolve_knowledge_port
 from app.write_guard import DEFAULT_WRITE_GUARD
 from app.services.inbox import append_change, append_conflict
 from app.services.outbox import insert_object_and_outbox
@@ -49,9 +52,13 @@ def _read_note(path: Path) -> tuple[dict[str, Any], str]:
 def _write_note(path: Path, frontmatter: dict[str, Any], body: str) -> None:
     fm_dump = yaml.safe_dump(frontmatter, sort_keys=False).strip()
     rendered = f"---\n{fm_dump}\n---\n\n{body}" if body else f"---\n{fm_dump}\n---\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
     DEFAULT_WRITE_GUARD.assert_writes_allowed("vault sync note write")
-    path.write_text(rendered, encoding="utf-8")
+    resolved = path.resolve()
+    root = Path(resolved.anchor) if resolved.anchor else Path("/")
+    rel = resolved.relative_to(root).as_posix()
+    locator = NoteLocator(vault=os.getenv("OBSIDIAN_VAULT_NAME", "Vault"), path=rel)
+    port = resolve_knowledge_port(vault_root=root)
+    port.write_note(locator, rendered)
 
 
 def _get_state_by_path(conn: psycopg.Connection, path: str) -> Optional[dict[str, Any]]:
