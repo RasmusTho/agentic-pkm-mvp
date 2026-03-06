@@ -37,6 +37,8 @@ def test_health_handles_malformed_heartbeat_json(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setenv("WATCHER_HEARTBEAT_PATH", str(heartbeat))
     monkeypatch.setenv("KNOWLEDGE_PRIMARY_ADAPTER", "fs_vault")
+    monkeypatch.setenv("KNOWLEDGE_FALLBACK_ADAPTER", "obsidian_cli")
+    monkeypatch.setenv("KNOWLEDGE_ALLOW_FALLBACK", "0")
     monkeypatch.setenv("KNOWLEDGE_STRICT_STARTUP", "0")
     client = TestClient(app)
     resp = client.get("/api/health")
@@ -59,6 +61,8 @@ def test_health_handles_future_heartbeat_timestamp(tmp_path, monkeypatch) -> Non
 
     monkeypatch.setenv("WATCHER_HEARTBEAT_PATH", str(heartbeat))
     monkeypatch.setenv("KNOWLEDGE_PRIMARY_ADAPTER", "fs_vault")
+    monkeypatch.setenv("KNOWLEDGE_FALLBACK_ADAPTER", "obsidian_cli")
+    monkeypatch.setenv("KNOWLEDGE_ALLOW_FALLBACK", "0")
     monkeypatch.setenv("KNOWLEDGE_STRICT_STARTUP", "0")
     client = TestClient(app)
     resp = client.get("/api/health")

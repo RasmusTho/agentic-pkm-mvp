@@ -82,6 +82,8 @@ def _health_client(
     monkeypatch.setenv("WATCHER_HEARTBEAT_STALE_SECONDS", "60")
     monkeypatch.setenv("WORKER_HEARTBEAT_STALE_SECONDS", "60")
     monkeypatch.setenv("KNOWLEDGE_PRIMARY_ADAPTER", "fs_vault")
+    monkeypatch.setenv("KNOWLEDGE_FALLBACK_ADAPTER", "obsidian_cli")
+    monkeypatch.setenv("KNOWLEDGE_ALLOW_FALLBACK", "0")
     monkeypatch.setenv("KNOWLEDGE_STRICT_STARTUP", "0")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.delenv("DATABASE_URL", raising=False)
