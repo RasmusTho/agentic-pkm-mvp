@@ -270,9 +270,28 @@ preflight_obsidian_strict() {
 
   obsidian_gate_json=$(python - <<'PY'
 import json
+import os
+import subprocess
 from app.knowledge.health import obsidian_dependency_status
 
-status = obsidian_dependency_status()
+def _installer_version() -> str | None:
+    env_version = (os.getenv("OBSIDIAN_INSTALLER_VERSION") or "").strip()
+    if env_version:
+        return env_version
+    try:
+        proc = subprocess.run(
+            ["obsidian", "version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+        )
+        raw = (proc.stdout or proc.stderr or "").strip()
+        return raw or None
+    except Exception:
+        return None
+
+status = obsidian_dependency_status(get_installer_version=_installer_version)
 print(json.dumps({"ok": status.ok, "details": status.details}, ensure_ascii=False))
 PY
 )
