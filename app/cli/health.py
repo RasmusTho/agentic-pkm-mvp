@@ -4,6 +4,7 @@ import importlib
 import json
 import os
 import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -173,7 +174,29 @@ def _obsidian_required() -> bool:
         settings = load_knowledge_settings()
     except KnowledgeConfigError:
         return True
-    return settings.strict_startup or settings.primary_adapter == KnowledgeAdapter.OBSIDIAN_CLI
+    if settings.strict_startup:
+        return True
+    if settings.primary_adapter != KnowledgeAdapter.OBSIDIAN_CLI:
+        return False
+    return not settings.allow_fallback
+
+
+def _get_obsidian_installer_version() -> str | None:
+    env_version = (os.getenv("OBSIDIAN_INSTALLER_VERSION") or "").strip()
+    if env_version:
+        return env_version
+    try:
+        proc = subprocess.run(
+            ["obsidian", "version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+        )
+        raw = (proc.stdout or proc.stderr or "").strip()
+        return raw or None
+    except Exception:
+        return None
 
 
 def _check_obsidian_dependencies() -> Dict[str, Any]:
@@ -181,7 +204,7 @@ def _check_obsidian_dependencies() -> Dict[str, Any]:
         settings = load_knowledge_settings()
     except KnowledgeConfigError as exc:
         return _result(False, f"knowledge settings invalid: {exc}")
-    status = obsidian_dependency_status()
+    status = obsidian_dependency_status(get_installer_version=_get_obsidian_installer_version)
     data = {
         **status.details,
         "primary_adapter": settings.primary_adapter.value,
