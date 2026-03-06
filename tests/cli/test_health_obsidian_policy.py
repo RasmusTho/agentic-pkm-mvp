@@ -44,7 +44,7 @@ def test_check_obsidian_dependencies_passes_installer_reader(monkeypatch) -> Non
         captured["version"] = str(get_installer_version())
         return _Status()
 
-    monkeypatch.setattr("app.cli.health.obsidian_dependency_status", fake_status)
+    monkeypatch.setattr(health_module, "obsidian_dependency_status", fake_status)
     result = health_module._check_obsidian_dependencies()
     assert result["ok"] is True
     assert captured["version"] == "1.12.4"
