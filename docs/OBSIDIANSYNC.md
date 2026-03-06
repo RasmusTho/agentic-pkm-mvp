@@ -41,5 +41,6 @@ Watcher note: Runtime now uses the registry watcher (`configs/watchers.yaml` + `
 - Current adapters:
   - `FsVaultAdapter` for deterministic local/test writes.
   - `ObsidianCliAdapter` for Obsidian CLI-driven operations.
+- Inbox service writes (change/conflict logs) now append via `KnowledgePort` rather than direct file I/O.
 - Policy + startup posture is governed by `KNOWLEDGE_*` settings and health-gated via `python -m app.cli health --json`.
 - See `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`.
