@@ -5,8 +5,9 @@ import os
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
+from app.knowledge.contracts import NoteLocator
+from app.knowledge.references import build_obsidian_advanced_uri
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 from app.ports.sink import DummySink, Sink
 from app.services.inbox import append_change
@@ -40,7 +41,7 @@ def _make_uri(path: Path) -> str:
         rel = path.relative_to(VAULT)
     except ValueError:
         rel = path
-    return f"obsidian://advanced-uri?vault={quote(vault_name)}&filepath={quote(rel.as_posix())}"
+    return build_obsidian_advanced_uri(NoteLocator(vault=vault_name, path=rel.as_posix()))
 
 
 def _ensure_uuid(path: Path, frontmatter: dict[str, Any], body: str) -> bool:

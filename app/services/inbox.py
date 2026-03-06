@@ -3,8 +3,9 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
 
+from app.knowledge.contracts import NoteLocator
+from app.knowledge.references import build_obsidian_advanced_uri
 from app.vault.paths import get_vault_inbox_dir_rel
 
 
@@ -86,4 +87,4 @@ def _build_uri(vault_path: Path | str | None) -> str | None:
         rel = path_obj.relative_to(Path(os.getenv("VAULT_DIR", "vault")))
     except ValueError:
         rel = path_obj.name
-    return f"obsidian://advanced-uri?vault={quote(vault_name)}&filepath={quote(str(rel))}"
+    return build_obsidian_advanced_uri(NoteLocator(vault=vault_name, path=str(rel).replace("\\", "/")))

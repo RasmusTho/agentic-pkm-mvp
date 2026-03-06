@@ -68,3 +68,17 @@ def test_append_note_requires_fields(tmp_path: Path) -> None:
         append_note(title="", body="missing", vault_root=tmp_path)
     with pytest.raises(VaultToolError):
         append_note(title="Valid", body=" ", vault_root=tmp_path)
+
+
+def test_append_note_uses_knowledge_port_writer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, str]] = []
+
+    class FakePort:
+        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
+            calls.append((locator.path, content))
+            return None
+
+    monkeypatch.setattr("app.mcp.vault_tools.resolve_knowledge_port", lambda **kwargs: FakePort())
+    path = append_note(title="Contract Test", body="Body", vault_root=tmp_path)
+    assert path.name == "contract-test.md"
+    assert calls and calls[0][0] == "_mcp/contract-test.md"
