@@ -126,6 +126,9 @@ def _merge(existing, updated):
         "compose_up_cmd",
         "compose_up_rc",
         "compose_up_output_snippet",
+        "obsidian_gate_enabled",
+        "obsidian_gate_ok",
+        "obsidian_gate_detail",
     }
     merged = dict(existing)
     for key, value in updated.items():
