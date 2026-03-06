@@ -42,3 +42,20 @@ def test_write_note_checks_write_guard(monkeypatch, tmp_path: Path) -> None:
 
     vault_sync._write_note(note_path, {"uuid": "u2"}, "Body")
     assert calls == ["vault sync note write"]
+
+
+def test_write_note_falls_back_to_default_vault_when_env_blank(monkeypatch, tmp_path: Path) -> None:
+    note_path = tmp_path / "vault" / "Inbox" / "note.md"
+    captured: dict[str, str] = {}
+
+    class FakePort:
+        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
+            captured["vault"] = locator.vault
+            return None
+
+    monkeypatch.setenv("OBSIDIAN_VAULT_NAME", "   ")
+    monkeypatch.setattr(vault_sync, "resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr(vault_sync.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda _: None)
+
+    vault_sync._write_note(note_path, {"uuid": "u3"}, "Body")
+    assert captured["vault"] == "Vault"

@@ -120,6 +120,9 @@ def _merge(existing, updated):
         "compose_up_cmd",
         "compose_up_rc",
         "compose_up_output_snippet",
+        "obsidian_gate_enabled",
+        "obsidian_gate_ok",
+        "obsidian_gate_detail",
     }
     merged = dict(existing)
     for key, value in updated.items():
@@ -181,6 +184,9 @@ payload = {
     "compose_up_cmd": os.environ.get("COMPOSE_UP_CMD") or None,
     "compose_up_rc": _coerce_int("COMPOSE_UP_RC"),
     "compose_up_output_snippet": os.environ.get("COMPOSE_UP_OUTPUT_SNIPPET") or None,
+    "obsidian_gate_enabled": _coerce_bool("OBSIDIAN_GATE_ENABLED"),
+    "obsidian_gate_ok": os.environ.get("OBSIDIAN_GATE_OK") or None,
+    "obsidian_gate_detail": os.environ.get("OBSIDIAN_GATE_DETAIL") or None,
 }
 
 payload = _merge(existing, payload)
@@ -240,9 +246,17 @@ require_db_outbox_env() {
 }
 
 preflight_obsidian_strict() {
+  export OBSIDIAN_GATE_ENABLED=0
+  export OBSIDIAN_GATE_OK=not_run
+  export OBSIDIAN_GATE_DETAIL=
   if [ "${STARTUP_ENFORCE_OBSIDIAN:-0}" != "1" ]; then
+    write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
     return 0
   fi
+  export OBSIDIAN_GATE_ENABLED=1
+  export OBSIDIAN_GATE_OK=checking
+  export OBSIDIAN_GATE_DETAIL=
+  write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
   export KNOWLEDGE_PRIMARY_ADAPTER="${KNOWLEDGE_PRIMARY_ADAPTER:-obsidian_cli}"
   export KNOWLEDGE_FALLBACK_ADAPTER="${KNOWLEDGE_FALLBACK_ADAPTER:-fs_vault}"
   export KNOWLEDGE_STRICT_STARTUP="${KNOWLEDGE_STRICT_STARTUP:-1}"
@@ -251,11 +265,13 @@ preflight_obsidian_strict() {
   obsidian_gate_json=$(python - <<'PY'
 import json
 from app.knowledge.health import obsidian_dependency_status
+from app.cli.health import _get_obsidian_installer_version
 
-status = obsidian_dependency_status()
+status = obsidian_dependency_status(get_installer_version=_get_obsidian_installer_version)
 print(json.dumps({"ok": status.ok, "details": status.details}, ensure_ascii=False))
 PY
 )
+  export OBSIDIAN_GATE_DETAIL="$obsidian_gate_json"
   obsidian_ok=$(OBSIDIAN_GATE_JSON="$obsidian_gate_json" python - <<'PY'
 import json
 import os
@@ -263,6 +279,12 @@ payload = json.loads(os.environ.get("OBSIDIAN_GATE_JSON", "{}"))
 print("1" if payload.get("ok") else "0")
 PY
 )
+  if [ "$obsidian_ok" = "1" ]; then
+    export OBSIDIAN_GATE_OK=ok
+  else
+    export OBSIDIAN_GATE_OK=failed
+  fi
+  write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
   if [ "$obsidian_ok" != "1" ]; then
     fail_preflight "runtime mode Obsidian strict gate failed: $obsidian_gate_json"
   fi

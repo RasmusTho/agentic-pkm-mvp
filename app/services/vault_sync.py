@@ -56,7 +56,8 @@ def _write_note(path: Path, frontmatter: dict[str, Any], body: str) -> None:
     resolved = path.resolve()
     root = Path(resolved.anchor) if resolved.anchor else Path("/")
     rel = resolved.relative_to(root).as_posix()
-    locator = NoteLocator(vault=os.getenv("OBSIDIAN_VAULT_NAME", "Vault"), path=rel)
+    vault_name = (os.getenv("OBSIDIAN_VAULT_NAME") or "").strip() or "Vault"
+    locator = NoteLocator(vault=vault_name, path=rel)
     port = resolve_knowledge_port(vault_root=root)
     port.write_note(locator, rendered)
 
