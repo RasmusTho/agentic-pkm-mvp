@@ -64,6 +64,9 @@ def _health_client(
     worker_path: Path | None = None,
     worker_enabled: bool | None = False,
 ) -> TestClient:
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    outbox_path.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     if watcher_path is not None:
         monkeypatch.setenv("WATCHER_HEARTBEAT_PATH", str(watcher_path))
     else:
