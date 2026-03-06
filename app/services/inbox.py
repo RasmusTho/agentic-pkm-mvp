@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.knowledge.contracts import NoteLocator
 from app.knowledge.references import build_obsidian_advanced_uri
+from app.knowledge.service import resolve_knowledge_port
 from app.vault.paths import get_vault_inbox_dir_rel
 
 
@@ -67,15 +68,15 @@ def _append_line(
     uri: str | None = None,
 ) -> None:
     root = _resolve_vault_root(vault_root)
-    target = root / Path(note_rel_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-
     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     action_link = uri or _build_uri(vault_path)
     suffix = f" | {action_link}" if action_link else ""
+    line = f"- [{timestamp}] {message}{suffix}\n"
 
-    with target.open("a", encoding="utf-8") as handle:
-        handle.write(f"- [{timestamp}] {message}{suffix}\n")
+    vault_name = os.getenv("OBSIDIAN_VAULT_NAME", "Vault")
+    locator = NoteLocator(vault=vault_name, path=note_rel_path.replace("\\", "/"))
+    port = resolve_knowledge_port(vault_root=root)
+    port.append_note(locator, line)
 
 
 def _build_uri(vault_path: Path | str | None) -> str | None:
