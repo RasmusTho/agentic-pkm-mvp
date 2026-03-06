@@ -7,6 +7,9 @@ from typing import Any, Mapping, Sequence
 
 import yaml
 
+from app.knowledge.contracts import NoteLocator
+from app.knowledge.service import resolve_knowledge_port
+
 
 class VaultToolError(Exception):
     """Raised when vault-backed MCP actions cannot proceed."""
@@ -92,7 +95,9 @@ def append_note(
     yaml_block = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True).strip()
     body_block = body.rstrip()
     content = f"---\n{yaml_block}\n---\n\n{body_block}\n"
-    note_path.write_text(content, encoding="utf-8")
+    locator = NoteLocator(vault=os.getenv("OBSIDIAN_VAULT_NAME", "Vault"), path=note_path.relative_to(root).as_posix())
+    port = resolve_knowledge_port(vault_root=root)
+    port.write_note(locator, content)
     return note_path
 
 

@@ -11,6 +11,9 @@ from typing import Any, Dict
 import httpx
 
 from app.components.llm.fabric import describe_default_routes
+from app.knowledge.errors import KnowledgeConfigError
+from app.knowledge.health import obsidian_dependency_status
+from app.knowledge.settings import KnowledgeAdapter, load_knowledge_settings
 from app.obs.log import span, with_trace_id
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.settings.panel_actions import get_panel_actions_diagnostics
@@ -163,6 +166,32 @@ def _check_llm_providers(ollama_check: Dict[str, Any]) -> Dict[str, Any]:
         "providers": providers,
         "active_provider": provider or "mock",
     }
+
+
+def _obsidian_required() -> bool:
+    try:
+        settings = load_knowledge_settings()
+    except KnowledgeConfigError:
+        return True
+    return settings.strict_startup or settings.primary_adapter == KnowledgeAdapter.OBSIDIAN_CLI
+
+
+def _check_obsidian_dependencies() -> Dict[str, Any]:
+    try:
+        settings = load_knowledge_settings()
+    except KnowledgeConfigError as exc:
+        return _result(False, f"knowledge settings invalid: {exc}")
+    status = obsidian_dependency_status()
+    data = {
+        **status.details,
+        "primary_adapter": settings.primary_adapter.value,
+        "fallback_adapter": settings.fallback_adapter.value,
+        "strict_startup": settings.strict_startup,
+        "allow_fallback": settings.allow_fallback,
+    }
+    if status.ok:
+        return _result(True, "Obsidian dependency checks passed", data=data)
+    return _result(False, "Obsidian dependency checks failed", data=data)
 
 
 def _heartbeat_status(
@@ -387,6 +416,17 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
             }
         )
 
+    obsidian = checks.get("obsidian", {})
+    if obsidian.get("ok") is False and obsidian.get("required"):
+        actions.append(
+            {
+                "id": "obsidian_dependency_missing",
+                "severity": "required",
+                "message": "Obsidian CLI/installer dependency check failed",
+                "command_hint": "Install/update Obsidian installer (>=1.12.4) and ensure `obsidian` is in PATH",
+            }
+        )
+
     return actions
 
 
@@ -399,6 +439,7 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
         "index_outbox": _annotate_required(_check_outbox_path(), required=True),
         "panel_actions": _annotate_required(_check_panel_actions(), required=False),
         "ollama": _annotate_required(_check_ollama(), required=_ollama_required()),
+        "obsidian": _annotate_required(_check_obsidian_dependencies(), required=_obsidian_required()),
     }
     checks["llm_router"] = _annotate_required(_check_llm_router(), required=False)
     checks["llm_providers"] = _annotate_required(_check_llm_providers(checks["ollama"]), required=False)

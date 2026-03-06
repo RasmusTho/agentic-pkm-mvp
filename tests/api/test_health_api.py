@@ -78,6 +78,8 @@ def _health_client(
         monkeypatch.setenv("WORKER_ENABLE", "1" if worker_enabled else "0")
     monkeypatch.setenv("WATCHER_HEARTBEAT_STALE_SECONDS", "60")
     monkeypatch.setenv("WORKER_HEARTBEAT_STALE_SECONDS", "60")
+    monkeypatch.setenv("KNOWLEDGE_PRIMARY_ADAPTER", "fs_vault")
+    monkeypatch.setenv("KNOWLEDGE_STRICT_STARTUP", "0")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -94,6 +96,8 @@ def _assert_check_metadata(payload: dict) -> None:
     assert "selected_defaults" in checks["llm_router"]
     assert "llm_providers" in checks
     assert "providers" in checks["llm_providers"]
+    assert "obsidian" in checks
+    assert "required" in checks["obsidian"]
 
 
 def test_health_success(monkeypatch, tmp_path) -> None:

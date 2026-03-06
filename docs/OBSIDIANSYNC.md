@@ -35,3 +35,11 @@ Watcher note: Runtime now uses the registry watcher (`configs/watchers.yaml` + `
 ## Advanced-URI UX
 - All Inbox items get `obsidian://advanced-uri` links for quick navigation to the affected file.
 - The `System/Dashboards/*.md` dashboard shows the latest events via Dataview tables.
+
+## Knowledge Port abstraction (vNext)
+- Obsidian interactions are now specified behind `app/knowledge` contract types (`KnowledgePort`, `NoteLocator`, `WriteReceipt`) so domain/runtime code does not bind directly to transport details.
+- Current adapters:
+  - `FsVaultAdapter` for deterministic local/test writes.
+  - `ObsidianCliAdapter` for Obsidian CLI-driven operations.
+- Policy + startup posture is governed by `KNOWLEDGE_*` settings and health-gated via `python -m app.cli health --json`.
+- See `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`.

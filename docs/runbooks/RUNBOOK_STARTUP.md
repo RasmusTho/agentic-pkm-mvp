@@ -18,7 +18,12 @@ State: Historical (SoT v4.10). This checklist may drift; prefer `docs/runbooks/R
 2. Seed `${VAULT_SYSTEM_DIR_REL}/Settings/health.md` so guided thresholds/incident logging exist (see `docs/HEALTH.md`).
 3. Optional overrides: `INDEX_OUTBOX_PATH`, `HEALTH_THRESHOLDS_*` and `HEALTH_INCIDENT_CAPTURE_*` can guard tuning; keep `incident_log_path` in the vault to a known location you can tail.
 4. LLM preflight: `LLM_PROVIDER` + `LLM_MODEL` are required for runtime. `LLM_PROVIDER=mock` requires no endpoint vars. `LLM_PROVIDER=ollama` accepts `OLLAMA_URL` or `OPENAI_BASE_URL`. Other providers require `OPENAI_BASE_URL`.
-5. `scripts/start_full_system.sh` enforces `VAULT_ROOT` (fail-fast unless `ALLOW_LEGACY_VAULT=1`) and uses `vault.layout.md` to resolve `VAULT_INBOX_DIR_REL`/`VAULT_SYSTEM_DIR_REL`. The resolved inbox is exported so the watcher scope defaults to that single folder. Runtime mode now starts `db`+`api`+`watcher`+`worker` by default; set `START_WATCHERS=0` and/or `START_WORKER=0` (or `START_MODE=infra`) when you need only API services.
+5. Knowledge adapter posture (Obsidian contract):
+   - `KNOWLEDGE_PRIMARY_ADAPTER` (`obsidian_cli` or `fs_vault`)
+   - `KNOWLEDGE_STRICT_STARTUP` (default strict)
+   - `KNOWLEDGE_ALLOW_FALLBACK` (disabled by default in strict mode)
+   - When strict Obsidian mode is enabled, health checks fail fast unless `obsidian` CLI is available and installer floor is met.
+6. `scripts/start_full_system.sh` enforces `VAULT_ROOT` (fail-fast unless `ALLOW_LEGACY_VAULT=1`) and uses `vault.layout.md` to resolve `VAULT_INBOX_DIR_REL`/`VAULT_SYSTEM_DIR_REL`. The resolved inbox is exported so the watcher scope defaults to that single folder. Runtime mode now starts `db`+`api`+`watcher`+`worker` by default; set `START_WATCHERS=0` and/or `START_WORKER=0` (or `START_MODE=infra`) when you need only API services.
 
 ## 2. Containers
 1. Run `scripts/start_full_system.sh` to bring up the stack. The runtime default brings up `db`+`api`+`watcher`+`worker`, waits for `/healthz`, ensures the layout note, exports the derived `VAULT_INBOX_DIR_REL`/`VAULT_SYSTEM_DIR_REL`, and runs the same ingest/health/preflight probes as before.
