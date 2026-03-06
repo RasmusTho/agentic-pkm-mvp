@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from app.cli import health as health_module
+import importlib
+
+health_module = importlib.import_module("app.cli.health")
 
 
 def test_obsidian_required_false_when_non_strict_fallback_allowed(monkeypatch) -> None:
