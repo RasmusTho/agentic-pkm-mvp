@@ -14,6 +14,7 @@ make alpha-up
    - requires `LLM_PROVIDER` + `LLM_MODEL`; mock requires no endpoint, Ollama accepts `OLLAMA_URL` or `OPENAI_BASE_URL`, other providers require `OPENAI_BASE_URL`
    - waits for `/api/status` then `/api/health` to report runtime `db`/`worker`/`watcher` as ok (timeout 60s)
    - optional checks like `ffmpeg` are ignored by default via `STARTUP_IGNORE_CHECKS=ffmpeg` (set to `""` for strict mode)
+   - optional strict Obsidian gate: set `STARTUP_ENFORCE_OBSIDIAN=1` to fail fast unless host Obsidian dependency checks pass (`obsidian` CLI + installer floor)
    - on failure, prints `docker compose ps`, tails api/worker/watcher logs, and dumps `/api/health`
 
 ## Alpha Compose Runtime (canonical)
@@ -54,6 +55,13 @@ Tests: `tests/e2e/test_operator_workflows.py::test_operator_can_diagnose_stale_w
 - Run the gap test after startup:
 ```
 scripts/gap_test_alpha.sh
+```
+- For Obsidian-required server posture, export before startup:
+```
+export STARTUP_ENFORCE_OBSIDIAN=1
+export KNOWLEDGE_PRIMARY_ADAPTER=obsidian_cli
+export KNOWLEDGE_STRICT_STARTUP=1
+export KNOWLEDGE_ALLOW_FALLBACK=0
 ```
 - If `/api/health` fails:
   - check heartbeat files in `/app/tmp`

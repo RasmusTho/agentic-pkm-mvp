@@ -239,6 +239,35 @@ require_db_outbox_env() {
   fi
 }
 
+preflight_obsidian_strict() {
+  if [ "${STARTUP_ENFORCE_OBSIDIAN:-0}" != "1" ]; then
+    return 0
+  fi
+  export KNOWLEDGE_PRIMARY_ADAPTER="${KNOWLEDGE_PRIMARY_ADAPTER:-obsidian_cli}"
+  export KNOWLEDGE_FALLBACK_ADAPTER="${KNOWLEDGE_FALLBACK_ADAPTER:-fs_vault}"
+  export KNOWLEDGE_STRICT_STARTUP="${KNOWLEDGE_STRICT_STARTUP:-1}"
+  export KNOWLEDGE_ALLOW_FALLBACK="${KNOWLEDGE_ALLOW_FALLBACK:-0}"
+
+  obsidian_gate_json=$(python - <<'PY'
+import json
+from app.knowledge.health import obsidian_dependency_status
+
+status = obsidian_dependency_status()
+print(json.dumps({"ok": status.ok, "details": status.details}, ensure_ascii=False))
+PY
+)
+  obsidian_ok=$(OBSIDIAN_GATE_JSON="$obsidian_gate_json" python - <<'PY'
+import json
+import os
+payload = json.loads(os.environ.get("OBSIDIAN_GATE_JSON", "{}"))
+print("1" if payload.get("ok") else "0")
+PY
+)
+  if [ "$obsidian_ok" != "1" ]; then
+    fail_preflight "runtime mode Obsidian strict gate failed: $obsidian_gate_json"
+  fi
+}
+
 preflight_runtime() {
   require_vars LLM_PROVIDER LLM_MODEL
   if [ "${LLM_PROVIDER_ENFORCE:-}" != "1" ]; then
@@ -284,6 +313,7 @@ PYLLM
   if [ "${START_WATCHERS:-0}" -eq 1 ] || [ "${START_WORKER:-0}" -eq 1 ]; then
     require_db_outbox_env
   fi
+  preflight_obsidian_strict
   export LLM_PROVIDER_ENFORCE=1
 }
 
