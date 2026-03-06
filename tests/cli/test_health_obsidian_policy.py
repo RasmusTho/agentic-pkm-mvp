@@ -5,6 +5,14 @@ import importlib
 health_module = importlib.import_module("app.cli.health")
 
 
+def test_obsidian_required_false_when_policy_not_explicit(monkeypatch) -> None:
+    monkeypatch.delenv("KNOWLEDGE_PRIMARY_ADAPTER", raising=False)
+    monkeypatch.delenv("KNOWLEDGE_FALLBACK_ADAPTER", raising=False)
+    monkeypatch.delenv("KNOWLEDGE_STRICT_STARTUP", raising=False)
+    monkeypatch.delenv("KNOWLEDGE_ALLOW_FALLBACK", raising=False)
+    assert health_module._obsidian_required() is False
+
+
 def test_obsidian_required_false_when_non_strict_fallback_allowed(monkeypatch) -> None:
     monkeypatch.setenv("KNOWLEDGE_PRIMARY_ADAPTER", "obsidian_cli")
     monkeypatch.setenv("KNOWLEDGE_FALLBACK_ADAPTER", "fs_vault")

@@ -170,6 +170,12 @@ def _check_llm_providers(ollama_check: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _obsidian_required() -> bool:
+    explicit_policy = any(
+        os.getenv(name) is not None
+        for name in ("KNOWLEDGE_PRIMARY_ADAPTER", "KNOWLEDGE_STRICT_STARTUP", "KNOWLEDGE_ALLOW_FALLBACK")
+    )
+    if not explicit_policy:
+        return False
     try:
         settings = load_knowledge_settings()
     except KnowledgeConfigError:
@@ -365,11 +371,11 @@ def _runtime_ok(runtime: dict[str, dict[str, Any]]) -> bool:
 
 
 def _checks_ok(checks: dict[str, dict[str, Any]]) -> bool:
-    return all(item.get("ok") for item in checks.values())
+    return all(item.get("ok") for item in checks.values() if item.get("required", True))
 
 
 def _required_checks_ok(checks: dict[str, dict[str, Any]]) -> bool:
-    return all(item.get("ok") for item in checks.values() if item.get("required", True))
+    return _checks_ok(checks)
 
 
 def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
