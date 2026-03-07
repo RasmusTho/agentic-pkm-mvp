@@ -90,3 +90,19 @@ def test_active_edit_skips(monkeypatch, tmp_path):
     assert not sink.upserts
     assert messages
     assert "Deferred" in messages[0][0][0]
+
+
+def test_uri_falls_back_to_default_vault_when_env_blank(monkeypatch, tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("---\nuuid: 9012\n---\n\nBody", encoding="utf-8")
+
+    monkeypatch.setenv("VAULT_DIR", str(vault))
+    monkeypatch.setenv("OBSIDIAN_VAULT_NAME", "   ")
+    import scripts.fs_watcher as watcher  # type: ignore
+
+    reload(watcher)
+    uri = watcher._make_uri(note)
+    assert "obsidian://advanced-uri" in uri
+    assert "vault=Vault" in uri

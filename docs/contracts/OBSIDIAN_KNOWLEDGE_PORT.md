@@ -27,6 +27,10 @@ This contract follows:
 Reference types:
 - `NoteLocator(vault, path)` where `path` is vault-relative and portable (`/` separators).
 - `WriteReceipt(operation, locator, adapter, trace_id, fallback_used)`.
+- Locator construction for runtime/services must go through shared helpers:
+  - `resolve_obsidian_vault_name(...)`
+  - `make_note_locator(...)`
+  - `make_note_locator_from_absolute(...)`
 
 ## Policy surface
 - `KNOWLEDGE_PRIMARY_ADAPTER` (`obsidian_cli` or `fs_vault`)
@@ -48,6 +52,13 @@ Validation rules:
 - `KnowledgeDependencyError` (missing CLI/installer dependency)
 - `KnowledgeCapabilityError` (adapter cannot perform requested operation)
 - `KnowledgeWriteConflict` (safe write preconditions fail)
+
+## Allowed exceptions (boundary)
+- Startup/ops glue may reference Obsidian only for dependency gates and telemetry:
+  - `scripts/start_full_system.sh`
+  - `app/cli/health.py`
+- URI rendering helpers may stay outside adapter classes but must only consume `NoteLocator` (no ad-hoc vault/path parsing).
+- No domain/service code may construct `NoteLocator` directly from env vars; use shared locator helpers instead.
 
 ## TDD test baseline (must exist before adapter wiring)
 1. Contract tests for `NoteLocator` portability constraints.
