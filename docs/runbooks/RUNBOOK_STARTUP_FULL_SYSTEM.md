@@ -16,6 +16,7 @@ make alpha-up
    - optional checks like `ffmpeg` are ignored by default via `STARTUP_IGNORE_CHECKS=ffmpeg` (set to `""` for strict mode)
    - optional strict Obsidian gate: set `STARTUP_ENFORCE_OBSIDIAN=1` to fail fast unless host Obsidian dependency checks pass (`obsidian` CLI + installer floor)
    - on failure, prints `docker compose ps`, tails api/worker/watcher logs, and dumps `/api/health`
+   - startup summary prints `obsidian gate: enabled=<...> status=<...>` and `tmp/startup_status.json` includes `obsidian_gate_enabled|ok|detail`
 
 ## Alpha Compose Runtime (canonical)
 - Services: `db`, `api`, `watcher`, `worker`.

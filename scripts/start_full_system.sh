@@ -305,8 +305,16 @@ PY
   export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
   write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
   if [ "$obsidian_ok" != "1" ]; then
+    obsidian_gate_ok="failed"
+    obsidian_gate_detail="$obsidian_gate_json"
+    export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
+    export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
     fail_preflight "runtime mode Obsidian strict gate failed: $obsidian_gate_json"
   fi
+  obsidian_gate_ok="passed"
+  obsidian_gate_detail="$obsidian_gate_json"
+  export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
+  export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
 }
 
 preflight_runtime() {
