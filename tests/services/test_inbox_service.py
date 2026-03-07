@@ -27,3 +27,17 @@ def test_append_change_uses_knowledge_port(monkeypatch, tmp_path: Path) -> None:
     assert calls
     assert calls[0][0] == "Inbox/_system_changes.md"
     assert "world" in calls[0][1]
+
+
+def test_append_change_falls_back_to_default_vault_when_env_blank(monkeypatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class FakePort:
+        def append_note(self, locator, content):  # type: ignore[no-untyped-def]
+            calls.append(locator.vault)
+            return None
+
+    monkeypatch.setenv("OBSIDIAN_VAULT_NAME", "   ")
+    monkeypatch.setattr("app.services.inbox.resolve_knowledge_port", lambda **kwargs: FakePort())
+    append_change("world", note_rel_path="Inbox/_system_changes.md", vault_root=tmp_path)
+    assert calls == ["Vault"]

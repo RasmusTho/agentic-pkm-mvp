@@ -64,6 +64,19 @@ def test_start_full_system_applies_watcher_auto_exec_default() -> None:
     assert "apply_start_full_system_defaults" in script
 
 
+def test_start_full_system_clears_obsidian_gate_fields_in_status_merge() -> None:
+    script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+    assert '"obsidian_gate_enabled"' in script
+    assert '"obsidian_gate_ok"' in script
+    assert '"obsidian_gate_detail"' in script
+
+
+def test_start_full_system_strict_gate_checks_installer_version() -> None:
+    script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+    assert "from app.cli.health import _get_obsidian_installer_version" in script
+    assert "obsidian_dependency_status(get_installer_version=_get_obsidian_installer_version)" in script
+
+
 def test_compose_watcher_fallback_uses_registry_command() -> None:
     compose = _load_compose("docker-compose.watcher.yml")
     watcher = (compose.get("services") or {}).get("watcher") or {}

@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.knowledge.contracts import NoteLocator
+from app.knowledge.locators import make_note_locator, make_note_locator_from_absolute
 from app.knowledge.references import build_obsidian_advanced_uri
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 from app.ports.sink import DummySink, Sink
@@ -36,12 +36,11 @@ def _record(path: Path, uuid_value: str, fm_hash: str, body_hash: str) -> None:
 
 
 def _make_uri(path: Path) -> str:
-    vault_name = os.getenv("OBSIDIAN_VAULT_NAME", "Vault")
     try:
-        rel = path.relative_to(VAULT)
+        locator = make_note_locator_from_absolute(path, vault_root=VAULT)
     except ValueError:
-        rel = path
-    return build_obsidian_advanced_uri(NoteLocator(vault=vault_name, path=rel.as_posix()))
+        locator = make_note_locator(path.as_posix())
+    return build_obsidian_advanced_uri(locator)
 
 
 def _ensure_uuid(path: Path, frontmatter: dict[str, Any], body: str) -> bool:

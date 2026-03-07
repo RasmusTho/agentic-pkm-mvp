@@ -252,17 +252,28 @@ require_db_outbox_env() {
 }
 
 preflight_obsidian_strict() {
+  obsidian_gate_enabled="false"
+  obsidian_gate_ok="not_run"
+  obsidian_gate_detail=""
+  export OBSIDIAN_GATE_ENABLED="$obsidian_gate_enabled"
+  export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
+  export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
   if [ "${STARTUP_ENFORCE_OBSIDIAN:-0}" != "1" ]; then
-    obsidian_gate_enabled="false"
     obsidian_gate_ok="skipped"
     obsidian_gate_detail="STARTUP_ENFORCE_OBSIDIAN!=1"
     export OBSIDIAN_GATE_ENABLED="$obsidian_gate_enabled"
     export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
     export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
+    write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
     return 0
   fi
   obsidian_gate_enabled="true"
+  obsidian_gate_ok="checking"
+  obsidian_gate_detail=""
   export OBSIDIAN_GATE_ENABLED="$obsidian_gate_enabled"
+  export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
+  export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
+  write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
   export KNOWLEDGE_PRIMARY_ADAPTER="${KNOWLEDGE_PRIMARY_ADAPTER:-obsidian_cli}"
   export KNOWLEDGE_FALLBACK_ADAPTER="${KNOWLEDGE_FALLBACK_ADAPTER:-fs_vault}"
   export KNOWLEDGE_STRICT_STARTUP="${KNOWLEDGE_STRICT_STARTUP:-1}"
@@ -270,31 +281,15 @@ preflight_obsidian_strict() {
 
   obsidian_gate_json=$(python - <<'PY'
 import json
-import os
-import subprocess
 from app.knowledge.health import obsidian_dependency_status
+from app.cli.health import _get_obsidian_installer_version
 
-def _installer_version() -> str | None:
-    env_version = (os.getenv("OBSIDIAN_INSTALLER_VERSION") or "").strip()
-    if env_version:
-        return env_version
-    try:
-        proc = subprocess.run(
-            ["obsidian", "version"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=3.0,
-        )
-        raw = (proc.stdout or proc.stderr or "").strip()
-        return raw or None
-    except Exception:
-        return None
-
-status = obsidian_dependency_status(get_installer_version=_installer_version)
+status = obsidian_dependency_status(get_installer_version=_get_obsidian_installer_version)
 print(json.dumps({"ok": status.ok, "details": status.details}, ensure_ascii=False))
 PY
 )
+  obsidian_gate_detail="$obsidian_gate_json"
+  export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
   obsidian_ok=$(OBSIDIAN_GATE_JSON="$obsidian_gate_json" python - <<'PY'
 import json
 import os
@@ -302,6 +297,13 @@ payload = json.loads(os.environ.get("OBSIDIAN_GATE_JSON", "{}"))
 print("1" if payload.get("ok") else "0")
 PY
 )
+  if [ "$obsidian_ok" = "1" ]; then
+    obsidian_gate_ok="passed"
+  else
+    obsidian_gate_ok="failed"
+  fi
+  export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
+  write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
   if [ "$obsidian_ok" != "1" ]; then
     obsidian_gate_ok="failed"
     obsidian_gate_detail="$obsidian_gate_json"
