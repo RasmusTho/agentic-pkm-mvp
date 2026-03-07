@@ -75,6 +75,6 @@ Wire this contract into:
 without changing external event contracts.
 
 ## Rolling implementation backlog
-- [ ] Verify all runtime call sites that perform note open/search are explicitly routed through `resolve_knowledge_port()`.
-- [ ] Add contract tests for `make_note_locator_from_absolute(...)` usage in service flows with mixed absolute/relative paths.
-- [ ] Add CI marker command in runbooks for `tests/architecture/test_obsidian_port_boundaries.py`.
+- [x] Verify all runtime call sites that perform note open/search are explicitly routed through `resolve_knowledge_port()`.
+- [x] Add contract tests for `make_note_locator_from_absolute(...)` usage in service flows with mixed absolute/relative paths.
+- [x] Add CI marker command in runbooks for `tests/architecture/test_obsidian_port_boundaries.py`.
