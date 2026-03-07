@@ -14,7 +14,7 @@ from app.db import conn_rw, ensure_schema
 
 from app.events.models import new_trace_id
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_METADATA, INGEST_OBJECT_UPDATED
-from app.knowledge.locators import make_note_locator
+from app.knowledge.locators import make_note_locator_from_absolute
 from app.knowledge.service import resolve_knowledge_port
 from app.write_guard import DEFAULT_WRITE_GUARD
 from app.services.inbox import append_change, append_conflict
@@ -54,8 +54,7 @@ def _write_note(path: Path, frontmatter: dict[str, Any], body: str) -> None:
     DEFAULT_WRITE_GUARD.assert_writes_allowed("vault sync note write")
     resolved = path.resolve()
     root = Path(resolved.anchor) if resolved.anchor else Path("/")
-    rel = resolved.relative_to(root).as_posix()
-    locator = make_note_locator(rel)
+    locator = make_note_locator_from_absolute(resolved, vault_root=root)
     port = resolve_knowledge_port(vault_root=root)
     port.write_note(locator, rendered)
 

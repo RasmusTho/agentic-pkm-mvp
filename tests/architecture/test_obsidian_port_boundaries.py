@@ -95,3 +95,23 @@ def test_advanced_uri_builder_imports_are_constrained() -> None:
         "build_obsidian_advanced_uri usage should stay in approved boundary modules: "
         f"{offenders}"
     )
+
+
+def test_knowledge_adapters_are_resolved_only_via_service_boundary() -> None:
+    scan_roots = [REPO_ROOT / "app", REPO_ROOT / "scripts"]
+    allow_importers = {
+        REPO_ROOT / "app" / "knowledge" / "__init__.py",
+        REPO_ROOT / "app" / "knowledge" / "service.py",
+    }
+    offenders: list[str] = []
+    for root in scan_roots:
+        for path in _iter_py_files(root):
+            if path in allow_importers:
+                continue
+            imports = _imports(path)
+            if "app.knowledge.adapters" in imports:
+                offenders.append(str(path.relative_to(REPO_ROOT)))
+    assert not offenders, (
+        "Direct app.knowledge.adapters imports are forbidden outside the service boundary: "
+        f"{offenders}"
+    )
