@@ -79,6 +79,7 @@ Example commands:
 - Architecture guardrails
   - export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
   - pytest -q tests/architecture/test_outer_inner_boundaries.py -m "not pg"
+  - pytest -q tests/architecture/test_obsidian_port_boundaries.py -m "not pg"
 - Panel action wiring (config-driven)
   - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
   - pytest -q tests/agents/panel_agent/test_panel_wiring.py -m "not pg"
