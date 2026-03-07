@@ -5,6 +5,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 IMPORT_RULES_PATH = REPO_ROOT / "tests" / "architecture" / "test_import_rules.py"
+OBSIDIAN_BOUNDARIES_PATH = REPO_ROOT / "tests" / "architecture" / "test_obsidian_port_boundaries.py"
 
 EXPECTED_FORBIDDEN = {
     "test_high_level_imports_use_components_entrypoints": {
@@ -23,10 +24,10 @@ EXPECTED_FORBIDDEN = {
 }
 
 
-def _load_import_rules() -> ast.Module:
-    if not IMPORT_RULES_PATH.exists():
-        raise AssertionError(f"Missing import rules test at {IMPORT_RULES_PATH}")
-    return ast.parse(IMPORT_RULES_PATH.read_text(encoding="utf-8"))
+def _load_module(path: Path) -> ast.Module:
+    if not path.exists():
+        raise AssertionError(f"Missing architecture test at {path}")
+    return ast.parse(path.read_text(encoding="utf-8"))
 
 
 def _find_function(module: ast.Module, name: str) -> ast.FunctionDef:
@@ -97,7 +98,7 @@ def test_import_boundary_tests_dont_allow_escape_hatches() -> None:
 
     See: docs/ARCHITECTURE.md §Agent Implementation Pattern
     """
-    module = _load_import_rules()
+    module = _load_module(IMPORT_RULES_PATH)
     text = IMPORT_RULES_PATH.read_text(encoding="utf-8")
     if "temporary" in text.lower():
         raise AssertionError(
@@ -120,3 +121,44 @@ def test_import_boundary_tests_dont_allow_escape_hatches() -> None:
             raise AssertionError(
                 f"Forbidden patterns weakened in {func_name}; missing: {sorted(missing)}"
             )
+
+
+def test_obsidian_boundary_guardrails_dont_allow_escape_hatches() -> None:
+    module = _load_module(OBSIDIAN_BOUNDARIES_PATH)
+    text = OBSIDIAN_BOUNDARIES_PATH.read_text(encoding="utf-8")
+    if "temporary" in text.lower():
+        raise AssertionError(
+            "Obsidian boundary tests must not add temporary exceptions; remove 'temporary' markers."
+        )
+
+    expected_note_locator_allow = {
+        REPO_ROOT / "app" / "knowledge" / "locators.py",
+    }
+    expected_vault_env_allow = {
+        REPO_ROOT / "app" / "knowledge" / "vault_identity.py",
+    }
+    expected_uri_importers_allow = {
+        REPO_ROOT / "app" / "services" / "inbox.py",
+        REPO_ROOT / "scripts" / "fs_watcher.py",
+        REPO_ROOT / "app" / "knowledge" / "__init__.py",
+    }
+    expected_adapters_importers_allow = {
+        REPO_ROOT / "app" / "knowledge" / "__init__.py",
+        REPO_ROOT / "app" / "knowledge" / "service.py",
+    }
+
+    note_func = _find_function(module, "test_note_locator_construction_is_centralized")
+    note_allow = set(_extract_paths(note_func, "allow_calls"))
+    assert note_allow == expected_note_locator_allow
+
+    env_func = _find_function(module, "test_obsidian_vault_name_env_is_read_only_in_vault_identity")
+    env_allow = set(_extract_paths(env_func, "allow_paths"))
+    assert env_allow == expected_vault_env_allow
+
+    uri_func = _find_function(module, "test_advanced_uri_builder_imports_are_constrained")
+    uri_allow = set(_extract_paths(uri_func, "allow_importers"))
+    assert uri_allow == expected_uri_importers_allow
+
+    adapters_func = _find_function(module, "test_knowledge_adapters_are_resolved_only_via_service_boundary")
+    adapters_allow = set(_extract_paths(adapters_func, "allow_importers"))
+    assert adapters_allow == expected_adapters_importers_allow
