@@ -106,3 +106,26 @@ def test_uri_falls_back_to_default_vault_when_env_blank(monkeypatch, tmp_path):
     uri = watcher._make_uri(note)
     assert "obsidian://advanced-uri" in uri
     assert "vault=Vault" in uri
+
+
+def test_uuid_injection_writes_via_knowledge_port(monkeypatch, tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("Body", encoding="utf-8")
+
+    watcher = _load_watcher(monkeypatch, vault)
+    monkeypatch.setattr(watcher, "active_edit", lambda p: False)
+    monkeypatch.setattr(watcher, "append_change", lambda *a, **k: None)
+    calls: list[tuple[str, str]] = []
+
+    class FakePort:
+        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
+            calls.append((locator.path, content))
+            return None
+
+    monkeypatch.setattr(watcher, "resolve_knowledge_port", lambda **kwargs: FakePort())
+    changed = watcher._ensure_uuid(note, {}, "Body")
+    assert changed is False
+    assert calls and calls[0][0] == "note.md"
+    assert "uuid:" in calls[0][1]

@@ -8,6 +8,7 @@ from typing import Any
 
 from app.knowledge.locators import make_note_locator, make_note_locator_from_absolute
 from app.knowledge.references import build_obsidian_advanced_uri
+from app.knowledge.service import resolve_knowledge_port
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 from app.ports.sink import DummySink, Sink
 from app.services.inbox import append_change
@@ -53,7 +54,9 @@ def _ensure_uuid(path: Path, frontmatter: dict[str, Any], body: str) -> bool:
         append_change(f"Deferred UUID injection for {path.name}", vault_path=path, uri=_make_uri(path))
         return True
     frontmatter["uuid"] = new_uuid
-    path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+    locator = make_note_locator_from_absolute(path, vault_root=VAULT)
+    port = resolve_knowledge_port(vault_root=VAULT)
+    port.write_note(locator, dump_frontmatter(frontmatter, body))
     append_change(f"Injected UUID in {path.name}", vault_path=path, uri=_make_uri(path))
     return False
 
