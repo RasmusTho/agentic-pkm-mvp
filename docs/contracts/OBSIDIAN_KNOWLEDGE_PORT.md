@@ -65,6 +65,7 @@ Validation rules:
 2. Settings tests for adapter policy parsing + invalid combinations.
 3. CLI scope tests enforcing `vault=<...>` first.
 4. Dependency health tests for missing CLI and installer version checks.
+5. Architecture guardrails preventing direct `NoteLocator(...)` construction and direct `OBSIDIAN_VAULT_NAME` reads outside shared helpers.
 
 ## Next implementation step
 Wire this contract into:
