@@ -6,6 +6,7 @@ from typing import Callable, Sequence
 
 from app.knowledge.contracts import NoteLocator, SearchHit, WriteReceipt
 from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeDependencyError
+from app.knowledge.locators import make_note_locator
 from app.knowledge.obsidian_cli_scope import scoped_cli_args
 
 
@@ -60,7 +61,7 @@ class FsVaultAdapter:
             rel = note.relative_to(self.vault_root).as_posix()
             excerpt = text[max(0, idx - 60) : idx + 120].replace("\n", " ")
             score = 1.0 / (1.0 + float(idx))
-            hits.append(SearchHit(locator=NoteLocator(vault=vault, path=rel), score=score, excerpt=excerpt))
+            hits.append(SearchHit(locator=make_note_locator(rel, vault=vault), score=score, excerpt=excerpt))
             if len(hits) >= limit:
                 break
         return hits
@@ -115,7 +116,7 @@ class ObsidianCliAdapter:
             rel = line.strip()
             if not rel:
                 continue
-            hits.append(SearchHit(locator=NoteLocator(vault=vault, path=rel), score=1.0, excerpt=""))
+            hits.append(SearchHit(locator=make_note_locator(rel, vault=vault), score=1.0, excerpt=""))
         return hits
 
     def open_note(self, locator: NoteLocator) -> None:

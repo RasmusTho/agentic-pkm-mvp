@@ -12,6 +12,7 @@ from app.knowledge.references import build_obsidian_advanced_uri
 from app.knowledge.service import resolve_knowledge_port
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings, load_knowledge_settings
 from app.knowledge.adapters import FsVaultAdapter, ObsidianCliAdapter
+from app.knowledge.locators import make_note_locator, make_note_locator_from_absolute, normalize_note_path
 from app.knowledge.vault_identity import resolve_obsidian_vault_name
 
 __all__ = [
@@ -32,6 +33,9 @@ __all__ = [
     "build_obsidian_advanced_uri",
     "has_valid_vault_scope",
     "load_knowledge_settings",
+    "make_note_locator",
+    "make_note_locator_from_absolute",
+    "normalize_note_path",
     "obsidian_dependency_status",
     "resolve_obsidian_vault_name",
     "resolve_knowledge_port",

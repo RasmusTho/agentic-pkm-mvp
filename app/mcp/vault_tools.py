@@ -7,9 +7,8 @@ from typing import Any, Mapping, Sequence
 
 import yaml
 
-from app.knowledge.contracts import NoteLocator
+from app.knowledge.locators import make_note_locator
 from app.knowledge.service import resolve_knowledge_port
-from app.knowledge.vault_identity import resolve_obsidian_vault_name
 
 
 class VaultToolError(Exception):
@@ -96,7 +95,7 @@ def append_note(
     yaml_block = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True).strip()
     body_block = body.rstrip()
     content = f"---\n{yaml_block}\n---\n\n{body_block}\n"
-    locator = NoteLocator(vault=resolve_obsidian_vault_name(), path=note_path.relative_to(root).as_posix())
+    locator = make_note_locator(note_path.relative_to(root).as_posix())
     port = resolve_knowledge_port(vault_root=root)
     port.write_note(locator, content)
     return note_path

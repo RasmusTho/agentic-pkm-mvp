@@ -14,9 +14,8 @@ from app.db import conn_rw, ensure_schema
 
 from app.events.models import new_trace_id
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_METADATA, INGEST_OBJECT_UPDATED
-from app.knowledge.contracts import NoteLocator
+from app.knowledge.locators import make_note_locator
 from app.knowledge.service import resolve_knowledge_port
-from app.knowledge.vault_identity import resolve_obsidian_vault_name
 from app.write_guard import DEFAULT_WRITE_GUARD
 from app.services.inbox import append_change, append_conflict
 from app.services.outbox import insert_object_and_outbox
@@ -56,7 +55,7 @@ def _write_note(path: Path, frontmatter: dict[str, Any], body: str) -> None:
     resolved = path.resolve()
     root = Path(resolved.anchor) if resolved.anchor else Path("/")
     rel = resolved.relative_to(root).as_posix()
-    locator = NoteLocator(vault=resolve_obsidian_vault_name(), path=rel)
+    locator = make_note_locator(rel)
     port = resolve_knowledge_port(vault_root=root)
     port.write_note(locator, rendered)
 
