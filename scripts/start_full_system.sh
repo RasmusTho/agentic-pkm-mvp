@@ -52,6 +52,12 @@ index_doctor_status="skipped"
 index_issue_count=0
 bootstrap_next="none"
 startup_watchdog_pid=""
+obsidian_gate_enabled="false"
+obsidian_gate_ok="not_run"
+obsidian_gate_detail=""
+export OBSIDIAN_GATE_ENABLED="$obsidian_gate_enabled"
+export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
+export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
 
 write_startup_status() {
   local passed="${1:-${PRE_FLIGHT_PASSED:-0}}"
@@ -246,16 +252,27 @@ require_db_outbox_env() {
 }
 
 preflight_obsidian_strict() {
-  export OBSIDIAN_GATE_ENABLED=0
-  export OBSIDIAN_GATE_OK=not_run
-  export OBSIDIAN_GATE_DETAIL=
+  obsidian_gate_enabled="false"
+  obsidian_gate_ok="not_run"
+  obsidian_gate_detail=""
+  export OBSIDIAN_GATE_ENABLED="$obsidian_gate_enabled"
+  export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
+  export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
   if [ "${STARTUP_ENFORCE_OBSIDIAN:-0}" != "1" ]; then
+    obsidian_gate_ok="skipped"
+    obsidian_gate_detail="STARTUP_ENFORCE_OBSIDIAN!=1"
+    export OBSIDIAN_GATE_ENABLED="$obsidian_gate_enabled"
+    export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
+    export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
     write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
     return 0
   fi
-  export OBSIDIAN_GATE_ENABLED=1
-  export OBSIDIAN_GATE_OK=checking
-  export OBSIDIAN_GATE_DETAIL=
+  obsidian_gate_enabled="true"
+  obsidian_gate_ok="checking"
+  obsidian_gate_detail=""
+  export OBSIDIAN_GATE_ENABLED="$obsidian_gate_enabled"
+  export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
+  export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
   write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
   export KNOWLEDGE_PRIMARY_ADAPTER="${KNOWLEDGE_PRIMARY_ADAPTER:-obsidian_cli}"
   export KNOWLEDGE_FALLBACK_ADAPTER="${KNOWLEDGE_FALLBACK_ADAPTER:-fs_vault}"
@@ -271,7 +288,8 @@ status = obsidian_dependency_status(get_installer_version=_get_obsidian_installe
 print(json.dumps({"ok": status.ok, "details": status.details}, ensure_ascii=False))
 PY
 )
-  export OBSIDIAN_GATE_DETAIL="$obsidian_gate_json"
+  obsidian_gate_detail="$obsidian_gate_json"
+  export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
   obsidian_ok=$(OBSIDIAN_GATE_JSON="$obsidian_gate_json" python - <<'PY'
 import json
 import os
@@ -280,10 +298,11 @@ print("1" if payload.get("ok") else "0")
 PY
 )
   if [ "$obsidian_ok" = "1" ]; then
-    export OBSIDIAN_GATE_OK=ok
+    obsidian_gate_ok="passed"
   else
-    export OBSIDIAN_GATE_OK=failed
+    obsidian_gate_ok="failed"
   fi
+  export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
   write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
   if [ "$obsidian_ok" != "1" ]; then
     fail_preflight "runtime mode Obsidian strict gate failed: $obsidian_gate_json"
@@ -1881,6 +1900,7 @@ SUMMARY:
   bootstrap next: $bootstrap_next
   watchers: $watchers_status
   worker: $worker_status
+  obsidian gate: enabled=$obsidian_gate_enabled status=$obsidian_gate_ok
   note: /api/health ok=false can be expected when optional tools (e.g., ffmpeg) are missing; Stage0 ingest/search/ask can still work.
   next: curl -sS http://127.0.0.1:18000/search?q=test&k=3
 SUMMARY
