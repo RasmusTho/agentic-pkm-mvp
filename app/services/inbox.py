@@ -7,11 +7,8 @@ from pathlib import Path
 from app.knowledge.contracts import NoteLocator
 from app.knowledge.references import build_obsidian_advanced_uri
 from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.vault_identity import resolve_obsidian_vault_name
 from app.vault.paths import get_vault_inbox_dir_rel
-
-
-def _vault_name() -> str:
-    return (os.getenv("OBSIDIAN_VAULT_NAME") or "").strip() or "Vault"
 
 
 def append_change(
@@ -77,7 +74,7 @@ def _append_line(
     suffix = f" | {action_link}" if action_link else ""
     line = f"- [{timestamp}] {message}{suffix}\n"
 
-    locator = NoteLocator(vault=_vault_name(), path=note_rel_path.replace("\\", "/"))
+    locator = NoteLocator(vault=resolve_obsidian_vault_name(), path=note_rel_path.replace("\\", "/"))
     port = resolve_knowledge_port(vault_root=root)
     port.append_note(locator, line)
 
@@ -90,4 +87,6 @@ def _build_uri(vault_path: Path | str | None) -> str | None:
         rel = path_obj.relative_to(Path(os.getenv("VAULT_DIR", "vault")))
     except ValueError:
         rel = path_obj.name
-    return build_obsidian_advanced_uri(NoteLocator(vault=_vault_name(), path=str(rel).replace("\\", "/")))
+    return build_obsidian_advanced_uri(
+        NoteLocator(vault=resolve_obsidian_vault_name(), path=str(rel).replace("\\", "/"))
+    )
