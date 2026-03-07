@@ -129,3 +129,15 @@ def test_uuid_injection_writes_via_knowledge_port(monkeypatch, tmp_path):
     assert changed is False
     assert calls and calls[0][0] == "note.md"
     assert "uuid:" in calls[0][1]
+
+
+def test_make_uri_handles_paths_outside_vault(monkeypatch, tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    other = tmp_path / "outside.md"
+    other.write_text("Body", encoding="utf-8")
+
+    watcher = _load_watcher(monkeypatch, vault)
+    uri = watcher._make_uri(other)
+    assert "obsidian://advanced-uri" in uri
+    assert "filepath=outside.md" in uri

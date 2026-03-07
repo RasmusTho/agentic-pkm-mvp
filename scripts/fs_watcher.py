@@ -40,7 +40,7 @@ def _make_uri(path: Path) -> str:
     try:
         locator = make_note_locator_from_absolute(path, vault_root=VAULT)
     except ValueError:
-        locator = make_note_locator(path.as_posix())
+        locator = make_note_locator(path.name)
     return build_obsidian_advanced_uri(locator)
 
 
