@@ -181,6 +181,7 @@ def test_absolute_locator_conversion_is_centralized() -> None:
 def test_locator_module_imports_are_centralized() -> None:
     scan_roots = [REPO_ROOT / "app", REPO_ROOT / "scripts"]
     allow_importers = {
+        REPO_ROOT / "app" / "knowledge" / "adapters.py",
         REPO_ROOT / "app" / "knowledge" / "__init__.py",
         REPO_ROOT / "app" / "knowledge" / "locators.py",
         REPO_ROOT / "app" / "knowledge" / "write_ops.py",

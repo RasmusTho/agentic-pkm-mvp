@@ -138,8 +138,7 @@ def test_obsidian_boundary_guardrails_dont_allow_escape_hatches() -> None:
         REPO_ROOT / "app" / "knowledge" / "vault_identity.py",
     }
     expected_uri_importers_allow = {
-        REPO_ROOT / "app" / "services" / "inbox.py",
-        REPO_ROOT / "scripts" / "fs_watcher.py",
+        REPO_ROOT / "app" / "knowledge" / "write_ops.py",
         REPO_ROOT / "app" / "knowledge" / "__init__.py",
     }
     expected_adapters_importers_allow = {

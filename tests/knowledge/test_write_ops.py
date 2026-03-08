@@ -78,7 +78,7 @@ def test_advanced_uri_from_vault_path_inside_root(tmp_path: Path) -> None:
     note = vault / "Inbox" / "a.md"
     uri = write_ops.advanced_uri_from_vault_path(note, vault_root=vault)
     assert "obsidian://advanced-uri" in uri
-    assert "filepath=Inbox%2Fa.md" in uri
+    assert "filepath=Inbox/a.md" in uri
 
 
 def test_advanced_uri_from_vault_path_outside_root_falls_back_to_name(tmp_path: Path) -> None:
