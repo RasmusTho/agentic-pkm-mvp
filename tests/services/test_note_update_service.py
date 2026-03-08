@@ -86,14 +86,13 @@ def test_process_note_update_changed_writes_via_knowledge_port(
     _write_snapshot(snapshot_dir, note_uuid, _note_content(note_uuid, checked=False))
     writes: list[str] = []
 
-    class FakePort:
-        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
-            writes.append(locator.path)
-            note_path.write_text(content, encoding="utf-8")
-            return None
+    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+        writes.append(Path(path).resolve().relative_to(Path(path).anchor).as_posix())
+        note_path.write_text(content, encoding="utf-8")
+        return None
 
     monkeypatch.setattr("app.settings.panel_actions.load_panel_action_mappings", lambda: _mapping())
-    monkeypatch.setattr("app.services.note_update.resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr("app.services.note_update.write_note_from_absolute", _fake_write)
     ctx = OrchestratorContext(settings={"panel_events_enable": False, "origin": "test.note_update"})
 
     result = process_note_update(note_path, ctx, snapshot_dir=snapshot_dir)

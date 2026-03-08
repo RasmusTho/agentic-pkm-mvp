@@ -103,12 +103,13 @@ def test_run_once_writes_note_via_knowledge_port(tmp_path: Path, monkeypatch):
 
     calls: list[tuple[str, str]] = []
 
-    class FakePort:
-        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
-            calls.append((locator.path, content))
-            return None
+    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+        resolved_root = (vault_root or (tmp_path / "vault")).resolve()
+        rel = Path(path).resolve().relative_to(resolved_root).as_posix()
+        calls.append((rel, content))
+        return None
 
-    monkeypatch.setattr(q, "resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr(q, "write_note_from_absolute", _fake_write)
     processed = run_once()
     assert processed == 1
     assert calls and calls[0][0] == "note.md"

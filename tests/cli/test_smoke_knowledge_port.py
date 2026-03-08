@@ -11,15 +11,16 @@ def test_smoke_seed_and_cursor_write_via_knowledge_port(tmp_path: Path, monkeypa
     vault = tmp_path / "vault"
     writes: list[str] = []
 
-    class FakePort:
-        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
-            writes.append(locator.path)
-            target = (vault / locator.path).resolve()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-            return None
+    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+        resolved_root = (vault_root or vault).resolve()
+        rel = Path(path).resolve().relative_to(resolved_root).as_posix()
+        writes.append(rel)
+        target = (resolved_root / rel).resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return None
 
-    monkeypatch.setattr(smoke_module, "resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr(smoke_module, "write_note_from_absolute", _fake_write)
 
     _, note_path = smoke_module._seed_note(vault)
     smoke_module._mark_cursor(note_path, vault)

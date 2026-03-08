@@ -166,15 +166,16 @@ def test_alpha_human_flows_writes_test_note_via_knowledge_port(tmp_path: Path, m
     vault = _make_vault(tmp_path)
     writes: list[str] = []
 
-    class FakePort:
-        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
-            writes.append(locator.path)
-            target = (vault / locator.path).resolve()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-            return None
+    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+        resolved_root = (vault_root or vault).resolve()
+        rel = Path(path).resolve().relative_to(resolved_root).as_posix()
+        writes.append(rel)
+        target = (resolved_root / rel).resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return None
 
-    monkeypatch.setattr(alpha_human_flows_module, "resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr(alpha_human_flows_module, "write_note_from_absolute", _fake_write)
     result = _run_cli(vault, tmp_path)
     assert result.exit_code == 0, result.output
     assert "Test/Alpha-HumanFlows.md" in writes

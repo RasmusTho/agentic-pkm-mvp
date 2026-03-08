@@ -17,7 +17,7 @@ def test_write_note_routes_through_knowledge_port(monkeypatch, tmp_path: Path) -
             return None
 
     monkeypatch.setenv("OBSIDIAN_VAULT_NAME", "Mimer")
-    monkeypatch.setattr(vault_sync, "resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr("app.knowledge.write_ops.resolve_knowledge_port", lambda **kwargs: FakePort())
     monkeypatch.setattr(vault_sync.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda _: None)
 
     vault_sync._write_note(note_path, {"uuid": "u1", "title": "T"}, "Body")
@@ -37,7 +37,7 @@ def test_write_note_checks_write_guard(monkeypatch, tmp_path: Path) -> None:
         def write_note(self, locator, content):  # type: ignore[no-untyped-def]
             return None
 
-    monkeypatch.setattr(vault_sync, "resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr("app.knowledge.write_ops.resolve_knowledge_port", lambda **kwargs: FakePort())
     monkeypatch.setattr(vault_sync.DEFAULT_WRITE_GUARD, "assert_writes_allowed", calls.append)
 
     vault_sync._write_note(note_path, {"uuid": "u2"}, "Body")
@@ -54,7 +54,7 @@ def test_write_note_falls_back_to_default_vault_when_env_blank(monkeypatch, tmp_
             return None
 
     monkeypatch.setenv("OBSIDIAN_VAULT_NAME", "   ")
-    monkeypatch.setattr(vault_sync, "resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr("app.knowledge.write_ops.resolve_knowledge_port", lambda **kwargs: FakePort())
     monkeypatch.setattr(vault_sync.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda _: None)
 
     vault_sync._write_note(note_path, {"uuid": "u3"}, "Body")
@@ -74,8 +74,8 @@ def test_write_note_uses_absolute_locator_factory(monkeypatch, tmp_path: Path) -
         captured["vault_root"] = Path(vault_root)
         return type("L", (), {"path": "Inbox/note.md", "vault": "Vault"})()
 
-    monkeypatch.setattr(vault_sync, "resolve_knowledge_port", lambda **kwargs: FakePort())
-    monkeypatch.setattr(vault_sync, "make_note_locator_from_absolute", fake_locator)
+    monkeypatch.setattr("app.knowledge.write_ops.resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr("app.knowledge.write_ops.make_note_locator_from_absolute", fake_locator)
     monkeypatch.setattr(vault_sync.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda _: None)
 
     vault_sync._write_note(note_path, {"uuid": "u4"}, "Body")

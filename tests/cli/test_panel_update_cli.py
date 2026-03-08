@@ -14,11 +14,10 @@ def test_panel_update_writes_via_knowledge_port(monkeypatch, tmp_path: Path) -> 
     note.write_text("Original", encoding="utf-8")
     captured: dict[str, str] = {}
 
-    class FakePort:
-        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
-            captured["path"] = locator.path
-            captured["content"] = content
-            return None
+    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+        captured["path"] = Path(path).resolve().relative_to(Path(path).anchor).as_posix()
+        captured["content"] = content
+        return None
 
     fake_result = SimpleNamespace(
         panel=SimpleNamespace(updated_markdown="Updated", intents=[]),
@@ -28,7 +27,7 @@ def test_panel_update_writes_via_knowledge_port(monkeypatch, tmp_path: Path) -> 
     )
 
     monkeypatch.setattr(cli_module, "handle_panel_update", lambda **kwargs: fake_result)
-    monkeypatch.setattr(cli_module, "resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr(cli_module, "write_note_from_absolute", _fake_write)
 
     runner = CliRunner()
     result = runner.invoke(root_cli, ["panel-update", str(note)])

@@ -10,12 +10,11 @@ def test_ensure_note_uuid_keeps_existing_uuid_without_write(monkeypatch, tmp_pat
     note.write_text("---\nuuid: existing-uuid\n---\n\nBody\n", encoding="utf-8")
     calls: list[str] = []
 
-    class FakePort:
-        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
-            calls.append(locator.path)
-            return None
+    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+        calls.append(str(path))
+        return None
 
-    monkeypatch.setattr(note_uuid, "resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr(note_uuid, "write_note_from_absolute", _fake_write)
     result = note_uuid.ensure_note_uuid(note)
     assert result == "existing-uuid"
     assert calls == []
@@ -26,13 +25,12 @@ def test_ensure_note_uuid_writes_via_knowledge_port(monkeypatch, tmp_path: Path)
     note.write_text("Body\n", encoding="utf-8")
     captured: dict[str, str] = {}
 
-    class FakePort:
-        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
-            captured["path"] = locator.path
-            captured["content"] = content
-            return None
+    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+        captured["path"] = Path(path).resolve().relative_to(Path(path).anchor).as_posix()
+        captured["content"] = content
+        return None
 
-    monkeypatch.setattr(note_uuid, "resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr(note_uuid, "write_note_from_absolute", _fake_write)
     monkeypatch.setattr(note_uuid.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda _: None)
 
     result = note_uuid.ensure_note_uuid(note, preferred_uuid="fixed-uuid")
