@@ -38,7 +38,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md | Event/intent compatibility contract (versioning) | Aligned (forward line v5.x) | 2026-02-05 | Covers envelope invariants, versioning rules, idempotence, and new-event checklist. |
 | docs/CONCEPTS/CONFIG_AS_PRODUCT_CONTRACT.md | Config-as-product contract | Aligned (forward line v5.x) | 2026-02-05 | Covers precedence, validation, rollback, audit, and portability rules for config. |
 | docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md | Cloud connectors decision (watcher/inbox contracts, delta feed guardrails) | Aligned (forward line v5.x) | 2026-02-05 | Source memo from Swedish draft; anchors delta feed alternatives, watcher matrix, inbox taxonomy, and automation safety signals. |
-| docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md | Obsidian knowledge port contract | Aligned (forward line v5.x) | 2026-03-06 | Spec-first contract for `app/knowledge` abstraction, policy, health gating, and TDD baseline. |
+| docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md | Obsidian knowledge port contract | Aligned (forward line v5.x) | 2026-03-08 | Spec-first contract updated for centralized `write_ops` boundary (writes/appends/URI conversion) and CI guardrails. |
 | docs/CONCEPTS/PORTABILITY_CONTRACT.md | Portability contract (macOS + Windows) | Aligned (forward line v5.x) | 2026-02-05 | Defines portability hazards and rules for portable artifacts and paths; referenced by PROJECT_KERNEL. |
 | docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md | Archive exposure contract (cold brain safety) | Aligned (forward line v5.x) | 2026-02-05 | Defines discovery→citation→preview→materialization modes; notes scope experiment (active domain + global evergreens, with domain excludes + one-shot includes). |
 | docs/CORE_CONTRACT.md | Core-6 contract (canonical) | Aligned (forward line v5.x) | 2026-02-05 | Canonical Core-6 semantic contract, ownership, and projection rules. |
@@ -101,7 +101,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | docs/SETTINGS.md | Settings | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Settings compiler + registries documented; some areas are forward-looking. |
 | docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Implemented for key routers (API key + SlowAPI); doc lists remaining wiring gaps. |
 | docs/ingest.md | Ingest (historical/current) | Legacy (archived) | 2026-02-05 | Historical reference; prefer HUMAN-FLOWS/OPERATIONS for current ingest. |
-| docs/OBSIDIANSYNC.md | Obsidian sync | Aligned (forward line v5.x) | 2026-02-05 | Registry watcher runtime + DB outbox canonical queue. |
+| docs/OBSIDIANSYNC.md | Obsidian sync | Aligned (forward line v5.x) | 2026-03-08 | Registry watcher runtime + DB outbox canonical queue; documents `app/knowledge/write_ops.py` as shared Obsidian boundary helper. |
 | docs/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/MEMORY.md | Memory (legacy overview) | Legacy (archived) | 2025-12-07 | Historical memory-layer description; not used in Reality-MVP. |
 | docs/AI_DEVELOPMENT.md | AI-assisted development policy | Aligned (forward line v5.x) | 2026-02-05 | Dev-layer policy tied to Core-6 guardrails and vault policy constraints. |
