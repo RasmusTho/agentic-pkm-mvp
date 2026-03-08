@@ -157,8 +157,8 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | --- | --- | --- | --- | --- |
 | docs/runbooks/ingest.md | Runbook: ingest | Legacy (archived) | 2026-02-05 | Historical reference; prefer OPERATIONS + STARTUP_FULL_SYSTEM runbook. |
 | docs/runbooks/RUNBOOK_GO_LIVE.md | Runbook: go-live checklist | Aligned (forward line v5.x) | 2026-02-05 | Go-live preflight updated for registry watcher + DB outbox + Ollama embeddings defaults. |
-| docs/runbooks/RUNBOOK_STARTUP.md | Runbook: startup checklist | Legacy (archived) | 2026-02-05 | Historical reference; prefer RUNBOOK_STARTUP_FULL_SYSTEM + scripts/start_full_system.sh. |
-| docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md | Runbook: full-system startup | Aligned (forward line v5.x) | 2026-02-05 | Brings up db/api/worker/watcher via scripts/start_full_system.sh; documents registry watcher + DB outbox requirement. |
+| docs/runbooks/RUNBOOK_STARTUP.md | Runbook: startup checklist | Legacy (archived) | 2026-03-08 | Historical SoT v4.10 checklist; updated with Obsidian contract notes, but current runtime source remains RUNBOOK_STARTUP_FULL_SYSTEM + scripts/start_full_system.sh. |
+| docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md | Runbook: full-system startup | Aligned (forward line v5.x) | 2026-03-08 | Canonical v5.x startup; includes strict Obsidian gate (`STARTUP_ENFORCE_OBSIDIAN`), health boundary checks, and startup-status telemetry fields. |
 | docs/runbooks/RUNBOOK_RUNTIME_GAP_TEST.md | Runbook: runtime gap test | Aligned (forward line v5.x) | 2026-02-05 | Verifies watcher registry `panel.scan.requested` → index event (`index.embedding.created`) → /api/ask via scripts/gap_test_alpha.sh. |
 | docs/RUNBOOK_RESET_TO_ZERO.md | Runbook: reset to zero | Aligned (forward line v5.x) | 2026-02-05 | Reset flow updated for DB outbox canonical queue + JSONL audit log. |
 | docs/E2E_ALPHA.md | Alpha E2E contract | Aligned (forward line v5.x) | 2026-02-05 | Canonical alpha-up → alpha_e2e → alpha-smoke flow, runtime note cleanup, and status semantics. |
