@@ -75,6 +75,33 @@ def test_process_note_update_happy_path(tmp_path: Path, monkeypatch: pytest.Monk
     assert snapshot_text == updated
 
 
+def test_process_note_update_changed_writes_via_knowledge_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    note_path = tmp_path / "note.md"
+    note_uuid = "note-port-1"
+    markdown = _note_content(note_uuid, checked=True)
+    note_path.write_text(markdown, encoding="utf-8")
+    snapshot_dir = tmp_path / "snapshots"
+    _write_snapshot(snapshot_dir, note_uuid, _note_content(note_uuid, checked=False))
+    writes: list[str] = []
+
+    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+        writes.append(Path(path).resolve().relative_to(Path(path).anchor).as_posix())
+        note_path.write_text(content, encoding="utf-8")
+        return None
+
+    monkeypatch.setattr("app.settings.panel_actions.load_panel_action_mappings", lambda: _mapping())
+    monkeypatch.setattr("app.services.note_update.write_note_from_absolute", _fake_write)
+    ctx = OrchestratorContext(settings={"panel_events_enable": False, "origin": "test.note_update"})
+
+    result = process_note_update(note_path, ctx, snapshot_dir=snapshot_dir)
+
+    assert result.changed is True
+    assert writes
+    assert "- [x]" not in note_path.read_text(encoding="utf-8")
+
+
 def test_process_note_update_detects_stale_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     uuid = "note-stale"
     old_content = _note_content(uuid, checked=True)

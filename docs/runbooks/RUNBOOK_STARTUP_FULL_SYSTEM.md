@@ -57,6 +57,10 @@ Tests: `tests/e2e/test_operator_workflows.py::test_operator_can_diagnose_stale_w
 ```
 scripts/gap_test_alpha.sh
 ```
+- Run Obsidian boundary architecture guardrails:
+```
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/architecture/test_obsidian_port_boundaries.py -m "not pg"
+```
 - For Obsidian-required server posture, export before startup:
 ```
 export STARTUP_ENFORCE_OBSIDIAN=1

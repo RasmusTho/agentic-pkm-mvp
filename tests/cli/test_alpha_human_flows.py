@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import textwrap
 from pathlib import Path
 
@@ -9,6 +10,8 @@ from app.cli import cli
 from app.retrieval.hybrid import get_store
 from app.services.note_log import note_log_path
 from scripts.yaml_roundtrip import load_frontmatter
+
+alpha_human_flows_module = importlib.import_module("app.cli.alpha_human_flows")
 
 
 def _base_env(tmp_path: Path) -> dict[str, str]:
@@ -156,6 +159,26 @@ def test_alpha_human_flows_explain_only(tmp_path: Path) -> None:
     assert not test_note.exists()
     outbox = Path(_base_env(tmp_path)["INDEX_OUTBOX_PATH"])
     assert not outbox.exists()
+
+
+def test_alpha_human_flows_writes_test_note_via_knowledge_port(tmp_path: Path, monkeypatch) -> None:
+    get_store().set_documents([])
+    vault = _make_vault(tmp_path)
+    writes: list[str] = []
+
+    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+        resolved_root = (vault_root or vault).resolve()
+        rel = Path(path).resolve().relative_to(resolved_root).as_posix()
+        writes.append(rel)
+        target = (resolved_root / rel).resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return None
+
+    monkeypatch.setattr(alpha_human_flows_module, "write_note_from_absolute", _fake_write)
+    result = _run_cli(vault, tmp_path)
+    assert result.exit_code == 0, result.output
+    assert "Test/Alpha-HumanFlows.md" in writes
 
 
 # Coverage gaps: Flow A sample selection errors not exercised; mirror file creation not asserted (path only);

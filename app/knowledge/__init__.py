@@ -14,6 +14,13 @@ from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings, load_kno
 from app.knowledge.adapters import FsVaultAdapter, ObsidianCliAdapter
 from app.knowledge.locators import make_note_locator, make_note_locator_from_absolute, normalize_note_path
 from app.knowledge.vault_identity import resolve_obsidian_vault_name
+from app.knowledge.write_ops import (
+    advanced_uri_from_vault_path,
+    append_note_relative,
+    default_vault_root_for_path,
+    write_note_from_absolute,
+    write_note_relative,
+)
 
 __all__ = [
     "KnowledgeAdapter",
@@ -31,13 +38,18 @@ __all__ = [
     "SearchHit",
     "WriteReceipt",
     "build_obsidian_advanced_uri",
+    "advanced_uri_from_vault_path",
     "has_valid_vault_scope",
     "load_knowledge_settings",
     "make_note_locator",
     "make_note_locator_from_absolute",
     "normalize_note_path",
     "obsidian_dependency_status",
+    "append_note_relative",
+    "default_vault_root_for_path",
     "resolve_obsidian_vault_name",
     "resolve_knowledge_port",
     "scoped_cli_args",
+    "write_note_from_absolute",
+    "write_note_relative",
 ]

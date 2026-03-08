@@ -1,7 +1,9 @@
+from pathlib import Path
 from typing import Dict, Any, List
-import re, os
+import re
 from .fs import archive_path
 from app.events.types import CLEANUP_DONE
+from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.services.events import emit
 
 _link_re = re.compile(r"\[[^\]]+\]\([^)]+\)")
@@ -36,8 +38,9 @@ def _write(path:str, body:str, fm:Dict[str,Any])->None:
         fm_lines.append(f"{k}: {v}")
     fm_lines.append("---")
     txt = "\n".join(fm_lines) + "\n" + (body or "") + ("\n" if body and not body.endswith("\n") else "")
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(txt)
+    resolved = Path(path).expanduser().resolve()
+    root = default_vault_root_for_path(resolved)
+    write_note_from_absolute(resolved, txt, vault_root=root)
 
 def _first_sentence(text:str)->str:
     txt = " ".join(l.strip() for l in text.splitlines() if l.strip())

@@ -7,8 +7,7 @@ from typing import Any, Mapping, Sequence
 
 import yaml
 
-from app.knowledge.locators import make_note_locator
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.write_ops import write_note_relative
 
 
 class VaultToolError(Exception):
@@ -95,9 +94,7 @@ def append_note(
     yaml_block = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True).strip()
     body_block = body.rstrip()
     content = f"---\n{yaml_block}\n---\n\n{body_block}\n"
-    locator = make_note_locator(note_path.relative_to(root).as_posix())
-    port = resolve_knowledge_port(vault_root=root)
-    port.write_note(locator, content)
+    write_note_relative(note_path.relative_to(root).as_posix(), content, vault_root=root)
     return note_path
 
 

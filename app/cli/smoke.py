@@ -12,6 +12,7 @@ import click
 
 from app.agents.ask.graph import run_ask_graph
 from app.agents.panel_agent import execute_panel_intent, run_panel_intent_for_note
+from app.knowledge.write_ops import write_note_from_absolute
 from app.orchestrator.runtime import Orchestrator
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.planner.tools import MCP_TOOL_DESCRIPTORS
@@ -73,12 +74,16 @@ def _has_cursor(note_path: Path) -> bool:
     return _CURSOR_MARKER in note_path.read_text(encoding="utf-8")
 
 
-def _mark_cursor(note_path: Path) -> None:
+def _write_vault_note(vault_root: Path, note_path: Path, content: str) -> None:
+    write_note_from_absolute(note_path, content, vault_root=vault_root)
+
+
+def _mark_cursor(note_path: Path, vault_root: Path) -> None:
     content = note_path.read_text(encoding="utf-8") if note_path.exists() else ""
     if _CURSOR_MARKER in content:
         return
     appended = content.rstrip() + "\n\n" + _CURSOR_MARKER + "\n"
-    note_path.write_text(appended, encoding="utf-8")
+    _write_vault_note(vault_root, note_path, appended)
 
 
 def _sync_store(note_uuid: str, note_path: Path) -> None:
@@ -107,7 +112,7 @@ def _seed_note(vault: Path) -> tuple[str, Path]:
         "- [x] Make this note evergreen\n"
         "%% AI:End %%\n"
     )
-    note_path.write_text(panel_block, encoding="utf-8")
+    _write_vault_note(vault, note_path, panel_block)
     payload = {"raw_text": panel_block, "origin": "vault"}
     domain_obj = DomainObject(
         uuid=note_uuid,
@@ -201,7 +206,7 @@ def _run_once(
     append_plan = _append_plan(note_uuid, vault)
     append_results = orchestrator.run_plan(append_plan)
 
-    _mark_cursor(note_path)
+    _mark_cursor(note_path, vault)
     _sync_store(note_uuid, note_path)
 
     post_state = _file_state(note_path)

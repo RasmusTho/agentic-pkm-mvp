@@ -60,6 +60,7 @@ from app.obs.log import with_trace_id
 from app.cli.health import run_health
 from app.stores.plan_store import get_plan_store
 from app.settings.compiler import compile_all
+from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.llm.trace_inspect import (
     build_sequence_for_trace,
     group_by_trace_id,
@@ -118,6 +119,12 @@ def _truthy_flag(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in TRUE_STRINGS
     return bool(value)
+
+
+def _write_note_via_knowledge_port(note_path: Path, content: str) -> None:
+    resolved = note_path.resolve()
+    root = default_vault_root_for_path(resolved)
+    write_note_from_absolute(resolved, content, vault_root=root)
 
 
 def _resolve_vault_root_path(
@@ -723,74 +730,9 @@ def alpha_human_flows(
 )
 def yggdrasil_init(root_dir: Path | None) -> None:
     yggdrasil_root = _resolve_yggdrasil_root(root_dir).expanduser()
-    module_paths = {
-        "Mimer": yggdrasil_root / "Mimer",
-        "Hugin": yggdrasil_root / "Hugin",
-        "Munin": yggdrasil_root / "Munin",
-        "Ratatosk": yggdrasil_root / "Ratatosk",
-        "Brokkr": yggdrasil_root / "Brokkr",
-        "Tyr": yggdrasil_root / "Tyr",
-        "Heimdall": yggdrasil_root / "Heimdall",
-    }
-
-    created: list[Path] = []
-    existed: list[Path] = []
-
-    for path in module_paths.values():
-        if path.exists():
-            existed.append(path)
-        else:
-            created.append(path)
-        path.mkdir(parents=True, exist_ok=True)
-
-    mimer_subdirs = [
-        "Index",
-        "Workspace",
-        "Ingress",
-        "Projects",
-        "Domains",
-        "Corpus",
-        "Sources",
-        "Ontology",
-        "Taxonomy",
-        "Canon",
-        "Archive",
-        "Machina",
-        "@Settings",
-    ]
-    mimer_root = module_paths["Mimer"]
-    for subdir in mimer_subdirs:
-        subdir_path = mimer_root / subdir
-        if subdir_path.exists():
-            existed.append(subdir_path)
-        else:
-            created.append(subdir_path)
-        subdir_path.mkdir(parents=True, exist_ok=True)
-
-    settings_dir = mimer_root / "@Settings"
-    placeholder = settings_dir / "global.md"
-    if not any(settings_dir.iterdir()):
-        placeholder.write_text(
-            "\n".join(
-                [
-                    "---",
-                    "kind: settings",
-                    "scope: global",
-                    "module: Mimer",
-                    "system: Yggdrasil",
-                    "---",
-                    "",
-                    "# Global settings for Mimer (Yggdrasil)",
-                    "",
-                    "This is an initial placeholder created by the `yggdrasil-init` command.",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        created.append(placeholder)
-    elif placeholder.exists():
-        existed.append(placeholder)
+    result = YggdrasilScaffolder(root=yggdrasil_root).scaffold()
+    created = result.get("created", [])
+    existed = result.get("existed", [])
 
     click.echo(f"Yggdrasil root: {yggdrasil_root}")
     if created:
@@ -956,7 +898,7 @@ def panel_update(note_path: Path, old_path: Path | None) -> None:
     )
 
     if result.panel.updated_markdown != new_markdown:
-        note_path.write_text(result.panel.updated_markdown, encoding="utf-8")
+        _write_note_via_knowledge_port(note_path, result.panel.updated_markdown)
 
     click.echo(f"Note: {note_path}")
     click.echo(f"Panel intents: {len(result.panel.intents)}")

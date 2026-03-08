@@ -17,6 +17,7 @@ from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.filters import strip_ai_panels
 from app.ingest.config import resolve_ingest_config
 from app.index.outbox import append_jsonl
+from app.knowledge.write_ops import write_note_from_absolute
 from app.observability.ingest_meta import record_ingest_run
 from app.obs.log import with_trace_id
 from app.retrieval.hybrid import get_store
@@ -351,7 +352,10 @@ def _write_mirror(
         }
     )
     body = existing_body if (existing_body or "").strip() else f"Mirror for {rel_path}"
-    mirror_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+    content = dump_frontmatter(frontmatter, body)
+    resolved_root = vault_root.expanduser().resolve()
+    resolved_mirror = mirror_path.expanduser().resolve()
+    write_note_from_absolute(resolved_mirror, content, vault_root=resolved_root)
     return mirror_path
 
 

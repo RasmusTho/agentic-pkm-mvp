@@ -6,7 +6,8 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from app.agents.panel.integration import handle_panel_update
-from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
+from app.components.concurrency import OptimisticWriteGuard
+from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.orchestrator.handler import OrchestratorContext
 from app.services.note_uuid import ensure_note_uuid
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -24,6 +25,12 @@ class NoteUpdateResult(BaseModel):
     uuid_added: bool = False
     events_count: int = 0
     dispatch_count: int = 0
+
+
+def _write_note_via_knowledge_port(note_path: Path, content: str) -> None:
+    resolved = note_path.resolve()
+    root = default_vault_root_for_path(resolved)
+    write_note_from_absolute(resolved, content, vault_root=root)
 
 
 def apply_promotion_frontmatter(
@@ -65,10 +72,10 @@ def apply_promotion_frontmatter(
     updated = dump_frontmatter(fm, body)
     if updated != markdown:
         DEFAULT_WRITE_GUARD.assert_writes_allowed("promotion frontmatter")
-        try:
-            _WRITE_GUARD.write_if_unchanged(note_path, expected_version, updated)
-        except VersionMismatch:
+        current_version = _WRITE_GUARD.read_version(note_path)
+        if current_version != expected_version:
             return False
+        _write_note_via_knowledge_port(note_path, updated)
     return True
 
 
@@ -116,9 +123,8 @@ def process_note_update(
     changed = panel_result.panel.updated_markdown != raw_markdown
     if changed:
         DEFAULT_WRITE_GUARD.assert_writes_allowed("panel runtimes")
-        try:
-            _WRITE_GUARD.write_if_unchanged(resolved_path, expected_version, panel_result.panel.updated_markdown)
-        except VersionMismatch:
+        current_version = _WRITE_GUARD.read_version(resolved_path)
+        if current_version != expected_version:
             return NoteUpdateResult(
                 uuid=note_uuid,
                 current_path=resolved_path,
@@ -128,6 +134,7 @@ def process_note_update(
                 events_count=len(panel_result.events),
                 dispatch_count=panel_result.dispatch_count,
             )
+        _write_note_via_knowledge_port(resolved_path, panel_result.panel.updated_markdown)
 
     snapshot_path = _snapshot_path(snapshot_dir, note_uuid, ensure_parent=True)
     if snapshot_path is not None:

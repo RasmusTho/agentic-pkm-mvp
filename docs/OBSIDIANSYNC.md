@@ -43,7 +43,18 @@ Watcher note: Runtime now uses the registry watcher (`configs/watchers.yaml` + `
   - `ObsidianCliAdapter` for Obsidian CLI-driven operations.
 - Inbox service writes (change/conflict logs) now append via `KnowledgePort` rather than direct file I/O.
 - Vault sync note writes (UUID heal/frontmatter write path) now write via `KnowledgePort`.
+- UUID heal writes in `note_uuid` service now write via `KnowledgePort` as well.
+- Promotion queue frontmatter update writes now route via `KnowledgePort`.
+- `panel-update` CLI writes now route via `KnowledgePort`.
+- Settings auto-heal/writeback (`app/settings/compiler.py`, `app/settings/writeback.py`) now writes markdown settings notes via `KnowledgePort`.
+- Vault layout/system-note creation (`app/vault/layout.py`) now writes notes via `KnowledgePort`.
+- `alpha-human-flows` vault note mutations now write via `KnowledgePort` (`app/cli/alpha_human_flows.py`).
+- Note update/promotion runtime writes now route via `KnowledgePort` (`app/services/note_update.py`).
+- `yggdrasil-init` settings placeholder writes now route via `KnowledgePort` (`app/settings/yggdrasil_scaffolder.py`).
+- Vault ingest mirror-note writes (`System/Metadata/VaultMirror`) now route via `KnowledgePort` (`app/ingest/vault_alpha.py`).
+- Note hygiene archive-note writes now route via `KnowledgePort` (`app/agents/note_hygiene/agent.py`).
 - Vault identity resolution for Obsidian (`OBSIDIAN_VAULT_NAME`, blank-safe default) is centralized in `app/knowledge/vault_identity.py`.
 - `NoteLocator` creation is centralized via `app/knowledge/locators.py` so path separator and relative-path rules stay consistent across adapters/services.
+- Shared helper boundary `app/knowledge/write_ops.py` now owns absolute/relative note writes, appends, and Advanced URI path conversion (`advanced_uri_from_vault_path`) so service/runtime modules do not wire ports/locators directly.
 - Policy + startup posture is governed by `KNOWLEDGE_*` settings and health-gated via `python -m app.cli health --json`.
 - See `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`.

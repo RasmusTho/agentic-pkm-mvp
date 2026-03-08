@@ -14,8 +14,7 @@ from app.db import conn_rw, ensure_schema
 
 from app.events.models import new_trace_id
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_METADATA, INGEST_OBJECT_UPDATED
-from app.knowledge.locators import make_note_locator
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.write_guard import DEFAULT_WRITE_GUARD
 from app.services.inbox import append_change, append_conflict
 from app.services.outbox import insert_object_and_outbox
@@ -53,11 +52,8 @@ def _write_note(path: Path, frontmatter: dict[str, Any], body: str) -> None:
     rendered = f"---\n{fm_dump}\n---\n\n{body}" if body else f"---\n{fm_dump}\n---\n"
     DEFAULT_WRITE_GUARD.assert_writes_allowed("vault sync note write")
     resolved = path.resolve()
-    root = Path(resolved.anchor) if resolved.anchor else Path("/")
-    rel = resolved.relative_to(root).as_posix()
-    locator = make_note_locator(rel)
-    port = resolve_knowledge_port(vault_root=root)
-    port.write_note(locator, rendered)
+    root = default_vault_root_for_path(resolved)
+    write_note_from_absolute(resolved, rendered, vault_root=root)
 
 
 def _get_state_by_path(conn: psycopg.Connection, path: str) -> Optional[dict[str, Any]]:

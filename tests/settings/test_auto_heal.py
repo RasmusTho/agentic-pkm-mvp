@@ -72,3 +72,52 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
     agent_md = (vault / "agents" / "classifier.md").read_text(encoding="utf-8")
     assert "timeout_ms: 8000" in agent_md
     assert "<!-- BEGIN:settings:reference -->" in agent_md
+
+
+def test_auto_heal_writes_settings_via_knowledge_port(tmp_path, monkeypatch) -> None:
+    vault = tmp_path / "vault" / "@Settings"
+    runtime_dir = tmp_path / "runtime" / "settings"
+
+    _write_md(
+        vault / "global.md",
+        """
+        ---
+        uuid: g
+        ---
+        ## Runtime
+        ```yaml settings
+        timeout_ms: "fast"
+        ```
+        """,
+    )
+    _write_md(
+        vault / "providers.md",
+        """
+        ---
+        uuid: p
+        ---
+        ## Provider defaults
+        ```yaml settings
+        llm: {}
+        ```
+        """,
+    )
+
+    writes: list[str] = []
+
+    def _fake_write_note(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+        resolved_root = (vault_root or vault.parent).resolve()
+        resolved_path = Path(path).resolve()
+        rel = resolved_path.relative_to(resolved_root).as_posix()
+        writes.append(rel)
+        resolved_path.parent.mkdir(parents=True, exist_ok=True)
+        resolved_path.write_text(content, encoding="utf-8")
+        return None
+
+    monkeypatch.setattr(compiler, "VAULT", vault)
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+    monkeypatch.setattr("app.settings.writeback.write_note_from_absolute", _fake_write_note)
+
+    compiler.compile_all(auto_heal=True)
+
+    assert "@Settings/global.md" in writes

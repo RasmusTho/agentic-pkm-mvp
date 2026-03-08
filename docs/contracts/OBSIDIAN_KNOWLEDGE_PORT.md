@@ -68,8 +68,18 @@ Validation rules:
 5. Architecture guardrails preventing direct `NoteLocator(...)` construction and direct `OBSIDIAN_VAULT_NAME` reads outside shared helpers.
 
 ## Next implementation step
-Wire this contract into:
-- MCP vault tools path
-- inbox/watcher URI helpers
-- startup health command and runbooks
-without changing external event contracts.
+Keep the boundary stable: enforce architecture guardrails in CI, and only add new vault-facing behavior via `app/knowledge/write_ops.py` (or deeper `app/knowledge/*` modules) rather than direct service/runtime wiring.
+
+## Rolling implementation backlog
+- [x] Verify all runtime call sites that perform note open/search are explicitly routed through `resolve_knowledge_port()`.
+- [x] Add contract tests for `make_note_locator_from_absolute(...)` usage in service flows with mixed absolute/relative paths.
+- [x] Add CI marker command in runbooks for `tests/architecture/test_obsidian_port_boundaries.py`.
+- [x] Route settings auto-heal/writeback note updates through `KnowledgePort` (`app/settings/writeback.py`, `app/settings/compiler.py`).
+- [x] Route vault layout/system-note bootstrap writes through `KnowledgePort` (`app/vault/layout.py`).
+- [x] Route alpha human flows vault note mutation writes through `KnowledgePort` (`app/cli/alpha_human_flows.py`).
+- [x] Route note update + promotion note writes through `KnowledgePort` (`app/services/note_update.py`).
+- [x] Route Yggdrasil bootstrap settings placeholder writes through `KnowledgePort` (`app/settings/yggdrasil_scaffolder.py`).
+- [x] Route vault ingest mirror-note writes through `KnowledgePort` (`app/ingest/vault_alpha.py`).
+- [x] Route note hygiene archive-note writes through `KnowledgePort` (`app/agents/note_hygiene/agent.py`).
+- [x] Centralize service/runtime vault write+append wiring behind `app/knowledge/write_ops.py` helper functions (`write_note_from_absolute`, `write_note_relative`, `append_note_relative`).
+- [x] Centralize Advanced URI vault-path conversion via `app/knowledge/write_ops.py::advanced_uri_from_vault_path` and remove ad-hoc locator parsing from runtime/services.
