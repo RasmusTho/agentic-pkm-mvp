@@ -68,7 +68,7 @@ Validation rules:
 5. Architecture guardrails preventing direct `NoteLocator(...)` construction and direct `OBSIDIAN_VAULT_NAME` reads outside shared helpers.
 
 ## Next implementation step
-Complete remaining vault-facing write paths so direct filesystem note writes are removed from service/runtime boundaries, and keep architecture guardrails enforcing the rule in CI.
+Keep the boundary stable: enforce architecture guardrails in CI, and only add new vault-facing behavior via `app/knowledge/write_ops.py` (or deeper `app/knowledge/*` modules) rather than direct service/runtime wiring.
 
 ## Rolling implementation backlog
 - [x] Verify all runtime call sites that perform note open/search are explicitly routed through `resolve_knowledge_port()`.
