@@ -105,17 +105,18 @@ def test_auto_heal_writes_settings_via_knowledge_port(tmp_path, monkeypatch) -> 
 
     writes: list[str] = []
 
-    class FakePort:
-        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
-            writes.append(locator.path)
-            target = (vault.parent / locator.path).resolve()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-            return None
+    def _fake_write_note(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+        resolved_root = (vault_root or vault.parent).resolve()
+        resolved_path = Path(path).resolve()
+        rel = resolved_path.relative_to(resolved_root).as_posix()
+        writes.append(rel)
+        resolved_path.parent.mkdir(parents=True, exist_ok=True)
+        resolved_path.write_text(content, encoding="utf-8")
+        return None
 
     monkeypatch.setattr(compiler, "VAULT", vault)
     monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
-    monkeypatch.setattr("app.settings.writeback.resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr("app.settings.writeback.write_note_from_absolute", _fake_write_note)
 
     compiler.compile_all(auto_heal=True)
 

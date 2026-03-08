@@ -3,8 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-from app.knowledge.locators import make_note_locator_from_absolute
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.write_ops import write_note_from_absolute
 
 
 class YggdrasilScaffolder:
@@ -86,9 +85,7 @@ class YggdrasilScaffolder:
         )
         resolved_root = vault_root.expanduser().resolve()
         resolved_path = placeholder.expanduser().resolve()
-        locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root)
-        port = resolve_knowledge_port(vault_root=resolved_root)
-        port.write_note(locator, content)
+        write_note_from_absolute(resolved_path, content, vault_root=resolved_root)
 
 
 __all__ = ["YggdrasilScaffolder"]

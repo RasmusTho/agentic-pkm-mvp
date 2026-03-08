@@ -60,8 +60,7 @@ from app.obs.log import with_trace_id
 from app.cli.health import run_health
 from app.stores.plan_store import get_plan_store
 from app.settings.compiler import compile_all
-from app.knowledge.locators import make_note_locator_from_absolute
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.llm.trace_inspect import (
     build_sequence_for_trace,
     group_by_trace_id,
@@ -124,10 +123,8 @@ def _truthy_flag(value: Any) -> bool:
 
 def _write_note_via_knowledge_port(note_path: Path, content: str) -> None:
     resolved = note_path.resolve()
-    root = Path(resolved.anchor) if resolved.anchor else Path("/")
-    locator = make_note_locator_from_absolute(resolved, vault_root=root)
-    port = resolve_knowledge_port(vault_root=root)
-    port.write_note(locator, content)
+    root = default_vault_root_for_path(resolved)
+    write_note_from_absolute(resolved, content, vault_root=root)
 
 
 def _resolve_vault_root_path(

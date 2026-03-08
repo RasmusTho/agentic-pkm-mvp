@@ -7,8 +7,7 @@ from typing import Any, Iterable
 
 import yaml
 
-from app.knowledge.locators import make_note_locator_from_absolute
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.write_ops import write_note_from_absolute
 
 
 LAYOUT_NOTE_NAME = "vault.layout.md"
@@ -249,9 +248,7 @@ def _render_layout_note(layout: VaultLayout) -> str:
 def _write_note_via_knowledge_port(vault_root: Path, path: Path, content: str) -> None:
     resolved_root = vault_root.expanduser().resolve()
     resolved_path = path.expanduser().resolve()
-    locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root)
-    port = resolve_knowledge_port(vault_root=resolved_root)
-    port.write_note(locator, content)
+    write_note_from_absolute(resolved_path, content, vault_root=resolved_root)
 
 
 def load_or_create_layout(vault_root: Path) -> VaultLayout:

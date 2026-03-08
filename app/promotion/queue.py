@@ -23,8 +23,7 @@ from app.events.types import (
 )
 from app.observability.tracing import current_trace_id, span
 from app.promotion.gates import OrphanPromotionError, ensure_object_has_relations, prepare_relations_for_promotion
-from app.knowledge.locators import make_note_locator_from_absolute
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.write_ops import write_note_from_absolute
 from app.settings.models import PromotionSettings, SettingsBundle
 from app.settings.runtime import subscribe_settings
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
@@ -132,9 +131,7 @@ def _write_note_via_port(path: Path, content: str) -> None:
     root_candidates = [Path(VAULT).resolve(), Path(resolved.anchor) if resolved.anchor else Path("/")]
     for root in root_candidates:
         try:
-            locator = make_note_locator_from_absolute(resolved, vault_root=root)
-            port = resolve_knowledge_port(vault_root=root)
-            port.write_note(locator, content)
+            write_note_from_absolute(resolved, content, vault_root=root)
             return
         except ValueError:
             continue

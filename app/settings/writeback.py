@@ -5,8 +5,7 @@ from typing import Any, Dict
 
 import yaml
 
-from app.knowledge.locators import make_note_locator_from_absolute
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.write_ops import write_note_from_absolute
 
 from .loader import read_text
 
@@ -24,9 +23,7 @@ def _infer_vault_root(path: Path) -> Path:
 def write_markdown_via_knowledge_port(path: Path, markdown: str, *, vault_root: Path | None = None) -> None:
     resolved = path.expanduser().resolve()
     root = (vault_root or _infer_vault_root(resolved)).expanduser().resolve()
-    locator = make_note_locator_from_absolute(resolved, vault_root=root)
-    port = resolve_knowledge_port(vault_root=root)
-    port.write_note(locator, markdown)
+    write_note_from_absolute(resolved, markdown, vault_root=root)
 
 
 def writeback_settings_block(path: Path, canonical: Dict[str, Any], *, vault_root: Path | None = None) -> None:

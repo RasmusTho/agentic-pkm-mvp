@@ -9,18 +9,16 @@ def test_scaffolder_writes_placeholder_via_knowledge_port(tmp_path: Path, monkey
     writes: list[str] = []
     mimer_root = tmp_path / "Mimer"
 
-    class FakePort:
-        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
-            writes.append(locator.path)
-            target = (mimer_root / locator.path).resolve()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-            return None
+    def _fake_write_note(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+        resolved_root = (vault_root or tmp_path).resolve()
+        resolved_path = Path(path).resolve()
+        rel = resolved_path.relative_to(resolved_root).as_posix()
+        writes.append(rel)
+        resolved_path.parent.mkdir(parents=True, exist_ok=True)
+        resolved_path.write_text(content, encoding="utf-8")
+        return None
 
-    monkeypatch.setattr(
-        "app.settings.yggdrasil_scaffolder.resolve_knowledge_port",
-        lambda **kwargs: FakePort(),
-    )
+    monkeypatch.setattr("app.settings.yggdrasil_scaffolder.write_note_from_absolute", _fake_write_note)
 
     result = YggdrasilScaffolder(root=tmp_path).scaffold()
 
