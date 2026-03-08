@@ -81,3 +81,35 @@ def test_run_once_override_with_reason(tmp_path: Path, monkeypatch):
     assert processed == 1
     log_lines = log.read_text(encoding="utf-8").splitlines()
     assert any("promote.orphan.override" in ln for ln in log_lines)
+
+
+def test_run_once_writes_note_via_knowledge_port(tmp_path: Path, monkeypatch):
+    import app.promotion.queue as q
+
+    qpath, log, settings = _setup(monkeypatch, tmp_path)
+    settings.write_text(
+        "promotion:\n  cooldown_seconds: 0\n  require_idle_seconds: 0\n  max_retries: 1\n  move_policy:\n    enabled: false\n    default_target: 2_Cards/Concepts\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(q, "VAULT", tmp_path / "vault")
+    monkeypatch.setattr(q, "prepare_relations_for_promotion", lambda *a, **k: None)
+    monkeypatch.setattr(q, "ensure_object_has_relations", lambda *a, **k: None)
+    monkeypatch.setenv("PROMOTION_ALLOW_ORPHANS", "1")
+
+    p = tmp_path / "vault" / "note.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("---\nreview_state: inbox\n---\nBody\n", encoding="utf-8")
+    enqueue(p, uuid="00000000-0000-0000-0000-000000000005", desired_state="promoted")
+
+    calls: list[tuple[str, str]] = []
+
+    class FakePort:
+        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
+            calls.append((locator.path, content))
+            return None
+
+    monkeypatch.setattr(q, "resolve_knowledge_port", lambda **kwargs: FakePort())
+    processed = run_once()
+    assert processed == 1
+    assert calls and calls[0][0] == "note.md"
+    assert "review_state: promoted" in calls[0][1]

@@ -23,6 +23,8 @@ from app.events.types import (
 )
 from app.observability.tracing import current_trace_id, span
 from app.promotion.gates import OrphanPromotionError, ensure_object_has_relations, prepare_relations_for_promotion
+from app.knowledge.locators import make_note_locator_from_absolute
+from app.knowledge.service import resolve_knowledge_port
 from app.settings.models import PromotionSettings, SettingsBundle
 from app.settings.runtime import subscribe_settings
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
@@ -125,6 +127,20 @@ def _select_target(meta: Dict[str, Any], move_policy: Dict[str, Any], legacy_con
     return target_path, None
 
 
+def _write_note_via_port(path: Path, content: str) -> None:
+    resolved = path.resolve()
+    root_candidates = [Path(VAULT).resolve(), Path(resolved.anchor) if resolved.anchor else Path("/")]
+    for root in root_candidates:
+        try:
+            locator = make_note_locator_from_absolute(resolved, vault_root=root)
+            port = resolve_knowledge_port(vault_root=root)
+            port.write_note(locator, content)
+            return
+        except ValueError:
+            continue
+    raise ValueError(f"Unable to resolve note locator for {resolved}")
+
+
 subscribe_settings(_apply_promotion_settings)
 subscribe_settings(_apply_global_settings)
 
@@ -178,7 +194,7 @@ def run_once() -> int:
                 body_lines = [ln for ln in (body.splitlines()) if "Promote" not in ln.strip()]
                 body = "\n".join(body_lines).lstrip("\n")
                 updated_text = dump_frontmatter(meta, body)
-                p.write_text(updated_text, encoding="utf-8")
+                _write_note_via_port(p, updated_text)
 
                 if uuid:
                     try:
