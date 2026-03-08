@@ -37,5 +37,6 @@ def test_ensure_note_uuid_writes_via_knowledge_port(monkeypatch, tmp_path: Path)
 
     result = note_uuid.ensure_note_uuid(note, preferred_uuid="fixed-uuid")
     assert result == "fixed-uuid"
-    assert captured["path"] == "note.md"
+    expected_path = note.resolve().relative_to(Path(note.anchor)).as_posix()
+    assert captured["path"] == expected_path
     assert "uuid: fixed-uuid" in captured["content"]
