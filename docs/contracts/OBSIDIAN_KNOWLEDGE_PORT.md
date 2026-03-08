@@ -68,13 +68,11 @@ Validation rules:
 5. Architecture guardrails preventing direct `NoteLocator(...)` construction and direct `OBSIDIAN_VAULT_NAME` reads outside shared helpers.
 
 ## Next implementation step
-Wire this contract into:
-- MCP vault tools path
-- inbox/watcher URI helpers
-- startup health command and runbooks
-without changing external event contracts.
+Complete remaining vault-facing write paths so direct filesystem note writes are removed from service/runtime boundaries, and keep architecture guardrails enforcing the rule in CI.
 
 ## Rolling implementation backlog
 - [x] Verify all runtime call sites that perform note open/search are explicitly routed through `resolve_knowledge_port()`.
 - [x] Add contract tests for `make_note_locator_from_absolute(...)` usage in service flows with mixed absolute/relative paths.
 - [x] Add CI marker command in runbooks for `tests/architecture/test_obsidian_port_boundaries.py`.
+- [x] Route settings auto-heal/writeback note updates through `KnowledgePort` (`app/settings/writeback.py`, `app/settings/compiler.py`).
+- [x] Route vault layout/system-note bootstrap writes through `KnowledgePort` (`app/vault/layout.py`).

@@ -115,3 +115,19 @@ def test_knowledge_adapters_are_resolved_only_via_service_boundary() -> None:
         "Direct app.knowledge.adapters imports are forbidden outside the service boundary: "
         f"{offenders}"
     )
+
+
+def test_vault_note_writes_use_knowledge_port_helpers() -> None:
+    guarded_files = {
+        REPO_ROOT / "app" / "settings" / "compiler.py",
+        REPO_ROOT / "app" / "settings" / "writeback.py",
+        REPO_ROOT / "app" / "vault" / "layout.py",
+    }
+    offenders: list[str] = []
+    for path in guarded_files:
+        if "write_text" in _all_calls(path):
+            offenders.append(str(path.relative_to(REPO_ROOT)))
+    assert not offenders, (
+        "Guarded vault-facing modules must not call Path.write_text directly; route writes via KnowledgePort helpers: "
+        f"{offenders}"
+    )

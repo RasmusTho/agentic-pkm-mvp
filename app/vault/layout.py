@@ -7,6 +7,9 @@ from typing import Any, Iterable
 
 import yaml
 
+from app.knowledge.locators import make_note_locator_from_absolute
+from app.knowledge.service import resolve_knowledge_port
+
 
 LAYOUT_NOTE_NAME = "vault.layout.md"
 SYSTEM_NOTE_TITLE = "Vault Structure – Human-First Orientation (Mimer)"
@@ -243,6 +246,14 @@ def _render_layout_note(layout: VaultLayout) -> str:
     return f"---\n{frontmatter}\n---\n\n{body}"
 
 
+def _write_note_via_knowledge_port(vault_root: Path, path: Path, content: str) -> None:
+    resolved_root = vault_root.expanduser().resolve()
+    resolved_path = path.expanduser().resolve()
+    locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root)
+    port = resolve_knowledge_port(vault_root=resolved_root)
+    port.write_note(locator, content)
+
+
 def load_or_create_layout(vault_root: Path) -> VaultLayout:
     vault_root = vault_root.expanduser()
 
@@ -274,7 +285,7 @@ def load_or_create_layout(vault_root: Path) -> VaultLayout:
     )
 
     note_path.parent.mkdir(parents=True, exist_ok=True)
-    note_path.write_text(_render_layout_note(layout), encoding="utf-8")
+    _write_note_via_knowledge_port(vault_root, note_path, _render_layout_note(layout))
     return layout
 
 
@@ -283,9 +294,10 @@ def ensure_system_note(vault_root: Path, system_folder: str) -> Path:
     if note_path.exists():
         return note_path
     note_path.parent.mkdir(parents=True, exist_ok=True)
-    note_path.write_text(
+    _write_note_via_knowledge_port(
+        vault_root,
+        note_path,
         "# System Notes\n\nThis folder contains system configuration and operational notes.\n",
-        encoding="utf-8",
     )
     return note_path
 

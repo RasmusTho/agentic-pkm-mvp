@@ -63,3 +63,33 @@ def test_ensure_system_note_created_and_idempotent(tmp_path: Path, monkeypatch: 
     note_path.write_text("custom\n", encoding="utf-8")
     ensure_system_note(vault_root, system_folder)
     assert note_path.read_text(encoding="utf-8") == "custom\n"
+
+
+def test_ensure_vault_layout_writes_notes_via_knowledge_port(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+
+    system_folder = "⚙️ System"
+    inbox_folder = "📥 Inbox"
+    desk_folder = "🛠️ Workbench"
+
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", system_folder)
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", inbox_folder)
+    monkeypatch.setenv("VAULT_DESK_DIR_REL", desk_folder)
+
+    writes: list[str] = []
+
+    class FakePort:
+        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
+            writes.append(locator.path)
+            target = (vault_root / locator.path).resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            return None
+
+    monkeypatch.setattr("app.vault.layout.resolve_knowledge_port", lambda **kwargs: FakePort())
+
+    ensure_vault_layout(vault_root)
+
+    assert f"{system_folder}/vault.layout.md" in writes
+    assert any(path.endswith(".md") and "Vault Structure" in path for path in writes)

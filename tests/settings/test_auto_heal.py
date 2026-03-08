@@ -72,3 +72,51 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
     agent_md = (vault / "agents" / "classifier.md").read_text(encoding="utf-8")
     assert "timeout_ms: 8000" in agent_md
     assert "<!-- BEGIN:settings:reference -->" in agent_md
+
+
+def test_auto_heal_writes_settings_via_knowledge_port(tmp_path, monkeypatch) -> None:
+    vault = tmp_path / "vault" / "@Settings"
+    runtime_dir = tmp_path / "runtime" / "settings"
+
+    _write_md(
+        vault / "global.md",
+        """
+        ---
+        uuid: g
+        ---
+        ## Runtime
+        ```yaml settings
+        timeout_ms: "fast"
+        ```
+        """,
+    )
+    _write_md(
+        vault / "providers.md",
+        """
+        ---
+        uuid: p
+        ---
+        ## Provider defaults
+        ```yaml settings
+        llm: {}
+        ```
+        """,
+    )
+
+    writes: list[str] = []
+
+    class FakePort:
+        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
+            writes.append(locator.path)
+            target = (vault.parent / locator.path).resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            return None
+
+    monkeypatch.setattr(compiler, "VAULT", vault)
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+    monkeypatch.setattr("app.settings.writeback.resolve_knowledge_port", lambda **kwargs: FakePort())
+
+    compiler.compile_all(auto_heal=True)
+
+    assert "@Settings/global.md" in writes
