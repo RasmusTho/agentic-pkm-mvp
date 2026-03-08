@@ -5,6 +5,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from app.cli import alpha_human_flows as alpha_human_flows_module
 from app.cli import cli
 from app.retrieval.hybrid import get_store
 from app.services.note_log import note_log_path
@@ -171,7 +172,7 @@ def test_alpha_human_flows_writes_test_note_via_knowledge_port(tmp_path: Path, m
             target.write_text(content, encoding="utf-8")
             return None
 
-    monkeypatch.setattr("app.cli.alpha_human_flows.resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr(alpha_human_flows_module, "resolve_knowledge_port", lambda **kwargs: FakePort())
     result = _run_cli(vault, tmp_path)
     assert result.exit_code == 0, result.output
     assert "Test/Alpha-HumanFlows.md" in writes
