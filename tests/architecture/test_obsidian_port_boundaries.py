@@ -119,6 +119,7 @@ def test_knowledge_adapters_are_resolved_only_via_service_boundary() -> None:
 
 def test_vault_note_writes_use_knowledge_port_helpers() -> None:
     guarded_files = {
+        REPO_ROOT / "app" / "agents" / "note_hygiene" / "agent.py",
         REPO_ROOT / "app" / "settings" / "compiler.py",
         REPO_ROOT / "app" / "settings" / "writeback.py",
         REPO_ROOT / "app" / "settings" / "yggdrasil_scaffolder.py",

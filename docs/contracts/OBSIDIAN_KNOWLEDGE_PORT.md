@@ -80,3 +80,4 @@ Complete remaining vault-facing write paths so direct filesystem note writes are
 - [x] Route note update + promotion note writes through `KnowledgePort` (`app/services/note_update.py`).
 - [x] Route Yggdrasil bootstrap settings placeholder writes through `KnowledgePort` (`app/settings/yggdrasil_scaffolder.py`).
 - [x] Route vault ingest mirror-note writes through `KnowledgePort` (`app/ingest/vault_alpha.py`).
+- [x] Route note hygiene archive-note writes through `KnowledgePort` (`app/agents/note_hygiene/agent.py`).
