@@ -3,8 +3,7 @@ from typing import Dict, Any, List
 import re
 from .fs import archive_path
 from app.events.types import CLEANUP_DONE
-from app.knowledge.locators import make_note_locator_from_absolute
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.services.events import emit
 
 _link_re = re.compile(r"\[[^\]]+\]\([^)]+\)")
@@ -40,10 +39,8 @@ def _write(path:str, body:str, fm:Dict[str,Any])->None:
     fm_lines.append("---")
     txt = "\n".join(fm_lines) + "\n" + (body or "") + ("\n" if body and not body.endswith("\n") else "")
     resolved = Path(path).expanduser().resolve()
-    root = Path(resolved.anchor) if resolved.anchor else Path("/")
-    locator = make_note_locator_from_absolute(resolved, vault_root=root)
-    port = resolve_knowledge_port(vault_root=root)
-    port.write_note(locator, txt)
+    root = default_vault_root_for_path(resolved)
+    write_note_from_absolute(resolved, txt, vault_root=root)
 
 def _first_sentence(text:str)->str:
     txt = " ".join(l.strip() for l in text.splitlines() if l.strip())

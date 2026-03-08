@@ -13,15 +13,15 @@ def test_write_mirror_uses_knowledge_port(tmp_path: Path, monkeypatch) -> None:
     note_uuid = "11111111-1111-1111-1111-111111111111"
     writes: list[str] = []
 
-    class FakePort:
-        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
-            writes.append(locator.path)
-            target = (vault_root / locator.path).resolve()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-            return None
+    def _fake_write_note(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+        resolved_root = (vault_root or tmp_path).resolve()
+        resolved_path = Path(path).resolve()
+        writes.append(resolved_path.relative_to(resolved_root).as_posix())
+        resolved_path.parent.mkdir(parents=True, exist_ok=True)
+        resolved_path.write_text(content, encoding="utf-8")
+        return None
 
-    monkeypatch.setattr("app.ingest.vault_alpha.resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr("app.ingest.vault_alpha.write_note_from_absolute", _fake_write_note)
 
     mirror_path = _write_mirror(
         vault_root,

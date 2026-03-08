@@ -17,8 +17,7 @@ from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.filters import strip_ai_panels
 from app.ingest.config import resolve_ingest_config
 from app.index.outbox import append_jsonl
-from app.knowledge.locators import make_note_locator_from_absolute
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.write_ops import write_note_from_absolute
 from app.observability.ingest_meta import record_ingest_run
 from app.obs.log import with_trace_id
 from app.retrieval.hybrid import get_store
@@ -356,9 +355,7 @@ def _write_mirror(
     content = dump_frontmatter(frontmatter, body)
     resolved_root = vault_root.expanduser().resolve()
     resolved_mirror = mirror_path.expanduser().resolve()
-    locator = make_note_locator_from_absolute(resolved_mirror, vault_root=resolved_root)
-    port = resolve_knowledge_port(vault_root=resolved_root)
-    port.write_note(locator, content)
+    write_note_from_absolute(resolved_mirror, content, vault_root=resolved_root)
     return mirror_path
 
 
