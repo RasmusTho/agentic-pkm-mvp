@@ -51,6 +51,7 @@ Watcher note: Runtime now uses the registry watcher (`configs/watchers.yaml` + `
 - `alpha-human-flows` vault note mutations now write via `KnowledgePort` (`app/cli/alpha_human_flows.py`).
 - Note update/promotion runtime writes now route via `KnowledgePort` (`app/services/note_update.py`).
 - `yggdrasil-init` settings placeholder writes now route via `KnowledgePort` (`app/settings/yggdrasil_scaffolder.py`).
+- Vault ingest mirror-note writes (`System/Metadata/VaultMirror`) now route via `KnowledgePort` (`app/ingest/vault_alpha.py`).
 - Vault identity resolution for Obsidian (`OBSIDIAN_VAULT_NAME`, blank-safe default) is centralized in `app/knowledge/vault_identity.py`.
 - `NoteLocator` creation is centralized via `app/knowledge/locators.py` so path separator and relative-path rules stay consistent across adapters/services.
 - Policy + startup posture is governed by `KNOWLEDGE_*` settings and health-gated via `python -m app.cli health --json`.
