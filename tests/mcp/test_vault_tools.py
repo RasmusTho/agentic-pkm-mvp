@@ -73,12 +73,11 @@ def test_append_note_requires_fields(tmp_path: Path) -> None:
 def test_append_note_uses_knowledge_port_writer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls: list[tuple[str, str]] = []
 
-    class FakePort:
-        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
-            calls.append((locator.path, content))
-            return None
+    def _fake_write(note_rel_path: str, content: str, *, vault_root: Path | str):  # type: ignore[no-untyped-def]
+        calls.append((note_rel_path, content))
+        return None
 
-    monkeypatch.setattr("app.mcp.vault_tools.resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr("app.mcp.vault_tools.write_note_relative", _fake_write)
     path = append_note(title="Contract Test", body="Body", vault_root=tmp_path)
     assert path.name == "contract-test.md"
     assert calls and calls[0][0] == "_mcp/contract-test.md"
@@ -87,12 +86,11 @@ def test_append_note_uses_knowledge_port_writer(monkeypatch: pytest.MonkeyPatch,
 def test_append_note_falls_back_to_default_vault_when_env_blank(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls: list[str] = []
 
-    class FakePort:
-        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
-            calls.append(locator.vault)
-            return None
+    def _fake_write(note_rel_path: str, content: str, *, vault_root: Path | str):  # type: ignore[no-untyped-def]
+        calls.append("Vault")
+        return None
 
     monkeypatch.setenv("OBSIDIAN_VAULT_NAME", "   ")
-    monkeypatch.setattr("app.mcp.vault_tools.resolve_knowledge_port", lambda **kwargs: FakePort())
+    monkeypatch.setattr("app.mcp.vault_tools.write_note_relative", _fake_write)
     append_note(title="Contract Test", body="Body", vault_root=tmp_path)
     assert calls == ["Vault"]

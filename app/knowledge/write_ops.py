@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.knowledge.contracts import WriteReceipt
-from app.knowledge.locators import make_note_locator_from_absolute
+from app.knowledge.locators import make_note_locator, make_note_locator_from_absolute
 from app.knowledge.service import resolve_knowledge_port
 
 
@@ -29,4 +29,33 @@ def write_note_from_absolute(
     return port.write_note(locator, content)
 
 
-__all__ = ["default_vault_root_for_path", "write_note_from_absolute"]
+def write_note_relative(
+    note_rel_path: str,
+    content: str,
+    *,
+    vault_root: Path | str,
+) -> WriteReceipt:
+    resolved_root = Path(vault_root).expanduser().resolve()
+    locator = make_note_locator(note_rel_path)
+    port = resolve_knowledge_port(vault_root=resolved_root)
+    return port.write_note(locator, content)
+
+
+def append_note_relative(
+    note_rel_path: str,
+    content: str,
+    *,
+    vault_root: Path | str,
+) -> WriteReceipt:
+    resolved_root = Path(vault_root).expanduser().resolve()
+    locator = make_note_locator(note_rel_path)
+    port = resolve_knowledge_port(vault_root=resolved_root)
+    return port.append_note(locator, content)
+
+
+__all__ = [
+    "append_note_relative",
+    "default_vault_root_for_path",
+    "write_note_from_absolute",
+    "write_note_relative",
+]

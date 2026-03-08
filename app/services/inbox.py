@@ -4,9 +4,9 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.knowledge.locators import make_note_locator
 from app.knowledge.references import build_obsidian_advanced_uri
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.locators import make_note_locator
+from app.knowledge.write_ops import append_note_relative
 from app.vault.paths import get_vault_inbox_dir_rel
 
 
@@ -73,9 +73,7 @@ def _append_line(
     suffix = f" | {action_link}" if action_link else ""
     line = f"- [{timestamp}] {message}{suffix}\n"
 
-    locator = make_note_locator(note_rel_path)
-    port = resolve_knowledge_port(vault_root=root)
-    port.append_note(locator, line)
+    append_note_relative(note_rel_path, line, vault_root=root)
 
 
 def _build_uri(vault_path: Path | str | None) -> str | None:
