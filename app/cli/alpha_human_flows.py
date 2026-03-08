@@ -13,8 +13,7 @@ from app.agents.qa.agent import answer as qa_answer
 from app.agents.panel.filters import strip_ai_panels
 from app.ingest.config import DEFAULT_VAULT_ROOT
 from app.index.outbox import append_jsonl
-from app.knowledge.locators import make_note_locator_from_absolute
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.write_ops import write_note_from_absolute
 from app.obs.log import with_trace_id
 from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
@@ -42,11 +41,7 @@ AI_PANEL_BLOCK = "\n".join(
 
 
 def _write_vault_note(vault_root: Path, path: Path, content: str) -> None:
-    resolved_root = vault_root.expanduser().resolve()
-    resolved_path = path.expanduser().resolve()
-    locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root)
-    port = resolve_knowledge_port(vault_root=resolved_root)
-    port.write_note(locator, content)
+    write_note_from_absolute(path, content, vault_root=vault_root)
 
 
 def _select_sample_files(vault_root: Path, sample_size: int) -> List[Path]:

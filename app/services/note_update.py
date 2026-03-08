@@ -7,8 +7,7 @@ from pydantic import BaseModel
 
 from app.agents.panel.integration import handle_panel_update
 from app.components.concurrency import OptimisticWriteGuard
-from app.knowledge.locators import make_note_locator_from_absolute
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.orchestrator.handler import OrchestratorContext
 from app.services.note_uuid import ensure_note_uuid
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -30,10 +29,8 @@ class NoteUpdateResult(BaseModel):
 
 def _write_note_via_knowledge_port(note_path: Path, content: str) -> None:
     resolved = note_path.resolve()
-    root = Path(resolved.anchor) if resolved.anchor else Path("/")
-    locator = make_note_locator_from_absolute(resolved, vault_root=root)
-    port = resolve_knowledge_port(vault_root=root)
-    port.write_note(locator, content)
+    root = default_vault_root_for_path(resolved)
+    write_note_from_absolute(resolved, content, vault_root=root)
 
 
 def apply_promotion_frontmatter(

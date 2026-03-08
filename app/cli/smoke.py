@@ -12,8 +12,7 @@ import click
 
 from app.agents.ask.graph import run_ask_graph
 from app.agents.panel_agent import execute_panel_intent, run_panel_intent_for_note
-from app.knowledge.locators import make_note_locator_from_absolute
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.write_ops import write_note_from_absolute
 from app.orchestrator.runtime import Orchestrator
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.planner.tools import MCP_TOOL_DESCRIPTORS
@@ -76,11 +75,7 @@ def _has_cursor(note_path: Path) -> bool:
 
 
 def _write_vault_note(vault_root: Path, note_path: Path, content: str) -> None:
-    resolved_root = vault_root.expanduser().resolve()
-    resolved_path = note_path.expanduser().resolve()
-    locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root)
-    port = resolve_knowledge_port(vault_root=resolved_root)
-    port.write_note(locator, content)
+    write_note_from_absolute(note_path, content, vault_root=vault_root)
 
 
 def _mark_cursor(note_path: Path, vault_root: Path) -> None:

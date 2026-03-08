@@ -3,8 +3,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from app.knowledge.locators import make_note_locator_from_absolute
-from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
@@ -22,10 +21,8 @@ def ensure_note_uuid(path: Path, *, preferred_uuid: str | None = None) -> str:
         candidate = str(uuid.uuid4())
     frontmatter["uuid"] = candidate
     DEFAULT_WRITE_GUARD.assert_writes_allowed("ensure uuid")
-    root = Path(resolved.anchor) if resolved.anchor else Path("/")
-    locator = make_note_locator_from_absolute(resolved, vault_root=root)
-    port = resolve_knowledge_port(vault_root=root)
-    port.write_note(locator, dump_frontmatter(frontmatter, body))
+    root = default_vault_root_for_path(resolved)
+    write_note_from_absolute(resolved, dump_frontmatter(frontmatter, body), vault_root=root)
     return candidate
 
 
