@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import importlib
 import textwrap
 from pathlib import Path
 
 from click.testing import CliRunner
 
-from app.cli import alpha_human_flows as alpha_human_flows_module
 from app.cli import cli
 from app.retrieval.hybrid import get_store
 from app.services.note_log import note_log_path
 from scripts.yaml_roundtrip import load_frontmatter
+
+alpha_human_flows_module = importlib.import_module("app.cli.alpha_human_flows")
 
 
 def _base_env(tmp_path: Path) -> dict[str, str]:
