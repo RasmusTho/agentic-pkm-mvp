@@ -45,6 +45,7 @@ Watcher note: Runtime now uses the registry watcher (`configs/watchers.yaml` + `
 - Vault sync note writes (UUID heal/frontmatter write path) now write via `KnowledgePort`.
 - UUID heal writes in `note_uuid` service now write via `KnowledgePort` as well.
 - Promotion queue frontmatter update writes now route via `KnowledgePort`.
+- `panel-update` CLI writes now route via `KnowledgePort`.
 - Vault identity resolution for Obsidian (`OBSIDIAN_VAULT_NAME`, blank-safe default) is centralized in `app/knowledge/vault_identity.py`.
 - `NoteLocator` creation is centralized via `app/knowledge/locators.py` so path separator and relative-path rules stay consistent across adapters/services.
 - Policy + startup posture is governed by `KNOWLEDGE_*` settings and health-gated via `python -m app.cli health --json`.

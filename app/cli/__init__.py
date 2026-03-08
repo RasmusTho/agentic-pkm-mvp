@@ -60,6 +60,8 @@ from app.obs.log import with_trace_id
 from app.cli.health import run_health
 from app.stores.plan_store import get_plan_store
 from app.settings.compiler import compile_all
+from app.knowledge.locators import make_note_locator_from_absolute
+from app.knowledge.service import resolve_knowledge_port
 from app.llm.trace_inspect import (
     build_sequence_for_trace,
     group_by_trace_id,
@@ -118,6 +120,14 @@ def _truthy_flag(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in TRUE_STRINGS
     return bool(value)
+
+
+def _write_note_via_knowledge_port(note_path: Path, content: str) -> None:
+    resolved = note_path.resolve()
+    root = Path(resolved.anchor) if resolved.anchor else Path("/")
+    locator = make_note_locator_from_absolute(resolved, vault_root=root)
+    port = resolve_knowledge_port(vault_root=root)
+    port.write_note(locator, content)
 
 
 def _resolve_vault_root_path(
@@ -956,7 +966,7 @@ def panel_update(note_path: Path, old_path: Path | None) -> None:
     )
 
     if result.panel.updated_markdown != new_markdown:
-        note_path.write_text(result.panel.updated_markdown, encoding="utf-8")
+        _write_note_via_knowledge_port(note_path, result.panel.updated_markdown)
 
     click.echo(f"Note: {note_path}")
     click.echo(f"Panel intents: {len(result.panel.intents)}")
