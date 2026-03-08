@@ -158,5 +158,24 @@ def test_alpha_human_flows_explain_only(tmp_path: Path) -> None:
     assert not outbox.exists()
 
 
+def test_alpha_human_flows_writes_test_note_via_knowledge_port(tmp_path: Path, monkeypatch) -> None:
+    get_store().set_documents([])
+    vault = _make_vault(tmp_path)
+    writes: list[str] = []
+
+    class FakePort:
+        def write_note(self, locator, content):  # type: ignore[no-untyped-def]
+            writes.append(locator.path)
+            target = (vault / locator.path).resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            return None
+
+    monkeypatch.setattr("app.cli.alpha_human_flows.resolve_knowledge_port", lambda **kwargs: FakePort())
+    result = _run_cli(vault, tmp_path)
+    assert result.exit_code == 0, result.output
+    assert "Test/Alpha-HumanFlows.md" in writes
+
+
 # Coverage gaps: Flow A sample selection errors not exercised; mirror file creation not asserted (path only);
 # ASK output content not validated beyond source presence; ingestion error handling paths not covered.

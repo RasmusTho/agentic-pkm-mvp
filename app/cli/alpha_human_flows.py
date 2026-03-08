@@ -13,6 +13,8 @@ from app.agents.qa.agent import answer as qa_answer
 from app.agents.panel.filters import strip_ai_panels
 from app.ingest.config import DEFAULT_VAULT_ROOT
 from app.index.outbox import append_jsonl
+from app.knowledge.locators import make_note_locator_from_absolute
+from app.knowledge.service import resolve_knowledge_port
 from app.obs.log import with_trace_id
 from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
@@ -37,6 +39,14 @@ AI_PANEL_BLOCK = "\n".join(
         "",
     ]
 )
+
+
+def _write_vault_note(vault_root: Path, path: Path, content: str) -> None:
+    resolved_root = vault_root.expanduser().resolve()
+    resolved_path = path.expanduser().resolve()
+    locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root)
+    port = resolve_knowledge_port(vault_root=resolved_root)
+    port.write_note(locator, content)
 
 
 def _select_sample_files(vault_root: Path, sample_size: int) -> List[Path]:
@@ -130,7 +140,7 @@ def _ingest_note(path: Path) -> Tuple[str, dict | None]:
     return object_id, classification
 
 
-def _ensure_test_note(path: Path, *, dry_run: bool) -> Tuple[str, bool]:
+def _ensure_test_note(path: Path, *, vault_root: Path, dry_run: bool) -> Tuple[str, bool]:
     if path.exists():
         frontmatter, body = load_frontmatter(path.read_text(encoding="utf-8"))
         existing_uuid = str(frontmatter.get("uuid") or "").strip()
@@ -139,7 +149,7 @@ def _ensure_test_note(path: Path, *, dry_run: bool) -> Tuple[str, bool]:
         new_uuid = str(uuid.uuid4())
         if not dry_run:
             frontmatter["uuid"] = new_uuid
-            path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+            _write_vault_note(vault_root, path, dump_frontmatter(frontmatter, body))
         return new_uuid, not dry_run
     new_uuid = str(uuid.uuid4())
     if not dry_run:
@@ -152,22 +162,22 @@ def _ensure_test_note(path: Path, *, dry_run: bool) -> Tuple[str, bool]:
         ]
         body = "\n".join(body_lines)
         frontmatter = {"uuid": new_uuid, "title": path.stem}
-        path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+        _write_vault_note(vault_root, path, dump_frontmatter(frontmatter, body))
     return new_uuid, not dry_run
 
 
-def _ensure_ai_panel(path: Path, *, dry_run: bool) -> bool:
+def _ensure_ai_panel(path: Path, *, vault_root: Path, dry_run: bool) -> bool:
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     if "## AI-instruktion" in text:
         return False
     if dry_run:
         return True
     updated = text.rstrip() + ("\n\n" if text and not text.endswith("\n") else "") + AI_PANEL_BLOCK
-    path.write_text(updated, encoding="utf-8")
+    _write_vault_note(vault_root, path, updated)
     return True
 
 
-def _set_promotion_fields(path: Path, *, dry_run: bool) -> bool:
+def _set_promotion_fields(path: Path, *, vault_root: Path, dry_run: bool) -> bool:
     frontmatter, body = load_frontmatter(path.read_text(encoding="utf-8"))
     changed = False
     if frontmatter.get("review_state") != "promoted":
@@ -177,7 +187,7 @@ def _set_promotion_fields(path: Path, *, dry_run: bool) -> bool:
         frontmatter["maturity"] = "evergreen"
         changed = True
     if changed and not dry_run:
-        path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+        _write_vault_note(vault_root, path, dump_frontmatter(frontmatter, body))
     return changed
 
 
@@ -272,7 +282,7 @@ def run_alpha_human_flows(
 
     click.echo("2) Flow B – ensure test note")
     test_note_path = vault_root / ALPHA_TEST_NOTE_REL
-    test_uuid, created = _ensure_test_note(test_note_path, dry_run=dry_run)
+    test_uuid, created = _ensure_test_note(test_note_path, vault_root=vault_root, dry_run=dry_run)
     status = "created" if created and not dry_run else "existing"
     click.echo(f"   test note: {test_note_path} ({status}, uuid={test_uuid})")
 
@@ -295,7 +305,7 @@ def run_alpha_human_flows(
             click.echo(f"   error ingesting test note: {exc}")
 
     click.echo("4) Flow D – ensure AI panel and reingest")
-    panel_needed = _ensure_ai_panel(test_note_path, dry_run=dry_run)
+    panel_needed = _ensure_ai_panel(test_note_path, vault_root=vault_root, dry_run=dry_run)
     if panel_needed:
         click.echo("   AI panel inserted" + (" [dry-run]" if dry_run else ""))
     else:
@@ -317,7 +327,7 @@ def run_alpha_human_flows(
     if not test_note_path.exists() and dry_run:
         click.echo("   [dry-run] test note not written; skipping promotion changes")
     else:
-        promo_changed = _set_promotion_fields(test_note_path, dry_run=dry_run)
+        promo_changed = _set_promotion_fields(test_note_path, vault_root=vault_root, dry_run=dry_run)
         if promo_changed:
             click.echo("   promotion fields set" + (" [dry-run]" if dry_run else ""))
         else:

@@ -76,3 +76,4 @@ Complete remaining vault-facing write paths so direct filesystem note writes are
 - [x] Add CI marker command in runbooks for `tests/architecture/test_obsidian_port_boundaries.py`.
 - [x] Route settings auto-heal/writeback note updates through `KnowledgePort` (`app/settings/writeback.py`, `app/settings/compiler.py`).
 - [x] Route vault layout/system-note bootstrap writes through `KnowledgePort` (`app/vault/layout.py`).
+- [x] Route alpha human flows vault note mutation writes through `KnowledgePort` (`app/cli/alpha_human_flows.py`).
