@@ -77,3 +77,4 @@ Complete remaining vault-facing write paths so direct filesystem note writes are
 - [x] Route settings auto-heal/writeback note updates through `KnowledgePort` (`app/settings/writeback.py`, `app/settings/compiler.py`).
 - [x] Route vault layout/system-note bootstrap writes through `KnowledgePort` (`app/vault/layout.py`).
 - [x] Route alpha human flows vault note mutation writes through `KnowledgePort` (`app/cli/alpha_human_flows.py`).
+- [x] Route note update + promotion note writes through `KnowledgePort` (`app/services/note_update.py`).
