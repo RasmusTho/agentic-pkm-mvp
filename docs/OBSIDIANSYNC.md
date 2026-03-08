@@ -43,6 +43,7 @@ Watcher note: Runtime now uses the registry watcher (`configs/watchers.yaml` + `
   - `ObsidianCliAdapter` for Obsidian CLI-driven operations.
 - Inbox service writes (change/conflict logs) now append via `KnowledgePort` rather than direct file I/O.
 - Vault sync note writes (UUID heal/frontmatter write path) now write via `KnowledgePort`.
+- UUID heal writes in `note_uuid` service now write via `KnowledgePort` as well.
 - Vault identity resolution for Obsidian (`OBSIDIAN_VAULT_NAME`, blank-safe default) is centralized in `app/knowledge/vault_identity.py`.
 - `NoteLocator` creation is centralized via `app/knowledge/locators.py` so path separator and relative-path rules stay consistent across adapters/services.
 - Policy + startup posture is governed by `KNOWLEDGE_*` settings and health-gated via `python -m app.cli health --json`.
