@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
+from app.knowledge.locators import make_note_locator_from_absolute
+from app.knowledge.service import resolve_knowledge_port
+
 
 class YggdrasilScaffolder:
     def __init__(self, root: Path | None = None) -> None:
@@ -57,29 +60,35 @@ class YggdrasilScaffolder:
         settings_dir = mimer_root / "@Settings"
         placeholder = settings_dir / "global.md"
         if not any(settings_dir.iterdir()):
-            placeholder.write_text(
-                "\n".join(
-                    [
-                        "---",
-                        "kind: settings",
-                        "scope: global",
-                        "module: Mimer",
-                        "system: Yggdrasil",
-                        "---",
-                        "",
-                        "# Global settings for Mimer (Yggdrasil)",
-                        "",
-                        "This is an initial placeholder created by the `yggdrasil-init` command.",
-                        "",
-                    ]
-                ),
-                encoding="utf-8",
-            )
+            self._write_settings_placeholder(mimer_root, placeholder)
             created.append(placeholder)
         elif placeholder.exists():
             existed.append(placeholder)
 
         return {"root": [yggdrasil_root], "created": created, "existed": list(set(existed))}
+
+    @staticmethod
+    def _write_settings_placeholder(vault_root: Path, placeholder: Path) -> None:
+        content = "\n".join(
+            [
+                "---",
+                "kind: settings",
+                "scope: global",
+                "module: Mimer",
+                "system: Yggdrasil",
+                "---",
+                "",
+                "# Global settings for Mimer (Yggdrasil)",
+                "",
+                "This is an initial placeholder created by the `yggdrasil-init` command.",
+                "",
+            ]
+        )
+        resolved_root = vault_root.expanduser().resolve()
+        resolved_path = placeholder.expanduser().resolve()
+        locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root)
+        port = resolve_knowledge_port(vault_root=resolved_root)
+        port.write_note(locator, content)
 
 
 __all__ = ["YggdrasilScaffolder"]
