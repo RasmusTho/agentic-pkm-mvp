@@ -81,3 +81,5 @@ Complete remaining vault-facing write paths so direct filesystem note writes are
 - [x] Route Yggdrasil bootstrap settings placeholder writes through `KnowledgePort` (`app/settings/yggdrasil_scaffolder.py`).
 - [x] Route vault ingest mirror-note writes through `KnowledgePort` (`app/ingest/vault_alpha.py`).
 - [x] Route note hygiene archive-note writes through `KnowledgePort` (`app/agents/note_hygiene/agent.py`).
+- [x] Centralize service/runtime vault write+append wiring behind `app/knowledge/write_ops.py` helper functions (`write_note_from_absolute`, `write_note_relative`, `append_note_relative`).
+- [x] Centralize Advanced URI vault-path conversion via `app/knowledge/write_ops.py::advanced_uri_from_vault_path` and remove ad-hoc locator parsing from runtime/services.

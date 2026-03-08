@@ -79,8 +79,7 @@ def test_obsidian_vault_name_env_is_read_only_in_vault_identity() -> None:
 def test_advanced_uri_builder_imports_are_constrained() -> None:
     scan_roots = [REPO_ROOT / "app", REPO_ROOT / "scripts"]
     allow_importers = {
-        REPO_ROOT / "app" / "services" / "inbox.py",
-        REPO_ROOT / "scripts" / "fs_watcher.py",
+        REPO_ROOT / "app" / "knowledge" / "write_ops.py",
         REPO_ROOT / "app" / "knowledge" / "__init__.py",
     }
     offenders: list[str] = []
@@ -174,6 +173,28 @@ def test_absolute_locator_conversion_is_centralized() -> None:
                 offenders.append(str(path.relative_to(REPO_ROOT)))
     assert not offenders, (
         "Direct make_note_locator_from_absolute usage is forbidden outside app/knowledge; "
+        "use app.knowledge.write_ops helpers instead: "
+        f"{offenders}"
+    )
+
+
+def test_locator_module_imports_are_centralized() -> None:
+    scan_roots = [REPO_ROOT / "app", REPO_ROOT / "scripts"]
+    allow_importers = {
+        REPO_ROOT / "app" / "knowledge" / "__init__.py",
+        REPO_ROOT / "app" / "knowledge" / "locators.py",
+        REPO_ROOT / "app" / "knowledge" / "write_ops.py",
+    }
+    offenders: list[str] = []
+    for root in scan_roots:
+        for path in _iter_py_files(root):
+            if path in allow_importers:
+                continue
+            imports = _imports(path)
+            if "app.knowledge.locators" in imports:
+                offenders.append(str(path.relative_to(REPO_ROOT)))
+    assert not offenders, (
+        "Direct app.knowledge.locators imports are forbidden outside app/knowledge; "
         "use app.knowledge.write_ops helpers instead: "
         f"{offenders}"
     )

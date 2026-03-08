@@ -71,3 +71,19 @@ def test_append_note_relative_uses_port_append(monkeypatch, tmp_path: Path) -> N
     assert captured["path"] == "Inbox/log.md"
     assert captured["vault"] == "Vault"
     assert captured["content"] == "line\n"
+
+
+def test_advanced_uri_from_vault_path_inside_root(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    note = vault / "Inbox" / "a.md"
+    uri = write_ops.advanced_uri_from_vault_path(note, vault_root=vault)
+    assert "obsidian://advanced-uri" in uri
+    assert "filepath=Inbox%2Fa.md" in uri
+
+
+def test_advanced_uri_from_vault_path_outside_root_falls_back_to_name(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    other = tmp_path / "outside.md"
+    uri = write_ops.advanced_uri_from_vault_path(other, vault_root=vault)
+    assert "obsidian://advanced-uri" in uri
+    assert "filepath=outside.md" in uri

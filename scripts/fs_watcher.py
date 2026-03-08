@@ -6,9 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.knowledge.locators import make_note_locator
-from app.knowledge.references import build_obsidian_advanced_uri
-from app.knowledge.write_ops import write_note_from_absolute
+from app.knowledge.write_ops import advanced_uri_from_vault_path, write_note_from_absolute
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 from app.ports.sink import DummySink, Sink
 from app.services.inbox import append_change
@@ -37,12 +35,7 @@ def _record(path: Path, uuid_value: str, fm_hash: str, body_hash: str) -> None:
 
 
 def _make_uri(path: Path) -> str:
-    try:
-        rel = path.expanduser().resolve().relative_to(VAULT.expanduser().resolve()).as_posix()
-        locator = make_note_locator(rel)
-    except Exception:
-        locator = make_note_locator(path.name)
-    return build_obsidian_advanced_uri(locator)
+    return advanced_uri_from_vault_path(path, vault_root=VAULT)
 
 
 def _ensure_uuid(path: Path, frontmatter: dict[str, Any], body: str) -> bool:

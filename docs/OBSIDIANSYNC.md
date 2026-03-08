@@ -55,5 +55,6 @@ Watcher note: Runtime now uses the registry watcher (`configs/watchers.yaml` + `
 - Note hygiene archive-note writes now route via `KnowledgePort` (`app/agents/note_hygiene/agent.py`).
 - Vault identity resolution for Obsidian (`OBSIDIAN_VAULT_NAME`, blank-safe default) is centralized in `app/knowledge/vault_identity.py`.
 - `NoteLocator` creation is centralized via `app/knowledge/locators.py` so path separator and relative-path rules stay consistent across adapters/services.
+- Shared helper boundary `app/knowledge/write_ops.py` now owns absolute/relative note writes, appends, and Advanced URI path conversion (`advanced_uri_from_vault_path`) so service/runtime modules do not wire ports/locators directly.
 - Policy + startup posture is governed by `KNOWLEDGE_*` settings and health-gated via `python -m app.cli health --json`.
 - See `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`.
