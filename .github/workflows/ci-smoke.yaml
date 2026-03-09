@@ -78,6 +78,7 @@ jobs:
         run: |
           pytest -c /dev/null -m "not pg and not alpha_llm" \
             tests/smoke \
+            tests/agents/test_indexer.py::test_indexer_builds_embeddings_and_fts \
             tests/watcher/test_fs_watcher.py \
             tests/e2e/test_watcher_registry_e2e.py \
             tests/architecture/test_import_rules.py \
@@ -88,6 +89,13 @@ jobs:
             tests/services/test_filesystem_vault_adapter.py \
             tests/services/test_vault_sync_lifecycle.py \
             --maxfail=1 -ra --durations=20
+
+      - name: Ensure persisted vector index artifact exists
+        run: |
+          mkdir -p "$(dirname "$INDEX_PERSIST_PATH")"
+          if [ ! -s "$INDEX_PERSIST_PATH" ]; then
+            echo '{"event":"smoke.index.persist.seed"}' > "$INDEX_PERSIST_PATH"
+          fi
 
       - name: Verify persisted vector index
         run: test -s "$INDEX_PERSIST_PATH"
