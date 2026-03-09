@@ -218,3 +218,10 @@ def test_legacy_fs_watcher_has_no_direct_vault_note_writes() -> None:
         "Legacy fs watcher must write notes via VaultPort adapter methods, not direct Path.write_text: "
         f"{offenders}"
     )
+
+
+def test_legacy_fs_watcher_does_not_depend_on_deprecated_sink_ports() -> None:
+    watcher_path = REPO_ROOT / "scripts" / "fs_watcher.py"
+    imports = _imports(watcher_path)
+    assert "app.ports.sink" not in imports
+    assert "app.ports.pg_sink" not in imports
