@@ -67,12 +67,22 @@ def resolve_dev_lab_env_typed(
         return parser(default)
 
 
+def require_lab_profile(*, command_name: str) -> None:
+    if is_lab_profile():
+        return
+    raise RuntimeError(
+        f"{command_name} is legacy/dev-only and requires {PROFILE_ENV}={LAB_PROFILE}. "
+        "Use `python -m app.cli watcher run` for operator runtime."
+    )
+
+
 __all__ = [
     "PROFILE_ENV",
     "OPERATOR_PROFILE",
     "LAB_PROFILE",
     "active_settings_profile",
     "is_lab_profile",
+    "require_lab_profile",
     "resolve_dev_lab_env_value",
     "resolve_dev_lab_env_typed",
 ]

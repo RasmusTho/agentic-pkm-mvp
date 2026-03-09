@@ -92,4 +92,4 @@ State: v5.x forward line. Runtime automation uses the registry watcher (`configs
 - Intent vs mutation: panel runtime emits intents (`promote.intent.created`), while `promote.done` comes from the promotion consumer; note mutation requires the consumer to run (included by default in runtime).
 
 ### Legacy/dev-only tools
-- `vault-watcher-run` / `vault-watcher-daemon` and `runtime-loop` are legacy snapshot-based tools. They are not used for runtime start-system flows and are kept for historical/dev-only workflows.
+- `vault-watcher-run` / `vault-watcher-daemon` and `runtime-loop` are legacy snapshot-based tools. They are not used for runtime start-system flows, require `PKM_SETTINGS_PROFILE=lab`, and are kept for historical/dev-only workflows.

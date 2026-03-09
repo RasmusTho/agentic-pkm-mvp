@@ -7,6 +7,7 @@ from pathlib import Path
 import click
 
 from app.runtime.runtime_loop import OutboxPathError, resolve_outbox_path
+from app.settings.tiering import require_lab_profile
 from app.settings.validate import validate_settings
 from app.watcher.config import WatcherConfig
 from app.watcher.events import emit_watcher_run_event
@@ -120,8 +121,8 @@ def watcher_run(config: Path, max_ticks: int | None) -> None:
 @click.command(
     name="vault-watcher-run",
     help=(
-        "Single-shot vault watcher: detects changed notes via snapshot, ingests them, "
-        "and optionally runs PanelAgent runtime."
+        "Legacy/dev-only single-shot snapshot watcher (requires PKM_SETTINGS_PROFILE=lab): "
+        "detects changed notes via snapshot, ingests them, and optionally runs PanelAgent runtime."
     ),
 )
 @click.option(
@@ -170,6 +171,11 @@ def vault_watcher_run(
     max_notes: int,
     force: bool,
 ) -> None:
+    try:
+        require_lab_profile(command_name="vault-watcher-run")
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+
     from app.cli import _resolve_vault_root_path
 
     resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=True)
@@ -215,8 +221,8 @@ def vault_watcher_run(
 @click.command(
     name="vault-watcher-daemon",
     help=(
-        "Continuous vault watcher: polls for changed notes and runs ingest/panel; "
-        "designed for Docker/daemon use."
+        "Legacy/dev-only snapshot daemon (requires PKM_SETTINGS_PROFILE=lab): "
+        "polls for changed notes and runs ingest/panel."
     ),
 )
 @click.option(
@@ -275,6 +281,11 @@ def vault_watcher_daemon(
     max_notes: int,
     force: bool,
 ) -> None:
+    try:
+        require_lab_profile(command_name="vault-watcher-daemon")
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+
     from app.cli import _resolve_vault_root_path
 
     resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=True)

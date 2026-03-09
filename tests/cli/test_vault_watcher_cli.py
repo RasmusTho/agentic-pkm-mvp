@@ -18,6 +18,7 @@ def _write_note(base: Path, rel: str, body: str) -> Path:
 
 def _base_env(tmp_path: Path, actions_path: Path, outbox_path: Path) -> dict[str, str]:
     return {
+        "PKM_SETTINGS_PROFILE": "lab",
         "STORE_BACKEND": "memory",
         "LLM_PROVIDER": "mock",
         "LLM_MOCK_RESPONSE": "Mock response [#1]",
@@ -186,9 +187,26 @@ mappings:
 
 def test_vault_watcher_cli_bad_root_exits_nonzero(tmp_path: Path) -> None:
     runner = CliRunner()
-    result = runner.invoke(cli, ["vault-watcher-run", "--vault-root", str(tmp_path / "missing")])
+    result = runner.invoke(
+        cli,
+        ["vault-watcher-run", "--vault-root", str(tmp_path / "missing")],
+        env={"PKM_SETTINGS_PROFILE": "lab"},
+    )
     assert result.exit_code != 0
     assert "Vault root not found" in result.output or "Invalid value" in result.output
+
+
+def test_vault_watcher_cli_requires_lab_profile(tmp_path: Path) -> None:
+    runner = CliRunner()
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    result = runner.invoke(
+        cli,
+        ["vault-watcher-run", "--vault-root", str(vault)],
+        env={"PKM_SETTINGS_PROFILE": "operator"},
+    )
+    assert result.exit_code != 0
+    assert "requires PKM_SETTINGS_PROFILE=lab" in result.output
 
 
 def test_vault_watcher_cli_dry_run(tmp_path: Path, monkeypatch) -> None:

@@ -106,6 +106,7 @@ mappings:
     monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
 
     env = {
+        "PKM_SETTINGS_PROFILE": "lab",
         "STORE_BACKEND": "memory",
         "LLM_PROVIDER": "mock",
         "LLM_MOCK_RESPONSE": "Mock response [#1]",

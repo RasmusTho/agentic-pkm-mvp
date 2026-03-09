@@ -59,7 +59,7 @@ Ownership here means architectural ownership (which side controls runtime behavi
 | `app/reasoning/*`, `app/langgraph/*` (beyond baseline-enabled paths) | Agentic Lab | Advanced reasoning/graph expansion remains opt-in. |
 | `app/orchestrator/*` advanced modes and V2 tracks | Agentic Lab | Experimental orchestration beyond baseline. |
 | `app/eval/*`, `docs/research/*` | Agentic Lab | Evaluation and research tracks are non-default. |
-| Legacy snapshot watcher flows (`vault-watcher-run`, daemon/runtime-loop paths) | Agentic Lab | Dev-only/historical; not production startup path. |
+| Legacy snapshot watcher flows (`vault-watcher-run`, daemon/runtime-loop paths) | Agentic Lab | Dev-only/historical; require `PKM_SETTINGS_PROFILE=lab`; not production startup path. |
 
 ## Non-goals
 - No rewrite of baseline runtime or event contracts in this step.
