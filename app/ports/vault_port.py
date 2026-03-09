@@ -102,6 +102,14 @@ class DummyVaultPort:
         *,
         expected_mtime_ns: int | None = None,
     ) -> bool:
+        if expected_mtime_ns is not None and path.exists():
+            if path.stat().st_mtime_ns != expected_mtime_ns:
+                return False
+        import yaml
+
+        fm_dump = yaml.safe_dump(frontmatter, sort_keys=False).strip()
+        rendered = f"---\n{fm_dump}\n---\n\n{body}" if body else f"---\n{fm_dump}\n---\n"
+        path.write_text(rendered, encoding="utf-8")
         return True
 
     def rename_note(self, uuid_value: str, new_path: Path) -> None:
