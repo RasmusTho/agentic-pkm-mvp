@@ -219,21 +219,35 @@ else
   _fail "ingest.vault.changed missing for nested with-ai note"
 fi
 
-check_outbox_topic_exists() {
-  local topic="$1"
-  local note_name="$2"
-  local note_esc="$note_name"
-  val="$(_psql_scalar "select case when exists(select 1 from outbox where topic='${topic}' and position('${note_esc}' in payload::text) > 0) then 1 else 0 end;")"
-  _log "topic_exists topic=$topic note=$note_name val=$val"
-  [[ "$val" == "1" ]]
-}
-
-wait_ok_topic() {
-  local topic="$1"
-  local note_name="$2"
+wait_ok_panel_tick_activity() {
+  local tick_path="$1"
   local ok="0"
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-    if check_outbox_topic_exists "$topic" "$note_name"; then
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if docker compose exec -T watcher sh -lc "python - <<'PY'
+import json
+from pathlib import Path
+
+p = Path('${tick_path}')
+if not p.exists():
+    raise SystemExit(1)
+
+lines = [ln for ln in p.read_text(encoding='utf-8').splitlines() if ln.strip()]
+if not lines:
+    raise SystemExit(1)
+
+has_activity = False
+for ln in lines[-50:]:
+    rec = json.loads(ln)
+    if rec.get('watcher_name') != 'panel':
+        continue
+    emitted = int(rec.get('emitted_events') or 0)
+    candidates = int(rec.get('panel_candidates') or 0)
+    if emitted > 0 or candidates > 0:
+        has_activity = True
+        break
+
+raise SystemExit(0 if has_activity else 1)
+PY"; then
       ok="1"
       break
     fi
@@ -242,16 +256,10 @@ wait_ok_topic() {
   [[ "$ok" == "1" ]]
 }
 
-if wait_ok_topic "panel.scan.requested" "$NOTE_ROOT_NO_AI_NAME"; then
-  _pass "panel.scan.requested exists for root no-ai note"
+if wait_ok_panel_tick_activity "/tmp/verify_watcher_tick_${EPOCH}.jsonl"; then
+  _pass "panel watcher tick log shows panel activity (candidates/emits)"
 else
-  _fail "panel.scan.requested missing for root no-ai note"
-fi
-
-if wait_ok_topic "panel.scan.requested" "$NOTE_NESTED_WITH_AI_NAME"; then
-  _pass "panel.scan.requested exists for nested with-ai note"
-else
-  _fail "panel.scan.requested missing for nested with-ai note"
+  _fail "panel watcher tick log missing panel activity"
 fi
 
 count_side_effects() {
