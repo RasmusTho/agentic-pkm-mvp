@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Verifies:
 # - watcher default scope is vault-wide (notes outside inbox are detected)
-# - PanelAgent engages on %%ai and can proactively create a panel for eligible notes
+# - registry watcher emits panel scan + ingest events for eligible notes
 # - no side-effecting action events are emitted without explicit checkboxes
 
 NOW_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -242,16 +242,16 @@ wait_ok_topic() {
   [[ "$ok" == "1" ]]
 }
 
-if wait_ok_topic "panel.intent.created" "$NOTE_ROOT_NO_AI_NAME"; then
-  _pass "panel.intent.created exists for root no-ai note"
+if wait_ok_topic "panel.scan.requested" "$NOTE_ROOT_NO_AI_NAME"; then
+  _pass "panel.scan.requested exists for root no-ai note"
 else
-  _fail "panel.intent.created missing for root no-ai note"
+  _fail "panel.scan.requested missing for root no-ai note"
 fi
 
-if wait_ok_topic "panel.intent.created" "$NOTE_NESTED_WITH_AI_NAME"; then
-  _pass "panel.intent.created exists for nested with-ai note"
+if wait_ok_topic "panel.scan.requested" "$NOTE_NESTED_WITH_AI_NAME"; then
+  _pass "panel.scan.requested exists for nested with-ai note"
 else
-  _fail "panel.intent.created missing for nested with-ai note"
+  _fail "panel.scan.requested missing for nested with-ai note"
 fi
 
 count_side_effects() {
@@ -299,34 +299,17 @@ for p in paths:
     print()
 PY
 
-if NOTE_ROOT_NO_AI_HOST="$NOTE_ROOT_NO_AI_HOST" python - <<'PY' >/dev/null 2>&1
+if NOTE_ROOT_NO_AI_HOST="$NOTE_ROOT_NO_AI_HOST" NOTE_NESTED_WITH_AI_HOST="$NOTE_NESTED_WITH_AI_HOST" python - <<'PY' >/dev/null 2>&1
 import os
-import re
 from pathlib import Path
-txt = Path(os.environ["NOTE_ROOT_NO_AI_HOST"]).read_text(encoding="utf-8")
-assert "<!--ai:assist:start-->" in txt
-assert "<!--ai:suggested_actions:start-->" in txt
-assert len(re.findall(r"^- ❓\s", txt, flags=re.M)) == 1
+for key in ("NOTE_ROOT_NO_AI_HOST", "NOTE_NESTED_WITH_AI_HOST"):
+    txt = Path(os.environ[key]).read_text(encoding="utf-8")
+    assert "marker:" in txt
 PY
 then
-  _pass "root no-ai note got panel proposals + exactly one question (host)"
+  _pass "host notes preserved marker content after watcher run"
 else
-  _fail "root no-ai note missing panel proposals/question (host)"
-fi
-
-if NOTE_NESTED_WITH_AI_HOST="$NOTE_NESTED_WITH_AI_HOST" python - <<'PY' >/dev/null 2>&1
-import os
-import re
-from pathlib import Path
-txt = Path(os.environ["NOTE_NESTED_WITH_AI_HOST"]).read_text(encoding="utf-8")
-assert "<!--ai:assist:start-->" in txt
-assert "<!--ai:suggested_actions:start-->" in txt
-assert len(re.findall(r"^- ❓\s", txt, flags=re.M)) == 1
-PY
-then
-  _pass "nested with-ai note got proposals + exactly one question (host)"
-else
-  _fail "nested with-ai note missing proposals/question (host)"
+  _fail "host notes missing expected marker content after watcher run"
 fi
 
 _log "=== outbox recent rows ==="
