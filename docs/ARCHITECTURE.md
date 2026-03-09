@@ -38,6 +38,16 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 - See `docs/COMPONENTS.md` for the canonical, human- and machine-readable list of active components (stores, agents, embeddings, rerankers, eval stack, observability). Update it when wiring new component entrypoints under `app/components/*`.
 - The outbox/event system uses a common envelope (`event`, `trace_id`, `source`, `timestamp`, `payload`, `meta`) defined in `app/events/schema.py` and enforced by architecture tests; emitters should write via outbox helpers to preserve the contract.
 
+## Boundary Map (Current)
+- Current architecture boundary map (Mermaid source): `docs/diagrams/architecture.mmd`.
+- Terminology in the map:
+  - `Omgivning (utanför systemgräns)` = actors/services outside this system.
+  - `Systemlandskap / driftsberoenden (ej i kodbasen)` = runtime dependencies owned by the system but not part of this repository (for example Postgres, Obsidian, vault filesystem).
+  - `Koddomän (denna kodbas)` = components implemented in this repository.
+- The map also marks:
+  - Internal interface abstractions (`VaultPort`, `KnowledgePort`, store protocols).
+  - Representative internal functions used as runtime seams between modules.
+
 ## SoT lines
 - **SoT v5.5 Reality-MVP baseline (locked)** — watcher auto-run gate + panel action provenance + concurrency/idempotency guardrails on top of the stable vault ingest, hybrid retrieval/ASK, observability/status surfaces, and orchestrator runtime V1.
 - **SoT v4.10 Reality-MVP (foundation snapshot)** — single-user PKM with stable vault ingest, minimal external ingest, hybrid retrieval + ASK with sources/latency, observability/status surfaces (CLI/API/GUI), and orchestrator runtime V1. Retained as the foundation history; superseded by the v5.5 baseline.
@@ -46,6 +56,7 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 ### Runtime watcher choice
 - Registry watcher is the runtime default; start-system flows and Docker compose use `python -m app.cli watcher run` with `configs/watchers.yaml`.
 - Legacy snapshot watchers (`vault-watcher-run`, `vault-watcher-daemon`, runtime-loop) are dev-only and not used in runtime start-system flows.
+- Legacy `scripts/fs_watcher.py` note lifecycle operations route through `VaultPort` (`FilesystemVaultAdapter`) rather than direct sink/pass-through writes.
 - DB outbox is canonical in runtime; JSONL outbox is audit/diagnostic only.
 
 ### Architecture Statement: Multi-agent outer, LangGraph inner

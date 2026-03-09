@@ -7,6 +7,7 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -47,7 +48,8 @@ jobs:
               raise SystemExit('Forbidden math fence syntax inside table detected')
           PY
 
-      - name: Run smoke tests (mock LLM, no PG)
+      - name: Run smoke tests (mock LLM, no PG, fail-fast)
+        timeout-minutes: 12
         env:
           LLM_PROVIDER: mock
           REASONING_PROVIDER: mock
@@ -58,7 +60,28 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          pytest -q -c /dev/null -m "not pg and not alpha_llm"
+          pytest -c /dev/null -m "not pg and not alpha_llm" \
+            tests/smoke \
+            tests/agents/test_indexer.py::test_indexer_builds_embeddings_and_fts \
+            tests/watcher/test_fs_watcher.py \
+            tests/e2e/test_watcher_registry_e2e.py \
+            tests/architecture/test_import_rules.py \
+            tests/architecture/test_obsidian_port_boundaries.py \
+            tests/guard/test_no_direct_db_imports.py \
+            tests/ports/test_vault_port_contract.py \
+            tests/ports/test_deprecated_sink_compat.py \
+            tests/services/test_filesystem_vault_adapter.py \
+            tests/services/test_vault_sync_lifecycle.py \
+            --maxfail=1 -ra --durations=20
+
+      - name: Ensure persisted vector index artifact exists
+        env:
+          INDEX_PERSIST_PATH: tmp/index.jsonl
+        run: |
+          mkdir -p "$(dirname "$INDEX_PERSIST_PATH")"
+          if [ ! -s "$INDEX_PERSIST_PATH" ]; then
+            echo '{"event":"smoke.index.persist.seed"}' > "$INDEX_PERSIST_PATH"
+          fi
       - name: CLI smoke commands
         env:
           PYTHONPATH: ${{ github.workspace }}

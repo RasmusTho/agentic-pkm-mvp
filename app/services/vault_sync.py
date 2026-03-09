@@ -146,11 +146,24 @@ def _update_path_only(
                     (uuid_value, "note", new_path),
                 )
 
-    # Step 2: update file_state last (so it isn’t poisoned by a prior error)
+    # Step 2: write/normalize file_state last (so it isn’t poisoned by a prior error)
     with conn.cursor() as cur:
         cur.execute(
-            "update file_state set path=%s, fm_hash=%s, body_hash=%s, mtime=%s, last_seen=now() where path=%s",
-            (new_path, fm_hash, body_hash, mtime, old_path),
+            """
+            insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)
+            values(%s,%s,%s,%s,%s,now())
+            on conflict (path) do update set
+              uuid = excluded.uuid,
+              fm_hash = excluded.fm_hash,
+              body_hash = excluded.body_hash,
+              mtime = excluded.mtime,
+              last_seen = now()
+            """,
+            (new_path, uuid_value, fm_hash, body_hash, mtime),
+        )
+        cur.execute(
+            "delete from file_state where uuid = %s and path <> %s",
+            (uuid_value, new_path),
         )
 
 
@@ -186,6 +199,34 @@ def update_path(uuid_value: str, new_path: str) -> None:
                 """,
                 (resolved_path, uuid_value, fm_hash, body_hash, mtime),
             )
+            cur.execute(
+                "delete from file_state where uuid = %s and path <> %s",
+                (uuid_value, resolved_path),
+            )
+        conn.commit()
+
+
+def delete_note(path: str, *, uuid_value: str | None = None) -> None:
+    resolved_path = str(Path(path).resolve())
+    with _conn() as conn:
+        ensure_schema(conn)
+        conn.commit()
+        state = _get_state_by_path(conn, resolved_path)
+        effective_uuid = (uuid_value or (state or {}).get("uuid") or "").strip() or None
+        with conn.cursor() as cur:
+            cur.execute("delete from file_state where path = %s", (resolved_path,))
+            if effective_uuid:
+                cur.execute("select count(*) from file_state where uuid = %s", (effective_uuid,))
+                row = cur.fetchone()
+                if isinstance(row, dict):
+                    remaining = int(row.get("count", 0))
+                else:
+                    remaining = row[0] if row else 0
+                if remaining == 0:
+                    try:
+                        cur.execute("update objects set path = null where uuid = %s", (effective_uuid,))
+                    except Exception:
+                        cur.execute("update objects set path = null where id = %s", (effective_uuid,))
         conn.commit()
 
 
@@ -486,4 +527,4 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
     return result
 
 
-__all__ = ["sync_markdown", "handle_rename", "update_path", "upsert_object_from_note", "active_edit"]
+__all__ = ["sync_markdown", "handle_rename", "update_path", "delete_note", "upsert_object_from_note", "active_edit"]

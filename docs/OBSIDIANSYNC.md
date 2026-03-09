@@ -22,6 +22,7 @@ Watcher note: Runtime now uses the registry watcher (`configs/watchers.yaml` + `
 
 ## Rename policy
 - File rename or move only updates `objects.path` and `file_state.path` via the watcher.
+- Rename normalization keeps exactly one active `file_state.path` per UUID.
 - No re-embedding is triggered on rename/move; indexing runs only when the file body changes.
 
 ## Settings hot-reload
@@ -29,8 +30,9 @@ Watcher note: Runtime now uses the registry watcher (`configs/watchers.yaml` + `
 - Invalid YAML (validated against `schemas/system-settings.schema.json`) is logged and does not stop existing policies.
 
 ## Filesystem fallback
-- `scripts/fs_watcher.py` mirrors the same policy as the git watcher and provides offline idempotence.
-- An active file (detected via `settings.policy()`) is not written back; instead a triage message is added to Inbox with an Advanced-URI link.
+- `scripts/fs_watcher.py` mirrors the same policy as the git watcher and now routes vault lifecycle operations through `VaultPort` (`app/ports/vault_port.py`) with `FilesystemVaultAdapter` (`app/ports/filesystem_vault_adapter.py`).
+- UUID-heal writes are guarded with mtime checks to avoid blind overwrite during concurrent edits.
+- Delete propagation removes stale `file_state` rows and clears `objects.path` when the UUID no longer has an active file path.
 
 ## Advanced-URI UX
 - All Inbox items get `obsidian://advanced-uri` links for quick navigation to the affected file.

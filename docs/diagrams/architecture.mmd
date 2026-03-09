@@ -1,27 +1,91 @@
-flowchart TB
-  subgraph Client
-    U[User]
-    OB[Obsidian Vault]
+flowchart LR
+  %% Legend via classes
+  classDef ext fill:#f3f4f6,stroke:#6b7280,color:#111827
+  classDef dep fill:#fff7ed,stroke:#c2410c,color:#7c2d12
+  classDef code fill:#ecfeff,stroke:#0e7490,color:#083344
+  classDef iface fill:#eef2ff,stroke:#4338ca,color:#1e1b4b,stroke-width:2px
+  classDef fn fill:#f0fdf4,stroke:#15803d,color:#14532d,stroke-dasharray: 4 2
+
+  %% 1) Omgivning
+  subgraph EXT["Omgivning (utanför systemgräns)"]
+    U["Användare"]
+    APIClient["API-klienter"]
+    LLMProv["LLM-tjänster"]
   end
 
-  subgraph Backend
-    API[FastAPI API]
-    AG[Agents (LangGraph, PER loop)]
-    STO[ObjectStore]
-    VEC[VectorIndex (pgvector)]
-    REL[(RelationIndex - planned)]
-    DB[(Postgres 16)]
-    OUT[(Outbox table)]
-    WRK[Outbox Worker]
+  %% 2) Systemlandskap (ej i repo)
+  subgraph RUNTIME["Systemlandskap / driftsberoenden (ej i kodbasen)"]
+    VaultFS["Vault-filsystem"]
+    ObsidianApp["Obsidian App/CLI"]
+    PG["Postgres + pgvector"]
+    OutboxStore["Outbox (DB/JSONL)"]
   end
 
-  U --> API
-  OB --> API
-  API --> AG
-  AG --> STO
-  STO --> DB
-  AG --> VEC
-  AG -. planned .-> REL
-  AG --> OUT
-  WRK --> OUT
-  WRK --> AG
+  %% 3) Koddomän
+  subgraph CODE["Koddomän (denna kodbas)"]
+    API["FastAPI"]
+    Watcher["Registry Watcher"]
+    Ingest["Ingest"]
+    Ask["ASK/Retrieval"]
+    IdxConsumer["Indexer Consumer"]
+    PromoConsumer["Promotion Consumer"]
+    VaultSync["vault_sync"]
+
+    subgraph IFACES["Interna interface-abstraktioner"]
+      VaultPort["VaultPort (Protocol)"]
+      KnowledgePort["KnowledgePort (Protocol)"]
+      Stores["ObjectStore / VectorIndex / RelationIndex (Protocols)"]
+    end
+
+    subgraph FUNCS["Interna funktioner (exempel)"]
+      F1["run_registry_forever()"]
+      F2["hybrid_search()"]
+      F3["consume_promotion_intents()"]
+      F4["process_event()"]
+      F5["resolve_knowledge_port()"]
+      F6["upsert_object_from_note()"]
+      F7["ensure_note_uuid()"]
+    end
+
+    FsVaultAdapter["FilesystemVaultAdapter"]
+    FsAdapter["FsVaultAdapter"]
+    ObsidianAdapter["ObsidianCliAdapter"]
+    LLMRouter["LLM Router/Fabric"]
+    PgStores["PG-adapters"]
+    MemStores["Memory-adapters"]
+  end
+
+  %% Flöden
+  U --> VaultFS
+  APIClient --> API
+  API --> Ask
+  Ask --> LLMRouter --> LLMProv
+
+  VaultFS --> Watcher
+  Watcher --> F1
+  Watcher --> F7
+  Watcher --> VaultPort --> FsVaultAdapter --> VaultSync
+  VaultSync --> F6
+  VaultSync --> PG
+
+  API --> F2
+  F2 --> Stores
+
+  Ingest --> Stores
+  Stores --> PgStores --> PG
+  Stores --> MemStores
+
+  Watcher --> OutboxStore
+  Ingest --> OutboxStore
+  OutboxStore --> IdxConsumer --> F4 --> Stores
+  OutboxStore --> PromoConsumer --> F3 --> KnowledgePort
+
+  KnowledgePort --> FsAdapter --> VaultFS
+  KnowledgePort --> ObsidianAdapter --> ObsidianApp
+  F5 --> KnowledgePort
+
+  class U,APIClient,LLMProv ext
+  class VaultFS,ObsidianApp,PG,OutboxStore dep
+  class API,Watcher,Ingest,Ask,IdxConsumer,PromoConsumer,VaultSync,FsVaultAdapter,FsAdapter,ObsidianAdapter,LLMRouter,PgStores,MemStores code
+  class VaultPort,KnowledgePort,Stores iface
+  class F1,F2,F3,F4,F5,F6,F7 fn

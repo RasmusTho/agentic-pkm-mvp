@@ -119,10 +119,13 @@ def test_knowledge_adapters_are_resolved_only_via_service_boundary() -> None:
 def test_vault_note_writes_use_knowledge_port_helpers() -> None:
     guarded_files = {
         REPO_ROOT / "app" / "agents" / "note_hygiene" / "agent.py",
+        REPO_ROOT / "app" / "services" / "vault_sync.py",
+        REPO_ROOT / "app" / "services" / "note_uuid.py",
         REPO_ROOT / "app" / "settings" / "compiler.py",
         REPO_ROOT / "app" / "settings" / "writeback.py",
         REPO_ROOT / "app" / "settings" / "yggdrasil_scaffolder.py",
         REPO_ROOT / "app" / "vault" / "layout.py",
+        REPO_ROOT / "scripts" / "fs_watcher.py",
     }
     offenders: list[str] = []
     for path in guarded_files:
@@ -199,3 +202,26 @@ def test_locator_module_imports_are_centralized() -> None:
         "use app.knowledge.write_ops helpers instead: "
         f"{offenders}"
     )
+
+
+def test_legacy_fs_watcher_has_no_direct_vault_note_writes() -> None:
+    watcher_path = REPO_ROOT / "scripts" / "fs_watcher.py"
+    tree = ast.parse(watcher_path.read_text(encoding="utf-8"))
+    offenders: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        if isinstance(fn, ast.Attribute) and fn.attr == "write_text":
+            offenders.append(node.lineno)
+    assert not offenders, (
+        "Legacy fs watcher must write notes via VaultPort adapter methods, not direct Path.write_text: "
+        f"{offenders}"
+    )
+
+
+def test_legacy_fs_watcher_does_not_depend_on_deprecated_sink_ports() -> None:
+    watcher_path = REPO_ROOT / "scripts" / "fs_watcher.py"
+    imports = _imports(watcher_path)
+    assert "app.ports.sink" not in imports
+    assert "app.ports.pg_sink" not in imports

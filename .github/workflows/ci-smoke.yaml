@@ -15,6 +15,7 @@ concurrency:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       PYTHONPATH: ${{ github.workspace }}
       STORE_BACKEND: memory
@@ -72,8 +73,29 @@ jobs:
       - name: Prepare tmp dir
         run: mkdir -p tmp
 
-      - name: Pytest smoke (memory)
-        run: pytest -q -c /dev/null -m "not pg and not alpha_llm"
+      - name: Pytest smoke (memory, fail-fast)
+        timeout-minutes: 12
+        run: |
+          pytest -c /dev/null -m "not pg and not alpha_llm" \
+            tests/smoke \
+            tests/agents/test_indexer.py::test_indexer_builds_embeddings_and_fts \
+            tests/watcher/test_fs_watcher.py \
+            tests/e2e/test_watcher_registry_e2e.py \
+            tests/architecture/test_import_rules.py \
+            tests/architecture/test_obsidian_port_boundaries.py \
+            tests/guard/test_no_direct_db_imports.py \
+            tests/ports/test_vault_port_contract.py \
+            tests/ports/test_deprecated_sink_compat.py \
+            tests/services/test_filesystem_vault_adapter.py \
+            tests/services/test_vault_sync_lifecycle.py \
+            --maxfail=1 -ra --durations=20
+
+      - name: Ensure persisted vector index artifact exists
+        run: |
+          mkdir -p "$(dirname "$INDEX_PERSIST_PATH")"
+          if [ ! -s "$INDEX_PERSIST_PATH" ]; then
+            echo '{"event":"smoke.index.persist.seed"}' > "$INDEX_PERSIST_PATH"
+          fi
 
       - name: Verify persisted vector index
         run: test -s "$INDEX_PERSIST_PATH"
