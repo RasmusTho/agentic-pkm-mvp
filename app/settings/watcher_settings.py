@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 import yaml
 
@@ -13,7 +13,8 @@ DEFAULT_INDEX_OUTBOX = Path("tmp/index-outbox.jsonl")
 DEFAULT_WATCHER_TICK_LOG = Path("tmp/watcher_tick.jsonl")
 DEFAULT_ALLOWED_ACTIONS = ("promote.evergreen",)
 DEFAULT_AUTO_EXEC_ENV = "WATCHER_AUTO_EXEC"
-DEFAULT_AUTO_EXEC_DEFAULT = False
+DEFAULT_AUTO_EXEC_DEFAULT = True
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 def _resolve_vault_root(vault_root: Path | None = None) -> Path:
@@ -124,3 +125,16 @@ def load_watcher_settings(vault_root: Path | None = None) -> WatcherSettings:
 def invalid_allowed_actions(settings: WatcherSettings, valid_actions: Iterable[str]) -> list[str]:
     valid_set = set(valid_actions)
     return [action for action in settings.allowed_actions if action not in valid_set]
+
+
+def resolve_auto_exec_enabled(
+    *,
+    vault_root: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    settings = load_watcher_settings(vault_root)
+    env_map = os.environ if env is None else env
+    raw = env_map.get(settings.auto_exec_env)
+    if raw is None:
+        return settings.auto_exec_default
+    return str(raw).strip().lower() in _TRUE_VALUES

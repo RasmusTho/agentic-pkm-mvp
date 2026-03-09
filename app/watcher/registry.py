@@ -23,6 +23,7 @@ from app.outbox.events import get_index_outbox_path
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import write_outbox_event
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
+from app.settings.watcher_settings import resolve_auto_exec_enabled
 from app.vault.layout import load_layout
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
 from app.watcher.state import WatcherState
@@ -544,9 +545,8 @@ def _as_float(value: str | None, *, fallback: float) -> float:
         return fallback
 
 
-def _auto_exec_enabled() -> bool:
-    raw = os.getenv("WATCHER_AUTO_EXEC", "0")
-    return str(raw).strip().lower() in _TRUE_VALUES
+def _auto_exec_enabled(vault_root: Path) -> bool:
+    return resolve_auto_exec_enabled(vault_root=vault_root)
 
 
 def _db_outbox_required() -> bool:
@@ -820,7 +820,7 @@ def _run_spec_tick(
             else:
                 summary["panel_skipped_policy"] = int(summary.get("panel_skipped_policy", 0)) + 1
                 continue
-            if not _auto_exec_enabled():
+            if not _auto_exec_enabled(cfg.vault_path):
                 summary["panel_skipped_auto_exec"] = int(summary.get("panel_skipped_auto_exec", 0)) + 1
                 continue
         current_mtime = mtime

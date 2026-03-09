@@ -3,7 +3,7 @@ State: SoT v5.5 baseline (descriptive). This is a reference inventory; if any ro
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
 - DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
-- Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
+- Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout is opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
 # Runtime Inventory
@@ -30,7 +30,7 @@ Reference inventory for configuration, dependencies, and operational contracts. 
 | `DATABASE_URL` / `DB_DSN` | `app/services/outbox.py`, runtime | (none) | DB connection string (required when DB outbox is enabled/required). |
 | `STORE_BACKEND` | watcher/runtime (`app/watcher/registry.py`) | `memory` | Controls some watcher gating/requirements. |
 | `WATCHER_SCOPE_GLOB` | `app/watcher/registry.py` | `<inbox>/**` | Restricts watcher scanning scope. |
-| `WATCHER_AUTO_EXEC` | `app/watcher/registry.py` | `0` | Auto-exec kill switch (watcher safe automation). |
+| `WATCHER_AUTO_EXEC` | `app/watcher/registry.py` | `1` | Auto-exec mode switch (`0` keeps emit-only mode). |
 | `WATCHER_REQUIRE_DB_OUTBOX` | `app/watcher/registry.py` | `0` | When true, watcher refuses to run without DB outbox env present. |
 | `WATCHER_RATE_LIMIT_PER_MIN` | `app/watcher/registry.py` | `30` | Rate limit for events emitted per minute. |
 | `WATCHER_DEBOUNCE_MS` | `app/watcher/registry.py` | `1500` | Debounce window before scanning again. |
