@@ -78,6 +78,7 @@ def test_registry_panel_policy_skips_never_and_counts_candidates(
     _write_config(config_path)
 
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "📥 Inbox")
@@ -130,6 +131,7 @@ def test_registry_panel_auto_exec_disabled_skips_mutations(
     _write_config(config_path)
 
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "📥 Inbox")
@@ -172,6 +174,7 @@ def test_registry_panel_auto_exec_defaults_enabled_when_unset(
     _write_config(config_path)
 
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "📥 Inbox")
@@ -212,6 +215,7 @@ def test_registry_panel_settings_default_false_disables_when_env_unset(
     _write_config(config_path)
 
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "📥 Inbox")

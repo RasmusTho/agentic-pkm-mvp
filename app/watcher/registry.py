@@ -850,8 +850,10 @@ def _run_spec_tick(
     rate_limited_in_tick = 0
 
     action_mappings: Mapping[str, PanelActionMapping] = {}
+    panel_auto_exec_enabled = False
     if spec.emit_event == "panel.scan.requested":
         action_mappings = load_panel_action_mappings()
+        panel_auto_exec_enabled = _auto_exec_enabled(cfg.vault_path)
 
     for rel, mtime, digest in changed_entries:
         last_seen = state.last_seen(str(rel))
@@ -872,7 +874,7 @@ def _run_spec_tick(
             else:
                 summary["panel_skipped_policy"] = int(summary.get("panel_skipped_policy", 0)) + 1
                 continue
-            if not _auto_exec_enabled(cfg.vault_path):
+            if not panel_auto_exec_enabled:
                 summary["panel_skipped_auto_exec"] = int(summary.get("panel_skipped_auto_exec", 0)) + 1
                 continue
         current_mtime = mtime
