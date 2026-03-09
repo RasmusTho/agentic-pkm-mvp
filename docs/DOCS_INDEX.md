@@ -100,6 +100,7 @@ Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foun
 | docs/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
 | docs/ALIGNMENT.md | Alignment guide | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
 | docs/SETTINGS.md | Settings | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Settings compiler + registries documented; some areas are forward-looking. |
+| docs/SETTINGS_TIERING.md | Settings tiering design + migration map | Aligned (forward line v5.x) | 2026-03-09 | Defines Operator-facing vs Dev/Lab-only settings inventory and Step 4 enforcement targets. |
 | docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Implemented for key routers (API key + SlowAPI); doc lists remaining wiring gaps. |
 | docs/ingest.md | Ingest (historical/current) | Legacy (archived) | 2026-02-05 | Historical reference; prefer HUMAN-FLOWS/OPERATIONS for current ingest. |
 | docs/OBSIDIANSYNC.md | Obsidian sync | Aligned (forward line v5.x) | 2026-03-08 | Registry watcher runtime + DB outbox canonical queue; documents `app/knowledge/write_ops.py` as shared Obsidian boundary helper. |

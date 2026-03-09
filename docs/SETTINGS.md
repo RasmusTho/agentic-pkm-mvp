@@ -23,6 +23,8 @@ Compiler:
 
 Runtime settings cover the panel action catalog and watcher policy; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli settings-validate` / `python -m app.cli settings-explain`.
 
+Settings tiering design (operator-facing vs dev/lab-only), inventory, and migration targets live in `docs/SETTINGS_TIERING.md`.
+
 ## Repo settings artifacts (non-compiled)
 
 Some settings live as **repository artifacts** because they are:
