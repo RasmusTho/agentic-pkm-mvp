@@ -18,6 +18,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 ## Baseline Definition (SoT v5.5)
 - Runtime watcher: registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`) is the default; legacy snapshot watchers are dev-only.
 - Runtime default: `scripts/start_full_system.sh` sets `WATCHER_AUTO_EXEC=1` unless explicitly set by the operator; set `WATCHER_AUTO_EXEC=0` to run watchers in emit-only mode. Once armed, any note with an AI panel fence is treated as a candidate and actions are filtered through the allowlisted `watcher_settings.allowed_actions`, while the only per-note opt-out is `ai_panel_auto_run: never` (nested form accepted) and manual CLI panel runs remain available.
+- Settings tiering (watcher controls): runtime defaults to `PKM_SETTINGS_PROFILE=operator`; dev/lab-only watcher tuning env vars are applied only when `PKM_SETTINGS_PROFILE=lab`.
 - DB outbox is canonical in runtime; JSONL (`INDEX_OUTBOX_PATH`) is audit only and should not be used as the worker queue.
 - Required contracts: event compatibility/outbox envelope (`docs/EVENTS.md`), trust semantics, config-as-product, and PanelAgent wiring (`docs/PANEL_AGENT.md` + `docs/settings/panel-actions.md`).
 - Minimal concurrency guarantees: DedupTaskQueue + event_id dedup guard watcher runs, optimistic writes protect note updates, and the promotion consumer uses an EventDedupStore to skip duplicate intents (`docs/CONCURRENCY.md`, `app/promotion/consumer.py`).

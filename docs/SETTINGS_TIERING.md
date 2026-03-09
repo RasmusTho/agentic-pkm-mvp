@@ -30,6 +30,7 @@ Criteria:
 - compatibility shims and non-production paths.
 
 Rule target (for Step 4): normal runtime reads operator-facing settings only, unless lab mode is explicitly enabled.
+Step 4 enforcement profile switch: `PKM_SETTINGS_PROFILE=operator|lab` (default `operator`).
 
 ## Inventory (Current Settings)
 This table is scoped to high-impact runtime controls used by startup/watcher/worker/ASK flows.
@@ -41,6 +42,7 @@ This table is scoped to high-impact runtime controls used by startup/watcher/wor
 | `WATCHER_AUTO_EXEC` | env + `vault/@Settings/watchers.md` | Operator-facing | Core operator mode switch (`1` default, `0` emit-only). |
 | `WATCHER_SCOPE_GLOB` | env / watcher config | Operator-facing | Human-meaningful runtime scope control. |
 | `watcher_settings.allowed_actions` | `vault/@Settings/watchers.md` | Operator-facing | Human-meaningful action safety policy. |
+| `PKM_SETTINGS_PROFILE` | env | Operator-facing | Explicit runtime profile switch (`operator` default, `lab` opt-in). |
 | `LLM_PROVIDER` / model endpoints (`OLLAMA_URL`, etc.) | env + model settings | Operator-facing | Chooses runtime inference backend used by ASK/panel flows. |
 | `PANEL_PROACTIVE_ASSIST` | env | Operator-facing | Directly changes panel assist behavior seen by the operator. |
 | `INDEX_OUTBOX_PATH` | env | Dev/Lab-only | JSONL audit/diagnostic path; non-canonical queue. |
@@ -62,6 +64,7 @@ This table is scoped to high-impact runtime controls used by startup/watcher/wor
 
 ## Enforcement Design (Step 4 Acceptance Targets)
 - Add a runtime mode gate with explicit profile:
+  - env: `PKM_SETTINGS_PROFILE`
   - default: `operator`
   - opt-in: `lab`
 - In `operator` mode:

@@ -24,6 +24,7 @@ Compiler:
 Runtime settings cover the panel action catalog and watcher policy; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli settings-validate` / `python -m app.cli settings-explain`.
 
 Settings tiering design (operator-facing vs dev/lab-only), inventory, and migration targets live in `docs/SETTINGS_TIERING.md`.
+Runtime profile switch for tier enforcement: `PKM_SETTINGS_PROFILE=operator|lab` (default `operator`).
 
 ## Repo settings artifacts (non-compiled)
 

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.index.outbox import DEFAULT_OUTBOX_PATH
+from app.settings.tiering import resolve_dev_lab_env_typed
 from app.watcher.heartbeat import DEFAULT_HEARTBEAT_PATH, resolve_heartbeat_path
 
 
@@ -34,6 +36,14 @@ def _as_float(value: str | None, *, fallback: float) -> float:
         return float(value) if value is not None else fallback
     except Exception:
         return fallback
+
+
+def _parse_int_factory(*, fallback: int) -> Callable[[str], int]:
+    return lambda raw: _as_int(raw, fallback=fallback)
+
+
+def _parse_float_factory(*, fallback: float) -> Callable[[str], float]:
+    return lambda raw: _as_float(raw, fallback=fallback)
 
 
 def _default_scope_glob(vault_root: Path) -> str:
@@ -80,14 +90,34 @@ class WatcherConfig:
             scope_source,
         )
 
-        debounce_ms = _as_int(os.getenv("WATCHER_DEBOUNCE_MS"), fallback=1500)
-        rate_limit_per_min = _as_int(os.getenv("WATCHER_RATE_LIMIT_PER_MIN"), fallback=30)
-        backoff_seconds = _as_int(os.getenv("WATCHER_BACKOFF_SECONDS"), fallback=10)
+        debounce_ms = resolve_dev_lab_env_typed(
+            "WATCHER_DEBOUNCE_MS",
+            default="1500",
+            parser=_parse_int_factory(fallback=1500),
+            logger=logger,
+        )
+        rate_limit_per_min = resolve_dev_lab_env_typed(
+            "WATCHER_RATE_LIMIT_PER_MIN",
+            default="30",
+            parser=_parse_int_factory(fallback=30),
+            logger=logger,
+        )
+        backoff_seconds = resolve_dev_lab_env_typed(
+            "WATCHER_BACKOFF_SECONDS",
+            default="10",
+            parser=_parse_int_factory(fallback=10),
+            logger=logger,
+        )
         outbox_env = os.getenv("INDEX_OUTBOX_PATH") or str(DEFAULT_OUTBOX_PATH)
         state_path = Path(os.getenv("WATCHER_STATE_PATH", "tmp/watcher_state.json")).expanduser()
         stop_file = Path(os.getenv("WATCHER_STOP_FILE", "tmp/WATCHER_STOP")).expanduser()
         heartbeat_path = resolve_heartbeat_path()
-        tick_sleep_seconds = _as_float(os.getenv("WATCHER_TICK_SLEEP_SECONDS"), fallback=1.0)
+        tick_sleep_seconds = resolve_dev_lab_env_typed(
+            "WATCHER_TICK_SLEEP_SECONDS",
+            default="1.0",
+            parser=_parse_float_factory(fallback=1.0),
+            logger=logger,
+        )
         tick_log_env = os.getenv("WATCHER_TICK_LOG_PATH")
         tick_log_path = Path(tick_log_env) if tick_log_env else Path("/app/tmp/watcher_tick.jsonl")
         max_scanned_files_per_tick = _as_int(os.getenv("WATCHER_MAX_SCANNED_FILES_PER_TICK"), fallback=500)

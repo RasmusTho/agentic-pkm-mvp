@@ -26,6 +26,7 @@ def _base_env(tmp_path: Path, *, tick_sleep: str, monkeypatch: pytest.MonkeyPatc
     vault_path = tmp_path / "vault"
     vault_path.mkdir()
 
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_path))
     monkeypatch.setenv("WATCHER_TICK_SLEEP_SECONDS", tick_sleep)

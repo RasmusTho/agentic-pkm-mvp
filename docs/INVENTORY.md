@@ -29,6 +29,7 @@ Reference inventory for configuration, dependencies, and operational contracts. 
 | `INDEX_OUTBOX_PATH` | watcher/cli (`app/outbox/events.py`, `app/index/outbox.py`) | `tmp/index-outbox.jsonl` | JSONL audit log (non-canonical); watcher may append for diagnostics. |
 | `DATABASE_URL` / `DB_DSN` | `app/services/outbox.py`, runtime | (none) | DB connection string (required when DB outbox is enabled/required). |
 | `STORE_BACKEND` | watcher/runtime (`app/watcher/registry.py`) | `memory` | Controls some watcher gating/requirements. |
+| `PKM_SETTINGS_PROFILE` | settings tier gate (`app/settings/tiering.py`) | `operator` | Settings tier enforcement profile (`operator` default, `lab` for dev/lab-only knobs). |
 | `WATCHER_SCOPE_GLOB` | `app/watcher/registry.py` | `<inbox>/**` | Restricts watcher scanning scope. |
 | `WATCHER_AUTO_EXEC` | `app/watcher/registry.py` | `1` | Auto-exec mode switch (`0` keeps emit-only mode). |
 | `WATCHER_REQUIRE_DB_OUTBOX` | `app/watcher/registry.py` | `0` | When true, watcher refuses to run without DB outbox env present. |
