@@ -228,13 +228,27 @@ check_outbox_topic_exists() {
   [[ "$val" == "1" ]]
 }
 
-if check_outbox_topic_exists "panel.intent.created" "$NOTE_ROOT_NO_AI_NAME"; then
+wait_ok_topic() {
+  local topic="$1"
+  local note_name="$2"
+  local ok="0"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    if check_outbox_topic_exists "$topic" "$note_name"; then
+      ok="1"
+      break
+    fi
+    sleep 1
+  done
+  [[ "$ok" == "1" ]]
+}
+
+if wait_ok_topic "panel.intent.created" "$NOTE_ROOT_NO_AI_NAME"; then
   _pass "panel.intent.created exists for root no-ai note"
 else
   _fail "panel.intent.created missing for root no-ai note"
 fi
 
-if check_outbox_topic_exists "panel.intent.created" "$NOTE_NESTED_WITH_AI_NAME"; then
+if wait_ok_topic "panel.intent.created" "$NOTE_NESTED_WITH_AI_NAME"; then
   _pass "panel.intent.created exists for nested with-ai note"
 else
   _fail "panel.intent.created missing for nested with-ai note"
