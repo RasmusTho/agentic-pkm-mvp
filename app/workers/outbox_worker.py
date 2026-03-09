@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from app.events.types import INGEST_OBJECT_CREATED, INGEST_VAULT_CHANGED, PROMOTE_INTENT_CREATED
+from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, PROMOTE_INTENT_CREATED
 from app.observability.tracer import start_span
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
 from app.services.indexer import handle_ingest_object_created
@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WorkerIngestSummary:
     ingested: int
+
+
+def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
+    # Explicit no-op cleanup hook for delete events. Downstream index cleanup can
+    # be added here later without changing worker dispatch contracts.
+    logger.info(
+        "handled ingest delete event uuid=%s path=%s deleted=%s",
+        payload.get("uuid"),
+        payload.get("path"),
+        payload.get("deleted"),
+    )
 
 
 def _ensure_logging_configured() -> None:
@@ -292,6 +303,8 @@ def run(
                             handle_ingest_object_created(payload)
                         elif topic == INGEST_VAULT_CHANGED:
                             handle_ingest_vault_changed(payload)
+                        elif topic == INGEST_OBJECT_DELETED:
+                            handle_ingest_object_deleted(payload)
                         elif topic == PROMOTE_INTENT_CREATED:
                             from app.promotion.consumer import consume_promotion_intent_payload
 
@@ -300,6 +313,8 @@ def run(
                                 trace_id=trace_id,
                                 event_id=event_id,
                             )
+                        else:
+                            logger.debug("worker skipping unsupported topic=%s trace_id=%s", topic, trace_id)
                     except Exception:
                         logger.exception(
                             "worker handler failed topic=%s trace_id=%s note_path=%s",

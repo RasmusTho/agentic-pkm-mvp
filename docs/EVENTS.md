@@ -52,6 +52,16 @@ Payload (minimum contract):
 
 This record must not include an embedding vector.
 
+### `ingest.object.deleted`
+
+Emitted when a vault note path is removed from `file_state` and deletion is confirmed in the sync layer.
+
+Payload (minimum contract):
+- `deleted` (`bool`, must be `true`)
+- `path` (`string`, resolved note path)
+- `uuid` (`string`, when known)
+- optional attribution fields such as `reason` / `source`
+
 ### `index.embedding.created`
 
 Emitted after the indexer computes and upserts an embedding.

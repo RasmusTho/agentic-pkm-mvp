@@ -13,7 +13,7 @@ import yaml
 from app.db import conn_rw, ensure_schema
 
 from app.events.models import new_trace_id
-from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_METADATA, INGEST_OBJECT_UPDATED
+from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_OBJECT_METADATA, INGEST_OBJECT_UPDATED
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.write_guard import DEFAULT_WRITE_GUARD
 from app.services.inbox import append_change, append_conflict
@@ -208,6 +208,8 @@ def update_path(uuid_value: str, new_path: str) -> None:
 
 def delete_note(path: str, *, uuid_value: str | None = None) -> None:
     resolved_path = str(Path(path).resolve())
+    deleted = False
+    delete_payload: dict[str, Any] | None = None
     with _conn() as conn:
         ensure_schema(conn)
         conn.commit()
@@ -215,6 +217,7 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> None:
         effective_uuid = (uuid_value or (state or {}).get("uuid") or "").strip() or None
         with conn.cursor() as cur:
             cur.execute("delete from file_state where path = %s", (resolved_path,))
+            deleted = (cur.rowcount or 0) > 0
             if effective_uuid:
                 cur.execute("select count(*) from file_state where uuid = %s", (effective_uuid,))
                 row = cur.fetchone()
@@ -227,7 +230,18 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> None:
                         cur.execute("update objects set path = null where uuid = %s", (effective_uuid,))
                     except Exception:
                         cur.execute("update objects set path = null where id = %s", (effective_uuid,))
+            if deleted:
+                delete_payload = {
+                    "path": resolved_path,
+                    "deleted": True,
+                    "reason": "vault_note_deleted",
+                    "source": "vault_sync.delete_note",
+                }
+                if effective_uuid:
+                    delete_payload["uuid"] = effective_uuid
         conn.commit()
+    if deleted and delete_payload is not None:
+        _enqueue(INGEST_OBJECT_DELETED, delete_payload)
 
 
 def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, fm_changed: bool, body_changed: bool) -> None:

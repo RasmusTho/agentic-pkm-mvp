@@ -137,8 +137,40 @@ def test_delete_note_clears_file_state_and_object_path(monkeypatch) -> None:
     }
     monkeypatch.setattr(vault_sync, "_conn", lambda: conn)
     monkeypatch.setattr(vault_sync, "ensure_schema", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(vault_sync, "insert_object_and_outbox", lambda *args, **kwargs: None)
 
     vault_sync.delete_note("/vault/note.md", uuid_value="u2")
 
     assert "/vault/note.md" not in conn.file_state
     assert conn.objects_path["u2"] is None
+
+
+def test_delete_note_emits_outbox_event_on_real_delete(monkeypatch) -> None:
+    conn = _FakeConn()
+    conn.objects_path["u3"] = "/vault/gone.md"
+    conn.file_state["/vault/gone.md"] = {
+        "path": "/vault/gone.md",
+        "uuid": "u3",
+        "fm_hash": "x",
+        "body_hash": "y",
+        "mtime": datetime.now(timezone.utc),
+    }
+    emitted: list[tuple[dict[str, object], str, str | None]] = []
+
+    monkeypatch.setattr(vault_sync, "_conn", lambda: conn)
+    monkeypatch.setattr(vault_sync, "ensure_schema", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        vault_sync,
+        "insert_object_and_outbox",
+        lambda payload, topic, trace_id, **kwargs: emitted.append((payload, topic, trace_id)),
+    )
+
+    vault_sync.delete_note("/vault/gone.md", uuid_value="u3")
+
+    assert emitted
+    payload, topic, trace_id = emitted[-1]
+    assert topic == "ingest.object.deleted"
+    assert trace_id
+    assert payload["uuid"] == "u3"
+    assert payload["path"] == "/vault/gone.md"
+    assert payload["deleted"] is True
