@@ -47,6 +47,24 @@ _run() {
   return "$rc"
 }
 
+_filter_lines() {
+  local pattern="$1"
+  if command -v rg >/dev/null 2>&1; then
+    rg -n "$pattern" || true
+    return
+  fi
+  grep -nE "$pattern" || true
+}
+
+_matches() {
+  local pattern="$1"
+  if command -v rg >/dev/null 2>&1; then
+    rg -q "$pattern"
+    return
+  fi
+  grep -qE "$pattern"
+}
+
 _write_report() {
   {
     echo "=== verify_vaultwide_panel ==="
@@ -131,7 +149,7 @@ else
   _fail "root + nested notes NOT visible in watcher container under /app/vault"
 fi
 
-compose_scope="$(docker compose config 2>/dev/null | rg -n 'WATCHER_SCOPE_GLOB' || true)"
+compose_scope="$(docker compose config 2>/dev/null | _filter_lines 'WATCHER_SCOPE_GLOB')"
 if [[ -n "$compose_scope" ]]; then
   _log "compose_scope_glob_matches:"
   printf "%s\n" "$compose_scope" >>"$LOG_PATH"
@@ -142,7 +160,7 @@ fi
 
 watcher_env="$(docker compose exec -T watcher env 2>/dev/null || true)"
 printf "%s\n" "$watcher_env" | egrep 'WATCHER_VAULT_PATH|WATCHER_SCOPE_GLOB|WATCHER_AUTO_EXEC|PANEL_PROACTIVE_ASSIST|STORE_BACKEND|DATABASE_URL|INDEX_OUTBOX_PATH' | sort >>"$LOG_PATH" 2>&1 || true
-if printf "%s\n" "$watcher_env" | rg -q '^WATCHER_SCOPE_GLOB='; then
+if printf "%s\n" "$watcher_env" | _matches '^WATCHER_SCOPE_GLOB='; then
   _fail "watcher env includes WATCHER_SCOPE_GLOB (should be unset unless operator sets it)"
 else
   _pass "watcher env does not include WATCHER_SCOPE_GLOB (default computed at runtime)"
@@ -150,7 +168,7 @@ fi
 
 stop_out="$(docker compose exec -T watcher sh -lc 'test -f /app/tmp/WATCHER_STOP && echo WATCHER_STOP_PRESENT || true' 2>/dev/null || true)"
 printf "%s\n" "$stop_out" >>"$LOG_PATH" 2>&1 || true
-if printf "%s\n" "$stop_out" | rg -q "WATCHER_STOP_PRESENT"; then
+if printf "%s\n" "$stop_out" | _matches "WATCHER_STOP_PRESENT"; then
   _log "NOTE: WATCHER_STOP present at /app/tmp/WATCHER_STOP (this verifier uses WATCHER_STOP_FILE override for the run)"
   _pass "WATCHER_STOP present in container (ignored for verifier run via WATCHER_STOP_FILE override)"
 else
