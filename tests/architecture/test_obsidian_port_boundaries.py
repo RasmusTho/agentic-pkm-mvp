@@ -199,3 +199,19 @@ def test_locator_module_imports_are_centralized() -> None:
         "use app.knowledge.write_ops helpers instead: "
         f"{offenders}"
     )
+
+
+def test_legacy_fs_watcher_has_no_direct_vault_note_writes() -> None:
+    watcher_path = REPO_ROOT / "scripts" / "fs_watcher.py"
+    tree = ast.parse(watcher_path.read_text(encoding="utf-8"))
+    offenders: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        if isinstance(fn, ast.Attribute) and fn.attr == "write_text":
+            offenders.append(node.lineno)
+    assert not offenders, (
+        "Legacy fs watcher must write notes via VaultPort adapter methods, not direct Path.write_text: "
+        f"{offenders}"
+    )
