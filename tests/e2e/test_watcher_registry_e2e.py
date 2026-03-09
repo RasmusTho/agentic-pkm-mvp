@@ -123,6 +123,7 @@ def test_watcher_registry_uses_env_paths_heals_uuid_and_applies_panel_policy(
     _write_registry_config(config_path)
 
     env = {
+        "PKM_SETTINGS_PROFILE": "lab",
         "STORE_BACKEND": "memory",
         "WATCHER_ENABLE": "1",
         "WATCHER_VAULT_PATH": str(vault_root),
