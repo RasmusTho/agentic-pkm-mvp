@@ -209,6 +209,7 @@ def update_path(uuid_value: str, new_path: str) -> None:
 def delete_note(path: str, *, uuid_value: str | None = None) -> None:
     resolved_path = str(Path(path).resolve())
     deleted = False
+    remaining_for_uuid: int | None = None
     delete_payload: dict[str, Any] | None = None
     with _conn() as conn:
         ensure_schema(conn)
@@ -222,23 +223,22 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> None:
                 cur.execute("select count(*) from file_state where uuid = %s", (effective_uuid,))
                 row = cur.fetchone()
                 if isinstance(row, dict):
-                    remaining = int(row.get("count", 0))
+                    remaining_for_uuid = int(row.get("count", 0))
                 else:
-                    remaining = row[0] if row else 0
-                if remaining == 0:
+                    remaining_for_uuid = row[0] if row else 0
+                if remaining_for_uuid == 0:
                     try:
                         cur.execute("update objects set path = null where uuid = %s", (effective_uuid,))
                     except Exception:
                         cur.execute("update objects set path = null where id = %s", (effective_uuid,))
-            if deleted:
+            if deleted and effective_uuid and remaining_for_uuid == 0:
                 delete_payload = {
                     "path": resolved_path,
                     "deleted": True,
                     "reason": "vault_note_deleted",
                     "source": "vault_sync.delete_note",
                 }
-                if effective_uuid:
-                    delete_payload["uuid"] = effective_uuid
+                delete_payload["uuid"] = effective_uuid
         conn.commit()
     if deleted and delete_payload is not None:
         _enqueue(INGEST_OBJECT_DELETED, delete_payload)

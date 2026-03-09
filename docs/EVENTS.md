@@ -54,12 +54,12 @@ This record must not include an embedding vector.
 
 ### `ingest.object.deleted`
 
-Emitted when a vault note path is removed from `file_state` and deletion is confirmed in the sync layer.
+Emitted when a vault note path is removed from `file_state` **and** the note UUID has no remaining `file_state` references.
 
 Payload (minimum contract):
 - `deleted` (`bool`, must be `true`)
 - `path` (`string`, resolved note path)
-- `uuid` (`string`, when known)
+- `uuid` (`string`)
 - optional attribution fields such as `reason` / `source`
 
 ### `index.embedding.created`
