@@ -251,16 +251,26 @@ require_db_outbox_env() {
   fi
 }
 
-preflight_obsidian_strict() {
+preflight_obsidian_check() {
   obsidian_gate_enabled="false"
   obsidian_gate_ok="not_run"
   obsidian_gate_detail=""
   export OBSIDIAN_GATE_ENABLED="$obsidian_gate_enabled"
   export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
   export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
-  if [ "${STARTUP_ENFORCE_OBSIDIAN:-0}" != "1" ]; then
+
+  local check_enabled="${STARTUP_CHECK_OBSIDIAN:-1}"
+  local enforce_enabled="${STARTUP_ENFORCE_OBSIDIAN:-0}"
+  if [ "$enforce_enabled" = "1" ]; then
+    check_enabled="1"
+    export KNOWLEDGE_PRIMARY_ADAPTER="${KNOWLEDGE_PRIMARY_ADAPTER:-obsidian_cli}"
+    export KNOWLEDGE_FALLBACK_ADAPTER="${KNOWLEDGE_FALLBACK_ADAPTER:-fs_vault}"
+    export KNOWLEDGE_STRICT_STARTUP="${KNOWLEDGE_STRICT_STARTUP:-1}"
+    export KNOWLEDGE_ALLOW_FALLBACK="${KNOWLEDGE_ALLOW_FALLBACK:-0}"
+  fi
+  if [ "$check_enabled" != "1" ]; then
     obsidian_gate_ok="skipped"
-    obsidian_gate_detail="STARTUP_ENFORCE_OBSIDIAN!=1"
+    obsidian_gate_detail="STARTUP_CHECK_OBSIDIAN!=1"
     export OBSIDIAN_GATE_ENABLED="$obsidian_gate_enabled"
     export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
     export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
@@ -274,10 +284,6 @@ preflight_obsidian_strict() {
   export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
   export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
   write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
-  export KNOWLEDGE_PRIMARY_ADAPTER="${KNOWLEDGE_PRIMARY_ADAPTER:-obsidian_cli}"
-  export KNOWLEDGE_FALLBACK_ADAPTER="${KNOWLEDGE_FALLBACK_ADAPTER:-fs_vault}"
-  export KNOWLEDGE_STRICT_STARTUP="${KNOWLEDGE_STRICT_STARTUP:-1}"
-  export KNOWLEDGE_ALLOW_FALLBACK="${KNOWLEDGE_ALLOW_FALLBACK:-0}"
 
   obsidian_gate_json=$(python - <<'PY'
 import json
@@ -304,17 +310,24 @@ PY
   fi
   export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
   write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
-  if [ "$obsidian_ok" != "1" ]; then
+  if [ "$obsidian_ok" != "1" ] && [ "$enforce_enabled" = "1" ]; then
     obsidian_gate_ok="failed"
     obsidian_gate_detail="$obsidian_gate_json"
     export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
     export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
     fail_preflight "runtime mode Obsidian strict gate failed: $obsidian_gate_json"
   fi
-  obsidian_gate_ok="passed"
+  if [ "$obsidian_ok" != "1" ]; then
+    obsidian_gate_ok="warning"
+  else
+    obsidian_gate_ok="passed"
+  fi
   obsidian_gate_detail="$obsidian_gate_json"
   export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
   export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
+  if [ "$obsidian_ok" != "1" ]; then
+    echo "WARNING: Obsidian compatibility check failed (strict gate disabled): $obsidian_gate_json" >&2
+  fi
 }
 
 preflight_runtime() {
@@ -362,8 +375,70 @@ PYLLM
   if [ "${START_WATCHERS:-0}" -eq 1 ] || [ "${START_WORKER:-0}" -eq 1 ]; then
     require_db_outbox_env
   fi
-  preflight_obsidian_strict
+  preflight_obsidian_check
   export LLM_PROVIDER_ENFORCE=1
+}
+
+probe_vault_mount_rw() {
+  local probe_json
+  set +e
+  probe_json=$(run_docker_compose exec -T api python - <<'PY'
+import json
+from pathlib import Path
+
+target = Path("/app/vault/.startup_rw_probe.md")
+payload = {"ok": False, "path": str(target), "step": "write"}
+try:
+    target.write_text("startup probe\n", encoding="utf-8")
+    payload["step"] = "read"
+    _ = target.read_text(encoding="utf-8")
+    payload["step"] = "unlink"
+    target.unlink()
+    payload["ok"] = True
+except Exception as exc:
+    payload["error_type"] = type(exc).__name__
+    payload["error"] = str(exc)
+    payload["errno"] = getattr(exc, "errno", None)
+print(json.dumps(payload, ensure_ascii=False))
+PY
+  )
+  local rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    probe_json="${probe_json:-{\"ok\":false,\"error\":\"probe command failed\",\"rc\":$rc}}"
+  fi
+
+  local probe_ok
+  probe_ok=$(VAULT_RW_PROBE_JSON="$probe_json" python - <<'PY'
+import json
+import os
+try:
+    payload = json.loads(os.environ.get("VAULT_RW_PROBE_JSON", "{}"))
+except Exception:
+    payload = {}
+print("1" if payload.get("ok") else "0")
+PY
+  )
+  if [ "$probe_ok" = "1" ]; then
+    echo "Vault rw probe: ok"
+    return 0
+  fi
+
+  local is_icloud=0
+  case "$vault_host_path" in
+    */Library/Mobile\ Documents/com~apple~CloudDocs/*) is_icloud=1 ;;
+  esac
+
+  if [ "${STARTUP_REQUIRE_VAULT_RW:-0}" = "1" ] || [ "${VERIFY_ACTIVE:-0}" = "1" ]; then
+    fail_preflight "vault rw probe failed: $probe_json"
+  fi
+
+  if [ "$is_icloud" -eq 1 ]; then
+    echo "WARNING: iCloud vault mount is not writable from container: $probe_json" >&2
+    echo "WARNING: ensure LOCAL_UID/LOCAL_GID mapping is active and iCloud files are locally downloaded." >&2
+  else
+    echo "WARNING: vault mount rw probe failed: $probe_json" >&2
+  fi
 }
 
 
@@ -560,6 +635,27 @@ fi
 vault_host_path="$(cd "$vault_host_path" && pwd)"
 export VAULT_ROOT="$vault_host_path"
 
+if [ -z "${VAULT_LAYOUT_NOTE_REL:-}" ]; then
+  layout_count=$(find "$vault_host_path" -mindepth 2 -maxdepth 2 -type f -name "vault.layout.md" 2>/dev/null | wc -l | tr -d '[:space:]')
+  if [ "${layout_count:-0}" -gt 1 ]; then
+    preferred_layout=""
+    if [ -n "${VAULT_SYSTEM_DIR_REL:-}" ] && [ -f "$vault_host_path/${VAULT_SYSTEM_DIR_REL}/vault.layout.md" ]; then
+      preferred_layout="${VAULT_SYSTEM_DIR_REL}/vault.layout.md"
+    else
+      for candidate in "⚙️ System/vault.layout.md" "System/vault.layout.md" "_system/vault.layout.md" "~system/vault.layout.md"; do
+        if [ -f "$vault_host_path/$candidate" ]; then
+          preferred_layout="$candidate"
+          break
+        fi
+      done
+    fi
+    if [ -n "$preferred_layout" ]; then
+      export VAULT_LAYOUT_NOTE_REL="$preferred_layout"
+      echo "Vault layout note: auto-selected '$VAULT_LAYOUT_NOTE_REL' (multiple candidates detected)"
+    fi
+  fi
+fi
+
 runtime_env_path="${RUNTIME_ENV_PATH:-tmp/runtime.env}"
 RUNTIME_ENV_PATH="$runtime_env_path"
 bash scripts/export_runtime_env.sh
@@ -755,7 +851,7 @@ capture_step() {
   printf -v "$key_rc" "%s" "$rc"
   printf -v "$key_out" "%s" "$snippet"
   export "$key_step" "$key_cmd" "$key_rc" "$key_out"
-  write_startup_status 1 ""
+  write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
   printf "%s" "$output"
   return "$rc"
 }
@@ -827,9 +923,17 @@ run_db_probe() {
   local last_error=""
   local ok=0
   local psql_output=""
+  local had_errexit=0
+  case $- in
+    *e*) had_errexit=1 ;;
+  esac
   while [ "$attempt" -le "$max_attempts" ]; do
+    set +e
     psql_output=$(docker exec "$db_cid" env PGPASSWORD="$db_pwd" psql -U "$db_user" -d "$db_name" -c "select current_user, current_database();" 2>&1)
     status=$?
+    if [ "$had_errexit" -eq 1 ]; then
+      set -e
+    fi
     if [ "$status" -eq 0 ]; then
       ok=1
       break
@@ -1030,6 +1134,10 @@ run_and_capture_json() {
   shift
   local output rc json_ok
   local cmd_str="$*"
+  local had_errexit=0
+  case $- in
+    *e*) had_errexit=1 ;;
+  esac
   output=$("$@" 2>&1)
   rc=$?
   export LLM_PROBE_STEP="$step"
@@ -1046,6 +1154,7 @@ run_and_capture_json() {
     echo "INFO: optional check '$step' failed (ignored for fast start)" >&2
   fi
   json_ok=0
+  set +e
   JSON_RAW="$output" python - <<'PYJSON'
 import json, os, sys
 raw = os.environ.get("JSON_RAW", "")
@@ -1055,7 +1164,11 @@ except Exception:
     sys.exit(1)
 sys.exit(0)
 PYJSON
-  if [ "$?" -eq 0 ]; then
+  parse_rc=$?
+  if [ "$had_errexit" -eq 1 ]; then
+    set -e
+  fi
+  if [ "$parse_rc" -eq 0 ]; then
     json_ok=1
   fi
   if [ "$json_ok" -ne 1 ]; then
@@ -1151,6 +1264,9 @@ set_phase "db_probe"
 run_db_probe
 mark_phase_ok "db_probe"
 wait_for_healthz
+set_phase "vault_rw_probe"
+probe_vault_mount_rw
+mark_phase_ok "vault_rw_probe"
 
 set_phase "object_stats"
 store_stats_json=$(run_docker_compose exec -T api python -m app.cli store stats --json || true)
@@ -1175,7 +1291,12 @@ ensure_json_or_fail() {
   local sleep_s="${JSON_PARSE_SLEEP_SECONDS:-1}"
   local last_error=""
   local ok=0
+  local had_errexit=0
+  case $- in
+    *e*) had_errexit=1 ;;
+  esac
   for attempt in $(seq 1 "$attempts"); do
+    set +e
     parse_error=$(JSON_RAW="$raw" python - <<'PY'
 import json
 import os
@@ -1190,6 +1311,9 @@ except Exception as exc:
 PY
     )
     status=$?
+    if [ "$had_errexit" -eq 1 ]; then
+      set -e
+    fi
     if [ "$status" -eq 0 ]; then
       ok=1
       break

@@ -38,6 +38,7 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
+      VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
@@ -74,6 +75,7 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
+      VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
@@ -108,6 +110,7 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
+      VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
@@ -122,7 +125,10 @@ services:
       WATCHER_VAULT_PATH: /app/vault
       WATCHER_HEARTBEAT_PATH: /app/tmp/watcher_heartbeat.json
       WATCHER_STATE_PATH: /app/tmp/watcher_state.json
-      WATCHER_STOP_FILE: /app/tmp/WATCHER_STOP
+      WATCHER_STATE_DIR: ${WATCHER_STATE_DIR:-tmp}
+      WATCHER_STOP_FILE: ${WATCHER_STOP_FILE:-/app/tmp/WATCHER_STOP}
+      WATCHER_SCOPE_GLOB: ${WATCHER_SCOPE_GLOB:-}
+      WATCHER_MAX_SCANNED_FILES_PER_TICK: ${WATCHER_MAX_SCANNED_FILES_PER_TICK:-500}
       INDEX_OUTBOX_PATH: /app/tmp/index-outbox.jsonl
       WORKER_HEARTBEAT_PATH: /app/tmp/worker_heartbeat.json
     depends_on:
