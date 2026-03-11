@@ -45,7 +45,24 @@ def table_count(conn: psycopg.Connection, table_name: str) -> int:
 
 
 def choose_object_table(conn: psycopg.Connection) -> str:
-    if table_exists(conn, "store_objects") and table_count(conn, "store_objects") > 0:
+    if table_exists(conn, "store_objects"):
+        store_count = table_count(conn, "store_objects")
+        objects_exists = table_exists(conn, "objects")
+        objects_count = table_count(conn, "objects") if objects_exists else 0
+        if store_count == 0 and objects_count > 0:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO store_objects (object_id, kind, source_ref, payload, created_at, updated_at)
+                        SELECT id, kind, source_ref, payload, created_at, now()
+                        FROM objects
+                        ON CONFLICT (object_id) DO NOTHING
+                        """
+                    )
+            except Exception:
+                # Best-effort migration for legacy tables; keep runtime read path stable.
+                pass
         return "store_objects"
     return "objects"
 
