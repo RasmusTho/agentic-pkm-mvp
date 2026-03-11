@@ -1,6 +1,7 @@
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.watcher.vault_watcher import VaultWatcher, compute_changes, load_snapshot, run_watcher_tick, save_snapshot
 
@@ -80,3 +81,44 @@ def test_run_watcher_tick_emits_event_when_no_changes(tmp_path: Path, monkeypatc
     assert summary["changed"] == 0
     payloads = [json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert any(ev.get("event") == "watcher.run" for ev in payloads)
+
+
+def test_run_watcher_tick_uses_watcher_settings_default_when_env_unset(tmp_path: Path, monkeypatch) -> None:
+    vault = tmp_path / "vault"
+    inbox = vault / "Inbox"
+    inbox.mkdir(parents=True)
+    (inbox / "n.md").write_text(
+        "---\ntitle: N\n---\n\n%% AI:Start %%\n- [ ] Do thing\n%% AI:End %%\n",
+        encoding="utf-8",
+    )
+    settings_dir = vault / "@Settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    (settings_dir / "watchers.md").write_text(
+        "---\nauto_run:\n  auto_exec_env: WATCHER_AUTO_EXEC\n  auto_exec_default: false\n---\n",
+        encoding="utf-8",
+    )
+    outbox = tmp_path / "events.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.delenv("WATCHER_AUTO_EXEC", raising=False)
+    monkeypatch.setattr(
+        "app.watcher.vault_watcher.run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+    monkeypatch.setattr(
+        "app.watcher.vault_watcher.handle_note_update",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("panel runtime should not run")),
+    )
+
+    summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=vault / ".state.json",
+        skip_panel=False,
+        emit_only=True,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=None,
+    )
+
+    assert summary["panel_candidates"] == 1
+    assert summary["panel_skipped_auto_exec"] == 1

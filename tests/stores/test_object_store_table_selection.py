@@ -1,103 +1,113 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-
-import pytest
+from uuid import uuid4
 
 from app.store.object_store import DomainObject, ObjectStore
 
 
-class FakeCursor:
-    def __init__(self, single=None, multi=None):
-        self.single = single
-        self.multi = multi or []
-        self.last_query = ""
-        self._mode = None
+class FakeCanonicalStore:
+    def __init__(self, record: dict | None = None, rows: list[dict] | None = None):
+        self.record = record
+        self.rows = rows or []
 
-    def __enter__(self):
-        return self
+    def get(self, object_id):
+        return self.record
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        return False
+    def put(self, object_id, *, kind: str, source_ref: str, payload: dict) -> None:
+        self.record = {
+            "object_id": object_id,
+            "kind": kind,
+            "source_ref": source_ref,
+            "payload": payload,
+            "created_at": datetime.now(timezone.utc),
+        }
 
-    def execute(self, query, params=None):
-        self.last_query = str(query)
-        self._mode = "one" if "LIMIT 1" in self.last_query else "all"
+    def list_objects(self, kind: str | None = None, *, limit: int = 100):
+        rows = list(self.rows)
+        if kind is not None:
+            rows = [row for row in rows if row.get("kind") == kind]
+        return rows[:limit]
 
-    def fetchone(self):
-        return self.single if self._mode == "one" else None
-
-    def fetchall(self):
-        return list(self.multi) if self._mode == "all" else []
-
-
-class FakeConn:
-    def __init__(self, cursor: FakeCursor):
-        self.cursor_obj = cursor
-
-    def cursor(self):
-        return self.cursor_obj
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        return False
+    def count_objects(self, kind: str | None = None) -> int:
+        if kind is None:
+            return len(self.rows)
+        return sum(1 for row in self.rows if row.get("kind") == kind)
 
 
-@pytest.fixture(autouse=True)
-def fake_pg(monkeypatch):
-    monkeypatch.setattr("app.store.object_store._pg_available", lambda: True)
-    yield
+def test_get_object_uses_memory_cache(monkeypatch):
+    obj = DomainObject(
+        uuid="mem-1",
+        kind="capture_note",
+        payload={"plane": "vault"},
+        source_ref="vault://Inbox/note.md",
+        created_at=datetime.now(timezone.utc),
+    )
+    from app.store import object_store as legacy
+
+    legacy._MEMORY_STORE.clear()
+    legacy._MEMORY_STORE[obj.uuid] = obj
+    monkeypatch.setattr("app.store.object_store.resolve_store_backend", lambda: "memory")
+
+    got = ObjectStore().get_object("mem-1")
+    assert got is not None
+    assert got.uuid == "mem-1"
 
 
-def _domain_row(object_id: str) -> dict:
-    return {
-        "object_id": object_id,
-        "uuid": object_id,
+def test_get_object_delegates_to_canonical_store(monkeypatch):
+    oid = uuid4()
+    row = {
+        "object_id": oid,
         "kind": "capture_note",
         "payload": {"plane": "vault"},
         "source_ref": "vault://Inbox/note.md",
         "created_at": datetime.now(timezone.utc),
     }
+    monkeypatch.setattr("app.store.object_store.resolve_store_backend", lambda: "pg")
+    monkeypatch.setattr("app.store.object_store.get_object_store", lambda: FakeCanonicalStore(record=row))
 
-
-def test_get_object_prefers_store_objects(monkeypatch):
-    cursor = FakeCursor(single=_domain_row("store-1"))
-    monkeypatch.setattr("app.store.object_store._conn_rw", lambda: FakeConn(cursor))
-    monkeypatch.setattr("app.store.object_store.choose_object_table", lambda conn: "store_objects")
-
-    store = ObjectStore()
-    obj = store.get_object("store-1")
-
+    obj = ObjectStore().get_object(str(oid))
     assert obj is not None
-    assert obj.uuid == "store-1"
-    assert "store_objects" in cursor.last_query
+    assert obj.uuid == str(oid)
+    assert obj.kind == "capture_note"
 
 
-def test_list_objects_prefers_store_objects(monkeypatch):
-    rows = [_domain_row("store-2"), _domain_row("store-3")]
-    cursor = FakeCursor(multi=rows)
-    monkeypatch.setattr("app.store.object_store._conn_rw", lambda: FakeConn(cursor))
-    monkeypatch.setattr("app.store.object_store.choose_object_table", lambda conn: "store_objects")
+def test_list_objects_delegates_to_canonical_store(monkeypatch):
+    rows = [
+        {
+            "object_id": uuid4(),
+            "kind": "capture_note",
+            "payload": {"n": 1},
+            "source_ref": "vault://a.md",
+            "created_at": datetime.now(timezone.utc),
+        },
+        {
+            "object_id": uuid4(),
+            "kind": "capture_note",
+            "payload": {"n": 2},
+            "source_ref": "vault://b.md",
+            "created_at": datetime.now(timezone.utc),
+        },
+    ]
+    monkeypatch.setattr("app.store.object_store.resolve_store_backend", lambda: "pg")
+    monkeypatch.setattr("app.store.object_store.get_object_store", lambda: FakeCanonicalStore(rows=rows))
 
-    store = ObjectStore()
-    listed = store.list_objects(limit=5)
-
+    listed = ObjectStore().list_objects(limit=5)
     assert len(listed) == 2
     assert listed[0].kind == "capture_note"
-    assert "store_objects" in cursor.last_query
 
 
-def test_list_objects_falls_back_to_objects(monkeypatch):
-    rows = [_domain_row("obj-1")]
-    cursor = FakeCursor(multi=rows)
-    monkeypatch.setattr("app.store.object_store._conn_rw", lambda: FakeConn(cursor))
-    monkeypatch.setattr("app.store.object_store.choose_object_table", lambda conn: "objects")
+def test_count_objects_delegates_to_canonical_store(monkeypatch):
+    rows = [
+        {
+            "object_id": uuid4(),
+            "kind": "capture_note",
+            "payload": {},
+            "source_ref": "vault://a.md",
+            "created_at": datetime.now(timezone.utc),
+        }
+    ]
+    monkeypatch.setattr("app.store.object_store.resolve_store_backend", lambda: "pg")
+    monkeypatch.setattr("app.store.object_store.get_object_store", lambda: FakeCanonicalStore(rows=rows))
 
-    store = ObjectStore()
-    listed = store.list_objects()
-
-    assert len(listed) == 1
-    assert listed[0].uuid == "obj-1"
-    assert "objects" in cursor.last_query
+    assert ObjectStore().count_objects() == 1

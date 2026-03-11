@@ -23,6 +23,8 @@ from app.outbox.events import get_index_outbox_path
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import write_outbox_event
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
+from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_value
+from app.settings.watcher_settings import resolve_auto_exec_enabled
 from app.vault.layout import load_layout
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
 from app.watcher.state import WatcherState
@@ -379,24 +381,62 @@ class RegistryConfig:
             scope_source,
             inbox_source,
         )
-        debounce_ms = _as_int(os.getenv("WATCHER_DEBOUNCE_MS"), fallback=1500)
-        rate_limit_per_min = _as_int(os.getenv("WATCHER_RATE_LIMIT_PER_MIN"), fallback=30)
+        debounce_ms = resolve_dev_lab_env_typed(
+            "WATCHER_DEBOUNCE_MS",
+            default="1500",
+            parser=_parse_int_factory(fallback=1500),
+            logger=logger,
+        )
+        rate_limit_per_min = resolve_dev_lab_env_typed(
+            "WATCHER_RATE_LIMIT_PER_MIN",
+            default="30",
+            parser=_parse_int_factory(fallback=30),
+            logger=logger,
+        )
         outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH", get_index_outbox_path()))
         state_dir = Path(os.getenv("WATCHER_STATE_DIR", "tmp")).expanduser()
         heartbeat_path = Path(os.getenv("WATCHER_HEARTBEAT_PATH", resolve_heartbeat_path()))
         summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), fallback=60)
         stop_file = Path(os.getenv("WATCHER_STOP_FILE", "/app/tmp/WATCHER_STOP")).expanduser()
-        tick_sleep_seconds = max(
-            float(os.getenv("WATCHER_TICK_SLEEP_SECONDS", "0.2")),
-            MIN_TICK_SLEEP_SECONDS,
+        tick_sleep_raw = resolve_dev_lab_env_typed(
+            "WATCHER_TICK_SLEEP_SECONDS",
+            default="0.2",
+            parser=_parse_float_factory(fallback=0.2),
+            logger=logger,
         )
+        tick_sleep_seconds = max(tick_sleep_raw, MIN_TICK_SLEEP_SECONDS)
         tick_log_env = os.getenv("WATCHER_TICK_LOG_PATH")
         tick_log_path = Path(tick_log_env) if tick_log_env else Path("/app/tmp/watcher_tick.jsonl")
-        max_scanned_files_per_tick = _as_int(os.getenv("WATCHER_MAX_SCANNED_FILES_PER_TICK"), fallback=500)
-        max_bytes_read_per_tick = _as_int(os.getenv("WATCHER_MAX_BYTES_READ_PER_TICK"), fallback=50_000_000)
-        max_elapsed_ms_per_tick = _as_int(os.getenv("WATCHER_MAX_ELAPSED_MS_PER_TICK"), fallback=2000)
-        max_bad_ticks = _as_int(os.getenv("WATCHER_MAX_BAD_TICKS"), fallback=10)
-        bad_tick_backoff_seconds = _as_float(os.getenv("WATCHER_BAD_TICK_BACKOFF_SECONDS"), fallback=2.0)
+        max_scanned_files_per_tick = resolve_dev_lab_env_typed(
+            "WATCHER_MAX_SCANNED_FILES_PER_TICK",
+            default="500",
+            parser=_parse_int_factory(fallback=500),
+            logger=logger,
+        )
+        max_bytes_read_per_tick = resolve_dev_lab_env_typed(
+            "WATCHER_MAX_BYTES_READ_PER_TICK",
+            default="50000000",
+            parser=_parse_int_factory(fallback=50_000_000),
+            logger=logger,
+        )
+        max_elapsed_ms_per_tick = resolve_dev_lab_env_typed(
+            "WATCHER_MAX_ELAPSED_MS_PER_TICK",
+            default="2000",
+            parser=_parse_int_factory(fallback=2000),
+            logger=logger,
+        )
+        max_bad_ticks = resolve_dev_lab_env_typed(
+            "WATCHER_MAX_BAD_TICKS",
+            default="10",
+            parser=_parse_int_factory(fallback=10),
+            logger=logger,
+        )
+        bad_tick_backoff_seconds = resolve_dev_lab_env_typed(
+            "WATCHER_BAD_TICK_BACKOFF_SECONDS",
+            default="2.0",
+            parser=_parse_float_factory(fallback=2.0),
+            logger=logger,
+        )
 
         for spec in specs:
             spec.scope_glob = scope_glob
@@ -544,13 +584,25 @@ def _as_float(value: str | None, *, fallback: float) -> float:
         return fallback
 
 
-def _auto_exec_enabled() -> bool:
-    raw = os.getenv("WATCHER_AUTO_EXEC", "0")
-    return str(raw).strip().lower() in _TRUE_VALUES
+def _parse_int_factory(*, fallback: int):
+    return lambda raw: _as_int(raw, fallback=fallback)
+
+
+def _parse_float_factory(*, fallback: float):
+    return lambda raw: _as_float(raw, fallback=fallback)
+
+
+def _auto_exec_enabled(vault_root: Path) -> bool:
+    return resolve_auto_exec_enabled(vault_root=vault_root)
 
 
 def _db_outbox_required() -> bool:
-    if _as_bool(os.getenv("WATCHER_REQUIRE_DB_OUTBOX", "0")):
+    require_db = resolve_dev_lab_env_value(
+        "WATCHER_REQUIRE_DB_OUTBOX",
+        default="0",
+        logger=logger,
+    )
+    if _as_bool(require_db):
         return True
     backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
     return backend == "pg"
@@ -798,8 +850,10 @@ def _run_spec_tick(
     rate_limited_in_tick = 0
 
     action_mappings: Mapping[str, PanelActionMapping] = {}
+    panel_auto_exec_enabled = False
     if spec.emit_event == "panel.scan.requested":
         action_mappings = load_panel_action_mappings()
+        panel_auto_exec_enabled = _auto_exec_enabled(cfg.vault_path)
 
     for rel, mtime, digest in changed_entries:
         last_seen = state.last_seen(str(rel))
@@ -820,7 +874,7 @@ def _run_spec_tick(
             else:
                 summary["panel_skipped_policy"] = int(summary.get("panel_skipped_policy", 0)) + 1
                 continue
-            if not _auto_exec_enabled():
+            if not panel_auto_exec_enabled:
                 summary["panel_skipped_auto_exec"] = int(summary.get("panel_skipped_auto_exec", 0)) + 1
                 continue
         current_mtime = mtime

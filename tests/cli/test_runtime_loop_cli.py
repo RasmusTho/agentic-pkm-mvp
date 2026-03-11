@@ -27,6 +27,7 @@ def test_runtime_loop_emits_watcher_event_and_counts(monkeypatch: pytest.MonkeyP
 
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("STORE_BACKEND", "memory")
     runner = CliRunner()
     result = runner.invoke(
@@ -73,6 +74,7 @@ def test_runtime_loop_rejects_directory_outbox(monkeypatch: pytest.MonkeyPatch, 
     outbox_dir = tmp_path / "outbox-dir"
     outbox_dir.mkdir()
 
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("STORE_BACKEND", "memory")
     runner = CliRunner()
     result = runner.invoke(
@@ -102,6 +104,7 @@ def test_runtime_loop_defaults_outbox_path(monkeypatch: pytest.MonkeyPatch, tmp_
     _write_note(vault, "Notes/A.md")
     outbox = tmp_path / "fallback-outbox.jsonl"
 
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
 
@@ -157,6 +160,7 @@ Actions:
     _write_note(vault, "Notes/A.md", note_body)
 
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -175,6 +179,7 @@ Actions:
             "--no-consume-promotions",
         ],
         env={
+            "PKM_SETTINGS_PROFILE": "lab",
             "STORE_BACKEND": "memory",
             "PANEL_ACTIONS_PATH": str(actions_path),
             "INDEX_OUTBOX_PATH": str(outbox),
@@ -187,3 +192,25 @@ Actions:
     events = {rec.get("event") for rec in records}
     assert "panel.action.triggered" in events
     assert "promote.intent.created" in events
+
+
+def test_runtime_loop_requires_lab_profile(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    _write_note(vault, "Notes/A.md")
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "runtime-loop",
+            "--vault-root",
+            str(vault),
+            "--interval",
+            "0",
+            "--dry-run",
+            "--no-run-panels",
+            "--no-consume-promotions",
+        ],
+        env={"PKM_SETTINGS_PROFILE": "operator", "STORE_BACKEND": "memory"},
+    )
+    assert result.exit_code != 0
+    assert "requires PKM_SETTINGS_PROFILE=lab" in result.output

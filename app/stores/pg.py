@@ -222,6 +222,34 @@ class PgObjectStore(ObjectStore):
                 )
                 return cur.fetchall()
 
+    def list_objects(self, kind: str | None = None, *, limit: int = 100) -> Iterable[dict]:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                table = self._active_table(conn)
+                if kind is not None:
+                    stmt = sql.SQL(
+                        """
+                        SELECT object_id, kind, source_ref, payload, created_at
+                        FROM {table}
+                        WHERE kind = %s
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """
+                    ).format(table=sql.Identifier(table))
+                    params = (kind, limit)
+                else:
+                    stmt = sql.SQL(
+                        """
+                        SELECT object_id, kind, source_ref, payload, created_at
+                        FROM {table}
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """
+                    ).format(table=sql.Identifier(table))
+                    params = (limit,)
+                cur.execute(stmt, params)
+                return cur.fetchall()
+
     def count_objects(self, kind: str | None = None) -> int:
         with _connect() as conn:
             with conn.cursor() as cur:
@@ -475,6 +503,5 @@ def inspect_pg_index_state() -> dict:
             else:
                 state["rows_wrong_dim"] = None
     return state
-
 
 

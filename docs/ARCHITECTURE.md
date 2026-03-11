@@ -24,6 +24,7 @@ Fitness functions capture the high-level criteria that must hold true for the ru
 
 Architecture describes how things are wired today; these documents define what must remain stable as implementations evolve:
 
+- `docs/CORE_RUNTIME_AGENTIC_LAB_BOUNDARY.md`
 - `docs/PROJECT_KERNEL.md`
 - `docs/CONCEPTS/LAYERING_MODEL.md`
 - `docs/CONCEPTS/PORTABILITY_CONTRACT.md`
@@ -55,7 +56,9 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 
 ### Runtime watcher choice
 - Registry watcher is the runtime default; start-system flows and Docker compose use `python -m app.cli watcher run` with `configs/watchers.yaml`.
-- Legacy snapshot watchers (`vault-watcher-run`, `vault-watcher-daemon`, runtime-loop) are dev-only and not used in runtime start-system flows.
+- Settings tiering enforcement: watcher dev/lab tuning env vars are ignored in normal runtime (`PKM_SETTINGS_PROFILE=operator`) and require explicit `PKM_SETTINGS_PROFILE=lab`.
+- Legacy snapshot watchers (`vault-watcher-run`, `vault-watcher-daemon`, runtime-loop) are dev-only, require `PKM_SETTINGS_PROFILE=lab`, and are not used in runtime start-system flows.
+- Store object table is canonicalized to `store_objects`; legacy `objects` rows are best-effort backfilled when `store_objects` is empty so runtime reads/writes stay on one table.
 - Legacy `scripts/fs_watcher.py` note lifecycle operations route through `VaultPort` (`FilesystemVaultAdapter`) rather than direct sink/pass-through writes.
 - DB outbox is canonical in runtime; JSONL outbox is audit/diagnostic only.
 
@@ -185,6 +188,7 @@ ObjectStore persists object envelopes and agent decisions; VectorIndex stores ch
 
 ### Event Choreography
 1. `ingest.object.created` records capture acceptance and seeds the PER loop.
+   - `ingest.object.deleted` signals explicit vault-note deletion (path/uuid) so downstream consumers can react without inferring from missing state.
 2. `ingest.object.normalized`, `.classified`, `.chunked`, `.deduped`, `.citation_checked` mark completion of each agent and carry `trace_id` plus payload diff.
 3. `index.embedding.created` signals VectorIndex writes and unlocks downstream consumers (legacy alias: `index.object.embedded`).
 4. `promote.pending` captures Reviewer approval; `promote.done` finalizes PromotionAgent moves and informs subscribers such as search indexing or set sync.

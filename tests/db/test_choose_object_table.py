@@ -84,7 +84,13 @@ def test_choose_object_table_prefers_store_objects():
     assert choose_object_table(conn) == "store_objects"
 
 
-def test_choose_object_table_falls_back_to_objects():
+def test_choose_object_table_prefers_store_objects_even_when_empty():
+    cursor = FakeCursor({"store_objects": True, "objects": True}, {"store_objects": 0, "objects": 2})
+    conn = FakeConnection(cursor)
+    assert choose_object_table(conn) == "store_objects"
+
+
+def test_choose_object_table_falls_back_to_objects_when_store_objects_missing():
     cursor = FakeCursor({"store_objects": False, "objects": True}, {"objects": 2})
     conn = FakeConnection(cursor)
     assert choose_object_table(conn) == "objects"

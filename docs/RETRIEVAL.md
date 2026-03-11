@@ -3,7 +3,7 @@ State: SoT v5.5 baseline (descriptive). This doc describes the current in-proces
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
 - DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
-- Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
+- Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout remains opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
 # Retrieval (Current Reality)

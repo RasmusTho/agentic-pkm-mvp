@@ -23,6 +23,7 @@ Watcher note: Runtime now uses the registry watcher (`configs/watchers.yaml` + `
 ## Rename policy
 - File rename or move only updates `objects.path` and `file_state.path` via the watcher.
 - Rename normalization keeps exactly one active `file_state.path` per UUID.
+- Delete emits explicit `ingest.object.deleted` outbox events only when the deleted path was the UUID’s last `file_state` reference (payload includes `deleted: true`, path, UUID).
 - No re-embedding is triggered on rename/move; indexing runs only when the file body changes.
 
 ## Settings hot-reload

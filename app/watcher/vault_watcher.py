@@ -16,7 +16,7 @@ from app.components.concurrency import DedupTaskQueue, OptimisticWriteGuard, Sys
 from app.ingest import vault_alpha as vault_alpha
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
-from app.settings.watcher_settings import load_watcher_settings
+from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
 from app.store.object_store import ObjectStore
 from app.watcher.events import emit_watcher_run_event
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
@@ -219,9 +219,8 @@ def _build_dedup_key(policy_id: str, rel_path: Path, content_hash: str) -> str:
     return f"watcher:{policy_id}:{rel_path.as_posix()}:{content_hash}"
 
 
-def _auto_exec_enabled() -> bool:
-    raw = os.getenv("WATCHER_AUTO_EXEC", "0")
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+def _auto_exec_enabled(vault_root: Path) -> bool:
+    return resolve_auto_exec_enabled(vault_root=vault_root)
 
 
 def compute_changes(
@@ -373,7 +372,7 @@ def run_watcher_tick(
 
     summary["panel_candidates"] = len(policy_allowed_paths)
 
-    auto_exec_enabled = _auto_exec_enabled()
+    auto_exec_enabled = _auto_exec_enabled(vault_root)
     if not auto_exec_enabled and not skip_panel:
         if policy_allowed_paths:
             summary["panel_skipped_auto_exec"] += len(policy_allowed_paths)

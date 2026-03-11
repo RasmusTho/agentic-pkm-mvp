@@ -96,6 +96,7 @@ def test_watcher_rule_mode_promotes_with_catalog(tmp_path: Path, monkeypatch: py
     snapshot_path = tmp_path / "snapshot.json"
 
     env = {
+        "PKM_SETTINGS_PROFILE": "lab",
         "STORE_BACKEND": "memory",
         "LLM_PROVIDER": "mock",
         "PANEL_ACTIONS_PATH": str(actions_path),
@@ -150,6 +151,7 @@ def test_watcher_llm_mode_promotes_without_exact_label(tmp_path: Path, monkeypat
     )
 
     env = {
+        "PKM_SETTINGS_PROFILE": "lab",
         "STORE_BACKEND": "memory",
         "LLM_PROVIDER": "mock",
         "PANEL_ACTIONS_PATH": str(actions_path),

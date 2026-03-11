@@ -3,6 +3,7 @@
 INGEST_OBJECT_CREATED = "ingest.object.created"
 INGEST_OBJECT_UPDATED = "ingest.object.updated"
 INGEST_OBJECT_METADATA = "ingest.object.metadata"
+INGEST_OBJECT_DELETED = "ingest.object.deleted"
 INGEST_NORMALIZE_DONE = "ingest.normalize.done"
 INGEST_CHUNK_DONE = "ingest.chunk.done"
 INGEST_INDEX_DONE = "ingest.index.done"
@@ -66,6 +67,7 @@ __all__ = [
     "INGEST_OBJECT_CREATED",
     "INGEST_OBJECT_UPDATED",
     "INGEST_OBJECT_METADATA",
+    "INGEST_OBJECT_DELETED",
     "INGEST_NORMALIZE_DONE",
     "INGEST_CHUNK_DONE",
     "INGEST_INDEX_DONE",

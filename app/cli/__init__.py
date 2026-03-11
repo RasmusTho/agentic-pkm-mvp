@@ -60,6 +60,7 @@ from app.obs.log import with_trace_id
 from app.cli.health import run_health
 from app.stores.plan_store import get_plan_store
 from app.settings.compiler import compile_all
+from app.settings.tiering import require_lab_profile
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.llm.trace_inspect import (
     build_sequence_for_trace,
@@ -1269,7 +1270,13 @@ def uat_run_vault_test(
 
 
 
-@cli.command(name="runtime-loop", help="Run watcher→panel→promotion loop once or continuously.")
+@cli.command(
+    name="runtime-loop",
+    help=(
+        "Legacy/dev-only watcher→panel→promotion loop (requires PKM_SETTINGS_PROFILE=lab). "
+        "Use `watcher run` for operator runtime."
+    ),
+)
 @click.option("--vault-root", type=click.Path(path_type=Path), required=True, help="Vault root path.")
 @click.option("--snapshot-path", type=click.Path(path_type=Path), default=None, help="Optional snapshot path for watcher state.")
 @click.option("--interval", type=int, default=0, show_default=True, help="Polling interval seconds; 0 runs only once.")
@@ -1292,6 +1299,11 @@ def runtime_loop(
     consume_promotions: bool,
     outbox_path: Path | None,
 ) -> None:
+    try:
+        require_lab_profile(command_name="runtime-loop")
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+
     resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=False)
     if resolved is None:
         raise click.BadParameter("Vault root could not be resolved.")

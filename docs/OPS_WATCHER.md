@@ -1,7 +1,7 @@
 State: forward line v5.x (registry watcher; Docker-first deployment)
 # Watcher Operations
 
-The runtime watcher is registry-based (config-driven) and runs via `python -m app.cli watcher run`. The legacy `vault-watcher-run`/`vault-watcher-daemon` snapshot watcher remains available for historical workflows, but it is deprecated for runtime/start system usage.
+The runtime watcher is registry-based (config-driven) and runs via `python -m app.cli watcher run`. The legacy `vault-watcher-run`/`vault-watcher-daemon` snapshot watcher is lab-only (`PKM_SETTINGS_PROFILE=lab`) and deprecated for runtime/start system usage.
 
 ## Docker-first deployment
 1) Set `VAULT_ROOT` to your local vault path (quotes allow spaces):
@@ -32,9 +32,9 @@ The runtime watcher is registry-based (config-driven) and runs via `python -m ap
   WATCHER_ENABLE=1 WATCHER_VAULT_PATH="/path/to/vault" python -m app.cli watcher run
   ```
 - Optional safety: `python -m app.cli watcher run --max-ticks 1` for a single scan loop.
-- Legacy snapshot watcher (deprecated for runtime):
+- Legacy snapshot watcher (deprecated for runtime; lab-only):
   ```bash
-  python -m app.cli vault-watcher-run --vault-root "<vault>" --snapshot-path "<state.json>"
+  PKM_SETTINGS_PROFILE=lab python -m app.cli vault-watcher-run --vault-root "<vault>" --snapshot-path "<state.json>"
   ```
 
 ## Key env and defaults

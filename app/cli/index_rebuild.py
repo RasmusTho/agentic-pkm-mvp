@@ -44,94 +44,12 @@ def _extract_text(payload: dict | None) -> str:
     return ""
 
 
-def _serialize_payload(value: Any) -> dict:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except Exception:
-            return {}
-    return {}
-
-
-def _memory_objects(limit: int | None) -> List[legacy_store.DomainObject]:
-    objs = list(legacy_store._MEMORY_STORE.values())
-    if limit is not None:
-        return objs[:limit]
-    return objs
-
-
-def _db_objects(limit: int | None) -> Tuple[List[legacy_store.DomainObject], str]:
-    if not legacy_store._pg_available():
-        return [], "none"
-    conn = legacy_store._db_connect()
-    if conn is None:
-        return [], "none"
-    table = "objects"
-    try:
-        table = legacy_store.choose_object_table(conn)
-    except Exception:
-        table = "objects"
-    if table not in {"objects", "store_objects"}:
-        table = "objects"
-
-    if table == "store_objects":
-        uuid_expr = "object_id"
-        object_id_expr = "object_id"
-    else:
-        uuid_expr = "COALESCE(NULLIF(uuid::text, ''), id::text)"
-        object_id_expr = "id"
-
-    query = f"""
-        SELECT
-            {uuid_expr} AS uuid,
-            {object_id_expr} AS object_id,
-            kind,
-            source_ref,
-            payload,
-            created_at
-        FROM {table}
-        ORDER BY created_at ASC
-    """
-    params: List[Any] = []
-    if limit is not None:
-        query += " LIMIT %s"
-        params.append(limit)
-
-    records: List[legacy_store.DomainObject] = []
-    try:
-        with conn.cursor() as cur:
-            cur.execute(query, tuple(params))
-            columns = [desc.name for desc in cur.description] if cur.description else []
-            rows = cur.fetchall()
-        for row in rows:
-            record = dict(zip(columns, row)) if columns else {}
-            payload = _serialize_payload(record.get("payload"))
-            records.append(
-                legacy_store.DomainObject(
-                    uuid=str(record.get("uuid") or record.get("object_id") or ""),
-                    kind=str(record.get("kind") or "note"),
-                    payload=payload,
-                    source_ref=record.get("source_ref"),
-                    created_at=record.get("created_at"),
-                )
-            )
-    except Exception:
-        return [], "none"
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-    return records, table
-
-
 def _load_objects(limit: int | None) -> Tuple[List[legacy_store.DomainObject], str]:
-    memory_objs = _memory_objects(limit)
-    if memory_objs:
-        return memory_objs, "none"
-    return _db_objects(limit)
+    store = legacy_store.ObjectStore()
+    objects = store.list_objects(limit=limit or 1000000)
+    backend = resolve_store_backend()
+    table = "memory" if backend == "memory" else "store_objects"
+    return objects, table
 
 
 def _maybe_reset_pg_index(index_store, identity: EmbeddingIdentity, *, as_json: bool) -> None:

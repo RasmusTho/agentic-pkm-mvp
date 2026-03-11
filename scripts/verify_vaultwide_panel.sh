@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Verifies:
 # - watcher default scope is vault-wide (notes outside inbox are detected)
-# - PanelAgent engages on %%ai and can proactively create a panel for eligible notes
+# - registry watcher emits panel scan + ingest events for eligible notes
 # - no side-effecting action events are emitted without explicit checkboxes
 
 NOW_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -45,6 +45,24 @@ _run() {
   printf "%s\n" "$out" >>"$LOG_PATH"
   _log "RC=$rc"
   return "$rc"
+}
+
+_filter_lines() {
+  local pattern="$1"
+  if command -v rg >/dev/null 2>&1; then
+    rg -n "$pattern" || true
+    return
+  fi
+  grep -nE "$pattern" || true
+}
+
+_matches() {
+  local pattern="$1"
+  if command -v rg >/dev/null 2>&1; then
+    rg -q "$pattern"
+    return
+  fi
+  grep -qE "$pattern"
 }
 
 _write_report() {
@@ -131,7 +149,7 @@ else
   _fail "root + nested notes NOT visible in watcher container under /app/vault"
 fi
 
-compose_scope="$(docker compose config 2>/dev/null | rg -n 'WATCHER_SCOPE_GLOB' || true)"
+compose_scope="$(docker compose config 2>/dev/null | _filter_lines 'WATCHER_SCOPE_GLOB')"
 if [[ -n "$compose_scope" ]]; then
   _log "compose_scope_glob_matches:"
   printf "%s\n" "$compose_scope" >>"$LOG_PATH"
@@ -142,7 +160,7 @@ fi
 
 watcher_env="$(docker compose exec -T watcher env 2>/dev/null || true)"
 printf "%s\n" "$watcher_env" | egrep 'WATCHER_VAULT_PATH|WATCHER_SCOPE_GLOB|WATCHER_AUTO_EXEC|PANEL_PROACTIVE_ASSIST|STORE_BACKEND|DATABASE_URL|INDEX_OUTBOX_PATH' | sort >>"$LOG_PATH" 2>&1 || true
-if printf "%s\n" "$watcher_env" | rg -q '^WATCHER_SCOPE_GLOB='; then
+if printf "%s\n" "$watcher_env" | _matches '^WATCHER_SCOPE_GLOB='; then
   _fail "watcher env includes WATCHER_SCOPE_GLOB (should be unset unless operator sets it)"
 else
   _pass "watcher env does not include WATCHER_SCOPE_GLOB (default computed at runtime)"
@@ -150,7 +168,7 @@ fi
 
 stop_out="$(docker compose exec -T watcher sh -lc 'test -f /app/tmp/WATCHER_STOP && echo WATCHER_STOP_PRESENT || true' 2>/dev/null || true)"
 printf "%s\n" "$stop_out" >>"$LOG_PATH" 2>&1 || true
-if printf "%s\n" "$stop_out" | rg -q "WATCHER_STOP_PRESENT"; then
+if printf "%s\n" "$stop_out" | _matches "WATCHER_STOP_PRESENT"; then
   _log "NOTE: WATCHER_STOP present at /app/tmp/WATCHER_STOP (this verifier uses WATCHER_STOP_FILE override for the run)"
   _pass "WATCHER_STOP present in container (ignored for verifier run via WATCHER_STOP_FILE override)"
 else
@@ -201,25 +219,47 @@ else
   _fail "ingest.vault.changed missing for nested with-ai note"
 fi
 
-check_outbox_topic_exists() {
-  local topic="$1"
-  local note_name="$2"
-  local note_esc="$note_name"
-  val="$(_psql_scalar "select case when exists(select 1 from outbox where topic='${topic}' and position('${note_esc}' in payload::text) > 0) then 1 else 0 end;")"
-  _log "topic_exists topic=$topic note=$note_name val=$val"
-  [[ "$val" == "1" ]]
+wait_ok_panel_tick_activity() {
+  local tick_path="$1"
+  local ok="0"
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if docker compose exec -T watcher sh -lc "python - <<'PY'
+import json
+from pathlib import Path
+
+p = Path('${tick_path}')
+if not p.exists():
+    raise SystemExit(1)
+
+lines = [ln for ln in p.read_text(encoding='utf-8').splitlines() if ln.strip()]
+if not lines:
+    raise SystemExit(1)
+
+has_activity = False
+for ln in lines[-50:]:
+    rec = json.loads(ln)
+    if rec.get('watcher_name') != 'panel':
+        continue
+    emitted = int(rec.get('emitted_events') or 0)
+    candidates = int(rec.get('panel_candidates') or 0)
+    if emitted > 0 or candidates > 0:
+        has_activity = True
+        break
+
+raise SystemExit(0 if has_activity else 1)
+PY"; then
+      ok="1"
+      break
+    fi
+    sleep 1
+  done
+  [[ "$ok" == "1" ]]
 }
 
-if check_outbox_topic_exists "panel.intent.created" "$NOTE_ROOT_NO_AI_NAME"; then
-  _pass "panel.intent.created exists for root no-ai note"
+if wait_ok_panel_tick_activity "/tmp/verify_watcher_tick_${EPOCH}.jsonl"; then
+  _pass "panel watcher tick log shows panel activity (candidates/emits)"
 else
-  _fail "panel.intent.created missing for root no-ai note"
-fi
-
-if check_outbox_topic_exists "panel.intent.created" "$NOTE_NESTED_WITH_AI_NAME"; then
-  _pass "panel.intent.created exists for nested with-ai note"
-else
-  _fail "panel.intent.created missing for nested with-ai note"
+  _fail "panel watcher tick log missing panel activity"
 fi
 
 count_side_effects() {
@@ -267,34 +307,17 @@ for p in paths:
     print()
 PY
 
-if NOTE_ROOT_NO_AI_HOST="$NOTE_ROOT_NO_AI_HOST" python - <<'PY' >/dev/null 2>&1
+if NOTE_ROOT_NO_AI_HOST="$NOTE_ROOT_NO_AI_HOST" NOTE_NESTED_WITH_AI_HOST="$NOTE_NESTED_WITH_AI_HOST" python - <<'PY' >/dev/null 2>&1
 import os
-import re
 from pathlib import Path
-txt = Path(os.environ["NOTE_ROOT_NO_AI_HOST"]).read_text(encoding="utf-8")
-assert "<!--ai:assist:start-->" in txt
-assert "<!--ai:suggested_actions:start-->" in txt
-assert len(re.findall(r"^- ❓\s", txt, flags=re.M)) == 1
+for key in ("NOTE_ROOT_NO_AI_HOST", "NOTE_NESTED_WITH_AI_HOST"):
+    txt = Path(os.environ[key]).read_text(encoding="utf-8")
+    assert "marker:" in txt
 PY
 then
-  _pass "root no-ai note got panel proposals + exactly one question (host)"
+  _pass "host notes preserved marker content after watcher run"
 else
-  _fail "root no-ai note missing panel proposals/question (host)"
-fi
-
-if NOTE_NESTED_WITH_AI_HOST="$NOTE_NESTED_WITH_AI_HOST" python - <<'PY' >/dev/null 2>&1
-import os
-import re
-from pathlib import Path
-txt = Path(os.environ["NOTE_NESTED_WITH_AI_HOST"]).read_text(encoding="utf-8")
-assert "<!--ai:assist:start-->" in txt
-assert "<!--ai:suggested_actions:start-->" in txt
-assert len(re.findall(r"^- ❓\s", txt, flags=re.M)) == 1
-PY
-then
-  _pass "nested with-ai note got proposals + exactly one question (host)"
-else
-  _fail "nested with-ai note missing proposals/question (host)"
+  _fail "host notes missing expected marker content after watcher run"
 fi
 
 _log "=== outbox recent rows ==="

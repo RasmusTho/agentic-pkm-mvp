@@ -3,7 +3,7 @@ State: SoT v5.5 baseline (descriptive, partial). The CLI evolves quickly; prefer
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
 - DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
-- Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
+- Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout remains opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
 # CLI Reference
@@ -20,8 +20,8 @@ Authoritative discovery:
 | --- | --- |
 | `health` | Local dependency checks (ffmpeg/yt-dlp/outbox/LLM reachability). |
 | `smoke` | Quick repo smoke tests / checks (CI-oriented). |
-| `watcher daemon` | Run the registry watcher daemon (scope, debounce, guardrails). |
-| `runtime-loop` | Run watcher→panel→promotion loop once or continuously (operator entrypoint). |
+| `watcher run` | Run the registry watcher loop (operator runtime path). |
+| `runtime-loop` | Legacy/dev-only snapshot loop (`PKM_SETTINGS_PROFILE=lab` required). |
 | `settings-validate` | Validate settings artifacts and compiled settings. |
 | `settings-explain` | Explain settings provenance / resolution. |
 | `llm check` | Probe LLM/embedding endpoint reachability. |
@@ -30,8 +30,8 @@ Authoritative discovery:
 
 | Command | Human Flow | Description |
 | --- | --- | --- |
-| `python -m app.cli runtime-loop` | Runtime Loop | Watcher tick → panel parse → promotion consumer (opt-in). |
-| `python -m app.cli watcher daemon` | Watcher | Continuous vault scan inside scope with guardrails. |
+| `python -m app.cli watcher run` | Watcher | Continuous registry watcher loop inside scope with guardrails. |
+| `python -m app.cli runtime-loop` | Runtime Loop (legacy) | Legacy snapshot watcher tick → panel parse → promotion consumer (`PKM_SETTINGS_PROFILE=lab`). |
 | `python -m app.cli ask` | ASK | Ask questions via the orchestrator pipeline. |
 
 See `docs/HUMAN-FLOWS.md` for flow semantics and `docs/OPERATIONS.md` for operator runbooks.
@@ -41,11 +41,11 @@ See `docs/HUMAN-FLOWS.md` for flow semantics and `docs/OPERATIONS.md` for operat
 # Health check before a run
 LLM_PROVIDER=mock python -m app.cli health --json
 
-# Run the runtime loop once (operator entrypoint)
-python -m app.cli runtime-loop --once
+# Run operator watcher runtime loop (registry watcher)
+python -m app.cli watcher run --max-ticks 1
 
-# Run watcher daemon (scan + emit)
-python -m app.cli watcher daemon
+# Run legacy runtime loop (dev/lab only)
+PKM_SETTINGS_PROFILE=lab python -m app.cli runtime-loop --interval 0
 
 # Normalize a file and return the object_id (legacy-ish utility; still supported)
 python -m app.cli normalize notes/idea.md --json

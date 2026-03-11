@@ -15,38 +15,6 @@ from app.stores import get_object_store
 _HYBRID_WARMED = False
 
 
-def _load_pg_documents(store, hybrid, seen: set[str]) -> int:
-    try:
-        from app.stores.pg import PgObjectStore, _connect  # type: ignore
-    except Exception:
-        return 0
-
-    if not isinstance(store, PgObjectStore):
-        return 0
-
-    try:
-        with _connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT object_id, payload, source_ref FROM store_objects")
-                rows = cur.fetchall()
-    except Exception:
-        return 0
-
-    docs_added = 0
-    for row in rows or []:
-        payload = row.get("payload") or {}
-        text = payload.get("text") or payload.get("content")
-        if not text:
-            continue
-        doc_id = str(row.get("object_id"))
-        if doc_id in seen:
-            continue
-        hybrid.add_document(doc_id=doc_id, text=str(text), source_ref=row.get("source_ref"), payload=payload)
-        seen.add(doc_id)
-        docs_added += 1
-    return docs_added
-
-
 def _ensure_hybrid_store_loaded() -> None:
     global _HYBRID_WARMED
     hybrid = get_hybrid_store()
@@ -58,28 +26,28 @@ def _ensure_hybrid_store_loaded() -> None:
     docs_added = 0
     seen: set[str] = set()
 
-    # Memory store path
     try:
-        objs = getattr(store, "_objects", {})
-        if isinstance(objs, dict) and objs:
-            for oid, rec in objs.items():
-                payload = rec.get("payload") or {}
-                text = payload.get("text") or payload.get("content")
-                if not text:
-                    continue
-                doc_id = str(oid)
-                hybrid.add_document(
-                    doc_id=doc_id,
-                    text=str(text),
-                    source_ref=rec.get("source_ref"),
-                    payload=payload,
-                )
-                seen.add(doc_id)
-                docs_added += 1
+        records = list(store.list_objects(limit=100000))
     except Exception:
-        pass
+        records = []
 
-    docs_added += _load_pg_documents(store, hybrid, seen)
+    for rec in records:
+        payload = rec.get("payload") or {}
+        text = payload.get("text") or payload.get("content")
+        if not text:
+            continue
+        doc_id = str(rec.get("object_id") or rec.get("id") or payload.get("uuid") or "")
+        if not doc_id or doc_id in seen:
+            continue
+        hybrid.add_document(
+            doc_id=doc_id,
+            text=str(text),
+            source_ref=rec.get("source_ref"),
+            payload=payload,
+        )
+        seen.add(doc_id)
+        docs_added += 1
+
     if docs_added > 0:
         _HYBRID_WARMED = True
 

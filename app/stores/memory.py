@@ -101,6 +101,19 @@ class MemoryObjectStore(ObjectStore):
                 break
         return out
 
+    def list_objects(self, kind: str | None = None, *, limit: int = 100) -> Iterable[dict]:
+        out: list[dict] = []
+        for oid in self._order:
+            rec = self._objects.get(oid)
+            if not rec:
+                continue
+            if kind is not None and rec.get("kind") != kind:
+                continue
+            out.append(rec)
+            if len(out) >= limit:
+                break
+        return out
+
     def count_objects(self, kind: str | None = None) -> int:
         if kind is None:
             return len(self._objects)
@@ -392,4 +405,3 @@ class MemoryRelationIndex(RelationIndex):
                     if entry["dst"] == src:
                         return True
         return False
-

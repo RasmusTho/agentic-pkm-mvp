@@ -3,7 +3,7 @@ State: SoT v5.5 baseline (descriptive). Settings exist both as vault-backed comp
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
 - DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
-- Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
+- Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout remains opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
 # Settings
@@ -22,6 +22,9 @@ Compiler:
 - `python -m app.cli settings compile`
 
 Runtime settings cover the panel action catalog and watcher policy; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli settings-validate` / `python -m app.cli settings-explain`.
+
+Settings tiering design (operator-facing vs dev/lab-only), inventory, and migration targets live in `docs/SETTINGS_TIERING.md`.
+Runtime profile switch for tier enforcement: `PKM_SETTINGS_PROFILE=operator|lab` (default `operator`).
 
 ## Repo settings artifacts (non-compiled)
 
