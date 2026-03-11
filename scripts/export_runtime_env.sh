@@ -41,6 +41,18 @@ if [ -n "${VAULT_LAYOUT_NOTE_REL:-}" ]; then
   printf "%s\n" "VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL}" >> "$runtime_env_path"
 fi
 
+if [ -n "${VAULT_SYSTEM_DIR_REL:-}" ]; then
+  printf "%s\n" "VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL}" >> "$runtime_env_path"
+fi
+
+if [ -n "${VAULT_INBOX_DIR_REL:-}" ]; then
+  printf "%s\n" "VAULT_INBOX_DIR_REL=${VAULT_INBOX_DIR_REL}" >> "$runtime_env_path"
+fi
+
+if [ -n "${VAULT_DESK_DIR_REL:-}" ]; then
+  printf "%s\n" "VAULT_DESK_DIR_REL=${VAULT_DESK_DIR_REL}" >> "$runtime_env_path"
+fi
+
 if [ -n "${WATCHER_STATE_DIR:-}" ]; then
   printf "%s\n" "WATCHER_STATE_DIR=${WATCHER_STATE_DIR}" >> "$runtime_env_path"
 fi

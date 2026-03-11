@@ -12,12 +12,15 @@ def _load_compose(path: str) -> dict:
 def test_compose_watcher_worker_have_db_outbox_env() -> None:
     compose = _load_compose("docker-compose.yaml")
     services = compose.get("services") or {}
-    for service_name in ("watcher", "worker"):
+    for service_name in ("api", "watcher", "worker"):
         service = services.get(service_name) or {}
         env = service.get("environment") or {}
         assert env.get("DATABASE_URL")
         assert env.get("DB_DSN")
         assert env.get("STORE_BACKEND") == "pg"
+        assert "VAULT_SYSTEM_DIR_REL" in env
+        assert "VAULT_INBOX_DIR_REL" in env
+        assert "VAULT_DESK_DIR_REL" in env
 
 
 def test_compose_watcher_has_auto_exec_env() -> None:
@@ -52,6 +55,13 @@ def test_export_runtime_env_propagates_watcher_auto_exec() -> None:
     assert "WATCHER_AUTO_EXEC" in script
 
 
+def test_export_runtime_env_propagates_vault_folder_env() -> None:
+    script = Path("scripts/export_runtime_env.sh").read_text(encoding="utf-8")
+    assert "VAULT_SYSTEM_DIR_REL" in script
+    assert "VAULT_INBOX_DIR_REL" in script
+    assert "VAULT_DESK_DIR_REL" in script
+
+
 def test_start_full_system_requires_database_url_for_runtime() -> None:
     script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
     assert "DATABASE_URL" in script
@@ -82,6 +92,17 @@ def test_start_full_system_has_vault_rw_probe() -> None:
     script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
     assert "probe_vault_mount_rw" in script
     assert "STARTUP_REQUIRE_VAULT_RW" in script
+
+
+def test_start_full_system_preserves_explicit_env_over_dotenv() -> None:
+    script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+    assert 'if key in os.environ' in script
+
+
+def test_start_full_system_derives_watcher_scope_from_layout_inbox() -> None:
+    script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+    assert 'layout_scope_glob="${layout_inbox}/*.md,${layout_inbox}/**/*.md"' in script
+    assert 'printf "WATCHER_SCOPE_GLOB=%s\\n" "$layout_scope_glob" >> "$runtime_env_path"' in script
 
 
 def test_compose_watcher_fallback_uses_registry_command() -> None:

@@ -76,3 +76,45 @@ def test_apply_start_full_system_defaults_does_not_override_explicit_startup_che
         "printf '%s' \"$STARTUP_CHECK_OBSIDIAN\""
     )
     assert out == "0"
+
+
+def test_apply_start_full_system_vault_defaults_infers_dirs_from_empty_layout_note() -> None:
+    out = _bash(
+        "set -euo pipefail; "
+        "vault_root=$(mktemp -d); "
+        "mkdir -p \"$vault_root/⚙️ System\" \"$vault_root/📥 Inbox\" \"$vault_root/🛠️ Workbench\"; "
+        ": > \"$vault_root/⚙️ System/vault.layout.md\"; "
+        "source scripts/lib/start_full_system_env.sh; "
+        "unset VAULT_SYSTEM_DIR_REL VAULT_INBOX_DIR_REL VAULT_DESK_DIR_REL; "
+        "apply_start_full_system_vault_defaults \"$vault_root\"; "
+        "python - <<'PY'\n"
+        "import os\n"
+        "print(os.environ.get('VAULT_SYSTEM_DIR_REL', ''))\n"
+        "print(os.environ.get('VAULT_INBOX_DIR_REL', ''))\n"
+        "print(os.environ.get('VAULT_DESK_DIR_REL', ''))\n"
+        "PY"
+    )
+    lines = out.splitlines()
+    assert lines == ["⚙️ System", "📥 Inbox", "🛠️ Workbench"]
+
+
+def test_apply_start_full_system_vault_defaults_does_not_override_explicit_values() -> None:
+    out = _bash(
+        "set -euo pipefail; "
+        "vault_root=$(mktemp -d); "
+        "mkdir -p \"$vault_root/⚙️ System\" \"$vault_root/📥 Inbox\" \"$vault_root/🛠️ Workbench\"; "
+        ": > \"$vault_root/⚙️ System/vault.layout.md\"; "
+        "source scripts/lib/start_full_system_env.sh; "
+        "export VAULT_SYSTEM_DIR_REL=CustomSystem; "
+        "export VAULT_INBOX_DIR_REL=CustomInbox; "
+        "export VAULT_DESK_DIR_REL=CustomDesk; "
+        "apply_start_full_system_vault_defaults \"$vault_root\"; "
+        "python - <<'PY'\n"
+        "import os\n"
+        "print(os.environ.get('VAULT_SYSTEM_DIR_REL', ''))\n"
+        "print(os.environ.get('VAULT_INBOX_DIR_REL', ''))\n"
+        "print(os.environ.get('VAULT_DESK_DIR_REL', ''))\n"
+        "PY"
+    )
+    lines = out.splitlines()
+    assert lines == ["CustomSystem", "CustomInbox", "CustomDesk"]

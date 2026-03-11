@@ -39,6 +39,9 @@ services:
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
+      VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
+      VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
+      VAULT_DESK_DIR_REL: ${VAULT_DESK_DIR_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
@@ -76,6 +79,9 @@ services:
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
+      VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
+      VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
+      VAULT_DESK_DIR_REL: ${VAULT_DESK_DIR_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
@@ -111,6 +117,9 @@ services:
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
+      VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
+      VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
+      VAULT_DESK_DIR_REL: ${VAULT_DESK_DIR_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}

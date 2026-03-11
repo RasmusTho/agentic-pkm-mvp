@@ -6,10 +6,32 @@ cd "$ROOT"
 
 load_dotenv() {
   if [ -f ".env" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    source ".env"
-    set +a
+    eval "$(
+      python - <<'PY'
+from __future__ import annotations
+
+import os
+import re
+import shlex
+from pathlib import Path
+
+pattern = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+for raw_line in Path(".env").read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    match = pattern.match(line)
+    if not match:
+        continue
+    key, value = match.groups()
+    if key in os.environ:
+        continue
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
+    print(f"export {key}={shlex.quote(value)}")
+PY
+    )"
   fi
 }
 
@@ -634,6 +656,7 @@ if [ ! -d "$vault_host_path" ]; then
 fi
 vault_host_path="$(cd "$vault_host_path" && pwd)"
 export VAULT_ROOT="$vault_host_path"
+apply_start_full_system_vault_defaults "$vault_host_path"
 
 if [ -z "${VAULT_LAYOUT_NOTE_REL:-}" ]; then
   layout_count=$(find "$vault_host_path" -mindepth 2 -maxdepth 2 -type f -name "vault.layout.md" 2>/dev/null | wc -l | tr -d '[:space:]')
@@ -1434,6 +1457,11 @@ if [ -n "$layout_inbox" ]; then
 fi
 if [ -n "$layout_system" ]; then
   printf "VAULT_SYSTEM_DIR_REL=%s\n" "$layout_system" >> "$runtime_env_path"
+fi
+if [ -n "$layout_inbox" ] && [ -z "${WATCHER_SCOPE_GLOB:-}" ]; then
+  layout_scope_glob="${layout_inbox}/*.md,${layout_inbox}/**/*.md"
+  printf "WATCHER_SCOPE_GLOB=%s\n" "$layout_scope_glob" >> "$runtime_env_path"
+  export WATCHER_SCOPE_GLOB="$layout_scope_glob"
 fi
 
 if [ -n "$layout_inbox" ] && [ -n "$layout_system" ]; then
