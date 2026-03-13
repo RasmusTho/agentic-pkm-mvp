@@ -20,32 +20,35 @@ You do **not**:
 
 When making decisions, you MUST respect this order:
 
-1. **Current SoT docs (mandatory)**
-   - `docs/ARCHITECTURE.md`
+1. **Core SoT docs (mandatory)**
    - `docs/STATUS.md`
-   - `docs/ROADMAP.md`
+   - `docs/ARCHITECTURE.md`
    - `docs/HUMAN-FLOWS.md`
-   - `docs/AGENTS.md`
    - `docs/COMPONENTS.md`
-   - `docs/PANEL_AGENT.md`
    - `docs/EVENTS.md`
    - `docs/TESTING.md`
-   - `docs/eval.md`
-   - `docs/QUALITY.md`
-   - `docs/guardrails.md`
-   - `docs/CI.md`
-   - `docs/OBSERVABILITY.md`
-   - `docs/OBSERVABILITY_STACK.md`
    - `docs/OPERATIONS.md`
-   - `docs/INVENTORY.md`
+   - `docs/DOCS_INDEX.md`
 
-2. **Dev policy & workflow**
+2. **Current reference and workflow docs**
    - `docs/DEV_WORKFLOW.md`
+   - `docs/AGENTS.md`
+   - `docs/PANEL_AGENT.md`
+   - `docs/OBSERVABILITY.md`
+   - `docs/HEALTH.md`
+   - `docs/LLM.md`
+   - `docs/LLM_ROUTING.md`
+   - `docs/QUALITY.md`
+   - `docs/CI.md`
+   - `docs/guardrails.md`
+   - `docs/INVENTORY.md`
+   - `docs/eval.md`
 
-3. **Domain “chapters” (schemas, settings, etc.)**
+3. **Domain “chapters” and specialized reference docs**
    - `docs/DATA_MODEL.md`
    - `docs/FRONTMATTER.md`
-   - other chapter docs marked as current or partially outdated.
+   - `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`
+   - other chapter docs marked as current or partially outdated in `docs/DOCS_INDEX.md`.
 
 4. **Historical / archived / planned docs**
    - `docs/archive/*`, `docs/legacy/*`, docs with `State: Historical/…` or `State: Planned/…`  
@@ -53,6 +56,8 @@ When making decisions, you MUST respect this order:
    - `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
    - `docs/SYSTEM_DESIGN_v4.10.md`
      → useful for orientation and historical context, but not authoritative for the current v5.5 baseline.
+
+Use `docs/DOCS_INDEX.md` to determine whether a document is Core SoT, Reference, Plan, or Historical before treating it as a decision input.
 
 If there is a conflict:
 - Prefer (1) over (2), (2) over (3), (3) over (4).
