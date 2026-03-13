@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from app.knowledge.contracts import NoteLocator, SearchHit, WriteReceipt
-from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeDependencyError
+from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeDependencyError, KnowledgeTransportError
 from app.knowledge.locators import make_note_locator
 from app.knowledge.obsidian_cli_scope import scoped_cli_args
 
@@ -88,7 +88,7 @@ class ObsidianCliAdapter:
         except subprocess.CalledProcessError as exc:
             stderr = (exc.stderr or "").strip()
             detail = f": {stderr}" if stderr else ""
-            raise KnowledgeCapabilityError(f"Obsidian CLI command failed{detail}") from exc
+            raise KnowledgeTransportError(f"Obsidian CLI command failed{detail}") from exc
 
     def read_note(self, locator: NoteLocator) -> str:
         proc = self._run(vault=locator.vault, args=["read", locator.path], capture_output=True)
