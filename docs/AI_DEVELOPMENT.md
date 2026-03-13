@@ -24,7 +24,9 @@ When making non-trivial changes, conceptually read and respect:
   - `docs/ARCHITECTURE.md`
   - `docs/HUMAN-FLOWS.md`
   - `docs/AGENTS.md`
+- Historical orientation only:
   - `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
+  - `docs/SYSTEM_DESIGN_v4.10.md`
 - Development workflow:
   - `docs/DEV_WORKFLOW.md`
 - Testing and CI:

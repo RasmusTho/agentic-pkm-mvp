@@ -1,15 +1,17 @@
 State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency hardening) with the forward line now entering v5.6 LangGraph/Reasoning rollouts.
 # Architecture — SoT v5.5 Reality-MVP baseline (forward line v5.6)
 
+This document is the active architecture source of truth for the SoT v5.5 Reality-MVP baseline and the place where current runtime contracts are defined.
+
 Historic SoT snapshots and older plans live in `docs/archive/`; the 4.x ladder history is in `docs/history/SOT_4X_HISTORY.md`. Forward-looking plan lives in `docs/ROADMAP.md`.
-They are kept for reference but are not considered active truth for the current SoT v5.5 Reality-MVP baseline.
-External dependencies, deployment topology, and human-facing surfaces are captured in `docs/SYSTEM_DESIGN_v4.10.md`; this document focuses on internal architecture and runtime contracts.
+Those documents are kept for reference but are not active truth for the current baseline. If a historical or roadmap document conflicts with this document on current-state runtime architecture, this document wins.
 
-System map: `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md` covers the high-level Yggdrasil modules and flows; this document remains the detailed technical architecture.
+This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system.
 
-`docs/HUMAN-FLOWS.md` captures the intended human experience and interaction flows; any architecture change that alters user-facing behavior should be validated against that contract before shipping.
-
-This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system. A high-level overview of Yggdrasil’s modules and flows lives in `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`, and human interaction patterns in `docs/HUMAN-FLOWS.md`.
+Related documents and authority boundaries:
+- `docs/HUMAN-FLOWS.md` is the user-facing behavior contract. Any architecture change that alters user-visible behavior should be validated against it before shipping.
+- `docs/SYSTEM_DESIGN_v4.10.md` is a historical reference for external dependencies, deployment topology, and human-facing surfaces from the v4.10 foundation snapshot. It is useful background, but it is not authoritative for the current v5.5 baseline.
+- `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md` is a historical high-level module map retained for orientation and naming continuity. It may not reflect current v5.5 wiring and should not be treated as the active system map when evaluating current behavior.
 
 ## Fitness Functions
 

@@ -28,7 +28,6 @@ When making decisions, you MUST respect this order:
    - `docs/AGENTS.md`
    - `docs/COMPONENTS.md`
    - `docs/PANEL_AGENT.md`
-   - `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
    - `docs/EVENTS.md`
    - `docs/TESTING.md`
    - `docs/eval.md`
@@ -52,6 +51,9 @@ When making decisions, you MUST respect this order:
 4. **Historical / archived / planned docs**
    - `docs/archive/*`, `docs/legacy/*`, docs with `State: Historical/…` or `State: Planned/…`  
      → may inform design, but MUST NOT override (1)–(3).
+   - `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
+   - `docs/SYSTEM_DESIGN_v4.10.md`
+     → useful for orientation and historical context, but not authoritative for the current v5.5 baseline.
 
 If there is a conflict:
 - Prefer (1) over (2), (2) over (3), (3) over (4).
