@@ -1,8 +1,10 @@
-State: SoT v5.5 Reality-MVP baseline locked.
+State: SoT v5.5 Reality-MVP baseline locked. This is a local setup/how-to document, not the runtime observability contract.
 # Local Observability Stack
 
 This repo already emits structured logs (JSON) and exposes Prometheus metrics when `METRICS_ENABLED=1`. The steps below give a lightweight single-developer setup to inspect those signals locally.
 See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for how observability ties into the baseline system design.
+
+For runtime signal semantics and counters, use `docs/OBSERVABILITY.md`. For top-level operator runbooks, use `docs/OPERATIONS.md`.
 
 ## Prerequisites
 - Docker Desktop (or any Docker engine)

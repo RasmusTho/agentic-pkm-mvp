@@ -1,5 +1,12 @@
-State: SoT v5.5 Reality-MVP baseline locked with the forward line now tracking v5.6.
+State: SoT v5.5 Reality-MVP baseline locked with the forward line now tracking v5.6. This document defines runtime observability signals and how to interpret them.
 # Observability
+This document is the runtime observability contract for logs, counters, heartbeats, and status interpretation.
+
+For adjacent operational surfaces:
+- use `docs/OPERATIONS.md` as the top-level operations playbook
+- use `docs/HEALTH.md` for health CLI behavior and contract details
+- use `docs/OBSERVABILITY_STACK.md` for local Prometheus/Grafana setup
+
 ## Shared heartbeat/outbox paths
 - The health CLI and API rely on `tmp/watcher_heartbeat.json` and `tmp/worker_heartbeat.json` for liveness, plus `INDEX_OUTBOX_PATH` as the audit log.
 - The DB outbox (DATABASE_URL/DB_DSN) is the authoritative worker queue; JSONL remains audit/telemetry only.

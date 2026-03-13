@@ -1,7 +1,9 @@
-State: forward line v5.x (registry watcher; Docker-first deployment)
+State: forward line v5.x (registry watcher; Docker-first deployment). This is watcher-specific operational guidance.
 # Watcher Operations
 
 The runtime watcher is registry-based (config-driven) and runs via `python -m app.cli watcher run`. The legacy `vault-watcher-run`/`vault-watcher-daemon` snapshot watcher is lab-only (`PKM_SETTINGS_PROFILE=lab`) and deprecated for runtime/start system usage.
+
+Use `docs/OPERATIONS.md` as the top-level runtime operations playbook. Use this document when the issue is specifically about watcher deployment, config, or execution mode.
 
 ## Docker-first deployment
 1) Set `VAULT_ROOT` to your local vault path (quotes allow spaces):

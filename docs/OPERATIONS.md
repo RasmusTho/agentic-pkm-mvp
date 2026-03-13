@@ -1,5 +1,20 @@
-State: SoT v5.5 Reality-MVP baseline locked.
+State: SoT v5.5 Reality-MVP baseline locked. This is the top-level operations entrypoint for the current runtime.
 # Operations Playbook
+
+Use this document as the operator-facing starting point for runtime operations.
+
+Specialized companion documents:
+- `docs/HEALTH.md` - health CLI behavior and runtime health contract
+- `docs/OPS_WATCHER.md` - watcher-specific deployment and runtime notes
+- `docs/OBSERVABILITY.md` - runtime observability signals, counters, and span/log contracts
+- `docs/OBSERVABILITY_STACK.md` - local Prometheus/Grafana setup for developers and operators
+
+Reading order:
+1. Start here for runtime expectations and runbooks.
+2. Follow `docs/HEALTH.md` when verifying readiness or diagnosing degraded state.
+3. Follow `docs/OPS_WATCHER.md` for watcher deployment/runtime specifics.
+4. Follow `docs/OBSERVABILITY.md` for interpreting telemetry and counters.
+5. Use `docs/OBSERVABILITY_STACK.md` only when you want the local monitoring stack.
 
 ## Version & Release Workflow
 - Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory (supporting `--dry-run`).
@@ -52,6 +67,7 @@ State: SoT v5.5 Reality-MVP baseline locked.
 ## Observability
 - Logs: JSON-formatted via `app/observability.setup_logging()`. Hook into your logging stack (CloudWatch, ELK, etc.).
 - Metrics: enable `METRICS_ENABLED=1` to expose Prometheus metrics under `/metrics` using `prometheus-fastapi-instrumentator` (secure access appropriately).
+- Runtime signals and interpretation live in `docs/OBSERVABILITY.md`.
 - Local Prometheus+Grafana recipe lives in `docs/OBSERVABILITY_STACK.md` (Docker Compose).
 
 ## Runtime health: watcher → DB outbox → worker
@@ -60,6 +76,7 @@ State: SoT v5.5 Reality-MVP baseline locked.
 - DB outbox: check the `outbox` table for recent `ingest.vault.changed` and `panel.*` events; the worker should mark `delivered_at`.
 - JSONL audit: `INDEX_OUTBOX_PATH` should append lines, but it is not the worker queue.
 - Status: `python -m app.cli status` reports `worker_queue` vs `events_log` to distinguish DB vs JSONL.
+- Health command semantics and degradation rules live in `docs/HEALTH.md`.
 
 ## Startup telemetry (startup_status.json)
 - Location: `tmp/startup_status.json` (workspace root on the host).
