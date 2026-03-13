@@ -10,6 +10,7 @@ Start here:
 - `docs/DOCS_INDEX.md` — map of documentation + review status
 - `docs/STATUS.md` — current baseline reality (v5.5) + forward line (v5.6)
 - `docs/ARCHITECTURE.md` — runtime architecture + contracts (v5.5 baseline)
+- `docs/DOCS_REFACTOR_PLAN.md` — staged plan for simplifying the documentation set
 
 Prereqs:
 - Python **>= 3.12** (see `docs/PYTHON_VERSION_POLICY.md`).
