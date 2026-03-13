@@ -1,4 +1,6 @@
 State: SoT v5.5 Reality-MVP baseline locked. This is the top-level operations entrypoint for the current runtime.
+Doc role: Core SoT
+Authority: Top-level operator guidance for the current runtime; delegates specialized operational detail to linked companion docs but remains the main operational entrypoint.
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.

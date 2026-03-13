@@ -1,4 +1,6 @@
 State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency guardrails); forward line v5.6 tracking LangGraph and reasoning rollouts while referencing `docs/STATUS.md#baseline-definition`.
+Doc role: Core SoT
+Authority: Canonical map of document roles and review status for the current repo; use it to determine whether a document is Core SoT, Reference, Plan, or Historical.
 # Documentation Review Index — SoT v5.5 baseline + v5.x forward line
 
 Central map of documentation and markdown artifacts in this repo. Review status values:

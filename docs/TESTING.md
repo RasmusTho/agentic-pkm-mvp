@@ -1,4 +1,6 @@
 State: SoT v5.5 Reality-MVP baseline locked (baseline definition anchored in `docs/STATUS.md#baseline-definition`).
+Doc role: Core SoT
+Authority: Canonical testing and validation strategy for the active baseline, including required layers and guardrails for code changes.
 # TESTING
 
 ## Layers

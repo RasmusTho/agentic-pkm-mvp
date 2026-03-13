@@ -1,4 +1,6 @@
 State: SoT v5.5 baseline (descriptive component catalog; update alongside wiring changes).
+Doc role: Core SoT
+Authority: Current component catalog and dependency boundary reference for the active baseline; descriptive of wiring and ownership, not a replacement for ARCHITECTURE-level contracts.
 # Components Catalog (Reality-MVP + forward line)
 
 Canonical list of current modular building blocks.

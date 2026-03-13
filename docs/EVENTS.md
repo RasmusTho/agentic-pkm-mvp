@@ -1,4 +1,6 @@
 State: v5.5 baseline + v5.6 forward line — Outbox JSONL envelope + event catalog (contract-level).
+Doc role: Core SoT
+Authority: Canonical event envelope and event meaning contract for emitted runtime events; authoritative unless superseded by an explicit compatibility contract update.
 
 # Events
 

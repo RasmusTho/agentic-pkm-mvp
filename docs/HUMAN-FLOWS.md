@@ -1,4 +1,6 @@
-State: SoT v4.10 Reality-MVP (baseline locked) with v5.x forward line extending PanelAgent runtime + registry watcher.
+State: SoT v5.5 Reality-MVP baseline locked with v5.6 forward line extending PanelAgent runtime and registry watcher behavior.
+Doc role: Core SoT
+Authority: Canonical user-facing behavior contract for the current system; architecture and implementation changes should remain compatible with this document unless it is updated intentionally.
 # Human Flows — Yggdrasil / agentic-pkm-mvp
 
 > Audience: humans using the system in Obsidian + CLI. Human language is canonical; automation is additive, not authoritative.
