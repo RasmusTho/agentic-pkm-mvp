@@ -109,8 +109,8 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/OBSIDIANSYNC.md | Obsidian sync | Aligned (forward line v5.x) | 2026-03-08 | Registry watcher runtime + DB outbox canonical queue; documents `app/knowledge/write_ops.py` as shared Obsidian boundary helper. |
 | docs/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/MEMORY.md | Memory (legacy overview) | Legacy (archived) | 2025-12-07 | Historical memory-layer description; not used in Reality-MVP. |
-| docs/AI_DEVELOPMENT.md | AI-assisted development policy | Aligned (forward line v5.x) | 2026-02-05 | Dev-layer policy tied to Core-6 guardrails and vault policy constraints. |
-| docs/DEV_WORKFLOW.md | Developer workflow | Aligned (forward line v5.x) | 2026-02-05 | TDD/docs-first workflow aligned with the v5.5 baseline. |
+| docs/AI_DEVELOPMENT.md | AI-assisted development policy | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; `docs/DEV_WORKFLOW.md` is now the primary development workflow and dev-layer AI policy surface. |
+| docs/DEV_WORKFLOW.md | Developer workflow | Aligned (forward line v5.x) | 2026-03-13 | Primary development workflow and dev-layer AI policy; consolidates change order, constraints, and required validation. |
 | docs/OPERATIONS.md | Operations playbook | Aligned (forward line v5.x) | 2026-02-05 | Compose stack (api/worker/watcher/db) + v5.5 runtime runbooks; DB outbox canonical queue. |
 | docs/OPS_WATCHER.md | Watcher operations (Docker + host) | Aligned (forward line v5.x) | 2026-02-05 | Registry watcher operations, config-driven scope, DB outbox requirement; legacy snapshot watcher noted. |
 | docs/INVENTORY.md | Runtime inventory | Aligned (forward line v5.x) | 2026-02-05 | Reference inventory (no file:line); update alongside code. |
@@ -129,8 +129,8 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Aligned (forward line v5.x) | 2026-02-05 | Repo requires Python >=3.12; CI smoke pinned to 3.12. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-02-05 | Updated for v5.5 baseline + v5.6 forward line counters; registry watcher health + DB outbox canonical queue clarified. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (forward line v5.x) | 2026-02-05 | Prometheus/Grafana compose scrape `/metrics`. |
-| docs/AI_DEVELOPMENT.md | AI development | Aligned (forward line v5.x) | 2026-02-05 | Current dev-layer AI policy aligned to Core-6 guardrails and vault settings. |
-| docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-02-05 | TDD/docs-first workflow aligned with the v5.5 baseline. |
+| docs/AI_DEVELOPMENT.md | AI development | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; use `docs/DEV_WORKFLOW.md` instead. |
+| docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-03-13 | Primary development workflow and dev-layer AI policy. |
 | docs/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
 | docs/ALIGNMENT.md | Alignment | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
 | docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2025-12-07 | Historical v4.2 overview; superseded by SoT v4.10 docs. |
@@ -237,8 +237,8 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Aligned (forward line v5.x) | 2026-02-05 | Repo requires Python >=3.12; CI smoke pinned to 3.12. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-02-05 | Updated for v5.5 baseline + v5.6 forward line counters; registry watcher health + DB outbox canonical queue clarified. |
 | docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (forward line v5.x) | 2026-02-05 | Prometheus/Grafana compose scrape `/metrics`. |
-| docs/AI_DEVELOPMENT.md | AI development | Aligned (forward line v5.x) | 2026-02-05 | Current dev-layer AI policy aligned to Core-6 guardrails and vault settings. |
-| docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-02-05 | TDD/docs-first workflow aligned with the v5.5 baseline. |
+| docs/AI_DEVELOPMENT.md | AI development | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; use `docs/DEV_WORKFLOW.md` instead. |
+| docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-03-13 | Primary development workflow and dev-layer AI policy. |
 | docs/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
 | docs/ALIGNMENT.md | Alignment | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
 | docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2025-12-07 | Historical v4.2 overview; superseded by SoT v4.10 docs. |

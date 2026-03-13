@@ -1,11 +1,56 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher/panel safety + concurrency guardrails).
-# **Developer Workflow — SoT v5.5**
+State: SoT v5.5 Reality-MVP baseline locked (watcher/panel safety + concurrency guardrails). This is the primary development workflow and dev-layer AI policy document.
+# Developer Workflow
 
-This document describes how to work _on the codebase_ for the Agentic PKM / Yggdrasil
-system. It complements docs/ARCHITECTURE.md (runtime design) and docs/AI_DEVELOPMENT.md
-(dev-layer AI policy).
+This document describes how to work on the Agentic PKM / Yggdrasil codebase.
 
-## **Development loop (order of operations)**
+It is the primary guide for:
+- the order of operations for non-trivial changes,
+- dev-layer AI/code-agent rules,
+- required tests and eval expectations,
+- how to keep code, tests, and SoT documents aligned.
+
+It does not define runtime agent behavior. Runtime rules live in `docs/ARCHITECTURE.md`, `docs/AGENTS.md`, `docs/HUMAN-FLOWS.md`, and related SoT docs.
+
+## Scope
+
+- Applies to:
+  - humans making code, test, or documentation changes,
+  - AI/code agents operating during development,
+  - local tools that generate or refactor implementation artifacts.
+- Does not apply to:
+  - runtime ASK/PanelAgent/Planner behavior,
+  - production-time agent decisions,
+  - user-facing runtime contracts except where changes must be reflected back into SoT docs.
+
+## Sources of truth
+
+When making non-trivial changes, read and respect these documents in order:
+
+1. Runtime SoT and user-facing contracts:
+   - `docs/ARCHITECTURE.md`
+   - `docs/STATUS.md`
+   - `docs/HUMAN-FLOWS.md`
+   - `docs/AGENTS.md`
+   - `docs/EVENTS.md`
+2. Development and validation:
+   - `docs/TESTING.md`
+   - `docs/CI.md`
+   - `docs/eval.md`
+   - `docs/guardrails.md`
+3. Supporting domain chapters:
+   - `docs/CORE_CONTRACT.md`
+   - `docs/DATA_MODEL.md`
+   - `docs/FRONTMATTER.md`
+   - `docs/NOTE_KIND_POLICIES.md`
+4. Historical orientation only:
+   - `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
+   - `docs/SYSTEM_DESIGN_v4.10.md`
+   - `docs/history/*`
+   - `docs/archive/*`
+
+If code and docs disagree, update the docs first or in the same change. Do not silently treat undocumented behavior as the new SoT.
+
+## Development loop
 
 For any non-trivial change:
 
@@ -48,34 +93,70 @@ For any non-trivial change:
         - update docs/STATUS.md with current reality, and
         - adjust docs/ROADMAP.md if future milestones change.
 
-## **AI-assisted development**
+## Hard constraints
 
-- AI/code agents are **accelerators**, not architects.
-    - Architecture and SoT docs define _what is allowed_.
-    - Tests and evals define _what is acceptable_.
-- Follow docs/AI_DEVELOPMENT.md for:
-    - scope (dev-time only),
-    - constraints (layers, Core-6, events),
-    - required test commands.
-- Eval tests live under `tests/eval/`, are marked `@pytest.mark.eval`, and remain opt-in (see `docs/eval.md`).
-- Keep runtime prompts/behavior separate from dev prompts:
-    - runtime rules live in docs/ARCHITECTURE.md, docs/AGENTS.md, and settings,
-    - dev-layer prompts live in .codex/AGENTS.md.
+- AI/code agents are accelerators, not architects.
+  - SoT docs define what is allowed.
+  - Tests and evals define what is acceptable.
+- Respect layering.
+  - Use Stores/Outbox/Index abstractions.
+  - Do not introduce new ad-hoc DB access paths.
+  - Keep agents server-agnostic; API remains a thin HTTP surface.
+- Do not redesign Core-6 casually.
+  - Do not change the semantics of `uuid`, `title`, `origin`, `source_ref`, `trust`, or `review_state` without an explicit SoT update.
+  - `kind` remains a policy-routing field, not a schema.
+  - `zone` remains a derived overlay.
+- Treat trust and review state as guardrails.
+  - Do not mutate reviewed content without explicit intent.
+  - Read write permissions and behavior constraints from settings/policy, not from note layout guesses.
+- Do not invent new global categories on the fly.
+  - New zones, kinds, event names, or top-level settings must be reflected in `docs/ARCHITECTURE.md`, `docs/EVENTS.md`, or relevant schema docs before code relies on them.
+- Keep dependencies controlled.
+  - Do not add new external dependencies without updating `pyproject.toml` and, where relevant, `docs/DEPENDENCIES.md` and `docs/CI.md`.
+- Keep tests deterministic.
+  - Use documented mocks/stubs/providers.
+  - Avoid non-repeatable side effects in tests unless the test explicitly covers them.
+- Keep runtime prompts and behavior separate from dev prompts.
+  - Runtime rules live in runtime SoT docs and settings.
+  - Dev-layer prompts live in `.codex/AGENTS.md`.
 
-## **Branch strategy**
+## Required tests
 
-- main → stable SoT.
-- feature/* → short-lived, scoped branches.
-- Keep branches focused on one coherent change (feature, refactor, or SoT-step).
+For any non-trivial change:
 
-## **Coding discipline**
+- Run the fast test matrix:
+
+  ```bash
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"
+  ```
+
+- When touching retrieval, reasoning, ASK, or external surfaces:
+  - run relevant API tests (for example `pytest -q tests/api`)
+  - run the relevant eval suites in `docs/eval.md`
+
+- Keep lint and type checks aligned with CI:
+
+  ```bash
+  ruff check app tests
+  mypy app
+  ```
+
+Eval tests live under `tests/eval/`, are marked `@pytest.mark.eval`, and remain opt-in unless a workflow explicitly enables them.
+
+## Branch strategy
+
+- `main` -> stable SoT
+- `feature/*` or `codex/*` -> short-lived, scoped branches
+- Keep branches focused on one coherent change (feature, refactor, or SoT-step)
+
+## Coding discipline
 
 - **Deterministic**: no unseeded randomness in logic or tests.
 - **Explicit**: every state-changing action must be observable in logs/events.
 - **Transparent**: logs consistently include agent, action, trace_id where applicable.
 - **Modular**: agents and services should be replaceable behind clear interfaces.
 
-## **Debugging (local)**
+## Debugging (local)
 
 Examples:
 

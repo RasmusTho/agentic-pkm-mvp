@@ -40,7 +40,6 @@ When making decisions, you MUST respect this order:
    - `docs/INVENTORY.md`
 
 2. **Dev policy & workflow**
-   - `docs/AI_DEVELOPMENT.md`
    - `docs/DEV_WORKFLOW.md`
 
 3. **Domain “chapters” (schemas, settings, etc.)**
