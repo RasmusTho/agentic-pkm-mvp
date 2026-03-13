@@ -9,12 +9,24 @@ def _load_compose(path: str) -> dict:
     return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
 
 
+def _compose_env(service: dict) -> dict[str, str | None]:
+    raw_env = service.get("environment") or {}
+    if isinstance(raw_env, dict):
+        return raw_env
+
+    env: dict[str, str | None] = {}
+    for entry in raw_env:
+        key, sep, value = str(entry).partition("=")
+        env[key] = value if sep else None
+    return env
+
+
 def test_compose_watcher_worker_have_db_outbox_env() -> None:
     compose = _load_compose("docker-compose.yaml")
     services = compose.get("services") or {}
     for service_name in ("api", "watcher", "worker"):
         service = services.get(service_name) or {}
-        env = service.get("environment") or {}
+        env = _compose_env(service)
         assert env.get("DATABASE_URL")
         assert env.get("DB_DSN")
         assert env.get("STORE_BACKEND") == "pg"
@@ -26,9 +38,20 @@ def test_compose_watcher_worker_have_db_outbox_env() -> None:
 def test_compose_watcher_has_auto_exec_env() -> None:
     compose = _load_compose("docker-compose.yaml")
     watcher = (compose.get("services") or {}).get("watcher") or {}
-    env = watcher.get("environment") or {}
+    env = _compose_env(watcher)
     assert "WATCHER_AUTO_EXEC" in env
     assert "WATCHER_AUTO_EXEC-1" in str(env.get("WATCHER_AUTO_EXEC"))
+
+
+def test_compose_watcher_scope_glob_is_optional_passthrough() -> None:
+    compose = _load_compose("docker-compose.yaml")
+    watcher = (compose.get("services") or {}).get("watcher") or {}
+    env = _compose_env(watcher)
+    assert "WATCHER_SCOPE_GLOB" not in env
+    env_file = watcher.get("env_file") or []
+    assert env_file
+    assert env_file[0]["path"] == "${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}"
+    assert env_file[0]["required"] is False
 
 
 def test_compose_watcher_uses_registry_command() -> None:
