@@ -73,6 +73,25 @@ class FsVaultAdapter:
 
 RunnerFn = Callable[..., subprocess.CompletedProcess[str]]
 
+_TRANSPORT_ERROR_MARKERS = (
+    "connection refused",
+    "connection reset",
+    "connection timed out",
+    "econnrefused",
+    "econnreset",
+    "enotfound",
+    "failed to connect",
+    "network is unreachable",
+    "not running",
+    "service unavailable",
+    "timed out",
+)
+
+
+def _is_transport_failure(detail: str) -> bool:
+    lowered = detail.lower()
+    return any(marker in lowered for marker in _TRANSPORT_ERROR_MARKERS)
+
 
 class ObsidianCliAdapter:
     def __init__(self, *, cli_bin: str = "obsidian", runner: RunnerFn = subprocess.run) -> None:
@@ -88,7 +107,10 @@ class ObsidianCliAdapter:
         except subprocess.CalledProcessError as exc:
             stderr = (exc.stderr or "").strip()
             detail = f": {stderr}" if stderr else ""
-            raise KnowledgeTransportError(f"Obsidian CLI command failed{detail}") from exc
+            message = f"Obsidian CLI command failed{detail}"
+            if _is_transport_failure(stderr):
+                raise KnowledgeTransportError(message) from exc
+            raise KnowledgeCapabilityError(message) from exc
 
     def read_note(self, locator: NoteLocator) -> str:
         proc = self._run(vault=locator.vault, args=["read", locator.path], capture_output=True)
