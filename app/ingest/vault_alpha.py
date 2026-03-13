@@ -61,6 +61,10 @@ _LOCKED_FILES_LOG_DEFAULT = Path("/app/tmp/locked-files.jsonl")
 _VAULT_NOTE_UUID_NAMESPACE = uuid.UUID("b6b2d8b3-8f2a-4a75-9c65-4c4a0d36b3b8")
 
 
+def _is_permission_denied_error(exc: Exception) -> bool:
+    return isinstance(exc, OSError) and getattr(exc, "errno", None) in {1, 13, 30}
+
+
 def _locked_files_log_path() -> Path:
     raw = os.getenv(_LOCKED_FILES_LOG_ENV)
     return Path(raw).expanduser() if raw else _LOCKED_FILES_LOG_DEFAULT
@@ -466,17 +470,26 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
     else:
         note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
 
-    _write_mirror(
-        vault_root,
-        rel_path,
-        note_uuid=note_uuid,
-        title=title,
-        review_state=review_state,
-        maturity=maturity,
-        ingest_fingerprint=ingest_fingerprint,
-        existing_frontmatter=mirror_frontmatter if mirror_path else None,
-        existing_body=mirror_body if mirror_path else None,
-    )
+    try:
+        _write_mirror(
+            vault_root,
+            rel_path,
+            note_uuid=note_uuid,
+            title=title,
+            review_state=review_state,
+            maturity=maturity,
+            ingest_fingerprint=ingest_fingerprint,
+            existing_frontmatter=mirror_frontmatter if mirror_path else None,
+            existing_body=mirror_body if mirror_path else None,
+        )
+    except OSError as exc:
+        if _is_locked_error(exc) or _is_permission_denied_error(exc):
+            click.echo(
+                f"Warning: could not write mirror for {rel_path}; continuing without mirror update ({exc})",
+                err=True,
+            )
+        else:
+            raise
 
     core6 = {
         "id": note_uuid,
@@ -741,7 +754,16 @@ def _ingest_candidates(
             else:
                 note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
             if needs_uuid_write and note_uuid:
-                ensure_note_uuid(path, preferred_uuid=note_uuid)
+                try:
+                    ensure_note_uuid(path, preferred_uuid=note_uuid)
+                except OSError as exc:
+                    if _is_locked_error(exc) or _is_permission_denied_error(exc):
+                        click.echo(
+                            f"Warning: could not persist uuid for {rel_display}; continuing without file rewrite ({exc})",
+                            err=True,
+                        )
+                    else:
+                        raise
             should_skip = False
             if note_uuid and not force and not cold_rebuild:
                 parsed_uuid = None

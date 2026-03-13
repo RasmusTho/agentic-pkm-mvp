@@ -6,7 +6,7 @@ from pathlib import Path
 
 import psycopg
 from psycopg import Error
-from psycopg.errors import InsufficientPrivilege
+from psycopg.errors import DependentObjectsStillExist, DuplicateObject, InsufficientPrivilege
 from psycopg.rows import dict_row
 
 from app.db.dsn import connect as _connect, resolve_dsn
@@ -60,6 +60,20 @@ def ensure_schema(conn: psycopg.Connection) -> None:
                 "Skipping migration statement due to insufficient privileges",
                 extra={"statement": statement},
             )
+        except DependentObjectsStillExist:
+            conn.rollback()
+            upper_stmt = statement.upper()
+            if "ALTER TABLE PUBLIC.OBJECTS DROP CONSTRAINT IF EXISTS OBJECTS_PKEY" in upper_stmt:
+                _LOGGER.warning("Skipping legacy objects_pkey drop; dependent FKs exist")
+                continue
+            raise
+        except DuplicateObject:
+            conn.rollback()
+            upper_stmt = statement.upper()
+            if "ALTER TABLE PUBLIC.OBJECTS ADD CONSTRAINT OBJECTS_PKEY PRIMARY KEY (ID)" in upper_stmt:
+                _LOGGER.info("objects_pkey already present; skipping duplicate ADD CONSTRAINT")
+                continue
+            raise
         except Error:
             conn.rollback()
             raise
