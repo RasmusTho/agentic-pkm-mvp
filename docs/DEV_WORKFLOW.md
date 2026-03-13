@@ -26,22 +26,29 @@ It does not define runtime agent behavior. Runtime rules live in `docs/ARCHITECT
 
 When making non-trivial changes, read and respect these documents in order:
 
-1. Runtime SoT and user-facing contracts:
-   - `docs/ARCHITECTURE.md`
+1. Core SoT:
    - `docs/STATUS.md`
+   - `docs/ARCHITECTURE.md`
    - `docs/HUMAN-FLOWS.md`
-   - `docs/AGENTS.md`
+   - `docs/COMPONENTS.md`
    - `docs/EVENTS.md`
-2. Development and validation:
    - `docs/TESTING.md`
+   - `docs/OPERATIONS.md`
+   - `docs/DOCS_INDEX.md`
+2. Current reference and development guidance:
+   - `docs/AGENTS.md`
+   - `docs/PANEL_AGENT.md`
    - `docs/CI.md`
    - `docs/eval.md`
    - `docs/guardrails.md`
-3. Supporting domain chapters:
+   - `docs/OBSERVABILITY.md`
+   - `docs/HEALTH.md`
+3. Supporting domain chapters and specialized contracts:
    - `docs/CORE_CONTRACT.md`
    - `docs/DATA_MODEL.md`
    - `docs/FRONTMATTER.md`
    - `docs/NOTE_KIND_POLICIES.md`
+   - `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`
 4. Historical orientation only:
    - `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
    - `docs/SYSTEM_DESIGN_v4.10.md`
@@ -49,6 +56,8 @@ When making non-trivial changes, read and respect these documents in order:
    - `docs/archive/*`
 
 If code and docs disagree, update the docs first or in the same change. Do not silently treat undocumented behavior as the new SoT.
+
+Use `docs/DOCS_INDEX.md` to determine whether a document is Core SoT, Reference, Plan, or Historical before treating it as a decision input.
 
 ## Development loop
 
@@ -148,6 +157,25 @@ Eval tests live under `tests/eval/`, are marked `@pytest.mark.eval`, and remain 
 - `main` -> stable SoT
 - `feature/*` or `codex/*` -> short-lived, scoped branches
 - Keep branches focused on one coherent change (feature, refactor, or SoT-step)
+
+## Documentation rules
+
+- Treat the active core set as the default reading path:
+  - `docs/STATUS.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/HUMAN-FLOWS.md`
+  - `docs/COMPONENTS.md`
+  - `docs/EVENTS.md`
+  - `docs/TESTING.md`
+  - `docs/OPERATIONS.md`
+  - `docs/DOCS_INDEX.md`
+- Do not create a new top-level doc if the content fits an existing core or reference doc.
+- If you add a new doc:
+  - add it to `docs/DOCS_INDEX.md`,
+  - classify it clearly as Core SoT, Reference, Plan, or Historical,
+  - link it from the owning parent doc if it is meant to be read.
+- Historical or planned docs must not be presented as current runtime truth.
+- If a doc becomes a redirect or compatibility alias, say so explicitly at the top of the file and in `docs/DOCS_INDEX.md`.
 
 ## Coding discipline
 

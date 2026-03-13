@@ -29,9 +29,16 @@ if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
   - see `docs/TESTING.md` and `docs/DEV_WORKFLOW.md`
 
 ## Branching and commits
-- Branch format: feature/<slug>, chore/<slug>, fix/<slug>
+- Branch format: `feature/<slug>`, `chore/<slug>`, `fix/<slug>`, or `codex/<slug>`
 - Conventional commits: feat:, fix:, docs:, chore:, refactor:, test:
 - Keep PRs small, include a test when possible
+
+## Documentation expectations
+- Read the active core docs first: `docs/STATUS.md`, `docs/ARCHITECTURE.md`, `docs/HUMAN-FLOWS.md`, `docs/COMPONENTS.md`, `docs/EVENTS.md`, `docs/TESTING.md`, `docs/OPERATIONS.md`, `docs/DOCS_INDEX.md`.
+- Use `docs/DOCS_INDEX.md` to determine whether a document is Core SoT, Reference, Plan, or Historical before relying on it.
+- Do not create a new top-level doc if the content belongs in an existing core or reference document.
+- If you add or repurpose a doc, update `docs/DOCS_INDEX.md` in the same change.
+- Historical or planned docs must be labeled as such and must not be treated as current runtime truth.
 
 ## Code style
 - ruff for linting
@@ -47,3 +54,4 @@ if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
 - Tests pass locally
 - New/changed events are documented under docs/EVENTS.md
 - Agent input/output contract documented in docs/AGENTS.md
+- `docs/DOCS_INDEX.md` updated if docs were added, merged, deprecated, or re-scoped
