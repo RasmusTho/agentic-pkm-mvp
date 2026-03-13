@@ -50,7 +50,7 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v5.5 base) | Aligned (forward line v5.x) | 2026-03-13 | Active runtime architecture source of truth; defines current authority boundaries vs ROADMAP/history and treats v4.10 system-design/module-map docs as historical reference only. |
 | docs/CORE_RUNTIME_AGENTIC_LAB_BOUNDARY.md | Core Runtime vs Agentic Lab boundary contract | Aligned (forward line v5.x) | 2026-03-09 | Defines the operator-safe core boundary, opt-in lab boundary, ownership map, and non-goals for simplification work. |
 | docs/CONCURRENCY.md | Concurrency + idempotency guardrails | Aligned (forward line v5.x) | 2026-02-05 | Normative concurrency/idempotency requirements and test placeholders. |
-| docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2026-03-13 | Historical reference for v4.10 topology/external surfaces; contains v5.5 delta note; not authoritative for the current baseline. |
+| docs/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2026-03-14 | Historical reference for v4.10 topology/external surfaces; contains an explicit current-state warning and is not authoritative for the current baseline. |
 | docs/STATUS.md | Operational snapshot | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2026-02-05 | Baseline definition (v5.5) covers watcher/panel settings provenance and concurrency guards; registry watcher default + DB outbox canonical queue noted. |
 | docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2026-02-05 | Forward line leans on the v5.5 baseline while v5.6 LangGraph/Reasoning stages are planned; runtime loop evaluation stack updated for registry watcher + DB outbox. |
 | docs/V56_FORWARD_LINE.md | v5.6 forward line kickoff plan | Aligned (SoT v5.6 forward line) | 2026-02-05 | Now/Next/Later plan with acceptance criteria for watchers auto-run, LangGraph rollout, and orchestrator V2; links STATUS/ROADMAP for traceability. |
@@ -65,12 +65,12 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2026-03-13 | System-level agent architecture doc covering shared patterns, agent matrix, and coordination direction; PanelAgent-specific behavior lives in `docs/PANEL_AGENT.md`. |
 | docs/PLANNER.md | Planner contract | Legacy (archived) | 2026-02-05 | Historical reference; planner/orchestrator behavior has evolved. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (forward line v5.x) | 2026-02-05 | Canonical Outbox envelope + selected event meanings; compatibility anchored in EVENT_COMPATIBILITY_CONTRACT. |
-| docs/DIAGRAMS.md | C4 diagrams | Baseline-only (v4.10) | 2026-02-05 | Legacy diagrams; prefer ARCHITECTURE/HUMAN-FLOWS for v5.5 baseline. |
+| docs/DIAGRAMS.md | C4 diagrams | Legacy (archived) | 2026-03-14 | Legacy diagrams with explicit historical-only warning; prefer ARCHITECTURE/HUMAN-FLOWS for current runtime wiring. |
 | docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2026-03-13 | User-facing behavior contract for the current system; architecture changes should be validated against it. |
 | docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2026-02-05 | Evaluation stack updated for registry watcher + DB outbox contracts; covers watcher dedup, promotion idempotency, settings validation. |
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x) | 2026-03-13 | PanelAgent-specific runtime contract covering panel syntax, runtime behavior, events, and wiring; complements the system-level `docs/AGENTS.md`. |
 | docs/UAT_PANEL_WATCHER.md | UAT guide (panel + watcher) | Aligned (forward line v5.x) | 2026-02-05 | Registry watcher UAT flow with AI fence policy and UUID healing. |
-| docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Legacy (archived) | 2026-03-13 | Historical module map retained for orientation and naming continuity; may not reflect v5.5 wiring and is not the active system map. |
+| docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Legacy (archived) | 2026-03-14 | Historical module map retained for orientation and naming continuity; explicit warning added that it is not the active system map. |
 | docs/research/pattern-harvest-agentic-architecture.md | Research synthesis (outer/inner agent architecture) | Aligned (analysis, docs-only) | 2026-02-05 | Pattern harvest of events/A2A/tools/observability/config; backlog + Mermaid diagram; no runtime wiring. |
 
 ## Supporting Docs (Quality, Ops, Flows, Data)
@@ -133,13 +133,13 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-03-13 | Primary development workflow and dev-layer AI policy. |
 | docs/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
 | docs/ALIGNMENT.md | Alignment | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
-| docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2025-12-07 | Historical v4.2 overview; superseded by SoT v4.10 docs. |
+| docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2026-03-14 | Historical v4.2 overview with explicit current-state warning; superseded by current SoT docs. |
 | docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-02-05 | Definitions updated to match v5.5 baseline (outbox/JSONL audit, rerank hooks). |
 
 ## Historical / Archived (Architecture Deep Dives)
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/history/SOT_4X_HISTORY.md | 4.x SoT history | Legacy (archived) | 2025-12-07 | Historical ladder and milestones for v4.x. |
+| docs/history/SOT_4X_HISTORY.md | 4.x SoT history | Legacy (archived) | 2026-03-14 | Historical ladder and milestones for v4.x; use only for background, not current-state decisions. |
 | docs/archive/architecture/next-steps.md | Architecture future/bridge (historical) | Legacy (archived) | 2025-12-17 | SoT v4.3-era addendum; kept for reference with an explicit HISTORICAL banner; not authoritative for current SoT. |
 | docs/archive/architecture/obsidian_integration.md | Obsidian integration deep dive (historical) | Legacy (archived) | 2025-12-17 | SoT v4.3-era deep dive; kept for reference with an explicit HISTORICAL banner; not authoritative for current SoT. |
 | docs/architecture/memory/api.md | Memory API v4.2 | Legacy (archived) | 2025-12-07 | V4.2 agent-memory API; not in Reality-MVP. |
@@ -241,5 +241,5 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-03-13 | Primary development workflow and dev-layer AI policy. |
 | docs/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
 | docs/ALIGNMENT.md | Alignment | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
-| docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2025-12-07 | Historical v4.2 overview; superseded by SoT v4.10 docs. |
+| docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2026-03-14 | Historical v4.2 overview with explicit current-state warning; superseded by current SoT docs. |
 | docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-02-05 | Definitions updated to match v5.5 baseline (outbox/JSONL audit, rerank hooks). |

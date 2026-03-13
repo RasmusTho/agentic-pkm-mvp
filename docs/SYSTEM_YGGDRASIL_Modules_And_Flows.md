@@ -1,5 +1,9 @@
 State: Historical (SoT v4.10). Module map retained for reference; it may not reflect the v5.5 baseline wiring.
 
+Historical reference only:
+- Use this document for naming continuity and background orientation.
+- Do not treat it as the active system map for current behavior; use `docs/ARCHITECTURE.md` and `docs/HUMAN-FLOWS.md` first.
+
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
 - DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.

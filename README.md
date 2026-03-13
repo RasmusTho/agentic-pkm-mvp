@@ -81,8 +81,8 @@ make alpha-smoke
 CI jobs parse `CI SUMMARY …` lines and fail merges when `GATES.ok != true`.
 See `docs/CI.md` and `docs/tracks/TRACK_FITNESS_CI_CONTRACT.md`.
 
-## History
-SoT v4.10 is the historical Reality-MVP foundation snapshot (not current runtime truth). References:
+## Historical References
+SoT v4.10 is the historical Reality-MVP foundation snapshot and is not current runtime truth. Read `docs/STATUS.md` and `docs/ARCHITECTURE.md` first; use the references below only for background:
 - `docs/SYSTEM_DESIGN_v4.10.md`
 - `docs/history/SOT_4X_HISTORY.md`
 

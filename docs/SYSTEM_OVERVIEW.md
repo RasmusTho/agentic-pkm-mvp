@@ -1,5 +1,9 @@
-State: Historical / partially outdated (e.g. SoT v4.2). See ARCHITECTURE SoT v4.10 for current intent.
+State: Historical / partially outdated (e.g. SoT v4.2). Read `docs/ARCHITECTURE.md` and `docs/STATUS.md` for current intent and behavior.
 # System Overview — SoT v4.2
+
+Historical reference only:
+- This snapshot predates the current baseline and forward line.
+- Keep it for background only; do not use it to resolve current architectural questions.
 
 Why
 Turn unstructured notes into trusted, retrievable knowledge with provenance and promotion gates.

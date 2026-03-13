@@ -1,12 +1,16 @@
 State: Historical (SoT v4.x). Diagrams here are legacy; for v5.5 baseline and v5.6 forward line, prefer `docs/ARCHITECTURE.md` and `docs/HUMAN-FLOWS.md`.
 
+Historical reference only:
+- These diagrams are kept for background and legacy visualization.
+- Do not use them as the primary source for current runtime wiring or component boundaries.
+
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
 - DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
 - Watcher auto-run remains off unless allowlisted; LangGraph/Reasoning rollout is opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
-# Diagrams
+# Legacy Diagrams
 
 Visual references for the SoT v4.5 ingestion, store, and promotion flows. Rendered via Mermaid and exportable with `mmdc`.
 
