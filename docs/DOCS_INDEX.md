@@ -77,7 +77,6 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/CI.md | CI overview | Aligned (forward line v5.x) | 2026-02-05 | Updated for v5.5 baseline gates, smoke flows, and watcher controls. |
-| docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2026-02-05 | Evaluation stack updated for registry watcher + DB outbox contracts; runtime loop UAT coverage. |
 | docs/ISSUES_TESTING.md | Testing coverage issues | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Living backlog; v4.x router/fabric entries are obsolete; remaining open item tracks future-timestamp heartbeat rejection coverage. |
 | docs/QUALITY.md | Quality gates | Aligned (forward line v5.x) | 2026-02-05 | QA guardrails + fitness gates aligned with v5.5 baseline. |
 | docs/guardrails.md | Guardrails | Aligned (forward line v5.x) | 2026-02-05 | Runtime guardrails + concurrency safety aligned with v5.5 baseline. |
@@ -88,53 +87,35 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-03-13 | Runtime observability contract for heartbeats, counters, spans, and status interpretation. |
 | docs/OBSERVABILITY_STACK.md | Local observability stack | Aligned (forward line v5.x) | 2026-03-13 | Local Prometheus/Grafana setup guide; not the runtime observability contract. |
 | docs/OPERATIONS.md | Operations playbook | Aligned (forward line v5.x) | 2026-03-13 | Top-level operator entrypoint for runtime runbooks; links to specialized health, watcher, and observability docs. |
+| docs/OPS_WATCHER.md | Watcher operations (Docker + host) | Aligned (forward line v5.x) | 2026-03-13 | Watcher-specific operational guidance for deployment, config, and execution mode; complements OPERATIONS. |
 | docs/INFRASTRUCTURE.md | Infrastructure notes | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Compose stack (db/api/worker) for Reality-MVP. |
 | docs/HEALTH.md | Health checks | Aligned (forward line v5.x) | 2026-03-13 | Health CLI behavior and runtime health contract; companion to OPERATIONS and OBSERVABILITY. |
 | docs/CLI.md | CLI reference | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Partial reference; authoritative list is `python -m app.cli --help`. |
 | docs/LLM_ROUTING.md | LLM routing contract (router + fabric) | Aligned (forward line v5.x) | 2026-02-05 | Canonical routing/fabric contract; documents env precedence and debug surfaces. |
 | docs/LLM.md | LLM integration | Aligned (forward line v5.x) | 2026-03-13 | Primary operational LLM document covering providers, env vars, backend scenarios, and limits; routing contract remains separate in `docs/LLM_ROUTING.md`. |
 | docs/LLM_BACKENDS.md | LLM backends | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; use `docs/LLM.md` for operational setup and `docs/LLM_ROUTING.md` for routing policy. |
-| docs/RETRIEVAL.md | Retrieval | Aligned (forward line v5.x) | 2026-02-05 | Hybrid retrieval + optional rerank hooks (RERANK_ENABLE/RERANK_PROVIDER). |
+| docs/RETRIEVAL.md | Retrieval | Aligned (forward line v5.x) | 2026-02-05 | Hybrid retrieval + optional rerank hooks (`RERANK_ENABLE`/`RERANK_PROVIDER`). |
 | docs/FRONTMATTER.md | Frontmatter rules | Aligned (forward line v5.x) | 2026-02-05 | Defines metadata layers, ownership, and the warm-surface write contract. |
 | docs/DATA_MODEL.md | Data model | Aligned (forward line v5.x) | 2026-02-05 | DB mirror of the Core-6 contract; derived overlays are rebuildable. |
 | docs/DATA_GOVERNANCE.md | Data governance | Aligned (forward line v5.x) | 2026-02-05 | Clarifies canonical vs derived artifacts, trust semantics, and auditable persistence. |
 | docs/DB_SCHEMA.md | DB schema | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Snapshot of current tables/views + DB outbox bootstrap; notes multiple historical Alembic heads. |
 | docs/SCORECARDS.md | Scorecards | Planned / not implemented | 2026-02-05 | Spec only; not enforced by runtime unless CI gates/tests consume it. |
-| docs/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
-| docs/ALIGNMENT.md | Alignment guide | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
 | docs/SETTINGS.md | Settings | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Settings compiler + registries documented; some areas are forward-looking. |
 | docs/SETTINGS_TIERING.md | Settings tiering design + migration map | Aligned (forward line v5.x) | 2026-03-09 | Defines Operator-facing vs Dev/Lab-only settings inventory and Step 4 enforcement targets. |
 | docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Implemented for key routers (API key + SlowAPI); doc lists remaining wiring gaps. |
-| docs/ingest.md | Ingest (historical/current) | Legacy (archived) | 2026-02-05 | Historical reference; prefer HUMAN-FLOWS/OPERATIONS for current ingest. |
 | docs/OBSIDIANSYNC.md | Obsidian sync | Aligned (forward line v5.x) | 2026-03-08 | Registry watcher runtime + DB outbox canonical queue; documents `app/knowledge/write_ops.py` as shared Obsidian boundary helper. |
-| docs/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
-| docs/MEMORY.md | Memory (legacy overview) | Legacy (archived) | 2025-12-07 | Historical memory-layer description; not used in Reality-MVP. |
-| docs/AI_DEVELOPMENT.md | AI-assisted development policy | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; `docs/DEV_WORKFLOW.md` is now the primary development workflow and dev-layer AI policy surface. |
 | docs/DEV_WORKFLOW.md | Developer workflow | Aligned (forward line v5.x) | 2026-03-13 | Primary development workflow and dev-layer AI policy; consolidates change order, constraints, and required validation. |
-| docs/OPERATIONS.md | Operations playbook | Aligned (forward line v5.x) | 2026-03-13 | Top-level operator entrypoint for runtime runbooks; DB outbox canonical queue and companion docs linked explicitly. |
-| docs/OPS_WATCHER.md | Watcher operations (Docker + host) | Aligned (forward line v5.x) | 2026-03-13 | Watcher-specific operational guidance for deployment, config, and execution mode; complements OPERATIONS. |
+| docs/AI_DEVELOPMENT.md | AI-assisted development policy | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; `docs/DEV_WORKFLOW.md` is now the primary development workflow and dev-layer AI policy surface. |
 | docs/INVENTORY.md | Runtime inventory | Aligned (forward line v5.x) | 2026-02-05 | Reference inventory (no file:line); update alongside code. |
 | docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-02-05 | Definitions updated to match v5.5 baseline (outbox/JSONL audit, rerank hooks). |
-| docs/QUALITY.md | Quality | Aligned (forward line v5.x) | 2026-02-05 | QA guardrails + fitness gates aligned with v5.5 baseline. |
 | docs/CONTRIBUTING.md | Contributing guide | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Practical quickstart; defers deep workflow to DEV_WORKFLOW/TESTING. |
 | docs/CHANGELOG.md | Docs changelog | Legacy (archived) | 2026-02-05 | Historical; prefer STATUS/ROADMAP for current baseline and forward line. |
-| docs/PRIVACY.md | Privacy | Aligned (forward line v5.x) | 2026-02-05 | Local-first, outbound only on optional remote LLMs. |
-| docs/HEALTH.md | Health checks | Aligned (forward line v5.x) | 2026-03-13 | Health CLI behavior and runtime health contract; companion to OPERATIONS and OBSERVABILITY. |
-| docs/LLM_BACKENDS.md | LLM backends | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; use `docs/LLM.md` instead. |
-| docs/INFRASTRUCTURE.md | Infrastructure | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Compose stack (db/api/worker) for Reality-MVP. |
-| docs/OPERATIONS.md | Operations | Aligned (forward line v5.x) | 2026-03-13 | Top-level operator entrypoint for runtime runbooks; companion docs define health, watcher, and observability specifics. |
-| docs/INVENTORY.md | Inventory | Aligned (forward line v5.x) | 2026-02-05 | Reference inventory (no file:line); update alongside code. |
-| docs/OVERVIEW_WS.md | Overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
-| docs/DEPENDENCIES.md | Dependencies | Aligned (forward line v5.x) | 2026-02-05 | External deps aligned to current modules (transcribe, llm, watcher). |
-| docs/PYTHON_VERSION_POLICY.md | Python version policy | Aligned (forward line v5.x) | 2026-02-05 | Repo requires Python >=3.12; CI smoke pinned to 3.12. |
-| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-03-13 | Runtime observability contract for heartbeats, counters, spans, and status interpretation. |
-| docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (forward line v5.x) | 2026-03-13 | Local Prometheus/Grafana setup guide; not the runtime observability contract. |
-| docs/AI_DEVELOPMENT.md | AI development | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; use `docs/DEV_WORKFLOW.md` instead. |
-| docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-03-13 | Primary development workflow and dev-layer AI policy. |
 | docs/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
-| docs/ALIGNMENT.md | Alignment | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
+| docs/ALIGNMENT.md | Alignment guide | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
+| docs/ingest.md | Ingest (historical/current) | Legacy (archived) | 2026-02-05 | Historical reference; prefer HUMAN-FLOWS/OPERATIONS for current ingest. |
+| docs/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
+| docs/MEMORY.md | Memory (legacy overview) | Legacy (archived) | 2025-12-07 | Historical memory-layer description; not used in Reality-MVP. |
 | docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2026-03-14 | Historical v4.2 overview with explicit current-state warning; superseded by current SoT docs. |
-| docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-02-05 | Definitions updated to match v5.5 baseline (outbox/JSONL audit, rerank hooks). |
 
 ## Historical / Archived (Architecture Deep Dives)
 | Path | Scope | Review status | Last reviewed | Notes |
@@ -185,9 +166,7 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 ## Eval and Quality
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/eval.md | Eval stack | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Opt-in DeepEval/Ragas; env vars reflect app/eval/llm_client.py. |
-| docs/SCORECARDS.md | Scorecards | Planned / not implemented | 2026-02-05 | Spec only; not enforced by runtime unless CI gates/tests consume it. |
-| docs/QUALITY.md | Quality | Aligned (forward line v5.x) | 2026-02-05 | QA guardrails + fitness gates aligned with v5.5 baseline. |
+| docs/eval.md | Eval stack | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Opt-in DeepEval/Ragas; env vars reflect `app/eval/llm_client.py`. |
 
 ## Agents / Codex Guidance
 | Path | Scope | Review status | Last reviewed | Notes |
@@ -226,20 +205,3 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | --- | --- | --- | --- | --- |
 | docs/scenarios/REALITY_MVP.md | Reality-MVP scenario | Legacy (archived) | 2026-02-05 | Historical reference; current baseline tracked in STATUS. |
 | docs/PROTOCOL_SATELLITE_SYNC.md | Satellite sync protocol | Planned / not implemented | 2026-02-05 | Spec only; not implemented in v5.5 baseline. |
-
-## Additional Docs (misc)
-| Path | Scope | Review status | Last reviewed | Notes |
-| --- | --- | --- | --- | --- |
-| docs/LLM_BACKENDS.md | LLM backends | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; use `docs/LLM.md` instead. |
-| docs/INFRASTRUCTURE.md | Infrastructure | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Compose stack; DB outbox canonical, JSONL audit only. |
-| docs/OVERVIEW_WS.md | Overview workspace | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
-| docs/DEPENDENCIES.md | Dependencies | Aligned (forward line v5.x) | 2026-02-05 | External deps aligned to current modules (transcribe, llm, watcher). |
-| docs/PYTHON_VERSION_POLICY.md | Python version policy | Aligned (forward line v5.x) | 2026-02-05 | Repo requires Python >=3.12; CI smoke pinned to 3.12. |
-| docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-02-05 | Updated for v5.5 baseline + v5.6 forward line counters; registry watcher health + DB outbox canonical queue clarified. |
-| docs/OBSERVABILITY_STACK.md | Observability stack | Aligned (forward line v5.x) | 2026-02-05 | Prometheus/Grafana compose scrape `/metrics`. |
-| docs/AI_DEVELOPMENT.md | AI development | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; use `docs/DEV_WORKFLOW.md` instead. |
-| docs/DEV_WORKFLOW.md | Dev workflow | Aligned (forward line v5.x) | 2026-03-13 | Primary development workflow and dev-layer AI policy. |
-| docs/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
-| docs/ALIGNMENT.md | Alignment | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
-| docs/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2026-03-14 | Historical v4.2 overview with explicit current-state warning; superseded by current SoT docs. |
-| docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-02-05 | Definitions updated to match v5.5 baseline (outbox/JSONL audit, rerank hooks). |
