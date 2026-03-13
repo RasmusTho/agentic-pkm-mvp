@@ -92,8 +92,8 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/HEALTH.md | Health checks | Aligned (forward line v5.x) | 2026-02-05 | CLI health checks (ffmpeg/yt-dlp/outbox/ollama) + ci-smoke reference. |
 | docs/CLI.md | CLI reference | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Partial reference; authoritative list is `python -m app.cli --help`. |
 | docs/LLM_ROUTING.md | LLM routing contract (router + fabric) | Aligned (forward line v5.x) | 2026-02-05 | Canonical routing/fabric contract; documents env precedence and debug surfaces. |
-| docs/LLM.md | LLM integration | Aligned (forward line v5.x) | 2026-02-05 | Updated env vars/endpoints + explicit delta notes. |
-| docs/LLM_BACKENDS.md | LLM backends | Aligned (forward line v5.x) | 2026-02-05 | Backends/env vars documented (chat + embeddings via Ollama/mock; OpenAI/DeepSeek chat). |
+| docs/LLM.md | LLM integration | Aligned (forward line v5.x) | 2026-03-13 | Primary operational LLM document covering providers, env vars, backend scenarios, and limits; routing contract remains separate in `docs/LLM_ROUTING.md`. |
+| docs/LLM_BACKENDS.md | LLM backends | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; use `docs/LLM.md` for operational setup and `docs/LLM_ROUTING.md` for routing policy. |
 | docs/RETRIEVAL.md | Retrieval | Aligned (forward line v5.x) | 2026-02-05 | Hybrid retrieval + optional rerank hooks (RERANK_ENABLE/RERANK_PROVIDER). |
 | docs/FRONTMATTER.md | Frontmatter rules | Aligned (forward line v5.x) | 2026-02-05 | Defines metadata layers, ownership, and the warm-surface write contract. |
 | docs/DATA_MODEL.md | Data model | Aligned (forward line v5.x) | 2026-02-05 | DB mirror of the Core-6 contract; derived overlays are rebuildable. |
@@ -120,7 +120,7 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/CHANGELOG.md | Docs changelog | Legacy (archived) | 2026-02-05 | Historical; prefer STATUS/ROADMAP for current baseline and forward line. |
 | docs/PRIVACY.md | Privacy | Aligned (forward line v5.x) | 2026-02-05 | Local-first, outbound only on optional remote LLMs. |
 | docs/HEALTH.md | Health checks | Aligned (forward line v5.x) | 2026-02-05 | CLI health checks (ffmpeg/yt-dlp/outbox/ollama) + ci-smoke reference. |
-| docs/LLM_BACKENDS.md | LLM backends | Aligned (forward line v5.x) | 2026-02-05 | Backends/env vars documented (chat + embeddings via Ollama/mock; OpenAI/DeepSeek chat). |
+| docs/LLM_BACKENDS.md | LLM backends | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; use `docs/LLM.md` instead. |
 | docs/INFRASTRUCTURE.md | Infrastructure | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Compose stack (db/api/worker) for Reality-MVP. |
 | docs/OPERATIONS.md | Operations | Aligned (forward line v5.x) | 2026-02-05 | Compose stack (api/worker/watcher/db) + v5.5 runtime runbooks; DB outbox canonical queue. |
 | docs/INVENTORY.md | Inventory | Aligned (forward line v5.x) | 2026-02-05 | Reference inventory (no file:line); update alongside code. |
@@ -230,7 +230,7 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 ## Additional Docs (misc)
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/LLM_BACKENDS.md | LLM backends | Aligned (forward line v5.x) | 2026-02-05 | Backends/env vars documented (chat + embeddings via Ollama/mock; OpenAI/DeepSeek chat). |
+| docs/LLM_BACKENDS.md | LLM backends | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; use `docs/LLM.md` instead. |
 | docs/INFRASTRUCTURE.md | Infrastructure | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Compose stack; DB outbox canonical, JSONL audit only. |
 | docs/OVERVIEW_WS.md | Overview workspace | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
 | docs/DEPENDENCIES.md | Dependencies | Aligned (forward line v5.x) | 2026-02-05 | External deps aligned to current modules (transcribe, llm, watcher). |
