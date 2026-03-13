@@ -22,6 +22,10 @@ def test_smoke(tmp_path: Path, monkeypatch):
     (tmp_path / "settings.yaml").write_text("promotion:\n  cooldown_seconds: 0\n  require_idle_seconds: 0\n  max_retries: 1\n  move_policy:\n    enabled: false\n    default_target: 2_Cards/Concepts\n", encoding="utf-8")
     monkeypatch.setenv("PROMOTION_ALLOW_ORPHANS", "1")
     monkeypatch.setenv("PROMOTION_ORPHAN_OVERRIDE_REASON", "tests")
+    monkeypatch.setenv("KNOWLEDGE_PRIMARY_ADAPTER", "fs_vault")
+    monkeypatch.setenv("KNOWLEDGE_FALLBACK_ADAPTER", "obsidian_cli")
+    monkeypatch.setenv("KNOWLEDGE_STRICT_STARTUP", "0")
+    monkeypatch.setenv("KNOWLEDGE_ALLOW_FALLBACK", "0")
 
     enqueue(note, uuid="00000000-0000-0000-0000-000000000007", desired_state="promoted")
     assert run_once() == 1

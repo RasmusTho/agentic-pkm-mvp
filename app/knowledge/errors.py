@@ -17,6 +17,10 @@ class KnowledgeDependencyError(KnowledgeError):
     """Raised when runtime dependencies for the selected adapter are missing."""
 
 
+class KnowledgeTransportError(KnowledgeCapabilityError):
+    """Raised when an adapter transport fails but a fallback may still be viable."""
+
+
 class KnowledgeWriteConflict(KnowledgeError):
     """Raised when a write precondition cannot be satisfied safely."""
 
@@ -26,5 +30,6 @@ __all__ = [
     "KnowledgeConfigError",
     "KnowledgeCapabilityError",
     "KnowledgeDependencyError",
+    "KnowledgeTransportError",
     "KnowledgeWriteConflict",
 ]
