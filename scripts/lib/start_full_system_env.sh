@@ -104,7 +104,10 @@ PY
 
 apply_start_full_system_vault_defaults() {
   local vault_root="${1:-}"
-  local line key value
+  local line key value inferred_env_path
+  inferred_env_path="$(mktemp)"
+  trap 'rm -f "$inferred_env_path"' RETURN
+  infer_start_full_system_vault_layout_env "$vault_root" >"$inferred_env_path"
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     key="${line%%=*}"
@@ -114,5 +117,7 @@ apply_start_full_system_vault_defaults() {
       continue
     fi
     export "$key=$value"
-  done < <(infer_start_full_system_vault_layout_env "$vault_root")
+  done <"$inferred_env_path"
+  trap - RETURN
+  rm -f "$inferred_env_path"
 }

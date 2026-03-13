@@ -51,12 +51,6 @@ def ensure_schema(conn: psycopg.Connection) -> None:
     if not statements:
         return
     for statement in statements:
-        upper_stmt = statement.upper()
-        # Legacy PK rewrite statements are unsafe to rerun once dependent FKs exist.
-        if "ALTER TABLE PUBLIC.OBJECTS DROP CONSTRAINT IF EXISTS OBJECTS_PKEY" in upper_stmt:
-            continue
-        if "ALTER TABLE PUBLIC.OBJECTS ADD CONSTRAINT OBJECTS_PKEY PRIMARY KEY (ID)" in upper_stmt:
-            continue
         try:
             with conn.cursor() as cur:
                 cur.execute(statement)
