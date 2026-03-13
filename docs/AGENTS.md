@@ -1,12 +1,20 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher/panel safety + concurrency guardrails) with the forward line now tracking v5.6 (LangGraph + Reasoning rollouts).
-# 6.0 Agent loop (deterministic)
+State: SoT v5.5 Reality-MVP baseline locked (watcher/panel safety + concurrency guardrails) with the forward line now tracking v5.6 (LangGraph + Reasoning rollouts). This document defines system-level agent architecture and coordination patterns.
+# Agents
+
+This document covers the system-level view of agents in the current architecture:
+- shared agent design principles,
+- the cross-agent matrix,
+- LangGraph/AgentState direction,
+- coordination via Outbox, Planner, and future A2A envelopes.
+
+Use `docs/PANEL_AGENT.md` for PanelAgent-specific runtime behavior, panel syntax, emitted events, and wiring details.
 
 ## Design principle
 - Non-trivial decision logic should move toward “LangGraph inner, events/A2A outer”: each agent owns an explicit `AgentState` and LangGraph graph for internal choices, while coordination between agents happens via Outbox events/A2A envelopes orchestrated by the Orchestrator/Planner.
 - PanelAgent is the concrete example: LangGraph runtime with an action catalog driving a configurable decider (`PANEL_AGENT_DECIDER=rule|llm`), defaulting to deterministic rule-mode while offering opt-in LLM-based selection.
 - Current adoption is phased: ASK and PanelAgent use LangGraph; most other agents remain deterministic pipelines until v5.6 rollout phases.
 
-## ASK AgentState (Reality-MVP)
+## ASK AgentState (Reality-MVP example)
 - `trace_id`: propagated through ASK runs.
 - `query`: user question.
 - `hits`: retrieval results `{object_id, score, origin, zone, trust, title, path, snippet, payload}`.
@@ -15,16 +23,16 @@ State: SoT v5.5 Reality-MVP baseline locked (watcher/panel safety + concurrency 
 
 Flow: `query → retrieve (hybrid search) → rerank (ask_score + reranker) → answer (LLM optional)`. The canonical implementation lives in `app/agents/ask/graph.py` and is invoked by `/api/ask`.
 
-## Graph
+## Example graph
 `retrieve -> draft -> self-check -> final` (max 2 iterations)
 
-## Prompt structure
+## Example prompt structure
 - Instructions
 - Context (quoted excerpts with source IDs)
 - Question
 - Requirements (format, language, citation requirements)
 
-## Answer contract
+## Example answer contract
 - `Summary`
 - `Sources` (list: doc_id + timestamps when relevant)
 

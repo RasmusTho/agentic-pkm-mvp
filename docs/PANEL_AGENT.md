@@ -1,7 +1,15 @@
-State: v5.5 baseline — PanelAgent runtime V1 (v5.0) with planner pipeline opt-in.
+State: v5.5 baseline — PanelAgent runtime V1 (v5.0) with planner pipeline opt-in. This document defines the PanelAgent-specific runtime contract.
 # PanelAgent / NoteInteractionAgent (Runtime v5.0)
 
 Purpose: translate human-driven AI panels in vault notes into structured intents/events while keeping the panel simple, optional, and human-first.
+
+Scope:
+- PanelAgent-specific behavior
+- panel syntax and mutation rules
+- emitted events and payload shapes
+- runtime toggles, wiring, and watcher-facing behavior
+
+For the system-level multi-agent architecture, agent matrix, and LangGraph/A2A direction, use `docs/AGENTS.md`.
 
 ## PanelAgent Runtime V1 (current baseline)
 - Runtime V1 uses a fixed mapping from panel actions to follow-up events (e.g., promotion intents) and writes receipts into an in-note AI status callout; the panel stays a small working set with no history.
