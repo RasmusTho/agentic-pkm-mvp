@@ -1,7 +1,7 @@
 State: SoT v4.10 Reality-MVP (current).
 # Obsidian-first sync
 
-This doc describes how the Obsidian vault PKM-Alpha (Mimer) is synced and mirrored. For how this fits into the overall system, see `docs/HUMAN-FLOWS.md` (Capture & Ingest flow) and the surfaces in `docs/SYSTEM_DESIGN_v4.10.md`.
+This doc describes how the Obsidian vault PKM-Alpha (Mimer) is synced and mirrored. For how this fits into the overall system, see `docs/HUMAN-FLOWS.md` (Capture & Ingest flow) and the surfaces in `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`.
 Watcher note: Runtime now uses the registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`) and the DB outbox as the canonical queue. Legacy snapshot watchers (`vault-watcher-run`/`vault-watcher-daemon`) are dev-only. For a hands-on walkthrough, see `docs/UAT_PANEL_WATCHER.md`.
 
 ## Principles

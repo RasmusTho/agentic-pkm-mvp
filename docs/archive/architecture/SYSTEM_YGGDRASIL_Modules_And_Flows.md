@@ -26,7 +26,7 @@ In SoT v4.10 this codebase primarily implements the Mimer module (the Obsidian v
 | Tyr | Formal archives (planned v5.x) | Planned: admin/records integration |
 | Heimdall | Infra & observability | Observability stack (Grafana/Prometheus/Loki) |
 
-See `docs/SYSTEM_DESIGN_v4.10.md` for how these modules map onto deployment topology and surfaces.
+See `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md` for how these modules map onto deployment topology and surfaces.
 
 ## Modules at a glance
 - **Mimer — Knowledge (Obsidian vault)**: Human-first vault with notes, ontology, and semantic links; minimal frontmatter plus UUID identity. Acts as the cognitive graph that threads together interpretations of media, records, and projects. Provides Core-6 projections and references (e.g., `source_ref`) into other modules without duplicating their artifacts. This is the same vault historically referred to as PKM-Alpha.

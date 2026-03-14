@@ -50,8 +50,8 @@ When making non-trivial changes, read and respect these documents in order:
    - `docs/NOTE_KIND_POLICIES.md`
    - `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`
 4. Historical orientation only:
-   - `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
-   - `docs/SYSTEM_DESIGN_v4.10.md`
+   - `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
+   - `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
    - `docs/history/*`
    - `docs/archive/*`
 

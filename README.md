@@ -91,7 +91,7 @@ See `docs/CI.md` and `docs/tracks/TRACK_FITNESS_CI_CONTRACT.md`.
 
 ## Historical References
 SoT v4.10 is the historical Reality-MVP foundation snapshot and is not current runtime truth. Read `docs/STATUS.md` and `docs/ARCHITECTURE.md` first; use the references below only for background:
-- `docs/SYSTEM_DESIGN_v4.10.md`
+- `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
 - `docs/history/SOT_4X_HISTORY.md`
 
 The current baseline is v5.5; forward-line work for v5.6 is tracked in `docs/V56_FORWARD_LINE.md`.

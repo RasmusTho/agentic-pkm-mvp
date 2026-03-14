@@ -19,7 +19,7 @@ These findings were checked against the current documents before creating this p
 - `docs/OBSERVABILITY.md` and `docs/OBSERVABILITY_STACK.md` are related but not duplicates: one is runtime observability contract and signals, the other is a local stack setup guide.
 - `docs/OPERATIONS.md`, `docs/HEALTH.md`, and `docs/OPS_WATCHER.md` belong in one operational cluster, but they should not be blindly merged because they currently serve different scopes.
 - `docs/AGENTS.md` and `docs/PANEL_AGENT.md` should remain separate, but their scope boundary must become explicit: system-level agent architecture vs PanelAgent-specific runtime contract.
-- `docs/SYSTEM_DESIGN_v4.10.md`, `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`, `docs/archive/architecture/SYSTEM_OVERVIEW.md`, and `docs/archive/architecture/DIAGRAMS.md` are historical/reference artifacts and should not sit in the active reading path.
+- `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`, `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md`, `docs/archive/architecture/SYSTEM_OVERVIEW.md`, and `docs/archive/architecture/DIAGRAMS.md` are historical/reference artifacts and should not sit in the active reading path.
 
 ## Target document roles
 
@@ -146,8 +146,8 @@ Goals:
 - keep history accessible but clearly secondary.
 
 Priority historical/reference candidates:
-- `docs/SYSTEM_DESIGN_v4.10.md`
-- `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
+- `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
+- `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
 - `docs/archive/architecture/SYSTEM_OVERVIEW.md`
 - `docs/archive/architecture/DIAGRAMS.md`
 - selected `docs/archive/*` and `docs/legacy/*`
@@ -186,7 +186,7 @@ These are the first concrete actions to take after this plan lands:
 - `keep separate, re-scope`: `docs/AGENTS.md`
 - `keep separate, re-scope`: `docs/PANEL_AGENT.md`
 - `keep separate, re-scope`: `docs/OBSERVABILITY.md`, `docs/OBSERVABILITY_STACK.md`, `docs/HEALTH.md`, `docs/OPS_WATCHER.md`
-- `historical path`: `docs/SYSTEM_DESIGN_v4.10.md`, `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`, `docs/archive/architecture/SYSTEM_OVERVIEW.md`, `docs/archive/architecture/DIAGRAMS.md`
+- `historical path`: `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`, `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md`, `docs/archive/architecture/SYSTEM_OVERVIEW.md`, `docs/archive/architecture/DIAGRAMS.md`
 
 ## Non-goals for the first pass
 

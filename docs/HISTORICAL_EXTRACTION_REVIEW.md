@@ -4,10 +4,10 @@ State: Working review for docs refactor branch `codex/docs-refactor-structure`.
 This review compares high-risk historical docs against the active core/reference docs to determine what still has value to extract before archival or deletion.
 
 Reviewed historical docs:
-- `docs/SYSTEM_DESIGN_v4.10.md`
-- `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
-- `docs/SYSTEM_OVERVIEW.md`
-- `docs/DIAGRAMS.md`
+- `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
+- `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
+- `docs/archive/architecture/SYSTEM_OVERVIEW.md`
+- `docs/archive/architecture/DIAGRAMS.md`
 
 Compared against current docs:
 - `docs/ARCHITECTURE.md`
@@ -35,14 +35,14 @@ Compared against current docs:
 
 | Historical doc | Still valuable | Already covered today | Extract target | Proposed disposition |
 | --- | --- | --- | --- | --- |
-| `docs/SYSTEM_DESIGN_v4.10.md` | Compact system-context view, external dependencies, deployment surfaces, flow-to-infra mapping | Large parts already covered by `ARCHITECTURE`, `COMPONENTS`, `OPERATIONS`, `LLM`, `OBSERVABILITY_STACK`, `DEPENDENCIES` | Extract a short current “System Context / External Surfaces” section into `ARCHITECTURE` or `README`; move topology details into `OPERATIONS`/`INFRASTRUCTURE` if still missing | Archive after extraction; do not delete until topology summary is rehomed |
-| `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md` | Naming continuity for Mimer/Hugin/Munin/Ratatosk/Brokkr/Tyr/Heimdall; high-level module responsibilities | `ARCHITECTURE` now states current Mimer focus and references Yggdrasil, but does not fully capture the module glossary in one place | Extract a short “Yggdrasil module glossary” into `ARCHITECTURE` or `GLOSSARY` | Archive after extraction; likely no need to keep as a first-class doc |
-| `docs/SYSTEM_OVERVIEW.md` | Almost none beyond historical sequence/context | Superseded by `CORE_CONTRACT`, `EVENTS`, `RETRIEVAL`, `ARCHITECTURE`, `TESTING` | None | Delete or move deep into archive; no extraction needed |
-| `docs/DIAGRAMS.md` | Legacy Mermaid diagrams may still be useful as background if explicitly marked legacy | Current runtime wiring is described in `ARCHITECTURE`; diagrams themselves still reflect older JSONL/projector flows | Possibly keep diagrams under an archive path only, or extract one sanitized current diagram into `docs/diagrams/` later | Archive or move to `docs/archive/`; do not keep in active docs root |
+| `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md` | Compact system-context view, external dependencies, deployment surfaces, flow-to-infra mapping | Large parts already covered by `ARCHITECTURE`, `COMPONENTS`, `OPERATIONS`, `LLM`, `OBSERVABILITY_STACK`, `DEPENDENCIES` | Extract a short current “System Context / External Surfaces” section into `ARCHITECTURE` or `README`; move topology details into `OPERATIONS`/`INFRASTRUCTURE` if still missing | Archive after extraction; do not delete until topology summary is rehomed |
+| `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md` | Naming continuity for Mimer/Hugin/Munin/Ratatosk/Brokkr/Tyr/Heimdall; high-level module responsibilities | `ARCHITECTURE` now states current Mimer focus and references Yggdrasil, but does not fully capture the module glossary in one place | Extract a short “Yggdrasil module glossary” into `ARCHITECTURE` or `GLOSSARY` | Archive after extraction; likely no need to keep as a first-class doc |
+| `docs/archive/architecture/SYSTEM_OVERVIEW.md` | Almost none beyond historical sequence/context | Superseded by `CORE_CONTRACT`, `EVENTS`, `RETRIEVAL`, `ARCHITECTURE`, `TESTING` | None | Archived; no further extraction needed |
+| `docs/archive/architecture/DIAGRAMS.md` | Legacy Mermaid diagrams may still be useful as background if explicitly marked legacy | Current runtime wiring is described in `ARCHITECTURE`; diagrams themselves still reflect older JSONL/projector flows | Possibly keep diagrams under an archive path only, or extract one sanitized current diagram into `docs/diagrams/` later | Archived; not an active-root doc |
 
 ## Per-Document Findings
 
-### `docs/SYSTEM_DESIGN_v4.10.md`
+### `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
 
 What still has value:
 - The C4-style system context is still a good shape for explaining the repo boundary, runtime dependencies, and user-facing surfaces.
@@ -67,7 +67,7 @@ Extraction decision:
 Disposition:
 - Archive after extraction.
 
-### `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
+### `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
 
 What still has value:
 - The high-level Yggdrasil naming system and module intent remain useful for orientation.
@@ -93,7 +93,7 @@ Extraction decision:
 Disposition:
 - Archive after extraction.
 
-### `docs/SYSTEM_OVERVIEW.md`
+### `docs/archive/architecture/SYSTEM_OVERVIEW.md`
 
 What still has value:
 - Mostly historical lineage only.
@@ -114,7 +114,7 @@ Extraction decision:
 Disposition:
 - Safe delete candidate once links are removed and archive requirements are confirmed.
 
-### `docs/DIAGRAMS.md`
+### `docs/archive/architecture/DIAGRAMS.md`
 
 What still has value:
 - The Mermaid source may still help explain historical ingestion/promotion flow evolution.

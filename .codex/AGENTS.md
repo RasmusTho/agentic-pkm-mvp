@@ -53,8 +53,8 @@ When making decisions, you MUST respect this order:
 4. **Historical / archived / planned docs**
    - `docs/archive/*`, `docs/legacy/*`, docs with `State: Historical/…` or `State: Planned/…`  
      → may inform design, but MUST NOT override (1)–(3).
-   - `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
-   - `docs/SYSTEM_DESIGN_v4.10.md`
+   - `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
+   - `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
      → useful for orientation and historical context, but not authoritative for the current v5.5 baseline.
 
 Use `docs/DOCS_INDEX.md` to determine whether a document is Core SoT, Reference, Plan, or Historical before treating it as a decision input.

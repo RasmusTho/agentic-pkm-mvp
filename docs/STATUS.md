@@ -71,7 +71,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 
 ## Status — Operational Snapshot
 
-Reference: `docs/SYSTEM_DESIGN_v4.10.md` captures the foundation deployment topology still used by the v5.5 baseline.
+Reference: `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md` captures the foundation deployment topology still used by the v5.5 baseline.
 
 | Version | Goal | Delivered | Open | Next | Notes |
 | --- | --- | --- | --- | --- | --- |
