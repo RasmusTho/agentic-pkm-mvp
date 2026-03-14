@@ -7,16 +7,14 @@ Use this document as the operator-facing starting point for runtime operations.
 
 Specialized companion documents:
 - `docs/HEALTH.md` - health CLI behavior and runtime health contract
-- `docs/OPS_WATCHER.md` - watcher-specific deployment and runtime notes
 - `docs/OBSERVABILITY.md` - runtime observability signals, counters, and span/log contracts
-- `docs/OBSERVABILITY_STACK.md` - local Prometheus/Grafana setup for developers and operators
+- `docs/INFRASTRUCTURE.md` - local runtime stack, Docker/Colima setup, and local observability stack
 
 Reading order:
 1. Start here for runtime expectations and runbooks.
 2. Follow `docs/HEALTH.md` when verifying readiness or diagnosing degraded state.
-3. Follow `docs/OPS_WATCHER.md` for watcher deployment/runtime specifics.
-4. Follow `docs/OBSERVABILITY.md` for interpreting telemetry and counters.
-5. Use `docs/OBSERVABILITY_STACK.md` only when you want the local monitoring stack.
+3. Follow `docs/OBSERVABILITY.md` for interpreting telemetry and counters.
+4. Use `docs/INFRASTRUCTURE.md` when you need Docker/runtime topology or the local monitoring stack.
 
 ## Version & Release Workflow
 - Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory (supporting `--dry-run`).
@@ -28,6 +26,57 @@ Reading order:
 - DB outbox is canonical in runtime; the worker consumes the DB outbox.
 - JSONL outbox (`INDEX_OUTBOX_PATH`) is audit/diagnostic only and must not be used as the worker queue.
 - Registry watcher is the single runtime watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`). Legacy snapshot watchers are dev-only.
+
+## Watcher Operations
+
+Use this section when the issue is specifically about watcher deployment, config, or execution mode.
+
+### Docker-first deployment
+1. Set `VAULT_ROOT` to your local vault path:
+   `export VAULT_ROOT="/Users/you/PKM - Alpha"`
+2. On macOS/iCloud-backed vaults, set container UID/GID mapping so watcher and worker can write UUID heals back into the vault:
+   - `export LOCAL_UID=$(id -u)`
+   - `export LOCAL_GID=$(id -g)`
+   - recreate services after changes: `docker compose up -d --force-recreate watcher worker api`
+3. Start the watcher service:
+   ```bash
+   docker compose up -d watcher
+   ```
+4. Follow logs:
+   ```bash
+   docker compose logs -f watcher
+   ```
+
+### Host fallback
+- Run the registry watcher directly:
+  ```bash
+  WATCHER_ENABLE=1 WATCHER_VAULT_PATH="/path/to/vault" python -m app.cli watcher run
+  ```
+- Single-tick safety run:
+  ```bash
+  python -m app.cli watcher run --max-ticks 1
+  ```
+- Legacy snapshot watcher is lab-only and not part of runtime/start-system flows:
+  ```bash
+  PKM_SETTINGS_PROFILE=lab python -m app.cli vault-watcher-run --vault-root "<vault>" --snapshot-path "<state.json>"
+  ```
+
+### Key watcher env and defaults
+- `WATCHER_ENABLE=1` arms the registry watcher.
+- `WATCHER_VAULT_PATH` points at the vault root.
+- `WATCHER_SCOPE_GLOB` overrides scan scope (default `**/*.md`).
+- `VAULT_INBOX_DIR_REL` overrides inbox folder behavior when needed.
+- `WATCHER_STATE_DIR` stores registry watcher state.
+- `WATCHER_HEARTBEAT_PATH` and `WATCHER_TICK_LOG_PATH` control watcher health/tick outputs.
+- `WATCHER_AUTO_EXEC=1` arms panel auto-exec; per-note opt-out remains `ai_panel_auto_run: never`.
+- `PANEL_PROACTIVE_ASSIST=0|1` controls proactive panel creation.
+- `WATCHER_STOP_FILE` pauses scanning when present.
+
+### Watcher caveats
+- The registry watcher remains polling/snapshot-based; no OS file-event hooks are used.
+- Paths with spaces are supported; wrap vault paths in quotes.
+- When using iCloud/Obsidian sync, keep scopes conservative and rely on debounce/backoff guardrails.
+- Do not use the legacy snapshot watcher for runtime start-system flows.
 
 ## Runtime Compose Stack
 - Canonical runtime compose stack: `db`, `api`, `watcher`, `worker`.
@@ -70,7 +119,7 @@ Reading order:
 - Logs: JSON-formatted via `app/observability.setup_logging()`. Hook into your logging stack (CloudWatch, ELK, etc.).
 - Metrics: enable `METRICS_ENABLED=1` to expose Prometheus metrics under `/metrics` using `prometheus-fastapi-instrumentator` (secure access appropriately).
 - Runtime signals and interpretation live in `docs/OBSERVABILITY.md`.
-- Local Prometheus+Grafana recipe lives in `docs/OBSERVABILITY_STACK.md` (Docker Compose).
+- Local Prometheus+Grafana recipe lives in `docs/INFRASTRUCTURE.md` (Docker Compose).
 
 ## Runtime health: watcher → DB outbox → worker
 - Watcher heartbeat: `WATCHER_HEARTBEAT_PATH` (default `/app/tmp/watcher_heartbeat.json` in containers, `tmp/watcher_heartbeat.json` on host).

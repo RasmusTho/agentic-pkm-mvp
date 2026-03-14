@@ -52,9 +52,9 @@ Recommended next execution order:
 | `docs/eval.md` | Reference | keep | Distinct eval surface if kept narrow |
 | `docs/guardrails.md` | Reference | keep | Distinct runtime safety policy surface |
 | `docs/OBSERVABILITY.md` | Reference | keep | Runtime observability contract |
-| `docs/OBSERVABILITY_STACK.md` | Reference | merge into | `docs/INFRASTRUCTURE.md` or `docs/OPERATIONS.md`; local stack/how-to only |
+| `docs/OBSERVABILITY_STACK.md` | Deprecated redirect | delete | Content merged into `docs/INFRASTRUCTURE.md`; remove once inbound links are fully gone |
 | `docs/HEALTH.md` | Reference | keep | Distinct health contract/CLI surface |
-| `docs/OPS_WATCHER.md` | Reference | merge into | `docs/OPERATIONS.md`; watcher-specific operational guidance likely better as a section unless it keeps growing |
+| `docs/OPS_WATCHER.md` | Deprecated redirect | delete | Content merged into `docs/OPERATIONS.md`; remove once inbound links are fully gone |
 | `docs/INFRASTRUCTURE.md` | Reference | keep | Distinct local runtime / compose / topology doc |
 | `docs/CLI.md` | Reference | merge into | `docs/OPERATIONS.md` or `docs/DEV_WORKFLOW.md`; partial CLI reference is weak as standalone unless expanded |
 | `docs/LLM.md` | Reference | keep | Operational LLM owner |
@@ -113,7 +113,7 @@ Target docs:
 Goal:
 - Keep `OPERATIONS.md` as the operator entrypoint
 - Keep `OBSERVABILITY.md` and `HEALTH.md` as distinct contracts
-- Merge `OPS_WATCHER.md` and `OBSERVABILITY_STACK.md` into surviving docs unless a strong standalone need remains
+- `OPS_WATCHER.md` and `OBSERVABILITY_STACK.md` are already reduced to redirect stubs and can be deleted once links are fully updated
 - Decide whether `CLI.md` survives or is folded into operations/dev workflow
 
 ### Quality / testing consolidation

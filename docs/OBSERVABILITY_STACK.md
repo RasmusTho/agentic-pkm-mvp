@@ -1,46 +1,11 @@
-State: SoT v5.5 Reality-MVP baseline locked. This is a local setup/how-to document, not the runtime observability contract.
+State: Deprecated local setup redirect. Local observability-stack guidance now lives in `docs/INFRASTRUCTURE.md`.
 # Local Observability Stack
 
-This repo already emits structured logs (JSON) and exposes Prometheus metrics when `METRICS_ENABLED=1`. The steps below give a lightweight single-developer setup to inspect those signals locally.
-See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for how observability ties into the baseline system design.
+This document is retained only as a compatibility stub during the docs cleanup.
 
-For runtime signal semantics and counters, use `docs/OBSERVABILITY.md`. For top-level operator runbooks, use `docs/OPERATIONS.md`.
+Use:
+- `docs/INFRASTRUCTURE.md` for Prometheus/Grafana local stack setup
+- `docs/OBSERVABILITY.md` for runtime signal semantics
+- `docs/OPERATIONS.md` for top-level operator runbooks
 
-## Prerequisites
-- Docker Desktop (or any Docker engine)
-- API server running locally on port 18000 with `METRICS_ENABLED=1`
-
-```bash
-export METRICS_ENABLED=1
-uvicorn app.main:app --reload --port 18000
-```
-
-## Start Prometheus + Grafana
-```bash
-docker compose -f ops/observability/docker-compose.yaml up
-```
-
-- Prometheus UI: http://localhost:9090 (uses `ops/observability/prometheus.yml` to scrape `host.docker.internal:18000/metrics`)
-- Grafana UI: http://localhost:3000 (default login admin/admin)
-
-Add Prometheus as a data source in Grafana (URL `http://prometheus:9090`) and build dashboards from metrics such as `http_requests_total` and `http_request_duration_seconds_bucket`.
-
-When finished:
-```bash
-docker compose -f ops/observability/docker-compose.yaml down
-```
-
-## Flow coverage (Reality-MVP)
-- Capture & Ingest: metrics for ingest throughput/errors, Outbox event counts; logs for normalization/classification steps.
-- ASK: request latency/volume, rerank/LLM timings, answer error rates; traces when OTLP is enabled.
-- Review & Promotion: promotion/review events in Outbox, frontmatter write spans, guardrail counters.
-- Panel Interaction: panel intent events in Outbox; verify no panel text enters embeddings via ingest logs.
-- Eval & QA: CI-safe logs/metrics around eval runs; optional ASK traces when running locally with OTLP.
-
-## Log Consumption
-While the stack runs, the API logs JSON to stdout. For quick inspection:
-```bash
-uvicorn app.main:app --reload | jq
-```
-
-For archival or forward shipping, feed stdout into your preferred log collector (Elastic, Loki, etc.).
+This file should be removed once inbound links are fully updated.

@@ -62,6 +62,49 @@ API and worker share the same Python image built from the repo.
 - Vault ingest: Compose mounts the vault under `/app/vault`; `scripts/start_full_system.sh` validates that mount, checks for Markdown notes, and only runs `vault-alpha-ingest` when `store stats` reports zero objects so the store starts from a deliberate batch ingest. Watchers/worker runs remain incremental and do not sweep the entire vault after the bootstrap job.
 - Prometheus instrumentation is available via `prometheus-fastapi-instrumentator` (metrics exposure is gated by settings).
 
+## Local Observability Stack
+
+This repo already emits structured logs and exposes Prometheus metrics when `METRICS_ENABLED=1`. Use the optional local stack when you want a developer/operator view of those signals.
+
+Prerequisites:
+- Docker engine running locally
+- API server available on port `18000` with `METRICS_ENABLED=1`
+
+```bash
+export METRICS_ENABLED=1
+uvicorn app.main:app --reload --port 18000
+```
+
+Start Prometheus + Grafana:
+
+```bash
+docker compose -f ops/observability/docker-compose.yaml up
+```
+
+- Prometheus UI: `http://localhost:9090`
+- Grafana UI: `http://localhost:3000`
+
+Grafana should use Prometheus at `http://prometheus:9090` as a data source.
+
+When finished:
+
+```bash
+docker compose -f ops/observability/docker-compose.yaml down
+```
+
+Typical local signal coverage:
+- Capture & ingest throughput/errors
+- ASK latency/volume
+- Promotion/review event activity
+- Panel intent activity
+- Eval traces/logs when running locally
+
+For quick log inspection without the stack:
+
+```bash
+uvicorn app.main:app --reload | jq
+```
+
 ## Relation to Alpha Vault & Ingest
 - Ingest/ASK flows talk to the same Postgres DSN used by compose (`127.0.0.1:15432`).
 - Alpha ingest from the host typically runs with Ollama embeddings and `STORE_BACKEND=pg`, emitting DB outbox events consumed by the worker.

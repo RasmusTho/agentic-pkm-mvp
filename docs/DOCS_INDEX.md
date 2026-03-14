@@ -89,9 +89,9 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/DEPENDENCIES.md | Dependencies | Aligned (forward line v5.x) | 2026-02-05 | External deps aligned to current modules (transcribe, llm, watcher). |
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Aligned (forward line v5.x) | 2026-02-05 | Repo requires Python >=3.12; CI smoke pinned to 3.12. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-03-13 | Runtime observability contract for heartbeats, counters, spans, and status interpretation. |
-| docs/OBSERVABILITY_STACK.md | Local observability stack | Aligned (forward line v5.x) | 2026-03-13 | Local Prometheus/Grafana setup guide; not the runtime observability contract. |
+| docs/OBSERVABILITY_STACK.md | Local observability stack | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; local Prometheus/Grafana setup now lives in `docs/INFRASTRUCTURE.md`. |
 | docs/OPERATIONS.md | Operations playbook | Aligned (forward line v5.x) | 2026-03-13 | Top-level operator entrypoint for runtime runbooks; links to specialized health, watcher, and observability docs. |
-| docs/OPS_WATCHER.md | Watcher operations (Docker + host) | Aligned (forward line v5.x) | 2026-03-13 | Watcher-specific operational guidance for deployment, config, and execution mode; complements OPERATIONS. |
+| docs/OPS_WATCHER.md | Watcher operations (Docker + host) | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; watcher deployment/runtime guidance now lives in `docs/OPERATIONS.md`. |
 | docs/INFRASTRUCTURE.md | Infrastructure notes | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Compose stack (db/api/worker) for Reality-MVP. |
 | docs/HEALTH.md | Health checks | Aligned (forward line v5.x) | 2026-03-13 | Health CLI behavior and runtime health contract; companion to OPERATIONS and OBSERVABILITY. |
 | docs/CLI.md | CLI reference | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Partial reference; authoritative list is `python -m app.cli --help`. |
