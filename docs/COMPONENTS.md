@@ -48,8 +48,8 @@ Changing embedding profiles safely: 1) sanity-check with `python -m app.cli embe
 
 - **ASK API** — Question answering endpoint returning answers plus sources/latency. Maturity: Baseline.
 - **Reasoning layer** — Optional structured reasoning overlays (claims/evidence/inference). Maturity: Experimental.
-- **ReasoningFacade** — Shared reasoning/tool entrypoint for LangGraph agents. Maturity: Planned.
-- **BaseLangGraphAgent** — Common agent scaffolding for LangGraph inner loops. Maturity: Planned.
+- **ReasoningFacade** — Shared reasoning/tool entrypoint for LangGraph agents. Maturity: Planned. Forward-line only; not part of the locked v5.5 baseline.
+- **BaseLangGraphAgent** — Common agent scaffolding for LangGraph inner loops. Maturity: Planned. Forward-line only; not part of the locked v5.5 baseline.
 - **Panel agent** — Panel parsing + intent emission/execution for note interaction. Maturity: Active.
 - **LLM router + fabric** — Canonical access layer for chat + embeddings (`app/components/llm/router.py`, `app/components/llm/fabric.py`). High-level modules must use `get_chat_client` / `get_embeddings_client`; routes are reported via `/api/health`. Maturity: Active.
 
@@ -71,14 +71,12 @@ Changing embedding profiles safely: 1) sanity-check with `python -m app.cli embe
 - **Optimistic writes** — Version-checked note writes (`OptimisticWriteGuard`) to prevent corruption. Maturity: Baseline.
 - **Idempotency guards** — `EventDedupStore` / `IdempotencyGuard` for event/action dedup in consumers. Maturity: Baseline.
 
-## Dev-layer helpers & governance
+## Optional extension points (not active runtime)
 
-- **Architecture tests** — Layering/contract tests to keep determinism and boundaries intact. Maturity: Baseline.
-- **AI development workflow** — Docs describing coding and review practices. Maturity: Baseline.
-- **Frontmatter/data model docs** — Vault expectations and data model descriptions. Maturity: Baseline.
-- **Eval docs** — Guidance on running optional suites. Maturity: Baseline.
+- **Structured OCR** — Stubbed extension point in `app/components/ocr.py`; not wired into the active runtime. Maturity: Planned.
+- **Compressive OCR** — Stubbed extension point in `app/components/ocr.py`; not wired into the active runtime. Maturity: Planned.
 
-## OCR extension points (placeholders)
-
-- **Structured OCR** — Stubbed extension point; not wired as a user-facing feature. Maturity: Planned.
-- **Compressive OCR** — Stubbed extension point; not wired as a user-facing feature. Maturity: Planned.
+Documentation and governance surfaces are intentionally tracked elsewhere:
+- development workflow: `docs/DEV_WORKFLOW.md`
+- data/frontmatter contracts: `docs/DATA_MODEL.md`, `docs/FRONTMATTER.md`
+- eval guidance: `docs/eval.md`, `docs/TESTING.md`
