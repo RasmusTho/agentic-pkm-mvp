@@ -44,6 +44,6 @@ flowchart TD
 
 ### Export to PNG/SVG
 1. Install Mermaid CLI locally: `npm install -g @mermaid-js/mermaid-cli`.
-2. Copy a block into an `.mmd` file or run `mmdc -i docs/DIAGRAMS.md -o artifacts/docs-diagrams.svg --page --scale 1`.
+2. Copy a block into an `.mmd` file or run `mmdc -i docs/archive/architecture/DIAGRAMS.md -o artifacts/docs-diagrams.svg --page --scale 1`.
 3. Store exported images under `docs/diagrams/` if they should be versioned; CI only requires the source Markdown.
 <!-- SECTION:DIAGRAMS:END -->

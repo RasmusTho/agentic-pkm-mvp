@@ -51,7 +51,7 @@ Core concepts
 
 Docs
 - docs/ARCHITECTURE.md
-- docs/SYSTEM_OVERVIEW.md
+- docs/archive/architecture/SYSTEM_OVERVIEW.md
 - docs/SETTINGS.md
 - docs/DATA_GOVERNANCE.md
 - docs/VERSIONING.md
@@ -120,7 +120,9 @@ Core-6 lives under objects.payload.core6
 - Remote LLM opt-in by env
 EOF
 
-cat > docs/SYSTEM_OVERVIEW.md <<'EOF'
+mkdir -p docs/archive/architecture
+
+cat > docs/archive/architecture/SYSTEM_OVERVIEW.md <<'EOF'
 # System Overview — SoT v4.2
 
 Why
@@ -157,6 +159,6 @@ Trust and Promotion
 Reviewer blocks when trust is low or citations missing
 EOF
 
-git add README.md docs/ARCHITECTURE.md docs/SYSTEM_OVERVIEW.md
+git add README.md docs/ARCHITECTURE.md docs/archive/architecture/SYSTEM_OVERVIEW.md
 git commit -m "docs: update README and add architecture/system overview for SoT v4.2"
 git push

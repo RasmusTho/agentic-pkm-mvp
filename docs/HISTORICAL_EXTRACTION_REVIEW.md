@@ -144,4 +144,5 @@ Disposition:
 2. Add those extracted summaries to active docs.
 3. Move `docs/DIAGRAMS.md` into an archive path or mark it for relocation.
 4. Remove or archive `docs/SYSTEM_OVERVIEW.md`.
-5. Update `docs/DOCS_INDEX.md`, `README.md`, and any direct links accordingly.
+5. Update any links or index rows that still point at the docs-root historical paths.
+6. Update `docs/DOCS_INDEX.md`, `README.md`, and any direct links accordingly.

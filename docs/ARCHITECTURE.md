@@ -15,6 +15,25 @@ Related documents and authority boundaries:
 - `docs/SYSTEM_DESIGN_v4.10.md` is a historical reference for external dependencies, deployment topology, and human-facing surfaces from the v4.10 foundation snapshot. It is useful background, but it is not authoritative for the current v5.5 baseline.
 - `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md` is a historical high-level module map retained for orientation and naming continuity. It may not reflect current v5.5 wiring and should not be treated as the active system map when evaluating current behavior.
 
+## System Context (Current)
+
+The current runtime sits inside a small local system boundary:
+- Human-facing surfaces:
+  - the Obsidian vault as the canonical writing and reading surface,
+  - the CLI for operator and developer workflows,
+  - the HTTP API for ASK, health, and status.
+- Runtime components in this repository:
+  - ingestion, watcher, panel, ASK, promotion, worker, and store-facing application code,
+  - event emission and observability hooks,
+  - settings and contract enforcement.
+- Runtime dependencies outside this repository:
+  - Postgres/pgvector for canonical store persistence and DB outbox,
+  - the local vault filesystem,
+  - optional local or remote LLM/embedding providers,
+  - optional observability stack components such as Prometheus and Grafana.
+
+In the current v5.5 baseline, the implemented center of gravity is still the Mimer module: vault-first ingestion, indexing, retrieval, and agent behavior around the Obsidian knowledge surface. Other Yggdrasil modules remain useful conceptual boundaries, but they are not equally implemented in the current runtime.
+
 ## Fitness Functions
 
 Fitness functions capture the high-level criteria that must hold true for the runtime to be considered healthy (indexing uptime, worker heartbeats, doc guardrails, etc.). These functions are expressed as CI jobs, operational checklists, and runtime invariants that are enforced before code merges or releases.

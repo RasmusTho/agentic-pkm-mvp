@@ -19,7 +19,7 @@ Overview of tools and libraries required in each environment.
 | yt-dlp | Downloads YouTube/audio sources (`app/media/transcribe.py`). | `pip install -r requirements.txt`. |
 | faster-whisper | Local ASR. | Install via pip; GPU builds need a C++ toolchain. |
 | Ollama | LLM + embeddings (`app/llm/adapter.py`, `app/llm/embeddings.py`). | `brew install ollama && ollama serve`. |
-| mmdc (optional) | Mermaid export (`docs/DIAGRAMS.md`). | `npm install -g @mermaid-js/mermaid-cli`. |
+| mmdc (optional) | Mermaid export for archived/current diagram sources. | `npm install -g @mermaid-js/mermaid-cli`. |
 
 ## Python packages (selection)
 - `httpx`, `requests` – all network calls (Ollama / OpenAI / DeepSeek).
