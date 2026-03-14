@@ -36,7 +36,18 @@ In the current v5.5 baseline, the implemented center of gravity is still the Mim
 
 ## Fitness Functions
 
-Fitness functions capture the high-level criteria that must hold true for the runtime to be considered healthy (indexing uptime, worker heartbeats, doc guardrails, etc.). These functions are expressed as CI jobs, operational checklists, and runtime invariants that are enforced before code merges or releases.
+Fitness functions capture the high-level criteria that must hold true for the runtime to be considered healthy.
+
+In the current baseline, architecture owns the invariants and boundaries, while enforcement is expressed in:
+- `docs/TESTING.md` for CI and regression gates
+- `docs/STATUS.md` for the current rollout posture and baseline lock
+- `docs/OPERATIONS.md` for runtime checks and operator-facing verification
+
+At minimum, the following must stay true:
+- the DB outbox remains the canonical queue for runtime side effects,
+- watcher, worker, and ASK paths remain observable through health/status surfaces,
+- note updates remain deterministic and guarded by idempotency/write-safety rules,
+- docs and tests continue to enforce the same current-state boundaries.
 
 ### Instance model (internal master/satellite plumbing)
 - SettingsBundle includes `instance` with `id` (e.g., `home`, `work`, `laptop`) and `role` (`master` or `satellite`).
@@ -93,11 +104,14 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 - Examples: the ASK agent already follows this pattern (`app/agents/ask/graph.py` + `AgentState`); PanelAgent is partially aligned today (Runtime V1 fixed mapping) with a planned migration to the same LangGraph + AgentState pattern (PanelAgent 2.0).
 - Current adoption is phased: ASK and PanelAgent use LangGraph; most other agents remain deterministic pipelines until v5.6 rollout phases.
 
-## Agent Implementation Pattern (Normative)
-- Agents MUST route reasoning/tool calls through the ReasoningFacade once it is available.
-- LangGraph agents SHOULD share a common BaseLangGraphAgent to keep state transitions and tool invocation uniform.
+## Agent Implementation Pattern (Current Direction)
 - Agents MUST preserve external event contracts and Outbox envelopes during migrations.
-- Implementation details will live in `docs/AGENT_IMPLEMENTATION.md` (placeholder for later).
+- Agents that already use LangGraph should keep explicit state and deterministic tool/event boundaries.
+- If `ReasoningFacade` or shared LangGraph scaffolding is introduced into the active baseline, this document and the owning agent specs must be updated in the same change.
+- Current agent-specific implementation detail lives in:
+  - `docs/AGENTS.md`
+  - `docs/PANEL_AGENT.md`
+  - active settings and graph specs under `docs/settings/`
 
 Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_boundary_tests_dont_allow_escape_hatches`
 
@@ -126,7 +140,7 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 - Zones are orthogonal to lifecycle (inbox → processed/staging → evergreen → archived) and to temporal value (ephemeral vs normal vs evergreen longevity). A note can be evergreen and Cold, or ephemeral and Active.
 - Zones are derived overlays driven by system metadata (recency, relations, usage), not mandatory folder/tag names; they can be projected into ASK responses and GUI status but do not dictate file layout.
 
-## Core Contract, State Axes, and Overlays (vNext)
+## Core Contract, State Axes, and Overlays
 - Core contract: Core-6 is the minimal semantic projection (uuid, title, origin, source_ref, trust, review_state). Fields may be explicit or derived; see `docs/CORE_CONTRACT.md`.
 - State axes: orthogonal and policy-driven via vault settings; policies define which axes are enabled, locked, or forced.
 - Derived / overlay metadata: system-owned overlays such as `zone`, recency, or salience are computed from signals and remain outside the core contract.
@@ -148,7 +162,7 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 - The same file is both metadata mirror and per-note log: it collects agent runs, promotion history, provenance, and any future satellite sync evidence so the machine history follows the object regardless of backend.
 - The Note Log is portable Markdown that can move via Git between instances even when SetDB/AMG or other Stores differ.
 
-## Reality-MVP Architecture Components
+## Current Runtime Surfaces
 1) **Vault ingestion** — CLI/agent path to ingest selected Obsidian folders, normalize into Core-6 envelopes, persist in ObjectStore, emit Outbox events, chunk/index into VectorIndex, and keep provenance intact.
    - Targeted ingest is available via `ingest-vault-paths` for specific markdown files (reuses the same pipeline; first v5.1 watcher-ready step and the entrypoint watchers will call).
    - Panel/runtime entrypoint: `panel run-many` runs the same PanelAgent parse/runtime for multiple notes (emit-only supported) and remains the manual CLI hook for multi-note runs. Watcher auto-run treats AI-fenced notes as candidates once `WATCHER_AUTO_EXEC=1` is armed and only `ai_panel_auto_run: never` (`ai_panel: { auto_run: never }`) blocks the run.
@@ -159,149 +173,47 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 4) **Observability backend** — status service that aggregates per-store object counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency; exposed via CLI and interim GUI.
 5) **Interim GUI** — simple FastAPI-served page (root `/`) that shows status (object counts, last ingest, ASK stats) and an ASK input with answers + visible sources; explicitly a temporary observability/interaction surface.
 6) **Panel action catalog & watcher settings** — the canonical action catalog (`docs/settings/panel-actions.md`) + `vault/@Settings/watchers.md` describe allowed `watcher_allowed` actions, auto-run env (`WATCHER_AUTO_EXEC`), and outbox paths; `python -m app.cli settings-explain` and `python -m app.cli settings-validate` emit provenance + validation output for reviews.
-All Reality-MVP components run on the existing PER-loop agents (Normalizer, Classifier, Chunker, CitationChecker, Indexer, Reviewer, Promotion Agent) and Store abstraction (ObjectStore, VectorIndex, RelationIndex) with Outbox-driven events and Projector/Planner/Reasoning layers kept as additive overlays.
-Advanced zone logic, reflection workflows, serendipity, and collaboration are deferred until the Reality-MVP foundation is solid.
+All current runtime surfaces build on the same Store abstraction (ObjectStore, VectorIndex, RelationIndex), event envelope, and vault-first write boundary.
 
-## Archival Baseline (SoT v4.5A Canon)
-The sections below retain the v4.5A Canon details as a historical baseline; invariants still apply unless superseded by the Reality-MVP notes above.
+## Operational and Implementation Detail
 
-## Purpose & Principles
-- Human-first and agentic PKM: agents stay assistive, preserve author context, and only advance maturity when a reviewer signs off.
-- Observability-first to drive transparency: every agent emits structured audit spans plus deterministic fixtures so regressions reproduce in CI.
-- Core-6 contract & UUID identity: each object carries the Core-6 envelope (uuid, title, origin, source_ref, trust, review_state), whether explicit or derived, and a stable UUID threaded through stores and events.
-- Store abstraction & Outbox events: ObjectStore, VectorIndex, and RelationIndex share a Store interface, while the Outbox broadcasts change events for asynchronous consumers.
-- Separation of trust and audit: trust levels gate promotion; audit trails remain append-only so reviewers can replay any decision independently.
+The following topics are part of the current system, but their detailed behavior is owned by narrower documents:
+- persistence backends, startup paths, and runtime topology:
+  - `docs/OPERATIONS.md`
+  - `docs/INFRASTRUCTURE.md`
+- retrieval, reranking, and ASK behavior:
+  - `docs/COMPONENTS.md`
+  - `docs/LLM.md`
+  - `docs/RETRIEVAL.md`
+- note-update, panel, and promotion specifics:
+  - `docs/PANEL_AGENT.md`
+  - `docs/HUMAN-FLOWS.md`
+- observability, health, and CI/runtime verification:
+  - `docs/OBSERVABILITY.md`
+  - `docs/HEALTH.md`
+  - `docs/TESTING.md`
 
-## Core Architecture
+## Forward-Line Features (Non-baseline)
 
-### Runtime Surfaces
-Centralized reference for HTTP apps and ports during local development and docker-compose runs.
+These topics are real parts of the repo and roadmap, but they are not baseline-defining architecture for the locked v5.5 runtime:
+- richer Reasoning/LangGraph rollout beyond the currently active agents
+- A2A envelopes and cross-agent routing experiments
+- MCP-facing runtime surfaces
+- Orchestrator V2 design and rollout
+- future satellite-sync behavior
 
-#### HTTP Apps
-| Module | Variable | Purpose | Primary Routes / Notes | How to Run |
-| --- | --- | --- | --- | --- |
-| `app.main` | `app` | Reality-MVP PKM HTTP API (status + ASK + interim GUI) | `/healthz`, `/readyz`, `/api/health`, `/api/status`, `/search`, `/api/ask`, `/docs`, `/openapi.json` (and `/` serves static dashboard; `/api/ingest` still optional for internal tooling) | `uvicorn app.main:app --reload --port 18000` (docker-compose maps container `8000` → host `18000`) |
-| `app.legacy_http` | `app` | Legacy agent/interesting/demo endpoints | `/agent/health`, `/interesting`, `/dashboard`; uses stub repo in lifespan | `uvicorn app.legacy_http:app --reload --port 18001` (dev-only) |
-| `app._legacy.main` | `app` | Deprecated pre-Reality API with rate limits/metrics | `/`, `/health`, `/version`, `/context`, `/items`, `/ingest`, `/search`, agent/ui routes; requires DB + settings | `uvicorn app._legacy.main:app --reload` (not recommended for new runs) |
-| `api.app` | `app` | WS golden-data demo API | `/query` returns mock answer + citations from `golden/` | `uvicorn api.app:app --reload --port 8001` when needed |
+Treat these as forward-line or specialized-reference topics owned by:
+- `docs/ROADMAP.md`
+- `docs/plans/V56_FORWARD_LINE.md`
+- `docs/plans/PROTOCOL_SATELLITE_SYNC.md`
+- `docs/AGENTS.md`
+- `docs/tracks/*`
 
-#### Ports
-| Service | Purpose | Default Port | How it’s exposed / notes |
-| --- | --- | ---: | --- |
-| Reality-MVP HTTP API | PKM status + ASK endpoints | 18000 | Run locally via `uvicorn app.main:app --reload --port 18000`; docker-compose exposes container `8000` on host `18000`. |
-| Postgres (app DB) | Stores/agents persistence | 15432 | `db` service in `docker-compose.yaml` listens on 5432 in-container; default DSN `postgresql+psycopg://app:app@localhost:15432/app`. |
-| OTLP collector (optional) | Traces via OpenTelemetry Collector | 4318 (HTTP) / 4317 (gRPC) | Endpoints configured in `otelcol.yaml`; point trace exporters at `http://localhost:4318` when running a collector. |
-| Prometheus (optional) | Metrics scrape endpoint | 9090 | `ops/observability/docker-compose.yaml` publishes Prometheus on 9090. |
-| Grafana (optional) | Observability UI | 3000 | `ops/observability/docker-compose.yaml` publishes Grafana on 3000 with admin/admin defaults. |
+## Historical Material
 
-This table supersedes the prior `docs/PORTS.md` listing.
+Historical topology, older runtime surfaces, and superseded architecture detail live outside this document:
+- `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
+- `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
+- `docs/history/SOT_4X_HISTORY.md`
 
-### Agents
-- Normalizer — accepts capture payloads, enforces Core-6 fields, and strips unsafe metadata.
-- Classifier — tags object type, topic facets, and routing hints for downstream agents.
-- Chunker — segments normalized text into retrieval-ready spans plus embedding metadata stubs.
-- Deduper — compares against prior hashes and emits relation records for duplicates or merges.
-- CitationChecker — validates outbound references and attaches citation debt metrics.
-- Indexer — materializes embeddings, syncs ObjectStore + VectorIndex, and raises `index.embedding.created` (legacy alias: `index.object.embedded`).
-- Reviewer — enforces maturity gates, toggles trust levels, and prepares Projector contracts.
-- Projector — publishes curated packets to downstream surfaces (docs, API, knowledge packs).
-- PromotionAgent — final arbiter that commits promotion decisions to audit + Outbox while coordinating cooldowns.
-
-### Store Layer
-ObjectStore persists object envelopes and agent decisions; VectorIndex stores chunk vectors plus embedding metadata; RelationIndex captures graph edges (duplicate_of, cites, derived_from) for query-time traversal. Each store implements CRUD via the Store abstraction so the same agent code works against in-memory dicts or Postgres-backed engines.
-
-### Event Choreography
-1. `ingest.object.created` records capture acceptance and seeds the PER loop.
-   - `ingest.object.deleted` signals explicit vault-note deletion (path/uuid) so downstream consumers can react without inferring from missing state.
-2. `ingest.object.normalized`, `.classified`, `.chunked`, `.deduped`, `.citation_checked` mark completion of each agent and carry `trace_id` plus payload diff.
-3. `index.embedding.created` signals VectorIndex writes and unlocks downstream consumers (legacy alias: `index.object.embedded`).
-4. `promote.pending` captures Reviewer approval; `promote.done` finalizes PromotionAgent moves and informs subscribers such as search indexing or set sync.
-- All events carry `instance_id` from `SettingsBundle.instance.id` (default `home`) so audit/Outbox can mark which runtime emitted the event and prepare master/satellite without changing the vault UX.
-
-### PromotionAgent Rules
-- Idempotent writes: promotion can be retried safely because target maturity and storage side effects are computed deterministically from audit trails.
-- Cooldown windows: move requests within the same five-minute window are coalesced to prevent thrash when upstream agents reclassify the same object.
-- `move_policy` guardrails: `move_policy=advance_only` prohibits demotions outside manual overrides, while `move_policy=force` is reserved for maintenance tasks and always logs a privileged audit entry.
-
-## Ingestion Pipeline (PER loop)
-Every agent follows Plan → Execute → Reflect. Plan inspects the latest event plus Core-6 envelope to decide whether work is required, Execute performs the mutation using the Store layer, and Reflect writes audit spans, metrics, and Outbox entries. Data hand-offs are immutable payloads: Normalizer emits `normalized_object`, Chunker emits `chunk_set`, Deduper adds a `relation_patch`, CitationChecker appends `citation_report`, and Indexer produces an `embedding_batch`. The Reviewer consumes the cumulative context to assert maturity, then Projector and PromotionAgent close the loop. Failed executions requeue themselves by emitting a retryable event with the same `trace_id`.
-
-### Note Ingestion Defaults
-- Obsidian notes (including vault-alpha ingest) are auto-healed before Panel runs: the frontmatter `uuid` is written or retained via the YAML round-trip helpers (always as `uuid: [[<uuid>]]`), preferring any existing `uuid`/`id` even when mirrors disagree.
-- Notes without UUIDs are still ingested and snapshotted; the ingest pipeline materializes the `uuid` into the note frontmatter (wikilink) and mirror before proceeding so identity stays stable across runs.
-- Vault ingest stores an ingest fingerprint (text SHA + file mtime) in mirrors and the Store; skips only apply when the Store already has an object and those fingerprints agree with the freshly computed fingerprint. `--force` bypasses fingerprint/store checks, reingests everything, and is the recovery path for “new DB + old mirrors.”
-- `note_moves_enable` defaults to false in runtime/global settings; Planner demotes move/rename/re-file steps to log-only and Promotion logs `promote.skip.move` instead of moving files.
-- Malformed frontmatter is tolerated: invalid YAML is skipped with a warning and reported in the ingest summary rather than crashing the run.
-- Ingest errors are recorded (counts + paths) in the ingest summary; reruns can resume from already-processed notes (via `resume_from` in code paths) while finishing remaining items.
-- Operators can enable moves later by setting `note_moves_enable: true` in `vault/@Settings/global` (propagates into generated runtime settings after `python -m app.cli settings compile`; the `runtime/settings/` directory is generated and not committed).
-
-### Diarization-aware Chunking (v4.6-C)
-When `DIARIZE_ENABLE=1`, the ingestion pipeline now feeds diarization metadata (speaker, start, end) into `speaker_aware_chunks()` so spans are cut on speaker changes or size boundaries (O(n) over segment length). Each emitted chunk carries `{speaker,start,end,speaker_segments}` metadata that flows through `ingest_and_chunk()` to indexing, and the audit stream (`text.chunk.created`) records `speaker_count` so reviewers can trace diarization coverage. With the flag disabled, `build_chunks()` preserves the legacy token/character splitter to keep defaults inert and deterministic.
-Oversized per-speaker segments are deterministically pre-split to respect `max_chars`; proportional start/end timestamps keep timelines monotonic without re-reading audio.
-
-### Reasoning Layer (cross-agent capability + DeliberationAgent)
-Reasoning is a cross-cutting capability every agent can use for planning, critique, and reflection. The layer is multi-mode (`app/reasoning/models.py`) rather than a single JSON extractor. `ReasoningMode` defines supported modes and `ReasoningRun` captures each run (id, mode, trace_id, object_uuids, steps, result, status/error). The router `run_reasoning(...)` in `app/reasoning/provider.py` orchestrates:
-
-- `claims`: existing claims/evidence/inferences extraction (backed by `ReasoningInput` + `ReasoningOutput`); still fixture-backed for mock runs (`data/golden/reasoning_samples.jsonl`) and Ollama-backed locally.
-- `review`: lightweight review/critique of a note (summary/issues/suggestions), mock-deterministic in CI, LLM-backed locally.
-- `ranking`: candidate ranking with reasons, mock-deterministic in CI, LLM-backed locally (SetEvaluator consumes this).
-- `planning`: reserved/TBD.
-
-Calls include `agent` and `kind` (e.g., `reasoning.claims`, `reasoning.review`, `reasoning.ranking`) for tracing. The pipeline still gates on `REASONING_ENABLE=1` and stores claims outputs in the ReasoningStore; other modes feed agents directly (Reviewer, SetEvaluator) while remaining observable via the JSONL trace. DeliberationAgent is the specialized multi-step ASK agent that uses the Reasoning Layer to take multiple hops, and the same pattern is reused by Reviewer, SetEvaluator, and Planner.
-
-Invariants:
-- `claims` is successful (`status="ok"`) only when at least one claim or evidence exists; fully empty `{claims:[], evidence:[], inferences:[]}` is `status="failed"`.
-- `ranking` is successful only when the ranking list is non-empty and contains at least one non-empty reason; otherwise `status="failed"`.
-
-## Orchestrator V2 Design (Preview)
-- Parallel step execution with deterministic scheduling and replay.
-- Compensation/rollback hooks for multi-step plans.
-- Checkpointing and resumption for long-running plans.
-- Structured retry policy for idempotent steps.
-- Flagged rollout: `ORCHESTRATOR_VERSION=v1|v2` (preview only).
-- Placeholder: `docs/ORCHESTRATOR_V2.md`.
-
-## Persistence & Execution Modes
-- `STORE_BACKEND=memory` is the default for CI and unit tests; it instantiates in-memory implementations of ObjectStore, VectorIndex, and RelationIndex with deterministic UUID seeds.
-- `STORE_BACKEND=pg` connects to Postgres/pgvector for full-fidelity runs; migrations guarantee schema parity with the memory structs.
-- VectorIndex persistence is optional JSONL snapshots: set `INDEX_PERSIST_PATH` when writing batches and `INDEX_PERSIST_LOAD` to bootstrap warm caches across runs.
-- `audit_log()` always writes to the configured sink, falling back to `logs/audit.jsonl` when stdout/file destinations are unavailable, ensuring no audit gap.
-- The LLM layer defaults to `LLM_PROVIDER=mock` with fixture responses for deterministic CI; production enabling switches providers via env, while `llm_retry()` applies exponential backoff and caps at three attempts per request.
-
-## Retrieval Layer (Rerank & Hybrid Search)
-Hybrid search merges BM25 (FTS) plus vector similarity, returning distinct object IDs with score provenance. `RerankerProvider` now ships a matrix of deterministic adapters (`none`, `mock_ce`, `ce_local`, `ce_http`) that are injected via dependency wiring; reranking remains inert until `RERANK_ENABLE=1`. Operators select providers with `RERANK_PROVIDER`, keep cost bounded using `RERANK_TOP_K`, and rely on `ce_local` when they need a deterministic cross-encoder heuristic during CI. `apply_optional_rerank()` (located in `app/retrieval/hybrid_rerank_hook.py`) is called at the end of `hybrid_search` after unioning lexical + vector matches; invariants: never drop items, only reorder the first `TOP_K`, and maintain stable IDs for downstream caching. The v4.6 track keeps the same plug-in model so tests can swap mocks without touching query code, while production can point to an HTTP cross-encoder when approvals land.
-
-### Rerank Hook Placement
-The adapter `app/retrieval/hook_adapter.py::maybe_rerank(query, items)` sits on the final step of `hybrid_search` after BM25/vector scores are normalized and merged. By default it returns items untouched; when `RERANK_ENABLE` is set it delegates to `apply_optional_rerank()` so PromotionAgent and downstream caches always observe deterministic payloads (id, text, score, snippet, metadata). Memory-mode CI keeps determinism because the mock cross-encoder is pure Python and respects the provided ordering contracts.
-
-## Observability & CI
-JSONL audit logs capture `trace_id`, agent name, inputs, and outputs for each PER step; correlated `span_id`s map to structured metrics for latency and retries. Deterministic CI runs use `pytest -q -m "not pg"`, memory stores, and mock LLMs to ensure reproducible timings. Outbox processing meets QAS-010 by keeping ingest-to-index latency ≤ 2 s, while search endpoints monitor QAS-003 with p95 latency < 250 ms under hybrid retrieval. Telemetry dashboards watch agent failure rates and promotion cooldown breaches so regressions are caught before shipping.
-Runtime status lives in `app.observability.status_service`: it aggregates per-plane object counts (vault/external), ingest run timestamps/errors (via ingest summaries), and ASK latency/error counts. The `status` CLI command and interim GUI (root `/`, static HTML + JS under `app/web/static/index.html`) call this backend to show a human-readable snapshot.
-
-## A2A / Agent-to-Agent Protocol (v4.8)
-A2A runs as an internal message bus over the same Stores + Events + the PER loop. When `A2A_ENABLE=1`, the Outbox registers an additional channel that carries envelopes between agents without bypassing audit or promotion invariants, and every agent can opt into message handling via `handle_agent_message()` while continuing to emit the standard ingest events. The canonical schema (request/response/error) plus audit events (`agent.request.created`, `agent.response.created`, `agent.error.created`) now ship in-tree so tests can exercise protocol hooks while routing/orchestrator wiring remains feature-gated.
-
-### Envelope Events
-- `agent.request.created` — emitted when an agent wants follow-up work from another agent; carries `request_id`, `trace_id`, desired capability, and payload summary.
-- `agent.response.created` — emitted when the responding agent finishes work; includes `request_id`, `trace_id`, and a summarized response payload.
-- `agent.error.created` — emitted when a follow-up request fails; includes error details, stack trace, and metadata for audit replay.
-
-## MCP (Model Context Protocol) Surface (v4.9)
-The PKM runtime exposes itself as an MCP server so external tools can orchestrate ingest/search flows without bespoke adapters. MCP endpoints mirror the internal Store/Agent APIs (e.g., `pipe_note`, `search_notes`, `get_claims`, `promote_object`, `list_relations`) and sit behind the same auth + audit envelope as the CLI.
-Running with `MCP_ENABLE=1` starts an MCP server process bound to the local runtime; tool metadata describes inputs/outputs using the canonical schema so editors like Obsidian or ChatGPT can call them directly. Deterministic mocks remain available for CI so MCP startup is a no-op unless explicitly toggled.
-
-## Note Update Path (Panel Runtime + UUID integrity)
-`NoteUpdateService` builds on that by treating the note UUID as the durable identity: `process_note_update()` loads the note, checks an optional expected path (stale detection), hydrates prior snapshots from `tmp/note_update_snapshots`, and runs `handle_panel_update()` before writing the updated markdown + snapshot. The `note-update` CLI batches this over one or more files (`python -m app.cli note-update vault/Inbox --glob '*.md'`), emits per-note status, and summarizes processed/changed/dispatch counts. This is the same entrypoint future filesystem watchers will call when they notice edited notes, so behaviour stays deterministic whether triggered manually or automatically.
-Two commands exist on purpose: `panel-update` runs the AI panel in isolation for a single note (instruction/actions/logg) without snapshots, stale detection, or watcher orchestration, while `note-update` runs the canonical UUID-first pipeline with snapshots, stale detection, and panel + event dispatch that note-scan and future watchers rely on. Use this quick guide to pick the right tool.
-- use `panel-update` when:
-- you only want to operate on a single file without invoking snapshots, stale detection, watcher logic, or UUID holistic update logic,
-- you are developing panel actions and want a tight feedback loop.
-- use `note-update` when:
-- you need deterministic UUID-first behaviour consistent with watcher-triggered runs,
-- you want stale detection and snapshots with `tmp/note_update_snapshots`,
-- you want behaviour consistent with note-scan and future watchers.
-
-## Runtime Topology (Reality-MVP)
-- The compose stack runs db (pgvector), api (FastAPI on 8000 mapped to 18000), watcher (registry watcher), and worker (DB outbox consumer) on Colima-backed Docker.
-- `/api/health` now surfaces watcher heartbeats, worker heartbeats, and DB/LLM readiness checks so the Status service can report liveliness with deterministic probes.
-- Operator scripts (`scripts/start_full_system.sh`, `scripts/gap_test_alpha.sh`) wrap the watcher→worker→index→/api/ask loop, log diagnostics, and guard against missing sources so the architecture is observable without manual digging.
+This document deliberately does not inline those older sections. For current-state questions, the active sections above are authoritative.
