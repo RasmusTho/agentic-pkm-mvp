@@ -58,6 +58,13 @@ When making decisions, you MUST respect this order:
 
 Use `docs/DOCS_INDEX.md` to determine whether a document is Core SoT, Reference, Plan, or Historical before treating it as a decision input.
 
+For any documentation or specification task, you MUST determine the owning document before drafting edits:
+- start in `docs/DOCS_INDEX.md`,
+- identify the document role,
+- identify the owning `Core SoT` doc for the topic,
+- read that owner before reading neighboring reference docs,
+- treat `Plan` and `Historical` docs as context only.
+
 If there is a conflict:
 - Prefer (1) over (2), (2) over (3), (3) over (4).
 - If you believe the SoT itself should change, you MUST:
@@ -172,6 +179,19 @@ For every non-trivial change, follow this sequence:
      - keep normative statements close to the document that owns them,
      - move operational or implementation detail out of spec docs when it obscures the contract.
 
+7. **Follow the document change algorithm**
+   - For any docs change, execute this sequence:
+     - classify the request by topic and owning surface,
+     - confirm the owner in `docs/DOCS_INDEX.md`,
+     - update the owning document first,
+     - update neighboring reference docs only when they materially help the reader,
+     - update `docs/DOCS_INDEX.md` if any role, path, status, or reading order changed,
+     - remove or rewrite duplicate statements instead of leaving conflicting copies behind.
+   - Do not start by editing the easiest document to reach. Start with the owner.
+   - Do not create a sibling doc to avoid touching an owner doc.
+   - Do not leave a redirect/stub indefinitely once inbound references are removed.
+   - If a topic no longer needs its own document, merge it into the owner and delete or archive the old file.
+
 ---
 
 ## 4. Task loop you MUST follow
@@ -222,3 +242,18 @@ For each user request:
   - Follow existing component patterns in `app/components/*`.
 
 If you are unsure whether to introduce a new pattern or reuse an existing one, prefer reuse and mention the trade-off explicitly in your plan.
+
+## 6. Anti-dilution rules for documentation
+
+When changing documentation, optimize for clarity under high complexity:
+- one topic must have one owner document,
+- normative rules belong in the owner doc, not in a summary or convenience doc,
+- summary docs may point, scope, or map, but they must not silently redefine contracts,
+- examples, runbooks, and how-to material must not become the de facto spec,
+- if two docs say nearly the same thing, merge or sharpen the boundary,
+- every new document must justify why an existing owner doc is insufficient.
+
+The default outcome for overlap is:
+- merge into the owner doc,
+- tighten neighboring docs,
+- archive or delete the redundant file.

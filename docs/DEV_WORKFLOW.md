@@ -188,6 +188,12 @@ Expected local toolchain:
   - `docs/TESTING.md`
   - `docs/OPERATIONS.md`
   - `docs/DOCS_INDEX.md`
+- For any documentation or specification task, use this reading order:
+  - `docs/DOCS_INDEX.md` to identify document role and owner
+  - the owning `Core SoT` doc
+  - adjacent `Core SoT` docs that define neighboring boundaries
+  - current `Reference` docs for implementation or operational detail
+  - `Plan` and `Historical` docs only for context, never as current truth
 - Do not create a new top-level doc if the content fits an existing core or reference doc.
 - If you add a new doc:
   - start from `docs/templates/DOC_TEMPLATE.md`,
@@ -201,6 +207,42 @@ Expected local toolchain:
   - identify which document owns the final decision,
   - keep invariants, boundaries, and decision rules explicit,
   - avoid duplicating implementation detail that belongs in reference docs.
+
+## Documentation update procedure
+
+Use this procedure whenever behavior, policy, or document structure changes:
+
+1. Identify the topic owner
+   - Use `docs/DOCS_INDEX.md` to find the owning document and its role.
+   - Do not start in a summary doc just because it is shorter.
+
+2. Update the owner first
+   - If the change affects current truth, edit the owning `Core SoT` doc first or in the same commit.
+   - If the change is operational or explanatory only, update the owning `Reference` doc.
+
+3. Propagate only where needed
+   - Update neighboring docs only if they are part of the intended reading path.
+   - Prefer links and short boundary notes over repeated prose.
+
+4. Remove duplication created by the change
+   - If two docs now overlap, merge the content into the owner and tighten or remove the secondary doc.
+   - Do not leave multiple near-authoritative descriptions of the same behavior.
+
+5. Update the map
+   - Update `docs/DOCS_INDEX.md` whenever a doc is added, merged, deleted, archived, deprecated, or re-scoped.
+
+6. Choose the smallest durable document shape
+   - Prefer extending an existing owner doc over creating a sibling doc.
+   - Create a new doc only when the topic has a distinct owner, audience, and maintenance boundary.
+
+## Anti-dilution rules
+
+- One topic should have one owner document.
+- Core rules and invariants must live where they are owned.
+- Indexes, summaries, runbooks, and examples must not become hidden specification layers.
+- Reference docs may explain how the system works, but they must not quietly overrule `Core SoT`.
+- Plan docs must separate future intent from current reality.
+- Historical docs must never be used as justification for current behavior without a current owner doc adopting the rule.
 
 ## Review checklist
 
