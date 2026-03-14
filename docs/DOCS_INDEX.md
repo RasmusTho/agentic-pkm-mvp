@@ -26,6 +26,7 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | --- | --- | --- | --- | --- |
 | README.md | Top-level overview | Aligned (forward line v5.x) | 2026-02-05 | v5.5 baseline quickstart + invariants; points to DOCS_INDEX/STATUS/ARCHITECTURE. |
 | docs/DOCS_REFACTOR_PLAN.md | Documentation simplification plan | Proposed / in progress | 2026-03-13 | Working plan for reducing active doc surface, clarifying document roles, and staging merges/moves. |
+| docs/DOCS_SECOND_WAVE_CLEANUP.md | Second-wave cleanup matrix | Proposed / in progress | 2026-03-14 | Prioritized keep/merge/archive/delete matrix for the next docs cleanup wave. |
 | CHANGELOG.md | Repo change log (root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/CHANGELOG.md. |
 | .github/ISSUE_TEMPLATE/v4.6-objective.md | Issue template (historical, root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/ISSUE_TEMPLATE_v4.6-objective.md. |
 | .github/pull_request_template.md | PR template (historical, root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/pull_request_template.md. |
