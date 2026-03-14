@@ -27,6 +27,7 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | README.md | Top-level overview | Aligned (forward line v5.x) | 2026-02-05 | v5.5 baseline quickstart + invariants; points to DOCS_INDEX/STATUS/ARCHITECTURE. |
 | docs/DOCS_REFACTOR_PLAN.md | Documentation simplification plan | Proposed / in progress | 2026-03-13 | Working plan for reducing active doc surface, clarifying document roles, and staging merges/moves. |
 | docs/DOCS_SECOND_WAVE_CLEANUP.md | Second-wave cleanup matrix | Proposed / in progress | 2026-03-14 | Prioritized keep/merge/archive/delete matrix for the next docs cleanup wave. |
+| docs/HISTORICAL_EXTRACTION_REVIEW.md | Historical extraction review | Proposed / in progress | 2026-03-14 | Working review of historical docs against current owners to decide extract/archive/delete actions. |
 | CHANGELOG.md | Repo change log (root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/CHANGELOG.md. |
 | .github/ISSUE_TEMPLATE/v4.6-objective.md | Issue template (historical, root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/ISSUE_TEMPLATE_v4.6-objective.md. |
 | .github/pull_request_template.md | PR template (historical, root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/pull_request_template.md. |
@@ -101,7 +102,7 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/RETRIEVAL.md | Retrieval | Aligned (forward line v5.x) | 2026-02-05 | Hybrid retrieval + optional rerank hooks (`RERANK_ENABLE`/`RERANK_PROVIDER`). |
 | docs/FRONTMATTER.md | Frontmatter rules | Aligned (forward line v5.x) | 2026-02-05 | Defines metadata layers, ownership, and the warm-surface write contract. |
 | docs/DATA_MODEL.md | Data model | Aligned (forward line v5.x) | 2026-02-05 | DB mirror of the Core-6 contract; derived overlays are rebuildable. |
-| docs/DATA_GOVERNANCE.md | Data governance | Aligned (forward line v5.x) | 2026-02-05 | Clarifies canonical vs derived artifacts, trust semantics, and auditable persistence. |
+| docs/DATA_GOVERNANCE.md | Data governance | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; canonical-vs-derived artifact rules and persistence/audit guidance now live in `docs/DATA_MODEL.md`. |
 | docs/DB_SCHEMA.md | DB schema | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Snapshot of current tables/views + DB outbox bootstrap; notes multiple historical Alembic heads. |
 | docs/SCORECARDS.md | Scorecards | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; scorecard-style targets now live in `docs/eval.md`. |
 | docs/SETTINGS.md | Settings | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Settings compiler + registries documented; some areas are forward-looking. |

@@ -15,6 +15,50 @@ See `docs/CORE_CONTRACT.md`.
 - Missing YAML does not imply missing semantics; Core-6 and state axes may be implicit or derived.
 - Zones, metrics, embeddings, and scores are derived and can be rebuilt from the source content.
 
+## Canonical vs derived artifacts
+
+Canonical artifacts are the durable sources of meaning:
+- warm artifacts: human-authored, editable notes on the writing surface
+- cold artifacts: archived source material that remains retrievable and citable without being forced into the writing surface
+
+Canonical artifacts must remain portable, readable without the system, and carry stable identity plus provenance.
+
+Derived artifacts are rebuildable views:
+- indexes, embeddings, projections, caches, summaries, and other machine views
+- operational traces, receipts, and audit records retained for observability and legibility
+
+Derived artifacts may be persisted for performance and auditability, but they must never become the only remaining copy of meaning.
+
+## Persistence surfaces
+
+This system persists across three conceptual surfaces:
+
+### Warm surface (human writing)
+- canonical, editable notes
+- minimal, human-first metadata
+- no silent rewriting of meaning; durable changes require explicit review/apply intent
+
+### Cold surface (archive brain)
+- canonical source artifacts intended for retrieval and citation
+- exposure is gated by domain + trust policy
+
+### System plane (operations + audit)
+- receipts, audits, traces, and other operational records
+- rebuildable indexes and machine views
+- configuration artifacts and their validation/audit receipts
+
+System-plane persistence must avoid polluting the warm writing surface while remaining inspectable and portable.
+
+## Audit and receipts
+
+Receipts are first-class and must make meaningful system actions reconstructable. At minimum they should show:
+- what happened
+- which inputs or sources were used
+- what boundary context was in effect
+- what changed, if anything, and how to reverse it
+
+Receipts may be surfaced through UI affordances, but they must remain available even if the presentation layer changes.
+
 ## Tables (vNext mirror surface)
 
 ### objects

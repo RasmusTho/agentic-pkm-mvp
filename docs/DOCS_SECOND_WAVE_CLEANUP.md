@@ -61,7 +61,7 @@ Recommended next execution order:
 | `docs/LLM_ROUTING.md` | Reference / contract | keep | Distinct routing contract |
 | `docs/RETRIEVAL.md` | Reference | keep | Distinct retrieval behavior surface |
 | `docs/DATA_MODEL.md` | Reference | keep | Distinct data model doc |
-| `docs/DATA_GOVERNANCE.md` | Reference | merge into | `docs/DATA_MODEL.md` or `docs/CORE_CONTRACT.md`; strong overlap in canonical-vs-derived semantics |
+| `docs/DATA_GOVERNANCE.md` | Deprecated redirect | delete | Governance semantics merged into `docs/DATA_MODEL.md`; remove once inbound links are fully gone |
 | `docs/DB_SCHEMA.md` | Reference | keep | Distinct DB snapshot/reference |
 | `docs/FRONTMATTER.md` | Reference | keep | Distinct vault/frontmatter contract |
 | `docs/SETTINGS.md` | Reference | keep | Main settings owner |
