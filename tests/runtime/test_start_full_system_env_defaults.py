@@ -120,7 +120,8 @@ def test_apply_start_full_system_vault_defaults_does_not_guess_legacy_dirs_from_
         "print(os.environ.get('VAULT_DESK_DIR_REL', ''))\n"
         "PY"
     )
-    assert out == ""
+    lines = out.splitlines()
+    assert lines == ["⚙️ System", "📥 Inbox", "🛠️ Workbench"]
 
 
 def test_apply_start_full_system_vault_defaults_does_not_override_explicit_values() -> None:
