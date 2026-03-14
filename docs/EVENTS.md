@@ -1,10 +1,11 @@
-State: v5.5 baseline + v5.6 forward line — Outbox JSONL envelope + event catalog (contract-level).
+State: v5.5 baseline + v5.6 forward line — event envelope + event catalog (contract-level).
 Doc role: Core SoT
 Authority: Canonical event envelope and event meaning contract for emitted runtime events; authoritative unless superseded by an explicit compatibility contract update.
 
 # Events
 
-This document describes the event artifacts emitted by the system and recorded in the Outbox (JSONL). It defines the canonical envelope and documents the meanings of key event types.
+This document describes the event artifacts emitted by the system and recorded in the outbox path.
+In the active baseline, the DB outbox is canonical and JSONL remains audit/diagnostic only. This document defines the canonical event envelope and the meanings of key event types.
 
 Compatibility and evolution are governed by `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`.
 
@@ -13,9 +14,10 @@ Connector/watcher/inbox action vocabulary and delta feed guardrails are captured
 
 ## Outbox envelope (canonical)
 
-All Outbox records MUST include this minimal envelope:
+All outbox records MUST include this minimal envelope:
 
 - `event` (`string`): event type, e.g. `ingest.object.created`, `index.embedding.created`.
+- `event_id` (`string`): unique event identifier used for deduplication and replay safety.
 - `trace_id` (`string`): correlation id for a run/trace.
 - `source` (`string`): emitting component identity (stable attribution label).
 - `timestamp` (`string`, ISO-8601 UTC): emission time.
@@ -89,15 +91,15 @@ Example:
 }
 ```
 
-### `index.embedding.created` (current emission)
-
-`index.embedding.created` is the event currently emitted by the indexer. Treat `index.object.embedded` as a legacy alias for compatibility with older consumers.
-
+Current emission note:
+- `index.embedding.created` is the current indexer event.
+- `index.object.embedded` is a legacy alias kept only for compatibility with older consumers.
 - Producers must not include embedding vectors in outbox events.
 
 ### `watcher.run`
 
-Emitted after a watcher tick completes.
+Emitted after a legacy snapshot watcher tick completes.
+The registry watcher does not use `watcher.run`; its health is tracked through heartbeat and tick signals surfaced via health/status.
 
 Payload (minimum contract):
 - `vault_root` (`string`)
