@@ -45,7 +45,7 @@ Recommended next execution order:
 | `docs/AGENTS.md` | Reference | keep | System-level agent architecture |
 | `docs/PANEL_AGENT.md` | Reference | keep | PanelAgent-specific contract |
 | `docs/ROADMAP.md` | Plan | keep | Strategic plan owner |
-| `docs/V56_FORWARD_LINE.md` | Plan | merge into | `docs/ROADMAP.md` once v5.6 planning stabilizes; currently still useful as a short-lived plan doc |
+| `docs/plans/V56_FORWARD_LINE.md` | Plan | merge into | `docs/ROADMAP.md` once v5.6 planning stabilizes; currently still useful as a short-lived plan doc |
 | `docs/CI.md` | Removed | completed | Content merged into `docs/TESTING.md`; redirect stub deleted on this branch |
 | `docs/ISSUES_TESTING.md` | Removed | completed | Remaining active gap tracking merged into `docs/TESTING.md`; redirect stub deleted on this branch |
 | `docs/QUALITY.md` | Removed | completed | Validation guidance merged into `docs/TESTING.md`; redirect stub deleted on this branch |
@@ -81,7 +81,7 @@ Recommended next execution order:
 | `docs/runbooks/RUNBOOK_RESET_TO_ZERO.md` | Runbook | completed | Moved out of top-level `docs/` into `docs/runbooks/` |
 | `docs/runbooks/E2E_ALPHA.md` | Runbook | completed | Moved out of top-level `docs/` into `docs/runbooks/` |
 | `docs/SCORECARDS.md` | Removed | completed | Scorecard-style aspirational targets merged into `docs/eval.md`; redirect stub deleted on this branch |
-| `docs/PROTOCOL_SATELLITE_SYNC.md` | Plan | keep | Distinct protocol/planning doc |
+| `docs/plans/PROTOCOL_SATELLITE_SYNC.md` | Plan | keep | Distinct protocol/planning doc |
 | `docs/work/DOCS_REFACTOR_PLAN.md` | Plan | keep | Active refactor work tracker until cleanup ends, then archive |
 | `docs/work/HISTORICAL_EXTRACTION_REVIEW.md` | Working review | archive | Useful only during refactor execution |
 | `docs/AI_DEVELOPMENT.md` | Removed | completed | Content already moved to `docs/DEV_WORKFLOW.md`; redirect stub deleted on this branch |

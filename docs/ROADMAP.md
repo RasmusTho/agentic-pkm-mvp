@@ -67,7 +67,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 | v5.1–v5.4 | Watcher track (ingest/panel CLI, policy, ergonomics) | Operationally accepted |
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
 | v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
-| v5.6 | ReasoningFacade + LangGraph rollout + Orchestrator V2 (flagged) + Vault-as-GUI settings compiler; docs-first kickoff plan in `docs/V56_FORWARD_LINE.md` | Docs-first kickoff (status/roadmap updates) |
+| v5.6 | ReasoningFacade + LangGraph rollout + Orchestrator V2 (flagged) + Vault-as-GUI settings compiler; docs-first kickoff plan in `docs/plans/V56_FORWARD_LINE.md` | Docs-first kickoff (status/roadmap updates) |
 
 ## Tracks (details moved)
 - Watcher track details: `docs/tracks/TRACK_WATCHER.md`

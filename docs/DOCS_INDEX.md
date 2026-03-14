@@ -56,7 +56,7 @@ Active cleanup work for simplifying this document set is tracked in `docs/work/D
 | docs/archive/architecture/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2026-03-14 | Historical reference for v4.10 topology/external surfaces; moved out of the active docs root and not authoritative for the current baseline. |
 | docs/STATUS.md | Operational snapshot | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2026-02-05 | Baseline definition (v5.5) covers watcher/panel settings provenance and concurrency guards; registry watcher default + DB outbox canonical queue noted. |
 | docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2026-02-05 | Forward line leans on the v5.5 baseline while v5.6 LangGraph/Reasoning stages are planned; runtime loop evaluation stack updated for registry watcher + DB outbox. |
-| docs/V56_FORWARD_LINE.md | v5.6 forward line kickoff plan | Aligned (SoT v5.6 forward line) | 2026-02-05 | Now/Next/Later plan with acceptance criteria for watchers auto-run, LangGraph rollout, and orchestrator V2; links STATUS/ROADMAP for traceability. |
+| docs/plans/V56_FORWARD_LINE.md | v5.6 forward line kickoff plan | Aligned (SoT v5.6 forward line) | 2026-02-05 | Now/Next/Later plan with acceptance criteria for watchers auto-run, LangGraph rollout, and orchestrator V2; links STATUS/ROADMAP for traceability. |
 | docs/tracks/TRACK_WATCHER.md | Watcher track (v5.1–v5.4) | Aligned (forward line v5.x) | 2026-02-05 | Adds registry watcher as runtime standard; legacy snapshot watcher noted. |
 | docs/tracks/TRACK_PANELAGENT_LANGGRAPH.md | PanelAgent LangGraph track (v5.5) | Aligned (forward line v5.x) | 2026-02-05 | PanelAgent catalog/decider modes, planner/orchestrator pipeline, promotion consumer. |
 | docs/tracks/TRACK_AGENTOPS_A2A_MCP.md | AgentOps / A2A / MCP track | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Pattern harvest themes for events/A2A/tools/ops; some items are planned. |
@@ -194,4 +194,4 @@ Active cleanup work for simplifying this document set is tracked in `docs/work/D
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/scenarios/REALITY_MVP.md | Reality-MVP scenario | Legacy (archived) | 2026-02-05 | Historical reference; current baseline tracked in STATUS. |
-| docs/PROTOCOL_SATELLITE_SYNC.md | Satellite sync protocol | Planned / not implemented | 2026-02-05 | Spec only; not implemented in v5.5 baseline. |
+| docs/plans/PROTOCOL_SATELLITE_SYNC.md | Satellite sync protocol | Planned / not implemented | 2026-02-05 | Spec only; not implemented in v5.5 baseline. |

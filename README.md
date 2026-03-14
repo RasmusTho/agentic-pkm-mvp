@@ -48,7 +48,7 @@ Prereqs:
 ## Documentation Reading Order
 - Core SoT: `docs/STATUS.md`, `docs/ARCHITECTURE.md`, `docs/HUMAN-FLOWS.md`, `docs/COMPONENTS.md`, `docs/EVENTS.md`, `docs/TESTING.md`, `docs/OPERATIONS.md`
 - Reference docs: use `docs/DOCS_INDEX.md` to find implementation, operator, and development guidance outside the core set
-- Plan docs: `docs/ROADMAP.md`, `docs/V56_FORWARD_LINE.md`, and the docs under `docs/tracks/`
+- Plan docs: `docs/ROADMAP.md`, `docs/plans/V56_FORWARD_LINE.md`, `docs/plans/PROTOCOL_SATELLITE_SYNC.md`, and the docs under `docs/tracks/`
 - Historical docs: read only for background after the core docs; they are not current truth
 
 ## Quickstart (Developer / CI)
@@ -97,4 +97,4 @@ SoT v4.10 is the historical Reality-MVP foundation snapshot and is not current r
 - `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
 - `docs/history/SOT_4X_HISTORY.md`
 
-The current baseline is v5.5; forward-line work for v5.6 is tracked in `docs/V56_FORWARD_LINE.md`.
+The current baseline is v5.5; forward-line work for v5.6 is tracked in `docs/plans/V56_FORWARD_LINE.md`.
