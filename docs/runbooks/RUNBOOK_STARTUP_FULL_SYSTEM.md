@@ -14,7 +14,9 @@ make alpha-up
    - requires `LLM_PROVIDER` + `LLM_MODEL`; mock requires no endpoint, Ollama accepts `OLLAMA_URL` or `OPENAI_BASE_URL`, other providers require `OPENAI_BASE_URL`
    - waits for `/api/status` then `/api/health` to report runtime `db`/`worker`/`watcher` as ok (timeout 60s)
    - optional checks like `ffmpeg` are ignored by default via `STARTUP_IGNORE_CHECKS=ffmpeg` (set to `""` for strict mode)
+   - Obsidian compatibility check runs by default (`STARTUP_CHECK_OBSIDIAN=1`) and reports pass/warning in startup telemetry
    - optional strict Obsidian gate: set `STARTUP_ENFORCE_OBSIDIAN=1` to fail fast unless host Obsidian dependency checks pass (`obsidian` CLI + installer floor)
+   - vault read/write probe runs inside the `api` container before watcher/worker startup; set `STARTUP_REQUIRE_VAULT_RW=1` to make rw probe failures fatal outside verify mode
    - on failure, prints `docker compose ps`, tails api/worker/watcher logs, and dumps `/api/health`
    - startup summary prints `obsidian gate: enabled=<...> status=<...>` and `tmp/startup_status.json` includes `obsidian_gate_enabled|ok|detail`
 

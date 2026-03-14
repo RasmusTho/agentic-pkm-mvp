@@ -37,6 +37,30 @@ if [ -n "${WATCHER_AUTO_EXEC+x}" ]; then
   printf "%s\n" "WATCHER_AUTO_EXEC=${WATCHER_AUTO_EXEC}" >> "$runtime_env_path"
 fi
 
+if [ -n "${VAULT_LAYOUT_NOTE_REL:-}" ]; then
+  printf "%s\n" "VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL}" >> "$runtime_env_path"
+fi
+
+if [ -n "${VAULT_SYSTEM_DIR_REL:-}" ]; then
+  printf "%s\n" "VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL}" >> "$runtime_env_path"
+fi
+
+if [ -n "${VAULT_INBOX_DIR_REL:-}" ]; then
+  printf "%s\n" "VAULT_INBOX_DIR_REL=${VAULT_INBOX_DIR_REL}" >> "$runtime_env_path"
+fi
+
+if [ -n "${VAULT_DESK_DIR_REL:-}" ]; then
+  printf "%s\n" "VAULT_DESK_DIR_REL=${VAULT_DESK_DIR_REL}" >> "$runtime_env_path"
+fi
+
+if [ -n "${WATCHER_STATE_DIR:-}" ]; then
+  printf "%s\n" "WATCHER_STATE_DIR=${WATCHER_STATE_DIR}" >> "$runtime_env_path"
+fi
+
+if [ -n "${WATCHER_STOP_FILE:-}" ]; then
+  printf "%s\n" "WATCHER_STOP_FILE=${WATCHER_STOP_FILE}" >> "$runtime_env_path"
+fi
+
 # Only include WATCHER_SCOPE_GLOB if explicitly set by the operator.
 # If unset or blank, the watcher computes a vault-wide default at runtime.
 scope_glob_raw="${WATCHER_SCOPE_GLOB:-}"

@@ -20,6 +20,7 @@ import uuid
 from typing import Any, Sequence
 
 from app.vault.paths import get_vault_inbox_dir_rel
+from scripts.yaml_roundtrip import load_frontmatter
 
 _DEFAULT_API_BASE = "http://127.0.0.1:18000"
 _REQUIRED_TOPIC = "promote.intent.created"
@@ -62,19 +63,77 @@ def _runtime_note_dir(vault_root: Path, inbox_dir_rel: str) -> Path:
     return (vault_root / inbox_dir_rel / "_alpha_e2e").expanduser()
 
 
-def _create_runtime_note(vault_root: Path, inbox_dir_rel: str, note_uuid: str) -> Path:
-    runtime_dir = _runtime_note_dir(vault_root, inbox_dir_rel)
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    note_path = runtime_dir / f"alpha_e2e_runtime_{note_uuid}.md"
+def _select_layout_note_rel(vault_root: Path) -> str | None:
+    filename = "vault.layout.md"
+    candidates = sorted(
+        p for p in vault_root.glob(f"*/{filename}") if p.is_file()
+    )
+    if len(candidates) <= 1:
+        return None
+    preferred = [
+        "⚙️ System/vault.layout.md",
+        "System/vault.layout.md",
+        "_system/vault.layout.md",
+        "~system/vault.layout.md",
+    ]
+    for rel in preferred:
+        target = vault_root / rel
+        if target.is_file():
+            return rel
+    return None
+
+
+def _layout_env_defaults(vault_root: Path, layout_note_rel: str | None) -> dict[str, str]:
+    if not layout_note_rel:
+        return {}
+    note_path = (vault_root / layout_note_rel).expanduser()
+    try:
+        raw = note_path.read_text(encoding="utf-8")
+        frontmatter, _ = load_frontmatter(raw)
+    except Exception:
+        return {}
+    if not isinstance(frontmatter, dict):
+        return {}
+    env: dict[str, str] = {}
+    system = str(frontmatter.get("system_folder") or "").strip()
+    inbox = str(frontmatter.get("inbox_folder") or "").strip()
+    desk = str(frontmatter.get("desk_folder") or "").strip()
+    if system:
+        env["VAULT_SYSTEM_DIR_REL"] = system
+    if inbox:
+        env["VAULT_INBOX_DIR_REL"] = inbox
+    if desk:
+        env["VAULT_DESK_DIR_REL"] = desk
+    return env
+
+
+def _write_runtime_note(note_path: Path, note_uuid: str, *, checked: bool) -> None:
+    checked_mark = "x" if checked else " "
+    action_line = f"- [{checked_mark}] Make this note evergreen <!--ai:id=promote.evergreen-->"
     content = (
         "---\n"
         f"uuid: {note_uuid}\n"
         "created_by: alpha_e2e\n"
+        "ai_panel_auto_run: watcher\n"
         "---\n"
-        "# Alpha E2E Runtime\n\n"
-        "- [x] Make this note evergreen <!--ai:id=promote.evergreen-->\n"
+        f"<!-- alpha-e2e-write-ts:{time.time_ns()} -->\n"
+        "%% AI:Start %%\n"
+        "## AI-instruktion\n"
+        "Promote this test note when checked.\n\n"
+        "## AI-åtgärder\n"
+        f"{action_line}\n\n"
+        "## AI-logg\n"
+        "%% AI:End %%\n"
     )
     note_path.write_text(content, encoding="utf-8")
+
+
+def _create_runtime_note(vault_root: Path, inbox_dir_rel: str, note_uuid: str) -> Path:
+    runtime_dir = _runtime_note_dir(vault_root, inbox_dir_rel)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    note_path = runtime_dir / f"alpha_e2e_runtime_{note_uuid}.md"
+    # Seed unchecked first so watcher/panel can detect an explicit toggle-to-checked transition.
+    _write_runtime_note(note_path, note_uuid, checked=False)
     return note_path
 
 
@@ -320,6 +379,20 @@ def _run_golden_path(vault_root: Path, inbox_dir_rel: str, api_base: str) -> tup
     note_uuid = uuid.uuid4().hex
     note_path = _create_runtime_note(vault_root, inbox_dir_rel, note_uuid)
 
+    def _seed_ingested() -> bool:
+        hb = _read_json_file(heartbeat_path) or {}
+        return int(hb.get("processed_total") or 0) > baseline_processed
+
+    # Wait for the seed note to be ingested so old/current panel states differ on the next update.
+    _wait_for("seed_ingest", timeout_s=20.0, interval_s=1.0, predicate=_seed_ingested)
+    seed_hb = _read_json_file(heartbeat_path) or {}
+    baseline_processed = int(seed_hb.get("processed_total") or 0)
+    seed_status = _read_status_safe(api_base)
+    baseline_promote_created = _intent_counter(seed_status, "promote_created_total")
+    baseline_promotion_executed = _event_counter(seed_status, "promotion_executed_total")
+    time.sleep(1.2)
+    _write_runtime_note(note_path, note_uuid, checked=True)
+
     def _processed_ready() -> bool:
         hb = _read_json_file(heartbeat_path) or {}
         processed_total = int(hb.get("processed_total") or 0)
@@ -390,6 +463,30 @@ def main(argv: list[str] | None = None) -> int:
         _run(["make", "alpha-down"], allow_fail=True)
         env = os.environ.copy()
         env["AUTO_BOOTSTRAP"] = auto_bootstrap_env
+        # Isolate watcher control/state for SIT so stale stop/state files cannot poison results.
+        env.setdefault("WATCHER_STOP_FILE", "/app/tmp/WATCHER_STOP_ALPHA_E2E")
+        env.setdefault("WATCHER_STATE_DIR", "/app/tmp/watcher-state-alpha-e2e")
+        scope_prefix = inbox_dir_rel.strip("/").strip()
+        if scope_prefix:
+            e2e_scope = f"{scope_prefix}/_alpha_e2e"
+            env.setdefault("WATCHER_SCOPE_GLOB", f"{e2e_scope}/*.md,{e2e_scope}/**/*.md")
+        env.setdefault("WATCHER_MAX_SCANNED_FILES_PER_TICK", "5000")
+        env.setdefault("BOOTSTRAP_INGEST_MAX_NOTES", "50")
+        runtime_dir = _runtime_note_dir(vault_root, inbox_dir_rel)
+        if runtime_dir.exists():
+            for stale in runtime_dir.glob("alpha_e2e_runtime_*.md"):
+                stale.unlink(missing_ok=True)
+        state_dir = _REPO_ROOT / "tmp" / "watcher-state-alpha-e2e"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        for stale in state_dir.glob("watcher_state_*.json"):
+            stale.unlink(missing_ok=True)
+        stop_host = _REPO_ROOT / "tmp" / "WATCHER_STOP_ALPHA_E2E"
+        stop_host.unlink(missing_ok=True)
+        layout_rel = _select_layout_note_rel(vault_root)
+        if layout_rel and not env.get("VAULT_LAYOUT_NOTE_REL"):
+            env["VAULT_LAYOUT_NOTE_REL"] = layout_rel
+        for key, value in _layout_env_defaults(vault_root, layout_rel).items():
+            env.setdefault(key, value)
         _run(["make", "alpha-up"], env=env)
         status = _fetch_json(f"{api_base}/api/status")
         health = _fetch_json(f"{api_base}/api/health")

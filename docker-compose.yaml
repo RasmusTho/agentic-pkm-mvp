@@ -38,6 +38,10 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
+      VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
+      VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
+      VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
+      VAULT_DESK_DIR_REL: ${VAULT_DESK_DIR_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
@@ -74,6 +78,10 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       DB_DSN: postgresql+psycopg://app:app@db:5432/app
       STORE_BACKEND: pg
+      VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
+      VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
+      VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
+      VAULT_DESK_DIR_REL: ${VAULT_DESK_DIR_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
       LLM_PROVIDER_ENFORCE: "1"
       LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
@@ -100,31 +108,40 @@ services:
     image: workspace-app
     working_dir: /app
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
+    env_file:
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
     volumes:
       - ./:/app
       - "${VAULT_ROOT:-./vault}:/app/vault"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.cli watcher run"]
     environment:
-      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
-      DB_DSN: postgresql+psycopg://app:app@db:5432/app
-      STORE_BACKEND: pg
-      LLM_PROVIDER: ${LLM_PROVIDER}
-      LLM_PROVIDER_ENFORCE: "1"
-      LLM_MODEL: ${LLM_MODEL:-llama3.1:8b}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
-      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text:latest}
-      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text:latest}
-      EMBED_DIM: ${EMBED_DIM:-768}
-      EMBED_NORMALIZE: ${EMBED_NORMALIZE:-1}
-      WATCHER_ENABLE: "1"
-      WATCHER_AUTO_EXEC: "${WATCHER_AUTO_EXEC-1}"
-      WATCHER_VAULT_PATH: /app/vault
-      WATCHER_HEARTBEAT_PATH: /app/tmp/watcher_heartbeat.json
-      WATCHER_STATE_PATH: /app/tmp/watcher_state.json
-      WATCHER_STOP_FILE: /app/tmp/WATCHER_STOP
-      INDEX_OUTBOX_PATH: /app/tmp/index-outbox.jsonl
-      WORKER_HEARTBEAT_PATH: /app/tmp/worker_heartbeat.json
+      - DATABASE_URL=postgresql+psycopg://app:app@db:5432/app
+      - DB_DSN=postgresql+psycopg://app:app@db:5432/app
+      - STORE_BACKEND=pg
+      - VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL:-}
+      - VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL:-}
+      - VAULT_INBOX_DIR_REL=${VAULT_INBOX_DIR_REL:-}
+      - VAULT_DESK_DIR_REL=${VAULT_DESK_DIR_REL:-}
+      - LLM_PROVIDER=${LLM_PROVIDER}
+      - LLM_PROVIDER_ENFORCE=1
+      - LLM_MODEL=${LLM_MODEL:-llama3.1:8b}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_EMBED_MODEL=${OLLAMA_EMBED_MODEL:-nomic-embed-text:latest}
+      - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text:latest}
+      - EMBED_DIM=${EMBED_DIM:-768}
+      - EMBED_NORMALIZE=${EMBED_NORMALIZE:-1}
+      - WATCHER_ENABLE=1
+      - WATCHER_AUTO_EXEC=${WATCHER_AUTO_EXEC-1}
+      - WATCHER_VAULT_PATH=/app/vault
+      - WATCHER_HEARTBEAT_PATH=/app/tmp/watcher_heartbeat.json
+      - WATCHER_STATE_PATH=/app/tmp/watcher_state.json
+      - WATCHER_STATE_DIR=${WATCHER_STATE_DIR:-tmp}
+      - WATCHER_STOP_FILE=${WATCHER_STOP_FILE:-/app/tmp/WATCHER_STOP}
+      - WATCHER_MAX_SCANNED_FILES_PER_TICK=${WATCHER_MAX_SCANNED_FILES_PER_TICK:-500}
+      - INDEX_OUTBOX_PATH=/app/tmp/index-outbox.jsonl
+      - WORKER_HEARTBEAT_PATH=/app/tmp/worker_heartbeat.json
     depends_on:
       - db
     restart: unless-stopped
