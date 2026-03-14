@@ -11,7 +11,9 @@ Start here:
 - `docs/ARCHITECTURE.md` — active runtime architecture source of truth
 - `docs/HUMAN-FLOWS.md` — user-facing behavior contract
 - `docs/DOCS_INDEX.md` — map of the wider documentation set, including reference and historical docs
-- `docs/DOCS_REFACTOR_PLAN.md` — staged plan for simplifying the documentation set
+
+Documentation maintenance work:
+- `docs/work/DOCS_REFACTOR_PLAN.md` — staged plan for simplifying the documentation set
 
 Prereqs:
 - Python **>= 3.12** (see `docs/DEPENDENCIES.md`).

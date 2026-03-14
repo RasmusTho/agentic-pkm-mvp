@@ -82,8 +82,8 @@ Recommended next execution order:
 | `docs/runbooks/E2E_ALPHA.md` | Runbook | completed | Moved out of top-level `docs/` into `docs/runbooks/` |
 | `docs/SCORECARDS.md` | Removed | completed | Scorecard-style aspirational targets merged into `docs/eval.md`; redirect stub deleted on this branch |
 | `docs/PROTOCOL_SATELLITE_SYNC.md` | Plan | keep | Distinct protocol/planning doc |
-| `docs/DOCS_REFACTOR_PLAN.md` | Plan | keep | Active refactor work tracker until cleanup ends, then archive |
-| `docs/HISTORICAL_EXTRACTION_REVIEW.md` | Working review | archive | Useful only during refactor execution |
+| `docs/work/DOCS_REFACTOR_PLAN.md` | Plan | keep | Active refactor work tracker until cleanup ends, then archive |
+| `docs/work/HISTORICAL_EXTRACTION_REVIEW.md` | Working review | archive | Useful only during refactor execution |
 | `docs/AI_DEVELOPMENT.md` | Removed | completed | Content already moved to `docs/DEV_WORKFLOW.md`; redirect stub deleted on this branch |
 | `docs/LLM_BACKENDS.md` | Removed | completed | Content already moved to `docs/LLM.md`; redirect stub deleted on this branch |
 | `docs/CORE6_CONTRACT.md` | Removed | completed | Canonical `docs/CORE_CONTRACT.md` already exists; compatibility alias deleted on this branch |
