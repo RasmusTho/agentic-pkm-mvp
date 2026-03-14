@@ -64,6 +64,7 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 
 ## Boundary Map (Current)
 - Current architecture boundary map (Mermaid source): `docs/diagrams/architecture.mmd`.
+- Current rendered/runtime-facing diagram companion: `docs/DIAGRAMS.md`.
 - Terminology in the map:
   - `Omgivning (utanför systemgräns)` = actors/services outside this system.
   - `Systemlandskap / driftsberoenden (ej i kodbasen)` = runtime dependencies owned by the system but not part of this repository (for example Postgres, Obsidian, vault filesystem).

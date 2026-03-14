@@ -35,6 +35,7 @@ Prereqs:
 - [Docs Index](docs/DOCS_INDEX.md)
 - [Status](docs/STATUS.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Diagrams](docs/DIAGRAMS.md)
 - [Human Flows](docs/HUMAN-FLOWS.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Operations](docs/OPERATIONS.md)

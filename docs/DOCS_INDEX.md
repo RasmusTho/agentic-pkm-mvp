@@ -64,10 +64,11 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/ROADMAP.md | Quality Wave (Runtime Loop Evaluation Stack) section | Aligned (forward line v5.x) | 2026-02-05 | Contract tests, golden vault, metamorphic + cold rebuild runs, fitness gates, scripted UAT; registry watcher focus. |
 | docs/COMPONENTS.md | Component catalog + dependency rules | Aligned (forward line v5.x) | 2026-02-05 | Component catalog updated to v5.5 outbox reality (DB canonical + JSONL audit). |
 | docs/EMBEDDINGS.md | Embedding spec | Aligned (forward line v5.x) | 2026-02-05 | Normative spec for provider-aware embeddings (identity, dims, outbox events, rebuild rules). |
+| docs/DIAGRAMS.md | Current architecture diagrams | Aligned (forward line v5.x) | 2026-03-14 | Current visual companion to ARCHITECTURE/COMPONENTS/EVENTS for system boundary and runtime flows. |
 | docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2026-03-13 | System-level agent architecture doc covering shared patterns, agent matrix, and coordination direction; PanelAgent-specific behavior lives in `docs/PANEL_AGENT.md`. |
 | docs/PLANNER.md | Planner contract | Legacy (archived) | 2026-02-05 | Historical reference; planner/orchestrator behavior has evolved. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (forward line v5.x) | 2026-02-05 | Canonical Outbox envelope + selected event meanings; compatibility anchored in EVENT_COMPATIBILITY_CONTRACT. |
-| docs/archive/architecture/DIAGRAMS.md | C4 diagrams | Legacy (archived) | 2026-03-14 | Legacy diagrams moved out of the active docs root; prefer ARCHITECTURE/HUMAN-FLOWS for current runtime wiring. |
+| docs/archive/architecture/DIAGRAMS.md | Legacy diagrams | Legacy (archived) | 2026-03-14 | Legacy diagrams moved out of the active docs root; use `docs/DIAGRAMS.md` for the current runtime view. |
 | docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2026-03-13 | User-facing behavior contract for the current system; architecture changes should be validated against it. |
 | docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2026-02-05 | Evaluation stack updated for registry watcher + DB outbox contracts; covers watcher dedup, promotion idempotency, settings validation. |
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x) | 2026-03-13 | PanelAgent-specific runtime contract covering panel syntax, runtime behavior, events, and wiring; complements the system-level `docs/AGENTS.md`. |
