@@ -152,6 +152,25 @@ For any non-trivial change:
 
 Eval tests live under `tests/eval/`, are marked `@pytest.mark.eval`, and remain opt-in unless a workflow explicitly enables them.
 
+## Local setup
+
+Suggested bootstrap:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
+```
+
+Expected local toolchain:
+- Python: see `docs/DEPENDENCIES.md` for the supported floor and compatibility policy
+- `venv` + `pip`
+- Docker and Docker Compose for full runtime paths
+- Postgres for DB outbox + store backed runtime mode
+- Optional: Ollama for local LLM-backed flows
+
 ## Branch strategy
 
 - `main` -> stable SoT
@@ -182,6 +201,13 @@ Eval tests live under `tests/eval/`, are marked `@pytest.mark.eval`, and remain 
   - identify which document owns the final decision,
   - keep invariants, boundaries, and decision rules explicit,
   - avoid duplicating implementation detail that belongs in reference docs.
+
+## Review checklist
+
+- Tests pass locally for the slice you changed
+- New or changed events are reflected in `docs/EVENTS.md`
+- Agent input/output contract changes are reflected in `docs/AGENTS.md` or the owning agent spec
+- `docs/DOCS_INDEX.md` is updated if docs were added, merged, deprecated, archived, or re-scoped
 
 ## Coding discipline
 

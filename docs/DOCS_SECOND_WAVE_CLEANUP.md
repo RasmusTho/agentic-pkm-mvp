@@ -75,7 +75,7 @@ Recommended next execution order:
 | `docs/INVENTORY.md` | Reference | keep | Runtime inventory still useful as a separate lookup surface |
 | `docs/GLOSSARY.md` | Reference | keep | Distinct terminology surface |
 | `docs/DEV_WORKFLOW.md` | Reference | keep | Primary development workflow doc |
-| `docs/CONTRIBUTING.md` | Reference | merge into | `docs/DEV_WORKFLOW.md`; currently a lightweight subset/entrypoint |
+| `docs/CONTRIBUTING.md` | Deprecated redirect | delete | Contributor setup and workflow merged into `docs/DEV_WORKFLOW.md`; remove once inbound links are fully gone |
 | `docs/templates/DOC_TEMPLATE.md` | Reference / template | keep | Needed for governance |
 | `docs/UAT_PANEL_WATCHER.md` | Reference / runbook | merge into | `docs/runbooks/` or `docs/OPERATIONS.md`; better as runbook material than top-level doc |
 | `docs/RUNBOOK_RESET_TO_ZERO.md` | Runbook | move into | `docs/runbooks/` for consistency with other runbooks |

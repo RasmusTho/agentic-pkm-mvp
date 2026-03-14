@@ -113,7 +113,7 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/templates/DOC_TEMPLATE.md | Document template | Aligned (forward line v5.x) | 2026-03-14 | Standard template for new docs; defines metadata, scope, authority, and writing structure. |
 | docs/INVENTORY.md | Runtime inventory | Aligned (forward line v5.x) | 2026-02-05 | Reference inventory (no file:line); update alongside code. |
 | docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-02-05 | Definitions updated to match v5.5 baseline (outbox/JSONL audit, rerank hooks). |
-| docs/CONTRIBUTING.md | Contributing guide | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Practical quickstart; defers deep workflow to DEV_WORKFLOW/TESTING. |
+| docs/CONTRIBUTING.md | Contributing guide | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; practical contributor setup and workflow now live in `docs/DEV_WORKFLOW.md`. |
 | docs/CHANGELOG.md | Docs changelog | Legacy (archived) | 2026-02-05 | Historical; prefer STATUS/ROADMAP for current baseline and forward line. |
 | docs/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
 | docs/ALIGNMENT.md | Alignment guide | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
