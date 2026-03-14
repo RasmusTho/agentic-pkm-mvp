@@ -664,13 +664,6 @@ if [ -z "${VAULT_LAYOUT_NOTE_REL:-}" ]; then
     preferred_layout=""
     if [ -n "${VAULT_SYSTEM_DIR_REL:-}" ] && [ -f "$vault_host_path/${VAULT_SYSTEM_DIR_REL}/vault.layout.md" ]; then
       preferred_layout="${VAULT_SYSTEM_DIR_REL}/vault.layout.md"
-    else
-      for candidate in "⚙️ System/vault.layout.md" "System/vault.layout.md" "_system/vault.layout.md" "~system/vault.layout.md"; do
-        if [ -f "$vault_host_path/$candidate" ]; then
-          preferred_layout="$candidate"
-          break
-        fi
-      done
     fi
     if [ -n "$preferred_layout" ]; then
       export VAULT_LAYOUT_NOTE_REL="$preferred_layout"
