@@ -1,4 +1,6 @@
-State: SoT v5.5 baseline (descriptive). This is a reference inventory; if any row drifts from code, prefer the code and update this doc.
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Reference inventory of env vars, CLI surfaces, external tools, and runtime signals; code remains authoritative when a row drifts.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -90,7 +92,7 @@ Transcribe entries (`app/media/transcribe.py`) also include `trace_id` before re
 ## Cache, timeout, and breaker policy
 - `_MODEL_CACHE` keeps `(ASR_MODEL, ASR_DEVICE)` → `WhisperModel` (`app/media/transcribe.py`). No eviction; restart to free memory.
 - `_embed_single` is `@lru_cache(maxsize=2048)` and reuses embeddings per text/provider/model (`app/llm/embeddings.py`).
-- `LLM_TIMEOUT` governs Ollama/OpenAI/DeepSeek HTTP calls (60–120 s). No automatic retry yet; see `docs/LLM_BACKENDS.md`.
+- `LLM_TIMEOUT` governs Ollama/OpenAI/DeepSeek HTTP calls (60–120 s). No automatic retry yet; see `docs/LLM.md`.
 - `CircuitBreaker` and `timeout_wrapper` live in `app/quality/guardrails.py`; usage varies by subsystem.
 - Span logging includes latency and status (`app/obs/log.py`), powering the `jq` recipes in `docs/OBSERVABILITY.md`.
 <!-- SECTION:INVENTORY:END -->

@@ -1,4 +1,6 @@
-State: Kernel/Contracts (applies across SoT v4.10 baseline + v5.x forward line; implementation-agnostic).
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Core SoT
+Authority: Product-kernel contract for purpose, principles, and long-lived stability constraints across the system; implementation docs must align with it without redefining it.
 
 # PROJECT_KERNEL — agentic-pkm-mvp
 

@@ -1,4 +1,6 @@
-State: SoT v5.5 baseline (descriptive). This lists practical external dependencies used by the current code paths.
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Practical dependency matrix for current code paths and environments; code and lockfiles remain the executable source of truth.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -19,7 +21,7 @@ Overview of tools and libraries required in each environment.
 | yt-dlp | Downloads YouTube/audio sources (`app/media/transcribe.py`). | `pip install -r requirements.txt`. |
 | faster-whisper | Local ASR. | Install via pip; GPU builds need a C++ toolchain. |
 | Ollama | LLM + embeddings (`app/llm/adapter.py`, `app/llm/embeddings.py`). | `brew install ollama && ollama serve`. |
-| mmdc (optional) | Mermaid export (`docs/DIAGRAMS.md`). | `npm install -g @mermaid-js/mermaid-cli`. |
+| mmdc (optional) | Mermaid export for archived/current diagram sources. | `npm install -g @mermaid-js/mermaid-cli`. |
 
 ## Python packages (selection)
 - `httpx`, `requests` – all network calls (Ollama / OpenAI / DeepSeek).
@@ -43,4 +45,17 @@ Overview of tools and libraries required in each environment.
 ## Links
 - `docs/INVENTORY.md` for the full variable/span/tool matrix.
 - `docs/OPERATIONS.md` for runbooks and SLO context.
+
+## Python Version Policy
+
+- Repo minimum: Python `>=3.12`
+  - enforced by `pyproject.toml`
+- CI smoke floor: Python `3.12`
+  - used as the compatibility floor for baseline validation
+
+Guardrails:
+- keep core code compatible with 3.12
+- use the optional scripts below when validating compatibility explicitly:
+  - `scripts/py312_compile_check.sh`
+  - `scripts/py312_smoke_test.sh`
 <!-- SECTION:DEPENDENCIES:END -->

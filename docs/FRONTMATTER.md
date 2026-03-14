@@ -1,4 +1,6 @@
-State: Kernel-adjacent (warm-surface metadata contract; implementation-agnostic).
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Warm-surface metadata ownership and write contract for frontmatter; complements Core-6 and human-flow rules without redefining semantic or operational ownership.
 
 # Frontmatter — the warm-surface write contract
 
@@ -15,6 +17,7 @@ See also:
 - `docs/CONCEPTS/LAYERING_MODEL.md` (Domain/Plane/Trust/Zone)
 - `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md` (ASSERT/SUGGEST/APPLY + evidence/receipts)
 - `docs/CORE_CONTRACT.md` (Core-6 semantic contract)
+- `docs/HUMAN-FLOWS.md` (human-facing behavior constraints for note mutation)
 
 ## Metadata layers
 
@@ -34,7 +37,7 @@ Not all semantics must be explicit in YAML. Core-6 fields may be implicit or der
 
 ## Ownership: human vs system
 
-Exact field names are intentionally not locked here; the ownership rules are what must remain stable.
+Exact field names are intentionally not locked here; the ownership and write rules are what must remain stable.
 
 ### Human-owned (default)
 The human owns fields that express meaning and intent, such as:

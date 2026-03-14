@@ -1,5 +1,9 @@
 State: Historical (SoT v4.10). Module map retained for reference; it may not reflect the v5.5 baseline wiring.
 
+Historical reference only:
+- Use this document for naming continuity and background orientation.
+- Do not treat it as the active system map for current behavior; use `docs/ARCHITECTURE.md` and `docs/HUMAN-FLOWS.md` first.
+
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
 - DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
@@ -22,7 +26,7 @@ In SoT v4.10 this codebase primarily implements the Mimer module (the Obsidian v
 | Tyr | Formal archives (planned v5.x) | Planned: admin/records integration |
 | Heimdall | Infra & observability | Observability stack (Grafana/Prometheus/Loki) |
 
-See `docs/SYSTEM_DESIGN_v4.10.md` for how these modules map onto deployment topology and surfaces.
+See `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md` for how these modules map onto deployment topology and surfaces.
 
 ## Modules at a glance
 - **Mimer — Knowledge (Obsidian vault)**: Human-first vault with notes, ontology, and semantic links; minimal frontmatter plus UUID identity. Acts as the cognitive graph that threads together interpretations of media, records, and projects. Provides Core-6 projections and references (e.g., `source_ref`) into other modules without duplicating their artifacts. This is the same vault historically referred to as PKM-Alpha.

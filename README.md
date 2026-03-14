@@ -7,12 +7,13 @@ Agentic PKM is a vault-first, event-driven PKM runtime:
 - The runtime is guarded by CI fitness gates and explicit safety switches (watcher auto-run, dedup/idempotency, optimistic writes).
 
 Start here:
-- `docs/DOCS_INDEX.md` — map of documentation + review status
 - `docs/STATUS.md` — current baseline reality (v5.5) + forward line (v5.6)
-- `docs/ARCHITECTURE.md` — runtime architecture + contracts (v5.5 baseline)
+- `docs/ARCHITECTURE.md` — active runtime architecture source of truth
+- `docs/HUMAN-FLOWS.md` — user-facing behavior contract
+- `docs/DOCS_INDEX.md` — map of the wider documentation set, including reference and historical docs
 
 Prereqs:
-- Python **>= 3.12** (see `docs/PYTHON_VERSION_POLICY.md`).
+- Python **>= 3.12** (see `docs/DEPENDENCIES.md`).
 - For full runtime: Docker + Docker Compose.
 
 ## What Works Today (SoT v5.5 Baseline)
@@ -31,13 +32,21 @@ Prereqs:
 ## Docs
 <!-- DOCS-LINKS:BEGIN -->
 - [Docs Index](docs/DOCS_INDEX.md)
-- [Architecture](docs/ARCHITECTURE.md)
 - [Status](docs/STATUS.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Diagrams](docs/DIAGRAMS.md)
+- [Human Flows](docs/HUMAN-FLOWS.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Operations](docs/OPERATIONS.md)
 - [Events](docs/EVENTS.md)
 - [Testing](docs/TESTING.md)
 <!-- DOCS-LINKS:END -->
+
+## Documentation Reading Order
+- Core SoT: `docs/STATUS.md`, `docs/ARCHITECTURE.md`, `docs/HUMAN-FLOWS.md`, `docs/COMPONENTS.md`, `docs/EVENTS.md`, `docs/TESTING.md`, `docs/OPERATIONS.md`
+- Reference docs: use `docs/DOCS_INDEX.md` to find implementation, operator, and development guidance outside the core set
+- Plan docs: `docs/ROADMAP.md`, `docs/plans/V56_FORWARD_LINE.md`, `docs/plans/PROTOCOL_SATELLITE_SYNC.md`, and the docs under `docs/tracks/`
+- Historical docs: read only for background after the core docs; they are not current truth
 
 ## Quickstart (Developer / CI)
 Install and run the fast test suite (no vault required):
@@ -67,7 +76,7 @@ Common safety switches:
 - `WATCHER_SCOPE_GLOB="<inbox>/**"` restricts watcher scanning (default derives from vault layout/inbox).
 
 ## Golden Path (Alpha E2E)
-The canonical “does the whole chain work?” contract lives in `docs/E2E_ALPHA.md`.
+The canonical “does the whole chain work?” contract lives in `docs/runbooks/E2E_ALPHA.md`.
 
 ```bash
 export VAULT_ROOT="/path/to/vault"
@@ -78,11 +87,11 @@ make alpha-smoke
 
 ## CI Gates (Fitness Summary)
 CI jobs parse `CI SUMMARY …` lines and fail merges when `GATES.ok != true`.
-See `docs/CI.md` and `docs/tracks/TRACK_FITNESS_CI_CONTRACT.md`.
+See `docs/TESTING.md` and `docs/tracks/TRACK_FITNESS_CI_CONTRACT.md`.
 
-## History
-SoT v4.10 is the historical Reality-MVP foundation snapshot (not current runtime truth). References:
-- `docs/SYSTEM_DESIGN_v4.10.md`
+## Historical References
+SoT v4.10 is the historical Reality-MVP foundation snapshot and is not current runtime truth. Read `docs/STATUS.md` and `docs/ARCHITECTURE.md` first; use the references below only for background:
+- `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
 - `docs/history/SOT_4X_HISTORY.md`
 
-The current baseline is v5.5; forward-line work for v5.6 is tracked in `docs/V56_FORWARD_LINE.md`.
+The current baseline is v5.5; forward-line work for v5.6 is tracked in `docs/plans/V56_FORWARD_LINE.md`.

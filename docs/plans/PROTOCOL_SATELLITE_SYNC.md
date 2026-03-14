@@ -1,4 +1,7 @@
 State: Spec / planned (not implemented in v5.5 baseline). Keep this as a forward-line design reference; code may not match yet.
+Doc role: Plan
+Authority: Forward-line protocol design for future master/satellite sync; does not override the current runtime baseline in `docs/STATUS.md` or `docs/ARCHITECTURE.md`.
+Owner: Satellite sync forward-line planning
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -62,5 +65,3 @@ Sync follows Git workflows (branching/rebasing/merging). Database state is deriv
 
 - Non-goals for Reality-MVP: no automatic cross-instance DB replication; no automatic semantic conflict resolution; no multi-user guarantees (single human across machines only).
 - Status: InstanceSettings + `instance_id` on events + VaultMirror `uuid.md` + Git/iCloud sync provide the plumbing. This draft will be paired with future CLI/agent tooling that MUST follow this protocol.
-# Satellite Sync Protocol (Draft)
-# Satellite Sync Protocol (Draft)

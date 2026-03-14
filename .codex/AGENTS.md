@@ -20,40 +20,50 @@ You do **not**:
 
 When making decisions, you MUST respect this order:
 
-1. **Current SoT docs (mandatory)**
-   - `docs/ARCHITECTURE.md`
+1. **Core SoT docs (mandatory)**
    - `docs/STATUS.md`
-   - `docs/ROADMAP.md`
+   - `docs/ARCHITECTURE.md`
    - `docs/HUMAN-FLOWS.md`
-   - `docs/AGENTS.md`
    - `docs/COMPONENTS.md`
-   - `docs/PANEL_AGENT.md`
    - `docs/EVENTS.md`
    - `docs/TESTING.md`
-   - `docs/eval.md`
-   - `docs/QUALITY.md`
-   - `docs/guardrails.md`
-   - `docs/CI.md`
-   - `docs/OBSERVABILITY.md`
-   - `docs/OBSERVABILITY_STACK.md`
    - `docs/OPERATIONS.md`
-   - `docs/INVENTORY.md`
+   - `docs/DOCS_INDEX.md`
 
-2. **Dev policy & workflow**
-   - `docs/AI_DEVELOPMENT.md`
+2. **Current reference and workflow docs**
    - `docs/DEV_WORKFLOW.md`
+   - `docs/AGENTS.md`
+   - `docs/PANEL_AGENT.md`
+   - `docs/OBSERVABILITY.md`
+   - `docs/HEALTH.md`
+   - `docs/LLM.md`
+   - `docs/LLM_ROUTING.md`
+   - `docs/TESTING.md`
+   - `docs/guardrails.md`
+   - `docs/INVENTORY.md`
+   - `docs/eval.md`
 
-3. **Domain “chapters” (schemas, settings, etc.)**
+3. **Domain “chapters” and specialized reference docs**
    - `docs/DATA_MODEL.md`
    - `docs/FRONTMATTER.md`
-   - other chapter docs marked as current or partially outdated.
+   - `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`
+   - other chapter docs marked as current or partially outdated in `docs/DOCS_INDEX.md`.
 
 4. **Historical / archived / planned docs**
    - `docs/archive/*`, `docs/legacy/*`, docs with `State: Historical/…` or `State: Planned/…`  
      → may inform design, but MUST NOT override (1)–(3).
-   - `docs/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
-   - `docs/SYSTEM_DESIGN_v4.10.md`
+   - `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
+   - `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
      → useful for orientation and historical context, but not authoritative for the current v5.5 baseline.
+
+Use `docs/DOCS_INDEX.md` to determine whether a document is Core SoT, Reference, Plan, or Historical before treating it as a decision input.
+
+For any documentation or specification task, you MUST determine the owning document before drafting edits:
+- start in `docs/DOCS_INDEX.md`,
+- identify the document role,
+- identify the owning `Core SoT` doc for the topic,
+- read that owner before reading neighboring reference docs,
+- treat `Plan` and `Historical` docs as context only.
 
 If there is a conflict:
 - Prefer (1) over (2), (2) over (3), (3) over (4).
@@ -146,6 +156,42 @@ For every non-trivial change, follow this sequence:
 
    Docs are not optional; they are part of the change set.
 
+6. **Handle specification docs deliberately**
+   - Before editing a spec-like document, determine:
+     - whether it is `Core SoT`, `Reference`, `Plan`, or `Historical`,
+     - which neighboring docs define adjacent boundaries,
+     - whether the document should define truth or merely explain implementation detail.
+   - Read spec docs in this order:
+     - owning Core SoT doc,
+     - adjacent Core SoT docs,
+     - implementation/reference docs,
+     - only then historical/planned material for context.
+   - When writing or revising a specification document:
+     - start from `docs/templates/DOC_TEMPLATE.md`,
+     - make scope and authority explicit near the top,
+     - keep invariants, boundaries, and decision rules explicit,
+     - prefer tables for stable taxonomies and ownership maps,
+     - use examples only where ambiguity remains after the rules,
+     - do not duplicate large sections from neighboring docs just to be “complete”.
+   - Optimize documentation for the repo’s complexity:
+     - compress repetition,
+     - preserve sharp responsibility boundaries,
+     - keep normative statements close to the document that owns them,
+     - move operational or implementation detail out of spec docs when it obscures the contract.
+
+7. **Follow the document change algorithm**
+   - For any docs change, execute this sequence:
+     - classify the request by topic and owning surface,
+     - confirm the owner in `docs/DOCS_INDEX.md`,
+     - update the owning document first,
+     - update neighboring reference docs only when they materially help the reader,
+     - update `docs/DOCS_INDEX.md` if any role, path, status, or reading order changed,
+     - remove or rewrite duplicate statements instead of leaving conflicting copies behind.
+   - Do not start by editing the easiest document to reach. Start with the owner.
+   - Do not create a sibling doc to avoid touching an owner doc.
+   - Do not leave a redirect/stub indefinitely once inbound references are removed.
+   - If a topic no longer needs its own document, merge it into the owner and delete or archive the old file.
+
 ---
 
 ## 4. Task loop you MUST follow
@@ -196,3 +242,18 @@ For each user request:
   - Follow existing component patterns in `app/components/*`.
 
 If you are unsure whether to introduce a new pattern or reuse an existing one, prefer reuse and mention the trade-off explicitly in your plan.
+
+## 6. Anti-dilution rules for documentation
+
+When changing documentation, optimize for clarity under high complexity:
+- one topic must have one owner document,
+- normative rules belong in the owner doc, not in a summary or convenience doc,
+- summary docs may point, scope, or map, but they must not silently redefine contracts,
+- examples, runbooks, and how-to material must not become the de facto spec,
+- if two docs say nearly the same thing, merge or sharpen the boundary,
+- every new document must justify why an existing owner doc is insufficient.
+
+The default outcome for overlap is:
+- merge into the owner doc,
+- tighten neighboring docs,
+- archive or delete the redundant file.

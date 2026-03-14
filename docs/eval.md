@@ -51,3 +51,24 @@ Implementation note: the eval harness configures `OPENAI_BASE_URL` / `OPENAI_API
 - Answer relevancy / answer-quality style metrics via DeepEval.
 - Faithfulness/hallucination metrics can be added once context is surfaced in ASK responses.
 - Ragas metrics (precision/recall, context relevance) are seeded via `tests/eval/test_rag_ragas.py`.
+
+## Scorecards And Targets
+
+Scorecards are currently aspirational rather than enforced runtime truth.
+
+- Current reality:
+  - CI/fitness gates live in `docs/TESTING.md` and the fitness track docs.
+  - Eval suites under `tests/eval/` remain opt-in.
+- Useful scorecard shape to preserve:
+
+```yaml
+ingestion_quality:
+  frontmatter_core6_complete: true
+  chunk_semantics_ok: true
+retrieval_answering:
+  faithfulness: ">= 0.8"
+  provenance: ">= 0.8"
+```
+
+- No runtime component consumes scorecard targets today.
+- If scorecards become enforceable, add a parser and explicit CI gate rather than treating this document as self-enforcing.

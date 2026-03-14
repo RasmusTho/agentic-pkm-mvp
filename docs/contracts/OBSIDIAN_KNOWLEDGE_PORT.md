@@ -1,5 +1,7 @@
-State: Draft contract (spec-first for Obsidian-required runtime).
-# Obsidian Knowledge Port Contract (v0)
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Core SoT
+Authority: Canonical contract for vault-facing knowledge operations and adapter boundaries; runtime/services must route note operations through this boundary or approved helpers built on top of it.
+# Obsidian Knowledge Port Contract
 
 ## Purpose
 Define one domain-facing interface between agents/runtime and knowledge operations so transport details
@@ -60,15 +62,16 @@ Validation rules:
 - URI rendering helpers may stay outside adapter classes but must only consume `NoteLocator` (no ad-hoc vault/path parsing).
 - No domain/service code may construct `NoteLocator` directly from env vars; use shared locator helpers instead.
 
-## TDD test baseline (must exist before adapter wiring)
+## Required test baseline
 1. Contract tests for `NoteLocator` portability constraints.
 2. Settings tests for adapter policy parsing + invalid combinations.
 3. CLI scope tests enforcing `vault=<...>` first.
 4. Dependency health tests for missing CLI and installer version checks.
 5. Architecture guardrails preventing direct `NoteLocator(...)` construction and direct `OBSIDIAN_VAULT_NAME` reads outside shared helpers.
 
-## Next implementation step
-Keep the boundary stable: enforce architecture guardrails in CI, and only add new vault-facing behavior via `app/knowledge/write_ops.py` (or deeper `app/knowledge/*` modules) rather than direct service/runtime wiring.
+Current enforcement:
+- CI/architecture tests enforce the boundary in `tests/architecture/test_obsidian_port_boundaries.py`.
+- Runtime/service writes are expected to route through `app/knowledge/write_ops.py` or deeper `app/knowledge/*` modules rather than direct service/runtime wiring.
 
 ## Rolling implementation backlog
 - [x] Verify all runtime call sites that perform note open/search are explicitly routed through `resolve_knowledge_port()`.

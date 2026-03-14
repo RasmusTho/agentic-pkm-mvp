@@ -1,4 +1,6 @@
 State: SoT v5.5 Reality-MVP baseline locked (baseline definition anchored in `docs/STATUS.md#baseline-definition`).
+Doc role: Core SoT
+Authority: Canonical testing and validation strategy for the active baseline, including required layers and guardrails for code changes.
 # TESTING
 
 ## Layers
@@ -8,20 +10,6 @@ State: SoT v5.5 Reality-MVP baseline locked (baseline definition anchored in `do
 - LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`)
 - Property-based ingest invariants: `tests/ingest/test_normalize_properties.py` ensures normalize outputs Core-6 fields robustly.
 
-## Test Coverage
-
-Current coverage (updated 2025-01-XX):
-- Router: 95% line coverage, 100% branch coverage
-- Fabric: 60% line coverage (gaps: failure modes)
-- Health: 85% line coverage (gaps: malformed input handling)
-
-Critical uncovered paths (issue links):
-- Router: Malformed LLMTaskIntent handling (Issue: `docs/ISSUES_TESTING.md#router-malformed-intent`)
-- Fabric: Provider unavailable scenarios (Issue: `docs/ISSUES_TESTING.md#fabric-provider-unavailable`)
-- Health: Future timestamp rejection (Issue: `docs/ISSUES_TESTING.md#health-future-timestamp`)
-
-See: `pytest --cov=app --cov-report=html`
-
 ## Evaluation Stack (Registry Watcher / Panel / Promotion)
 - **A. Contract tests** — assert watcher→panel→promotion event envelopes and payload invariants; run via `pytest -q tests/e2e/test_watcher_registry_e2e.py -m "not pg"` (exact command may move to `tests/fitness`).
 - **B. Golden vault** — seeded vault + snapshots under `docs/examples/vault_test_seed/`; deterministic diff harness to prove no unintended note mutations.
@@ -29,6 +17,23 @@ See: `pytest --cov=app --cov-report=html`
 - **D. Cold rebuild** — start from empty Store + existing mirrors; prove ingest + panel/promotion chain reconstructs counters/events without dupes.
 - **E. Fitness gates** — status/outbox counters checked post-run (`panel_runs`, `promote.intent.created/done`) with idempotence (no duplicate intents on rerun) enforced in CI (`app/fitness/*`, `ops/quality/baselines.yaml`).
 - **F. Scripted UAT** — CLI harness for registry watcher + promotion consumer + status assertions; runs on memory backend and real vaults with the golden seed pack.
+
+## CI And Fitness Gates
+
+- GitHub Actions workflows are the enforced CI surface for lint, tests, and fitness gating.
+- The fitness gate contract is:
+  - `python -m app.fitness.report` emits `CI SUMMARY ...` lines
+  - CI fails whenever `GATES.ok != true`
+
+## Required baseline checks
+
+- `ruff check app tests`
+- `mypy app`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`
+- `python -m app.cli settings-validate --json`
+
+For fast local runs that bypass workspace/global pytest configuration, prefer:
+- `STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg" -c /dev/null`
 
 ## Concurrency Tests (docs-only)
 These regression suites live in `docs/CONCURRENCY.md` and the new watcher/promotion/test libraries.
@@ -47,46 +52,19 @@ Example commands:
 - The test suite clears VAULT_ROOT and PANEL_ACTION_WIRING_PATH by default to prevent accidentally reading a user’s real vault (often iCloud-backed) which can block and hang tests.
 - Tests that require vault wiring overrides must set VAULT_ROOT explicitly (use monkeypatch + temp vault containing System/Config/panel-action-wiring.yaml) or set PANEL_ACTION_WIRING_PATH explicitly.
 
-## Commands
-- Repo-root deterministic run (memory backend; plugin autoload disabled):
-  - STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"
-- Workspace-root deterministic run (bypass global a workspace-level pytest.ini):
-  - STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg" -c /dev/null
-- Note: global a workspace-level pytest.ini can inject timeout args when plugins are disabled; prefer the commands above when running locally.
-- Single test
-  - pytest -q tests/agents/test_normalizer.py
-- E2E graph
-  - PYTHONPATH="$(pwd)" env DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:15432/app" pytest -q tests/e2e/test_pipe_graph.py
-- Eval (opt-in)
-  - PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "eval"  # DeepEval/Ragas; not part of fast CI
-- PanelAgent LLM E2E (opt-in, real LLM)
-  - export PANEL_AGENT_LLM_E2E=1 PANEL_AGENT_DECIDER=llm
-  - export LLM_PROVIDER=<provider> plus any provider-specific env (e.g., OPENAI_BASE_URL/OPENAI_API_KEY)
-  - PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/e2e/test_panel_llm_e2e.py -m "panel_llm_e2e"
-  - CI: optional job `panel-llm-e2e` in `.github/workflows/ci-smoke.yaml` runs these tests when `PANEL_AGENT_LLM_E2E_CI=true` and LLM secrets are present; otherwise it skips without failing the pipeline.
-- Panel planner/orchestrator (deterministic)
-  - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-  - pytest -q tests/cli/test_panel_orchestrator_cli.py -m "not pg"
-  - Planner pipeline remains opt-in (`PANEL_AGENT_PIPELINE=planner`); CLI execution is available via `panel-orchestrate-plan`.
-- Registry watcher (deterministic E2E, memory backend):
-  - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 INDEX_OUTBOX_PATH=$(mktemp)
-  - pytest -q tests/e2e/test_watcher_registry_e2e.py -m "not pg"
-- Optional manual run: `WATCHER_ENABLE=1 WATCHER_VAULT_PATH="<vault>" WATCHER_AUTO_EXEC=0 python -m app.cli watcher run --max-ticks 1`.
-- Watcher/Panel UAT CLI pack (deterministic, memory backend)
-  - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 INDEX_OUTBOX_PATH=$(mktemp)
-  - pytest -q tests/cli/test_uat_seed_cli.py tests/cli/test_uat_run_cli.py -m "not pg"
-  - Real vault: `python -m app.cli uat-seed-vault-test --vault-root "<vault>"` then `WATCHER_ENABLE=1 WATCHER_VAULT_PATH="<vault>" WATCHER_SCOPE_GLOB="Test/**" WATCHER_AUTO_EXEC=1 python -m app.cli watcher run --max-ticks 1`.
-- Architecture guardrails
-  - export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-  - pytest -q tests/architecture/test_outer_inner_boundaries.py -m "not pg"
-  - pytest -q tests/architecture/test_obsidian_port_boundaries.py -m "not pg"
-- Panel action wiring (config-driven)
-  - export STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-  - pytest -q tests/agents/panel_agent/test_panel_wiring.py -m "not pg"
-
-- Settings/Config
-  - `python -m app.cli.settings validate --json`
-  - `python -m app.cli.settings_explain`
+## Focused commands
+- Single test:
+  - `pytest -q tests/agents/test_normalizer.py`
+- Eval (opt-in):
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "eval"`
+- PanelAgent LLM E2E (opt-in, real LLM):
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/e2e/test_panel_llm_e2e.py -m "panel_llm_e2e"`
+- Registry watcher deterministic E2E:
+  - `STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/e2e/test_watcher_registry_e2e.py -m "not pg"`
+- Architecture guardrails:
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/architecture/test_outer_inner_boundaries.py tests/architecture/test_obsidian_port_boundaries.py -m "not pg"`
+- Panel wiring precedence:
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/agents/panel_agent/test_panel_wiring.py -m "not pg"`
 
 ## Debugging hanging tests
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONFAULTHANDLER=1 pytest -vv -m "not pg" --faulthandler-timeout 60`
@@ -101,9 +79,19 @@ Example commands:
 - Hashing-based embeddings in tests for stable semantics
 - Fixed chunk sizes and overlap
 
-## DB
-- Local Postgres with pgvector
-- Alembic upgrade before tests
+## Quality And Guardrails In Validation
+
+- Guardrails are part of the validation surface, not just runtime behavior.
+- Current quality checks worth preserving in test/eval design:
+  - forbidden-content filtering
+  - source requirements
+  - token budget enforcement
+  - circuit-breaker behavior when it becomes runtime-wired
+- Performance budgets currently tracked operationally:
+  - retrieval p95 target
+  - QA answer latency target
+  - ASR wall-time target
+- Use `docs/guardrails.md` for the runtime safety policy itself; this document owns how those expectations are validated.
 
 <!-- SECTION:TESTING-MATRIX:BEGIN -->
 ## Test matrix
@@ -117,17 +105,5 @@ Example commands:
 
 ## Selective runs & mocking
 - Set `LLM_PROVIDER=mock` and `LLM_MOCK_RESPONSE='{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}'` for deterministic answers (mirrors `.github/workflows/smoke.yml`).
-- To skip slower classifier tests, set `SKIP_CLASSIFIER_TESTS=0` locally (default `1` in `tests/agents/test_classifier.py:3`).
 - Mock ASR by patching `app.media.transcribe.WhisperModel`; see `tests/test_transcribe_smoke.py`.
-
-## Artifacts
-- `tmp/index-outbox.jsonl` – written by CLI/ASR tests; clean between runs if determinism is required.
-- `logs/*.jsonl` – JSON spans used by `jq` recipes in `docs/OBSERVABILITY.md`.
-- `tmp/audio/` – yt-dlp cache (unique filenames per test). Clean via `rm -rf tmp/audio/*`.
 <!-- SECTION:TESTING-MATRIX:END -->
-
-- Panel wiring precedence (deterministic):
-  - export PANEL_ACTIONS_PATH=<tmp/actions.md>
-  - optional vault override: set VAULT_ROOT to a temp vault containing System/Config/panel-action-wiring.yaml
-  - env override: PANEL_ACTION_WIRING_PATH points to a temp wiring file
-  - run: pytest -q tests/agents/panel_agent/test_panel_wiring.py -m "not pg"

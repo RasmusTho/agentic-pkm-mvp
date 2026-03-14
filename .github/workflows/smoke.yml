@@ -42,7 +42,7 @@ jobs:
               raise SystemExit('README.md missing DOCS-LINKS markers')
           if re.search(r"\\n", diagrams):
               raise SystemExit('docs/DIAGRAMS.md must not contain literal \n sequences')
-          if re.search(r"^\s+```mermaid", diagrams, re.MULTILINE):
+          if re.search(r"^[ \t]+```mermaid", diagrams, re.MULTILINE):
               raise SystemExit('Mermaid fences must not be indented')
           if re.search(r"->\|[^|]*\$begin:math:text\$[^|]*\$end:math:text\$\|", diagrams, re.MULTILINE):
               raise SystemExit('Forbidden math fence syntax inside table detected')

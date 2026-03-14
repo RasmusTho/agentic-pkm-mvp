@@ -1,4 +1,6 @@
-State: SoT v5.5 baseline + v5.6 forward line (boundary contract).
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Current boundary map between operator-safe runtime and opt-in agentic/lab surfaces; clarifies ownership without changing runtime contracts on its own.
 # Core Runtime vs Agentic Lab Boundary
 
 ## Purpose

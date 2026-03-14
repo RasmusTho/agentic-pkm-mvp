@@ -1,4 +1,6 @@
-State: SoT v5.5 baseline (descriptive). Definitions here should match the codebase; if you rename a concept in code, update this doc.
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Shared vocabulary for active concepts and module names used across the docs; if terminology changes in the active system, update this glossary with the owner docs.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -11,6 +13,13 @@ State: SoT v5.5 baseline (descriptive). Definitions here should match the codeba
 Brief definitions for recurring concepts.
 
 <!-- SECTION:GLOSSARY:BEGIN -->
+- **Mimer** - The current implemented knowledge surface centered on the Obsidian vault, ingestion/indexing, and vault-facing agent behavior.
+- **Hugin** - The agent and reasoning layer concept within Yggdrasil; in the current codebase this mostly maps to agent/runtime logic rather than a separate deployable module.
+- **Munin** - Planned media and raw-memory module for source artifacts that should not live directly as vault notes.
+- **Ratatosk** - Ingest and pipeline boundary for moving material into the system with auditable routing and normalization.
+- **Brokkr** - Planned project-workshop boundary for execution artifacts and deliverables outside the semantic vault layer.
+- **Tyr** - Planned formal-records boundary for receipts, contracts, and administrative records.
+- **Heimdall** - Infrastructure and observability boundary: runtime operations, metrics, logs, dashboards, and runbooks.
 - **Outbox** – Canonical DB outbox queue used by watcher/worker (`app/services/outbox.py`). JSONL (`INDEX_OUTBOX_PATH`) is a non-canonical audit log (`app/outbox/events.py`, `app/index/outbox.py`).
 - **Embedding** – Floating-point vector from `app/llm/embeddings.py` (Ollama `/api/embeddings` or mock); used in retrieval/indexing.
 - **BM25** – Lexical scorer (`rank_bm25.BM25Okapi`) used in hybrid retrieval.

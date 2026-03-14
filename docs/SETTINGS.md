@@ -1,4 +1,6 @@
-State: SoT v5.5 baseline (descriptive). Settings exist both as vault-backed compiled artifacts and as repo settings-as-code (registries).
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Current settings model, registries, and operator/lab tiering for the runtime; explains settings surfaces and precedence without replacing runtime validation commands.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -10,6 +12,11 @@ State: SoT v5.5 baseline (descriptive). Settings exist both as vault-backed comp
 
 This repo uses a **settings-as-artifacts** approach. “Settings” are not only runtime knobs; they are also
 versioned contracts for how the system behaves (agents, flows, panel wiring, prompts, and standards).
+
+Related docs:
+- `docs/ARCHITECTURE.md` for current authority boundaries and runtime baseline
+- `docs/DEV_WORKFLOW.md` for required validation/update order when changing settings artifacts
+- `docs/LLM_ROUTING.md` for the LLM-specific routing/fabric contract
 
 ## Runtime settings (compiled)
 
@@ -23,8 +30,39 @@ Compiler:
 
 Runtime settings cover the panel action catalog and watcher policy; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli settings-validate` / `python -m app.cli settings-explain`.
 
-Settings tiering design (operator-facing vs dev/lab-only), inventory, and migration targets live in `docs/SETTINGS_TIERING.md`.
+Settings tiering guidance (operator-facing vs dev/lab-only), inventory, and migration targets are described below.
 Runtime profile switch for tier enforcement: `PKM_SETTINGS_PROFILE=operator|lab` (default `operator`).
+
+## Settings Tiering
+
+The active settings model separates:
+- **Operator-facing settings** for normal single-user runtime operation
+- **Dev/Lab-only settings** for tuning, experiments, and compatibility paths
+
+Core rules:
+- normal runtime defaults to `PKM_SETTINGS_PROFILE=operator`
+- lab/experimental controls require explicit `PKM_SETTINGS_PROFILE=lab`
+- provenance and precedence should remain visible through `settings-validate` and `settings-explain`
+
+High-impact examples:
+- Operator-facing:
+  - `VAULT_ROOT`
+  - `DATABASE_URL` / `DB_DSN`
+  - `WATCHER_AUTO_EXEC`
+  - `WATCHER_SCOPE_GLOB`
+  - `watcher_settings.allowed_actions`
+  - `LLM_PROVIDER` and model endpoint selection
+  - `PANEL_PROACTIVE_ASSIST`
+- Dev/Lab-only:
+  - `INDEX_OUTBOX_PATH` as JSONL audit path
+  - `STORE_BACKEND`
+  - watcher performance-tuning knobs
+  - pipeline/decider/orchestrator/reasoning feature flags
+
+Target behavior:
+- operator mode should read/apply only operator-facing settings
+- lab mode may enable both tiers explicitly
+- low-level compatibility/tuning knobs should not accidentally shape normal runtime behavior
 
 ## Repo settings artifacts (non-compiled)
 
@@ -34,10 +72,10 @@ Some settings live as **repository artifacts** because they are:
 - referenced by multiple subsystems (PanelAgent, Orchestrator, tooling)
 
 Current artifacts:
-- Panel action wiring: `docs/settings/panel-actions.md`
+- Panel action wiring: `docs/settings/panel-actions.md` and `docs/settings/panel-action-wiring.yaml`
 - Flow settings: `docs/settings/flows.settings.yaml`
 
-## Prompt Registry (settings-backed)
+## Prompt Registry
 
 Prompts live as files in settings, with a small registry manifest for discovery and validation:
 
@@ -50,7 +88,7 @@ The registry enables:
 - future governance (deprecation, allowed models, eval suite binding)
 - linkage to architectural standards (MCP/A2A/JSON Schema/etc)
 
-## Standards Registry (MCP, A2A, OpenAPI, AsyncAPI, ...)
+## Standards Registry
 
 To keep architectural contracts explicit and reviewable, we maintain a “standards registry”:
 
@@ -59,7 +97,7 @@ To keep architectural contracts explicit and reviewable, we maintain a “standa
 This lists adopted standards and the canonical repo references implementing each standard
 (e.g. MCP tools, A2A schemas, OpenAPI, AsyncAPI, JSON Schema).
 
-## Tool Registry (MCP tools)
+## Tool Registry
 
 Tools live under docs/settings/tools/; the registry keeps the list deterministic and CI-validated:
 
@@ -103,3 +141,8 @@ Events are settings-backed artifacts:
 - Event descriptors: `docs/settings/events/*.yaml`
 
 The registry lists canonical event IDs, producers/consumers, and optional schema refs. Other registries (e.g., graphs) must reference these IDs.
+
+## Operational guidance
+- Use `python -m app.cli settings-validate --json` to validate compiled settings and registry consistency.
+- Use `python -m app.cli settings-explain --json` to inspect precedence and provenance.
+- When changing a registry or settings artifact, update the owning doc and validation expectations in the same change.

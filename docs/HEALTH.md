@@ -1,7 +1,9 @@
-State: SoT v5.5 Reality-MVP baseline locked.
+State: SoT v5.5 Reality-MVP baseline locked. This document defines the health CLI behavior and runtime health contract.
 # Health CLI & Contract
 
 Fast way to verify local dependencies (`health`) and the runtime health contract snapshot that drives the worker write guard.
+
+For top-level operational runbooks, use `docs/OPERATIONS.md`. For runtime telemetry interpretation beyond the health contract, use `docs/OBSERVABILITY.md`.
 
 <!-- SECTION:HEALTH:BEGIN -->
 ## Dependency checks

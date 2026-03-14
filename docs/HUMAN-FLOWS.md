@@ -1,4 +1,6 @@
-State: SoT v4.10 Reality-MVP (baseline locked) with v5.x forward line extending PanelAgent runtime + registry watcher.
+State: SoT v5.5 Reality-MVP baseline locked with v5.6 forward line extending PanelAgent runtime and registry watcher behavior.
+Doc role: Core SoT
+Authority: Canonical user-facing behavior contract for the current system; architecture and implementation changes should remain compatible with this document unless it is updated intentionally.
 # Human Flows — Yggdrasil / agentic-pkm-mvp
 
 > Audience: humans using the system in Obsidian + CLI. Human language is canonical; automation is additive, not authoritative.
@@ -8,23 +10,28 @@ State: SoT v4.10 Reality-MVP (baseline locked) with v5.x forward line extending 
 - The vault is the human surface; agents write traces/logs to side-channels (ObjectStore, Outbox, System folders) without rewriting your prose by default.
 - CLI is an agent tooling surface, not the main UI: it exists for automation, reproducible runs, and debugging.
 
-## 2. Scope and Reality-MVP Snapshot (SoT v4.10 + v5.x forward line)
+## 2. Scope and Current Reality-MVP Snapshot
 - v4.10 locked baseline: ingest + ASK + observability + orchestrator runtime V1; panels are optional and not indexed as content.
 - v5.x forward line: PanelAgent runtime + registry watcher automation with policy gating, UUID healing, and bounded scans. Legacy snapshot watchers remain dev-only.
 
 ## 3. Human Flow: Capture & Ingest
 - Keep frontmatter lean: `title`, `uuid`, optional `type/category/facets`.
-- Ingest via `vault-alpha-ingest` (or `ingest-vault-paths` for targeted notes).
+- Ingest happens through the canonical vault ingest path, either as a full batch or targeted note update.
 - UUID healing is automatic and logged; malformed frontmatter is skipped with a warning, not a crash.
 - Ingest writes objects to the Store, keeps derived indexes rebuildable, and maintains VaultMirror copies under `System/Metadata/VaultMirror/...`.
 - External ingest (drop folder) is opt-in; ingested objects carry `origin: external_raw` and surface in ASK/status alongside vault entries.
 
+### Vault sync principles
+- Human-first: the system should not rewrite note bodies; normal automation is limited to agreed frontmatter keys, AI panel content, and side-channel artifacts.
+- UUID is the identity boundary; filenames and paths are operational metadata and may change without changing note identity.
+- Vault edits flow into the runtime through the registry watcher and ingest pipeline; runtime-side note updates should stay narrow, explainable, and traceable.
+- If a note is active or conflicted, the system should prefer receipts, inbox items, or explicit proposals over silent mutation.
+
 ## 4. Human Flow: ASK (Reality-MVP)
-- `/api/ask` and `python -m app.cli ask` query the HybridStore (BM25 + embeddings) warmed from Store objects. Answers cite sources with origin/plane tags.
-- Default LLM provider is mock; set `LLM_PROVIDER` + credentials to enable LLM drafting/self-check. Errors surface in ASK status metrics.
-- Cite-before-trust: answers show source IDs/paths; rerank hooks/critique are optional overlays.
-- ASK is currently kept primarily for dev/operator purposes and is not yet fully speced as the long-term UX.
-- Forward line intent: ASK becomes a RAG agent that other agents call (tool/agent interface), not only a human-facing endpoint.
+- ASK is available through the HTTP API and CLI.
+- Answers must cite sources with origin/plane tags so the human can inspect where the answer came from.
+- Cite-before-trust: source visibility is mandatory, while reranking and critique remain optional overlays.
+- The current baseline treats ASK as a reliable retrieval-and-answer surface; richer agent-facing ASK behavior belongs to the forward line, not this human contract.
 
 ## 5. Design Principles (Human-first constraints)
 - The human is the ultimate authority for classification and meaning; the system proposes but never silently overrides.
@@ -47,14 +54,19 @@ State: SoT v4.10 Reality-MVP (baseline locked) with v5.x forward line extending 
 - System metadata must not pollute the main vault surface; only agreed frontmatter fields appear in notes.
 - ASK answers must cite contributing notes/paths; losing source visibility is a regression.
 - Promotion/Evergreen steps must not rewrite note bodies; frontmatter and moves follow documented policies with logs in the mirror.
+- Rename/move handling must preserve UUID continuity, update canonical paths consistently, and avoid unnecessary re-embedding when note body content did not change.
 
-## 7. Current Reality-MVP surfaces (implementation snapshot)
-- `vault-alpha-ingest` ingests Concepts (and optionally `Test/Alpha-HumanFlows.md`), strips AI panels, writes/updates VaultMirror `uuid.md` mirrors to match frontmatter, and populates the configured Store backend plus the in-process HybridStore used by ASK; fingerprints live in mirrors/store, skip unchanged notes once the Store is populated, and `--force` bypasses fingerprints/store checks, reingests everything, and heals missing frontmatter (run this after a fresh DB paired with existing mirrors).
-- `ingest-vault-paths` ingests specific markdown files by path (same pipeline as `vault-alpha-ingest`), enabling targeted updates as part of the watcher-ready work.
-- `alpha-human-flows` orchestrates flows A–F on top of the same ingest path; `--reset-outbox` is a destructive, dev-only flag for local regression checks that truncates the configured audit log.
-- `/api/ask` and the QA agent backends use BM25+embedding hybrid search over the in-process HybridStore, warmed from `store_objects` on first request; answers are the top-hit snippet and sources include doc ids and `source_ref` paths, while zones are not surfaced yet.
-- External corpus ingest is not automated; external objects only appear if inserted into the Store with an `origin` such as `external_raw`, and they surface in ASK/status alongside vault entries.
-- The CLI `ask` command still routes through the planner/orchestrator pipeline (QA steps fall back to the same hybrid retrieval), while `ingest-vault-root`/`pkm-alpha-ingest` provide quick root-level ingest helpers for the Alpha vault.
+## 7. Current Human-Facing Surfaces
+- Obsidian vault: the primary writing and reading surface.
+- CLI: operator/developer tooling for ingest, ASK, watcher control, and diagnostics.
+- HTTP API: `/api/ask`, `/api/health`, and `/api/status` for retrieval and runtime visibility.
+- AI panels + receipts: the in-note working surface for human-confirmed or human-visible actions.
+
+Detailed command behavior, startup flows, and troubleshooting belong in:
+- `docs/OPERATIONS.md`
+- `docs/INFRASTRUCTURE.md`
+- `docs/PANEL_AGENT.md`
+- `docs/TESTING.md`
 
 ## 8. Watcher-driven Flows (Registry Watcher)
 State: v5.x forward line. Runtime automation uses the registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`). Legacy snapshot watchers are dev-only.
@@ -82,14 +94,6 @@ State: v5.x forward line. Runtime automation uses the registry watcher (`configs
 - Panel runtime emits `panel.intent.created`, `panel.intent.executed`, `panel.action.*`, emits `promote.intent.created` for mapped promotion actions, and writes receipts into the in-note AI status callout (panel stays as the working set; receipts live outside the panel).
 - Promotion consumer updates the note file (frontmatter `review_state`) using the path in `promote.intent.created`; Store metadata can lag, but the vault note is the source of truth.
 
-### UAT: Watcher + Panel + Promotion on vault/Test
-- Seed curated notes into your vault Test folder:
-  - `python -m app.cli uat-seed-vault-test --vault-root "<vault_root>"` (defaults to Test/AgenticPKM-UAT).
-- Run the end-to-end flow with the registry watcher:
-  - `WATCHER_ENABLE=1 WATCHER_VAULT_PATH="<vault_root>" WATCHER_SCOPE_GLOB="Test/**" WATCHER_AUTO_EXEC=1 python -m app.cli watcher run --max-ticks 1`
-- Verify status: `python -m app.cli status` and confirm counters increased: `panel_runs`, `promote.intent.created`, `promotion_executed`, and ingest run counts. Use DB outbox as the ground truth.
-- Policy gating: the only per-note block is `ai_panel_auto_run: never` (nested form supported). Fenced notes become candidates when `WATCHER_AUTO_EXEC=1` is armed; proactive assist may also create panels for eligible non-fenced notes unless disabled.
-- Intent vs mutation: panel runtime emits intents (`promote.intent.created`), while `promote.done` comes from the promotion consumer; note mutation requires the consumer to run (included by default in runtime).
-
-### Legacy/dev-only tools
-- `vault-watcher-run` / `vault-watcher-daemon` and `runtime-loop` are legacy snapshot-based tools. They are not used for runtime start-system flows, require `PKM_SETTINGS_PROFILE=lab`, and are kept for historical/dev-only workflows.
+For UAT flows, operator commands, and dev-only watcher tools, use:
+- `docs/runbooks/UAT_PANEL_WATCHER.md`
+- `docs/OPERATIONS.md`

@@ -1,7 +1,14 @@
-State: v5.x forward line (normative concurrency and idempotency guardrails).
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Core SoT
+Authority: Normative concurrency and idempotency guardrails for watcher, worker, and agent-triggered side effects in the current runtime.
 # Concurrency & Idempotency Guide
 
-This guide defines the required concurrency and idempotency guards for watcher auto-exec and multi-agent orchestration. It is normative for v5.5D+.
+This guide defines the required concurrency and idempotency guards for watcher auto-exec, event consumption, and agent-triggered side effects in the current runtime.
+
+Related docs:
+- `docs/EVENTS.md` for canonical event envelope requirements, including `event_id`
+- `docs/OPERATIONS.md` for runtime/operator checks when concurrency failures are suspected
+- `docs/guardrails.md` for the shorter quality/safety summary
 
 ## DedupTaskQueue pattern (MUST)
 The system MUST use a DedupTaskQueue for tasks that can be triggered concurrently or retried (watcher runs, panel auto-exec, orchestrator steps).
@@ -30,14 +37,20 @@ Events MUST be idempotent across retries.
 - **Concurrent note edits:** MUST fail safe on version mismatch and avoid corrupting vault files.
 - **Retry storms:** MUST be absorbed by deterministic IDs and consumer dedup; retries should not produce new side effects.
 
-## Testing strategy (PR2)
-PR2 will add tests under `tests/ops/` and `tests/runtime/` (names may vary), covering:
+## Validation and tests
+Current validation coverage includes tests for:
 
 - **Watcher dedup:** concurrent watcher runs do not emit duplicate `watcher.run` or panel intents.
 - **Optimistic locking:** concurrent writes fail safe with a version mismatch and no corruption.
 - **Idempotency:** action replays (same `event_id`) do not re-apply side effects.
 
-Example commands (placeholders until tests land):
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/ops/test_concurrency_watchers.py -m "not pg"`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/runtime/test_optimistic_locking.py -m "not pg"`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/ops/test_event_idempotency.py -m "not pg"`
+Representative test files:
+- `tests/concurrency/test_dedup_task_queue.py`
+- `tests/concurrency/test_event_dedup_store.py`
+- `tests/concurrency/test_panel_action_idempotency.py`
+- `tests/promotion/test_consumer_idempotency.py`
+- `tests/architecture/test_events_outbox_contracts.py`
+
+Useful commands:
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/concurrency tests/promotion/test_consumer_idempotency.py -m "not pg"`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/architecture/test_events_outbox_contracts.py -m "not pg"`

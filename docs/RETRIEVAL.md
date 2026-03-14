@@ -1,4 +1,6 @@
-State: SoT v5.5 baseline (descriptive). This doc describes the current in-process hybrid retrieval + optional rerank hooks.
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Current retrieval and optional rerank behavior for the runtime; retrieval semantics may evolve, but this doc should reflect the actual active path.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.

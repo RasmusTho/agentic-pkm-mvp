@@ -1,4 +1,6 @@
-State: SoT v5.5 baseline (descriptive). This doc describes the env vars and endpoints used by the current LLM + embeddings adapters.
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Operational provider/setup guide for current chat and embedding adapters; routing/fabric contract remains in `docs/LLM_ROUTING.md` and embedding identity rules remain in `docs/EMBEDDINGS.md`.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -13,6 +15,7 @@ This document describes how the system selects/configures the LLM provider(s) us
 - **Embeddings** (retrieval/indexing)
 
 For the normative embedding identity + rebuild contract, see `docs/EMBEDDINGS.md`.
+For routing precedence and fabric behavior, see `docs/LLM_ROUTING.md`.
 
 ## Providers (Current)
 `LLM_PROVIDER` controls both chat and embeddings.
@@ -60,10 +63,38 @@ Embeddings are handled by `app/llm/embeddings.py`.
 - `OPENAI_API_KEY` (+ optional `OPENAI_BASE`, default `https://api.openai.com/v1/chat/completions`)
 - `DEEPSEEK_API_KEY` (+ optional `DEEPSEEK_BASE`, default `https://api.deepseek.com/chat/completions`)
 
+## Backend scenarios
+
+| Scenario | Variables | Notes |
+| --- | --- | --- |
+| Mock (CLI/tests default) | `LLM_PROVIDER=mock`, `LLM_MOCK_RESPONSE='{"type":"note", ...}'` | No network calls. Health check skips Ollama reachability. |
+| Local Ollama | `LLM_PROVIDER=ollama`, `OLLAMA_HOST=http://127.0.0.1:11434`, `LLM_MODEL=llama3.1:8b-instruct`, `OLLAMA_EMBED_MODEL=nomic-embed-text:latest` | Pre-pull models (`ollama pull llama3.1:8b`). |
+| DeepSeek via Ollama tag | `LLM_PROVIDER=ollama`, `LLM_MODEL=deepseek-r1:8b` | Same health flow. Pull via `ollama pull deepseek-r1:8b`. |
+| OpenAI API | `LLM_PROVIDER=openai`, `OPENAI_API_KEY=...`, `LLM_MODEL=gpt-4o-mini` | No built-in retry; consider guardrail breaker integration for unstable remote providers. |
+| DeepSeek API | `LLM_PROVIDER=deepseek`, `DEEPSEEK_API_KEY=...`, `LLM_MODEL=deepseek-chat` | Reuses the same timeout model as other chat providers. |
+
+## Timeouts, retries, breakers
+
+- `LLM_TIMEOUT` applies to every HTTP call.
+  - chat defaults to 120s
+  - embeddings and other adapter calls default to 60s
+- No automatic retry is implemented today; the health CLI only checks reachability/basic readiness.
+- `app/quality/guardrails.DEFAULT_BREAKER` is available for future integration around provider calls.
+- For deterministic CLI/test workflows, prefer `LLM_PROVIDER=mock` until a local Ollama server or remote provider is confirmed healthy.
+
 ## Delta / Known Limits
 - Embeddings are implemented for `mock` and `ollama` in the current code; `openai`/`deepseek` embeddings are not wired here today.
 - Diagnostics note: `python -m app.cli llm check` uses `OPENAI_BASE_URL` (OpenAI-compatible base) rather than `OPENAI_BASE` (chat completions URL) when probing non-Ollama providers.
 - If you change `EMBED_DIM`, you must treat it as an embedding identity change and rebuild any derived embedding stores (see `docs/EMBEDDINGS.md`).
+- DeepSeek via Ollama remains effectively an Ollama deployment choice rather than a separate provider integration.
+- Routing policy and provider/model selection precedence live in `docs/LLM_ROUTING.md`; keep that document separate from this operational setup guide.
+
+## DeepSeek via Ollama tag
+
+- Pull the model locally: `ollama pull deepseek-r1:8b`
+- Set `LLM_MODEL=deepseek-r1:8b`
+- Keep token budgets conservative for verbose reasoning-style output
+- Treat chain-of-thought style output as sensitive and avoid logging it directly; see `docs/PRIVACY.md`
 
 ## Quick Checks
 - With Ollama running locally:
@@ -71,3 +102,6 @@ Embeddings are handled by `app/llm/embeddings.py`.
 - If embeddings fail:
   - confirm `EMBED_DIM` matches the provider output and that the model supports the requested dimension behavior
   - confirm the endpoint is reachable (`OLLAMA_URL` / `OLLAMA_HOST`)
+- For routing/debugging questions:
+  - use `docs/LLM_ROUTING.md`
+  - inspect health/status surfaces that report selected defaults and provider readiness

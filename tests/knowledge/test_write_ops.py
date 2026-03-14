@@ -4,6 +4,7 @@ from pathlib import Path
 
 from app.knowledge import write_ops
 from app.knowledge.contracts import WriteReceipt
+from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings
 
 
 def test_default_vault_root_for_path_uses_filesystem_anchor(tmp_path: Path) -> None:
@@ -35,7 +36,15 @@ def test_write_note_from_absolute_resolves_locator_and_port(monkeypatch, tmp_pat
     assert captured["locator_path"] == "Inbox/note.md"
     assert captured["locator_vault"] == "Vault"
     assert captured["content"] == "hello"
-    assert captured["resolve_kwargs"] == {"vault_root": (tmp_path / "vault").resolve()}
+    assert captured["resolve_kwargs"] == {
+        "vault_root": (tmp_path / "vault").resolve(),
+        "settings": KnowledgeSettings(
+            primary_adapter=KnowledgeAdapter.FS_VAULT,
+            fallback_adapter=KnowledgeAdapter.OBSIDIAN_CLI,
+            allow_fallback=False,
+            strict_startup=False,
+        ),
+    }
 
 
 def test_write_note_relative_uses_make_note_locator(monkeypatch, tmp_path: Path) -> None:

@@ -1,5 +1,5 @@
 State: Legacy (archived).
-> **DEPRECATED (WS)** This document reflects a previous iteration (FastAPI/SQLAlchemy/LangGraph integrated). It is kept for reference. The WS overview is in docs/OVERVIEW_WS.md and policies in data/context/*.yaml.
+> **DEPRECATED (WS)** This document reflects a previous iteration (FastAPI/SQLAlchemy/LangGraph integrated). It is kept for reference. The WS overview is in docs/legacy/OVERVIEW_WS.md and policies in data/context/*.yaml.
 
 # Project Overview
 
@@ -79,7 +79,7 @@ State: Legacy (archived).
 - Structured logging + Prometheus metrics toggles live i `app/observability.py` (`METRICS_ENABLED=1` to expose `/metrics`).
 - Lokal Docker-stack (Prometheus + Grafana) finns beskriven i `docs/OBSERVABILITY_STACK.md`.
 - Kör API+Postgres+Redis via `docker-compose.yaml` för en självbärande dev-basad (se README för instruktioner).
-- Future roadmap (auth, observability, automation) tracked in `docs/ALIGNMENT.md` and `data/context/projects.json`.
+- Future roadmap (auth, observability, automation) tracked in `docs/legacy/ALIGNMENT.md` and `data/context/projects.json`.
 
 ## Information Flow (MVP)
 ```

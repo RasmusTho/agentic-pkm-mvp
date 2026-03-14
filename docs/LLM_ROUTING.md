@@ -1,10 +1,17 @@
-State: SoT v5.x forward line (router + fabric contract)
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Canonical routing and fabric contract for LLM chat and embedding access in the current runtime; operational provider configuration lives here, while broader provider usage lives in `docs/LLM.md`.
 
-LLM Routing Contract (Router + Fabric)
+# LLM Routing Contract (Router + Fabric)
 
 This document defines the canonical LLM access layer for chat/completions and embeddings.
 The router chooses a route (provider/model/mode), and the fabric is the only allowed entrypoint
 for high-level modules to talk to LLMs.
+
+Related docs:
+- `docs/LLM.md` for provider setup, environment configuration, and operational scenarios
+- `docs/SETTINGS.md` for the broader settings/registry model
+- `docs/HEALTH.md` for route/provider visibility in health output
 
 ## Concepts
 
@@ -23,12 +30,13 @@ for high-level modules to talk to LLMs.
 
 Routing is intentionally deterministic and single-source:
 
-1) **Vault-first config (stub)** — this is reserved for a future settings compiler integration.
-   The router currently does not read vault settings directly.
-2) **Environment overrides** — env vars override defaults (see below).
-3) **Built-in defaults** — used when no overrides are present.
+1. **Environment overrides** — env vars override defaults (see below).
+2. **Built-in defaults** — used when no overrides are present.
 
-Until vault-first routing is wired, use env vars to control routes in the runtime and CI.
+Current state:
+- The router is env-driven today.
+- Vault-first routing integration is not wired yet.
+- When that changes, this document must distinguish current runtime behavior from future policy.
 
 Tests: `tests/components/llm/test_router.py::test_router_respects_env_defaults`
 
