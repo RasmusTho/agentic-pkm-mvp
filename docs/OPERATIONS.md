@@ -11,10 +11,11 @@ Specialized companion documents:
 - `docs/INFRASTRUCTURE.md` - local runtime stack, Docker/Colima setup, and local observability stack
 
 Reading order:
-1. Start here for runtime expectations and runbooks.
+1. Start here for runtime expectations, core checks, and escalation paths.
 2. Follow `docs/HEALTH.md` when verifying readiness or diagnosing degraded state.
 3. Follow `docs/OBSERVABILITY.md` for interpreting telemetry and counters.
-4. Use `docs/INFRASTRUCTURE.md` when you need Docker/runtime topology or the local monitoring stack.
+4. Use `docs/INFRASTRUCTURE.md` when you need Docker/runtime topology, local startup flow, or the local monitoring stack.
+5. Use `docs/runbooks/` only for task-specific walkthroughs after you have identified the affected runtime surface.
 
 CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
@@ -30,9 +31,18 @@ CLI note:
 - JSONL outbox (`INDEX_OUTBOX_PATH`) is audit/diagnostic only and must not be used as the worker queue.
 - Registry watcher is the single runtime watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`). Legacy snapshot watchers are dev-only.
 
+Current runtime path:
+1. The registry watcher scans the vault and emits DB outbox events.
+2. The worker consumes DB outbox rows and performs ingest/index work.
+3. Health, status, and metrics confirm whether that path is healthy.
+
+When the issue is startup topology or Compose wiring, switch to `docs/INFRASTRUCTURE.md`.
+When the issue is signal interpretation, switch to `docs/OBSERVABILITY.md`.
+When the issue is health semantics or degraded-state rules, switch to `docs/HEALTH.md`.
+
 ## Watcher Operations
 
-Use this section when the issue is specifically about watcher deployment, config, or execution mode.
+Use this section only when the issue is specifically about watcher deployment, config, or execution mode.
 
 ### Docker-first deployment
 1. Set `VAULT_ROOT` to your local vault path:
@@ -59,10 +69,7 @@ Use this section when the issue is specifically about watcher deployment, config
   ```bash
   python -m app.cli watcher run --max-ticks 1
   ```
-- Legacy snapshot watcher is lab-only and not part of runtime/start-system flows:
-  ```bash
-  PKM_SETTINGS_PROFILE=lab python -m app.cli vault-watcher-run --vault-root "<vault>" --snapshot-path "<state.json>"
-  ```
+- The legacy snapshot watcher remains lab-only and is not part of runtime/start-system flows. Do not use it for current runtime operation.
 
 ### Key watcher env and defaults
 - `WATCHER_ENABLE=1` arms the registry watcher.
@@ -109,28 +116,8 @@ Companion docs:
 - The watcher runs `python -m app.cli watcher run` (registry loop; emits `ingest.vault.changed` or `panel.scan.requested` to outbox).
 - Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.
 
-## Storage Maintenance
-- The FastAPI service writes DuckDB artifacts to `storage/agent.duckdb` and provenance trails to `provenance.jsonl`.
-- Rotate them with `python scripts/rotate_storage.py [--dry-run|--copy|--truncate]`, which archives into `storage/archive/` by default and keeps a bounded history (`--max-backups`).
-- Schedule the script (cron/systemd/GitHub Actions) to run routinely; review `--copy/--truncate` flags depending on whether live readers expect files to remain.
-- Prior to rotation, ensure no long-running agent sessions depend on the files; quiesce the service if necessary.
-- Monitor free disk space and set alerts when the combined storage exceeds the agreed threshold.
-- Use `--max-age-days` alongside `--max-backups` to purge old archives (set policy, e.g. 30 days).
-- Run `pre-commit install` locally so lint/type/test hooks run automatically before each commit.
-- Vector data now lives in Postgres (`objects` + `embeddings`); ensure the `pgvector` extension is installed and run `VACUUM ANALYZE embeddings` periodically as the cluster grows.
-
-## Runtime Loop Runbook
-1. **Start locally (compose)** – `make alpha-up` (requires `VAULT_ROOT`), or `docker compose up --build`.
-2. **Health** – `python -m app.cli health --json` and `python -m app.cli status --json`.
-3. **Watcher** – verify `WATCHER_ENABLE=1`, `WATCHER_VAULT_PATH`, and `INDEX_OUTBOX_PATH` in env; check `tmp/watcher_heartbeat.json`.
-4. **Worker** – confirm `tmp/worker_heartbeat.json` updates and `processed_total` increases.
-5. **Stop** – `docker compose down` or `make alpha-down`.
-
-## Ingestion Review Runbook
-1. **Prepare payload** – gather metadata in a JSON-compatible dict plus raw text under `text`.
-2. **Ingest** – `python -m app.cli pipe <note.md>` or watcher-driven ingest via `vault-watcher-run`.
-3. **Validate** – check `/api/status` + `/api/health` and confirm `index.embedding.created` events in outbox (legacy alias: `index.object.embedded`).
-4. **Maintain** – run `python -m app.fitness.report` after major imports to watch latency and gate regressions.
+Detailed startup, local topology, and recovery procedures live in `docs/INFRASTRUCTURE.md`.
+Task-specific operator walkthroughs live in `docs/runbooks/`.
 
 ## Auth & Rate Limiting
 - Refer to `docs/SECURITY.md` for implementation guidance (API key dependency + `slowapi` limiter).
@@ -150,6 +137,13 @@ Companion docs:
 - Status: `python -m app.cli status` reports `worker_queue` vs `events_log` to distinguish DB vs JSONL.
 - Health command semantics and degradation rules live in `docs/HEALTH.md`.
 
+Operator triage order:
+1. Run `python -m app.cli health --json`.
+2. Run `python -m app.cli status --json`.
+3. Check watcher and worker heartbeat files.
+4. Inspect DB outbox freshness and `delivered_at`.
+5. Escalate to `docs/INFRASTRUCTURE.md` or a task-specific runbook if the issue is startup/runtime-topology specific.
+
 ## Common operator CLI commands
 
 Use `python -m app.cli <command> --help` for the full, current argument list. These are the stable operator-facing entrypoints:
@@ -167,7 +161,7 @@ Use `python -m app.cli <command> --help` for the full, current argument list. Th
 Flow mapping:
 - `python -m app.cli watcher run` -> watcher runtime
 - `python -m app.cli ask` -> ASK flow (see `docs/HUMAN-FLOWS.md`)
-- `python -m app.cli runtime-loop` -> legacy/dev-only snapshot runtime (`PKM_SETTINGS_PROFILE=lab`)
+- `python -m app.cli runtime-loop` -> legacy/dev-only runtime path, not part of current baseline operations
 
 Useful examples:
 
@@ -192,35 +186,15 @@ python -m app.cli settings-explain --json
   - Bucket C: exec/psql timing failure → `db_probe_step=db_env_*` or `db_probe_rc!=0`; `db_probe_output_snippet` shows the failing exec/psql error.
 - What to paste into an issue/PR comment: `timestamp`, `phase`, `last_ok_phase`, `exit_code`, `exit_reason`, `compose_up_*`, `db_probe_*`, `llm_probe_*`.
 
-<!-- SECTION:OPS-RUNBOOKS:BEGIN -->
-## Runbooks (quick reference)
-| Issue | Symptom | Action |
-| --- | --- | --- |
-| yt-dlp 403/429 | Health passes but `transcribe` fails with `DownloadError` | Run `yt-dlp -v URL`, add cookies (`--cookies-from-browser`), or download via a piped host (see `docs/DEPENDENCIES.md`). |
-| Missing ffmpeg | Health `ffmpeg=false`, CLI raises `CalledProcessError` | Install the package, verify with `which ffmpeg`. |
-| Ollama offline | Health `ollama=false`, agent replies “Insufficient evidence” | Start `ollama serve`, `ollama pull <model>`, confirm via `curl $OLLAMA_URL/api/tags`. |
-| `INDEX_OUTBOX_PATH` write failure | Health `index_outbox=false` | Fix filesystem permissions or point env to a writable directory. |
+## Incident handling
+1. Identify the failing surface with `health`, `status`, and heartbeat/outbox checks.
+2. Stabilize the runtime by reducing optional integrations only if needed for diagnosis.
+3. Record the incident in the active ticket or PR, and update `docs/STATUS.md` if current operational reality changed.
+4. Use the relevant companion document or runbook for recovery details.
 
-## SLO / SLA
-| Level | Target | Measurement |
-| --- | --- | --- |
-| Ingestion latency | < 5 s from CLI start to DB outbox entry | Compare CLI start with `transcribe` / `agent.answer` spans. |
-| Retrieval p95 | < 250 ms | `jq 'select(.node=="agent.answer") | .latency_ms'`. |
-| ASR wall time | < 30 s for a 5-minute clip | `transcribe` span. |
-| Health CLI | 100 % coverage before every release | Smoke step fails otherwise. |
-
-## Incident handling (manual)
-1. **Identify** – use `health` + `jq` to find the failing node.
-2. **Stabilize** – set `LLM_PROVIDER=mock` or `STORE_BACKEND=memory` to keep working while debugging.
-3. **Communicate** – add a short note to the active incident ticket or PR, and update `docs/STATUS.md` if the incident changed current operational reality or guardrails.
-4. **Restore** – restart Ollama/ffmpeg/CLI depending on the root cause. Restore `tmp/index-outbox.jsonl` from backup if corrupt (audit only).
-
-## Backup / restore for index-outbox (audit log)
-- Default path is `tmp/index-outbox.jsonl`. Simple rotation:
-  ```bash
-  cp tmp/index-outbox.jsonl "tmp/index-outbox.$(date +%Y%m%d%H%M%S).jsonl"
-  truncate -s 0 tmp/index-outbox.jsonl
-  ```
-- In CI, archive the file as an artifact when needed.
-- Restore: copy the file back and inspect via `python -m json.tool` (audit only; worker queue remains in DB).
-<!-- SECTION:OPS-RUNBOOKS:END -->
+Quick issue routing:
+- Missing dependency or local runtime startup issue -> `docs/INFRASTRUCTURE.md` and `docs/DEPENDENCIES.md`
+- Health contract or degraded-state interpretation -> `docs/HEALTH.md`
+- Metrics/logging interpretation -> `docs/OBSERVABILITY.md`
+- Watcher/panel manual walkthrough -> `docs/runbooks/UAT_PANEL_WATCHER.md`
+- Go-live/startup diagnostics -> `docs/runbooks/RUNBOOK_GO_LIVE.md`
