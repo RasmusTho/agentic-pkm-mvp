@@ -90,7 +90,7 @@ Recommended next execution order:
 | `docs/legacy/PLANNER.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |
 | `docs/legacy/PROJECTOR.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |
 | `docs/legacy/ALIGNMENT.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |
-| `docs/CHANGELOG.md` | Legacy | archive | Historical only |
+| `docs/legacy/CHANGELOG.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |
 | `docs/legacy/ingest.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |
 | `docs/legacy/OVERVIEW_WS.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |
 | `docs/legacy/MEMORY.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |

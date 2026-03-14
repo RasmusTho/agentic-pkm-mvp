@@ -212,7 +212,7 @@ python -m app.cli settings-explain --json
 ## Incident handling (manual)
 1. **Identify** – use `health` + `jq` to find the failing node.
 2. **Stabilize** – set `LLM_PROVIDER=mock` or `STORE_BACKEND=memory` to keep working while debugging.
-3. **Communicate** – add a short note to `docs/CHANGELOG.md` under “Unreleased incidents”.
+3. **Communicate** – add a short note to the active incident ticket or PR, and update `docs/STATUS.md` if the incident changed current operational reality or guardrails.
 4. **Restore** – restart Ollama/ffmpeg/CLI depending on the root cause. Restore `tmp/index-outbox.jsonl` from backup if corrupt (audit only).
 
 ## Backup / restore for index-outbox (audit log)
