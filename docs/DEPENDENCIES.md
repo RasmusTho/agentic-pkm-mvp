@@ -1,4 +1,6 @@
-State: SoT v5.5 baseline (descriptive). This lists practical external dependencies used by the current code paths.
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Practical dependency matrix for current code paths and environments; code and lockfiles remain the executable source of truth.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.

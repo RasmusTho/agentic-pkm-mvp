@@ -1,4 +1,6 @@
-State: SoT v5.5 baseline (descriptive). This is a reference inventory; if any row drifts from code, prefer the code and update this doc.
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Reference inventory of env vars, CLI surfaces, external tools, and runtime signals; code remains authoritative when a row drifts.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.

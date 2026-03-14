@@ -1,4 +1,6 @@
-State: SoT v5.5 baseline (descriptive). This doc describes the env vars and endpoints used by the current LLM + embeddings adapters.
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Operational provider/setup guide for current chat and embedding adapters; routing/fabric contract remains in `docs/LLM_ROUTING.md` and embedding identity rules remain in `docs/EMBEDDINGS.md`.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -13,6 +15,7 @@ This document describes how the system selects/configures the LLM provider(s) us
 - **Embeddings** (retrieval/indexing)
 
 For the normative embedding identity + rebuild contract, see `docs/EMBEDDINGS.md`.
+For routing precedence and fabric behavior, see `docs/LLM_ROUTING.md`.
 
 ## Providers (Current)
 `LLM_PROVIDER` controls both chat and embeddings.

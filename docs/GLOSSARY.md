@@ -1,4 +1,6 @@
-State: SoT v5.5 baseline (descriptive). Definitions here should match the codebase; if you rename a concept in code, update this doc.
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Shared vocabulary for active concepts and module names used across the docs; if terminology changes in the active system, update this glossary with the owner docs.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
