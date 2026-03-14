@@ -171,11 +171,17 @@ Eval tests live under `tests/eval/`, are marked `@pytest.mark.eval`, and remain 
   - `docs/DOCS_INDEX.md`
 - Do not create a new top-level doc if the content fits an existing core or reference doc.
 - If you add a new doc:
+  - start from `docs/templates/DOC_TEMPLATE.md`,
   - add it to `docs/DOCS_INDEX.md`,
   - classify it clearly as Core SoT, Reference, Plan, or Historical,
   - link it from the owning parent doc if it is meant to be read.
 - Historical or planned docs must not be presented as current runtime truth.
 - If a doc becomes a redirect or compatibility alias, say so explicitly at the top of the file and in `docs/DOCS_INDEX.md`.
+- When writing specification documents in a complex area:
+  - read the surrounding Core SoT docs first,
+  - identify which document owns the final decision,
+  - keep invariants, boundaries, and decision rules explicit,
+  - avoid duplicating implementation detail that belongs in reference docs.
 
 ## Coding discipline
 

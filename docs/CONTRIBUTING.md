@@ -37,6 +37,7 @@ if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
 - Read the active core docs first: `docs/STATUS.md`, `docs/ARCHITECTURE.md`, `docs/HUMAN-FLOWS.md`, `docs/COMPONENTS.md`, `docs/EVENTS.md`, `docs/TESTING.md`, `docs/OPERATIONS.md`, `docs/DOCS_INDEX.md`.
 - Use `docs/DOCS_INDEX.md` to determine whether a document is Core SoT, Reference, Plan, or Historical before relying on it.
 - Do not create a new top-level doc if the content belongs in an existing core or reference document.
+- Start new docs from `docs/templates/DOC_TEMPLATE.md`.
 - If you add or repurpose a doc, update `docs/DOCS_INDEX.md` in the same change.
 - Historical or planned docs must be labeled as such and must not be treated as current runtime truth.
 

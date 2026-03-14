@@ -150,6 +150,29 @@ For every non-trivial change, follow this sequence:
 
    Docs are not optional; they are part of the change set.
 
+6. **Handle specification docs deliberately**
+   - Before editing a spec-like document, determine:
+     - whether it is `Core SoT`, `Reference`, `Plan`, or `Historical`,
+     - which neighboring docs define adjacent boundaries,
+     - whether the document should define truth or merely explain implementation detail.
+   - Read spec docs in this order:
+     - owning Core SoT doc,
+     - adjacent Core SoT docs,
+     - implementation/reference docs,
+     - only then historical/planned material for context.
+   - When writing or revising a specification document:
+     - start from `docs/templates/DOC_TEMPLATE.md`,
+     - make scope and authority explicit near the top,
+     - keep invariants, boundaries, and decision rules explicit,
+     - prefer tables for stable taxonomies and ownership maps,
+     - use examples only where ambiguity remains after the rules,
+     - do not duplicate large sections from neighboring docs just to be “complete”.
+   - Optimize documentation for the repo’s complexity:
+     - compress repetition,
+     - preserve sharp responsibility boundaries,
+     - keep normative statements close to the document that owns them,
+     - move operational or implementation detail out of spec docs when it obscures the contract.
+
 ---
 
 ## 4. Task loop you MUST follow
