@@ -80,9 +80,9 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 ## Supporting Docs (Quality, Ops, Flows, Data)
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/CI.md | CI overview | Aligned (forward line v5.x) | 2026-02-05 | Updated for v5.5 baseline gates, smoke flows, and watcher controls. |
-| docs/ISSUES_TESTING.md | Testing coverage issues | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Living backlog; v4.x router/fabric entries are obsolete; remaining open item tracks future-timestamp heartbeat rejection coverage. |
-| docs/QUALITY.md | Quality gates | Aligned (forward line v5.x) | 2026-02-05 | QA guardrails + fitness gates aligned with v5.5 baseline. |
+| docs/CI.md | CI overview | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; CI and fitness-gate guidance now lives in `docs/TESTING.md`. |
+| docs/ISSUES_TESTING.md | Testing coverage issues | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; remaining active gap tracking now lives in `docs/TESTING.md`. |
+| docs/QUALITY.md | Quality gates | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; validation guidance now lives in `docs/TESTING.md` and runtime safety policy lives in `docs/guardrails.md`. |
 | docs/guardrails.md | Guardrails | Aligned (forward line v5.x) | 2026-02-05 | Runtime guardrails + concurrency safety aligned with v5.5 baseline. |
 | docs/SECURITY.md | Security | Aligned (forward line v5.x) | 2026-02-05 | Local-first security posture; keys/env handling aligned with v5.5 baseline. |
 | docs/PRIVACY.md | Privacy | Aligned (forward line v5.x) | 2026-02-05 | Local-first, outbound only on optional remote LLMs. |
@@ -103,7 +103,7 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/DATA_MODEL.md | Data model | Aligned (forward line v5.x) | 2026-02-05 | DB mirror of the Core-6 contract; derived overlays are rebuildable. |
 | docs/DATA_GOVERNANCE.md | Data governance | Aligned (forward line v5.x) | 2026-02-05 | Clarifies canonical vs derived artifacts, trust semantics, and auditable persistence. |
 | docs/DB_SCHEMA.md | DB schema | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Snapshot of current tables/views + DB outbox bootstrap; notes multiple historical Alembic heads. |
-| docs/SCORECARDS.md | Scorecards | Planned / not implemented | 2026-02-05 | Spec only; not enforced by runtime unless CI gates/tests consume it. |
+| docs/SCORECARDS.md | Scorecards | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; scorecard-style targets now live in `docs/eval.md`. |
 | docs/SETTINGS.md | Settings | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Settings compiler + registries documented; some areas are forward-looking. |
 | docs/SETTINGS_TIERING.md | Settings tiering design + migration map | Aligned (forward line v5.x) | 2026-03-09 | Defines Operator-facing vs Dev/Lab-only settings inventory and Step 4 enforcement targets. |
 | docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Implemented for key routers (API key + SlowAPI); doc lists remaining wiring gaps. |

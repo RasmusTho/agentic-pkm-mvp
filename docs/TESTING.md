@@ -32,6 +32,29 @@ See: `pytest --cov=app --cov-report=html`
 - **E. Fitness gates** — status/outbox counters checked post-run (`panel_runs`, `promote.intent.created/done`) with idempotence (no duplicate intents on rerun) enforced in CI (`app/fitness/*`, `ops/quality/baselines.yaml`).
 - **F. Scripted UAT** — CLI harness for registry watcher + promotion consumer + status assertions; runs on memory backend and real vaults with the golden seed pack.
 
+## CI And Fitness Gates
+
+- GitHub Actions workflows are the enforced CI surface for lint, tests, and fitness gating.
+- The fitness gate contract is:
+  - `python -m app.fitness.report` emits `CI SUMMARY ...` lines
+  - CI fails whenever `GATES.ok != true`
+  - parser/enforcement behavior is tested under `tests/ci/test_gates_enforcement.py`
+- Baseline local CI-aligned checks:
+  - `ruff check app tests`
+  - `mypy app`
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not eval"`
+- Deterministic local smoke slices:
+  - reality smoke via `scripts/reality_smoke.sh`
+  - ASK smoke via `scripts/ask_smoke.sh`
+  - vaultwide panel verification via `scripts/verify_vaultwide_panel.sh`
+
+## Known Testing Gaps
+
+- `health-future-timestamp`
+  - Status: open
+  - Gap: add or confirm coverage for rejecting future heartbeat timestamps in health/status heartbeat readers.
+- Historical gaps tracked in older testing notes for the v4.x router/fabric stack are obsolete and should not drive new work on the v5.5 baseline.
+
 ## Concurrency Tests (docs-only)
 These regression suites live in `docs/CONCURRENCY.md` and the new watcher/promotion/test libraries.
 
@@ -102,6 +125,20 @@ Example commands:
 ## Determinism
 - Hashing-based embeddings in tests for stable semantics
 - Fixed chunk sizes and overlap
+
+## Quality And Guardrails In Validation
+
+- Guardrails are part of the validation surface, not just runtime behavior.
+- Current quality checks worth preserving in test/eval design:
+  - forbidden-content filtering
+  - source requirements
+  - token budget enforcement
+  - circuit-breaker behavior when it becomes runtime-wired
+- Performance budgets currently tracked operationally:
+  - retrieval p95 target
+  - QA answer latency target
+  - ASR wall-time target
+- Use `docs/guardrails.md` for the runtime safety policy itself; this document owns how those expectations are validated.
 
 ## DB
 - Local Postgres with pgvector

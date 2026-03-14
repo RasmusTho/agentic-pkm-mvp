@@ -46,9 +46,9 @@ Recommended next execution order:
 | `docs/PANEL_AGENT.md` | Reference | keep | PanelAgent-specific contract |
 | `docs/ROADMAP.md` | Plan | keep | Strategic plan owner |
 | `docs/V56_FORWARD_LINE.md` | Plan | merge into | `docs/ROADMAP.md` once v5.6 planning stabilizes; currently still useful as a short-lived plan doc |
-| `docs/CI.md` | Reference | merge into | `docs/TESTING.md` or a surviving quality doc; overlaps strongly with testing/quality gates |
-| `docs/ISSUES_TESTING.md` | Reference / backlog | merge into | `docs/TESTING.md` as “known gaps” or move into issue tracker; not a strong standalone doc |
-| `docs/QUALITY.md` | Reference | merge into | `docs/TESTING.md` or `docs/eval.md`; quality gates overlap heavily with CI/testing |
+| `docs/CI.md` | Deprecated redirect | delete | Content merged into `docs/TESTING.md`; remove once inbound links are fully gone |
+| `docs/ISSUES_TESTING.md` | Deprecated redirect | delete | Remaining active gap tracking merged into `docs/TESTING.md`; remove once inbound links are fully gone |
+| `docs/QUALITY.md` | Deprecated redirect | delete | Validation guidance merged into `docs/TESTING.md`; runtime safety policy remains in `docs/guardrails.md` |
 | `docs/eval.md` | Reference | keep | Distinct eval surface if kept narrow |
 | `docs/guardrails.md` | Reference | keep | Distinct runtime safety policy surface |
 | `docs/OBSERVABILITY.md` | Reference | keep | Runtime observability contract |
@@ -80,7 +80,7 @@ Recommended next execution order:
 | `docs/UAT_PANEL_WATCHER.md` | Reference / runbook | merge into | `docs/runbooks/` or `docs/OPERATIONS.md`; better as runbook material than top-level doc |
 | `docs/RUNBOOK_RESET_TO_ZERO.md` | Runbook | move into | `docs/runbooks/` for consistency with other runbooks |
 | `docs/E2E_ALPHA.md` | Reference / runbook | move into | `docs/runbooks/` or keep if treated as a test contract; needs explicit ownership decision |
-| `docs/SCORECARDS.md` | Plan | merge into | `docs/eval.md` or `docs/QUALITY.md` successor; not strong enough alone while unimplemented |
+| `docs/SCORECARDS.md` | Deprecated redirect | delete | Scorecard-style aspirational targets merged into `docs/eval.md`; remove once inbound links are fully gone |
 | `docs/PROTOCOL_SATELLITE_SYNC.md` | Plan | keep | Distinct protocol/planning doc |
 | `docs/DOCS_REFACTOR_PLAN.md` | Plan | keep | Active refactor work tracker until cleanup ends, then archive |
 | `docs/HISTORICAL_EXTRACTION_REVIEW.md` | Working review | archive | Useful only during refactor execution |
@@ -130,6 +130,7 @@ Goal:
 - Make `TESTING.md` the clear owner
 - Keep `eval.md` only if it stays distinct
 - Fold gate/backlog/spec fragments into the surviving owners
+- `CI.md`, `QUALITY.md`, `ISSUES_TESTING.md`, and `SCORECARDS.md` are already reduced to redirect stubs and can be deleted once links are fully updated
 
 ## Exit Criteria For Second Wave
 
