@@ -86,9 +86,9 @@ Recommended next execution order:
 | `docs/HISTORICAL_EXTRACTION_REVIEW.md` | Working review | archive | Useful only during refactor execution |
 | `docs/AI_DEVELOPMENT.md` | Removed | completed | Content already moved to `docs/DEV_WORKFLOW.md`; redirect stub deleted on this branch |
 | `docs/LLM_BACKENDS.md` | Removed | completed | Content already moved to `docs/LLM.md`; redirect stub deleted on this branch |
-| `docs/CORE6_CONTRACT.md` | Deprecated alias | delete | Remove once compatibility links are gone; canonical doc already exists |
-| `docs/PLANNER.md` | Legacy | archive | Historical only |
-| `docs/PROJECTOR.md` | Legacy | archive | Historical only |
+| `docs/CORE6_CONTRACT.md` | Removed | completed | Canonical `docs/CORE_CONTRACT.md` already exists; compatibility alias deleted on this branch |
+| `docs/legacy/PLANNER.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |
+| `docs/legacy/PROJECTOR.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |
 | `docs/legacy/ALIGNMENT.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |
 | `docs/CHANGELOG.md` | Legacy | archive | Historical only |
 | `docs/legacy/ingest.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |

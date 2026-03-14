@@ -49,7 +49,6 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/CONCEPTS/PORTABILITY_CONTRACT.md | Portability contract (macOS + Windows) | Aligned (forward line v5.x) | 2026-02-05 | Defines portability hazards and rules for portable artifacts and paths; referenced by PROJECT_KERNEL. |
 | docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md | Archive exposure contract (cold brain safety) | Aligned (forward line v5.x) | 2026-02-05 | Defines discovery→citation→preview→materialization modes; notes scope experiment (active domain + global evergreens, with domain excludes + one-shot includes). |
 | docs/CORE_CONTRACT.md | Core-6 contract (canonical) | Aligned (forward line v5.x) | 2026-02-05 | Canonical Core-6 semantic contract, ownership, and projection rules. |
-| docs/CORE6_CONTRACT.md | Core-6 contract (compat alias) | Deprecated | 2025-12-28 | Superseded by `docs/CORE_CONTRACT.md`. |
 | docs/NOTE_KIND_POLICIES.md | Note kind policies | Aligned (forward line v5.x) | 2026-02-05 | Policy profiles for kind routing and state-axis enablement. |
 | docs/ARCHITECTURE.md | Architecture (SoT v5.x forward line on v5.5 base) | Aligned (forward line v5.x) | 2026-03-13 | Active runtime architecture source of truth; defines current authority boundaries vs ROADMAP/history and treats v4.10 system-design/module-map docs as historical reference only. |
 | docs/CORE_RUNTIME_AGENTIC_LAB_BOUNDARY.md | Core Runtime vs Agentic Lab boundary contract | Aligned (forward line v5.x) | 2026-03-09 | Defines the operator-safe core boundary, opt-in lab boundary, ownership map, and non-goals for simplification work. |
@@ -68,7 +67,6 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/EMBEDDINGS.md | Embedding spec | Aligned (forward line v5.x) | 2026-02-05 | Normative spec for provider-aware embeddings (identity, dims, outbox events, rebuild rules). |
 | docs/DIAGRAMS.md | Current architecture diagrams | Aligned (forward line v5.x) | 2026-03-14 | Current visual companion to ARCHITECTURE/COMPONENTS/EVENTS for system boundary and runtime flows. |
 | docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2026-03-13 | System-level agent architecture doc covering shared patterns, agent matrix, and coordination direction; PanelAgent-specific behavior lives in `docs/PANEL_AGENT.md`. |
-| docs/PLANNER.md | Planner contract | Legacy (archived) | 2026-02-05 | Historical reference; planner/orchestrator behavior has evolved. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (forward line v5.x) | 2026-02-05 | Canonical Outbox envelope + selected event meanings; compatibility anchored in EVENT_COMPATIBILITY_CONTRACT. |
 | docs/archive/architecture/DIAGRAMS.md | Legacy diagrams | Legacy (archived) | 2026-03-14 | Legacy diagrams moved out of the active docs root; use `docs/DIAGRAMS.md` for the current runtime view. |
 | docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x) | 2026-03-13 | User-facing behavior contract for the current system; architecture changes should be validated against it. |
@@ -101,7 +99,8 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/INVENTORY.md | Runtime inventory | Aligned (forward line v5.x) | 2026-02-05 | Reference inventory (no file:line); update alongside code. |
 | docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-02-05 | Definitions updated to match v5.5 baseline (outbox/JSONL audit, rerank hooks). |
 | docs/CHANGELOG.md | Docs changelog | Legacy (archived) | 2026-02-05 | Historical; prefer STATUS/ROADMAP for current baseline and forward line. |
-| docs/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
+| docs/legacy/PLANNER.md | Planner contract | Legacy (archived) | 2026-02-05 | Historical reference; planner/orchestrator behavior has evolved. |
+| docs/legacy/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
 | docs/legacy/ALIGNMENT.md | Alignment guide | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
 | docs/legacy/ingest.md | Ingest (historical/current) | Legacy (archived) | 2026-02-05 | Historical reference; prefer HUMAN-FLOWS/OPERATIONS for current ingest. |
 | docs/legacy/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
