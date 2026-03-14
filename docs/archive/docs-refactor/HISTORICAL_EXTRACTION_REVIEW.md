@@ -1,4 +1,7 @@
-State: Working review for docs refactor branch `codex/docs-refactor-structure`.
+State: Historical review record from the completed 2026 docs refactor pass.
+Doc role: Historical
+Authority: Archived extraction review used during cleanup of historical architecture docs; retained for traceability only.
+Last reviewed: 2026-03-14
 # Historical Extraction Review
 
 This review compares high-risk historical docs against the active core/reference docs to determine what still has value to extract before archival or deletion.

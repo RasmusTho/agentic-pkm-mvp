@@ -1,4 +1,7 @@
-State: Working cleanup matrix for docs refactor branch `codex/docs-refactor-structure`.
+State: Historical cleanup matrix from the completed 2026 docs refactor pass.
+Doc role: Historical
+Authority: Archived execution matrix for the completed cleanup wave; retained for traceability, not as an active work queue.
+Last reviewed: 2026-03-14
 # Docs Second-Wave Cleanup Matrix
 
 This matrix captures the next cleanup wave after:

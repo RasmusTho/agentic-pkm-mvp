@@ -13,7 +13,7 @@ Central map of documentation and markdown artifacts in this repo. Review status 
 
 Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foundation-only and queued for baseline/forward-line review; the active SoT baseline is v5.5.
 
-Active cleanup work for simplifying this document set is tracked in `docs/work/DOCS_REFACTOR_PLAN.md`.
+The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The active reading path is defined by the role map below.
 
 ## SoT Notes
 - v4.10 — locked Reality-MVP baseline (foundation only).
@@ -25,9 +25,9 @@ Active cleanup work for simplifying this document set is tracked in `docs/work/D
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | README.md | Top-level overview | Aligned (forward line v5.x) | 2026-02-05 | v5.5 baseline quickstart + invariants; points to DOCS_INDEX/STATUS/ARCHITECTURE. |
-| docs/work/DOCS_REFACTOR_PLAN.md | Documentation simplification plan | Proposed / in progress | 2026-03-13 | Working plan for reducing active doc surface, clarifying document roles, and staging merges/moves. |
-| docs/work/DOCS_SECOND_WAVE_CLEANUP.md | Second-wave cleanup matrix | Proposed / in progress | 2026-03-14 | Prioritized keep/merge/archive/delete matrix for the next docs cleanup wave. |
-| docs/work/HISTORICAL_EXTRACTION_REVIEW.md | Historical extraction review | Proposed / in progress | 2026-03-14 | Working review of historical docs against current owners to decide extract/archive/delete actions. |
+| docs/archive/docs-refactor/DOCS_REFACTOR_PLAN.md | Documentation simplification plan | Legacy (archived) | 2026-03-14 | Archived planning record for the 2026 docs cleanup effort; no longer an active decision surface. |
+| docs/archive/docs-refactor/DOCS_SECOND_WAVE_CLEANUP.md | Second-wave cleanup matrix | Legacy (archived) | 2026-03-14 | Archived execution matrix for the completed cleanup wave. |
+| docs/archive/docs-refactor/HISTORICAL_EXTRACTION_REVIEW.md | Historical extraction review | Legacy (archived) | 2026-03-14 | Archived extraction review used during the historical-doc cleanup pass. |
 | CHANGELOG.md | Repo change log (root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/CHANGELOG.md. |
 | .github/ISSUE_TEMPLATE/v4.6-objective.md | Issue template (historical, root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/ISSUE_TEMPLATE_v4.6-objective.md. |
 | .github/pull_request_template.md | PR template (historical, root) | Removed (2025-12-07) | 2025-12-07 | Removed in cleanup; archived under docs/archive/github-templates/pull_request_template.md. |

@@ -12,9 +12,6 @@ Start here:
 - `docs/HUMAN-FLOWS.md` — user-facing behavior contract
 - `docs/DOCS_INDEX.md` — map of the wider documentation set, including reference and historical docs
 
-Documentation maintenance work:
-- `docs/work/DOCS_REFACTOR_PLAN.md` — staged plan for simplifying the documentation set
-
 Prereqs:
 - Python **>= 3.12** (see `docs/DEPENDENCIES.md`).
 - For full runtime: Docker + Docker Compose.

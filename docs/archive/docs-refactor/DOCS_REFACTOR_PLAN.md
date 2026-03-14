@@ -1,4 +1,7 @@
-State: Proposed docs refactor plan for the v5.5 baseline and v5.6 forward line.
+State: Historical refactor plan for the 2026 docs cleanup pass.
+Doc role: Historical
+Authority: Archived planning record for the completed docs refactor effort; not part of the active SoT or current workflow.
+Last reviewed: 2026-03-14
 # Documentation Refactor Plan
 
 This document defines the step-by-step plan for simplifying the documentation set without losing current SoT coverage.
@@ -54,8 +57,8 @@ These are the documents that should remain first-class inputs for new work.
 - Phase 3 completed on this branch: `docs/LLM.md` is now the operational LLM doc; the obsolete `docs/LLM_BACKENDS.md` redirect has been removed; `docs/LLM_ROUTING.md` remains separate.
 - Phase 4 completed on this branch: `docs/OPERATIONS.md` is the operational entrypoint; `docs/OBSERVABILITY.md` and `docs/HEALTH.md` remain explicit companions, and the obsolete `docs/OBSERVABILITY_STACK.md` / `docs/OPS_WATCHER.md` redirects have been removed.
 - Phase 5 completed on this branch: `docs/AGENTS.md` and `docs/PANEL_AGENT.md` now have a clearer system-vs-component split.
-- Phase 6 partially completed on this branch: start surfaces and historical docs now carry stronger historical-only warnings, but no file moves have been done.
-- Phase 7 partially completed on this branch: `docs/DOCS_INDEX.md` has been deduplicated and development docs now include rules for doc creation and classification.
+- Phase 6 completed on this branch: historical docs were moved out of the active reading path, current value was extracted where needed, and historical references were explicitly downgraded.
+- Phase 7 completed on this branch: `docs/DOCS_INDEX.md` was deduplicated, development docs gained enforcement rules, and temporary work/plan docs were removed from the active root surface.
 
 ### Phase 1: Authority model and classification
 
