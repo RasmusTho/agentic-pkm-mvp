@@ -94,7 +94,7 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/OPS_WATCHER.md | Watcher operations (Docker + host) | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; watcher deployment/runtime guidance now lives in `docs/OPERATIONS.md`. |
 | docs/INFRASTRUCTURE.md | Infrastructure notes | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Compose stack (db/api/worker) for Reality-MVP. |
 | docs/HEALTH.md | Health checks | Aligned (forward line v5.x) | 2026-03-13 | Health CLI behavior and runtime health contract; companion to OPERATIONS and OBSERVABILITY. |
-| docs/CLI.md | CLI reference | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Partial reference; authoritative list is `python -m app.cli --help`. |
+| docs/CLI.md | CLI reference | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; stable operator CLI guidance now lives in `docs/OPERATIONS.md`, while authoritative discovery remains `python -m app.cli --help`. |
 | docs/LLM_ROUTING.md | LLM routing contract (router + fabric) | Aligned (forward line v5.x) | 2026-02-05 | Canonical routing/fabric contract; documents env precedence and debug surfaces. |
 | docs/LLM.md | LLM integration | Aligned (forward line v5.x) | 2026-03-13 | Primary operational LLM document covering providers, env vars, backend scenarios, and limits; routing contract remains separate in `docs/LLM_ROUTING.md`. |
 | docs/LLM_BACKENDS.md | LLM backends | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; use `docs/LLM.md` for operational setup and `docs/LLM_ROUTING.md` for routing policy. |

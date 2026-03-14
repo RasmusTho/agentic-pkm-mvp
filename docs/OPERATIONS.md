@@ -16,6 +16,9 @@ Reading order:
 3. Follow `docs/OBSERVABILITY.md` for interpreting telemetry and counters.
 4. Use `docs/INFRASTRUCTURE.md` when you need Docker/runtime topology or the local monitoring stack.
 
+CLI note:
+- `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
+
 ## Version & Release Workflow
 - Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory (supporting `--dry-run`).
 - Commit the bump with `chore(version): bump to X.Y.Z`, then create an annotated tag using `python scripts/tag_release.py [--dry-run|--push]` (tags default to `v<version>`).
@@ -146,6 +149,34 @@ Companion docs:
 - JSONL audit: `INDEX_OUTBOX_PATH` should append lines, but it is not the worker queue.
 - Status: `python -m app.cli status` reports `worker_queue` vs `events_log` to distinguish DB vs JSONL.
 - Health command semantics and degradation rules live in `docs/HEALTH.md`.
+
+## Common operator CLI commands
+
+Use `python -m app.cli <command> --help` for the full, current argument list. These are the stable operator-facing entrypoints:
+
+| Command | Purpose |
+| --- | --- |
+| `health` | Local dependency and readiness checks (ffmpeg/yt-dlp/outbox/LLM reachability). |
+| `status` | Human-readable runtime status snapshot for watcher/worker/outbox. |
+| `watcher run` | Registry watcher loop for the runtime path. |
+| `settings-validate` | Validate settings artifacts and compiled settings. |
+| `settings-explain` | Show settings provenance and effective resolution. |
+| `llm check` | Probe LLM/embedding endpoint reachability. |
+| `pipe <note.md>` | Run ingest for a note/path outside the watcher loop. |
+
+Flow mapping:
+- `python -m app.cli watcher run` -> watcher runtime
+- `python -m app.cli ask` -> ASK flow (see `docs/HUMAN-FLOWS.md`)
+- `python -m app.cli runtime-loop` -> legacy/dev-only snapshot runtime (`PKM_SETTINGS_PROFILE=lab`)
+
+Useful examples:
+
+```bash
+LLM_PROVIDER=mock python -m app.cli health --json
+python -m app.cli watcher run --max-ticks 1
+python -m app.cli pipe notes/meeting.md
+python -m app.cli settings-explain --json
+```
 
 ## Startup telemetry (startup_status.json)
 - Location: `tmp/startup_status.json` (workspace root on the host).

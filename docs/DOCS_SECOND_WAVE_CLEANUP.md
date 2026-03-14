@@ -56,7 +56,7 @@ Recommended next execution order:
 | `docs/HEALTH.md` | Reference | keep | Distinct health contract/CLI surface |
 | `docs/OPS_WATCHER.md` | Deprecated redirect | delete | Content merged into `docs/OPERATIONS.md`; remove once inbound links are fully gone |
 | `docs/INFRASTRUCTURE.md` | Reference | keep | Distinct local runtime / compose / topology doc |
-| `docs/CLI.md` | Reference | merge into | `docs/OPERATIONS.md` or `docs/DEV_WORKFLOW.md`; partial CLI reference is weak as standalone unless expanded |
+| `docs/CLI.md` | Deprecated redirect | delete | Stable operator CLI guidance merged into `docs/OPERATIONS.md`; remove once inbound links are fully gone |
 | `docs/LLM.md` | Reference | keep | Operational LLM owner |
 | `docs/LLM_ROUTING.md` | Reference / contract | keep | Distinct routing contract |
 | `docs/RETRIEVAL.md` | Reference | keep | Distinct retrieval behavior surface |
