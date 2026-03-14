@@ -19,12 +19,11 @@ from app.agents.panel_agent.policy import watcher_panel_candidate_for_path
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_VAULT_CHANGED
-from app.outbox.events import get_index_outbox_path
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import write_outbox_event
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_value
-from app.settings.watcher_settings import resolve_auto_exec_enabled
+from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
 from app.vault.layout import load_layout
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
 from app.watcher.state import WatcherState
@@ -393,11 +392,12 @@ class RegistryConfig:
             parser=_parse_int_factory(fallback=30),
             logger=logger,
         )
-        outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH", get_index_outbox_path()))
-        state_dir = Path(os.getenv("WATCHER_STATE_DIR", "tmp")).expanduser()
+        watcher_settings = load_watcher_settings(vault_path)
+        outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH") or watcher_settings.paths.index_outbox)
+        state_dir = Path(os.getenv("WATCHER_STATE_DIR") or watcher_settings.paths.watcher_state.parent).expanduser()
         heartbeat_path = Path(os.getenv("WATCHER_HEARTBEAT_PATH", resolve_heartbeat_path()))
         summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), fallback=60)
-        stop_file = Path(os.getenv("WATCHER_STOP_FILE", "/app/tmp/WATCHER_STOP")).expanduser()
+        stop_file = Path(os.getenv("WATCHER_STOP_FILE") or watcher_settings.paths.watcher_stop_file).expanduser()
         tick_sleep_raw = resolve_dev_lab_env_typed(
             "WATCHER_TICK_SLEEP_SECONDS",
             default="0.2",
@@ -406,7 +406,7 @@ class RegistryConfig:
         )
         tick_sleep_seconds = max(tick_sleep_raw, MIN_TICK_SLEEP_SECONDS)
         tick_log_env = os.getenv("WATCHER_TICK_LOG_PATH")
-        tick_log_path = Path(tick_log_env) if tick_log_env else Path("/app/tmp/watcher_tick.jsonl")
+        tick_log_path = Path(tick_log_env).expanduser() if tick_log_env else watcher_settings.paths.watcher_tick_log
         max_scanned_files_per_tick = resolve_dev_lab_env_typed(
             "WATCHER_MAX_SCANNED_FILES_PER_TICK",
             default="500",

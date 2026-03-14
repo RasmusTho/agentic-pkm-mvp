@@ -4,6 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+source "scripts/lib/load_env_defaults.sh"
+load_env_defaults_file ".env"
+load_env_defaults_file "config/runtime.defaults.env"
+
 if [ -z "${VAULT_ROOT:-}" ]; then
   echo "VAULT_ROOT is required to export runtime env" >&2
   exit 2
@@ -16,9 +20,16 @@ mkdir -p "$runtime_env_dir"
 local_uid="${LOCAL_UID:-$(id -u)}"
 local_gid="${LOCAL_GID:-$(id -g)}"
 
-default_db_url="postgresql+psycopg://app:app@db:5432/app"
-DATABASE_URL="${DATABASE_URL:-$default_db_url}"
-DB_DSN="${DB_DSN:-$DATABASE_URL}"
+if [ -z "${DATABASE_URL:-}" ] && [ -z "${DB_DSN:-}" ]; then
+  echo "DATABASE_URL or DB_DSN is required to export runtime env" >&2
+  exit 2
+fi
+if [ -n "${DATABASE_URL:-}" ] && [ -z "${DB_DSN:-}" ]; then
+  DB_DSN="$DATABASE_URL"
+fi
+if [ -n "${DB_DSN:-}" ] && [ -z "${DATABASE_URL:-}" ]; then
+  DATABASE_URL="$DB_DSN"
+fi
 export DATABASE_URL DB_DSN
 
 cat > "$runtime_env_path" <<ENV
@@ -127,11 +138,11 @@ embed_model = os.getenv("OLLAMA_EMBED_MODEL") or os.getenv("EMBED_MODEL")
 if not embed_model:
     embed_model = getattr(embed_ref, "model", None) if embed_ref else None
 
-default_base = "http://host.docker.internal:11434/v1"
+docker_default_base = os.getenv("DOCKER_OLLAMA_BASE_URL", "").strip()
 if not base_url:
-    base_url = default_base
-elif "127.0.0.1" in base_url or "localhost" in base_url:
-    base_url = default_base
+    raise SystemExit("OLLAMA_BASE_URL or OPENAI_BASE_URL is required when LLM_PROVIDER=ollama")
+if ("127.0.0.1" in base_url or "localhost" in base_url) and docker_default_base:
+    base_url = docker_default_base
 
 base_url = base_url.rstrip("/")
 ollama_host = _strip_v1(base_url)

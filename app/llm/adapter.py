@@ -15,7 +15,10 @@ def _prov() -> str:
 
 
 def _model() -> str:
-    return os.getenv("LLM_MODEL", "llama3.1:8b")
+    model = os.getenv("LLM_MODEL", "").strip()
+    if not model:
+        raise RuntimeError("LLM_MODEL is required")
+    return model
 
 
 def _rmodel() -> str:
@@ -39,8 +42,11 @@ def generate(
         content = str(mock)
         raw_response = {"content": content}
     elif p == "ollama":
+        ollama_host = os.getenv("OLLAMA_HOST", "").strip() or os.getenv("OLLAMA_URL", "").strip()
+        if not ollama_host:
+            raise RuntimeError("OLLAMA_HOST or OLLAMA_URL is required for ollama provider")
         r = requests.post(
-            os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434") + "/api/chat",
+            ollama_host.rstrip("/") + "/api/chat",
             json={"model": m, "messages": messages, "stream": False},
             timeout=float(os.getenv("LLM_TIMEOUT", "120")),
         )
@@ -49,7 +55,9 @@ def generate(
         content = raw_response["message"]["content"]
     elif p == "openai":
         api = os.environ["OPENAI_API_KEY"]
-        url = os.getenv("OPENAI_BASE", "https://api.openai.com/v1/chat/completions")
+        url = os.getenv("OPENAI_BASE", "").strip()
+        if not url:
+            raise RuntimeError("OPENAI_BASE is required for openai provider")
         r = requests.post(
             url,
             headers={"Authorization": f"Bearer {api}", "Content-Type": "application/json"},
@@ -61,7 +69,9 @@ def generate(
         content = raw_response["choices"][0]["message"]["content"]
     elif p == "deepseek":
         api = os.environ["DEEPSEEK_API_KEY"]
-        url = os.getenv("DEEPSEEK_BASE", "https://api.deepseek.com/chat/completions")
+        url = os.getenv("DEEPSEEK_BASE", "").strip()
+        if not url:
+            raise RuntimeError("DEEPSEEK_BASE is required for deepseek provider")
         r = requests.post(
             url,
             headers={"Authorization": f"Bearer {api}", "Content-Type": "application/json"},

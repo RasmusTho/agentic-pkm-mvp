@@ -16,7 +16,9 @@ from app.agents.projector.graph import invoke as project_invoke
 
 
 def _dsn() -> str:
-    url = os.environ.get("DATABASE_URL") or "postgresql+psycopg://app:app@127.0.0.1:15432/app"
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        raise RuntimeError("DATABASE_URL is required for backfill jobs")
     return url.replace("postgresql+psycopg://", "postgresql://")
 
 

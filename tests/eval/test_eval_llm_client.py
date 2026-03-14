@@ -9,6 +9,9 @@ from app.eval.llm_client import build_deepeval_model, configure_eval_openai_env
 
 def test_build_deepeval_model_constructs_without_network(monkeypatch) -> None:
     monkeypatch.setenv("EVAL_LLM_MODE", "skip")
+    monkeypatch.setenv("EVAL_LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("EVAL_LLM_API_KEY", "sk-local")
+    monkeypatch.setenv("EVAL_LLM_MODEL", "llama3.1:8b")
     cfg = configure_eval_openai_env()
     try:
         model = build_deepeval_model(cfg)

@@ -43,7 +43,10 @@ def validate_json(raw: str, schema_path: str) -> Dict[str, Any]:
 
 
 def _ollama_base_url() -> str:
-    return os.getenv("OLLAMA_HOST", os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")).rstrip("/")
+    base_url = os.getenv("OLLAMA_HOST", os.getenv("OLLAMA_URL", "")).rstrip("/")
+    if not base_url:
+        raise RuntimeError("OLLAMA_HOST or OLLAMA_URL is required for ollama provider")
+    return base_url
 
 
 def _normalize_ollama_path(path: str) -> str:
@@ -74,7 +77,9 @@ def _ollama_chat(
 
     base = _ollama_base_url()
     parsed = urlparse(base)
-    host = parsed.hostname or "127.0.0.1"
+    host = parsed.hostname
+    if not host:
+        raise RuntimeError("OLLAMA_HOST or OLLAMA_URL must include a hostname")
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     prefix = _normalize_ollama_path(parsed.path)
     path = f"{prefix}/api/chat" if prefix else "/api/chat"
@@ -325,7 +330,9 @@ def call_llm(
     elif provider == "openai":
         try:
             api_key = os.environ["OPENAI_API_KEY"]
-            url = os.getenv("OPENAI_BASE", "https://api.openai.com/v1/chat/completions")
+            url = os.getenv("OPENAI_BASE", "").strip()
+            if not url:
+                raise RuntimeError("OPENAI_BASE is required for openai provider")
             response_text, response_payload = _http_chat(
                 url=url,
                 api_key=api_key,
@@ -340,7 +347,9 @@ def call_llm(
     elif provider == "deepseek":
         try:
             api_key = os.environ["DEEPSEEK_API_KEY"]
-            url = os.getenv("DEEPSEEK_BASE", "https://api.deepseek.com/chat/completions")
+            url = os.getenv("DEEPSEEK_BASE", "").strip()
+            if not url:
+                raise RuntimeError("DEEPSEEK_BASE is required for deepseek provider")
             response_text, response_payload = _http_chat(
                 url=url,
                 api_key=api_key,

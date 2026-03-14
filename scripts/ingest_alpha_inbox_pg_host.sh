@@ -4,8 +4,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+source "scripts/lib/load_env_defaults.sh"
+load_env_defaults_file ".env"
+
 VAULT_PATH="${VAULT_ROOT:-}"
-DB_URL="postgresql://app:app@127.0.0.1:15432/app"
+DB_URL="${DATABASE_URL:-${DB_DSN:-}}"
+if [ -z "$DB_URL" ]; then
+  echo "DATABASE_URL or DB_DSN is required for host ingest" >&2
+  exit 2
+fi
 export STORE_BACKEND=pg
 export DATABASE_URL="$DB_URL"
 export DB_DSN="$DB_URL"
@@ -14,12 +21,12 @@ export WATCHER_HEARTBEAT_PATH="${WATCHER_HEARTBEAT_PATH:-$ROOT/tmp/watcher_heart
 
 if [[ -z "$VAULT_PATH" ]]; then
   echo "VAULT_ROOT is required for host ingest" >&2
-  exit 2
+  exit 3
 fi
 
 if [[ ! -d "$VAULT_PATH" ]]; then
   echo "Vault path not found: $VAULT_PATH" >&2
-  exit 3
+  exit 4
 fi
 
 echo "Host ingest -> PG store using vault: $VAULT_PATH"

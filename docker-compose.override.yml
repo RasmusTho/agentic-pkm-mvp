@@ -1,8 +1,8 @@
 services:
   worker:
     environment:
-      OPENAI_BASE_URL: "http://host.docker.internal:11434/v1"
-      OPENAI_API_KEY: "sk-local"
-      EMBED_MODEL: "nomic-embed-text:latest"
-      EMBED_DIM: "768"
-      EMBED_NORMALIZE: "1"
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      EMBED_MODEL: ${EMBED_MODEL:-}
+      EMBED_DIM: ${EMBED_DIM:-}
+      EMBED_NORMALIZE: ${EMBED_NORMALIZE:-}

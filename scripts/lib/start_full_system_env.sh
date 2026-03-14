@@ -141,7 +141,6 @@ for key in ("VAULT_LAYOUT_NOTE_REL", "VAULT_SYSTEM_DIR_REL", "VAULT_INBOX_DIR_RE
 PY
 }
 
-
 apply_start_full_system_vault_defaults() {
   local vault_root="${1:-}"
   local line key value inferred_env_path

@@ -77,6 +77,55 @@ def main() -> int:
                 )
                 break
 
+    runtime_roots = [
+        repo / "app",
+        repo / "scripts",
+        repo / "docker-compose.yaml",
+        repo / "docker-compose.override.yml",
+        repo / "docker-compose.watcher.yml",
+    ]
+    runtime_files: list[Path] = []
+    allowed_runtime_files = {
+        Path("scripts/verify_runtime_guard.py"),
+        Path(".env.example"),
+        Path("config/runtime.defaults.env"),
+        Path("config/eval.defaults.env"),
+        Path("vault/@Settings/watchers.md"),
+    }
+    runtime_patterns = [
+        re.compile(r"postgresql://(?:app|postgres):(?:app|postgres)@"),
+        re.compile(r"http://127\.0\.0\.1:11434"),
+        re.compile(r"http://localhost:11434"),
+        re.compile(r"http://host\.docker\.internal:11434/v1"),
+        re.compile(r"\bsk-local\b"),
+    ]
+
+    for root in runtime_roots:
+        if root.is_file():
+            runtime_files.append(root)
+            continue
+        if root.exists():
+            runtime_files.extend(p for p in root.rglob("*") if p.is_file())
+
+    for path in sorted(set(runtime_files)):
+        rel = path.relative_to(repo)
+        if rel in allowed_runtime_files:
+            continue
+        if "__pycache__" in rel.parts:
+            continue
+        if rel.parts and rel.parts[0] in {"tests", "docs"}:
+            continue
+        if len(rel.parts) >= 2 and (rel.parts[0], rel.parts[1]) == ("scripts", "dev"):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        for pattern in runtime_patterns:
+            if pattern.search(text):
+                offenders.append(f"{rel}: contains runtime default matching {pattern.pattern!r}")
+                break
+
     if offenders:
         print("Hardcoded vault-layout defaults found:")
         for o in offenders:

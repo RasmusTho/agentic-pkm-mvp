@@ -7,11 +7,13 @@ from uuid import uuid4
 import psycopg
 
 N = int(os.getenv("QAS010_N", "15"))
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:15432/app")
 
 
 def _conn():
-    return psycopg.connect(DATABASE_URL)
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is required")
+    return psycopg.connect(database_url)
 
 
 def seed():

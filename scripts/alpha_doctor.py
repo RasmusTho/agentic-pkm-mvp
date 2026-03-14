@@ -95,7 +95,10 @@ def _ollama_base_url(health: dict[str, Any] | None) -> str:
         base = health.get("checks", {}).get("ollama", {}).get("base_url")
         if isinstance(base, str) and base.strip():
             return base.rstrip("/")
-    return os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
+    base_url = os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "")).rstrip("/")
+    if not base_url:
+        raise RuntimeError("OLLAMA_URL or OLLAMA_HOST is required")
+    return base_url
 
 
 def _check_ollama(base_url: str) -> tuple[bool, str]:

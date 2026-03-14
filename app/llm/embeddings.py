@@ -44,20 +44,26 @@ def _normalize_ollama_url(url: str) -> str:
 
 
 OLLAMA_URL = _normalize_ollama_url(
-    os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434"))
+    os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", ""))
 )
 
 
 def _ollama_base_url() -> str:
-    return _normalize_ollama_url(OLLAMA_URL)
+    base_url = _normalize_ollama_url(OLLAMA_URL)
+    if not base_url:
+        raise RuntimeError("OLLAMA_URL or OLLAMA_HOST is required for embeddings")
+    return base_url
 
 
 def get_embed_model() -> str:
     """Return the currently configured embedding model name."""
-    return os.getenv("OLLAMA_EMBED_MODEL", os.getenv("EMBED_MODEL", "nomic-embed-text:latest"))
+    model = os.getenv("OLLAMA_EMBED_MODEL", os.getenv("EMBED_MODEL", "")).strip()
+    if not model:
+        raise RuntimeError("OLLAMA_EMBED_MODEL or EMBED_MODEL is required for embeddings")
+    return model
 
 
-EMBED_MODEL = get_embed_model()
+EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", os.getenv("EMBED_MODEL", "")).strip()
 
 
 def _provider() -> str:
