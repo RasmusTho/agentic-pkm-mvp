@@ -10,7 +10,7 @@ Authority: Canonical user-facing behavior contract for the current system; archi
 - The vault is the human surface; agents write traces/logs to side-channels (ObjectStore, Outbox, System folders) without rewriting your prose by default.
 - CLI is an agent tooling surface, not the main UI: it exists for automation, reproducible runs, and debugging.
 
-## 2. Scope and Reality-MVP Snapshot (SoT v4.10 + v5.x forward line)
+## 2. Scope and Current Reality-MVP Snapshot
 - v4.10 locked baseline: ingest + ASK + observability + orchestrator runtime V1; panels are optional and not indexed as content.
 - v5.x forward line: PanelAgent runtime + registry watcher automation with policy gating, UUID healing, and bounded scans. Legacy snapshot watchers remain dev-only.
 
