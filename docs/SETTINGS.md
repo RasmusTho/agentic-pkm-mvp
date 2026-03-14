@@ -23,8 +23,39 @@ Compiler:
 
 Runtime settings cover the panel action catalog and watcher policy; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli settings-validate` / `python -m app.cli settings-explain`.
 
-Settings tiering design (operator-facing vs dev/lab-only), inventory, and migration targets live in `docs/SETTINGS_TIERING.md`.
+Settings tiering guidance (operator-facing vs dev/lab-only), inventory, and migration targets are described in the section below. The legacy `docs/SETTINGS_TIERING.md` file is retained only as a deprecated redirect during cleanup.
 Runtime profile switch for tier enforcement: `PKM_SETTINGS_PROFILE=operator|lab` (default `operator`).
+
+## Settings Tiering
+
+The active settings model separates:
+- **Operator-facing settings** for normal single-user runtime operation
+- **Dev/Lab-only settings** for tuning, experiments, and compatibility paths
+
+Core rules:
+- normal runtime defaults to `PKM_SETTINGS_PROFILE=operator`
+- lab/experimental controls require explicit `PKM_SETTINGS_PROFILE=lab`
+- provenance and precedence should remain visible through `settings-validate` and `settings-explain`
+
+High-impact examples:
+- Operator-facing:
+  - `VAULT_ROOT`
+  - `DATABASE_URL` / `DB_DSN`
+  - `WATCHER_AUTO_EXEC`
+  - `WATCHER_SCOPE_GLOB`
+  - `watcher_settings.allowed_actions`
+  - `LLM_PROVIDER` and model endpoint selection
+  - `PANEL_PROACTIVE_ASSIST`
+- Dev/Lab-only:
+  - `INDEX_OUTBOX_PATH` as JSONL audit path
+  - `STORE_BACKEND`
+  - watcher performance-tuning knobs
+  - pipeline/decider/orchestrator/reasoning feature flags
+
+Target behavior:
+- operator mode should read/apply only operator-facing settings
+- lab mode may enable both tiers explicitly
+- low-level compatibility/tuning knobs should not accidentally shape normal runtime behavior
 
 ## Repo settings artifacts (non-compiled)
 

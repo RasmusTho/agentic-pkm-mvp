@@ -1,32 +1,8 @@
-State: SoT v5.5 baseline (descriptive). The repo targets Python >=3.12; CI smoke is pinned to 3.12 as the floor.
-
-## v5.5 Baseline Delta (Current Reality)
-- Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
-- DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
-- Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout remains opt-in.
-- See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
-
-
+State: Deprecated dependency-policy redirect. Python version policy now lives in `docs/DEPENDENCIES.md`.
 # Python Version Policy (Current Reality)
 
-## Targets
-- **Repo minimum:** Python **3.12**
-  - Enforced by `pyproject.toml` (`requires-python = ">=3.12"`).
-- **CI smoke floor:** Python **3.12**
-  - CI uses 3.12 as the compatibility guardrail / floor.
+This document is retained only as a compatibility stub during the docs cleanup.
 
-## Guardrails
-- Keep core code compatible with 3.12.
-- Use the local scripts below to validate compatibility when needed.
+Use `docs/DEPENDENCIES.md` for the current Python floor and compatibility-check guidance.
 
-## Local checks (optional, on demand)
-
-### 3.12 syntax tripwire (compile only)
-Uses a Python 3.12 Docker image to compile the code, catching syntax that requires 3.13/3.14.
-
-- `scripts/py312_compile_check.sh`
-
-### 3.12 smoke test (optional)
-Runs a minimal test pass in Python 3.12 (slower; only run when needed).
-
-- `scripts/py312_smoke_test.sh`
+This file should be removed once inbound links are fully updated.

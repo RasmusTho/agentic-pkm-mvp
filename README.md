@@ -14,7 +14,7 @@ Start here:
 - `docs/DOCS_REFACTOR_PLAN.md` — staged plan for simplifying the documentation set
 
 Prereqs:
-- Python **>= 3.12** (see `docs/PYTHON_VERSION_POLICY.md`).
+- Python **>= 3.12** (see `docs/DEPENDENCIES.md`).
 - For full runtime: Docker + Docker Compose.
 
 ## What Works Today (SoT v5.5 Baseline)

@@ -43,4 +43,17 @@ Overview of tools and libraries required in each environment.
 ## Links
 - `docs/INVENTORY.md` for the full variable/span/tool matrix.
 - `docs/OPERATIONS.md` for runbooks and SLO context.
+
+## Python Version Policy
+
+- Repo minimum: Python `>=3.12`
+  - enforced by `pyproject.toml`
+- CI smoke floor: Python `3.12`
+  - used as the compatibility floor for baseline validation
+
+Guardrails:
+- keep core code compatible with 3.12
+- use the optional scripts below when validating compatibility explicitly:
+  - `scripts/py312_compile_check.sh`
+  - `scripts/py312_smoke_test.sh`
 <!-- SECTION:DEPENDENCIES:END -->

@@ -112,7 +112,7 @@ Use this section when the issue is specifically about watcher deployment, config
 4. **Maintain** – run `python -m app.fitness.report` after major imports to watch latency and gate regressions.
 
 ## Auth & Rate Limiting
-- Refer to `docs/AUTH_RATE_LIMITING.md` for implementation guidance (API key dependency + `slowapi` limiter).
+- Refer to `docs/SECURITY.md` for implementation guidance (API key dependency + `slowapi` limiter).
 - Store the API key in environment or secret manager; rotate by updating deployments and monitoring logs for legacy usage.
 
 ## Observability

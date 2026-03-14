@@ -25,4 +25,26 @@ Lightweight policy for local and CI runs.
 1. Add TLS / Basic Auth around future FastAPI endpoints.
 2. Wrap external calls with `CircuitBreaker` + `timeout_wrapper` to avoid DoS via hanging requests.
 3. Add a `pre-commit` check ensuring `OLLAMA_URL` remains localhost-bound.
+
+## Auth And Rate Limiting
+
+Current implementation:
+- API key auth is implemented via `app/auth.py` and the `X-API-Key` header
+- auth is disabled when no API key is configured
+- rate limiting is implemented via `slowapi` where routers apply explicit limit decorators
+
+Current configuration surface:
+- `API_KEY`
+- `rate_limit_enabled`
+- `rate_limit_default`
+
+Operational stance:
+- default to auth disabled unless explicitly configured
+- when enabled, unauthorized requests should fail with `401`
+- rate limiting should protect public API surfaces without blocking internal trusted automation
+
+Remaining gaps:
+- ensure all externally exposed routers apply auth consistently
+- ensure routes that require rate limits actually carry explicit limiter wiring
+- choose long-term rate-limit storage posture for production (for example Redis-backed vs local-only)
 <!-- SECTION:SECURITY:END -->

@@ -9,7 +9,7 @@ State: SoT v5.5 baseline (practical contributor guide; if steps drift, update th
 # Contributing
 
 ## Toolchain
-- Python: see `docs/PYTHON_VERSION_POLICY.md` (CI smoke currently uses 3.12; local dev may be newer).
+- Python: see `docs/DEPENDENCIES.md` (CI smoke currently uses 3.12; local dev may be newer).
 - venv + pip (repo supports editable installs via `pyproject.toml`).
 - Docker and Docker Compose
 - Postgres (used for DB outbox + store in runtime mode)

@@ -65,12 +65,12 @@ Recommended next execution order:
 | `docs/DB_SCHEMA.md` | Reference | keep | Distinct DB snapshot/reference |
 | `docs/FRONTMATTER.md` | Reference | keep | Distinct vault/frontmatter contract |
 | `docs/SETTINGS.md` | Reference | keep | Main settings owner |
-| `docs/SETTINGS_TIERING.md` | Reference | merge into | `docs/SETTINGS.md`; likely better as a major section than standalone doc |
-| `docs/AUTH_RATE_LIMITING.md` | Reference | merge into | `docs/SECURITY.md` unless it is expected to grow materially |
+| `docs/SETTINGS_TIERING.md` | Deprecated redirect | delete | Tiering guidance merged into `docs/SETTINGS.md`; remove once inbound links are fully gone |
+| `docs/AUTH_RATE_LIMITING.md` | Deprecated redirect | delete | Auth/rate-limiting posture merged into `docs/SECURITY.md`; remove once inbound links are fully gone |
 | `docs/SECURITY.md` | Reference | keep | Distinct security posture doc |
 | `docs/PRIVACY.md` | Reference | keep | Distinct privacy posture doc |
 | `docs/DEPENDENCIES.md` | Reference | keep | Distinct external dependency inventory |
-| `docs/PYTHON_VERSION_POLICY.md` | Reference | merge into | `docs/DEPENDENCIES.md` or `docs/CONTRIBUTING.md`; too narrow for long-term standalone status |
+| `docs/PYTHON_VERSION_POLICY.md` | Deprecated redirect | delete | Python floor/compatibility guidance merged into `docs/DEPENDENCIES.md`; remove once inbound links are fully gone |
 | `docs/OBSIDIANSYNC.md` | Reference | merge into | `docs/OPERATIONS.md` or `docs/HUMAN-FLOWS.md`; likely too narrow and partly historical |
 | `docs/INVENTORY.md` | Reference | keep | Runtime inventory still useful as a separate lookup surface |
 | `docs/GLOSSARY.md` | Reference | keep | Distinct terminology surface |
