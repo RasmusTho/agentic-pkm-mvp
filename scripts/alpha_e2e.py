@@ -19,6 +19,7 @@ import urllib.request
 import uuid
 from typing import Any, Sequence
 
+from app.vault.layout import load_layout
 from app.vault.paths import get_vault_inbox_dir_rel
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -64,23 +65,17 @@ def _runtime_note_dir(vault_root: Path, inbox_dir_rel: str) -> Path:
 
 
 def _select_layout_note_rel(vault_root: Path) -> str | None:
-    filename = "vault.layout.md"
-    candidates = sorted(
-        p for p in vault_root.glob(f"*/{filename}") if p.is_file()
-    )
+    candidates = sorted(p for p in vault_root.glob("*/vault.layout.md") if p.is_file())
     if len(candidates) <= 1:
         return None
-    preferred = [
-        "⚙️ System/vault.layout.md",
-        "System/vault.layout.md",
-        "_system/vault.layout.md",
-        "~system/vault.layout.md",
-    ]
-    for rel in preferred:
-        target = vault_root / rel
-        if target.is_file():
-            return rel
-    return None
+    try:
+        layout = load_layout(vault_root)
+    except Exception:
+        return None
+    try:
+        return str(layout.note_path.relative_to(vault_root))
+    except Exception:
+        return None
 
 
 def _layout_env_defaults(vault_root: Path, layout_note_rel: str | None) -> dict[str, str]:

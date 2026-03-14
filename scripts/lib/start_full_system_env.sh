@@ -51,76 +51,34 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import yaml
+from app.vault.layout import load_layout
+from app.vault.paths import resolve_vault_inbox_dir_rel, resolve_vault_system_dir_rel
 
 vault_root = Path(sys.argv[1]).expanduser()
 
-preferred_layout_rels = [
-    "⚙️ System/vault.layout.md",
-    "System/vault.layout.md",
-    "_system/vault.layout.md",
-    "~system/vault.layout.md",
-]
-preferred_folders = {
-    "VAULT_SYSTEM_DIR_REL": ["⚙️ System", "System", "_system", "~system"],
-    "VAULT_INBOX_DIR_REL": ["📥 Inbox", "Inbox", "✉️ Inbox"],
-    "VAULT_DESK_DIR_REL": ["🛠️ Workbench", "Workbench", "Desk", "🔍 Focus"],
-}
+resolved: dict[str, str] = {}
 
-
-def _parse_frontmatter(path: Path) -> dict[str, object]:
+for key, resolver in (
+    ("VAULT_SYSTEM_DIR_REL", resolve_vault_system_dir_rel),
+    ("VAULT_INBOX_DIR_REL", resolve_vault_inbox_dir_rel),
+):
     try:
-        raw = path.read_text(encoding="utf-8")
+        resolved[key] = resolver(vault_root).value
     except Exception:
-        return {}
-    if not raw.startswith("---"):
-        return {}
-    parts = raw.split("---", 2)
-    if len(parts) < 3:
-        return {}
+        resolved[key] = ""
+
+try:
+    layout = load_layout(vault_root)
+except Exception:
+    layout = None
+else:
     try:
-        data = yaml.safe_load(parts[1]) or {}
+        resolved["VAULT_LAYOUT_NOTE_REL"] = str(layout.note_path.relative_to(vault_root))
     except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
+        pass
+    resolved["VAULT_DESK_DIR_REL"] = layout.desk_folder
 
-
-def _pick_layout_note(root: Path) -> Path | None:
-    for rel in preferred_layout_rels:
-        candidate = root / rel
-        if candidate.exists():
-            return candidate
-    matches = sorted(p for p in root.glob("*/vault.layout.md") if p.is_file())
-    if len(matches) == 1:
-        return matches[0]
-    return None
-
-
-def _pick_folder(root: Path, names: list[str]) -> str:
-    for name in names:
-        if (root / name).is_dir():
-            return name
-    return ""
-
-
-layout_path = _pick_layout_note(vault_root)
-frontmatter = _parse_frontmatter(layout_path) if layout_path else {}
-
-resolved = {
-    "VAULT_SYSTEM_DIR_REL": str(frontmatter.get("system_folder") or "").strip(),
-    "VAULT_INBOX_DIR_REL": str(frontmatter.get("inbox_folder") or "").strip(),
-    "VAULT_DESK_DIR_REL": str(frontmatter.get("desk_folder") or "").strip(),
-}
-
-if not resolved["VAULT_SYSTEM_DIR_REL"] and layout_path is not None:
-    resolved["VAULT_SYSTEM_DIR_REL"] = layout_path.parent.name
-
-for key, names in preferred_folders.items():
-    if resolved[key]:
-        continue
-    resolved[key] = _pick_folder(vault_root, names)
-
-for key in ("VAULT_SYSTEM_DIR_REL", "VAULT_INBOX_DIR_REL", "VAULT_DESK_DIR_REL"):
+for key in ("VAULT_LAYOUT_NOTE_REL", "VAULT_SYSTEM_DIR_REL", "VAULT_INBOX_DIR_REL", "VAULT_DESK_DIR_REL"):
     value = resolved.get(key, "")
     if value:
         print(f"{key}={value}")
