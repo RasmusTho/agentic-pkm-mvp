@@ -85,7 +85,6 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/SECURITY.md | Security | Aligned (forward line v5.x) | 2026-02-05 | Local-first security posture; keys/env handling aligned with v5.5 baseline. |
 | docs/PRIVACY.md | Privacy | Aligned (forward line v5.x) | 2026-02-05 | Local-first, outbound only on optional remote LLMs. |
 | docs/DEPENDENCIES.md | Dependencies | Aligned (forward line v5.x) | 2026-02-05 | External deps aligned to current modules (transcribe, llm, watcher). |
-| docs/PYTHON_VERSION_POLICY.md | Python version policy | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; Python version policy now lives in `docs/DEPENDENCIES.md`. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-03-13 | Runtime observability contract for heartbeats, counters, spans, and status interpretation. |
 | docs/OPERATIONS.md | Operations playbook | Aligned (forward line v5.x) | 2026-03-13 | Top-level operator entrypoint for runtime runbooks; links to specialized health, watcher, and observability docs. |
 | docs/INFRASTRUCTURE.md | Infrastructure notes | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Compose stack (db/api/worker) for Reality-MVP. |
@@ -97,8 +96,6 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/DATA_MODEL.md | Data model | Aligned (forward line v5.x) | 2026-02-05 | DB mirror of the Core-6 contract; derived overlays are rebuildable. |
 | docs/DB_SCHEMA.md | DB schema | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Snapshot of current tables/views + DB outbox bootstrap; notes multiple historical Alembic heads. |
 | docs/SETTINGS.md | Settings | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Settings compiler + registries documented; some areas are forward-looking. |
-| docs/SETTINGS_TIERING.md | Settings tiering design + migration map | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; settings tiering guidance now lives in `docs/SETTINGS.md`. |
-| docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; auth and rate-limiting posture now lives in `docs/SECURITY.md`. |
 | docs/DEV_WORKFLOW.md | Developer workflow | Aligned (forward line v5.x) | 2026-03-13 | Primary development workflow and dev-layer AI policy; consolidates change order, constraints, and required validation. |
 | docs/templates/DOC_TEMPLATE.md | Document template | Aligned (forward line v5.x) | 2026-03-14 | Standard template for new docs; defines metadata, scope, authority, and writing structure. |
 | docs/INVENTORY.md | Runtime inventory | Aligned (forward line v5.x) | 2026-02-05 | Reference inventory (no file:line); update alongside code. |

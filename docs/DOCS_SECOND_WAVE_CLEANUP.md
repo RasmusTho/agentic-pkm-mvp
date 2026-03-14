@@ -65,12 +65,12 @@ Recommended next execution order:
 | `docs/DB_SCHEMA.md` | Reference | keep | Distinct DB snapshot/reference |
 | `docs/FRONTMATTER.md` | Reference | keep | Distinct vault/frontmatter contract |
 | `docs/SETTINGS.md` | Reference | keep | Main settings owner |
-| `docs/SETTINGS_TIERING.md` | Deprecated redirect | delete | Tiering guidance merged into `docs/SETTINGS.md`; remove once inbound links are fully gone |
-| `docs/AUTH_RATE_LIMITING.md` | Deprecated redirect | delete | Auth/rate-limiting posture merged into `docs/SECURITY.md`; remove once inbound links are fully gone |
+| `docs/SETTINGS_TIERING.md` | Removed | completed | Tiering guidance merged into `docs/SETTINGS.md`; redirect stub deleted on this branch |
+| `docs/AUTH_RATE_LIMITING.md` | Removed | completed | Auth/rate-limiting posture merged into `docs/SECURITY.md`; redirect stub deleted on this branch |
 | `docs/SECURITY.md` | Reference | keep | Distinct security posture doc |
 | `docs/PRIVACY.md` | Reference | keep | Distinct privacy posture doc |
 | `docs/DEPENDENCIES.md` | Reference | keep | Distinct external dependency inventory |
-| `docs/PYTHON_VERSION_POLICY.md` | Deprecated redirect | delete | Python floor/compatibility guidance merged into `docs/DEPENDENCIES.md`; remove once inbound links are fully gone |
+| `docs/PYTHON_VERSION_POLICY.md` | Removed | completed | Python floor/compatibility guidance merged into `docs/DEPENDENCIES.md`; redirect stub deleted on this branch |
 | `docs/OBSIDIANSYNC.md` | Removed | completed | Active sync guidance merged into `docs/HUMAN-FLOWS.md`, `docs/OPERATIONS.md`, and `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`; redirect stub deleted on this branch |
 | `docs/INVENTORY.md` | Reference | keep | Runtime inventory still useful as a separate lookup surface |
 | `docs/GLOSSARY.md` | Reference | keep | Distinct terminology surface |
