@@ -21,6 +21,12 @@ Authority: Canonical user-facing behavior contract for the current system; archi
 - Ingest writes objects to the Store, keeps derived indexes rebuildable, and maintains VaultMirror copies under `System/Metadata/VaultMirror/...`.
 - External ingest (drop folder) is opt-in; ingested objects carry `origin: external_raw` and surface in ASK/status alongside vault entries.
 
+### Vault sync principles
+- Human-first: the system should not rewrite note bodies; normal automation is limited to agreed frontmatter keys, AI panel content, and side-channel artifacts.
+- UUID is the identity boundary; filenames and paths are operational metadata and may change without changing note identity.
+- Vault edits flow into the runtime through the registry watcher and ingest pipeline; runtime-side note updates should stay narrow, explainable, and traceable.
+- If a note is active or conflicted, the system should prefer receipts, inbox items, or explicit proposals over silent mutation.
+
 ## 4. Human Flow: ASK (Reality-MVP)
 - `/api/ask` and `python -m app.cli ask` query the HybridStore (BM25 + embeddings) warmed from Store objects. Answers cite sources with origin/plane tags.
 - Default LLM provider is mock; set `LLM_PROVIDER` + credentials to enable LLM drafting/self-check. Errors surface in ASK status metrics.
@@ -49,6 +55,7 @@ Authority: Canonical user-facing behavior contract for the current system; archi
 - System metadata must not pollute the main vault surface; only agreed frontmatter fields appear in notes.
 - ASK answers must cite contributing notes/paths; losing source visibility is a regression.
 - Promotion/Evergreen steps must not rewrite note bodies; frontmatter and moves follow documented policies with logs in the mirror.
+- Rename/move handling must preserve UUID continuity, update canonical paths consistently, and avoid unnecessary re-embedding when note body content did not change.
 
 ## 7. Current Reality-MVP surfaces (implementation snapshot)
 - `vault-alpha-ingest` ingests Concepts (and optionally `Test/Alpha-HumanFlows.md`), strips AI panels, writes/updates VaultMirror `uuid.md` mirrors to match frontmatter, and populates the configured Store backend plus the in-process HybridStore used by ASK; fingerprints live in mirrors/store, skip unchanged notes once the Store is populated, and `--force` bypasses fingerprints/store checks, reingests everything, and heals missing frontmatter (run this after a fresh DB paired with existing mirrors).

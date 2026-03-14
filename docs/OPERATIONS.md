@@ -78,6 +78,24 @@ Use this section when the issue is specifically about watcher deployment, config
 - When using iCloud/Obsidian sync, keep scopes conservative and rely on debounce/backoff guardrails.
 - Do not use the legacy snapshot watcher for runtime start-system flows.
 
+## Obsidian sync runtime
+
+Current runtime model:
+- Obsidian vault changes flow through the registry watcher into ingest/update events, then into the DB outbox and worker/indexer path
+- runtime-side note writes must stay narrow: agreed frontmatter updates, AI panel mutations, inbox/log artifacts, and explicit maintenance writes
+- `app/knowledge/write_ops.py` is the shared vault-write boundary for runtime/services; deeper transport details stay behind the knowledge-port abstractions
+
+Operational rules:
+- never treat note body rewrites as a normal sync action
+- rename or move events should update canonical path state without forcing re-embedding when body content is unchanged
+- delete propagation should emit explicit delete semantics only when the removed path was the UUID's last active file-state reference
+- settings hot-reload should apply policy changes without restart, while invalid settings payloads should fail closed and preserve the previous active policy
+
+Companion docs:
+- `docs/HUMAN-FLOWS.md` for human-facing vault behavior constraints
+- `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md` for the note-write abstraction and adapter contract
+- `docs/UAT_PANEL_WATCHER.md` for a watcher/panel walkthrough
+
 ## Runtime Compose Stack
 - Canonical runtime compose stack: `db`, `api`, `watcher`, `worker`.
 - `docker-compose.yaml` starts FastAPI (`api`), `worker`, `watcher`, and Postgres for local development.

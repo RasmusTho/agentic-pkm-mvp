@@ -107,7 +107,7 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/SETTINGS.md | Settings | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Settings compiler + registries documented; some areas are forward-looking. |
 | docs/SETTINGS_TIERING.md | Settings tiering design + migration map | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; settings tiering guidance now lives in `docs/SETTINGS.md`. |
 | docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; auth and rate-limiting posture now lives in `docs/SECURITY.md`. |
-| docs/OBSIDIANSYNC.md | Obsidian sync | Aligned (forward line v5.x) | 2026-03-08 | Registry watcher runtime + DB outbox canonical queue; documents `app/knowledge/write_ops.py` as shared Obsidian boundary helper. |
+| docs/OBSIDIANSYNC.md | Obsidian sync | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; active sync guidance now lives in `docs/HUMAN-FLOWS.md`, `docs/OPERATIONS.md`, and `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`. |
 | docs/DEV_WORKFLOW.md | Developer workflow | Aligned (forward line v5.x) | 2026-03-13 | Primary development workflow and dev-layer AI policy; consolidates change order, constraints, and required validation. |
 | docs/AI_DEVELOPMENT.md | AI-assisted development policy | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; `docs/DEV_WORKFLOW.md` is now the primary development workflow and dev-layer AI policy surface. |
 | docs/templates/DOC_TEMPLATE.md | Document template | Aligned (forward line v5.x) | 2026-03-14 | Standard template for new docs; defines metadata, scope, authority, and writing structure. |

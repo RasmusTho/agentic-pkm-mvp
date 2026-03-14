@@ -71,7 +71,7 @@ Recommended next execution order:
 | `docs/PRIVACY.md` | Reference | keep | Distinct privacy posture doc |
 | `docs/DEPENDENCIES.md` | Reference | keep | Distinct external dependency inventory |
 | `docs/PYTHON_VERSION_POLICY.md` | Deprecated redirect | delete | Python floor/compatibility guidance merged into `docs/DEPENDENCIES.md`; remove once inbound links are fully gone |
-| `docs/OBSIDIANSYNC.md` | Reference | merge into | `docs/OPERATIONS.md` or `docs/HUMAN-FLOWS.md`; likely too narrow and partly historical |
+| `docs/OBSIDIANSYNC.md` | Deprecated redirect | delete | Active sync guidance merged into `docs/HUMAN-FLOWS.md`, `docs/OPERATIONS.md`, and `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`; remove once inbound links are fully gone |
 | `docs/INVENTORY.md` | Reference | keep | Runtime inventory still useful as a separate lookup surface |
 | `docs/GLOSSARY.md` | Reference | keep | Distinct terminology surface |
 | `docs/DEV_WORKFLOW.md` | Reference | keep | Primary development workflow doc |
