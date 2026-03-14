@@ -38,8 +38,7 @@ When making decisions, you MUST respect this order:
    - `docs/HEALTH.md`
    - `docs/LLM.md`
    - `docs/LLM_ROUTING.md`
-   - `docs/QUALITY.md`
-   - `docs/CI.md`
+   - `docs/TESTING.md`
    - `docs/guardrails.md`
    - `docs/INVENTORY.md`
    - `docs/eval.md`

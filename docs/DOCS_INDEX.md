@@ -81,36 +81,28 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 ## Supporting Docs (Quality, Ops, Flows, Data)
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/CI.md | CI overview | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; CI and fitness-gate guidance now lives in `docs/TESTING.md`. |
-| docs/ISSUES_TESTING.md | Testing coverage issues | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; remaining active gap tracking now lives in `docs/TESTING.md`. |
-| docs/QUALITY.md | Quality gates | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; validation guidance now lives in `docs/TESTING.md` and runtime safety policy lives in `docs/guardrails.md`. |
 | docs/guardrails.md | Guardrails | Aligned (forward line v5.x) | 2026-02-05 | Runtime guardrails + concurrency safety aligned with v5.5 baseline. |
 | docs/SECURITY.md | Security | Aligned (forward line v5.x) | 2026-02-05 | Local-first security posture; keys/env handling aligned with v5.5 baseline. |
 | docs/PRIVACY.md | Privacy | Aligned (forward line v5.x) | 2026-02-05 | Local-first, outbound only on optional remote LLMs. |
 | docs/DEPENDENCIES.md | Dependencies | Aligned (forward line v5.x) | 2026-02-05 | External deps aligned to current modules (transcribe, llm, watcher). |
 | docs/PYTHON_VERSION_POLICY.md | Python version policy | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; Python version policy now lives in `docs/DEPENDENCIES.md`. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-03-13 | Runtime observability contract for heartbeats, counters, spans, and status interpretation. |
-| docs/OBSERVABILITY_STACK.md | Local observability stack | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; local Prometheus/Grafana setup now lives in `docs/INFRASTRUCTURE.md`. |
 | docs/OPERATIONS.md | Operations playbook | Aligned (forward line v5.x) | 2026-03-13 | Top-level operator entrypoint for runtime runbooks; links to specialized health, watcher, and observability docs. |
-| docs/OPS_WATCHER.md | Watcher operations (Docker + host) | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; watcher deployment/runtime guidance now lives in `docs/OPERATIONS.md`. |
 | docs/INFRASTRUCTURE.md | Infrastructure notes | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Compose stack (db/api/worker) for Reality-MVP. |
 | docs/HEALTH.md | Health checks | Aligned (forward line v5.x) | 2026-03-13 | Health CLI behavior and runtime health contract; companion to OPERATIONS and OBSERVABILITY. |
 | docs/CLI.md | CLI reference | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; stable operator CLI guidance now lives in `docs/OPERATIONS.md`, while authoritative discovery remains `python -m app.cli --help`. |
 | docs/LLM_ROUTING.md | LLM routing contract (router + fabric) | Aligned (forward line v5.x) | 2026-02-05 | Canonical routing/fabric contract; documents env precedence and debug surfaces. |
 | docs/LLM.md | LLM integration | Aligned (forward line v5.x) | 2026-03-13 | Primary operational LLM document covering providers, env vars, backend scenarios, and limits; routing contract remains separate in `docs/LLM_ROUTING.md`. |
-| docs/LLM_BACKENDS.md | LLM backends | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; use `docs/LLM.md` for operational setup and `docs/LLM_ROUTING.md` for routing policy. |
 | docs/RETRIEVAL.md | Retrieval | Aligned (forward line v5.x) | 2026-02-05 | Hybrid retrieval + optional rerank hooks (`RERANK_ENABLE`/`RERANK_PROVIDER`). |
 | docs/FRONTMATTER.md | Frontmatter rules | Aligned (forward line v5.x) | 2026-02-05 | Defines metadata layers, ownership, and the warm-surface write contract. |
 | docs/DATA_MODEL.md | Data model | Aligned (forward line v5.x) | 2026-02-05 | DB mirror of the Core-6 contract; derived overlays are rebuildable. |
 | docs/DATA_GOVERNANCE.md | Data governance | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; canonical-vs-derived artifact rules and persistence/audit guidance now live in `docs/DATA_MODEL.md`. |
 | docs/DB_SCHEMA.md | DB schema | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Snapshot of current tables/views + DB outbox bootstrap; notes multiple historical Alembic heads. |
-| docs/SCORECARDS.md | Scorecards | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; scorecard-style targets now live in `docs/eval.md`. |
 | docs/SETTINGS.md | Settings | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Settings compiler + registries documented; some areas are forward-looking. |
 | docs/SETTINGS_TIERING.md | Settings tiering design + migration map | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; settings tiering guidance now lives in `docs/SETTINGS.md`. |
 | docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; auth and rate-limiting posture now lives in `docs/SECURITY.md`. |
 | docs/OBSIDIANSYNC.md | Obsidian sync | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; active sync guidance now lives in `docs/HUMAN-FLOWS.md`, `docs/OPERATIONS.md`, and `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`. |
 | docs/DEV_WORKFLOW.md | Developer workflow | Aligned (forward line v5.x) | 2026-03-13 | Primary development workflow and dev-layer AI policy; consolidates change order, constraints, and required validation. |
-| docs/AI_DEVELOPMENT.md | AI-assisted development policy | Deprecated | 2026-03-13 | Redirect stub retained during docs refactor; `docs/DEV_WORKFLOW.md` is now the primary development workflow and dev-layer AI policy surface. |
 | docs/templates/DOC_TEMPLATE.md | Document template | Aligned (forward line v5.x) | 2026-03-14 | Standard template for new docs; defines metadata, scope, authority, and writing structure. |
 | docs/INVENTORY.md | Runtime inventory | Aligned (forward line v5.x) | 2026-02-05 | Reference inventory (no file:line); update alongside code. |
 | docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-02-05 | Definitions updated to match v5.5 baseline (outbox/JSONL audit, rerank hooks). |

@@ -38,7 +38,7 @@ When making non-trivial changes, read and respect these documents in order:
 2. Current reference and development guidance:
    - `docs/AGENTS.md`
    - `docs/PANEL_AGENT.md`
-   - `docs/CI.md`
+   - `docs/TESTING.md`
    - `docs/eval.md`
    - `docs/guardrails.md`
    - `docs/OBSERVABILITY.md`
@@ -121,7 +121,7 @@ For any non-trivial change:
 - Do not invent new global categories on the fly.
   - New zones, kinds, event names, or top-level settings must be reflected in `docs/ARCHITECTURE.md`, `docs/EVENTS.md`, or relevant schema docs before code relies on them.
 - Keep dependencies controlled.
-  - Do not add new external dependencies without updating `pyproject.toml` and, where relevant, `docs/DEPENDENCIES.md` and `docs/CI.md`.
+  - Do not add new external dependencies without updating `pyproject.toml` and, where relevant, `docs/DEPENDENCIES.md` and `docs/TESTING.md`.
 - Keep tests deterministic.
   - Use documented mocks/stubs/providers.
   - Avoid non-repeatable side effects in tests unless the test explicitly covers them.

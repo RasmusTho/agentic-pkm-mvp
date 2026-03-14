@@ -50,9 +50,9 @@ These are the documents that should remain first-class inputs for new work.
 ### Progress snapshot
 
 - Phase 1 completed on this branch: authority model, index role guidance, and entrypoint cleanup landed in `docs/DOCS_INDEX.md`, `README.md`, and `.codex/AGENTS.md`.
-- Phase 2 completed on this branch: `docs/DEV_WORKFLOW.md` is now the primary dev workflow doc; `docs/AI_DEVELOPMENT.md` is a deprecated redirect stub.
-- Phase 3 completed on this branch: `docs/LLM.md` is now the operational LLM doc; `docs/LLM_BACKENDS.md` is a deprecated redirect stub; `docs/LLM_ROUTING.md` remains separate.
-- Phase 4 completed on this branch: `docs/OPERATIONS.md` is the operational entrypoint; `docs/OBSERVABILITY.md`, `docs/OBSERVABILITY_STACK.md`, `docs/HEALTH.md`, and `docs/OPS_WATCHER.md` have explicit roles.
+- Phase 2 completed on this branch: `docs/DEV_WORKFLOW.md` is now the primary dev workflow doc; the obsolete `docs/AI_DEVELOPMENT.md` redirect has been removed.
+- Phase 3 completed on this branch: `docs/LLM.md` is now the operational LLM doc; the obsolete `docs/LLM_BACKENDS.md` redirect has been removed; `docs/LLM_ROUTING.md` remains separate.
+- Phase 4 completed on this branch: `docs/OPERATIONS.md` is the operational entrypoint; `docs/OBSERVABILITY.md` and `docs/HEALTH.md` remain explicit companions, and the obsolete `docs/OBSERVABILITY_STACK.md` / `docs/OPS_WATCHER.md` redirects have been removed.
 - Phase 5 completed on this branch: `docs/AGENTS.md` and `docs/PANEL_AGENT.md` now have a clearer system-vs-component split.
 - Phase 6 partially completed on this branch: start surfaces and historical docs now carry stronger historical-only warnings, but no file moves have been done.
 - Phase 7 partially completed on this branch: `docs/DOCS_INDEX.md` has been deduplicated and development docs now include rules for doc creation and classification.

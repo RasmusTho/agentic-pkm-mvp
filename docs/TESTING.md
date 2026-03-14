@@ -17,10 +17,10 @@ Current coverage (updated 2025-01-XX):
 - Fabric: 60% line coverage (gaps: failure modes)
 - Health: 85% line coverage (gaps: malformed input handling)
 
-Critical uncovered paths (issue links):
-- Router: Malformed LLMTaskIntent handling (Issue: `docs/ISSUES_TESTING.md#router-malformed-intent`)
-- Fabric: Provider unavailable scenarios (Issue: `docs/ISSUES_TESTING.md#fabric-provider-unavailable`)
-- Health: Future timestamp rejection (Issue: `docs/ISSUES_TESTING.md#health-future-timestamp`)
+Critical uncovered paths:
+- Router: Malformed LLMTaskIntent handling (see `#router-malformed-intent`)
+- Fabric: Provider unavailable scenarios (see `#fabric-provider-unavailable`)
+- Health: Future timestamp rejection (see `#health-future-timestamp`)
 
 See: `pytest --cov=app --cov-report=html`
 
@@ -38,6 +38,17 @@ See: `pytest --cov=app --cov-report=html`
 - The fitness gate contract is:
   - `python -m app.fitness.report` emits `CI SUMMARY ...` lines
   - CI fails whenever `GATES.ok != true`
+
+## Remaining active gaps
+
+### Router malformed intent
+- malformed `LLMTaskIntent` payloads still need stronger negative-path coverage around router parsing and rejection semantics
+
+### Fabric provider unavailable
+- provider-unavailable paths still need stronger assertions for fallback behavior, surfaced errors, and no-silent-success guarantees
+
+### Health future timestamp
+- health checks still need stronger coverage for future timestamps and invalid freshness transitions in watcher/worker heartbeat interpretation
   - parser/enforcement behavior is tested under `tests/ci/test_gates_enforcement.py`
 - Baseline local CI-aligned checks:
   - `ruff check app tests`

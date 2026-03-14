@@ -5,7 +5,7 @@ This document is the runtime observability contract for logs, counters, heartbea
 For adjacent operational surfaces:
 - use `docs/OPERATIONS.md` as the top-level operations playbook
 - use `docs/HEALTH.md` for health CLI behavior and contract details
-- use `docs/OBSERVABILITY_STACK.md` for local Prometheus/Grafana setup
+- use `docs/INFRASTRUCTURE.md` for local Prometheus/Grafana setup
 
 ## Shared heartbeat/outbox paths
 - The health CLI and API rely on `tmp/watcher_heartbeat.json` and `tmp/worker_heartbeat.json` for liveness, plus `INDEX_OUTBOX_PATH` as the audit log.

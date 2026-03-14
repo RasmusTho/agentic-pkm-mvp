@@ -46,15 +46,15 @@ Recommended next execution order:
 | `docs/PANEL_AGENT.md` | Reference | keep | PanelAgent-specific contract |
 | `docs/ROADMAP.md` | Plan | keep | Strategic plan owner |
 | `docs/V56_FORWARD_LINE.md` | Plan | merge into | `docs/ROADMAP.md` once v5.6 planning stabilizes; currently still useful as a short-lived plan doc |
-| `docs/CI.md` | Deprecated redirect | delete | Content merged into `docs/TESTING.md`; remove once inbound links are fully gone |
-| `docs/ISSUES_TESTING.md` | Deprecated redirect | delete | Remaining active gap tracking merged into `docs/TESTING.md`; remove once inbound links are fully gone |
-| `docs/QUALITY.md` | Deprecated redirect | delete | Validation guidance merged into `docs/TESTING.md`; runtime safety policy remains in `docs/guardrails.md` |
+| `docs/CI.md` | Removed | completed | Content merged into `docs/TESTING.md`; redirect stub deleted on this branch |
+| `docs/ISSUES_TESTING.md` | Removed | completed | Remaining active gap tracking merged into `docs/TESTING.md`; redirect stub deleted on this branch |
+| `docs/QUALITY.md` | Removed | completed | Validation guidance merged into `docs/TESTING.md`; redirect stub deleted on this branch |
 | `docs/eval.md` | Reference | keep | Distinct eval surface if kept narrow |
 | `docs/guardrails.md` | Reference | keep | Distinct runtime safety policy surface |
 | `docs/OBSERVABILITY.md` | Reference | keep | Runtime observability contract |
-| `docs/OBSERVABILITY_STACK.md` | Deprecated redirect | delete | Content merged into `docs/INFRASTRUCTURE.md`; remove once inbound links are fully gone |
+| `docs/OBSERVABILITY_STACK.md` | Removed | completed | Content merged into `docs/INFRASTRUCTURE.md`; redirect stub deleted on this branch |
 | `docs/HEALTH.md` | Reference | keep | Distinct health contract/CLI surface |
-| `docs/OPS_WATCHER.md` | Deprecated redirect | delete | Content merged into `docs/OPERATIONS.md`; remove once inbound links are fully gone |
+| `docs/OPS_WATCHER.md` | Removed | completed | Content merged into `docs/OPERATIONS.md`; redirect stub deleted on this branch |
 | `docs/INFRASTRUCTURE.md` | Reference | keep | Distinct local runtime / compose / topology doc |
 | `docs/CLI.md` | Deprecated redirect | delete | Stable operator CLI guidance merged into `docs/OPERATIONS.md`; remove once inbound links are fully gone |
 | `docs/LLM.md` | Reference | keep | Operational LLM owner |
@@ -80,12 +80,12 @@ Recommended next execution order:
 | `docs/UAT_PANEL_WATCHER.md` | Reference / runbook | merge into | `docs/runbooks/` or `docs/OPERATIONS.md`; better as runbook material than top-level doc |
 | `docs/RUNBOOK_RESET_TO_ZERO.md` | Runbook | move into | `docs/runbooks/` for consistency with other runbooks |
 | `docs/E2E_ALPHA.md` | Reference / runbook | move into | `docs/runbooks/` or keep if treated as a test contract; needs explicit ownership decision |
-| `docs/SCORECARDS.md` | Deprecated redirect | delete | Scorecard-style aspirational targets merged into `docs/eval.md`; remove once inbound links are fully gone |
+| `docs/SCORECARDS.md` | Removed | completed | Scorecard-style aspirational targets merged into `docs/eval.md`; redirect stub deleted on this branch |
 | `docs/PROTOCOL_SATELLITE_SYNC.md` | Plan | keep | Distinct protocol/planning doc |
 | `docs/DOCS_REFACTOR_PLAN.md` | Plan | keep | Active refactor work tracker until cleanup ends, then archive |
 | `docs/HISTORICAL_EXTRACTION_REVIEW.md` | Working review | archive | Useful only during refactor execution |
-| `docs/AI_DEVELOPMENT.md` | Deprecated | delete | Remove once links are fully gone; content already moved to `DEV_WORKFLOW` |
-| `docs/LLM_BACKENDS.md` | Deprecated | delete | Remove once links are fully gone; content already moved to `LLM.md` |
+| `docs/AI_DEVELOPMENT.md` | Removed | completed | Content already moved to `docs/DEV_WORKFLOW.md`; redirect stub deleted on this branch |
+| `docs/LLM_BACKENDS.md` | Removed | completed | Content already moved to `docs/LLM.md`; redirect stub deleted on this branch |
 | `docs/CORE6_CONTRACT.md` | Deprecated alias | delete | Remove once compatibility links are gone; canonical doc already exists |
 | `docs/PLANNER.md` | Legacy | archive | Historical only |
 | `docs/PROJECTOR.md` | Legacy | archive | Historical only |
@@ -103,9 +103,7 @@ The highest-value next cleanup slice is:
 
 Target docs:
 - `docs/OPERATIONS.md`
-- `docs/OPS_WATCHER.md`
 - `docs/OBSERVABILITY.md`
-- `docs/OBSERVABILITY_STACK.md`
 - `docs/HEALTH.md`
 - `docs/INFRASTRUCTURE.md`
 - `docs/CLI.md`
@@ -113,24 +111,20 @@ Target docs:
 Goal:
 - Keep `OPERATIONS.md` as the operator entrypoint
 - Keep `OBSERVABILITY.md` and `HEALTH.md` as distinct contracts
-- `OPS_WATCHER.md` and `OBSERVABILITY_STACK.md` are already reduced to redirect stubs and can be deleted once links are fully updated
-- Decide whether `CLI.md` survives or is folded into operations/dev workflow
+- `OPS_WATCHER.md` and `OBSERVABILITY_STACK.md` have been removed after their content was merged into surviving docs
+- `CLI.md` has now been folded into operations guidance and remains a delete candidate once any remaining non-active references are cleared
 
 ### Quality / testing consolidation
 
 Target docs:
 - `docs/TESTING.md`
-- `docs/CI.md`
-- `docs/QUALITY.md`
 - `docs/eval.md`
-- `docs/ISSUES_TESTING.md`
-- `docs/SCORECARDS.md`
 
 Goal:
 - Make `TESTING.md` the clear owner
 - Keep `eval.md` only if it stays distinct
 - Fold gate/backlog/spec fragments into the surviving owners
-- `CI.md`, `QUALITY.md`, `ISSUES_TESTING.md`, and `SCORECARDS.md` are already reduced to redirect stubs and can be deleted once links are fully updated
+- `CI.md`, `QUALITY.md`, `ISSUES_TESTING.md`, and `SCORECARDS.md` have now been removed after their content was merged into surviving docs
 
 ## Exit Criteria For Second Wave
 
