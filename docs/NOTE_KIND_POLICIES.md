@@ -1,10 +1,17 @@
-State: SoT v4.10 Reality-MVP (vNext policy model).
-# Note Kind Policies (vNext)
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Current policy-routing model for note kinds and state-axis enablement; complements but does not redefine the semantic Core-6 contract.
+# Note Kind Policies
 
 The `kind` field is a policy-routing signal for notes and objects. It does not define a schema.
 Instead, it selects which state axes are enabled, locked, or ignored by policy.
 
 Policies are defined via vault-as-GUI settings and compiled into runtime policy bundles.
+
+Related docs:
+- `docs/CORE_CONTRACT.md` for the semantic contract that remains stable across kinds
+- `docs/SETTINGS.md` for policy compilation and runtime settings resolution
+- `docs/FRONTMATTER.md` for metadata ownership on the warm surface
 
 ## Policy model
 - `kind` routes policy; it does not define structure or schema.

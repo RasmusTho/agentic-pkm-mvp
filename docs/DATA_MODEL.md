@@ -1,9 +1,16 @@
-State: SoT v4.10 (current; aligned with Core-6 vNext).
-# Data Model (AMG/SetDB)
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Current persistence and mirror model for the runtime; explains how Core-6 and derived system artifacts are represented without redefining semantic ownership.
+# Data Model
 
 The DB is a normalized mirror of the note contract and system overlays. It is not the source of
 truth for meaning; notes are the human contract surface and the Core-6 contract is authoritative.
 See `docs/CORE_CONTRACT.md`.
+
+Related docs:
+- `docs/CORE_CONTRACT.md` for the semantic contract mirrored here
+- `docs/DB_SCHEMA.md` for table-level schema detail
+- `docs/FRONTMATTER.md` for warm-surface metadata ownership
 
 ## Canonical contract
 - Core-6 (uuid, title, origin, source_ref, trust, review_state) is the minimal semantic contract.
@@ -59,7 +66,7 @@ Receipts are first-class and must make meaningful system actions reconstructable
 
 Receipts may be surfaced through UI affordances, but they must remain available even if the presentation layer changes.
 
-## Tables (vNext mirror surface)
+## Tables (current mirror surface)
 
 ### objects
 - `id` uuid pk

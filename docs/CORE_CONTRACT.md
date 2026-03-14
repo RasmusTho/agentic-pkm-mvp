@@ -1,9 +1,16 @@
-State: SoT v4.10 Reality-MVP (vNext contract).
-# Core Contract (Core-6 vNext)
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Core SoT
+Authority: Canonical semantic contract for the minimal object/note identity and provenance surface; neighboring docs may extend policy or persistence detail but must not redefine Core-6.
+# Core Contract (Core-6)
 
 Core-6 is the minimal, stable semantic contract that every note or object must project for agent
 reasoning, trust separation, and idempotent automation. It is a contract of meaning, not a YAML
 schema requirement.
+
+Related docs:
+- `docs/DATA_MODEL.md` for how Core-6 is mirrored in persistence surfaces
+- `docs/NOTE_KIND_POLICIES.md` for policy-selected state axes outside Core-6
+- `docs/FRONTMATTER.md` for warm-surface metadata ownership and write constraints
 
 ## Purpose
 - Define the smallest stable identity + provenance surface for every object.
@@ -24,7 +31,8 @@ schema requirement.
 - Core-6 is a semantic contract, not a literal YAML requirement.
 - Absence of YAML does not imply absence of semantics; Core-6 may be implicit or derived.
 - Notes are the human contract surface; they express intent and meaning.
-- DB/SetDB is a normalized mirror of the contract, not the source of truth.
+- The DB/system plane is a normalized mirror of the contract, not the source of truth.
+- Policy-selected axes may extend the object view, but they do not become part of Core-6 unless this document changes.
 
 ## Not Core-6
 The following are explicitly outside the Core-6 contract:
