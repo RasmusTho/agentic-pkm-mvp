@@ -97,7 +97,7 @@ Operational rules:
 Companion docs:
 - `docs/HUMAN-FLOWS.md` for human-facing vault behavior constraints
 - `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md` for the note-write abstraction and adapter contract
-- `docs/UAT_PANEL_WATCHER.md` for a watcher/panel walkthrough
+- `docs/runbooks/UAT_PANEL_WATCHER.md` for a watcher/panel walkthrough
 
 ## Runtime Compose Stack
 - Canonical runtime compose stack: `db`, `api`, `watcher`, `worker`.

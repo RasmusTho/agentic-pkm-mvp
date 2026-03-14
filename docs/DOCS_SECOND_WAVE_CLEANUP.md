@@ -77,9 +77,9 @@ Recommended next execution order:
 | `docs/DEV_WORKFLOW.md` | Reference | keep | Primary development workflow doc |
 | `docs/CONTRIBUTING.md` | Removed | completed | Contributor setup and workflow merged into `docs/DEV_WORKFLOW.md`; redirect stub deleted on this branch |
 | `docs/templates/DOC_TEMPLATE.md` | Reference / template | keep | Needed for governance |
-| `docs/UAT_PANEL_WATCHER.md` | Reference / runbook | merge into | `docs/runbooks/` or `docs/OPERATIONS.md`; better as runbook material than top-level doc |
-| `docs/RUNBOOK_RESET_TO_ZERO.md` | Runbook | move into | `docs/runbooks/` for consistency with other runbooks |
-| `docs/E2E_ALPHA.md` | Reference / runbook | move into | `docs/runbooks/` or keep if treated as a test contract; needs explicit ownership decision |
+| `docs/runbooks/UAT_PANEL_WATCHER.md` | Runbook | completed | Moved out of top-level `docs/` into `docs/runbooks/` |
+| `docs/runbooks/RUNBOOK_RESET_TO_ZERO.md` | Runbook | completed | Moved out of top-level `docs/` into `docs/runbooks/` |
+| `docs/runbooks/E2E_ALPHA.md` | Runbook | completed | Moved out of top-level `docs/` into `docs/runbooks/` |
 | `docs/SCORECARDS.md` | Removed | completed | Scorecard-style aspirational targets merged into `docs/eval.md`; redirect stub deleted on this branch |
 | `docs/PROTOCOL_SATELLITE_SYNC.md` | Plan | keep | Distinct protocol/planning doc |
 | `docs/DOCS_REFACTOR_PLAN.md` | Plan | keep | Active refactor work tracker until cleanup ends, then archive |

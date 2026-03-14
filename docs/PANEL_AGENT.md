@@ -73,7 +73,7 @@ Make this note evergreen
   - `PANEL_AGENT_PIPELINE=direct|planner` selects whether to emit promotion directly (default) or also create plans (planner mode).
 
 ## UAT / Trying it out
-- The quickest way to exercise PanelAgent + watcher flows on a small set of notes is in `docs/UAT_PANEL_WATCHER.md` (prep notes, targeted ingest, panel run-many, watcher dry-run/run, and what to observe).
+- The quickest way to exercise PanelAgent + watcher flows on a small set of notes is in `docs/runbooks/UAT_PANEL_WATCHER.md` (prep notes, targeted ingest, panel run-many, watcher dry-run/run, and what to observe).
 
 ### Event payload (panel.intent.created)
 ```json

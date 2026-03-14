@@ -77,7 +77,7 @@ Common safety switches:
 - `WATCHER_SCOPE_GLOB="<inbox>/**"` restricts watcher scanning (default derives from vault layout/inbox).
 
 ## Golden Path (Alpha E2E)
-The canonical “does the whole chain work?” contract lives in `docs/E2E_ALPHA.md`.
+The canonical “does the whole chain work?” contract lives in `docs/runbooks/E2E_ALPHA.md`.
 
 ```bash
 export VAULT_ROOT="/path/to/vault"
