@@ -78,7 +78,33 @@ def test_apply_start_full_system_defaults_does_not_override_explicit_startup_che
     assert out == "0"
 
 
-def test_apply_start_full_system_vault_defaults_infers_dirs_from_empty_layout_note() -> None:
+def test_apply_start_full_system_vault_defaults_infers_dirs_from_layout_note_frontmatter() -> None:
+    out = _bash(
+        "set -euo pipefail; "
+        "vault_root=$(mktemp -d); "
+        "mkdir -p \"$vault_root/config\"; "
+        "cat > \"$vault_root/config/vault.layout.md\" <<'EOF'\n"
+        "---\n"
+        "system_folder: config\n"
+        "inbox_folder: intake\n"
+        "desk_folder: workbench\n"
+        "---\n"
+        "EOF\n"
+        "source scripts/lib/start_full_system_env.sh; "
+        "unset VAULT_SYSTEM_DIR_REL VAULT_INBOX_DIR_REL VAULT_DESK_DIR_REL; "
+        "apply_start_full_system_vault_defaults \"$vault_root\"; "
+        "python - <<'PY'\n"
+        "import os\n"
+        "print(os.environ.get('VAULT_SYSTEM_DIR_REL', ''))\n"
+        "print(os.environ.get('VAULT_INBOX_DIR_REL', ''))\n"
+        "print(os.environ.get('VAULT_DESK_DIR_REL', ''))\n"
+        "PY"
+    )
+    lines = out.splitlines()
+    assert lines == ["config", "intake", "workbench"]
+
+
+def test_apply_start_full_system_vault_defaults_does_not_guess_legacy_dirs_from_empty_layout_note() -> None:
     out = _bash(
         "set -euo pipefail; "
         "vault_root=$(mktemp -d); "
@@ -94,8 +120,7 @@ def test_apply_start_full_system_vault_defaults_infers_dirs_from_empty_layout_no
         "print(os.environ.get('VAULT_DESK_DIR_REL', ''))\n"
         "PY"
     )
-    lines = out.splitlines()
-    assert lines == ["⚙️ System", "📥 Inbox", "🛠️ Workbench"]
+    assert out == ""
 
 
 def test_apply_start_full_system_vault_defaults_does_not_override_explicit_values() -> None:
