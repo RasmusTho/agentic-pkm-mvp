@@ -56,12 +56,12 @@ Recommended next execution order:
 | `docs/HEALTH.md` | Reference | keep | Distinct health contract/CLI surface |
 | `docs/OPS_WATCHER.md` | Removed | completed | Content merged into `docs/OPERATIONS.md`; redirect stub deleted on this branch |
 | `docs/INFRASTRUCTURE.md` | Reference | keep | Distinct local runtime / compose / topology doc |
-| `docs/CLI.md` | Deprecated redirect | delete | Stable operator CLI guidance merged into `docs/OPERATIONS.md`; remove once inbound links are fully gone |
+| `docs/CLI.md` | Removed | completed | Stable operator CLI guidance merged into `docs/OPERATIONS.md`; redirect stub deleted on this branch |
 | `docs/LLM.md` | Reference | keep | Operational LLM owner |
 | `docs/LLM_ROUTING.md` | Reference / contract | keep | Distinct routing contract |
 | `docs/RETRIEVAL.md` | Reference | keep | Distinct retrieval behavior surface |
 | `docs/DATA_MODEL.md` | Reference | keep | Distinct data model doc |
-| `docs/DATA_GOVERNANCE.md` | Deprecated redirect | delete | Governance semantics merged into `docs/DATA_MODEL.md`; remove once inbound links are fully gone |
+| `docs/DATA_GOVERNANCE.md` | Removed | completed | Governance semantics merged into `docs/DATA_MODEL.md`; redirect stub deleted on this branch |
 | `docs/DB_SCHEMA.md` | Reference | keep | Distinct DB snapshot/reference |
 | `docs/FRONTMATTER.md` | Reference | keep | Distinct vault/frontmatter contract |
 | `docs/SETTINGS.md` | Reference | keep | Main settings owner |
@@ -71,11 +71,11 @@ Recommended next execution order:
 | `docs/PRIVACY.md` | Reference | keep | Distinct privacy posture doc |
 | `docs/DEPENDENCIES.md` | Reference | keep | Distinct external dependency inventory |
 | `docs/PYTHON_VERSION_POLICY.md` | Deprecated redirect | delete | Python floor/compatibility guidance merged into `docs/DEPENDENCIES.md`; remove once inbound links are fully gone |
-| `docs/OBSIDIANSYNC.md` | Deprecated redirect | delete | Active sync guidance merged into `docs/HUMAN-FLOWS.md`, `docs/OPERATIONS.md`, and `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`; remove once inbound links are fully gone |
+| `docs/OBSIDIANSYNC.md` | Removed | completed | Active sync guidance merged into `docs/HUMAN-FLOWS.md`, `docs/OPERATIONS.md`, and `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`; redirect stub deleted on this branch |
 | `docs/INVENTORY.md` | Reference | keep | Runtime inventory still useful as a separate lookup surface |
 | `docs/GLOSSARY.md` | Reference | keep | Distinct terminology surface |
 | `docs/DEV_WORKFLOW.md` | Reference | keep | Primary development workflow doc |
-| `docs/CONTRIBUTING.md` | Deprecated redirect | delete | Contributor setup and workflow merged into `docs/DEV_WORKFLOW.md`; remove once inbound links are fully gone |
+| `docs/CONTRIBUTING.md` | Removed | completed | Contributor setup and workflow merged into `docs/DEV_WORKFLOW.md`; redirect stub deleted on this branch |
 | `docs/templates/DOC_TEMPLATE.md` | Reference / template | keep | Needed for governance |
 | `docs/UAT_PANEL_WATCHER.md` | Reference / runbook | merge into | `docs/runbooks/` or `docs/OPERATIONS.md`; better as runbook material than top-level doc |
 | `docs/RUNBOOK_RESET_TO_ZERO.md` | Runbook | move into | `docs/runbooks/` for consistency with other runbooks |
@@ -106,13 +106,11 @@ Target docs:
 - `docs/OBSERVABILITY.md`
 - `docs/HEALTH.md`
 - `docs/INFRASTRUCTURE.md`
-- `docs/CLI.md`
-
 Goal:
 - Keep `OPERATIONS.md` as the operator entrypoint
 - Keep `OBSERVABILITY.md` and `HEALTH.md` as distinct contracts
 - `OPS_WATCHER.md` and `OBSERVABILITY_STACK.md` have been removed after their content was merged into surviving docs
-- `CLI.md` has now been folded into operations guidance and remains a delete candidate once any remaining non-active references are cleared
+- `CLI.md` has now been folded into operations guidance and removed
 
 ### Quality / testing consolidation
 

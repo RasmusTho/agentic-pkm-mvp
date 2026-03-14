@@ -90,23 +90,19 @@ Active cleanup work for simplifying this document set is tracked in `docs/DOCS_R
 | docs/OPERATIONS.md | Operations playbook | Aligned (forward line v5.x) | 2026-03-13 | Top-level operator entrypoint for runtime runbooks; links to specialized health, watcher, and observability docs. |
 | docs/INFRASTRUCTURE.md | Infrastructure notes | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Compose stack (db/api/worker) for Reality-MVP. |
 | docs/HEALTH.md | Health checks | Aligned (forward line v5.x) | 2026-03-13 | Health CLI behavior and runtime health contract; companion to OPERATIONS and OBSERVABILITY. |
-| docs/CLI.md | CLI reference | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; stable operator CLI guidance now lives in `docs/OPERATIONS.md`, while authoritative discovery remains `python -m app.cli --help`. |
 | docs/LLM_ROUTING.md | LLM routing contract (router + fabric) | Aligned (forward line v5.x) | 2026-02-05 | Canonical routing/fabric contract; documents env precedence and debug surfaces. |
 | docs/LLM.md | LLM integration | Aligned (forward line v5.x) | 2026-03-13 | Primary operational LLM document covering providers, env vars, backend scenarios, and limits; routing contract remains separate in `docs/LLM_ROUTING.md`. |
 | docs/RETRIEVAL.md | Retrieval | Aligned (forward line v5.x) | 2026-02-05 | Hybrid retrieval + optional rerank hooks (`RERANK_ENABLE`/`RERANK_PROVIDER`). |
 | docs/FRONTMATTER.md | Frontmatter rules | Aligned (forward line v5.x) | 2026-02-05 | Defines metadata layers, ownership, and the warm-surface write contract. |
 | docs/DATA_MODEL.md | Data model | Aligned (forward line v5.x) | 2026-02-05 | DB mirror of the Core-6 contract; derived overlays are rebuildable. |
-| docs/DATA_GOVERNANCE.md | Data governance | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; canonical-vs-derived artifact rules and persistence/audit guidance now live in `docs/DATA_MODEL.md`. |
 | docs/DB_SCHEMA.md | DB schema | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Snapshot of current tables/views + DB outbox bootstrap; notes multiple historical Alembic heads. |
 | docs/SETTINGS.md | Settings | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Settings compiler + registries documented; some areas are forward-looking. |
 | docs/SETTINGS_TIERING.md | Settings tiering design + migration map | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; settings tiering guidance now lives in `docs/SETTINGS.md`. |
 | docs/AUTH_RATE_LIMITING.md | Auth/rate limiting | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; auth and rate-limiting posture now lives in `docs/SECURITY.md`. |
-| docs/OBSIDIANSYNC.md | Obsidian sync | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; active sync guidance now lives in `docs/HUMAN-FLOWS.md`, `docs/OPERATIONS.md`, and `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`. |
 | docs/DEV_WORKFLOW.md | Developer workflow | Aligned (forward line v5.x) | 2026-03-13 | Primary development workflow and dev-layer AI policy; consolidates change order, constraints, and required validation. |
 | docs/templates/DOC_TEMPLATE.md | Document template | Aligned (forward line v5.x) | 2026-03-14 | Standard template for new docs; defines metadata, scope, authority, and writing structure. |
 | docs/INVENTORY.md | Runtime inventory | Aligned (forward line v5.x) | 2026-02-05 | Reference inventory (no file:line); update alongside code. |
 | docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-02-05 | Definitions updated to match v5.5 baseline (outbox/JSONL audit, rerank hooks). |
-| docs/CONTRIBUTING.md | Contributing guide | Deprecated | 2026-03-14 | Redirect stub retained during cleanup; practical contributor setup and workflow now live in `docs/DEV_WORKFLOW.md`. |
 | docs/CHANGELOG.md | Docs changelog | Legacy (archived) | 2026-02-05 | Historical; prefer STATUS/ROADMAP for current baseline and forward line. |
 | docs/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
 | docs/ALIGNMENT.md | Alignment guide | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |

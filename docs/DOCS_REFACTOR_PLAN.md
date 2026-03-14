@@ -167,7 +167,7 @@ Goals:
 
 Steps:
 1. Normalize headers and role metadata on active docs.
-2. Update `docs/CONTRIBUTING.md` or the surviving dev workflow doc with rules for when a new doc is allowed.
+2. Update the surviving developer workflow doc with rules for when a new doc is allowed.
 3. Review `docs/DOCS_INDEX.md` for duplicate rows and stale classifications.
 4. Update `README.md` docs links to reflect the final core set and reading order.
 

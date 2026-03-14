@@ -21,7 +21,7 @@ State: offline synthesis (system not online); repo-grounded analysis only.
 ### Configuration & Governance
 - Panel action catalog mappings defined in docs/settings/panel-actions.md (ids, intent_type, downstream_event, params). Evidence: docs/settings/panel-actions.md.
 - Watcher auto-run policy treats AI-fenced notes as candidates once `WATCHER_AUTO_EXEC=1` is armed; only `ai_panel_auto_run: never` / `ai_panel: { auto_run: never }` blocks the automation. Evidence: docs/HUMAN-FLOWS.md §PanelAgent runtime + watcher integration (policy gating).
-- CLI flags/environment documented for ingest/panel/watcher settings. Evidence: docs/CLI.md (command tables) and docs/OBSIDIANSYNC.md (watcher notes).
+- CLI flags/environment documented for ingest/panel/watcher settings. Evidence: docs/OPERATIONS.md (stable commands/runbooks) and docs/HUMAN-FLOWS.md (watcher notes).
 - Panel action wiring now config-driven via YAML (`docs/settings/panel-action-wiring.yaml`), defaulting to promotion events; override with `PANEL_ACTION_WIRING_PATH`. Evidence: app/agents/panel_agent/wiring.py; docs/settings/panel-action-wiring.yaml.
 
 ### Observability & AgentOps
@@ -32,7 +32,7 @@ State: offline synthesis (system not online); repo-grounded analysis only.
 ### Docker/Runtime Posture
 - Base compose defines db/api/worker services mounting repo; STORE_BACKEND=pg in containers. Evidence: docker-compose.yaml (services db/api/worker).
 - Watcher compose for polling daemon mounts vault to /vault and /state for snapshots. Evidence: docker-compose.watcher.yml (watcher service command/volumes).
-- Docker usage not primary human interface; CLI exposed via python -m app.cli. Evidence: docs/CLI.md (click-based CLI reference).
+- Docker usage not primary human interface; CLI exposed via python -m app.cli. Evidence: docs/OPERATIONS.md and docs/HUMAN-FLOWS.md.
 - Watcher daemon supports snapshot outside vault via --snapshot-path (/state default in Docker). Evidence: app/cli/watcher.py (vault-watcher-daemon), app/watcher/vault_watcher.py (run_watcher_daemon).
 
 ## 3) Pattern Harvest Cards
@@ -79,7 +79,7 @@ State: offline synthesis (system not online); repo-grounded analysis only.
 
 ### Card E — Human-first config + validation/evals
 - Pattern: File-first configuration (vault/system folder) with validation; regression evals gated; CLI only as tooling surface.
-- Our Current State: Panel action catalog defined in docs/settings/panel-actions.md; watcher policy via note frontmatter. Evidence: docs/settings/panel-actions.md; docs/HUMAN-FLOWS.md policy section. CLI documented as tooling surface for ingest/panel/watcher. Evidence: docs/CLI.md command tables. Eval stack (DeepEval/Ragas) present but optional via markers/env. Evidence: docs/TESTING.md (PanelAgent LLM E2E opt-in; eval markers).
+- Our Current State: Panel action catalog defined in docs/settings/panel-actions.md; watcher policy via note frontmatter. Evidence: docs/settings/panel-actions.md; docs/HUMAN-FLOWS.md policy section. CLI documented as tooling surface for ingest/panel/watcher. Evidence: docs/OPERATIONS.md command/runbook sections. Eval stack (DeepEval/Ragas) present but optional via markers/env. Evidence: docs/TESTING.md (PanelAgent LLM E2E opt-in; eval markers).
 - Gap / Risk: No explicit “CLI not primary UI” statement in architecture docs; config validation limited; eval gates optional (mock by default).
 - Recommendation: Add explicit statement in architecture/human-flows that CLI is tooling, not human UI; add schema validation for panel-actions and watcher config; document eval gating with local providers.
 - Acceptance Criteria:
