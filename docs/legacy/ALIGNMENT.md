@@ -37,8 +37,8 @@ State: SoT v4.10 (current; details may lag ARCHITECTURE).
 - 2025-10-19: Observability hooks (JSON-loggar + Prometheus via `METRICS_ENABLED`) aktiverade i `app/observability.py`.
 - 2025-10-19: Pre-commit hooks för ruff/mypy/pytest tillagda (`.pre-commit-config.yaml`).
 - 2025-10-19: Arkivrotation tillåter retention via `--max-age-days` i `scripts/rotate_storage.py`.
-- 2025-10-19: Lokal observability-stack dokumenterad i `docs/OBSERVABILITY_STACK.md` och Docker Compose-basen etablerad.
-- 2025-10-19: Frontmatter- och API-kontrakt specificerade för agentflödet (docs/ALIGNMENT.md, README).
+- 2025-10-19: Lokal observability-stack dokumenterad i `docs/INFRASTRUCTURE.md` och Docker Compose-basen etablerad.
+- 2025-10-19: Frontmatter- och API-kontrakt specificerade för agentflödet (docs/legacy/ALIGNMENT.md, README).
 - 2025-10-19: (UTFASAD) Lokal watcher och vault-ingest (Obsidian inbox folder) fanns under `app/ingest/watcher.py`; funktionen är borttagen och behöver ersättas eller dokumenteras som legacy.
 - 2025-10-19: DuckDB-staging och review endpoints (`/ingest/pending`, `/ingest/review`) tillagda för agentstyrd QA.
 - 2025-10-19: Semantic chunking & categorization scheman dokumenterade i alignment + system context.

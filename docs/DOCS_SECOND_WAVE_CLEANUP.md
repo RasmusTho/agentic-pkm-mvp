@@ -89,11 +89,11 @@ Recommended next execution order:
 | `docs/CORE6_CONTRACT.md` | Deprecated alias | delete | Remove once compatibility links are gone; canonical doc already exists |
 | `docs/PLANNER.md` | Legacy | archive | Historical only |
 | `docs/PROJECTOR.md` | Legacy | archive | Historical only |
-| `docs/ALIGNMENT.md` | Legacy | archive | Historical only |
+| `docs/legacy/ALIGNMENT.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |
 | `docs/CHANGELOG.md` | Legacy | archive | Historical only |
-| `docs/ingest.md` | Legacy | archive | Historical only |
-| `docs/OVERVIEW_WS.md` | Legacy | archive | Historical only |
-| `docs/MEMORY.md` | Legacy | archive | Historical only |
+| `docs/legacy/ingest.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |
+| `docs/legacy/OVERVIEW_WS.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |
+| `docs/legacy/MEMORY.md` | Legacy | completed | Moved out of top-level `docs/` into `docs/legacy/` |
 
 ## Recommended Next Slice
 

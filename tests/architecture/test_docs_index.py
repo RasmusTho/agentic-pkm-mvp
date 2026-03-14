@@ -20,7 +20,7 @@ STATE_OPTIONAL_PREFIXES: tuple[str, ...] = (
     "docs/adrs/",
 )
 STATE_OPTIONAL_FILES: set[str] = {
-    "docs/OVERVIEW_WS.md",
+    "docs/legacy/OVERVIEW_WS.md",
     "docs/howto/memory.md",
 }
 
