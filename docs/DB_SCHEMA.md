@@ -1,4 +1,6 @@
-State: SoT v5.5 baseline (descriptive of current DB schema + runtime bootstrap; if this doc and migrations disagree, treat the code as source of truth and record the delta here).
+State: SoT v5.5 Reality-MVP baseline locked.
+Doc role: Reference
+Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -13,6 +15,11 @@ State: SoT v5.5 baseline (descriptive of current DB schema + runtime bootstrap; 
 - `app/services/outbox.py` (`bootstrap()`) defines the **DB outbox** table (canonical queue) at runtime.
 
 This document is a human-readable snapshot of what the code creates/uses in the v5.5 baseline. If you change the schema, update this doc in the same PR.
+
+Related docs:
+- `docs/DATA_MODEL.md` for semantic ownership and persistence-surface meaning
+- `docs/EVENTS.md` for the canonical outbox envelope carried in `outbox.payload`
+- `docs/OPERATIONS.md` for runtime health checks involving the DB outbox
 
 ## Core Tables (Store)
 
@@ -55,7 +62,7 @@ This document is a human-readable snapshot of what the code creates/uses in the 
   - `(object_id, key, created_at desc)` for “latest decision” reads
 
 ### `membership`
-The v4.5 baseline uses a **composite** key form:
+The current baseline retains the **composite** key form:
 - `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
 - `set_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`) (sets are stored as objects in this baseline)
 - `created_at` (`timestamptz`, default `now()`)
@@ -78,4 +85,4 @@ Created/ensured by `app/services/outbox.py:bootstrap()`:
   - Indexes: `outbox_created_idx`, `outbox_delivered_idx`
 
 ## Explicit Deltas / Known Gaps
-- This repo contains multiple historical Alembic “heads” (separate bootstrap paths). If you’re running into head conflicts or unexpected columns, inspect `app/alembic/versions/*` and document which head is your intended baseline for v5.5.
+- This repo still contains historical migration lineage and merge history under `app/alembic/versions/`. If you hit unexpected columns or migration conflicts, inspect the migration set and record the intended baseline delta in the same change.
