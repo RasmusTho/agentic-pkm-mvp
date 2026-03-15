@@ -15,3 +15,10 @@ def test_verify_runtime_stack_uses_in_container_checks() -> None:
     assert "python -m app.cli health --json" in script
     assert "python -m app.cli status" in script
     assert "required health ok=true" in script
+
+
+def test_verify_runtime_stack_parses_multiline_health_meta() -> None:
+    script = Path("scripts/verify_runtime_stack.sh").read_text(encoding="utf-8")
+    assert "sed -n '1p'" in script
+    assert "sed -n '2p'" in script
+    assert "sed -n '3p'" in script

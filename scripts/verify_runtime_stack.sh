@@ -88,7 +88,9 @@ print("1" if required_ok else "0")
 print(",".join(failed_required))
 PY
 )
-IFS=$'\n' read -r health_ok health_required_ok failed_required <<<"$health_meta"
+health_ok=$(printf '%s\n' "$health_meta" | sed -n '1p')
+health_required_ok=$(printf '%s\n' "$health_meta" | sed -n '2p')
+failed_required=$(printf '%s\n' "$health_meta" | sed -n '3p')
 health_ok=${health_ok:-0}
 health_required_ok=${health_required_ok:-0}
 failed_required=${failed_required:-}
