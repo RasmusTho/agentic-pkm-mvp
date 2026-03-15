@@ -4,46 +4,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-load_dotenv() {
-  if [ -f ".env" ]; then
-    eval "$(
-      python - <<'PY'
-from __future__ import annotations
-
-import os
-import re
-import shlex
-from pathlib import Path
-
-pattern = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
-for raw_line in Path(".env").read_text(encoding="utf-8").splitlines():
-    line = raw_line.strip()
-    if not line or line.startswith("#"):
-        continue
-    match = pattern.match(line)
-    if not match:
-        continue
-    key, value = match.groups()
-    if key in os.environ:
-        continue
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        value = value[1:-1]
-    print(f"export {key}={shlex.quote(value)}")
-PY
-    )"
-  fi
-}
-
-load_dotenv
+source "scripts/lib/load_env_defaults.sh"
+load_env_defaults_file ".env"
+load_env_defaults_file "config/runtime.defaults.env"
 
 source "scripts/lib/start_full_system_env.sh"
 apply_start_full_system_defaults
 
-default_db_url="postgresql+psycopg://app:app@db:5432/app"
-DATABASE_URL="${DATABASE_URL:-$default_db_url}"
-DB_DSN="${DB_DSN:-$DATABASE_URL}"
-export DATABASE_URL DB_DSN
+if [ -n "${DATABASE_URL:-}" ] && [ -z "${DB_DSN:-}" ]; then
+  DB_DSN="$DATABASE_URL"
+fi
+export DATABASE_URL="${DATABASE_URL:-}" DB_DSN="${DB_DSN:-}"
 
 unset INDEX_REBUILD_SUMMARY INDEX_REBUILD_FAILURES_PATH
 
@@ -690,9 +661,6 @@ else
   echo "Watcher scope_glob: computed at runtime from vault layout inbox"
 fi
 unset scope_glob_raw
-if ! grep -qE '^OLLAMA_URL=' "$runtime_env_path" 2>/dev/null; then
-  printf 'OLLAMA_URL=http://ollama:11434\n' >> "$runtime_env_path"
-fi
 runtime_env="--env-file $runtime_env_path"
 
 latest_tick_log_path="$ROOT/tmp/latest_watcher_tick_log"
@@ -1069,7 +1037,12 @@ def _normalize_base(url: str) -> str:
 
 
 def _resolve_base() -> str | None:
-    base = os.environ.get("OLLAMA_URL") or os.environ.get("OLLAMA_HOST")
+    base = (
+        os.environ.get("OLLAMA_BASE_URL")
+        or os.environ.get("OLLAMA_URL")
+        or os.environ.get("OLLAMA_HOST")
+        or os.environ.get("OPENAI_BASE_URL")
+    )
     if not base:
         return None
     return _normalize_base(base)
@@ -1091,7 +1064,7 @@ def _extract_embedding(payload: dict) -> list[float] | None:
 verbose = os.environ.get("VERIFY_ACTIVE") == "1"
 base = _resolve_base()
 if not base:
-    _fail("INFO: Ollama preflight failed: OLLAMA_URL/OLLAMA_HOST missing", verbose)
+    _fail("INFO: Ollama preflight failed: OLLAMA_BASE_URL/OLLAMA_URL/OLLAMA_HOST/OPENAI_BASE_URL missing", verbose)
 model = os.environ.get("OLLAMA_EMBED_MODEL") or os.environ.get("EMBED_MODEL", "nomic-embed-text:latest")
 with httpx.Client(timeout=10.0) as client:
     tags_resp = client.get(f"{base}/api/tags")
@@ -1669,7 +1642,7 @@ if [ "$objects_before" -le 0 ]; then
   ingest_run="yes"
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then
     set +e
-    ingest_summary_json=$(run_docker_compose exec -T api env STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@db:5432/app python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
+    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
     ingest_status=$?
     set -e
     if [ "$ingest_status" -ne 0 ]; then
@@ -1679,7 +1652,7 @@ if [ "$objects_before" -le 0 ]; then
     fi
   else
     set +e
-    ingest_summary_json=$(run_docker_compose exec -T api env STORE_BACKEND=pg DATABASE_URL=postgresql://app:app@db:5432/app python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
+    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
     ingest_status=$?
     set -e
     if [ "$ingest_status" -ne 0 ]; then

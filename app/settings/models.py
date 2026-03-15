@@ -116,7 +116,7 @@ class QaLLMSettings(BaseModel):
         json_schema_extra={"allowed": ["mock", "ollama", "http"]},
     )
     model: str = Field(default="llama3.1:8b-instruct", description="Model identifier for QA prompts.")
-    host: str = Field(default="http://127.0.0.1:11434", description="Base URL for local providers.")
+    host: str = Field(default="", description="Base URL for local providers.")
     timeout_s: float = Field(default=120.0, description="HTTP timeout in seconds.")
     max_tokens: int = Field(default=512, description="Maximum tokens per response.")
 
@@ -198,4 +198,3 @@ class SettingsBundle(BaseModel):
     agents: Dict[str, Any] = Field(default_factory=dict)
     yggdrasil_paths: Optional[YggdrasilPaths] = None
     instance: InstanceSettings = Field(default_factory=InstanceSettings)
-

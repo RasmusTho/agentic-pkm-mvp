@@ -9,13 +9,7 @@ from uuid import UUID
 from app.embedding_config import get_embed_dim
 from app.events.schema import make_outbox_event
 from app.llm.embeddings import EMBED_MODEL
-
-
-_DEFAULT_LOGS_OUTBOX = Path("logs/index-outbox.jsonl")
-_DEFAULT_TMP_OUTBOX = Path("tmp/index-outbox.jsonl")
-
-
-# default paths may be overridden by INDEX_OUTBOX_PATH
+from app.settings.watcher_settings import load_watcher_settings
 
 def _try_writable_path(path: Path) -> bool:
     try:
@@ -34,8 +28,7 @@ def _build_candidate_list(env_value: str | None) -> list[Path]:
     values: list[Path] = []
     if env_value and env_value.strip():
         values.append(Path(env_value).expanduser())
-    values.append(_DEFAULT_LOGS_OUTBOX)
-    values.append(_DEFAULT_TMP_OUTBOX)
+    values.append(load_watcher_settings().paths.index_outbox)
     return values
 
 

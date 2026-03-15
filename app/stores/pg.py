@@ -22,7 +22,9 @@ _TABLES_READY = False
 def _dsn() -> str:
     url = resolve_dsn()
     if not url:
-        url = os.environ.get("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+        url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        raise RuntimeError("DATABASE_URL is required for postgres store access")
     if url.startswith("postgresql+psycopg://"):
         url = "postgresql://" + url.split("postgresql+psycopg://", 1)[1]
     return url
@@ -503,5 +505,4 @@ def inspect_pg_index_state() -> dict:
             else:
                 state["rows_wrong_dim"] = None
     return state
-
 

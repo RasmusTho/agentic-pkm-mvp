@@ -6,9 +6,10 @@ import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from app.settings.watcher_settings import load_watcher_settings
+
 _DEFAULT_ENV = "WATCHER_HEARTBEAT_PATH"
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_HEARTBEAT_PATH = REPO_ROOT / "tmp" / "watcher_heartbeat.json"
+DEFAULT_HEARTBEAT_PATH = load_watcher_settings().paths.watcher_heartbeat
 
 
 def resolve_heartbeat_path(env_get: Callable[[str], str | None] | None = None) -> Path:
@@ -16,7 +17,7 @@ def resolve_heartbeat_path(env_get: Callable[[str], str | None] | None = None) -
     raw = getter(_DEFAULT_ENV)
     if raw and raw.strip():
         return Path(raw.strip()).expanduser()
-    return DEFAULT_HEARTBEAT_PATH
+    return load_watcher_settings().paths.watcher_heartbeat
 
 
 def _write_payload(path: Path, payload: dict[str, object]) -> None:

@@ -4,7 +4,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-DB_URL="postgresql://app:app@db:5432/app"
+source "scripts/lib/load_env_defaults.sh"
+load_env_defaults_file ".env"
+load_env_defaults_file "config/runtime.defaults.env"
+
+DB_URL="${DATABASE_URL:-${DB_DSN:-}}"
+if [ -z "$DB_URL" ]; then
+  echo "DATABASE_URL or DB_DSN is required" >&2
+  exit 2
+fi
 ENV_VARS="STORE_BACKEND=pg DATABASE_URL=$DB_URL DB_DSN=$DB_URL"
 EXEC="docker exec -it workspace-api-1 bash -lc"
 

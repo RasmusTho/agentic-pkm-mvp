@@ -108,13 +108,27 @@ def _check_outbox_path() -> Dict[str, Any]:
 
 
 def _check_ollama() -> Dict[str, Any]:
-    provider = os.environ.get("LLM_PROVIDER", "ollama").lower()
-    base = os.environ.get("OLLAMA_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
+    provider = (os.environ.get("LLM_PROVIDER") or "").strip().lower()
+    if provider == "llm":
+        provider = "ollama"
+    base = (
+        os.environ.get("OLLAMA_BASE_URL")
+        or os.environ.get("OLLAMA_URL")
+        or os.environ.get("OLLAMA_HOST")
+        or os.environ.get("OPENAI_BASE_URL")
+        or ""
+    ).rstrip("/")
     if provider != "ollama":
         result = _result(True, "Hoppar över Ollama-koll (LLM_PROVIDER != ollama)", data={"skipped": True})
         result["provider"] = provider
         result["base_url"] = base
         return result
+    if not base:
+        return _result(
+            False,
+            "OLLAMA_BASE_URL, OLLAMA_URL, OLLAMA_HOST eller OPENAI_BASE_URL saknas",
+            data={"provider": provider},
+        )
     try:
         resp = httpx.get(f"{base}/api/tags", timeout=float(os.environ.get("LLM_TIMEOUT", "5")))
         resp.raise_for_status()
