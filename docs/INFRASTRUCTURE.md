@@ -45,7 +45,8 @@ API and worker share the same Python image built from the repo.
 
 ## Startup Flow
 1. Ensure Colima/Docker is running.
-2. `docker compose up -d` builds the shared Python image and starts `db` → `api` → `worker`.
+2. `make start` is the supported local startup path. It writes `tmp/runtime.env`, brings up the core services, auto-selects a Docker-reachable Ollama endpoint when needed, and verifies the live runtime from inside the `api` container before exiting `0`.
+3. `docker compose up -d` remains available for low-level debugging, but it skips the startup wrapper's endpoint repair, vault probes, and authoritative runtime verification.
 3. `scripts/start_api.sh` (container entrypoint):
    - Normalizes the DSN from `DATABASE_URL` / `DB_DSN`.
    - Waits for Postgres to accept connections.
@@ -55,6 +56,24 @@ API and worker share the same Python image built from the repo.
 4. Worker bootstrap:
    - Uses an autocommit psycopg connection to create the `outbox` table/indexes and `pgcrypto` if needed.
    - Polls the outbox and triggers the indexer for ingest events.
+
+### Runtime verification
+- `make verify-runtime` is the recommended operator check once the stack is up.
+- It verifies:
+  - `docker compose ps`
+  - container health for `db`, `api`, `watcher`, and `worker` when present
+  - `docker compose exec -T api python -m app.cli health --json`
+  - `docker compose exec -T api python -m app.cli status`
+- The check exits non-zero when required runtime health is not green, even if optional health checks still report warnings.
+
+### Ollama endpoint selection
+- For `LLM_PROVIDER=ollama`, startup now probes candidate endpoints from inside the containerized runtime and persists the working endpoint into `tmp/runtime.env`.
+- Candidate order:
+  - configured endpoint
+  - `DOCKER_OLLAMA_BASE_URL` when set
+  - `http://host.docker.internal:11434`
+  - `http://ollama:11434`
+- This reduces drift between host-only Ollama URLs and what containers can actually reach.
 
 ## Observability
 - Health endpoints: Reality-MVP operators should hit `http://127.0.0.1:18000/healthz` (liveness), `/readyz` (readiness), `/api/health` (structured contract), and `/api/status` (SOT/status payload). Search and ask live at `/search` and `/api/ask` on the same host port. Docker Compose maps host `18000` ↔ container `8000`, so use the host port when invoking curl from the host. The legacy `/agent/health` surface lives under `app.legacy_http`, but go-live checks should rely on `/healthz` (simple OK) and `/api/health` (contract) instead. `/api/health` can report `ok=false` when optional tools like `ffmpeg` are missing; treat this as degraded functionality if core endpoints are healthy.
