@@ -10,6 +10,7 @@ import httpx
 from app.embedding_config import assert_embed_dim, get_embed_dim, l2_normalize
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+_MOCK_EMBED_MODEL = "mock-embedding"
 
 
 def _extract_error_detail(response: httpx.Response) -> str | None:
@@ -209,7 +210,12 @@ def embed_text(
     normalize: bool = True,
 ) -> List[float]:
     provider_val = provider or _provider()
-    model_val = model or get_embed_model()
+    if model:
+        model_val = model
+    elif provider_val == "mock":
+        model_val = _MOCK_EMBED_MODEL
+    else:
+        model_val = get_embed_model()
     dim_val = dim or get_embed_dim()
     vector = list(_embed_single(text, provider_val, model_val, dim_val))
     if normalize:
