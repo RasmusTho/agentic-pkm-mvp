@@ -27,6 +27,9 @@ def configure_eval_openai_env() -> EvalLLMConfig:
     api_key = os.getenv("EVAL_LLM_API_KEY", os.getenv("OPENAI_API_KEY", "")).strip()
     model = os.getenv("EVAL_LLM_MODEL", "").strip()
     mode = os.getenv("EVAL_LLM_MODE", DEFAULT_MODE).strip().lower() or DEFAULT_MODE
+    if mode != "run":
+        return EvalLLMConfig(base_url=base_url, api_key=api_key, model=model, mode=mode)
+
     missing = [
         name
         for name, value in (

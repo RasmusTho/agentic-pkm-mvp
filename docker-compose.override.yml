@@ -1,8 +1,5 @@
 services:
   worker:
     environment:
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      EMBED_MODEL: ${EMBED_MODEL:-}
-      EMBED_DIM: ${EMBED_DIM:-}
-      EMBED_NORMALIZE: ${EMBED_NORMALIZE:-}
+      - OPENAI_BASE_URL
+      - OPENAI_API_KEY

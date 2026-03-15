@@ -82,7 +82,7 @@ if [ -n "$scope_glob_raw" ]; then
 fi
 
 if [ "${LLM_PROVIDER:-}" = "ollama" ]; then
-  python - <<'PY' >> "$runtime_env_path"
+  python3 - <<'PY' >> "$runtime_env_path"
 from __future__ import annotations
 
 import os
@@ -126,7 +126,12 @@ providers = _load_providers(vault_root)
 llm_ref = providers.llm.get("default_chat") if providers else None
 embed_ref = providers.embedding.get("default") if providers else None
 
-base_url = os.getenv("OLLAMA_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+base_url = (
+    os.getenv("OLLAMA_BASE_URL")
+    or os.getenv("OLLAMA_URL")
+    or os.getenv("OLLAMA_HOST")
+    or os.getenv("OPENAI_BASE_URL")
+)
 if not base_url:
     base_url = getattr(llm_ref, "base_url", None) if llm_ref else None
 
@@ -140,7 +145,9 @@ if not embed_model:
 
 docker_default_base = os.getenv("DOCKER_OLLAMA_BASE_URL", "").strip()
 if not base_url:
-    raise SystemExit("OLLAMA_BASE_URL or OPENAI_BASE_URL is required when LLM_PROVIDER=ollama")
+    raise SystemExit(
+        "OLLAMA_BASE_URL, OLLAMA_URL, OLLAMA_HOST, or OPENAI_BASE_URL is required when LLM_PROVIDER=ollama"
+    )
 if ("127.0.0.1" in base_url or "localhost" in base_url) and docker_default_base:
     base_url = docker_default_base
 
