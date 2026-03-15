@@ -43,9 +43,15 @@ def validate_json(raw: str, schema_path: str) -> Dict[str, Any]:
 
 
 def _ollama_base_url() -> str:
-    base_url = os.getenv("OLLAMA_HOST", os.getenv("OLLAMA_URL", "")).rstrip("/")
+    base_url = (
+        os.getenv("OLLAMA_BASE_URL")
+        or os.getenv("OLLAMA_HOST")
+        or os.getenv("OLLAMA_URL")
+        or os.getenv("OPENAI_BASE_URL")
+        or ""
+    ).rstrip("/")
     if not base_url:
-        raise RuntimeError("OLLAMA_HOST or OLLAMA_URL is required for ollama provider")
+        raise RuntimeError("OLLAMA_BASE_URL, OLLAMA_HOST, OLLAMA_URL, or OPENAI_BASE_URL is required for ollama provider")
     return base_url
 
 

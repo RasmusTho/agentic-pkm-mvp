@@ -6,12 +6,12 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from app.config.llm import get_provider
 from app.llm.trace import log_llm_call
 
 
 def _prov() -> str:
-    prov = os.getenv("LLM_PROVIDER", "ollama").lower()
-    return "ollama" if prov == "llm" else prov
+    return get_provider()
 
 
 def _model() -> str:
@@ -42,9 +42,14 @@ def generate(
         content = str(mock)
         raw_response = {"content": content}
     elif p == "ollama":
-        ollama_host = os.getenv("OLLAMA_HOST", "").strip() or os.getenv("OLLAMA_URL", "").strip()
+        ollama_host = (
+            os.getenv("OLLAMA_BASE_URL", "").strip()
+            or os.getenv("OLLAMA_HOST", "").strip()
+            or os.getenv("OLLAMA_URL", "").strip()
+            or os.getenv("OPENAI_BASE_URL", "").strip()
+        )
         if not ollama_host:
-            raise RuntimeError("OLLAMA_HOST or OLLAMA_URL is required for ollama provider")
+            raise RuntimeError("OLLAMA_BASE_URL, OLLAMA_HOST, OLLAMA_URL, or OPENAI_BASE_URL is required for ollama provider")
         r = requests.post(
             ollama_host.rstrip("/") + "/api/chat",
             json={"model": m, "messages": messages, "stream": False},

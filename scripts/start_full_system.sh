@@ -1037,7 +1037,12 @@ def _normalize_base(url: str) -> str:
 
 
 def _resolve_base() -> str | None:
-    base = os.environ.get("OLLAMA_URL") or os.environ.get("OLLAMA_HOST")
+    base = (
+        os.environ.get("OLLAMA_BASE_URL")
+        or os.environ.get("OLLAMA_URL")
+        or os.environ.get("OLLAMA_HOST")
+        or os.environ.get("OPENAI_BASE_URL")
+    )
     if not base:
         return None
     return _normalize_base(base)
@@ -1059,7 +1064,7 @@ def _extract_embedding(payload: dict) -> list[float] | None:
 verbose = os.environ.get("VERIFY_ACTIVE") == "1"
 base = _resolve_base()
 if not base:
-    _fail("INFO: Ollama preflight failed: OLLAMA_URL/OLLAMA_HOST missing", verbose)
+    _fail("INFO: Ollama preflight failed: OLLAMA_BASE_URL/OLLAMA_URL/OLLAMA_HOST/OPENAI_BASE_URL missing", verbose)
 model = os.environ.get("OLLAMA_EMBED_MODEL") or os.environ.get("EMBED_MODEL", "nomic-embed-text:latest")
 with httpx.Client(timeout=10.0) as client:
     tags_resp = client.get(f"{base}/api/tags")

@@ -7,6 +7,7 @@ from typing import List, Mapping, Optional
 
 import httpx
 
+from app.config.llm import get_provider
 from app.embedding_config import assert_embed_dim, get_embed_dim, l2_normalize
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -44,15 +45,15 @@ def _normalize_ollama_url(url: str) -> str:
     return clean
 
 
-OLLAMA_URL = _normalize_ollama_url(
-    os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", ""))
-)
-
-
 def _ollama_base_url() -> str:
-    base_url = _normalize_ollama_url(OLLAMA_URL)
+    base_url = _normalize_ollama_url(
+        os.getenv("OLLAMA_BASE_URL", "")
+        or os.getenv("OLLAMA_URL", "")
+        or os.getenv("OLLAMA_HOST", "")
+        or os.getenv("OPENAI_BASE_URL", "")
+    )
     if not base_url:
-        raise RuntimeError("OLLAMA_URL or OLLAMA_HOST is required for embeddings")
+        raise RuntimeError("OLLAMA_BASE_URL, OLLAMA_URL, OLLAMA_HOST, or OPENAI_BASE_URL is required for embeddings")
     return base_url
 
 
@@ -68,7 +69,7 @@ EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", os.getenv("EMBED_MODEL", "")).stri
 
 
 def _provider() -> str:
-    return os.getenv("LLM_PROVIDER", "ollama").lower()
+    return get_provider()
 
 
 def get_embedding_provider() -> str:

@@ -26,10 +26,12 @@ def _normalize_provider(value: Optional[str]) -> Optional[str]:
 
 def _resolve_endpoint() -> tuple[Optional[str], Optional[str]]:
     provider = _normalize_provider(os.getenv("LLM_PROVIDER"))
+    if provider == "llm":
+        provider = "ollama"
     if provider == "mock":
         return None, "mock"
     if provider == "ollama":
-        base = os.getenv("OLLAMA_URL")
+        base = os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_URL") or os.getenv("OLLAMA_HOST")
         if base:
             return base.rstrip("/"), "ollama"
         fallback = os.getenv("OPENAI_BASE_URL")
@@ -41,7 +43,7 @@ def _resolve_endpoint() -> tuple[Optional[str], Optional[str]]:
         if base:
             return base.rstrip("/"), "openai_compat"
         return None, provider
-    base = os.getenv("OLLAMA_URL")
+    base = os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_URL") or os.getenv("OLLAMA_HOST")
     if base:
         return base.rstrip("/"), "ollama"
     fallback = os.getenv("OPENAI_BASE_URL")
@@ -83,7 +85,7 @@ def run_llm_check() -> Dict[str, object]:
         if provider:
             payload["error"] = f"{provider} endpoint is not configured"
         else:
-            payload["error"] = "OLLAMA_URL or OPENAI_BASE_URL must be configured"
+            payload["error"] = "OLLAMA_BASE_URL, OLLAMA_URL, OLLAMA_HOST, or OPENAI_BASE_URL must be configured"
         return payload
 
     ok, error, latency, url = _ping_endpoint(base, provider)

@@ -95,9 +95,15 @@ def _ollama_base_url(health: dict[str, Any] | None) -> str:
         base = health.get("checks", {}).get("ollama", {}).get("base_url")
         if isinstance(base, str) and base.strip():
             return base.rstrip("/")
-    base_url = os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "")).rstrip("/")
+    base_url = (
+        os.getenv("OLLAMA_BASE_URL")
+        or os.getenv("OLLAMA_URL")
+        or os.getenv("OLLAMA_HOST")
+        or os.getenv("OPENAI_BASE_URL")
+        or ""
+    ).rstrip("/")
     if not base_url:
-        raise RuntimeError("OLLAMA_URL or OLLAMA_HOST is required")
+        raise RuntimeError("OLLAMA_BASE_URL, OLLAMA_URL, OLLAMA_HOST, or OPENAI_BASE_URL is required")
     return base_url
 
 

@@ -55,7 +55,7 @@ def test_ollama_embeddings_hits_native_path(monkeypatch) -> None:
     server, thread = _start_server(responses)
     try:
         base_url = f"http://127.0.0.1:{server.server_address[1]}/v1"
-        monkeypatch.setattr(embeddings, "OLLAMA_URL", base_url)
+        monkeypatch.setenv("OLLAMA_URL", base_url)
         embeddings._embed_single.cache_clear()
         vector = embeddings.embed_text("server-path", provider="ollama", model="test", dim=3, normalize=False)
 
@@ -77,7 +77,7 @@ def test_ollama_embeddings_404_reports_actionable_error(monkeypatch) -> None:
     server, thread = _start_server(responses)
     try:
         base_url = f"http://127.0.0.1:{server.server_address[1]}/v1"
-        monkeypatch.setattr(embeddings, "OLLAMA_URL", base_url)
+        monkeypatch.setenv("OLLAMA_URL", base_url)
         embeddings._embed_single.cache_clear()
 
         with pytest.raises(RuntimeError) as excinfo:
