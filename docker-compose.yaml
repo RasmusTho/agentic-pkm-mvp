@@ -3,7 +3,6 @@ services:
     image: pgvector/pgvector:pg16
     env_file:
       - ./config/runtime.defaults.env
-    environment:
     ports:
       - "15432:5432"
     restart: unless-stopped
