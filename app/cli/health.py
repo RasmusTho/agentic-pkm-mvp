@@ -161,10 +161,13 @@ def _check_llm_router() -> Dict[str, Any]:
     }
 
 
-def _provider_env_check(provider: str) -> Dict[str, Any]:
+def _provider_env_check(provider: str, model: str) -> Dict[str, Any]:
     normalized = (provider or "").strip().lower()
+    resolved_model = (model or "").strip()
+    if not resolved_model:
+        return {"ok": False, "detail": "route model is missing", "status": "fail"}
     if normalized in {"", "mock", "deterministic"}:
-        return {"ok": True, "detail": "deterministic/local route", "status": "ok"}
+        return {"ok": True, "detail": f"deterministic/local route ({resolved_model})", "status": "ok"}
     if normalized == "ollama":
         result = _check_ollama()
         return {
@@ -207,7 +210,7 @@ def _check_llm_task_routes(router_check: Dict[str, Any]) -> Dict[str, Any]:
                 "model": model,
             }
             continue
-        probe = _provider_env_check(provider)
+        probe = _provider_env_check(provider, model)
         route_statuses[task_kind] = {
             "ok": bool(probe.get("ok")),
             "detail": probe.get("detail", ""),

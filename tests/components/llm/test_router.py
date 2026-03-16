@@ -173,3 +173,21 @@ def test_router_rejects_incompatible_embedding_fallback(monkeypatch, clean_llm_e
 
     assert route.provider == "ollama"
     assert route.model == "nomic-embed-text:latest"
+
+
+def test_router_verification_intents_include_configured_tasks(monkeypatch, clean_llm_env) -> None:
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            tasks={
+                "qa": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(provider="openai", model="gpt-4.1-mini")
+                )
+            }
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+
+    router = LLMRouter()
+    intents = router.verification_intents()
+
+    assert any(intent.task_kind == "qa" for intent in intents)
