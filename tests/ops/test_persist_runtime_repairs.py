@@ -17,7 +17,10 @@ def test_persist_runtime_repairs_updates_dotenv(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    env_path.write_text("OLLAMA_URL=http://100.86.38.44:11434\n", encoding="utf-8")
+    env_path.write_text(
+        "OLLAMA_BASE_URL=http://100.86.38.44:11434\nOLLAMA_URL=http://100.86.38.44:11434\n",
+        encoding="utf-8",
+    )
 
     subprocess.run(
         ["bash", "scripts/persist_runtime_repairs.sh"],
@@ -33,5 +36,6 @@ def test_persist_runtime_repairs_updates_dotenv(tmp_path) -> None:
     )
 
     text = env_path.read_text(encoding="utf-8")
+    assert "OLLAMA_BASE_URL=http://host.docker.internal:11434" in text
     assert "OLLAMA_URL=http://host.docker.internal:11434" in text
     assert "OLLAMA_HOST=http://host.docker.internal:11434" in text

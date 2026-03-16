@@ -35,6 +35,7 @@ if env_path.exists():
     lines = env_path.read_text(encoding="utf-8").splitlines()
 
 updates = {
+    "OLLAMA_BASE_URL": effective,
     "OLLAMA_URL": effective,
     "OLLAMA_HOST": effective,
 }

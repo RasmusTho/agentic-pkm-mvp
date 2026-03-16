@@ -11,6 +11,7 @@ from app.llm.embeddings import EMBED_MODEL, get_embed_model, get_embedding_provi
 from app.settings.runtime import get_settings_bundle
 
 _MOCK_EMBED_MODEL = "mock-embedding"
+_SUPPORTED_EMBED_PROVIDERS = {"mock", "ollama", "openai", "deepseek", "deterministic"}
 
 
 class EmbeddingClientProtocol(Protocol):
@@ -104,6 +105,19 @@ def _normalize_name(value: str | None) -> str | None:
     return value or None
 
 
+def _resolve_embedding_provider_name(value: str | None) -> str:
+    normalized = (_normalize_name(value) or "").lower()
+    if normalized == "llm":
+        return "ollama"
+    if normalized == "fake":
+        return "mock"
+    if not normalized:
+        return "mock"
+    if normalized not in _SUPPORTED_EMBED_PROVIDERS:
+        return "mock"
+    return normalized
+
+
 def _resolve_embedding_model(provider: str, override_model: str | None, configured_model: str | None = None) -> str:
     if override_model:
         return override_model
@@ -167,13 +181,13 @@ def resolve_embedding_identity(profile: str | None = None, override_model: str |
         cfg = profiles_map.get(low)
         if not cfg:
             continue
-        provider = override_provider or cfg.provider or (os.getenv("LLM_PROVIDER") or get_embedding_provider())
+        provider = _resolve_embedding_provider_name(override_provider or cfg.provider or get_embedding_provider())
         model = _resolve_embedding_model(provider, override_model, cfg.model)
         dim = cfg.dim or get_embed_dim()
         normalize = cfg.normalize if cfg.normalize is not None else True
         return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=normalize)
 
-    provider = override_provider or os.getenv("LLM_PROVIDER") or get_embedding_provider()
+    provider = _resolve_embedding_provider_name(override_provider or get_embedding_provider())
     model = _resolve_embedding_model(provider, override_model)
     dim = get_embed_dim()
     return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=True)

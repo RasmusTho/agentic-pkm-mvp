@@ -24,3 +24,15 @@ def test_embedding_identity_uses_mock_model_without_embed_env(monkeypatch) -> No
 
     assert identity.provider == "mock"
     assert identity.model == "mock-embedding"
+
+
+def test_embedding_identity_normalizes_invalid_provider_to_mock(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "OLLAMA-TYPO")
+    monkeypatch.delenv("EMBED_MODEL", raising=False)
+    monkeypatch.delenv("OLLAMA_EMBED_MODEL", raising=False)
+    monkeypatch.setattr(llm_config, "_ACTIVE_PROVIDER", None)
+
+    identity = resolve_embedding_identity()
+
+    assert identity.provider == "mock"
+    assert identity.model == "mock-embedding"
