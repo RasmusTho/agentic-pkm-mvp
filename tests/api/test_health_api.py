@@ -236,3 +236,17 @@ def test_health_requires_task_route_configuration(monkeypatch, tmp_path) -> None
     assert data["required_ok"] is False
     assert data["checks"]["llm_task_routes"]["ok"] is False
     assert data["checks"]["llm_task_routes"]["routes"]["decide"]["status"] == "fail"
+
+
+def test_health_skips_eval_route_by_default(monkeypatch, tmp_path) -> None:
+    heartbeat = tmp_path / "watcher-heartbeat.json"
+    _write_watcher_heartbeat(heartbeat, ts=time.time())
+    worker_hb = tmp_path / "worker-heartbeat.json"
+    _write_worker_heartbeat(worker_hb, ts=time.time())
+    client = _health_client(monkeypatch, tmp_path, watcher_path=heartbeat, worker_path=worker_hb, worker_enabled=True)
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["checks"]["llm_task_routes"]["routes"]["eval"]["status"] == "skipped"

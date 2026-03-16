@@ -12,6 +12,7 @@ from typing import Any, Dict
 import httpx
 
 from app.components.llm.fabric import describe_default_route_policies, describe_default_routes
+from app.eval.llm_client import DEFAULT_MODE as DEFAULT_EVAL_MODE
 from app.knowledge.errors import KnowledgeConfigError
 from app.knowledge.health import obsidian_dependency_status
 from app.knowledge.settings import KnowledgeAdapter, load_knowledge_settings
@@ -173,10 +174,10 @@ def _provider_env_check(provider: str) -> Dict[str, Any]:
             "base_url": result.get("base_url"),
         }
     if normalized == "openai":
-        base = (os.getenv("OPENAI_BASE") or os.getenv("OPENAI_BASE_URL") or "").strip()
+        base = (os.getenv("OPENAI_BASE") or "").strip()
         api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
         ok = bool(base and api_key)
-        detail = "OpenAI route configured" if ok else "OPENAI_BASE/OPENAI_BASE_URL and OPENAI_API_KEY are required"
+        detail = "OpenAI route configured" if ok else "OPENAI_BASE and OPENAI_API_KEY are required"
         return {"ok": ok, "detail": detail, "status": "ok" if ok else "fail", "base_url": base}
     if normalized == "deepseek":
         base = (os.getenv("DEEPSEEK_BASE") or "").strip()
@@ -196,10 +197,11 @@ def _check_llm_task_routes(router_check: Dict[str, Any]) -> Dict[str, Any]:
         effective = item.get("effective") or {}
         provider = str(effective.get("provider") or "").strip().lower()
         model = str(effective.get("model") or "").strip()
-        if task_kind == "eval" and (os.getenv("EVAL_LLM_MODE") or "").strip().lower() == "skip":
+        eval_mode = (os.getenv("EVAL_LLM_MODE") or DEFAULT_EVAL_MODE).strip().lower() or DEFAULT_EVAL_MODE
+        if task_kind == "eval" and eval_mode == "skip":
             route_statuses[task_kind] = {
                 "ok": True,
-                "detail": "eval explicitly skipped",
+                "detail": "eval skipped",
                 "status": "skipped",
                 "provider": provider,
                 "model": model,
