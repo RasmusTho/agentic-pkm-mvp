@@ -192,6 +192,55 @@ def test_router_rejects_incompatible_embedding_fallback(monkeypatch, clean_llm_e
     assert route.model == "nomic-embed-text:latest"
 
 
+def test_router_honors_model_id_only_chat_fallback(monkeypatch, clean_llm_env) -> None:
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            tasks={
+                "plan": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(provider="openai", model="gpt-4.1"),
+                    fallback=LLMRoutingSettings.FallbackPolicy(
+                        mode="allowed",
+                        model_id="mock.chat",
+                    ),
+                )
+            }
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+
+    router = LLMRouter()
+    described = router.describe_intent(LLMTaskIntent(task_kind="plan"))
+
+    assert described["policy"]["fallback"]["model_id"] == "mock.chat"
+    candidates = router._route_candidates(LLMTaskIntent(task_kind="plan"))
+    assert any(route.provider == "mock" and route.model == "mock-chat" for route in candidates)
+
+
+def test_router_honors_model_id_only_embedding_fallback(monkeypatch, clean_llm_env) -> None:
+    clean_llm_env.setenv("EMBED_DIM", "8")
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            default_embedding=LLMRoutingSettings.TaskPolicy(
+                primary=LLMRoutingSettings.RouteTarget(
+                    model_id="mock.embed",
+                ),
+                fallback=LLMRoutingSettings.FallbackPolicy(
+                    mode="allowed",
+                    model_id="mock.embed",
+                ),
+                require_compatible_identity=True,
+            )
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+
+    router = LLMRouter()
+    route = router.route(LLMTaskIntent(task_kind="embed", strict_identity_required=True))
+
+    assert route.provider == "mock"
+    assert route.model == "mock-embed"
+
+
 def test_router_verification_intents_include_configured_tasks(monkeypatch, clean_llm_env) -> None:
     bundle = SettingsBundle(
         llm_routing=LLMRoutingSettings(

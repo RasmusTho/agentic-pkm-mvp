@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import os
+from functools import lru_cache
 from typing import Any, Iterable
 
 from app.components.embeddings import EmbeddingIdentity, resolve_embedding_identity
+from app.components.settings.models_loader import load_models
 from app.settings.models import LLMRoutingSettings
 from app.settings.runtime import get_settings_bundle
 
@@ -67,6 +69,24 @@ def _default_embed_model() -> str:
 
 def _default_mode(task_kind: str) -> str:
     return "embeddings" if task_kind == "embed" else "chat"
+
+
+@lru_cache(maxsize=1)
+def _model_registry() -> dict[str, Any]:
+    return load_models()
+
+
+def _resolve_target_model_id(
+    target: LLMRoutingSettings.RouteTarget | None,
+    *,
+    expected_kind: str,
+) -> tuple[str | None, str | None]:
+    if target is None or not target.model_id:
+        return None, None
+    descriptor = _model_registry().get(target.model_id)
+    if descriptor is None or descriptor.kind != expected_kind:
+        return None, None
+    return descriptor.provider, descriptor.model
 
 
 class LLMRouter:
@@ -137,12 +157,13 @@ class LLMRouter:
         degraded: bool,
         reason: str,
     ) -> LLMRoute:
+        target_provider, target_model = _resolve_target_model_id(target, expected_kind="chat")
         provider_source = None
         model_source = None
         routing = getattr(self._settings, "llm_routing", None) if self._settings is not None else None
         if target is not None:
-            provider_source = target.provider
-            model_source = target.model
+            provider_source = target.provider or target_provider
+            model_source = target.model or target_model
         provider_candidate = provider_source or getattr(routing, "default_provider", None) or os.getenv("LLM_PROVIDER")
         provider, provider_degraded, provider_reason = _resolve_provider(provider_candidate)
         model = (
@@ -169,10 +190,11 @@ class LLMRouter:
         profile = None
         override_provider = None
         override_model = None
+        target_provider, target_model = _resolve_target_model_id(target, expected_kind="embedding")
         if target is not None:
             profile = target.profile
-            override_provider = target.provider
-            override_model = target.model
+            override_provider = target.provider or target_provider
+            override_model = target.model or target_model
         if override_model is None and routing is not None:
             override_model = routing.default_embed_model
         identity = resolve_embedding_identity(
@@ -210,7 +232,7 @@ class LLMRouter:
         fallback = policy.fallback
         if fallback.mode == "never" or fallback.mode == "skip":
             return None
-        if fallback.provider or fallback.model or fallback.profile:
+        if fallback.model_id or fallback.provider or fallback.model or fallback.profile:
             return LLMRoutingSettings.RouteTarget(
                 model_id=fallback.model_id,
                 provider=fallback.provider,
