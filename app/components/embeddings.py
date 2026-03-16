@@ -10,6 +10,8 @@ from app.index import embeddings as _index_embeddings
 from app.llm.embeddings import EMBED_MODEL, get_embed_model, get_embedding_provider
 from app.settings.runtime import get_settings_bundle
 
+_MOCK_EMBED_MODEL = "mock-embedding"
+
 
 class EmbeddingClientProtocol(Protocol):
     identity: "EmbeddingIdentity"
@@ -102,6 +104,19 @@ def _normalize_name(value: str | None) -> str | None:
     return value or None
 
 
+def _resolve_embedding_model(provider: str, override_model: str | None, configured_model: str | None = None) -> str:
+    if override_model:
+        return override_model
+    if configured_model:
+        return configured_model
+    if provider == "mock":
+        return _MOCK_EMBED_MODEL
+    env_model = _normalize_name(os.getenv("EMBED_MODEL")) or _normalize_name(os.getenv("OLLAMA_EMBED_MODEL"))
+    if env_model:
+        return env_model
+    return get_embed_model()
+
+
 def resolve_embedding_identity(profile: str | None = None, override_model: str | None = None, override_provider: str | None = None) -> EmbeddingIdentity:
     spec = _normalize_name(profile)
     override_model = _normalize_name(override_model)
@@ -153,13 +168,13 @@ def resolve_embedding_identity(profile: str | None = None, override_model: str |
         if not cfg:
             continue
         provider = override_provider or cfg.provider or (os.getenv("LLM_PROVIDER") or get_embedding_provider())
-        model = override_model or cfg.model or os.getenv("EMBED_MODEL") or os.getenv("OLLAMA_EMBED_MODEL") or get_embed_model()
+        model = _resolve_embedding_model(provider, override_model, cfg.model)
         dim = cfg.dim or get_embed_dim()
         normalize = cfg.normalize if cfg.normalize is not None else True
         return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=normalize)
 
     provider = override_provider or os.getenv("LLM_PROVIDER") or get_embedding_provider()
-    model = override_model or os.getenv("EMBED_MODEL") or os.getenv("OLLAMA_EMBED_MODEL") or get_embed_model()
+    model = _resolve_embedding_model(provider, override_model)
     dim = get_embed_dim()
     return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=True)
 
