@@ -4,13 +4,20 @@ import json
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.config import llm as llm_config
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
+from app.settings.models import SettingsBundle
 from app.vault.paths import get_vault_inbox_dir_rel
 from app.watcher.heartbeat import resolve_heartbeat_path
+
+
+@pytest.fixture(autouse=True)
+def _isolate_llm_routing_settings(monkeypatch) -> None:
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: SettingsBundle())
 
 
 def _write_watcher_heartbeat(path: Path, *, ts: float, paused: bool = False) -> None:

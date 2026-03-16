@@ -25,6 +25,8 @@ Related docs:
 - **Deterministic routing**: If `determinism_required=True`, the router prefers `mock` over non-deterministic providers.
 - **Task policy routing**: User-facing task policies live in `vault/@Settings/llm_routing.md` and compile to
   `runtime/settings/llm_routing.yaml`.
+- **Model-first settings**: The settings note selects `model_id` values from the model registry. The compiler derives
+  `provider` and `model` from that registry so users do not need to keep both in sync by hand.
 - **Embedding identity protection**: embed tasks may auto-repair transport/endpoints, but must not silently switch
   to an incompatible embedding identity when `require_compatible_identity=true`.
 - **Default route reporting**: The fabric exposes `describe_default_routes()` so health checks can report
@@ -40,7 +42,7 @@ Routing is intentionally deterministic and single-source:
 4. **Built-in defaults** — used when no settings or env override is present.
 
 Current state:
-- Chat, reasoning, eval, and embedding routes can each carry separate preferred provider/model choices.
+- Chat, reasoning, eval, and embedding routes can each carry separate preferred model choices.
 - Embedding fallback is blocked unless the fallback preserves the resolved embedding identity.
 - Endpoint repair is operational and separate from provider substitution.
 
@@ -63,9 +65,14 @@ Compiled routing settings:
   - `default_eval`
   - `tasks.<task_kind>`
 - Each task policy supports:
-  - `primary.{provider,model,profile}`
-  - `fallback.{mode,provider,model,profile}`
+  - `primary.{model_id,provider,model,profile}`
+  - `fallback.{mode,model_id,provider,model,profile}`
   - `require_compatible_identity`
+
+Model registry:
+- `docs/settings/models/registry.yaml`
+- each `model_id` points to a descriptor with `kind`, `provider`, `model`, and notes
+- routing compile requires chat tasks to resolve to `kind: chat` and embed tasks to resolve to `kind: embedding`
 
 Provider-specific:
 - `OLLAMA_HOST` / `OLLAMA_URL` — base URL for Ollama native APIs.

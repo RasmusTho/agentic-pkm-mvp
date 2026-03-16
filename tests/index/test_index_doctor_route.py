@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
 from app.index.doctor import diagnose_index
+from app.settings.models import SettingsBundle
+
+
+@pytest.fixture(autouse=True)
+def _isolate_llm_routing_settings(monkeypatch) -> None:
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: SettingsBundle())
 
 
 def test_index_doctor_expected_identity_uses_router(monkeypatch) -> None:

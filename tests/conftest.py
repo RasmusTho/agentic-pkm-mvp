@@ -111,6 +111,8 @@ def stub_index(monkeypatch: pytest.MonkeyPatch) -> StubVectorIndex:
 def clean_llm_env(monkeypatch: pytest.MonkeyPatch):
     """Ensure a clean LLM environment for each test."""
 
+    from app.config import llm as llm_config
+
     keys = [
         "LLM_PROVIDER",
         "LLM_MODEL",
@@ -126,6 +128,7 @@ def clean_llm_env(monkeypatch: pytest.MonkeyPatch):
     ]
     for key in keys:
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(llm_config, "_ACTIVE_PROVIDER", None)
     yield monkeypatch
 
 

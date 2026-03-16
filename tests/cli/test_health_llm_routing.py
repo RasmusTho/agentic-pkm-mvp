@@ -9,6 +9,7 @@ health_module = importlib.import_module("app.cli.health")
 
 
 def test_health_llm_router_reports_route_policies(monkeypatch) -> None:
+    monkeypatch.setattr("app.config.llm._ACTIVE_PROVIDER", None)
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setenv("LLM_MODEL", "llama3.1:8b")
     monkeypatch.setenv("EMBED_MODEL", "nomic-embed-text:latest")

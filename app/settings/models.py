@@ -42,6 +42,10 @@ class Providers(BaseModel):
 
 class LLMRoutingSettings(BaseModel):
     class RouteTarget(BaseModel):
+        model_id: str | None = Field(
+            default=None,
+            description="Model registry id for this route. Provider/model are derived from it when present.",
+        )
         provider: str | None = Field(
             default=None,
             description="Provider id for this route (mock|ollama|openai|deepseek).",
@@ -59,6 +63,10 @@ class LLMRoutingSettings(BaseModel):
         mode: Literal["never", "local", "allowed", "skip"] = Field(
             default="never",
             description="Fallback policy when the preferred route cannot be used.",
+        )
+        model_id: str | None = Field(
+            default=None,
+            description="Fallback model registry id when fallback is allowed.",
         )
         provider: str | None = Field(
             default=None,

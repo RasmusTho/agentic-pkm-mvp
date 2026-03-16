@@ -54,8 +54,7 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
         ```yaml settings
         default_chat:
           primary:
-            provider: openai
-            model: gpt-4.1-mini
+            model_id: openai.chat.gpt_4_1_mini
         ```
         """,
     )
@@ -127,8 +126,7 @@ def test_auto_heal_writes_settings_via_knowledge_port(tmp_path, monkeypatch) -> 
         ```yaml settings
         default_chat:
           primary:
-            provider: openai
-            model: gpt-4.1-mini
+            model_id: openai.chat.gpt_4_1_mini
         ```
         """,
     )
@@ -192,8 +190,7 @@ def test_compile_all_writes_llm_routing_runtime_file(tmp_path, monkeypatch) -> N
         tasks:
           plan:
             primary:
-              provider: deepseek
-              model: deepseek-chat
+              model_id: openai.chat.gpt_4_1
         ```
         """,
     )
@@ -203,6 +200,58 @@ def test_compile_all_writes_llm_routing_runtime_file(tmp_path, monkeypatch) -> N
 
     bundle = compiler.compile_all(auto_heal=False)
 
-    assert bundle.llm_routing.tasks["plan"].primary.provider == "deepseek"
+    assert bundle.llm_routing.tasks["plan"].primary.model_id == "openai.chat.gpt_4_1"
+    assert bundle.llm_routing.tasks["plan"].primary.provider == "openai"
     compiled = (runtime_dir / "llm_routing.yaml").read_text(encoding="utf-8")
-    assert "deepseek" in compiled
+    assert "gpt-4.1" in compiled
+
+
+def test_compile_all_rejects_incompatible_model_kind_for_embed_task(tmp_path, monkeypatch) -> None:
+    vault = tmp_path / "vault" / "@Settings"
+    runtime_dir = tmp_path / "runtime" / "settings"
+
+    _write_md(
+        vault / "global.md",
+        """
+        ---
+        uuid: g
+        ---
+        ## Runtime
+        ```yaml settings
+        log_level: INFO
+        ```
+        """,
+    )
+    _write_md(
+        vault / "providers.md",
+        """
+        ---
+        uuid: p
+        ---
+        ## Provider defaults
+        ```yaml settings
+        llm: {}
+        ```
+        """,
+    )
+    _write_md(
+        vault / "llm_routing.md",
+        """
+        ---
+        uuid: r
+        ---
+        ## Routing
+        ```yaml settings
+        tasks:
+          embed:
+            primary:
+              model_id: openai.chat.gpt_4_1_mini
+        ```
+        """,
+    )
+
+    monkeypatch.setattr(compiler, "VAULT", vault)
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+
+    with pytest.raises(ValueError, match="expected kind=embedding"):
+        compiler.compile_all(auto_heal=False)

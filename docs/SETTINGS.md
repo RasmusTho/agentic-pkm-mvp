@@ -52,7 +52,7 @@ High-impact examples:
   - `WATCHER_AUTO_EXEC`
   - `WATCHER_SCOPE_GLOB`
   - `watcher_settings.allowed_actions`
-  - task-specific LLM provider/model selection and fallback policy
+  - task-specific LLM model selection and fallback policy
   - `PANEL_PROACTIVE_ASSIST`
 - Dev/Lab-only:
   - `INDEX_OUTBOX_PATH` as JSONL audit path
@@ -147,4 +147,4 @@ The registry lists canonical event IDs, producers/consumers, and optional schema
 - Use `python -m app.cli settings-validate --json` to validate compiled settings and registry consistency.
 - Use `python -m app.cli settings-explain --json` to inspect precedence and provenance.
 - When changing a registry or settings artifact, update the owning doc and validation expectations in the same change.
-- Treat `vault/@Settings/llm_routing.md` as the user-facing source of truth for chat, reasoning, embedding, and eval provider choices.
+- Treat `vault/@Settings/llm_routing.md` as the user-facing source of truth for chat, reasoning, embedding, and eval model choices. The compiler derives providers from the model registry.
