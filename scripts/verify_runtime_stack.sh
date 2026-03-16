@@ -93,6 +93,15 @@ for task_kind in ("decide", "plan", "embed", "eval"):
         f"fallback={fallback.get('mode') or 'never'} "
         f"strict_identity={str(strict_identity).lower()}"
     )
+
+embedding_index = ((payload.get("checks") or {}).get("embedding_index") or {})
+if embedding_index:
+    print(
+        "EMBEDDING INDEX: "
+        f"status={embedding_index.get('status') or '?'} "
+        f"rebuild_required={str(bool(embedding_index.get('rebuild_required'))).lower()} "
+        f"detail={embedding_index.get('detail') or ''}"
+    )
 PY
 
 health_meta=$(HEALTH_JSON="$health_json" python3 - <<'PY'

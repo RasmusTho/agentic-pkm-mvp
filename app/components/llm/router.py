@@ -323,6 +323,31 @@ class LLMRouter:
             routes[intent.task_kind] = self.route(intent)
         return routes
 
+    def verification_intents(self) -> list[LLMTaskIntent]:
+        task_kinds: list[str] = ["embed", "decide", "plan", "eval"]
+        routing = getattr(self._settings, "llm_routing", None) if self._settings is not None else None
+        if routing is not None:
+            for task_kind in routing.tasks.keys():
+                if task_kind not in task_kinds:
+                    task_kinds.append(task_kind)
+        intents: list[LLMTaskIntent] = []
+        for task_kind in task_kinds:
+            policy = None
+            if routing is not None:
+                policy = routing.tasks.get(task_kind)
+            strict_identity_required = bool(
+                task_kind == "embed"
+                or (policy is not None and policy.require_compatible_identity)
+                or ("embed" in task_kind)
+            )
+            intents.append(
+                LLMTaskIntent(
+                    task_kind=task_kind,
+                    strict_identity_required=strict_identity_required,
+                )
+            )
+        return intents
+
     def describe_intent(self, intent: LLMTaskIntent) -> dict[str, Any]:
         policy = self._task_policy(intent)
         effective = self.route(intent)

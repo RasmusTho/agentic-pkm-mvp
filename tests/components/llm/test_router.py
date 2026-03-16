@@ -3,7 +3,13 @@ from __future__ import annotations
 import pytest
 
 from app.components.llm.router import LLMRouter, LLMTaskIntent
+from app.config import llm as llm_config
 from app.settings.models import LLMRoutingSettings, SettingsBundle
+
+
+@pytest.fixture(autouse=True)
+def _isolate_router_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: SettingsBundle())
 
 
 @pytest.mark.parametrize(
@@ -43,6 +49,7 @@ def test_router_respects_model_env_defaults(clean_llm_env) -> None:
     clean_llm_env.setenv("LLM_PROVIDER", "ollama")
     clean_llm_env.setenv("LLM_MODEL", "llama-test")
     clean_llm_env.setenv("EMBED_MODEL", "embed-test")
+    clean_llm_env.setattr(llm_config, "_ACTIVE_PROVIDER", None)
 
     router = LLMRouter()
     decide = router.route(LLMTaskIntent(task_kind="decide"))
@@ -78,6 +85,7 @@ def test_router_preserves_embedding_identity_when_determinism_requested(clean_ll
     clean_llm_env.setenv("LLM_PROVIDER", "ollama")
     clean_llm_env.setenv("OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
     clean_llm_env.setenv("EMBED_MODEL", "nomic-embed-text:latest")
+    clean_llm_env.setattr(llm_config, "_ACTIVE_PROVIDER", None)
 
     router = LLMRouter()
     embed = router.route(LLMTaskIntent(task_kind="embed", determinism_required=True, strict_identity_required=True))
@@ -182,3 +190,21 @@ def test_router_rejects_incompatible_embedding_fallback(monkeypatch, clean_llm_e
 
     assert route.provider == "ollama"
     assert route.model == "nomic-embed-text:latest"
+
+
+def test_router_verification_intents_include_configured_tasks(monkeypatch, clean_llm_env) -> None:
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            tasks={
+                "qa": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(provider="openai", model="gpt-4.1-mini")
+                )
+            }
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+
+    router = LLMRouter()
+    intents = router.verification_intents()
+
+    assert any(intent.task_kind == "qa" for intent in intents)

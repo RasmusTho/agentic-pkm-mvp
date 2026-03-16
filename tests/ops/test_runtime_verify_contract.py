@@ -16,6 +16,7 @@ def test_verify_runtime_stack_uses_in_container_checks() -> None:
     assert "python -m app.cli health --json" in script
     assert "python -m app.cli status" in script
     assert 'print(\n        f"ROUTE {task_kind}:' in script
+    assert "EMBEDDING INDEX:" in script
     assert "required health ok=true" in script
 
 
