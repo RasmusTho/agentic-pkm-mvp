@@ -38,6 +38,11 @@ def test_startup_status_telemetry_shape(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("STARTUP_SUCCEEDED", "true")
     monkeypatch.setenv("RUNTIME_VERIFIED", "true")
     monkeypatch.setenv("OPERATOR_INTERRUPTED", "false")
+    monkeypatch.setenv("OLLAMA_ENDPOINT_REPAIRED", "true")
+    monkeypatch.setenv("OLLAMA_ENDPOINT_DRIFT", "true")
+    monkeypatch.setenv("OLLAMA_CONFIGURED_BASE_URL", "http://100.86.38.44:11434")
+    monkeypatch.setenv("OLLAMA_EFFECTIVE_BASE_URL", "http://host.docker.internal:11434")
+    monkeypatch.setenv("OLLAMA_ENDPOINT_PERSIST_HINT", "make persist-runtime-repairs")
 
     exec_globals: dict[str, object] = {}
     exec(code, exec_globals, exec_globals)
@@ -59,3 +64,8 @@ def test_startup_status_telemetry_shape(tmp_path, monkeypatch) -> None:
     assert payload["startup_succeeded"] is True
     assert payload["runtime_verified"] is True
     assert payload["operator_interrupted"] is False
+    assert payload["ollama_endpoint_repaired"] is True
+    assert payload["ollama_endpoint_drift"] is True
+    assert payload["ollama_configured_base_url"] == "http://100.86.38.44:11434"
+    assert payload["ollama_effective_base_url"] == "http://host.docker.internal:11434"
+    assert payload["ollama_endpoint_persist_hint"] == "make persist-runtime-repairs"

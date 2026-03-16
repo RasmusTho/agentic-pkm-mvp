@@ -7,6 +7,7 @@ def test_makefile_exposes_verify_runtime_and_doctor_targets() -> None:
     makefile = Path("Makefile").read_text(encoding="utf-8")
     assert "verify-runtime:" in makefile
     assert "doctor: verify-runtime" in makefile
+    assert "persist-runtime-repairs:" in makefile
 
 
 def test_verify_runtime_stack_uses_in_container_checks() -> None:
@@ -14,6 +15,7 @@ def test_verify_runtime_stack_uses_in_container_checks() -> None:
     assert "docker compose ps" in script
     assert "python -m app.cli health --json" in script
     assert "python -m app.cli status" in script
+    assert 'print(\n        f"ROUTE {task_kind}:' in script
     assert "required health ok=true" in script
 
 

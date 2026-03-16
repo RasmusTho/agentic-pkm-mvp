@@ -45,6 +45,21 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
         """,
     )
     _write_md(
+        vault / "llm_routing.md",
+        """
+        ---
+        uuid: r
+        ---
+        ## Routing
+        ```yaml settings
+        default_chat:
+          primary:
+            provider: openai
+            model: gpt-4.1-mini
+        ```
+        """,
+    )
+    _write_md(
         vault / "agents" / "classifier.md",
         """
         ---
@@ -102,6 +117,21 @@ def test_auto_heal_writes_settings_via_knowledge_port(tmp_path, monkeypatch) -> 
         ```
         """,
     )
+    _write_md(
+        vault / "llm_routing.md",
+        """
+        ---
+        uuid: r
+        ---
+        ## Routing
+        ```yaml settings
+        default_chat:
+          primary:
+            provider: openai
+            model: gpt-4.1-mini
+        ```
+        """,
+    )
 
     writes: list[str] = []
 
@@ -121,3 +151,58 @@ def test_auto_heal_writes_settings_via_knowledge_port(tmp_path, monkeypatch) -> 
     compiler.compile_all(auto_heal=True)
 
     assert "@Settings/global.md" in writes
+
+
+def test_compile_all_writes_llm_routing_runtime_file(tmp_path, monkeypatch) -> None:
+    vault = tmp_path / "vault" / "@Settings"
+    runtime_dir = tmp_path / "runtime" / "settings"
+
+    _write_md(
+        vault / "global.md",
+        """
+        ---
+        uuid: g
+        ---
+        ## Runtime
+        ```yaml settings
+        log_level: INFO
+        ```
+        """,
+    )
+    _write_md(
+        vault / "providers.md",
+        """
+        ---
+        uuid: p
+        ---
+        ## Provider defaults
+        ```yaml settings
+        llm: {}
+        ```
+        """,
+    )
+    _write_md(
+        vault / "llm_routing.md",
+        """
+        ---
+        uuid: r
+        ---
+        ## Routing
+        ```yaml settings
+        tasks:
+          plan:
+            primary:
+              provider: deepseek
+              model: deepseek-chat
+        ```
+        """,
+    )
+
+    monkeypatch.setattr(compiler, "VAULT", vault)
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+
+    bundle = compiler.compile_all(auto_heal=False)
+
+    assert bundle.llm_routing.tasks["plan"].primary.provider == "deepseek"
+    compiled = (runtime_dir / "llm_routing.yaml").read_text(encoding="utf-8")
+    assert "deepseek" in compiled

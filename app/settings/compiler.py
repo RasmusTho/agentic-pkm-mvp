@@ -19,6 +19,7 @@ from .models import (
     ClassifierSettings,
     GlobalSettings,
     InstanceSettings,
+    LLMRoutingSettings,
     PromotionSettings,
     Providers,
     QaSettings,
@@ -237,6 +238,16 @@ def compile_all(*, auto_heal: bool | None = None) -> SettingsBundle:
     if "providers" in file_paths:
         _update_reference(file_paths["providers"], "Providers", bundle.providers, auto_heal_enabled, vault_root=vault_root)
 
+    llm_routing_payload = _merge_sections(file_sections.get("llm_routing", {}))
+    llm_routing_model, llm_routing_canonical, llm_routing_fixed = _hydrate_model(
+        payload=llm_routing_payload, model_cls=LLMRoutingSettings
+    )
+    bundle.llm_routing = llm_routing_model
+    if auto_heal_enabled and llm_routing_fixed and "llm_routing" in file_paths:
+        writeback_settings_block(file_paths["llm_routing"], llm_routing_canonical, vault_root=vault_root)
+    if "llm_routing" in file_paths:
+        _update_reference(file_paths["llm_routing"], "LLM routing", bundle.llm_routing, auto_heal_enabled, vault_root=vault_root)
+
     embedding_payload = _merge_sections(file_sections.get("embeddings", {}))
     embeddings_model, embeddings_canonical, embeddings_fixed = _hydrate_model(
         payload=embedding_payload, model_cls=EmbeddingProfiles
@@ -290,6 +301,7 @@ def compile_all(*, auto_heal: bool | None = None) -> SettingsBundle:
 
     dump("global.yaml", bundle.global_.model_dump())
     dump("providers.yaml", bundle.providers.model_dump())
+    dump("llm_routing.yaml", bundle.llm_routing.model_dump())
     dump("instance.yaml", bundle.instance.model_dump())
     if bundle.yggdrasil_paths is not None:
         dump("yggdrasil.yaml", bundle.yggdrasil_paths.model_dump())

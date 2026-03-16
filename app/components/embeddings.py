@@ -7,7 +7,7 @@ from typing import Iterable, Iterator, Protocol, Sequence
 
 from app.embedding_config import get_embed_dim
 from app.index import embeddings as _index_embeddings
-from app.llm.embeddings import EMBED_MODEL, get_embedding_provider
+from app.llm.embeddings import EMBED_MODEL, get_embed_model, get_embedding_provider
 from app.settings.runtime import get_settings_bundle
 
 
@@ -152,14 +152,14 @@ def resolve_embedding_identity(profile: str | None = None, override_model: str |
         cfg = profiles_map.get(low)
         if not cfg:
             continue
-        provider = override_provider or cfg.provider or get_embedding_provider()
-        model = override_model or cfg.model or EMBED_MODEL
+        provider = override_provider or cfg.provider or (os.getenv("LLM_PROVIDER") or get_embedding_provider())
+        model = override_model or cfg.model or os.getenv("EMBED_MODEL") or os.getenv("OLLAMA_EMBED_MODEL") or get_embed_model()
         dim = cfg.dim or get_embed_dim()
         normalize = cfg.normalize if cfg.normalize is not None else True
         return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=normalize)
 
-    provider = override_provider or get_embedding_provider()
-    model = override_model or EMBED_MODEL
+    provider = override_provider or os.getenv("LLM_PROVIDER") or get_embedding_provider()
+    model = override_model or os.getenv("EMBED_MODEL") or os.getenv("OLLAMA_EMBED_MODEL") or get_embed_model()
     dim = get_embed_dim()
     return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=True)
 

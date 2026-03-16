@@ -68,6 +68,33 @@ echo "--- in-container health ---"
 health_json=$(run_docker_compose exec -T api python -m app.cli health --json)
 printf "%s\n" "$health_json"
 
+echo "--- llm routing ---"
+HEALTH_JSON="$health_json" python3 - <<'PY'
+from __future__ import annotations
+
+import json
+import os
+
+payload = json.loads(os.environ.get("HEALTH_JSON", "{}"))
+router = ((payload.get("checks") or {}).get("llm_router") or {})
+policies = router.get("route_policies") or {}
+
+for task_kind in ("decide", "plan", "embed", "eval"):
+    item = policies.get(task_kind) or {}
+    preferred = item.get("preferred") or {}
+    effective = item.get("effective") or {}
+    policy = item.get("policy") or {}
+    fallback = policy.get("fallback") or {}
+    strict_identity = bool(policy.get("require_compatible_identity"))
+    print(
+        f"ROUTE {task_kind}: "
+        f"preferred={preferred.get('provider') or '?'}:{preferred.get('model') or '?'} "
+        f"effective={effective.get('provider') or '?'}:{effective.get('model') or '?'} "
+        f"fallback={fallback.get('mode') or 'never'} "
+        f"strict_identity={str(strict_identity).lower()}"
+    )
+PY
+
 health_meta=$(HEALTH_JSON="$health_json" python3 - <<'PY'
 from __future__ import annotations
 

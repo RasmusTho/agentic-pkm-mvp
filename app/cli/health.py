@@ -11,7 +11,7 @@ from typing import Any, Dict
 
 import httpx
 
-from app.components.llm.fabric import describe_default_routes
+from app.components.llm.fabric import describe_default_route_policies, describe_default_routes
 from app.knowledge.errors import KnowledgeConfigError
 from app.knowledge.health import obsidian_dependency_status
 from app.knowledge.settings import KnowledgeAdapter, load_knowledge_settings
@@ -152,6 +152,7 @@ def _check_llm_router() -> Dict[str, Any]:
         "ok": True,
         "detail": "router ready",
         "selected_defaults": describe_default_routes(),
+        "route_policies": describe_default_route_policies(),
         "forced_overrides": {
             "provider": forced_provider or "",
             "model": forced_model or "",
