@@ -170,6 +170,27 @@ def test_router_uses_settings_task_policy(monkeypatch, clean_llm_env) -> None:
     assert described["policy"]["fallback"]["model_id"] == "ollama.chat.llama3_1_8b"
 
 
+def test_router_prefers_selected_model_id_over_env_defaults(monkeypatch, clean_llm_env) -> None:
+    clean_llm_env.setenv("LLM_PROVIDER", "ollama")
+    clean_llm_env.setenv("LLM_MODEL", "llama3.1:8b")
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            tasks={
+                "plan": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(model_id="openai.chat.gpt_4_1")
+                )
+            }
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+
+    router = LLMRouter()
+    route = router.route(LLMTaskIntent(task_kind="plan"))
+
+    assert route.provider == "openai"
+    assert route.model == "gpt-4.1"
+
+
 def test_router_rejects_incompatible_embedding_fallback(monkeypatch, clean_llm_env) -> None:
     clean_llm_env.setenv("LLM_PROVIDER", "ollama")
     clean_llm_env.setenv("EMBED_MODEL", "nomic-embed-text:latest")
