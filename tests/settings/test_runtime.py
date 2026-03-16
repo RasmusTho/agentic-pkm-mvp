@@ -48,11 +48,25 @@ def test_runtime_loads_llm_routing_settings(tmp_path, monkeypatch):
         runtime_dir / "llm_routing.yaml",
         {
             "default_chat": {
-                "primary": {"provider": "openai", "model": "gpt-4.1-mini"},
-                "fallback": {"mode": "local", "provider": "ollama", "model": "llama3.1:8b"},
+                "primary": {
+                    "model_id": "openai.chat.gpt_4_1_mini",
+                    "provider": "openai",
+                    "model": "gpt-4.1-mini",
+                },
+                "fallback": {
+                    "mode": "local",
+                    "model_id": "ollama.chat.llama3_1_8b",
+                    "provider": "ollama",
+                    "model": "llama3.1:8b",
+                },
             },
             "default_embedding": {
-                "primary": {"provider": "ollama", "model": "nomic-embed-text:latest", "profile": "default"},
+                "primary": {
+                    "model_id": "ollama.embed.nomic_embed_text",
+                    "provider": "ollama",
+                    "model": "nomic-embed-text:latest",
+                    "profile": "default",
+                },
                 "fallback": {"mode": "never"},
                 "require_compatible_identity": True,
             },
@@ -66,5 +80,6 @@ def test_runtime_loads_llm_routing_settings(tmp_path, monkeypatch):
     bundle = runtime.reload_settings_bundle(notify=False)
 
     assert bundle.llm_routing.default_chat.primary.provider == "openai"
+    assert bundle.llm_routing.default_chat.primary.model_id == "openai.chat.gpt_4_1_mini"
     assert bundle.llm_routing.default_chat.fallback.mode == "local"
     assert bundle.llm_routing.default_embedding.require_compatible_identity is True

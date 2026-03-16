@@ -112,6 +112,7 @@ class LLMRouter:
         if target is None:
             return {}
         return {
+            "model_id": target.model_id or "",
             "provider": target.provider or "",
             "model": target.model or "",
             "profile": target.profile or "",
@@ -123,6 +124,7 @@ class LLMRouter:
             return {}
         return {
             "mode": fallback.mode,
+            "model_id": fallback.model_id or "",
             "provider": fallback.provider or "",
             "model": fallback.model or "",
             "profile": fallback.profile or "",
@@ -210,6 +212,7 @@ class LLMRouter:
             return None
         if fallback.provider or fallback.model or fallback.profile:
             return LLMRoutingSettings.RouteTarget(
+                model_id=fallback.model_id,
                 provider=fallback.provider,
                 model=fallback.model,
                 profile=fallback.profile,

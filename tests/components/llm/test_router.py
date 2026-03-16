@@ -40,7 +40,7 @@ def test_router_respects_model_env_defaults(clean_llm_env) -> None:
     Validates: docs/LLM_ROUTING.md §Supported environment variables
     Contract: LLM_MODEL/EMBED_MODEL → LLMRoute.model
     """
-    clean_llm_env.setenv("LLM_PROVIDER", "mock")
+    clean_llm_env.setenv("LLM_PROVIDER", "ollama")
     clean_llm_env.setenv("LLM_MODEL", "llama-test")
     clean_llm_env.setenv("EMBED_MODEL", "embed-test")
 
@@ -48,11 +48,11 @@ def test_router_respects_model_env_defaults(clean_llm_env) -> None:
     decide = router.route(LLMTaskIntent(task_kind="decide"))
     embed = router.route(LLMTaskIntent(task_kind="embed", strict_identity_required=True))
 
-    assert decide.provider == "mock"
+    assert decide.provider == "ollama"
     assert decide.model == "llama-test"
     assert decide.mode == "chat"
 
-    assert embed.provider == "mock"
+    assert embed.provider == "ollama"
     assert embed.model == "embed-test"
     assert embed.mode == "embeddings"
 
@@ -129,13 +129,21 @@ def test_router_uses_settings_task_policy(monkeypatch, clean_llm_env) -> None:
     bundle = SettingsBundle(
         llm_routing=LLMRoutingSettings(
             default_chat=LLMRoutingSettings.TaskPolicy(
-                primary=LLMRoutingSettings.RouteTarget(provider="openai", model="gpt-chat"),
-                fallback=LLMRoutingSettings.FallbackPolicy(mode="local", provider="ollama", model="llama-local"),
+                primary=LLMRoutingSettings.RouteTarget(
+                    model_id="openai.chat.gpt_4_1_mini", provider="openai", model="gpt-chat"
+                ),
+                fallback=LLMRoutingSettings.FallbackPolicy(
+                    mode="local", model_id="ollama.chat.llama3_1_8b", provider="ollama", model="llama-local"
+                ),
             ),
             tasks={
                 "plan": LLMRoutingSettings.TaskPolicy(
-                    primary=LLMRoutingSettings.RouteTarget(provider="deepseek", model="deepseek-plan"),
-                    fallback=LLMRoutingSettings.FallbackPolicy(mode="local", provider="ollama", model="llama-local"),
+                    primary=LLMRoutingSettings.RouteTarget(
+                        model_id="openai.chat.gpt_4_1", provider="openai", model="gpt-4.1"
+                    ),
+                    fallback=LLMRoutingSettings.FallbackPolicy(
+                        mode="local", model_id="ollama.chat.llama3_1_8b", provider="ollama", model="llama-local"
+                    ),
                 )
             },
         )
@@ -145,9 +153,13 @@ def test_router_uses_settings_task_policy(monkeypatch, clean_llm_env) -> None:
     router = LLMRouter()
     route = router.route(LLMTaskIntent(task_kind="plan"))
 
-    assert route.provider == "deepseek"
-    assert route.model == "deepseek-plan"
+    assert route.provider == "openai"
+    assert route.model == "gpt-4.1"
     assert route.reason == "settings"
+
+    described = router.describe_intent(LLMTaskIntent(task_kind="plan"))
+    assert described["policy"]["primary"]["model_id"] == "openai.chat.gpt_4_1"
+    assert described["policy"]["fallback"]["model_id"] == "ollama.chat.llama3_1_8b"
 
 
 def test_router_rejects_incompatible_embedding_fallback(monkeypatch, clean_llm_env) -> None:
