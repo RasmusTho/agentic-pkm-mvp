@@ -177,6 +177,11 @@ python -m app.cli pipe notes/meeting.md
 python -m app.cli settings-explain --json
 ```
 
+Startup/runtime verification now treats task routes and embeddings explicitly:
+- `checks.llm_task_routes` verifies the effective chat/reasoning/embed/eval routes for the current config.
+- `checks.embedding_index` reports `rebuild_required=true|false` and the active/stored embedding identity relationship.
+- `make verify-runtime` prints both the task-route summary and the embedding-index rebuild state from inside the containerized stack.
+
 ## Startup telemetry (startup_status.json)
 - Location: `tmp/startup_status.json` (workspace root on the host).
 - Lifecycle: written by `scripts/start_full_system.sh` on phase changes and in the cleanup trap; the last write happens on exit. Values are merged with the existing file; fields with explicit `None`/empty values are cleared when the writer marks them as clearable.

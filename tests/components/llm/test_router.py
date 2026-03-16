@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.components.llm.router import LLMRouter, LLMTaskIntent
+from app.config import llm as llm_config
 from app.settings.models import LLMRoutingSettings, SettingsBundle
 
 
@@ -43,6 +44,7 @@ def test_router_respects_model_env_defaults(clean_llm_env) -> None:
     clean_llm_env.setenv("LLM_PROVIDER", "mock")
     clean_llm_env.setenv("LLM_MODEL", "llama-test")
     clean_llm_env.setenv("EMBED_MODEL", "embed-test")
+    clean_llm_env.setattr(llm_config, "_ACTIVE_PROVIDER", None)
 
     router = LLMRouter()
     decide = router.route(LLMTaskIntent(task_kind="decide"))
@@ -53,7 +55,7 @@ def test_router_respects_model_env_defaults(clean_llm_env) -> None:
     assert decide.mode == "chat"
 
     assert embed.provider == "mock"
-    assert embed.model == "embed-test"
+    assert embed.model == "mock-embedding"
     assert embed.mode == "embeddings"
 
 
@@ -78,6 +80,7 @@ def test_router_preserves_embedding_identity_when_determinism_requested(clean_ll
     clean_llm_env.setenv("LLM_PROVIDER", "ollama")
     clean_llm_env.setenv("OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
     clean_llm_env.setenv("EMBED_MODEL", "nomic-embed-text:latest")
+    clean_llm_env.setattr(llm_config, "_ACTIVE_PROVIDER", None)
 
     router = LLMRouter()
     embed = router.route(LLMTaskIntent(task_kind="embed", determinism_required=True, strict_identity_required=True))
