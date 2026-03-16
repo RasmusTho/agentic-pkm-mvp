@@ -35,6 +35,9 @@ def test_startup_status_telemetry_shape(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DB_PROBE_CMD", "docker compose ps -q db")
     monkeypatch.setenv("DB_PROBE_RC", "1")
     monkeypatch.setenv("DB_PROBE_OUTPUT_SNIPPET", "no container")
+    monkeypatch.setenv("STARTUP_SUCCEEDED", "true")
+    monkeypatch.setenv("RUNTIME_VERIFIED", "true")
+    monkeypatch.setenv("OPERATOR_INTERRUPTED", "false")
 
     exec_globals: dict[str, object] = {}
     exec(code, exec_globals, exec_globals)
@@ -53,3 +56,6 @@ def test_startup_status_telemetry_shape(tmp_path, monkeypatch) -> None:
     assert payload["db_probe_cmd"] == "docker compose ps -q db"
     assert payload["db_probe_rc"] == 1
     assert payload["db_probe_output_snippet"] == "no container"
+    assert payload["startup_succeeded"] is True
+    assert payload["runtime_verified"] is True
+    assert payload["operator_interrupted"] is False

@@ -8,6 +8,7 @@ source "scripts/lib/load_env_defaults.sh"
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"
 
+source "scripts/lib/runtime_endpoint_probe.sh"
 source "scripts/lib/start_full_system_env.sh"
 apply_start_full_system_defaults
 
@@ -48,9 +49,15 @@ startup_watchdog_pid=""
 obsidian_gate_enabled="false"
 obsidian_gate_ok="not_run"
 obsidian_gate_detail=""
+startup_succeeded="false"
+runtime_verified="false"
+operator_interrupted="false"
 export OBSIDIAN_GATE_ENABLED="$obsidian_gate_enabled"
 export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
 export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
+export STARTUP_SUCCEEDED="$startup_succeeded"
+export RUNTIME_VERIFIED="$runtime_verified"
+export OPERATOR_INTERRUPTED="$operator_interrupted"
 
 write_startup_status() {
   local passed="${1:-${PRE_FLIGHT_PASSED:-0}}"
@@ -122,6 +129,9 @@ def _merge(existing, updated):
         "obsidian_gate_enabled",
         "obsidian_gate_ok",
         "obsidian_gate_detail",
+        "startup_succeeded",
+        "runtime_verified",
+        "operator_interrupted",
     }
     merged = dict(existing)
     for key, value in updated.items():
@@ -186,6 +196,9 @@ payload = {
     "obsidian_gate_enabled": _coerce_bool("OBSIDIAN_GATE_ENABLED"),
     "obsidian_gate_ok": os.environ.get("OBSIDIAN_GATE_OK") or None,
     "obsidian_gate_detail": os.environ.get("OBSIDIAN_GATE_DETAIL") or None,
+    "startup_succeeded": _coerce_bool("STARTUP_SUCCEEDED"),
+    "runtime_verified": _coerce_bool("RUNTIME_VERIFIED"),
+    "operator_interrupted": _coerce_bool("OPERATOR_INTERRUPTED"),
 }
 
 payload = _merge(existing, payload)
@@ -221,7 +234,7 @@ cleanup() {
 }
 
 trap cleanup EXIT
-trap 'PRE_FLIGHT_REASON=${PRE_FLIGHT_REASON:-terminated}; PRE_FLIGHT_PASSED=${PRE_FLIGHT_PASSED:-0}; EXIT_REASON=${EXIT_REASON:-$PRE_FLIGHT_REASON}; EXIT_CODE=${EXIT_CODE:-1}; export EXIT_REASON EXIT_CODE; write_startup_status "$PRE_FLIGHT_PASSED" "$PRE_FLIGHT_REASON" || true; exit 1' TERM INT
+trap 'PRE_FLIGHT_REASON=${PRE_FLIGHT_REASON:-terminated}; PRE_FLIGHT_PASSED=${PRE_FLIGHT_PASSED:-0}; EXIT_REASON=${EXIT_REASON:-$PRE_FLIGHT_REASON}; EXIT_CODE=${EXIT_CODE:-1}; OPERATOR_INTERRUPTED=true; export EXIT_REASON EXIT_CODE OPERATOR_INTERRUPTED; write_startup_status "$PRE_FLIGHT_PASSED" "$PRE_FLIGHT_REASON" || true; exit 1' TERM INT
 
 fail_preflight() {
   local reason="$1"
@@ -543,7 +556,9 @@ FLIGHT_RECORDER_INTERVAL="${FLIGHT_RECORDER_INTERVAL:-5}"
 FLIGHT_RECORDER_DURATION="${FLIGHT_RECORDER_DURATION:-0}"
 VERIFY_ACTIVE="${VERIFY_ACTIVE:-0}"
 ALLOW_LEGACY_VAULT="${ALLOW_LEGACY_VAULT:-0}"
-HEALTH_ENDPOINT="${HEALTH_ENDPOINT:-http://127.0.0.1:18000/healthz}"
+API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"
+API_BASE_URL="${API_BASE_URL%/}"
+HEALTH_ENDPOINT="${HEALTH_ENDPOINT:-$API_BASE_URL/healthz}"
 HEALTH_MAX_ATTEMPTS="${HEALTH_MAX_ATTEMPTS:-12}"
 HEALTH_SLEEP_SECONDS="${HEALTH_SLEEP_SECONDS:-2}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-5}"
@@ -707,6 +722,9 @@ compose_up() {
     case "$1" in
       --build)
         extra+=("--build")
+        ;;
+      --force-recreate)
+        extra+=("--force-recreate")
         ;;
       *)
         services+=("$1")
@@ -993,6 +1011,52 @@ wait_for_healthz() {
 }
 
 ollama_preflight_ok=0
+ollama_endpoint_probe_json=""
+
+auto_configure_ollama_runtime_endpoint() {
+  local runtime_env_file="${1:?runtime env file required}"
+  local container_id="${2:?api container required}"
+  local probe_json changed chosen_base
+
+  probe_json=$(auto_resolve_ollama_runtime_endpoint "$runtime_env_file" "$container_id")
+  changed=$(OLLAMA_PROBE_JSON="$probe_json" CURRENT_BASE="$(normalize_ollama_base_url "${OLLAMA_BASE_URL:-${OLLAMA_URL:-${OLLAMA_HOST:-${OPENAI_BASE_URL:-}}}}")" python3 - <<'PY'
+from __future__ import annotations
+
+import json
+import os
+
+payload = json.loads(os.environ.get("OLLAMA_PROBE_JSON", "{}"))
+chosen = payload.get("chosen_base") or ""
+current = os.environ.get("CURRENT_BASE", "")
+print("1" if chosen and chosen != current else "0")
+PY
+)
+  chosen_base=$(OLLAMA_PROBE_JSON="$probe_json" python3 - <<'PY'
+from __future__ import annotations
+
+import json
+import os
+
+payload = json.loads(os.environ.get("OLLAMA_PROBE_JSON", "{}"))
+print(payload.get("chosen_base") or "")
+PY
+)
+  ollama_endpoint_probe_json="$probe_json"
+  export OLLAMA_ENDPOINT_PROBE_JSON="$probe_json"
+  export LLM_PROBE_STEP="ollama_endpoint_probe"
+  export LLM_PROBE_CMD="auto_resolve_ollama_runtime_endpoint"
+  export LLM_PROBE_RC=0
+  export LLM_PROBE_OUTPUT_SNIPPET="$(printf "%s" "$probe_json" | head -c 400)"
+  write_startup_status 1 ""
+  if [ "$changed" = "1" ]; then
+    echo "Ollama endpoint: auto-selected $chosen_base"
+    compose_up api --force-recreate
+    wait_for_healthz
+  else
+    echo "Ollama endpoint: using $chosen_base"
+  fi
+}
+
 run_ollama_preflight() {
   local output rc
   output=$(run_docker_compose exec -T api env VERIFY_ACTIVE="${VERIFY_ACTIVE:-0}" python - <<'PYOLLAMA'
@@ -1249,6 +1313,18 @@ if [ "${AUTO_BOOTSTRAP:-0}" -eq 1 ] && [ "$llm_requires_ollama" -eq 1 ]; then
   compose_up ollama
 fi
 api_container_id=$(run_docker_compose ps -q api | head -n1 || true)
+if [ "$llm_requires_ollama" -eq 1 ]; then
+  set_phase "ollama_endpoint_probe"
+  if ! auto_configure_ollama_runtime_endpoint "$runtime_env_path" "$api_container_id"; then
+    EXIT_REASON="ollama_endpoint_probe_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    exit 1
+  fi
+  api_container_id=$(run_docker_compose ps -q api | head -n1 || true)
+  mark_phase_ok "ollama_endpoint_probe"
+fi
 set_phase "db_probe"
 run_db_probe
 mark_phase_ok "db_probe"
@@ -1481,7 +1557,7 @@ if [ "$START_WATCHERS" -eq 1 ]; then
     exit 1
   fi
 fi
-ready_payload=$(curl -sS http://127.0.0.1:18000/readyz || true)
+ready_payload=$(curl -sS "$API_BASE_URL/readyz" || true)
 readiness_state=$(READY_JSON="$ready_payload" python - <<'PY'
 import json, os, sys
 try:
@@ -1500,7 +1576,7 @@ except Exception as exc:
 PY
 )
 
-api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
+api_health_payload=$(curl -sS "$API_BASE_URL/api/health" || true)
 update_health_state() {
   api_health_ok=$(API_HEALTH_JSON="$api_health_payload" python - <<'PY'
 import json, os, sys
@@ -1683,7 +1759,7 @@ if [ "$auto_bootstrap" -eq 1 ]; then
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then
     echo "INDEX: not required (no objects yet)"
   else
-    api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
+    api_health_payload=$(curl -sS "$API_BASE_URL/api/health" || true)
     update_health_state
     if [ "$api_health_index_rebuild" -eq 1 ]; then
       set_phase "index_rebuild"
@@ -1807,7 +1883,7 @@ PY
         exit 1
       fi
       mark_phase_ok "index_rebuild"
-      api_health_payload=$(curl -sS http://127.0.0.1:18000/api/health || true)
+      api_health_payload=$(curl -sS "$API_BASE_URL/api/health" || true)
       update_health_state
       if [ "$api_health_index_rebuild" -eq 1 ]; then
         EXIT_REASON="index_rebuild_still_required"
@@ -1860,7 +1936,7 @@ print(payload.get("skipped_locked", 0) or 0)
 PY
 )
 
-search_payload=$(curl -sS "http://127.0.0.1:18000/search?q=test&k=3" || true)
+search_payload=$(curl -sS "$API_BASE_URL/search?q=test&k=3" || true)
 ensure_json_or_fail "search" "$search_payload" "GET /search?q=test&k=3" "0"
 search_results=$(SEARCH_JSON="$search_payload" python - <<'PY'
 import json, os
@@ -1919,7 +1995,7 @@ if [ "$VERIFY_ACTIVE" -eq 1 ]; then
     fi
   fi
   set_phase "verify_ask"
-  ask_status=$(curl -sS -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:18000/api/ask -H 'Content-Type: application/json' -d '{"query":"startup verify"}' || true)
+  ask_status=$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$API_BASE_URL/api/ask" -H 'Content-Type: application/json' -d '{"query":"startup verify"}' || true)
   if [ "$ask_status" != "200" ]; then
     EXIT_REASON="verify_ask_failed"
     EXIT_CODE=1
@@ -1989,6 +2065,19 @@ PY
   fi
 fi
 
+set_phase "runtime_verify"
+if ! RUNTIME_ENV_PATH="$runtime_env_path" API_BASE_URL="$API_BASE_URL" bash scripts/verify_runtime_stack.sh; then
+  EXIT_REASON="runtime_verify_failed"
+  EXIT_CODE=1
+  export EXIT_REASON EXIT_CODE
+  export RUNTIME_VERIFIED=false
+  write_startup_status 0 "$EXIT_REASON"
+  exit 1
+fi
+runtime_verified="true"
+export RUNTIME_VERIFIED="$runtime_verified"
+mark_phase_ok "runtime_verify"
+
 if [ "$START_WATCHERS" -eq 1 ]; then
   watchers_status="enabled"
 else
@@ -2006,6 +2095,8 @@ echo "Flight recorder log: ${flight_recorder_log_path:-<disabled>}"
 echo "Tail: docker compose exec watcher sh -lc 'tail -n 20 \"${WATCHER_TICK_LOG_PATH:-/app/tmp/watcher_tick.jsonl}\"'"
 
 set_phase "done"
+startup_succeeded="true"
+export STARTUP_SUCCEEDED="$startup_succeeded"
 mark_phase_ok "done"
 echo "--- STARTUP COMPLETE ---"
 
@@ -2027,11 +2118,12 @@ SUMMARY:
   watchers: $watchers_status
   worker: $worker_status
   obsidian gate: enabled=$obsidian_gate_enabled status=$obsidian_gate_ok
+  runtime verified: $runtime_verified
   note: /api/health ok=false can be expected when optional tools (e.g., ffmpeg) are missing; Stage0 ingest/search/ask can still work.
-  next: curl -sS http://127.0.0.1:18000/search?q=test&k=3
+  next: curl -sS $API_BASE_URL/search?q=test&k=3
 SUMMARY
 
 if [ "$START_WATCHERS" -eq 1 ]; then
   echo "Stop watcher: docker compose exec watcher sh -c 'touch /app/tmp/WATCHER_STOP'"
 fi
-echo "URLs: http://127.0.0.1:18000  |  http://127.0.0.1:18000/api/status"
+echo "URLs: $API_BASE_URL  |  $API_BASE_URL/api/status"
