@@ -103,6 +103,8 @@ export LLM_FORCE_MODEL=llama3.1:8b-instruct
 - **Health snapshot** (`/api/health`)
   - `checks.llm_router.selected_defaults` shows the router’s default routes.
   - `checks.llm_router.route_policies` shows preferred and effective routes per task class.
+  - `checks.llm_task_routes.routes` shows whether each effective task route is actually configured and startup-safe.
+  - `checks.embedding_index` shows whether the active embedding identity is compatible with the stored index or requires rebuild.
   - `checks.llm_providers.providers` lists provider health checks.
 - **Alpha status output** (`scripts/alpha_status.py`)
   - Prints `llm routes` and `llm providers` summaries for human operators.

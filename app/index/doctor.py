@@ -44,6 +44,7 @@ def diagnose_index() -> Dict[str, Any]:
     backend = vector_index.__class__.__name__
     issues: list[str] = []
     warnings: list[str] = []
+    empty_index = False
 
     if stored_identity is None:
         warnings.append("VectorIndex has no recorded embedding identity (empty index or legacy backend).")
@@ -58,8 +59,12 @@ def diagnose_index() -> Dict[str, Any]:
     if PgVectorIndex is not None and isinstance(vector_index, PgVectorIndex):  # type: ignore[arg-type]
         if inspect_pg_index_state is not None:
             pg_state = inspect_pg_index_state()
+            empty_index = int(pg_state.get("rows") or 0) == 0
             if not pg_state.get("identity_present"):
-                issues.append("vector_index_meta is missing; embeddings must be rebuilt.")
+                if empty_index:
+                    warnings.append("Vector index is empty; no stored embedding identity recorded yet.")
+                else:
+                    issues.append("vector_index_meta is missing; embeddings must be rebuilt.")
             dims = pg_state.get("dims") or []
             distinct_dims = sorted({d for d in dims if isinstance(d, int)})
             if len(distinct_dims) > 1:
@@ -74,11 +79,25 @@ def diagnose_index() -> Dict[str, Any]:
     elif warnings:
         status = "warn"
 
+    compatible_identity: bool | None
+    if stored_identity is None:
+        compatible_identity = None if (empty_index or pg_state is None) else False
+    else:
+        compatible_identity = not bool(issues)
+
+    rebuild_required = bool(issues)
+    rebuild_reason = issues[0] if issues else None
+
     return {
         "timestamp": time.time(),
         "backend": backend,
         "expected_identity": _identity_to_dict(expected_identity),
         "stored_identity": _identity_to_dict(stored_identity),
+        "stored_identity_present": stored_identity is not None,
+        "compatible_identity": compatible_identity,
+        "empty_index": empty_index,
+        "rebuild_required": rebuild_required,
+        "rebuild_reason": rebuild_reason,
         "issues": issues,
         "warnings": warnings,
         "status": status,

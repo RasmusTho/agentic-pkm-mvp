@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.config import llm as llm_config
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.vault.paths import get_vault_inbox_dir_rel
 from app.watcher.heartbeat import resolve_heartbeat_path
@@ -99,6 +100,11 @@ def _assert_check_metadata(payload: dict) -> None:
     assert "severity" in checks["ffmpeg"]
     assert "llm_router" in checks
     assert "selected_defaults" in checks["llm_router"]
+    assert "route_policies" in checks["llm_router"]
+    assert "llm_task_routes" in checks
+    assert "routes" in checks["llm_task_routes"]
+    assert "embedding_index" in checks
+    assert "rebuild_required" in checks["embedding_index"]
     assert "llm_providers" in checks
     assert "providers" in checks["llm_providers"]
     assert "obsidian" in checks
@@ -185,6 +191,11 @@ def test_health_suggests_index_rebuild(monkeypatch, tmp_path) -> None:
             "backend": "pg",
             "expected_identity": {"provider": "mock", "model": "mock", "dim": 8},
             "stored_identity": {"provider": "mock", "model": "mock", "dim": 7},
+            "stored_identity_present": True,
+            "compatible_identity": False,
+            "empty_index": False,
+            "rebuild_required": True,
+            "rebuild_reason": "Identity mismatch",
             "issues": ["Identity mismatch"],
             "warnings": [],
             "status": "error",
@@ -202,3 +213,40 @@ def test_health_suggests_index_rebuild(monkeypatch, tmp_path) -> None:
         for action in actions
         if isinstance(action, dict)
     )
+    assert data["checks"]["embedding_index"]["rebuild_required"] is True
+
+
+def test_health_requires_task_route_configuration(monkeypatch, tmp_path) -> None:
+    heartbeat = tmp_path / "watcher-heartbeat.json"
+    _write_watcher_heartbeat(heartbeat, ts=time.time())
+    worker_hb = tmp_path / "worker-heartbeat.json"
+    _write_worker_heartbeat(worker_hb, ts=time.time())
+    client = _health_client(monkeypatch, tmp_path, watcher_path=heartbeat, worker_path=worker_hb, worker_enabled=True)
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("EMBED_MODEL", "text-embedding-test")
+    monkeypatch.delenv("OPENAI_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(llm_config, "_ACTIVE_PROVIDER", None)
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["required_ok"] is False
+    assert data["checks"]["llm_task_routes"]["ok"] is False
+    assert data["checks"]["llm_task_routes"]["routes"]["decide"]["status"] == "fail"
+
+
+def test_health_skips_eval_route_by_default(monkeypatch, tmp_path) -> None:
+    heartbeat = tmp_path / "watcher-heartbeat.json"
+    _write_watcher_heartbeat(heartbeat, ts=time.time())
+    worker_hb = tmp_path / "worker-heartbeat.json"
+    _write_worker_heartbeat(worker_hb, ts=time.time())
+    client = _health_client(monkeypatch, tmp_path, watcher_path=heartbeat, worker_path=worker_hb, worker_enabled=True)
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["checks"]["llm_task_routes"]["routes"]["eval"]["status"] == "skipped"
