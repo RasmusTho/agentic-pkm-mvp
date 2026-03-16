@@ -12,6 +12,7 @@ from .models import (
     ClassifierSettings,
     GlobalSettings,
     InstanceSettings,
+    LLMRoutingSettings,
     PromotionSettings,
     Providers,
     QaSettings,
@@ -47,6 +48,7 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
 def _build_bundle() -> SettingsBundle:
     global_yaml = _read_yaml(RUNTIME / "global.yaml")
     providers_yaml = _read_yaml(RUNTIME / "providers.yaml")
+    llm_routing_yaml = _read_yaml(RUNTIME / "llm_routing.yaml")
     embeddings_yaml = _read_yaml(RUNTIME / "embeddings.yaml")
     instance_yaml = _read_yaml(RUNTIME / "instance.yaml")
     yggdrasil_yaml = _read_yaml(RUNTIME / "yggdrasil.yaml")
@@ -82,6 +84,7 @@ def _build_bundle() -> SettingsBundle:
     bundle = SettingsBundle(
         global_=GlobalSettings(**global_yaml),
         providers=Providers(**providers_yaml),
+        llm_routing=LLMRoutingSettings(**llm_routing_yaml),
         embedding_profiles=embedding_profiles,
         agents=agents,
         yggdrasil_paths=yggdrasil_paths,
@@ -127,4 +130,3 @@ def _handle_hot_reload(_payload: Dict[str, Any]) -> None:
 
 
 init_hot_reload(_handle_hot_reload)
-

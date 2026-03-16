@@ -183,9 +183,12 @@ python -m app.cli settings-explain --json
 - Fields:
   - `phase`, `last_ok_phase`, `exit_code`, `exit_reason`, `timestamp` (last write). `started_at`/`ended_at` may appear when callers add them.
   - `startup_succeeded`, `runtime_verified`, `operator_interrupted`
+  - `ollama_endpoint_repaired`, `ollama_endpoint_drift`, `ollama_configured_base_url`, `ollama_effective_base_url`, `ollama_endpoint_persist_hint`
   - `llm_probe_step`, `llm_probe_cmd`, `llm_probe_rc`, `llm_probe_output_snippet`
   - `compose_up_step`, `compose_up_cmd`, `compose_up_rc`, `compose_up_output_snippet`
   - `db_probe_step`, `db_probe_cmd`, `db_probe_rc`, `db_probe_output_snippet`
+- Durable fix flow:
+  - If startup auto-repairs the Ollama endpoint, run `make persist-runtime-repairs` to write the working endpoint back to `.env`.
 - Debugging cold-start failures after `docker compose down`:
   - Bucket A: compose-up failure → check `compose_up_*` fields; expect `exit_reason=compose_up_failed` and a short `compose_up_output_snippet`.
   - Bucket B: db container/CID failure → `db_probe_step=compose_ps_db` and an empty/failed `db_probe_output_snippet`.

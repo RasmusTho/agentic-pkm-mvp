@@ -105,6 +105,8 @@ def test_start_full_system_clears_obsidian_gate_fields_in_status_merge() -> None
     assert '"startup_succeeded"' in script
     assert '"runtime_verified"' in script
     assert '"operator_interrupted"' in script
+    assert '"ollama_endpoint_repaired"' in script
+    assert '"ollama_effective_base_url"' in script
 
 
 def test_start_full_system_strict_gate_checks_installer_version() -> None:
@@ -135,6 +137,7 @@ def test_start_full_system_runs_runtime_verification_and_endpoint_probe() -> Non
     script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
     assert "auto_configure_ollama_runtime_endpoint" in script
     assert "bash scripts/verify_runtime_stack.sh" in script
+    assert "make persist-runtime-repairs" in script
     assert 'API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"' in script
 
 

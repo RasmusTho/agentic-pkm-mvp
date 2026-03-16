@@ -52,12 +52,22 @@ obsidian_gate_detail=""
 startup_succeeded="false"
 runtime_verified="false"
 operator_interrupted="false"
+ollama_endpoint_repaired="false"
+ollama_endpoint_drift="false"
+ollama_configured_base_url=""
+ollama_effective_base_url=""
+ollama_endpoint_persist_hint=""
 export OBSIDIAN_GATE_ENABLED="$obsidian_gate_enabled"
 export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
 export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
 export STARTUP_SUCCEEDED="$startup_succeeded"
 export RUNTIME_VERIFIED="$runtime_verified"
 export OPERATOR_INTERRUPTED="$operator_interrupted"
+export OLLAMA_ENDPOINT_REPAIRED="$ollama_endpoint_repaired"
+export OLLAMA_ENDPOINT_DRIFT="$ollama_endpoint_drift"
+export OLLAMA_CONFIGURED_BASE_URL="$ollama_configured_base_url"
+export OLLAMA_EFFECTIVE_BASE_URL="$ollama_effective_base_url"
+export OLLAMA_ENDPOINT_PERSIST_HINT="$ollama_endpoint_persist_hint"
 
 write_startup_status() {
   local passed="${1:-${PRE_FLIGHT_PASSED:-0}}"
@@ -132,6 +142,11 @@ def _merge(existing, updated):
         "startup_succeeded",
         "runtime_verified",
         "operator_interrupted",
+        "ollama_endpoint_repaired",
+        "ollama_endpoint_drift",
+        "ollama_configured_base_url",
+        "ollama_effective_base_url",
+        "ollama_endpoint_persist_hint",
     }
     merged = dict(existing)
     for key, value in updated.items():
@@ -199,6 +214,11 @@ payload = {
     "startup_succeeded": _coerce_bool("STARTUP_SUCCEEDED"),
     "runtime_verified": _coerce_bool("RUNTIME_VERIFIED"),
     "operator_interrupted": _coerce_bool("OPERATOR_INTERRUPTED"),
+    "ollama_endpoint_repaired": _coerce_bool("OLLAMA_ENDPOINT_REPAIRED"),
+    "ollama_endpoint_drift": _coerce_bool("OLLAMA_ENDPOINT_DRIFT"),
+    "ollama_configured_base_url": os.environ.get("OLLAMA_CONFIGURED_BASE_URL") or None,
+    "ollama_effective_base_url": os.environ.get("OLLAMA_EFFECTIVE_BASE_URL") or None,
+    "ollama_endpoint_persist_hint": os.environ.get("OLLAMA_ENDPOINT_PERSIST_HINT") or None,
 }
 
 payload = _merge(existing, payload)
@@ -1016,10 +1036,11 @@ ollama_endpoint_probe_json=""
 auto_configure_ollama_runtime_endpoint() {
   local runtime_env_file="${1:?runtime env file required}"
   local container_id="${2:?api container required}"
-  local probe_json changed chosen_base
+  local probe_json changed chosen_base current_base
 
   probe_json=$(auto_resolve_ollama_runtime_endpoint "$runtime_env_file" "$container_id")
-  changed=$(OLLAMA_PROBE_JSON="$probe_json" CURRENT_BASE="$(normalize_ollama_base_url "${OLLAMA_BASE_URL:-${OLLAMA_URL:-${OLLAMA_HOST:-${OPENAI_BASE_URL:-}}}}")" python3 - <<'PY'
+  current_base="$(normalize_ollama_base_url "${OLLAMA_BASE_URL:-${OLLAMA_URL:-${OLLAMA_HOST:-${OPENAI_BASE_URL:-}}}}")"
+  changed=$(OLLAMA_PROBE_JSON="$probe_json" CURRENT_BASE="$current_base" python3 - <<'PY'
 from __future__ import annotations
 
 import json
@@ -1041,6 +1062,22 @@ payload = json.loads(os.environ.get("OLLAMA_PROBE_JSON", "{}"))
 print(payload.get("chosen_base") or "")
 PY
 )
+  ollama_configured_base_url="$current_base"
+  ollama_effective_base_url="$chosen_base"
+  if [ "$changed" = "1" ]; then
+    ollama_endpoint_repaired="true"
+    ollama_endpoint_drift="true"
+    ollama_endpoint_persist_hint="make persist-runtime-repairs"
+  else
+    ollama_endpoint_repaired="false"
+    ollama_endpoint_drift="false"
+    ollama_endpoint_persist_hint=""
+  fi
+  export OLLAMA_ENDPOINT_REPAIRED="$ollama_endpoint_repaired"
+  export OLLAMA_ENDPOINT_DRIFT="$ollama_endpoint_drift"
+  export OLLAMA_CONFIGURED_BASE_URL="$ollama_configured_base_url"
+  export OLLAMA_EFFECTIVE_BASE_URL="$ollama_effective_base_url"
+  export OLLAMA_ENDPOINT_PERSIST_HINT="$ollama_endpoint_persist_hint"
   ollama_endpoint_probe_json="$probe_json"
   export OLLAMA_ENDPOINT_PROBE_JSON="$probe_json"
   export LLM_PROBE_STEP="ollama_endpoint_probe"
@@ -1050,6 +1087,8 @@ PY
   write_startup_status 1 ""
   if [ "$changed" = "1" ]; then
     echo "Ollama endpoint: auto-selected $chosen_base"
+    echo "Ollama endpoint drift: configured='${current_base:-<unset>}' effective='$chosen_base'"
+    echo "Persist repair: make persist-runtime-repairs"
     compose_up api --force-recreate
     wait_for_healthz
   else
@@ -2119,9 +2158,16 @@ SUMMARY:
   worker: $worker_status
   obsidian gate: enabled=$obsidian_gate_enabled status=$obsidian_gate_ok
   runtime verified: $runtime_verified
+  ollama configured: ${ollama_configured_base_url:-<unset>}
+  ollama effective: ${ollama_effective_base_url:-<unset>}
+  ollama repaired: $ollama_endpoint_repaired
   note: /api/health ok=false can be expected when optional tools (e.g., ffmpeg) are missing; Stage0 ingest/search/ask can still work.
   next: curl -sS $API_BASE_URL/search?q=test&k=3
 SUMMARY
+
+if [ "$ollama_endpoint_drift" = "true" ]; then
+  echo "Persist runtime repair: make persist-runtime-repairs"
+fi
 
 if [ "$START_WATCHERS" -eq 1 ]; then
   echo "Stop watcher: docker compose exec watcher sh -c 'touch /app/tmp/WATCHER_STOP'"
