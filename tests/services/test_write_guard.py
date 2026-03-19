@@ -35,6 +35,7 @@ def test_apply_promotion_runs_when_allowed(monkeypatch, tmp_path: Path) -> None:
     result = apply_promotion_frontmatter(path, "note-uuid", "evergreen")
     assert result is True
     assert "evergreen" in path.read_text(encoding="utf-8")
+    assert "maturity: evergreen" in path.read_text(encoding="utf-8")
 
 
 def test_apply_promotion_writes_via_knowledge_port(monkeypatch, tmp_path: Path) -> None:

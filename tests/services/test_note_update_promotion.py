@@ -14,6 +14,7 @@ def test_promotion_frontmatter_created_when_missing(tmp_path: Path) -> None:
     frontmatter, body = load_frontmatter(note_path.read_text(encoding="utf-8"))
     assert frontmatter["uuid"] == "UUID-1"
     assert frontmatter["review_state"] == "evergreen"
+    assert frontmatter["maturity"] == "evergreen"
     assert "Body content" in body
 
 
@@ -36,4 +37,5 @@ Keep body.
     frontmatter, _ = load_frontmatter(note_path.read_text(encoding="utf-8"))
     assert frontmatter["uuid"] == "UUID-2"
     assert frontmatter["review_state"] == "evergreen"
+    assert frontmatter["maturity"] == "evergreen"
     assert frontmatter["title"] == "Sample"

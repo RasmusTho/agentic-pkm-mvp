@@ -5,6 +5,7 @@ from typing import Any, Tuple
 
 from langgraph.graph import END, START, StateGraph
 
+from app.domain.state_axes import build_promotion_transition
 from app.components.concurrency import IdempotencyGuard
 from app.components.settings.panel_actions_loader import PanelActionCatalog, PanelActionDescriptor
 from app.agents.panel_agent.settings import DeciderMode
@@ -73,6 +74,7 @@ def _promotion_event(intent_event: PanelIntentEvent, action: PanelIntentAction, 
     maturity = params.get("maturity")
     if maturity:
         payload["maturity"] = maturity
+        payload["transition"] = build_promotion_transition(target_maturity=str(maturity))
     return OutboxEvent(
         event=target_event,
         trace_id=intent_event.trace_id,
