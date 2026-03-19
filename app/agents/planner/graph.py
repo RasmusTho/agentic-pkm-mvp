@@ -113,9 +113,9 @@ class PlannerGraph:
                             PlanStep(
                                 id="primitive-1",
                                 kind="primitive",
-                                action="update_review_state",
+                                action="promote_to_evergreen",
                                 target=pending.target or plan.goal,
-                                args={"review_state": "processed"},
+                                args={"review_state": "evergreen", "maturity": "evergreen"},
                             )
                         )
                     self.agent.save_plan(subplan)
