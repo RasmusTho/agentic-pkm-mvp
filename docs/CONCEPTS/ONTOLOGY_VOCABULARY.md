@@ -127,6 +127,16 @@ They record where the active runtime most clearly compresses multiple ontology l
     payload.
   - This is a strong sign that runtime naming and ontology naming are still misaligned here.
 
+- `app/domain/plan.py` and `app/agents/planner/graph.py`
+  - `plan` currently means execution plan much more than human project or commitment structure.
+  - action names such as `promote_to_evergreen` and `update_review_state` converge on the same
+    runtime mutation shape, which confirms that transition vocabulary is compressed in active code.
+
+- `app/services/vault_sync.py`
+  - legacy sync paths still write `kind="note"` objects directly into persistence using
+    `review_state` as a key semantic marker.
+  - treat `note` here as an implementation-era storage label, not as the preferred domain term.
+
 - `app/services/note_log.py`
   - `note log` currently names a mirror path and future logging surface more than a fully realized
     receipt model.

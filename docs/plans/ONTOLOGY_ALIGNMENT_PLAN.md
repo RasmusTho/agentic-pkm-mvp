@@ -16,6 +16,9 @@ Authoritative concept sources:
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
 - `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`
 
+Current normalization recommendation:
+- `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md`
+
 ## Current diagnosis
 
 The highest current concept drift appears around:
@@ -176,6 +179,16 @@ Review questions:
 - Which parts represent runtime projection?
 - Is `review_state` the right term for all current uses?
 
+Additional finding:
+- the same vault note is projected into several runtime forms in one ingest pass:
+  - mirror markdown under `System/Metadata/VaultMirror`,
+  - `DomainObject(kind="note")`,
+  - object-store row with `kind="note"`,
+  - retrieval/index document with `kind="note"`,
+  - JSONL pipeline record.
+- This strongly suggests that future code should gain a clearer naming distinction between
+  `Vault Note` and its runtime projections rather than continuing to overload `note`.
+
 #### `app/events/types.py` and panel/promotion events
 
 Observed issue:
@@ -187,6 +200,11 @@ Review questions:
   - transition execution,
   - transition receipt?
 
+Additional finding:
+- the current registry contains both `promotion.*` and `promote.*` families.
+- This is workable in the short term, but it increases ontology drift because the prefixes are not
+  consistently tied to one layer such as transition family, command family, or receipt family.
+
 #### `app/planner/schema.py`
 
 Observed issue:
@@ -196,6 +214,15 @@ Review questions:
 - Which plan constructs are commitment-ontology adjacent?
 - Which are purely runtime execution artifacts?
 
+Additional finding:
+- `app/domain/plan.py` and `app/agents/planner/graph.py` confirm that the active plan machinery is
+  execution-oriented:
+  - plans become `DomainObject(kind="plan")`,
+  - steps mutate runtime targets,
+  - and default primitive actions directly update `review_state`.
+- This supports treating current `Plan` as an `Execution Artifact` unless and until a separate human
+  project/commitment model is introduced.
+
 #### `app/promotion/consumer.py`
 
 Observed issue:
@@ -204,6 +231,12 @@ Observed issue:
 Review questions:
 - Is current `review_state` carrying too much semantic load?
 - Should promotion/maturity/review be separated more explicitly later?
+
+Additional finding:
+- `app/services/note_update.py` writes promotion by setting `frontmatter["review_state"]`.
+- `app/agents/planner/graph.py` treats `promote_to_evergreen` and `update_review_state` as the same
+  primitive shape.
+- This is the clearest current runtime compression of distinct ontology-level transitions.
 
 ### Priority 2 runtime seams
 
@@ -252,6 +285,59 @@ Higher-risk later work:
 
 These should happen only after the concept layer and contract layer are stable.
 
+## Workstream D — Likely future code changes
+
+These are not yet approved implementation tasks.
+They are the strongest current candidates after the seam review.
+
+### Candidate 1: separate human artifact naming from runtime projection naming
+
+Likely scope:
+- `app/ingest/vault_alpha.py`
+- `app/services/vault_sync.py`
+- store/retrieval/index payload docs and comments
+
+Goal:
+- keep `Vault Note` for the human-facing artifact,
+- qualify runtime/store/index forms as projections or records,
+- reduce the use of bare `note` where the code really means projected runtime object.
+
+### Candidate 2: split `review_state` from `maturity` semantics
+
+Likely scope:
+- `app/promotion/consumer.py`
+- `app/services/note_update.py`
+- `app/agents/planner/graph.py`
+- related panel/promotion payload schemas and tests
+
+Goal:
+- stop using `review_state` as the only durable sink for promotion/maturity outcomes,
+- make it possible to model review, promotion, and maturity as distinct but related axes.
+
+### Candidate 3: distinguish execution plans from human commitment/project structures
+
+Likely scope:
+- `app/planner/schema.py`
+- `app/domain/plan.py`
+- planner/orchestrator docs
+
+Goal:
+- keep current `Plan` machinery as execution-plan language,
+- avoid letting it stand in for project, commitment, next action, or review-cycle semantics.
+
+### Candidate 4: separate mirror/log from receipt model
+
+Likely scope:
+- `app/services/note_log.py`
+- mirror-writing paths in ingest/promotion
+- human-facing receipt surfaces in panel/status docs
+
+Goal:
+- clarify whether the metadata mirror is:
+  - only a portable mirror artifact,
+  - also a receipt surface,
+  - or both with different sections/contracts.
+
 ## Recommended execution order
 
 1. Rewrite `docs/CORE_CONTRACT.md`
@@ -270,6 +356,8 @@ Progress note:
 - The next highest-value target is now either:
   - a second concept pass on `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`, or
   - runtime-seam review for `app/ingest/vault_alpha.py`, `app/planner/schema.py`, `app/promotion/consumer.py`, and `app/services/note_log.py`.
+- A deeper normalization recommendation for `note`, `review_state`, `maturity`, `promotion`, `plan`,
+  and mirror/receipt separation now lives in `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md`.
 
 ## Success criteria
 

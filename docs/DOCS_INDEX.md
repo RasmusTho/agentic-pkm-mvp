@@ -202,3 +202,5 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | --- | --- | --- | --- | --- |
 | docs/scenarios/REALITY_MVP.md | Reality-MVP scenario | Legacy (archived) | 2026-02-05 | Historical reference; current baseline tracked in STATUS. |
 | docs/plans/PROTOCOL_SATELLITE_SYNC.md | Satellite sync protocol | Planned / not implemented | 2026-02-05 | Spec only; not implemented in v5.5 baseline. |
+| docs/plans/ONTOLOGY_ALIGNMENT_PLAN.md | Ontology alignment plan | Plan | 2026-03-19 | Tracks documentation-first ontology alignment across active SoT docs and runtime seams. |
+| docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md | Runtime ontology normalization | Plan | 2026-03-19 | Concrete normalization recommendations for `note`, `review_state`, `maturity`, `promotion`, `plan`, and mirror/receipt semantics before field or event renames. |
