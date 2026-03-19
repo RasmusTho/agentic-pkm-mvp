@@ -39,3 +39,16 @@ Keep body.
     assert frontmatter["review_state"] == "evergreen"
     assert frontmatter["maturity"] == "evergreen"
     assert frontmatter["title"] == "Sample"
+
+
+def test_promotion_frontmatter_supports_normalized_review_and_maturity_axes(tmp_path: Path) -> None:
+    note_path = tmp_path / "note.md"
+    note_path.write_text("Body content", encoding="utf-8")
+
+    ok = apply_promotion_frontmatter(note_path, "UUID-3", "reviewed", maturity="evergreen")
+    assert ok
+
+    frontmatter, _ = load_frontmatter(note_path.read_text(encoding="utf-8"))
+    assert frontmatter["uuid"] == "UUID-3"
+    assert frontmatter["review_state"] == "reviewed"
+    assert frontmatter["maturity"] == "evergreen"

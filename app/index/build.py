@@ -36,6 +36,7 @@ def infer_meta_defaults(rel_path: str, meta: Dict[str, Any], inbox_dir_rel: str)
         else:
             meta["review_state"] = "processed"
     # Legacy compatibility: older content may still express standing through review_state.
+    # Prefer native `maturity` when present.
     if "maturity" not in meta and meta.get("review_state") == "evergreen":
         meta["maturity"] = "evergreen"
     return meta
