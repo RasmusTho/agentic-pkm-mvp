@@ -6,6 +6,11 @@ Authority: Current component catalog and dependency boundary reference for the a
 Canonical list of current modular building blocks.
 
 This document is an implementation catalog (it may mention current entrypoints/config). Kernel-level intent and stability contracts live in `docs/PROJECT_KERNEL.md`.
+For the ontology/runtime distinction behind terms such as `artifact`, `object`, `agent`, `plan`,
+and `promotion`, also read:
+- `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
+- `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`
+- `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md`
 
 ## Maturity taxonomy
 
@@ -19,7 +24,7 @@ Use one label consistently:
 
 | Store abstraction | Backend (current) | Notes |
 | --- | --- | --- |
-| ObjectStore | Postgres / in-memory | Durable object records + payloads (operational mirror over canonical artifacts) |
+| ObjectStore | Postgres / in-memory | Durable runtime object records + payloads (operational mirror over canonical artifacts) |
 | VectorIndex | pgvector / in-memory | Embeddings + similarity search (derived, rebuildable) |
 | RelationIndex | in-memory / Postgres (if enabled) | Relations graph (may be present even if not fully exploited in every flow) |
 | Outbox | Postgres (canonical) + JSONL audit | Canonical queue is DB outbox (`outbox` table). JSONL (`INDEX_OUTBOX_PATH`) is audit/diagnostic only. |
@@ -30,10 +35,15 @@ Use one label consistently:
 
 ## Ingest / pipeline agents
 
-- **Normalizer** — Reads source material and emits normalized objects with provenance preserved. Maturity: Baseline.
+Interpretation note:
+- several entries in this section are runtime components that produce or transform projections of
+  artifacts.
+- they should not be read as the canonical ontology of the artifact classes they touch.
+
+- **Normalizer** — Reads source material and emits normalized runtime projections with provenance preserved. Maturity: Baseline.
 - **Classifier** — Proposes classifications (types/tags/etc) under human-first constraints. Maturity: Baseline.
 - **Chunker** — Splits content into spans for indexing/retrieval. Maturity: Baseline.
-- **Deduper** — Detects likely duplicates and records decisions conservatively. Maturity: Baseline.
+- **Deduper** — Detects likely duplicates across runtime projections and records decisions conservatively. Maturity: Baseline.
 - **CitationChecker** — Validates outbound references for ASK outputs and review flows. Maturity: Baseline (with Experimental use in CI).
 - **Indexer (agent + services)** — Creates embeddings and writes to the VectorIndex; emits index-related events. Maturity: Baseline.
 
@@ -46,7 +56,7 @@ Changing embedding profiles safely: 1) sanity-check with `python -m app.cli embe
 
 ## ASK / reasoning
 
-- **ASK API** — Question answering endpoint returning answers plus sources/latency. Maturity: Baseline.
+- **ASK API** — Question answering endpoint returning answers plus source references/latency. Maturity: Baseline.
 - **Reasoning layer** — Optional structured reasoning overlays (claims/evidence/inference). Maturity: Experimental.
 - **ReasoningFacade** — Shared reasoning/tool entrypoint for LangGraph agents. Maturity: Planned. Forward-line only; not part of the locked v5.5 baseline.
 - **BaseLangGraphAgent** — Common agent scaffolding for LangGraph inner loops. Maturity: Planned. Forward-line only; not part of the locked v5.5 baseline.
@@ -62,7 +72,7 @@ Changing embedding profiles safely: 1) sanity-check with `python -m app.cli embe
 
 - **Outbox/events** — DB outbox queue + JSONL audit log. Maturity: Baseline.
 - **Status/metrics** — Runtime counters and status snapshots surfaced to humans. Maturity: Baseline.
-- **Logging/audit** — Structured logs and receipts for actions and runs. Maturity: Baseline.
+- **Logging/audit** — Structured logs, traces, and receipt-like operational records for actions and runs. Maturity: Baseline.
 - **HealthContract + WriteGuard + incident snapshots** — Health state machine + write guard ensures safe transitions, emits `state/reason/since` snapshots, and logs incident JSONL entries (`tmp/health-incidents.jsonl` or vault overrides). Sidecar CLI surface: `python -m app.cli health --json` and `python -m app.cli health status --json`, plus the index/events doctor commands (baseline readiness checks). Maturity: Baseline.
 
 ## Concurrency & safety

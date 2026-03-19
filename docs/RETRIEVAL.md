@@ -17,6 +17,12 @@ The default retrieval path is an in-process memory store (`app/retrieval/hybrid.
 
 The final list can be optionally re-ranked via the rerank hook adapter.
 
+Interpretation note:
+- retrieval operates over runtime documents/projections, not directly over the full ontology of
+  human artifacts.
+- a retrieval hit is therefore a derived retrieval object pointing back to a source artifact or
+  vault-note projection.
+
 ## Hybrid Search (Current)
 Entry point: `app/retrieval/hybrid.py:hybrid_search(query, k=8, ...)`
 
@@ -54,6 +60,11 @@ Implementation lives under `app/retrieval/rerank/` and is applied via `app/retri
   }
 ]
 ```
+
+Interpretation:
+- `doc_id` identifies the retrieval document/projection used in scoring.
+- `source_ref` points back to the source location known to the runtime.
+- `payload` is retrieval metadata, not the canonical meaning of the artifact.
 
 ## Delta / Known Limits
 - This retrieval store is in-memory; it is not a durable vector DB.
