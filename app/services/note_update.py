@@ -38,7 +38,12 @@ def apply_promotion_frontmatter(
     note_uuid: str,
     new_review_state: str,
     optional_title: str | None = None,
+    *,
+    maturity: str | None = None,
 ) -> bool:
+    # `new_review_state` remains the primary compatibility input for current callers.
+    # During the state-axis migration, callers may also pass `maturity` explicitly so
+    # promotion standing can be persisted without overloading review posture.
     try:
         markdown = note_path.read_text(encoding="utf-8")
     except Exception:
@@ -66,6 +71,10 @@ def apply_promotion_frontmatter(
 
     if optional_title and not fm.get("title"):
         fm["title"] = optional_title
+
+    target_maturity = str(maturity or new_review_state).strip()
+    if target_maturity:
+        fm["maturity"] = target_maturity
 
     fm["review_state"] = new_review_state
 

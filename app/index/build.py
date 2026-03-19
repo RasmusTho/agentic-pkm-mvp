@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import fnmatch
 
+from app.domain.state_axes import review_state_for_maturity
 from app.vault.paths import get_vault_inbox_dir_rel
 
 from .ingest_md import parse_markdown
@@ -33,8 +34,14 @@ def infer_meta_defaults(rel_path: str, meta: Dict[str, Any], inbox_dir_rel: str)
             meta["review_state"] = "inbox"
         elif rel_path.startswith("9_Extras/Archive/") or "/9_Extras/Archive/" in rel_path:
             meta["review_state"] = "archived"
+        elif meta.get("maturity"):
+            meta["review_state"] = review_state_for_maturity(str(meta["maturity"]))
         else:
             meta["review_state"] = "processed"
+    # Legacy compatibility: older content may still express standing through review_state.
+    # Prefer native `maturity` when present.
+    if "maturity" not in meta and meta.get("review_state") == "evergreen":
+        meta["maturity"] = "evergreen"
     return meta
 
 

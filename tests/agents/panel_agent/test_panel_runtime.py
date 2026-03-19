@@ -110,6 +110,7 @@ def test_runtime_emits_promotion_intent_and_execution_event(tmp_path: Path, monk
     payload = promote.get("payload") or {}
     assert payload.get("note", {}).get("uuid") == note_uuid
     assert payload.get("maturity") == "evergreen"
+    assert (payload.get("transition") or {}).get("target_maturity") == "evergreen"
 
 
 def test_runtime_logs_unhandled_actions_without_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

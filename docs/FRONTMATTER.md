@@ -18,6 +18,8 @@ See also:
 - `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md` (ASSERT/SUGGEST/APPLY + evidence/receipts)
 - `docs/CORE_CONTRACT.md` (Core-6 semantic contract)
 - `docs/HUMAN-FLOWS.md` (human-facing behavior constraints for note mutation)
+- `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md` (current normalization recommendation for
+  `review_state`, `maturity`, `promotion`, and mirror/receipt boundaries)
 
 ## Metadata layers
 
@@ -28,6 +30,12 @@ Frontmatter may contain multiple layers of metadata, each with distinct ownershi
 - Derived / overlay fields: system-computed overlays (e.g., zone, recency, salience) that should remain system-owned.
 
 Not all semantics must be explicit in YAML. Core-6 fields may be implicit or derived when unambiguous.
+
+Normalization note:
+- `review_state` is the review/mutation-posture axis.
+- `maturity` is the development/standing axis when enabled by policy.
+- `promotion` is a transition family and should not be reduced to a single frontmatter field even
+  when the current runtime temporarily writes through `review_state`.
 
 ## Minimal human-facing philosophy
 
@@ -58,6 +66,13 @@ System-written fields must be:
 - Backed by receipts (what wrote it, why, and under what intent).
 - Safe to ignore without losing meaning.
 
+For active warm notes, frontmatter should remain a bounded human-facing surface.
+It should not become the only durable home for:
+- execution traces,
+- orchestration plans,
+- low-level event receipts,
+- or machine-only projections.
+
 ## The write contract (automatic vs confirmed vs never)
 
 Frontmatter writes must follow the trust semantics:
@@ -69,6 +84,8 @@ Frontmatter writes must follow the trust semantics:
 ### Requires explicit confirmation
 - Any write that changes meaning-bearing classification (domain, durable taxonomy, claims) or any durable workflow decision.
 - Any write that is triggered by cross-domain or cross-plane use (materializing archive content into a warm note).
+- Any write that changes `maturity`, standing, or other durable artifact role unless an explicit
+  policy allows automatic execution for that artifact class.
 
 ### Must never be auto-applied
 - Destructive or irreversible changes.
@@ -80,6 +97,12 @@ Frontmatter writes must follow the trust semantics:
 Receipts and cursors are operational artifacts:
 - They belong primarily in the system plane, so they remain available and auditable without polluting the writing surface.
 - They may be mirrored into the warm note only as a bounded, clearly non-authoritative status surface (for human convenience).
+
+Mirror note / receipt clarification:
+- the metadata mirror is a portable machine-side projection of a vault note,
+- it may also surface receipt-like information,
+- but it should not be treated as identical to the full receipt model unless a stricter contract
+  says so.
 
 If a note displays status/receipts, it must remain clear that:
 - The note body is still the human’s writing.

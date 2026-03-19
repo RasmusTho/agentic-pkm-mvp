@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, Mapping, MutableMapping, Protocol
 from app.a2a.events import emit_agent_error_event, send_agent_request
 from app.a2a.schema import new_error
 from app.agents.base.loop import Agent
+from app.domain.state_axes import build_promotion_transition
 from app.mcp.vault_tools import VaultToolError, append_note
 from app.orchestrator.agents import AgentPermissionError, resolve_agent_config, validate_agent_permissions
 from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
@@ -313,7 +314,9 @@ def _run_promotion_intent(args: Mapping[str, Any], context: StepContext) -> Dict
         payload["instruction"] = str(instruction)
     maturity = args.get("maturity")
     if maturity:
-        payload["maturity"] = str(maturity)
+        target_maturity = str(maturity)
+        payload["maturity"] = target_maturity
+        payload["transition"] = build_promotion_transition(target_maturity=target_maturity)
 
     event_kwargs = {
         "event": "promote.intent.created",

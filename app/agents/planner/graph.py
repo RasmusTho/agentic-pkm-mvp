@@ -7,6 +7,7 @@ from langgraph.graph import StateGraph, START, END
 
 from app.agents.base.graph import AgentState
 from app.agents.planner.agent import PlannerAgent
+from app.domain.state_axes import review_state_for_maturity
 from app.domain.plan import Plan, PlanStep
 from app.store.object_store import ObjectStore
 import app.guardrails as guardrails
@@ -113,9 +114,9 @@ class PlannerGraph:
                             PlanStep(
                                 id="primitive-1",
                                 kind="primitive",
-                                action="update_review_state",
+                                action="promote_to_evergreen",
                                 target=pending.target or plan.goal,
-                                args={"review_state": "processed"},
+                                args={"review_state": review_state_for_maturity("evergreen"), "maturity": "evergreen"},
                             )
                         )
                     self.agent.save_plan(subplan)
@@ -221,16 +222,25 @@ class PlannerGraph:
         if not obj:
             return {"ok": False, "reason": "missing_object", "target": target}
 
-        if action_name in ("update_review_state", "promote_to_evergreen", "set_review_state"):
+        if action_name in ("update_review_state", "promote_to_evergreen", "set_review_state", "set_maturity"):
             new_state = args.get("review_state") or "processed"
+            new_maturity = args.get("maturity")
+            if action_name == "promote_to_evergreen":
+                new_maturity = new_maturity or "evergreen"
+                new_state = args.get("review_state") or review_state_for_maturity(str(new_maturity))
             payload = obj.payload or {}
             frontmatter = payload.get("frontmatter") or {}
             frontmatter["review_state"] = new_state
+            if new_maturity:
+                frontmatter["maturity"] = str(new_maturity)
             payload["frontmatter"] = frontmatter
             obj.payload = payload
             # Save updated object
             self.store.save_object(obj, emit_outbox=False)
-            return {"ok": True, "action": action_name, "review_state": new_state, "target": target}
+            result = {"ok": True, "action": action_name, "review_state": new_state, "target": target}
+            if new_maturity:
+                result["maturity"] = str(new_maturity)
+            return result
 
         return {"ok": False, "reason": "unknown_action", "action": action_name, "target": target}
 

@@ -8,7 +8,7 @@ RULES = [
     {"when": {"review_state": "inbox"}, "action": "exclude"},
     {"when": {"review_state": "archived"}, "action": "include", "weight": 0.25},
     {"when": {"review_state": "promoted"}, "action": "include", "weight": 1.0},
-    {"when": {"review_state": "evergreen"}, "action": "include", "weight": 1.2},
+    {"when": {"maturity": "evergreen"}, "action": "include", "weight": 1.2},
     {"when": {"review_state": "processed"}, "action": "include", "weight": 0.8},
 ]
 
@@ -29,7 +29,7 @@ def test_ignore_glob_and_path_defaults(tmp_path: Path):
         dedent(
             """\
     ---
-    review_state: evergreen
+    maturity: evergreen
     ---
     evergreen body
     """

@@ -46,6 +46,8 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/PROJECT_KERNEL.md | Project kernel (human flows + stability contracts) | Aligned (forward line v5.x) | 2026-02-05 | Canonical intent and stability contracts with trust/event/config anchors; notes default scope experiment under Tensions/Follow-ups. |
+| docs/CONCEPTS/COGNITIVE_ONTOLOGY.md | Cognitive ontology (actors, artifacts, commitments, operations) | Aligned (forward line v5.x) | 2026-03-19 | Canonical human-first ontology for the second-brain domain; defines actors, artifacts, commitment structures, metacognitive layer, and provenance/accountability before schema/runtime concerns. |
+| docs/CONCEPTS/ONTOLOGY_VOCABULARY.md | Ontology vocabulary (canonical terms + drift map) | Aligned (forward line v5.x) | 2026-03-19 | Canonical normalized vocabulary for overloaded terms such as `note`, `object`, `source`, `agent`, `review`, `promotion`, and `memory`, with ontology-layer guidance and rewrite priorities. |
 | docs/CONCEPTS/LAYERING_MODEL.md | Layering model (Domain/Plane/Trust/Zone) | Aligned (forward line v5.x) | 2026-02-05 | Orthogonal boundary model; adds the default scope policy experiment, one-shot includes, bridge fields, and missing-domain safe degradation. |
 | docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md | Trust semantics contract (assert/suggest/apply) | Aligned (forward line v5.x) | 2026-02-05 | Defines trust tiers, gating rules, write constraints, and receipts. |
 | docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md | Event/intent compatibility contract (versioning) | Aligned (forward line v5.x) | 2026-02-05 | Covers envelope invariants, versioning rules, idempotence, and new-event checklist. |
@@ -63,6 +65,7 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | docs/STATUS.md | Operational snapshot | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2026-03-14 | Current snapshot of runtime reality, verification status, and forward-line Now/Next/Later; historical ladders moved out of the active status surface. |
 | docs/ROADMAP.md | Strategic roadmap | Aligned (SoT v5.5 baseline locked + forward line v5.6 planned) | 2026-02-05 | Forward line leans on the v5.5 baseline while v5.6 LangGraph/Reasoning stages are planned; runtime loop evaluation stack updated for registry watcher + DB outbox. |
 | docs/plans/V56_FORWARD_LINE.md | v5.6 forward line kickoff plan | Aligned (SoT v5.6 forward line) | 2026-02-05 | Now/Next/Later plan with acceptance criteria for watchers auto-run, LangGraph rollout, and orchestrator V2; links STATUS/ROADMAP for traceability. |
+| docs/plans/ONTOLOGY_ALIGNMENT_PLAN.md | Ontology alignment plan | Aligned (forward line v5.x) | 2026-03-19 | Plan for revising active SoT docs and selected runtime seams against the new cognitive ontology and normalized vocabulary. |
 | docs/tracks/TRACK_WATCHER.md | Watcher track (v5.1–v5.4) | Aligned (forward line v5.x) | 2026-02-05 | Adds registry watcher as runtime standard; legacy snapshot watcher noted. |
 | docs/tracks/TRACK_PANELAGENT_LANGGRAPH.md | PanelAgent LangGraph track (v5.5) | Aligned (forward line v5.x) | 2026-02-05 | PanelAgent catalog/decider modes, planner/orchestrator pipeline, promotion consumer. |
 | docs/tracks/TRACK_AGENTOPS_A2A_MCP.md | AgentOps / A2A / MCP track | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Pattern harvest themes for events/A2A/tools/ops; some items are planned. |
@@ -199,3 +202,6 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | --- | --- | --- | --- | --- |
 | docs/scenarios/REALITY_MVP.md | Reality-MVP scenario | Legacy (archived) | 2026-02-05 | Historical reference; current baseline tracked in STATUS. |
 | docs/plans/PROTOCOL_SATELLITE_SYNC.md | Satellite sync protocol | Planned / not implemented | 2026-02-05 | Spec only; not implemented in v5.5 baseline. |
+| docs/plans/ONTOLOGY_ALIGNMENT_PLAN.md | Ontology alignment plan | Plan | 2026-03-19 | Tracks documentation-first ontology alignment across active SoT docs and runtime seams. |
+| docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md | Runtime ontology normalization | Plan | 2026-03-19 | Concrete normalization recommendations for `note`, `review_state`, `maturity`, `promotion`, `plan`, and mirror/receipt semantics before field or event renames. |
+| docs/plans/STATE_AXIS_SEPARATION_SPEC.md | State axis separation spec | Plan | 2026-03-19 | First implementation-spec draft for separating review posture, maturity, promotion transitions, and execution-plan semantics in the runtime. |

@@ -11,6 +11,12 @@ Compatibility and evolution are governed by `docs/CONCEPTS/EVENT_COMPATIBILITY_C
 
 Connector/watcher/inbox action vocabulary and delta feed guardrails are captured in `docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md`, so the event catalog and the new connector terminology stay aligned.
 
+Normalization note:
+- events are operational artifacts, not the full ontology of the domain,
+- `source` in an event means emitter attribution, not automatically a `Source Artifact`,
+- transition families such as review and promotion may require separate intent/execution/receipt
+  layers even when the current event catalog is not yet fully normalized.
+
 
 ## Outbox envelope (canonical)
 
@@ -46,6 +52,15 @@ Outbox events MUST NOT carry embedding vectors.
 - Events may carry embedding metadata (dimension, model, counts) but not the raw vector payload.
 
 ## Event catalog (selected)
+
+## Interpretation rules
+
+- `object_id` and related fields are runtime/store identifiers unless explicitly qualified as human
+  artifact identifiers.
+- `note` payload fragments usually point to a vault note reference, not to the entire ontology of an
+  artifact.
+- `promote.*` and `promotion.*` names currently coexist; read them as belonging to the same broad
+  transition family in the current runtime, not as proof of a finalized naming model.
 
 ### `index.embedding.requested`
 
@@ -139,6 +154,30 @@ Payload typically includes:
 - `panel` reference
 - `action` reference
 - `instruction`
+
+Interpretation:
+- this is an intent event,
+- not the promotion transition itself,
+- and not a human-legible receipt.
+
+## Event-family normalization guidance
+
+The active runtime still mixes:
+- transition-family names (`promotion.*`)
+- imperative/process names (`promote.*`)
+- and state-mutation consequences carried elsewhere in runtime data.
+
+Until a later migration normalizes event names, interpret them through these layers:
+1. intent event
+2. execution/result event
+3. receipt/accountability artifact
+
+Examples in the current runtime:
+- `panel.intent.created` = intent-creation layer
+- `promote.intent.created` = transition intent layer
+- `promote.done` / `promote.error` = execution-result layer
+
+The event stream is not, by itself, the complete receipt model.
 
 ## References
 

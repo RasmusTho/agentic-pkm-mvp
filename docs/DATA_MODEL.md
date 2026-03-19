@@ -11,16 +11,29 @@ Related docs:
 - `docs/CORE_CONTRACT.md` for the semantic contract mirrored here
 - `docs/DB_SCHEMA.md` for table-level schema detail
 - `docs/FRONTMATTER.md` for warm-surface metadata ownership
+- `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md` for the current recommendation on separating
+  human artifacts, projections, review posture, maturity, promotion, and execution plans
 
 ## Canonical contract
 - Core-6 (uuid, title, origin, source_ref, trust, review_state) is the minimal semantic contract.
 - State axes (status, maturity, priority, temporal fields) are policy-selected and may be absent.
 - Derived overlays (zone, metrics, embeddings, scores) are system-owned and computed from signals.
 
+Normalization note:
+- `review_state` is currently the active review/mutation-posture axis.
+- `maturity` is a distinct semantic axis where enabled, even if active runtime paths sometimes
+  collapse promotion outcomes into `review_state`.
+- `kind` is policy routing, not artifact ontology.
+
 ## Mirror rules
-- Objects in the DB mirror notes and external sources; they do not override note meaning.
+- Objects in the DB mirror vault notes and external source artifacts; they do not override artifact meaning.
 - Missing YAML does not imply missing semantics; Core-6 and state axes may be implicit or derived.
 - Zones, metrics, embeddings, and scores are derived and can be rebuilt from the source content.
+
+Projection clarification:
+- a runtime/store row is a projection or record of an artifact,
+- not the artifact's full ontology,
+- even when the storage layer uses labels such as `kind="note"`.
 
 ## Canonical vs derived artifacts
 
@@ -35,6 +48,9 @@ Derived artifacts are rebuildable views:
 - operational traces, receipts, and audit records retained for observability and legibility
 
 Derived artifacts may be persisted for performance and auditability, but they must never become the only remaining copy of meaning.
+
+Execution plans belong to the derived/system side unless and until a separate human project model is
+introduced.
 
 ## Persistence surfaces
 
@@ -54,6 +70,11 @@ This system persists across three conceptual surfaces:
 - rebuildable indexes and machine views
 - configuration artifacts and their validation/audit receipts
 
+This plane may also contain:
+- execution artifacts such as generated plans,
+- mirror artifacts,
+- and low-level event records.
+
 System-plane persistence must avoid polluting the warm writing surface while remaining inspectable and portable.
 
 ## Audit and receipts
@@ -68,6 +89,10 @@ Receipts may be surfaced through UI affordances, but they must remain available 
 
 ## Tables (current mirror surface)
 
+Interpretation rule:
+- table names and storage labels describe the current mirror/runtime surface.
+- they do not, by themselves, define the canonical domain vocabulary.
+
 ### objects
 - `id` uuid pk
 - `kind` text
@@ -77,6 +102,8 @@ Receipts may be surfaced through UI affordances, but they must remain available 
 - `search_vector` tsvector generated
 
 The `payload` contains the Core-6 projection plus any policy-enabled state axes and overlays.
+In current runtime practice it may also contain execution-state or legacy compressed semantics that
+the ontology keeps separate.
 
 ### chunks
 - `id` uuid pk
@@ -120,6 +147,9 @@ The `payload` contains the Core-6 projection plus any policy-enabled state axes 
 - `value` jsonb
 - `created_at` timestamptz default now()
 
+These are system-side decision records, not durable proof that the corresponding semantic transition
+has been accepted by the human unless an explicit receipt or confirmed mutation also exists.
+
 ### audit
 - `id` uuid pk
 - `object_id` uuid null
@@ -128,3 +158,7 @@ The `payload` contains the Core-6 projection plus any policy-enabled state axes 
 - `ts` timestamptz default now()
 - `trace_id` text
 - `details` jsonb
+
+Audit rows are operational records.
+They support accountability, but they are not identical to the full concept of a receipt unless the
+owning contract says so.

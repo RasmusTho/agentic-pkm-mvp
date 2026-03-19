@@ -20,6 +20,13 @@ Related docs:
 - `docs/DATA_MODEL.md` for semantic ownership and persistence-surface meaning
 - `docs/EVENTS.md` for the canonical outbox envelope carried in `outbox.payload`
 - `docs/OPERATIONS.md` for runtime health checks involving the DB outbox
+- `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md` for the current normalization recommendation on
+  artifact/projection boundaries and compressed state vocabulary
+
+Interpretation rule:
+- schema terms such as `objects`, `kind`, `payload`, and `outbox` describe the current physical
+  representation layer.
+- they must not be read as the canonical ontology of the domain.
 
 ## Core Tables (Store)
 
@@ -31,6 +38,8 @@ Related docs:
 - `created_at` / `updated_at` (`timestamptz`, default `now()`)
 - Notes:
   - Some historical branches add an optional `uuid` column + index; do not rely on it unless your migration head includes it.
+  - `kind="note"` is currently a runtime/storage label and may represent a projection of a vault
+    note rather than the full semantic class of the human artifact.
 
 ### `chunks`
 - `id` (`uuid`, PK)
@@ -61,6 +70,10 @@ Related docs:
   - `decisions_object_id_idx`, `decisions_key_idx`
   - `(object_id, key, created_at desc)` for “latest decision” reads
 
+Interpretation:
+- rows in `decisions` are operational/system-side decision records.
+- they are not automatically equivalent to human-approved commitments or receipts.
+
 ### `membership`
 The current baseline retains the **composite** key form:
 - `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
@@ -83,6 +96,10 @@ Created/ensured by `app/services/outbox.py:bootstrap()`:
   - `delivered_at` (`timestamptz`, nullable)
   - `attempts` (`int`, default `0`)
   - Indexes: `outbox_created_idx`, `outbox_delivered_idx`
+
+Interpretation:
+- the outbox is the canonical runtime queue,
+- but the event payload is still an operational artifact layer rather than the whole domain model.
 
 ## Explicit Deltas / Known Gaps
 - This repo still contains historical migration lineage and merge history under `app/alembic/versions/`. If you hit unexpected columns or migration conflicts, inspect the migration set and record the intended baseline delta in the same change.

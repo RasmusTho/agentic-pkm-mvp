@@ -54,7 +54,8 @@ def test_runtime_loop_run_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     note_path = vault_root / DEFAULT_TARGET_SUBDIR / "AgenticPKM-UAT" / "evergreen-strategy.md"
     frontmatter, _ = load_frontmatter(note_path.read_text(encoding="utf-8"))
-    assert frontmatter.get("review_state") == "evergreen"
+    assert frontmatter.get("review_state") == "reviewed"
+    assert frontmatter.get("maturity") == "evergreen"
 
     records = [json.loads(line) for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     promote_events = [rec for rec in records if rec.get("event") == "promote.intent.created"]
@@ -72,6 +73,7 @@ def test_runtime_loop_run_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     promoted = store.get_object(PROMOTE_UUID)
     assert promoted is not None
     assert (promoted.payload or {}).get("review_state")
+    assert (promoted.payload or {}).get("maturity") == "evergreen"
 
     status = status_service.get_system_status()
     assert status.events.promote_created_total >= 1

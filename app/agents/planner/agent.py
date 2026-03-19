@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from app.domain.state_axes import review_state_for_maturity
 from app.domain.plan import Plan, PlanStep
 from app.store.object_store import ObjectStore
 
@@ -35,6 +36,14 @@ class PlannerAgent:
     def build_plan(self, goal: str, *, max_steps: int = 10, max_replans: int = 0) -> Plan:
         plan = Plan.create_top_level(goal=goal, max_steps=max_steps, max_replans=max_replans)
         target_uuid = self._extract_target_uuid(goal)
+        wants_evergreen = "evergreen" in goal.lower()
+
+        primitive_action = "promote_to_evergreen" if wants_evergreen else "update_review_state"
+        primitive_args = (
+            {"review_state": review_state_for_maturity("evergreen"), "maturity": "evergreen"}
+            if wants_evergreen
+            else {"review_state": "processed"}
+        )
 
         plan.steps = [
             PlanStep(
@@ -47,9 +56,9 @@ class PlannerAgent:
             PlanStep(
                 id=self._new_step_id("primitive", 1),
                 kind="primitive",
-                action="update_review_state",
+                action=primitive_action,
                 target=target_uuid,
-                args={"review_state": "processed"},
+                args=primitive_args,
             ),
         ]
         plan.max_steps = max_steps

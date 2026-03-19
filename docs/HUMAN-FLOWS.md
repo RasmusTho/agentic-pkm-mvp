@@ -5,10 +5,19 @@ Authority: Canonical user-facing behavior contract for the current system; archi
 
 > Audience: humans using the system in Obsidian + CLI. Human language is canonical; automation is additive, not authoritative.
 
+This document is intentionally user-facing and practical.
+It therefore speaks often in note- and vault-centric language, because those are the most visible
+human surfaces in the current baseline.
+
+For the broader domain ontology of the system as a second-brain environment — including actors,
+artifacts, commitment structures, metacognition, and provenance/accountability — see
+`docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`.
+
 ## 1. Vault-first, Human-first System
 - Keep writing in your vault. Agents run as helpers, not owners.
 - The vault is the human surface; agents write traces/logs to side-channels (ObjectStore, Outbox, System folders) without rewriting your prose by default.
 - CLI is an agent tooling surface, not the main UI: it exists for automation, reproducible runs, and debugging.
+- The current baseline is vault-first in practice, but the broader second-brain domain also includes external source artifacts, project material, reflective material, and system receipts outside the visible writing surface.
 
 ## 2. Scope and Current Reality-MVP Snapshot
 - v4.10 locked baseline: ingest + ASK + observability + orchestrator runtime V1; panels are optional and not indexed as content.
@@ -18,7 +27,7 @@ Authority: Canonical user-facing behavior contract for the current system; archi
 - Keep frontmatter lean: `title`, `uuid`, optional `type/category/facets`.
 - Ingest happens through the canonical vault ingest path, either as a full batch or targeted note update.
 - UUID healing is automatic and logged; malformed frontmatter is skipped with a warning, not a crash.
-- Ingest writes objects to the Store, keeps derived indexes rebuildable, and maintains VaultMirror copies under `System/Metadata/VaultMirror/...`.
+- Ingest projects notes and other ingestable artifacts into the Store, keeps derived indexes rebuildable, and maintains VaultMirror copies under `System/Metadata/VaultMirror/...`.
 - External ingest (drop folder) is opt-in; ingested objects carry `origin: external_raw` and surface in ASK/status alongside vault entries.
 
 ### Vault sync principles
@@ -32,6 +41,7 @@ Authority: Canonical user-facing behavior contract for the current system; archi
 - Answers must cite sources with origin/plane tags so the human can inspect where the answer came from.
 - Cite-before-trust: source visibility is mandatory, while reranking and critique remain optional overlays.
 - The current baseline treats ASK as a reliable retrieval-and-answer surface; richer agent-facing ASK behavior belongs to the forward line, not this human contract.
+- ASK is only one current human-facing retrieval/synthesis surface. It should not be read as exhausting the broader second-brain domain, which also includes capture, reflection, planning, project work, and creative work.
 
 ## 5. Design Principles (Human-first constraints)
 - The human is the ultimate authority for classification and meaning; the system proposes but never silently overrides.
@@ -39,6 +49,7 @@ Authority: Canonical user-facing behavior contract for the current system; archi
 - Panels are a conversation space for suggestions/instructions, not part of the knowledge base.
 - Metadata and logging remain inspectable (e.g., in `System/Metadata/...`) but unobtrusive in the writing surface.
 - Stability first: idempotent operations and predictable frontmatter/move policies keep trust high.
+- The system supports more than settled knowledge handling; it also supports project work, creative work, reflection, and other cognitive work without forcing all artifacts into a single note-like mold.
 - See also: `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md` (ASSERT/SUGGEST/APPLY gating + receipt expectations).
 - Panel semantics:
   - Freeform commands in the panel may execute when confidently mapped to a canonical action; the runtime still writes a receipt so the human sees what happened.

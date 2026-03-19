@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping
 
+from app.domain.state_axes import normalize_promotion_target, review_state_for_maturity
 from app.events.schema import OutboxEvent, make_outbox_event
 from app.events.types import PROMOTE_DONE, PROMOTE_ERROR, PROMOTE_INTENT_CREATED
 from app.events.models import new_event
@@ -66,12 +67,14 @@ def _apply_promotion_to_store(note_uuid: str, desired_state: str, trace_id: str 
     store = ObjectStore()
     existing = store.get_object(note_uuid)
     payload = dict(existing.payload or {}) if existing else {}
+    review_state = review_state_for_maturity(desired_state)
     promotion_meta = {
         "state": desired_state,
         "applied_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     payload["promotion"] = promotion_meta
-    payload["review_state"] = desired_state
+    payload["maturity"] = desired_state
+    payload["review_state"] = review_state
     if existing is None:
         obj = DomainObject(
             uuid=note_uuid,
@@ -121,7 +124,7 @@ def _handle_promotion_payload(
         note_path_value = payload.get("note_path") if isinstance(payload, dict) else None
     desired_state = "promoted"
     if isinstance(payload, dict):
-        desired_state = str(payload.get("maturity") or payload.get("action", {}).get("id") or desired_state)
+        desired_state = normalize_promotion_target(payload) or desired_state
 
     if not note_uuid:
         summary["errors"] += 1
@@ -144,7 +147,14 @@ def _handle_promotion_payload(
         return summary
 
     note_path = Path(str(note_path_value))
-    if not apply_promotion_frontmatter(note_path, note_uuid, desired_state, optional_title=title):
+    review_state = review_state_for_maturity(desired_state)
+    if not apply_promotion_frontmatter(
+        note_path,
+        note_uuid,
+        review_state,
+        optional_title=title,
+        maturity=desired_state,
+    ):
         summary["errors"] += 1
         emit(
             PROMOTE_ERROR,
@@ -167,6 +177,8 @@ def _handle_promotion_payload(
             "note_uuid": note_uuid,
             "note_path": str(note_path),
             "state": desired_state,
+            "maturity": desired_state,
+            "review_state": review_state,
             "source_event": event_id,
         },
         trace_id,
