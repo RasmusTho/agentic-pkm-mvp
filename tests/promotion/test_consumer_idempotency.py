@@ -44,3 +44,4 @@ def test_consume_promotion_intents_skips_duplicates(tmp_path: Path) -> None:
 
     content = note_path.read_text(encoding="utf-8")
     assert "review_state: evergreen" in content
+    assert "maturity: evergreen" in content
