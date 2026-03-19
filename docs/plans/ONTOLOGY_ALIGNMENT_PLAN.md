@@ -19,6 +19,9 @@ Authoritative concept sources:
 Current normalization recommendation:
 - `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md`
 
+Current implementation-spec draft:
+- `docs/plans/STATE_AXIS_SEPARATION_SPEC.md`
+
 ## Current diagnosis
 
 The highest current concept drift appears around:
@@ -358,6 +361,8 @@ Progress note:
   - runtime-seam review for `app/ingest/vault_alpha.py`, `app/planner/schema.py`, `app/promotion/consumer.py`, and `app/services/note_log.py`.
 - A deeper normalization recommendation for `note`, `review_state`, `maturity`, `promotion`, `plan`,
   and mirror/receipt separation now lives in `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md`.
+- A first implementation-spec draft for separating `review_state`, `maturity`, `promotion`, and
+  execution-plan semantics now lives in `docs/plans/STATE_AXIS_SEPARATION_SPEC.md`.
 
 ## Success criteria
 
