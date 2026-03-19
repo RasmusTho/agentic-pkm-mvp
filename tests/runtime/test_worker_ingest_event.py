@@ -98,3 +98,127 @@ def test_handle_ingest_vault_changed_heals_uuid_using_vault_layout_inbox(
 
     obj = ObjectStore().get_object(healed_uuid)
     assert obj is not None
+
+
+def test_handle_ingest_vault_changed_uses_relative_path_when_payload_path_is_host_absolute(
+    tmp_path: Path, monkeypatch
+) -> None:
+    reset_memory_stores()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    mounted_vault_root = tmp_path / "mounted-vault"
+    inbox = mounted_vault_root / "📥 Inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+
+    note_uuid = str(uuid.uuid4())
+    note_path = inbox / "host-path-note.md"
+    note_path.write_text(
+        f"---\nuuid: {note_uuid}\n---\n\nRuntime path translation works.\n",
+        encoding="utf-8",
+    )
+
+    host_style_root = Path("/Users/rasmus/Library/Mobile Documents/iCloud~md~obsidian/Documents/PKM - Alpha")
+    payload = {
+        "vault_path": str(host_style_root / "📥 Inbox" / "host-path-note.md"),
+        "relative_path": "📥 Inbox/host-path-note.md",
+        "hash": "test-hash",
+        "mtime": 123.0,
+    }
+
+    summary = outbox_worker.handle_ingest_vault_changed(payload, vault_root=mounted_vault_root)
+    assert summary.ingested == 1
+
+    obj = ObjectStore().get_object(note_uuid)
+    assert obj is not None
+    assert "Runtime path translation works." in str(obj.payload.get("raw_text") or obj.payload.get("text") or "")
+
+
+def test_handle_ingest_vault_changed_skips_missing_note(tmp_path: Path, monkeypatch) -> None:
+    reset_memory_stores()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    vault_root = tmp_path / "vault"
+    (vault_root / "📥 Inbox").mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "vault_path": str(vault_root / "📥 Inbox" / "missing.md"),
+        "relative_path": "📥 Inbox/missing.md",
+        "hash": "test-hash",
+        "mtime": 123.0,
+    }
+
+    summary = outbox_worker.handle_ingest_vault_changed(payload, vault_root=vault_root)
+    assert summary.ingested == 0
+
+
+def test_handle_panel_scan_requested_emits_panel_events(tmp_path: Path, monkeypatch) -> None:
+    reset_memory_stores()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("PANEL_AGENT_DECIDER", "rule")
+
+    vault_root = tmp_path / "vault"
+    inbox = vault_root / "📥 Inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+
+    note_uuid = str(uuid.uuid4())
+    note_path = inbox / "panel-note.md"
+    note_path.write_text(
+        "---\n"
+        f"uuid: {note_uuid}\n"
+        "ai_panel_auto_run: watcher\n"
+        "---\n"
+        "%% AI:Start %%\n"
+        "## AI-instruktion\n"
+        "Promote this test note when checked.\n\n"
+        "## AI-åtgärder\n"
+        "- [x] Make this note evergreen <!--ai:id=promote.evergreen-->\n\n"
+        "## AI-logg\n"
+        "%% AI:End %%\n",
+        encoding="utf-8",
+    )
+
+    events: list[str] = []
+
+    def fake_write_outbox(event):
+        events.append(getattr(event, "event", ""))
+        return "ok"
+
+    monkeypatch.setattr(outbox_worker, "write_outbox_event", fake_write_outbox)
+
+    payload = {
+        "vault_path": str(note_path),
+        "relative_path": "📥 Inbox/panel-note.md",
+        "hash": "test-hash",
+        "mtime": 123.0,
+    }
+
+    summary = outbox_worker.handle_panel_scan_requested(payload, vault_root=vault_root)
+    assert summary.emitted >= 3
+    assert "panel.intent.created" in events
+    assert "panel.intent.executed" in events
+    assert "promote.intent.created" in events
+
+
+def test_handle_panel_scan_requested_defers_unstable_file(tmp_path: Path, monkeypatch) -> None:
+    reset_memory_stores()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    vault_root = tmp_path / "vault"
+    inbox = vault_root / "📥 Inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+
+    note_path = inbox / "panel-note.md"
+    note_path.write_text("stub", encoding="utf-8")
+
+    monkeypatch.setattr(outbox_worker, "_stabilized_note_text", lambda *_args, **_kwargs: None)
+
+    payload = {
+        "vault_path": str(note_path),
+        "relative_path": "📥 Inbox/panel-note.md",
+        "hash": "test-hash",
+        "mtime": 123.0,
+    }
+
+    summary = outbox_worker.handle_panel_scan_requested(payload, vault_root=vault_root)
+    assert summary.emitted == 0
+    assert summary.deferred is True

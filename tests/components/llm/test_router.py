@@ -138,7 +138,7 @@ def test_router_uses_settings_task_policy(monkeypatch, clean_llm_env) -> None:
         llm_routing=LLMRoutingSettings(
             default_chat=LLMRoutingSettings.TaskPolicy(
                 primary=LLMRoutingSettings.RouteTarget(
-                    model_id="openai.chat.gpt_4_1_mini", provider="openai", model="gpt-chat"
+                    model_id="openai.chat.gpt_5_4_mini", provider="openai", model="gpt-chat"
                 ),
                 fallback=LLMRoutingSettings.FallbackPolicy(
                     mode="local", model_id="ollama.chat.llama3_1_8b", provider="ollama", model="llama-local"
@@ -147,7 +147,7 @@ def test_router_uses_settings_task_policy(monkeypatch, clean_llm_env) -> None:
             tasks={
                 "plan": LLMRoutingSettings.TaskPolicy(
                     primary=LLMRoutingSettings.RouteTarget(
-                        model_id="openai.chat.gpt_4_1", provider="openai", model="gpt-4.1"
+                        model_id="openai.chat.gpt_5_4", provider="openai", model="gpt-5.4"
                     ),
                     fallback=LLMRoutingSettings.FallbackPolicy(
                         mode="local", model_id="ollama.chat.llama3_1_8b", provider="ollama", model="llama-local"
@@ -162,11 +162,11 @@ def test_router_uses_settings_task_policy(monkeypatch, clean_llm_env) -> None:
     route = router.route(LLMTaskIntent(task_kind="plan"))
 
     assert route.provider == "openai"
-    assert route.model == "gpt-4.1"
+    assert route.model == "gpt-5.4"
     assert route.reason == "settings"
 
     described = router.describe_intent(LLMTaskIntent(task_kind="plan"))
-    assert described["policy"]["primary"]["model_id"] == "openai.chat.gpt_4_1"
+    assert described["policy"]["primary"]["model_id"] == "openai.chat.gpt_5_4"
     assert described["policy"]["fallback"]["model_id"] == "ollama.chat.llama3_1_8b"
 
 
@@ -177,7 +177,7 @@ def test_router_prefers_selected_model_id_over_env_defaults(monkeypatch, clean_l
         llm_routing=LLMRoutingSettings(
             tasks={
                 "plan": LLMRoutingSettings.TaskPolicy(
-                    primary=LLMRoutingSettings.RouteTarget(model_id="openai.chat.gpt_4_1")
+                    primary=LLMRoutingSettings.RouteTarget(model_id="openai.chat.gpt_5_4")
                 )
             }
         )
@@ -188,7 +188,7 @@ def test_router_prefers_selected_model_id_over_env_defaults(monkeypatch, clean_l
     route = router.route(LLMTaskIntent(task_kind="plan"))
 
     assert route.provider == "openai"
-    assert route.model == "gpt-4.1"
+    assert route.model == "gpt-5.4"
 
 
 def test_router_rejects_incompatible_embedding_fallback(monkeypatch, clean_llm_env) -> None:
@@ -218,7 +218,7 @@ def test_router_honors_model_id_only_chat_fallback(monkeypatch, clean_llm_env) -
         llm_routing=LLMRoutingSettings(
             tasks={
                 "plan": LLMRoutingSettings.TaskPolicy(
-                    primary=LLMRoutingSettings.RouteTarget(provider="openai", model="gpt-4.1"),
+                    primary=LLMRoutingSettings.RouteTarget(provider="openai", model="gpt-5.4"),
                     fallback=LLMRoutingSettings.FallbackPolicy(
                         mode="allowed",
                         model_id="mock.chat",
@@ -267,7 +267,7 @@ def test_router_verification_intents_include_configured_tasks(monkeypatch, clean
         llm_routing=LLMRoutingSettings(
             tasks={
                 "qa": LLMRoutingSettings.TaskPolicy(
-                    primary=LLMRoutingSettings.RouteTarget(provider="openai", model="gpt-4.1-mini")
+                    primary=LLMRoutingSettings.RouteTarget(provider="openai", model="gpt-5.4-mini")
                 )
             }
         )
