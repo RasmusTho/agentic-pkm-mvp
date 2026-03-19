@@ -1,0 +1,155 @@
+State: Concept contract companion (normalized vocabulary and concept-drift map; implementation-aware but ontology-led).
+
+# Ontology Vocabulary — canonical terms and drift map
+
+## Purpose
+
+This document normalizes the most important terms used across the repo.
+
+It answers:
+- which term should be canonical,
+- which existing terms are overloaded or ambiguous,
+- which ontology layer a term belongs to,
+- how implementation terms should be interpreted without letting them redefine the domain.
+
+This document is subordinate to:
+- `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
+- `docs/PROJECT_KERNEL.md`
+
+## Usage rule
+
+When a term appears in multiple ontology layers, the canonical human-first meaning wins.
+Implementation terms may remain in code and migration-era docs, but should be interpreted through the vocabulary below.
+
+## Canonical vocabulary
+
+| Canonical term | Ontology layer | Definition | Prefer over | Avoid / constrain |
+| --- | --- | --- | --- | --- |
+| `Actor` | Actor | Something that can participate in processes and carry attribution. | ad hoc use of "source" or "component" for agency | Treating every emitter as an ontological agent without qualification |
+| `Human` | Actor | The primary bearer of meaning, authority, and accountability. | "user" when meaning/authority is central | Reducing the human to just an API caller |
+| `System Agent` | Actor | A bounded assisting actor that can observe, propose, retrieve, transform, plan, or execute within limits. | runtime component names when discussing agency in general | Using "agent" for every helper, pipeline, or service without clarifying role |
+| `Delegation` | Provenance / accountability | A bounded authorization from a human to a system agent. | implicit "auto-run" framing | Treating automation as authority-free |
+| `Cognitive Artifact` | Artifact | Any persistent or semi-persistent object used in thinking, creating, remembering, planning, or orienting. | "object" as a general domain word | Using "object" as if it were already semantically clear |
+| `Work Artifact` | Artifact | A cognitive artifact used to advance work or thinking. | generic "note" when the artifact is not specifically a vault note | Collapsing all work artifacts into notes |
+| `Source Artifact` | Artifact / role | A cognitive artifact used as evidence, grounding, or reference in a context. | "source" as if it were always a distinct base type | Treating "source" as an intrinsic type in all contexts |
+| `Creative Artifact` | Artifact | A cognitive artifact for generative or exploratory creative work. | forcing creative material into "knowledge" vocabulary | Assuming all artifacts are propositional knowledge |
+| `Project Artifact` | Artifact | A cognitive artifact tied to a project or multi-step effort over time. | generic "document" | Treating project structure as just tags or metadata |
+| `Reflective Artifact` | Artifact | A cognitive artifact used for reflection, self-observation, or learning. | "journal note" when broader reflection is intended | Implicitly treating reflection as therapy-only |
+| `System Artifact` | Artifact | An artifact whose primary purpose is coordination, traceability, or explainability. | "log" or "mirror" when speaking generally | Treating system artifacts as human-authored meaning |
+| `Mirror Artifact` | Artifact / projection-facing specialization | A portable machine-side projection of a human-facing artifact with selected metadata/history. | vague `note log` or raw `mirror` when portability/projection is meant | Treating the mirror as the primary human artifact |
+| `Receipt Artifact` | Artifact / accountability specialization | A human-legible system artifact that records what happened, with what authority, and with what result. | generic `log` when accountability is meant | Treating receipts as backend-only diagnostics |
+| `Execution Artifact` | Artifact / process specialization | A generated artifact used to coordinate or record execution rather than to serve as a human project or note. | overloading `plan` or `run` | Treating execution artifacts as human commitments by default |
+| `Vault Note` | Artifact / implementation-facing specialization | A human-facing editable artifact in the warm plane, typically represented as a vault markdown note. | generic "note" when warm-surface specificity matters | Using "note" to mean every artifact in the system |
+| `Commitment` | Commitment structure | Something requiring attention, maintenance, progress, or decision. | overloading "task" or "project" | Modeling all open loops as notes |
+| `Project` | Commitment structure | A commitment requiring multiple steps over time. | generic "plan" or "set" when commitment is meant | Treating project as just a folder or tag |
+| `Next Action` | Commitment structure | The next concrete step that can advance a commitment. | vague "action" when GTD-like meaning matters | Using "action" for both checkbox label and ontological action without distinction |
+| `Waiting State` | Commitment structure / state | A blocked or deferred commitment dependent on another actor or event. | generic "pending" | Treating waiting as equivalent to inactivity |
+| `Review Cycle` | Commitment structure / operation | A recurring re-orientation practice that restores trust in the system. | one-off "review" wording | Treating review only as content approval |
+| `Cognitive Operation` | Operation | A meaningful activity performed on artifacts or commitments in order to understand, create, decide, remember, or advance work. | endpoint or feature names when discussing domain behavior | Elevating ASK or RAG to the central domain model |
+| `Inquiry` | Operation | A question-driven or exploratory cognitive operation. | making `Question` the primitive | Treating all retrieval as explicit Q&A |
+| `Proposal` | System artifact / process object | A recommended interpretation, change, or next step that has not yet been adopted. | mixing with `intent` | Treating every proposal as consent |
+| `Intent` | Process object | An expressed will that something should be done. | using `proposal` for explicit requested action | Collapsing system suggestion and human-approved intent |
+| `Action` | Operation / transition | A concrete performed step that changes state, artifact, or commitment trajectory. | overloaded checkbox/action-catalog term in domain discussion | Using action labels as if they were domain primitives |
+| `Transition` | Transition | A state-changing progression such as review, promotion, acceptance, rejection, archive. | objectifying review or promotion | Treating `promotion` as a durable entity |
+| `Review` | Transition / operation | A process or transition of examination, evaluation, or approval. | raw `review_state` when discussing ontology | Treating review solely as a status field |
+| `Promotion` | Transition | A transition in which an artifact changes role, maturity, or standing. | "promotion object" or treating it as a standalone thing | Collapsing it with plan, intent, and result |
+| `Receipt` | System artifact / accountability object | A human-legible record of what happened, by whom or by what, under what authority, and with what result. | generic "log" when human-facing accountability is meant | Treating receipts as optional diagnostics only |
+| `Provenance` | Provenance | The explanatory context for origin, dependence, and transformation. | reducing to `origin` or path alone | Treating provenance as just metadata garnish |
+| `Metacognitive State` | Metacognitive layer | A state concerning understanding, uncertainty, attention, load, or calibration. | hiding this behind retrieval/ranking language | Ignoring open loops, attention, and calibration |
+| `Open Loop` | Metacognitive layer / commitment structure | Anything that still has the human's attention without being sufficiently clarified or closed. | generic "inbox item" when broader meaning is intended | Treating all open loops as content artifacts |
+
+## Drift map for overloaded repo terms
+
+| Existing term | Observed drift | Most likely ontology class | Recommendation |
+| --- | --- | --- | --- |
+| `note` | Used for warm artifact, markdown file, object kind, and generic content unit | `Vault Note` or `Work Artifact` depending on context | Reserve `Vault Note` for warm editable notes; use `Cognitive Artifact` / `Work Artifact` elsewhere |
+| `object` | Used for domain artifact, store row, external file surrogate, and generic payload container | Usually implementation-facing `Object Record`, not base ontology | Avoid as a domain term; use artifact language in docs and reserve object for storage/runtime when necessary |
+| `source` | Used for provenance origin, evidence artifact, emitter identity, and file path | `Source Artifact`, `Provenance`, or emitter attribution depending on context | Always qualify: `source artifact`, `source emitter`, `source_ref`, or `origin` |
+| `agent` | Used for true assisting actors, deterministic pipelines, services, and roles | `System Agent` or role | Keep `System Agent` for bounded assisting actors; call simple components/services by their architectural name when agency is not intended |
+| `review` | Used for process, state field, approval, and promotion-related gating | `Review` transition/process | Distinguish `review` (process), `review state` (state marker), and approval/acceptance (decision/transition) |
+| `promotion` | Used for panel intent, agent flow, maturity change, and frontmatter update | `Promotion` transition | Treat as a transition with associated intent/receipt, not a standalone object |
+| `memory` | Used for human memory, external memory, in-process cache, and historical memory-store designs | `external cognitive support` at domain level; implementation varies | Constrain usage carefully; do not use `memory` as a blanket synonym for artifact store |
+| `plan` | Used for commitment structure, generated execution artifact, and planner output schema | `Plan Artifact` or `Project` depending on context | Distinguish project/commitment from execution plan |
+| `action` | Used for checkbox labels, ontological operations, tool calls, and next actions | `Action`, `Next Action`, or action-catalog item depending on context | Qualify as `next action`, `catalog action`, or `performed action` |
+| `artifact` | Sometimes means any content, sometimes only durable human-readable output | `Cognitive Artifact` | Prefer as the general domain term over `object` |
+| `receipt` | Used sparsely despite being conceptually central | `Receipt` | Promote as the canonical accountability term |
+
+## Interpretation rules for key docs
+
+### `docs/CORE_CONTRACT.md`
+- Read `note or object` as a migration-era compression of at least two layers:
+  - `Vault Note` / human-facing artifact
+  - storage/runtime representation
+- Do not treat `object` there as the preferred domain term going forward.
+
+### `docs/ARCHITECTURE.md`
+- Read `object store`, `store_objects`, and `objects` as implementation/storage terms.
+- Read `note` carefully: it sometimes means `Vault Note`, sometimes any ingested artifact.
+- Read `agent` as an architectural/runtime term that may be narrower than `System Agent` in the ontology.
+
+### `docs/HUMAN-FLOWS.md`
+- This is closest to the domain perspective, but still compresses:
+  - artifact,
+  - commitment,
+  - proposal,
+  - receipt,
+  - and action into "note flows".
+- Interpret it through `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` when revising.
+
+### `docs/AGENTS.md`
+- This document uses `agent` in an implementation-architecture sense.
+- It should later be revised to distinguish:
+  - ontological `System Agent`,
+  - runtime component,
+  - and role in a workflow.
+
+## Runtime seam notes
+
+These notes do not redefine the ontology.
+They record where the active runtime most clearly compresses multiple ontology layers.
+
+- `app/ingest/vault_alpha.py`
+  - `note` means at least three things at once:
+    - a human-facing vault note,
+    - a mirror-backed ingest path,
+    - and repeated runtime/store/index projections with `kind="note"`.
+  - `review_state` and `maturity` are both present, which supports keeping them distinct in the
+    ontology even though downstream runtime paths do not always preserve that distinction.
+
+- `app/planner/schema.py`
+  - `Plan` is currently an execution-oriented runtime artifact, not the same thing as a project,
+    commitment, or review cycle in the human ontology.
+  - `source_object_uuid` is runtime wording and should not be mistaken for the domain's preferred
+    term for a human artifact.
+
+- `app/promotion/consumer.py` and `app/services/note_update.py`
+  - `promotion` currently resolves into `review_state` mutation in both vault frontmatter and store
+    payload.
+  - This is a strong sign that runtime naming and ontology naming are still misaligned here.
+
+- `app/services/note_log.py`
+  - `note log` currently names a mirror path and future logging surface more than a fully realized
+    receipt model.
+  - Treat `note log`, `mirror`, and `receipt` as related but not yet fully separated concepts.
+
+## Documentation rewrite priorities
+
+The following terms should be corrected first in active SoT docs:
+1. `note`
+2. `object`
+3. `source`
+4. `agent`
+5. `review`
+6. `promotion`
+7. `memory`
+8. `plan`
+9. `action`
+
+## Source of truth rule
+
+If a runtime or schema term conflicts with the ontology:
+- the ontology defines what the concept means,
+- architecture defines how the runtime is currently wired,
+- schema/code define how the current system represents it.
+
+These layers must not be silently collapsed.

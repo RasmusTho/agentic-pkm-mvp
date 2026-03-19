@@ -49,6 +49,9 @@ Audit should make the system legible: the human can see what happened, why it ha
 
 Canonical layering story: the system uses four orthogonal dimensions — Domain, Plane, Trust, Zone — to describe boundaries without conflating them. See `docs/CONCEPTS/LAYERING_MODEL.md` for definitions and the cross-domain “bridge” concept.
 
+Canonical ontology story: the system is a human-first second-brain environment with six ontological layers — Actors, Artifacts, Commitment structures, Cognitive/creative operations, Metacognitive layer, and Provenance/accountability. See `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`.
+Canonical vocabulary story: overloaded terms such as `note`, `object`, `source`, `agent`, `review`, `promotion`, and `memory` are normalized in `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`.
+
 Cross-platform constraints are defined in `docs/CONCEPTS/PORTABILITY_CONTRACT.md`. Archive exposure and safety (discovery → materialization) are defined in `docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md`.
 
 ## 4. Stability Contracts (what must remain stable over time)
@@ -81,6 +84,8 @@ This project supports modern agentic patterns as *architectural families*, not f
 - Archive exposure safety is now defined in `docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md`; follow-up is to reference it consistently where cold archive behavior is described.
 - Cross-platform portability is now defined in `docs/CONCEPTS/PORTABILITY_CONTRACT.md`; follow-up is to reference it consistently where portable artifacts and path-like references are described.
 - Trust semantics and gating expectations are now anchored in `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`; follow-up is to reference it consistently where flows describe assertions, suggestions, and durable changes.
+- Cognitive ontology is now anchored in `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`; follow-up is to reference it consistently where notes, objects, agents, commitments, and human flows are described.
+- Ontology vocabulary is now anchored in `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`; follow-up is to replace compressed or overloaded terms in active SoT docs where possible.
 - Event/intent versioning and backward/forward compatibility are now anchored in `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`; follow-up is to reference it consistently where event/intent contracts are described.
 - Config-as-product constraints are now anchored in `docs/CONCEPTS/CONFIG_AS_PRODUCT_CONTRACT.md`; follow-up is to reference it consistently where configuration is described.
 - Component maturity language is not always consistent (e.g., “planned” vs “baseline/stable” in the same catalog); we should reconcile maturity taxonomy against the kernel’s stability contracts.
