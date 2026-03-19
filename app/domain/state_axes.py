@@ -28,4 +28,13 @@ def build_promotion_transition(*, target_maturity: str) -> dict[str, str]:
     }
 
 
-__all__ = ["normalize_promotion_target", "build_promotion_transition"]
+def review_state_for_maturity(maturity: str) -> str:
+    cleaned = str(maturity).strip().lower()
+    if cleaned == "evergreen":
+        return "reviewed"
+    if cleaned:
+        return cleaned
+    return "processed"
+
+
+__all__ = ["normalize_promotion_target", "build_promotion_transition", "review_state_for_maturity"]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from app.domain.state_axes import review_state_for_maturity
 from app.domain.plan import Plan, PlanStep
 from app.store.object_store import ObjectStore
 
@@ -38,7 +39,11 @@ class PlannerAgent:
         wants_evergreen = "evergreen" in goal.lower()
 
         primitive_action = "promote_to_evergreen" if wants_evergreen else "update_review_state"
-        primitive_args = {"review_state": "evergreen", "maturity": "evergreen"} if wants_evergreen else {"review_state": "processed"}
+        primitive_args = (
+            {"review_state": review_state_for_maturity("evergreen"), "maturity": "evergreen"}
+            if wants_evergreen
+            else {"review_state": "processed"}
+        )
 
         plan.steps = [
             PlanStep(

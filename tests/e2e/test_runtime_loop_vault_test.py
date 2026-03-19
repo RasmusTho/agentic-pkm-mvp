@@ -54,7 +54,7 @@ def test_runtime_loop_run_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     note_path = vault_root / DEFAULT_TARGET_SUBDIR / "AgenticPKM-UAT" / "evergreen-strategy.md"
     frontmatter, _ = load_frontmatter(note_path.read_text(encoding="utf-8"))
-    assert frontmatter.get("review_state") == "evergreen"
+    assert frontmatter.get("review_state") == "reviewed"
     assert frontmatter.get("maturity") == "evergreen"
 
     records = [json.loads(line) for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]

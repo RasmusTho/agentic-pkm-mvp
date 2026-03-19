@@ -7,6 +7,7 @@ from langgraph.graph import StateGraph, START, END
 
 from app.agents.base.graph import AgentState
 from app.agents.planner.agent import PlannerAgent
+from app.domain.state_axes import review_state_for_maturity
 from app.domain.plan import Plan, PlanStep
 from app.store.object_store import ObjectStore
 import app.guardrails as guardrails
@@ -115,7 +116,7 @@ class PlannerGraph:
                                 kind="primitive",
                                 action="promote_to_evergreen",
                                 target=pending.target or plan.goal,
-                                args={"review_state": "evergreen", "maturity": "evergreen"},
+                                args={"review_state": review_state_for_maturity("evergreen"), "maturity": "evergreen"},
                             )
                         )
                     self.agent.save_plan(subplan)
@@ -226,6 +227,7 @@ class PlannerGraph:
             new_maturity = args.get("maturity")
             if action_name == "promote_to_evergreen":
                 new_maturity = new_maturity or "evergreen"
+                new_state = args.get("review_state") or review_state_for_maturity(str(new_maturity))
             payload = obj.payload or {}
             frontmatter = payload.get("frontmatter") or {}
             frontmatter["review_state"] = new_state

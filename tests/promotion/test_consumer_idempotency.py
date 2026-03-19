@@ -43,5 +43,5 @@ def test_consume_promotion_intents_skips_duplicates(tmp_path: Path) -> None:
     assert summary.get("skipped_duplicates") == 1
 
     content = note_path.read_text(encoding="utf-8")
-    assert "review_state: evergreen" in content
+    assert "review_state: reviewed" in content
     assert "maturity: evergreen" in content

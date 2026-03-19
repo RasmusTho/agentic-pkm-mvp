@@ -44,5 +44,5 @@ def test_planner_runs_real_mutation_on_note() -> None:
     updated = store.get_object(note_uuid)
     assert updated is not None
     fm = (updated.payload or {}).get("frontmatter", {})
-    assert fm.get("review_state") == "evergreen"
+    assert fm.get("review_state") == "reviewed"
     assert fm.get("maturity") == "evergreen"
