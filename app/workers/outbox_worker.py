@@ -10,16 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from app.agents.panel.agent import handle_note_update
+from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
-from app.events.schema import OutboxEvent
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED, PROMOTE_INTENT_CREATED
 from app.observability.tracer import start_span
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
 from app.services.indexer import handle_ingest_object_created
 from app.services.note_uuid import ensure_note_uuid
-from app.services.outbox import ack_outbox, bootstrap, poll_outbox_one, write_outbox_event
-from app.settings.panel_actions import load_panel_action_mappings
+from app.services.outbox import ack_outbox, bootstrap, poll_outbox_one
 from app.vault.paths import get_vault_inbox_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import load_frontmatter
@@ -183,19 +181,6 @@ def _maybe_heal_uuid(note_path: Path, vault_root: Path) -> str:
             return ""
 
     return ""
-
-
-def _append_audit_event(event: OutboxEvent) -> None:
-    outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH", "/app/tmp/index-outbox.jsonl")).expanduser()
-    try:
-        outbox_path.parent.mkdir(parents=True, exist_ok=True)
-        with outbox_path.open("a", encoding="utf-8") as handle:
-            handle.write(event.model_dump_json())
-            handle.write("\n")
-    except Exception:
-        return
-
-
 def _write_markdown_if_changed(note_path: Path, original: str, updated: str) -> bool:
     if original == updated:
         return False
@@ -260,30 +245,31 @@ def handle_panel_scan_requested(
         logger.info("panel scan skipped (missing uuid) note_path=%s", note_path)
         return WorkerPanelSummary(emitted=0, deferred=True)
 
-    result = handle_note_update(
-        note_id=note_uuid,
-        old_markdown=raw_text,
-        new_markdown=raw_text,
-        action_mappings=load_panel_action_mappings(),
-        note_path=str(note_path),
-        proactive_assist=True,
+    refresh_panel_note_object(
+        note_uuid=note_uuid,
+        note_path=note_path,
+        raw_text=raw_text,
+        trace_id=str(payload.get("trace_id") or ""),
     )
 
-    try:
-        _write_markdown_if_changed(note_path, raw_text, result.updated_markdown)
-    except Exception as exc:
-        logger.warning("panel worker failed to write %s: %s", note_path, exc)
-
-    emitted = 0
-    for event in result.events:
-        write_outbox_event(event)
-        _append_audit_event(event)
-        emitted += 1
+    trace_id = str(payload.get("trace_id") or "") or None
+    execution = run_panel_note_execution(
+        note_uuid,
+        trace_id=trace_id,
+        outbox_path=Path(os.getenv("INDEX_OUTBOX_PATH", "/app/tmp/index-outbox.jsonl")).expanduser(),
+        persist_created_to_db=_use_db_outbox(),
+    )
+    emitted = execution.emitted_count
     if emitted:
         logger.info("panel scan handled note_path=%s note_uuid=%s emitted=%s", note_path, note_uuid, emitted)
     else:
         logger.info("panel scan produced no events note_path=%s note_uuid=%s", note_path, note_uuid)
     return WorkerPanelSummary(emitted=emitted)
+
+
+def _use_db_outbox() -> bool:
+    backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
+    return backend == "pg" or bool(os.getenv("DATABASE_URL") or os.getenv("DB_DSN"))
 
 def handle_ingest_vault_changed(
     payload: Mapping[str, Any], *, vault_root: Path | None = None

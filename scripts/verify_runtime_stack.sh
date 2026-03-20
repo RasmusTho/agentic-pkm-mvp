@@ -33,40 +33,75 @@ service_health_status() {
   docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid"
 }
 
-require_service_ok() {
+wait_for_service_ok() {
   local service="$1"
-  local status
-  status=$(service_health_status "$service")
-  case "$status" in
-    healthy|running)
-      printf "SERVICE %s: %s\n" "$service" "$status"
-      ;;
-    *)
-      printf "SERVICE %s: %s\n" "$service" "$status" >&2
-      return 1
-      ;;
-  esac
+  local timeout="${VERIFY_RUNTIME_SERVICE_WAIT_SECONDS:-30}"
+  local sleep_seconds="${VERIFY_RUNTIME_SERVICE_WAIT_SLEEP_SECONDS:-2}"
+  local deadline=$((SECONDS + timeout))
+  local status="missing"
+
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    status=$(service_health_status "$service")
+    case "$status" in
+      healthy|running)
+        printf "SERVICE %s: %s\n" "$service" "$status"
+        return 0
+        ;;
+      starting|created|restarting|missing)
+        sleep "$sleep_seconds"
+        ;;
+      *)
+        printf "SERVICE %s: %s\n" "$service" "$status" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  printf "SERVICE %s: %s\n" "$service" "$status" >&2
+  return 1
 }
 
 echo "--- docker compose ps ---"
 run_docker_compose ps
 
-require_service_ok "db"
-require_service_ok "api"
+wait_for_service_ok "db"
+wait_for_service_ok "api"
 
 watcher_cid=$(run_docker_compose ps -q watcher | head -n1 || true)
 if [ -n "$watcher_cid" ]; then
-  require_service_ok "watcher"
+  wait_for_service_ok "watcher"
 fi
 
 worker_cid=$(run_docker_compose ps -q worker | head -n1 || true)
 if [ -n "$worker_cid" ]; then
-  require_service_ok "worker"
+  wait_for_service_ok "worker"
 fi
 
 echo "--- in-container health ---"
-health_json=$(run_docker_compose exec -T api python -m app.cli health --json)
-printf "%s\n" "$health_json"
+health_output=$(run_docker_compose exec -T api python -m app.cli health --json)
+printf "%s\n" "$health_output"
+health_json=$(HEALTH_OUTPUT="$health_output" python3 - <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+for line in reversed(os.environ.get("HEALTH_OUTPUT", "").splitlines()):
+    candidate = line.strip()
+    if not candidate:
+        continue
+    try:
+        payload = json.loads(candidate)
+    except Exception:
+        continue
+    if isinstance(payload, dict) and "ok" in payload:
+        print(candidate)
+        break
+else:
+    raise SystemExit("health json payload not found in output")
+PY
+)
 
 echo "--- llm routing ---"
 HEALTH_JSON="$health_json" python3 - <<'PY'
