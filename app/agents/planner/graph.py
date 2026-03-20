@@ -111,12 +111,10 @@ class PlannerGraph:
                     if not subplan.steps:
                         # seed sub-plan with a concrete primitive step
                         subplan.steps.append(
-                            PlanStep(
-                                id="primitive-1",
-                                kind="primitive",
-                                action="promote_to_evergreen",
-                                target=pending.target or plan.goal,
-                                args={"review_state": review_state_for_maturity("evergreen"), "maturity": "evergreen"},
+                            self.agent.build_seed_primitive_step(
+                                subplan.goal,
+                                pending.target or plan.goal,
+                                step_id="primitive-1",
                             )
                         )
                     self.agent.save_plan(subplan)

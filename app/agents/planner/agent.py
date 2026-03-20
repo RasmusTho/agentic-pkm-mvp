@@ -33,17 +33,28 @@ class PlannerAgent:
     def _new_step_id(self, prefix: str, index: int) -> str:
         return f"{prefix}-{index}"
 
-    def build_plan(self, goal: str, *, max_steps: int = 10, max_replans: int = 0) -> Plan:
-        plan = Plan.create_top_level(goal=goal, max_steps=max_steps, max_replans=max_replans)
-        target_uuid = self._extract_target_uuid(goal)
-        wants_evergreen = "evergreen" in goal.lower()
+    def _goal_wants_evergreen(self, goal: str) -> bool:
+        return "evergreen" in goal.lower()
 
+    def build_seed_primitive_step(self, goal: str, target: Optional[str], *, step_id: str = "primitive-1") -> PlanStep:
+        wants_evergreen = self._goal_wants_evergreen(goal)
         primitive_action = "promote_to_evergreen" if wants_evergreen else "update_review_state"
         primitive_args = (
             {"review_state": review_state_for_maturity("evergreen"), "maturity": "evergreen"}
             if wants_evergreen
             else {"review_state": "processed"}
         )
+        return PlanStep(
+            id=step_id,
+            kind="primitive",
+            action=primitive_action,
+            target=target,
+            args=primitive_args,
+        )
+
+    def build_plan(self, goal: str, *, max_steps: int = 10, max_replans: int = 0) -> Plan:
+        plan = Plan.create_top_level(goal=goal, max_steps=max_steps, max_replans=max_replans)
+        target_uuid = self._extract_target_uuid(goal)
 
         plan.steps = [
             PlanStep(
@@ -53,13 +64,7 @@ class PlannerAgent:
                 target=target_uuid,
                 args={},
             ),
-            PlanStep(
-                id=self._new_step_id("primitive", 1),
-                kind="primitive",
-                action=primitive_action,
-                target=target_uuid,
-                args=primitive_args,
-            ),
+            self.build_seed_primitive_step(goal, target_uuid, step_id=self._new_step_id("primitive", 1)),
         ]
         plan.max_steps = max_steps
         plan.max_replans = max_replans

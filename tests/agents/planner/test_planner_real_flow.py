@@ -46,3 +46,18 @@ def test_planner_runs_real_mutation_on_note() -> None:
     fm = (updated.payload or {}).get("frontmatter", {})
     assert fm.get("review_state") == "reviewed"
     assert fm.get("maturity") == "evergreen"
+
+
+def test_planner_subplan_seed_preserves_non_evergreen_goal() -> None:
+    store = ObjectStore()
+    note_uuid = _make_note(store)
+    goal = f"Process note {note_uuid}"
+
+    plan = run_planner_for_goal(goal=goal, store=store, max_steps=5, max_replans=1)
+
+    assert isinstance(plan, Plan)
+    updated = store.get_object(note_uuid)
+    assert updated is not None
+    fm = (updated.payload or {}).get("frontmatter", {})
+    assert fm.get("review_state") == "processed"
+    assert "maturity" not in fm

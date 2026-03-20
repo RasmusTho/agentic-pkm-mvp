@@ -9,6 +9,7 @@ RULES = [
     {"when": {"review_state": "archived"}, "action": "include", "weight": 0.25},
     {"when": {"review_state": "promoted"}, "action": "include", "weight": 1.0},
     {"when": {"maturity": "evergreen"}, "action": "include", "weight": 1.2},
+    {"when": {"review_state": "evergreen"}, "action": "include", "weight": 1.2},
     {"when": {"review_state": "processed"}, "action": "include", "weight": 0.8},
 ]
 
