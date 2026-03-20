@@ -49,7 +49,7 @@ def _note_ref(domain_obj: DomainObject) -> NoteRef:
 def _map_action(action: ParsedAction, catalog: PanelActionCatalog) -> PanelIntentAction:
     descriptor = catalog.find_by_label(action.label)
     mapping = descriptor.to_mapping() if descriptor else None
-    action_id = descriptor.id if descriptor else (normalize_label(action.label) or uuid4().hex)
+    action_id = descriptor.id if descriptor else (action.action_id or normalize_label(action.label) or uuid4().hex)
     return PanelIntentAction(id=action_id, label=action.label, checked=action.checked, mapping=mapping)
 
 

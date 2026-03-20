@@ -14,11 +14,24 @@ import app.store.object_store as legacy_store
 from app.ingest.vault_root import _ingest_file
 from app.obs.log import with_trace_id
 from app.stores import get_object_store, reset_store_backends
+from app.vault.layout import load_layout
+from app.vault.paths import get_vault_inbox_dir_rel
 
 PKM_ALPHA_ROOT = Path(os.getenv("PKM_ALPHA_ROOT", "vault"))
 
-INBOX_DIR = os.getenv("VAULT_INBOX_DIR_REL", "Inbox")
-WORKBENCH_DIR = os.getenv("VAULT_WORKBENCH_DIR_REL", "Workbench")
+
+def _resolve_workbench_dir() -> str:
+    env_value = (os.getenv("VAULT_WORKBENCH_DIR_REL") or "").strip()
+    if env_value:
+        return env_value
+    try:
+        return load_layout(PKM_ALPHA_ROOT).desk_folder
+    except Exception:
+        return "Workbench"
+
+
+INBOX_DIR = get_vault_inbox_dir_rel(PKM_ALPHA_ROOT)
+WORKBENCH_DIR = _resolve_workbench_dir()
 
 NOTE_PATHS: Dict[str, Path] = {
     "research": Path(INBOX_DIR) / "Desicion science for data scientists 2.md",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 
@@ -7,6 +8,16 @@ from app.store.object_store import ObjectStore
 from app.workers import outbox_worker
 from scripts.yaml_roundtrip import load_frontmatter
 from tests.helpers.pkm_alpha_helper import reset_memory_stores
+
+
+def _read_events(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    return [
+        str((json.loads(line) or {}).get("event") or "")
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def _write_layout_note(vault_root: Path, *, inbox_folder: str) -> None:
@@ -155,6 +166,8 @@ def test_handle_panel_scan_requested_emits_panel_events(tmp_path: Path, monkeypa
     reset_memory_stores()
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("PANEL_AGENT_DECIDER", "rule")
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
 
     vault_root = tmp_path / "vault"
     inbox = vault_root / "📥 Inbox"
@@ -177,14 +190,6 @@ def test_handle_panel_scan_requested_emits_panel_events(tmp_path: Path, monkeypa
         encoding="utf-8",
     )
 
-    events: list[str] = []
-
-    def fake_write_outbox(event):
-        events.append(getattr(event, "event", ""))
-        return "ok"
-
-    monkeypatch.setattr(outbox_worker, "write_outbox_event", fake_write_outbox)
-
     payload = {
         "vault_path": str(note_path),
         "relative_path": "📥 Inbox/panel-note.md",
@@ -193,7 +198,60 @@ def test_handle_panel_scan_requested_emits_panel_events(tmp_path: Path, monkeypa
     }
 
     summary = outbox_worker.handle_panel_scan_requested(payload, vault_root=vault_root)
+    events = _read_events(outbox_path)
     assert summary.emitted >= 3
+    assert "panel.intent.created" in events
+    assert "panel.intent.executed" in events
+    assert "promote.intent.created" in events
+
+
+def test_handle_panel_scan_requested_emits_promotion_after_checked_transition(
+    tmp_path: Path, monkeypatch
+) -> None:
+    reset_memory_stores()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("PANEL_AGENT_DECIDER", "rule")
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+
+    vault_root = tmp_path / "vault"
+    inbox = vault_root / "📥 Inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+
+    note_uuid = str(uuid.uuid4())
+    note_path = inbox / "panel-transition.md"
+    unchecked = (
+        "---\n"
+        f"uuid: {note_uuid}\n"
+        "ai_panel_auto_run: watcher\n"
+        "---\n"
+        "%% AI:Start %%\n"
+        "## AI-instruktion\n"
+        "Promote this test note when checked.\n\n"
+        "## AI-åtgärder\n"
+        "- [ ] Make this note evergreen <!--ai:id=promote.evergreen-->\n\n"
+        "## AI-logg\n"
+        "%% AI:End %%\n"
+    )
+    note_path.write_text(unchecked, encoding="utf-8")
+
+    payload = {
+        "vault_path": str(note_path),
+        "relative_path": "📥 Inbox/panel-transition.md",
+        "hash": "test-hash",
+        "mtime": 123.0,
+        "trace_id": "trace-transition",
+    }
+
+    seed_summary = outbox_worker.handle_panel_scan_requested(payload, vault_root=vault_root)
+    assert seed_summary.emitted >= 1
+
+    checked = unchecked.replace("- [ ]", "- [x]")
+    note_path.write_text(checked, encoding="utf-8")
+
+    summary = outbox_worker.handle_panel_scan_requested(payload, vault_root=vault_root)
+    events = _read_events(outbox_path)
+    assert summary.emitted >= 4
     assert "panel.intent.created" in events
     assert "panel.intent.executed" in events
     assert "promote.intent.created" in events

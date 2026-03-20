@@ -129,7 +129,9 @@ def test_start_full_system_preserves_explicit_env_over_dotenv() -> None:
 
 def test_start_full_system_derives_watcher_scope_from_layout_inbox() -> None:
     script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
-    assert 'layout_scope_glob="${layout_inbox}/*.md,${layout_inbox}/**/*.md"' in script
+    helper = Path("scripts/lib/start_full_system_env.sh").read_text(encoding="utf-8")
+    assert 'layout_scope_glob="$(derive_start_full_system_scope_glob "$layout_inbox")"' in script
+    assert "derive_start_full_system_scope_glob()" in helper
     assert 'printf "WATCHER_SCOPE_GLOB=%s\\n" "$layout_scope_glob" >> "$runtime_env_path"' in script
 
 
@@ -139,6 +141,19 @@ def test_start_full_system_runs_runtime_verification_and_endpoint_probe() -> Non
     assert "bash scripts/verify_runtime_stack.sh" in script
     assert "make persist-runtime-repairs" in script
     assert 'API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"' in script
+
+
+def test_verify_runtime_stack_waits_for_service_health_transitions() -> None:
+    script = Path("scripts/verify_runtime_stack.sh").read_text(encoding="utf-8")
+    assert "wait_for_service_ok()" in script
+    assert 'VERIFY_RUNTIME_SERVICE_WAIT_SECONDS' in script
+    assert "starting|created|restarting|missing" in script
+
+
+def test_verify_runtime_stack_extracts_health_json_from_mixed_output() -> None:
+    script = Path("scripts/verify_runtime_stack.sh").read_text(encoding="utf-8")
+    assert 'health_output=$(run_docker_compose exec -T api python -m app.cli health --json)' in script
+    assert 'health json payload not found in output' in script
 
 
 def test_runtime_endpoint_probe_checks_docker_safe_candidates() -> None:

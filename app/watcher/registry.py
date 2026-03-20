@@ -927,7 +927,7 @@ def _run_spec_tick(
         last_mtime = state.last_mtime(rel_str)
         previous_hash = state.last_hash(rel_str)
         if last_mtime is not None and last_mtime == mtime:
-            state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash, seen_at=now)
+            state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash)
             continue
         hashed = _hash_file(path)
         if hashed is None:
@@ -936,7 +936,7 @@ def _run_spec_tick(
         summary["hashed_files"] = int(summary["hashed_files"]) + 1
         summary["bytes_read"] = int(summary["bytes_read"]) + read_bytes
         if previous_hash is not None and previous_hash == digest:
-            state.update_file_state(rel_str, mtime=mtime, content_hash=digest, seen_at=now)
+            state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
             continue
         changed_entries.append((rel, mtime, digest))
 

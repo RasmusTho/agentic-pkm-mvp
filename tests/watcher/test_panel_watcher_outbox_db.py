@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from app.events.schema import OutboxEvent
@@ -336,6 +337,70 @@ def test_run_spec_tick_does_not_count_panel_when_emit_returns_none(tmp_path, mon
     assert summary["emitted_in_tick"] == 0
     assert state.intents_emitted == 0
     assert state.last_trace_id is None
+
+
+def test_run_spec_tick_emits_second_panel_change_after_idle_tick(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note_dir = vault / get_vault_inbox_dir_rel(vault) / "_alpha_e2e"
+    note_dir.mkdir(parents=True)
+    note_path = note_dir / "note.md"
+    note_path.write_text("%% AI %%\n- [ ] Make this note evergreen <!--ai:id=promote.evergreen-->\n%% AI %%\n", encoding="utf-8")
+
+    cfg = RegistryConfig(
+        enable=True,
+        outbox_path=tmp_path / "outbox.jsonl",
+        vault_path=vault,
+        scope_glob="📥 Inbox/_alpha_e2e/*.md",
+        debounce_ms=1000,
+        rate_limit_per_min=30,
+        state_dir=tmp_path / "state",
+        heartbeat_path=tmp_path / "heartbeat.json",
+        config_path=tmp_path / "watchers.yaml",
+        summary_interval=0,
+        stop_file=tmp_path / "WATCHER_STOP",
+        tick_sleep_seconds=0.2,
+        tick_log_path=tmp_path / "watcher_tick.jsonl",
+        max_scanned_files_per_tick=500,
+        max_bytes_read_per_tick=50_000_000,
+        max_elapsed_ms_per_tick=2000,
+        max_bad_ticks=10,
+        bad_tick_backoff_seconds=2.0,
+        specs=[],
+    )
+    spec = WatcherSpec(
+        name="panel",
+        scope_glob="📥 Inbox/_alpha_e2e/*.md",
+        debounce_ms=1000,
+        rate_limit_per_min=30,
+        emit_event="panel.scan.requested",
+    )
+    state = WatcherState()
+
+    emissions: list[str] = []
+
+    def fake_emit_watch_event(**kwargs):
+        emissions.append(str(kwargs["rel_path"]))
+        return f"trace-{len(emissions)}"
+
+    monkeypatch.setattr("app.watcher.registry._emit_watch_event", fake_emit_watch_event)
+    monkeypatch.setattr("app.watcher.registry._panel_candidate_for_path", lambda *_: (True, True))
+    monkeypatch.setattr("app.watcher.registry._auto_exec_enabled", lambda *_args, **_kwargs: True)
+
+    first_mtime = note_path.stat().st_mtime
+    first = _run_spec_tick(cfg, spec, state, now=first_mtime + 0.1)
+    assert first["emitted_in_tick"] == 1
+
+    idle = _run_spec_tick(cfg, spec, state, now=first_mtime + 0.6)
+    assert idle["emitted_in_tick"] == 0
+
+    note_path.write_text("%% AI %%\n- [x] Make this note evergreen <!--ai:id=promote.evergreen-->\n%% AI %%\n", encoding="utf-8")
+    second_mtime = first_mtime + 2
+    os.utime(note_path, (second_mtime, second_mtime))
+
+    second = _run_spec_tick(cfg, spec, state, now=first_mtime + 1.6)
+    assert second["emitted_in_tick"] == 1
+    assert emissions == [str(note_path.relative_to(vault)), str(note_path.relative_to(vault))]
 
 
 def test_emit_panel_events_logs_no_event_outcome(tmp_path, monkeypatch, caplog):

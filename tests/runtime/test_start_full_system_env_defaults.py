@@ -144,3 +144,23 @@ def test_apply_start_full_system_vault_defaults_does_not_override_explicit_value
     )
     lines = out.splitlines()
     assert lines == ["CustomSystem", "CustomInbox", "CustomDesk"]
+
+
+def test_derive_start_full_system_scope_glob_uses_inferred_inbox_dir() -> None:
+    out = _bash(
+        "set -euo pipefail; "
+        "vault_root=$(mktemp -d); "
+        "mkdir -p \"$vault_root/config\"; "
+        "cat > \"$vault_root/config/vault.layout.md\" <<'EOF'\n"
+        "---\n"
+        "system_folder: config\n"
+        "inbox_folder: capture\n"
+        "desk_folder: workbench\n"
+        "---\n"
+        "EOF\n"
+        "source scripts/lib/start_full_system_env.sh; "
+        "unset VAULT_SYSTEM_DIR_REL VAULT_INBOX_DIR_REL VAULT_DESK_DIR_REL; "
+        "apply_start_full_system_vault_defaults \"$vault_root\"; "
+        "derive_start_full_system_scope_glob"
+    )
+    assert out == "capture/*.md,capture/**/*.md"

@@ -160,3 +160,11 @@ apply_start_full_system_vault_defaults() {
   trap - RETURN
   rm -f "$inferred_env_path"
 }
+
+derive_start_full_system_scope_glob() {
+  local inbox_rel="${1:-${VAULT_INBOX_DIR_REL:-}}"
+  if [ -z "${inbox_rel//[[:space:]]/}" ]; then
+    return 0
+  fi
+  printf '%s\n' "${inbox_rel}/*.md,${inbox_rel}/**/*.md"
+}

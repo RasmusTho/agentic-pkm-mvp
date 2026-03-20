@@ -95,11 +95,19 @@ def bootstrap(conn: Any = None) -> None:
 def _coerce_event(event: Event | OutboxEvent) -> Event:
     if isinstance(event, Event):
         return event
+    source = getattr(event, "source", None)
+    if hasattr(source, "component"):
+        source = getattr(source, "component", None) or "panel_agent"
+    payload = getattr(event, "payload", {}) or {}
+    if hasattr(payload, "model_dump"):
+        payload = payload.model_dump(mode="json")
+    elif not isinstance(payload, dict):
+        payload = dict(payload)
     return new_event(
         event_type=event.event,
-        payload=dict(event.payload),
+        payload=dict(payload),
         trace_id=event.trace_id,
-        source=event.source,
+        source=source,
         event_id=event.event_id,
         created_at=event.timestamp,
     )

@@ -7,10 +7,12 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from app.agents.panel.agent import handle_note_update
+from app.agents.panel_agent.agent import run_panel_intent_for_note
+from app.agents.panel_agent.runtime import execute_panel_intent
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED, PROMOTE_INTENT_CREATED
@@ -19,7 +21,7 @@ from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_wo
 from app.services.indexer import handle_ingest_object_created
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import ack_outbox, bootstrap, poll_outbox_one, write_outbox_event
-from app.settings.panel_actions import load_panel_action_mappings
+from app.store.object_store import DomainObject, ObjectStore
 from app.vault.paths import get_vault_inbox_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import load_frontmatter
@@ -260,30 +262,76 @@ def handle_panel_scan_requested(
         logger.info("panel scan skipped (missing uuid) note_path=%s", note_path)
         return WorkerPanelSummary(emitted=0, deferred=True)
 
-    result = handle_note_update(
-        note_id=note_uuid,
-        old_markdown=raw_text,
-        new_markdown=raw_text,
-        action_mappings=load_panel_action_mappings(),
-        note_path=str(note_path),
-        proactive_assist=True,
+    _refresh_panel_note_object(
+        note_uuid=note_uuid,
+        note_path=note_path,
+        raw_text=raw_text,
+        trace_id=str(payload.get("trace_id") or ""),
     )
 
-    try:
-        _write_markdown_if_changed(note_path, raw_text, result.updated_markdown)
-    except Exception as exc:
-        logger.warning("panel worker failed to write %s: %s", note_path, exc)
-
     emitted = 0
-    for event in result.events:
-        write_outbox_event(event)
-        _append_audit_event(event)
-        emitted += 1
+    trace_id = str(payload.get("trace_id") or "") or None
+    panel_events = run_panel_intent_for_note(note_uuid, trace_id=trace_id)
+    if _use_db_outbox():
+        for event in panel_events:
+            write_outbox_event(_coerce_panel_intent_event(event))
+            emitted += 1
+    else:
+        emitted += len(panel_events)
+    for event in panel_events:
+        result = execute_panel_intent(event)
+        emitted += len(result.emitted_events or [])
     if emitted:
         logger.info("panel scan handled note_path=%s note_uuid=%s emitted=%s", note_path, note_uuid, emitted)
     else:
         logger.info("panel scan produced no events note_path=%s note_uuid=%s", note_path, note_uuid)
     return WorkerPanelSummary(emitted=emitted)
+
+
+def _coerce_panel_intent_event(event: Any) -> OutboxEvent:
+    source = getattr(event, "source", None)
+    source_value = getattr(source, "component", None) or "panel_agent"
+    payload = event.model_dump(mode="json") if hasattr(event, "model_dump") else dict(getattr(event, "payload", {}) or {})
+    return OutboxEvent(
+        event=str(getattr(event, "event", "panel.intent.created")),
+        event_id=str(getattr(event, "event_id", "") or ""),
+        trace_id=str(getattr(event, "trace_id", "") or ""),
+        source=str(source_value),
+        timestamp=str(getattr(event, "timestamp", "") or ""),
+        payload=payload if isinstance(payload, dict) else {},
+    )
+
+
+def _use_db_outbox() -> bool:
+    backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
+    return backend == "pg" or bool(os.getenv("DATABASE_URL") or os.getenv("DB_DSN"))
+
+
+def _refresh_panel_note_object(*, note_uuid: str, note_path: Path, raw_text: str, trace_id: str) -> None:
+    store = ObjectStore()
+    existing = store.get_object(note_uuid)
+    frontmatter, _ = load_frontmatter(raw_text)
+    payload = dict(existing.payload or {}) if existing is not None else {}
+    payload.update(
+        {
+            "raw_text": raw_text,
+            "frontmatter": frontmatter if isinstance(frontmatter, dict) else {},
+            "origin": "vault",
+        }
+    )
+    if existing is None:
+        obj = DomainObject(
+            uuid=note_uuid,
+            kind="note",
+            payload=payload,
+            source_ref=str(note_path),
+            created_at=datetime.now(timezone.utc),
+        )
+    else:
+        existing.payload = payload
+        existing.source_ref = str(note_path)
+        obj = existing
+    store.save_object(obj, emit_outbox=False, trace_id=trace_id or None)
 
 def handle_ingest_vault_changed(
     payload: Mapping[str, Any], *, vault_root: Path | None = None
