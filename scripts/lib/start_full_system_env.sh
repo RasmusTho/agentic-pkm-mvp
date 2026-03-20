@@ -48,13 +48,11 @@ infer_start_full_system_vault_layout_env() {
   python - "$vault_root" <<'PY'
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import yaml
-
-from app.vault.layout import load_layout
-from app.vault.paths import resolve_vault_inbox_dir_rel, resolve_vault_system_dir_rel
 
 vault_root = Path(sys.argv[1]).expanduser()
 
@@ -86,31 +84,48 @@ def _layout_candidates(root: Path) -> list[Path]:
     return sorted(p for p in root.glob("*/vault.layout.md") if p.is_file())
 
 
+def _read_system_settings(root: Path) -> dict[str, object]:
+    path = root / "_system" / "settings" / "system-settings.yaml"
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _paths_data(root: Path) -> dict[str, str]:
+    settings = _read_system_settings(root)
+    out: dict[str, str] = {}
+    raw_paths = settings.get("paths")
+    if isinstance(raw_paths, dict):
+        for key, value in raw_paths.items():
+            if isinstance(value, str) and value.strip():
+                out[key] = value.strip()
+    for key in ("inbox_dir_rel", "system_dir_rel"):
+        if key in out:
+            continue
+        value = settings.get(key)
+        if isinstance(value, str) and value.strip():
+            out[key] = value.strip()
+    return out
+
+
 def _pick_existing_dir(root: Path, names: list[str]) -> str:
     for name in names:
         if (root / name).is_dir():
             return name
     return ""
 
-for key, resolver in (
-    ("VAULT_SYSTEM_DIR_REL", resolve_vault_system_dir_rel),
-    ("VAULT_INBOX_DIR_REL", resolve_vault_inbox_dir_rel),
-):
-    try:
-        resolved[key] = resolver(vault_root).value
-    except Exception:
-        resolved[key] = ""
+if env_value := os.getenv("VAULT_SYSTEM_DIR_REL", "").strip():
+    resolved["VAULT_SYSTEM_DIR_REL"] = env_value
+if env_value := os.getenv("VAULT_INBOX_DIR_REL", "").strip():
+    resolved["VAULT_INBOX_DIR_REL"] = env_value
+if env_value := os.getenv("VAULT_DESK_DIR_REL", "").strip():
+    resolved["VAULT_DESK_DIR_REL"] = env_value
 
-try:
-    layout = load_layout(vault_root)
-except Exception:
-    layout = None
-else:
-    try:
-        resolved["VAULT_LAYOUT_NOTE_REL"] = str(layout.note_path.relative_to(vault_root))
-    except Exception:
-        pass
-    resolved["VAULT_DESK_DIR_REL"] = layout.desk_folder
+paths_data = _paths_data(vault_root)
+resolved.setdefault("VAULT_SYSTEM_DIR_REL", paths_data.get("system_dir_rel", ""))
+resolved.setdefault("VAULT_INBOX_DIR_REL", paths_data.get("inbox_dir_rel", ""))
 
 if not resolved.get("VAULT_LAYOUT_NOTE_REL"):
     candidates = _layout_candidates(vault_root)
@@ -118,9 +133,12 @@ if not resolved.get("VAULT_LAYOUT_NOTE_REL"):
         note_path = candidates[0]
         frontmatter = _parse_frontmatter(note_path)
         resolved["VAULT_LAYOUT_NOTE_REL"] = str(note_path.relative_to(vault_root))
-        resolved.setdefault("VAULT_SYSTEM_DIR_REL", str(frontmatter.get("system_folder") or "").strip())
-        resolved.setdefault("VAULT_INBOX_DIR_REL", str(frontmatter.get("inbox_folder") or "").strip())
-        resolved.setdefault("VAULT_DESK_DIR_REL", str(frontmatter.get("desk_folder") or "").strip())
+        if not resolved.get("VAULT_SYSTEM_DIR_REL"):
+            resolved["VAULT_SYSTEM_DIR_REL"] = str(frontmatter.get("system_folder") or "").strip()
+        if not resolved.get("VAULT_INBOX_DIR_REL"):
+            resolved["VAULT_INBOX_DIR_REL"] = str(frontmatter.get("inbox_folder") or "").strip()
+        if not resolved.get("VAULT_DESK_DIR_REL"):
+            resolved["VAULT_DESK_DIR_REL"] = str(frontmatter.get("desk_folder") or "").strip()
         if not resolved["VAULT_SYSTEM_DIR_REL"]:
             resolved["VAULT_SYSTEM_DIR_REL"] = note_path.parent.name
         if not resolved["VAULT_INBOX_DIR_REL"]:
