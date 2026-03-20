@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from click.testing import CliRunner
 
@@ -56,5 +57,14 @@ def test_uat_run_cli_end_to_end(tmp_path: Path) -> None:
     # manual/never note should remain skipped by policy
     summary_path = tmp_path / DEFAULT_TARGET_SUBDIR / DEFAULT_FOLDER_NAME / ".agentic-pkm" / "vault_watcher_uat_state.json"
     assert summary_path.exists()
+    report_path = tmp_path / DEFAULT_TARGET_SUBDIR / DEFAULT_FOLDER_NAME / ".agentic-pkm" / "uat_report.json"
+    assert report_path.exists()
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    checks = report.get("checks") or {}
+    assert checks
+    assert all(bool(value) for value in checks.values())
+    assert report.get("rerun", {}).get("watcher", {}).get("changed") == 0
+    assert report.get("rerun", {}).get("promotion", {}).get("applied") == 0
 
     object_store_module._MEMORY_STORE.clear()

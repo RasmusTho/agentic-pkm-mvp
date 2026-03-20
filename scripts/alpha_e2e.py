@@ -19,6 +19,12 @@ import urllib.request
 import uuid
 from typing import Any, Sequence
 
+from app.testing.runtime_contract import (
+    failing_check_names,
+    validate_runtime_progress,
+    validate_status_invariants,
+    write_contract_report,
+)
 from app.vault.layout import load_layout
 from app.vault.paths import get_vault_inbox_dir_rel
 from scripts.yaml_roundtrip import load_frontmatter
@@ -44,15 +50,6 @@ def _read_json_file(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _is_postgres_dsn(value: str) -> bool:
-    lowered = value.lower()
-    return (
-        lowered.startswith("postgres://")
-        or lowered.startswith("postgresql://")
-        or lowered.startswith("postgresql+")
-    )
-
-
 def _worker_heartbeat_path() -> Path:
     raw = os.getenv("WORKER_HEARTBEAT_PATH")
     if raw:
@@ -62,6 +59,10 @@ def _worker_heartbeat_path() -> Path:
 
 def _runtime_note_dir(vault_root: Path, inbox_dir_rel: str) -> Path:
     return (vault_root / inbox_dir_rel / "_alpha_e2e").expanduser()
+
+
+def _default_report_path() -> Path:
+    return _REPO_ROOT / "tmp" / "alpha_e2e_report.json"
 
 
 def _select_layout_note_rel(vault_root: Path) -> str | None:
@@ -220,99 +221,6 @@ def _read_status_safe(api_base: str) -> dict[str, Any]:
         return {}
 
 
-def validate_status_invariants(status: dict[str, Any], health: dict[str, Any]) -> list[str]:
-    errors: list[str] = []
-
-    if health.get("required_ok") is not True:
-        errors.append("health.required_ok is not true")
-
-    if "pending_from_events_log" in status:
-        errors.append("status.pending_from_events_log must not be present")
-
-    worker_queue = status.get("worker_queue") or {}
-    if isinstance(worker_queue, dict) and "pending_from_events_log" in worker_queue:
-        errors.append("worker_queue.pending_from_events_log must not be present")
-
-    mode = worker_queue.get("mode") if isinstance(worker_queue, dict) else None
-    if mode in {"file", "jsonl"}:
-        events_log = status.get("events_log") or {}
-        if isinstance(events_log, dict) and isinstance(worker_queue, dict):
-            events_path = events_log.get("path")
-            outbox = status.get("outbox") or {}
-            outbox_path = outbox.get("path") if isinstance(outbox, dict) else None
-            if events_path and outbox_path and events_path != outbox_path:
-                errors.append("events_log.path does not match outbox.path")
-
-            total_lines = events_log.get("total_lines")
-            processed_total = worker_queue.get("processed_total")
-            pending = worker_queue.get("pending")
-            if (
-                isinstance(total_lines, int)
-                and isinstance(processed_total, int)
-                and isinstance(pending, int)
-            ):
-                expected = max(total_lines - processed_total, 0)
-                if pending != expected:
-                    errors.append("worker_queue.pending does not match events_log total_lines")
-            else:
-                errors.append("worker_queue pending/processed_total/events_log total_lines must be integers for file queue")
-    elif mode == "db":
-        source_path = worker_queue.get("source_path") if isinstance(worker_queue, dict) else None
-        if not isinstance(source_path, str) or not _is_postgres_dsn(source_path):
-            errors.append("worker_queue.source_path is not a postgres DSN")
-    else:
-        errors.append("worker_queue.mode is missing or unsupported")
-
-    return errors
-
-
-def validate_runtime_progress(
-    *,
-    baseline_processed: int,
-    current_processed: int,
-    processed_by_event: dict[str, int] | None,
-    required_topic: str,
-    baseline_promote_created: int | None,
-    current_promote_created: int | None,
-    baseline_promotion_executed: int | None,
-    current_promotion_executed: int | None,
-) -> list[str]:
-    errors: list[str] = []
-    processed_ok = False
-    if current_processed >= baseline_processed + 1:
-        if processed_by_event is not None:
-            if processed_by_event.get(required_topic, 0) >= 1:
-                processed_ok = True
-            else:
-                errors.append("worker processed_total increased but promote.intent.created not counted")
-        else:
-            processed_ok = True
-    else:
-        errors.append("worker processed_total did not increase")
-
-    promote_created_ok = False
-    if baseline_promote_created is not None and current_promote_created is not None:
-        if current_promote_created > baseline_promote_created:
-            promote_created_ok = True
-        else:
-            errors.append("status.intents.promote_created_total did not increase")
-    else:
-        errors.append("status.intents.promote_created_total missing")
-
-    promotion_ok = False
-    if baseline_promotion_executed is not None and current_promotion_executed is not None:
-        if current_promotion_executed > baseline_promotion_executed:
-            promotion_ok = True
-        else:
-            errors.append("status.events.promotion_executed_total did not increase")
-    else:
-        errors.append("status.events.promotion_executed_total missing")
-
-    if processed_ok or promote_created_ok or promotion_ok:
-        return []
-    return errors
-
-
 def _run(cmd: list[str], *, allow_fail: bool = False, env: dict[str, str] | None = None) -> None:
     subprocess.run(cmd, check=not allow_fail, cwd=_REPO_ROOT, env=env)
 
@@ -348,6 +256,25 @@ def debug_dump(api_base: str, note_paths: Sequence[Path]) -> None:
         print("ALPHA_E2E: runtime notes created:")
         for path in note_paths:
             print(f"  {path}")
+
+
+def _write_alpha_report(
+    *,
+    checks: dict[str, bool],
+    errors: Sequence[str],
+    status: dict[str, Any] | None = None,
+    health: dict[str, Any] | None = None,
+    note_paths: Sequence[Path] | None = None,
+) -> None:
+    payload = {
+        "checks": checks,
+        "failed_checks": failing_check_names(checks),
+        "errors": list(errors),
+        "status": status or {},
+        "health": health or {},
+        "runtime_notes": [str(path) for path in (note_paths or [])],
+    }
+    write_contract_report(_default_report_path(), payload)
 
 
 def _wait_for(label: str, timeout_s: float, interval_s: float, predicate) -> bool:
@@ -449,6 +376,14 @@ def main(argv: list[str] | None = None) -> int:
     vault_root = Path(vault_root_raw).expanduser()
     inbox_dir_rel = get_vault_inbox_dir_rel(vault_root)
     note_paths: list[Path] = []
+    report_checks: dict[str, bool] = {
+        "status_invariants_ok": False,
+        "worker_queue_mode_db": False,
+        "runtime_progress_ok": False,
+    }
+    last_status: dict[str, Any] = {}
+    last_health: dict[str, Any] = {}
+    error_messages: list[str] = []
 
     auto_bootstrap_env = os.getenv("AUTO_BOOTSTRAP")
     if auto_bootstrap_env is None:
@@ -485,6 +420,8 @@ def main(argv: list[str] | None = None) -> int:
         _run(["make", "alpha-up"], env=env)
         status = _fetch_json(f"{api_base}/api/status")
         health = _fetch_json(f"{api_base}/api/health")
+        last_status = status
+        last_health = health
         auto_bootstrap = auto_bootstrap_env == "1"
         if auto_bootstrap:
             action = _index_rebuild_required(health)
@@ -494,18 +431,56 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError(f"AUTO_BOOTSTRAP=1 but index_rebuild is still required. {message}. command_hint: {hint}")
         else:
             health = _maybe_auto_rebuild_index(api_base, health)
+            last_health = health
+        report_checks["worker_queue_mode_db"] = (
+            isinstance(status.get("worker_queue"), dict) and status.get("worker_queue", {}).get("mode") == "db"
+        )
         errors = validate_status_invariants(status, health)
+        report_checks["status_invariants_ok"] = not errors
         if errors:
+            error_messages = errors
+            _write_alpha_report(
+                checks=report_checks,
+                errors=error_messages,
+                status=last_status,
+                health=last_health,
+                note_paths=note_paths,
+            )
             raise RuntimeError(errors[0])
         flow_errors, created_note = _run_golden_path(vault_root, inbox_dir_rel, api_base)
         if created_note:
             note_paths.append(created_note)
+        report_checks["runtime_progress_ok"] = not flow_errors
         if flow_errors:
+            error_messages = flow_errors
+            _write_alpha_report(
+                checks=report_checks,
+                errors=error_messages,
+                status=last_status,
+                health=last_health,
+                note_paths=note_paths,
+            )
             raise RuntimeError(flow_errors[0])
+        _write_alpha_report(
+            checks=report_checks,
+            errors=[],
+            status=last_status,
+            health=last_health,
+            note_paths=note_paths,
+        )
         print("ALPHA_E2E: OK")
         _cleanup_runtime_notes(note_paths)
         return 0
     except (urllib.error.URLError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError, RuntimeError) as exc:
+        if not error_messages:
+            error_messages = [str(exc)]
+        _write_alpha_report(
+            checks=report_checks,
+            errors=error_messages,
+            status=last_status,
+            health=last_health,
+            note_paths=note_paths,
+        )
         print(f"ALPHA_E2E: FAIL - {exc}")
         debug_dump(api_base, note_paths)
         if args.teardown and note_paths:

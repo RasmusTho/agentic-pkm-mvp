@@ -64,6 +64,7 @@ Purpose: practical, low-risk UAT flow for exercising PanelAgent runtime and the 
 - DB outbox: inspect `outbox` table (or `/api/events/tail` if available) for `panel.intent.*` and `promote.intent.created`.
 - JSONL audit: `INDEX_OUTBOX_PATH` lines should mirror watcher emissions but are not consumed by the worker.
 - Safety: watcher does not rewrite note bodies; downstream agents may update frontmatter/mirrors only. UAT is scoped to the selected notes; the rest of the vault is untouched.
+- Scripted UAT report: `uat-run-vault-test --assert` now writes `.agentic-pkm/uat_report.json` inside the seeded folder. Treat that report as the machine-readable release/UAT artifact; it includes first-run results, rerun idempotence, and pass/fail checks.
 
 ## 7) Limits and future work
 - Scope: single-user UAT on a subset of notes; no multi-user or remote watcher yet.
