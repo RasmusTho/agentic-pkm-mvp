@@ -3,7 +3,13 @@ from __future__ import annotations
 from app.cli import llm_doctor
 
 
+def _clear_llm_endpoint_env(monkeypatch) -> None:
+    for key in ("OLLAMA_BASE_URL", "OLLAMA_URL", "OLLAMA_HOST", "OPENAI_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
+
+
 def test_llm_doctor_ollama_prefers_ollama_url(monkeypatch) -> None:
+    _clear_llm_endpoint_env(monkeypatch)
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setenv("OLLAMA_URL", "http://ollama:11434/")
     monkeypatch.setenv("OPENAI_BASE_URL", "http://openai.local/v1")
@@ -15,9 +21,8 @@ def test_llm_doctor_ollama_prefers_ollama_url(monkeypatch) -> None:
 
 
 def test_llm_doctor_ollama_accepts_ollama_host(monkeypatch) -> None:
+    _clear_llm_endpoint_env(monkeypatch)
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
-    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
-    monkeypatch.delenv("OLLAMA_URL", raising=False)
     monkeypatch.setenv("OLLAMA_HOST", "http://ollama-host:11434/")
 
     base, provider = llm_doctor._resolve_endpoint()
@@ -27,6 +32,7 @@ def test_llm_doctor_ollama_accepts_ollama_host(monkeypatch) -> None:
 
 
 def test_llm_doctor_ollama_prefers_ollama_base_url(monkeypatch) -> None:
+    _clear_llm_endpoint_env(monkeypatch)
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama-base:11434/v1/")
     monkeypatch.setenv("OLLAMA_URL", "http://ollama:11434/")
@@ -38,8 +44,8 @@ def test_llm_doctor_ollama_prefers_ollama_base_url(monkeypatch) -> None:
 
 
 def test_llm_doctor_ollama_falls_back_to_openai(monkeypatch) -> None:
+    _clear_llm_endpoint_env(monkeypatch)
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
-    monkeypatch.delenv("OLLAMA_URL", raising=False)
     monkeypatch.setenv("OPENAI_BASE_URL", "http://openai.local/v1/")
 
     base, provider = llm_doctor._resolve_endpoint()
@@ -49,6 +55,7 @@ def test_llm_doctor_ollama_falls_back_to_openai(monkeypatch) -> None:
 
 
 def test_llm_doctor_non_ollama_prefers_openai_base(monkeypatch) -> None:
+    _clear_llm_endpoint_env(monkeypatch)
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("OLLAMA_URL", "http://ollama:11434/")
     monkeypatch.setenv("OPENAI_BASE_URL", "http://openai.local/v1/")
@@ -60,6 +67,7 @@ def test_llm_doctor_non_ollama_prefers_openai_base(monkeypatch) -> None:
 
 
 def test_llm_doctor_mock_short_circuits(monkeypatch) -> None:
+    _clear_llm_endpoint_env(monkeypatch)
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("OLLAMA_URL", "http://ollama:11434/")
     monkeypatch.setenv("OPENAI_BASE_URL", "http://openai.local/v1/")
@@ -77,6 +85,7 @@ def test_llm_doctor_mock_short_circuits(monkeypatch) -> None:
 
 
 def test_llm_doctor_alias_llm_uses_ollama_resolution(monkeypatch) -> None:
+    _clear_llm_endpoint_env(monkeypatch)
     monkeypatch.setenv("LLM_PROVIDER", "llm")
     monkeypatch.setenv("OLLAMA_URL", "http://ollama:11434/")
 
