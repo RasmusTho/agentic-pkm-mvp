@@ -69,6 +69,9 @@ The CI surface should stay small and explicit. The intended steady-state roles a
 
 Older overlapping workflows may still exist while the surface is being consolidated, but new coverage should map to these roles instead of adding more partial gates.
 
+Current implementation checkpoint:
+- `.github/workflows/integration-nightly.yaml` runs the runtime-contract regression slice (metamorphic watcher coverage, alpha/UAT contract helpers, and cold-rebuild regression tests).
+
 ## Required baseline checks
 
 - `ruff check app tests`
