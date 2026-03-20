@@ -54,7 +54,7 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
         ```yaml settings
         default_chat:
           primary:
-            model_id: openai.chat.gpt_4_1_mini
+            model_id: openai.chat.gpt_5_4_mini
         ```
         """,
     )
@@ -126,7 +126,7 @@ def test_auto_heal_writes_settings_via_knowledge_port(tmp_path, monkeypatch) -> 
         ```yaml settings
         default_chat:
           primary:
-            model_id: openai.chat.gpt_4_1_mini
+            model_id: openai.chat.gpt_5_4_mini
         ```
         """,
     )
@@ -190,7 +190,7 @@ def test_compile_all_writes_llm_routing_runtime_file(tmp_path, monkeypatch) -> N
         tasks:
           plan:
             primary:
-              model_id: openai.chat.gpt_4_1
+              model_id: openai.chat.gpt_5_4
         ```
         """,
     )
@@ -200,10 +200,10 @@ def test_compile_all_writes_llm_routing_runtime_file(tmp_path, monkeypatch) -> N
 
     bundle = compiler.compile_all(auto_heal=False)
 
-    assert bundle.llm_routing.tasks["plan"].primary.model_id == "openai.chat.gpt_4_1"
+    assert bundle.llm_routing.tasks["plan"].primary.model_id == "openai.chat.gpt_5_4"
     assert bundle.llm_routing.tasks["plan"].primary.provider == "openai"
     compiled = (runtime_dir / "llm_routing.yaml").read_text(encoding="utf-8")
-    assert "gpt-4.1" in compiled
+    assert "gpt-5.4" in compiled
 
 
 def test_compile_all_rejects_incompatible_model_kind_for_embed_task(tmp_path, monkeypatch) -> None:
@@ -245,7 +245,7 @@ def test_compile_all_rejects_incompatible_model_kind_for_embed_task(tmp_path, mo
         tasks:
           embed:
             primary:
-              model_id: openai.chat.gpt_4_1_mini
+              model_id: openai.chat.gpt_5_4_mini
         ```
         """,
     )

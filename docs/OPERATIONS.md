@@ -34,7 +34,7 @@ CLI note:
 
 Current runtime path:
 1. The registry watcher scans the vault and emits DB outbox events.
-2. The worker consumes DB outbox rows and performs ingest/index work.
+2. The worker consumes DB outbox rows and performs ingest/index, panel scan, and promotion work.
 3. Health, status, and metrics confirm whether that path is healthy.
 
 When the issue is startup topology or Compose wiring, switch to `docs/INFRASTRUCTURE.md`.
@@ -114,7 +114,7 @@ Companion docs:
 - Postgres data lives in the `postgres-data` volume; `docker compose down -v` wipes it.
 - The API container runs `scripts/start_api.sh` (migrations + `uvicorn`).
 - The worker runs `python -m app.workers.outbox_worker` (consumes DB outbox).
-- The watcher runs `python -m app.cli watcher run` (registry loop; emits `ingest.vault.changed` or `panel.scan.requested` to outbox).
+- The watcher runs `python -m app.cli watcher run` (registry loop; emits `ingest.vault.changed` or `panel.scan.requested` to outbox only).
 - Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.
 - `scripts/start_full_system.sh` is the supported startup wrapper. It now auto-probes Ollama reachability from inside the containerized runtime and persists the selected Docker-reachable endpoint into `tmp/runtime.env` before declaring startup healthy.
 - When `LLM_PROVIDER=ollama`, startup tries the configured endpoint first, then Docker-safe candidates such as `host.docker.internal`, before failing the run.

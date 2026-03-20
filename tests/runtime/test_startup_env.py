@@ -70,7 +70,7 @@ def test_llm_alias_normalizes_to_ollama() -> None:
 
 
 def test_openai_provider_requires_openai_base_url() -> None:
-    env = {"LLM_PROVIDER": "openai", "LLM_MODEL": "gpt-4.1"}
+    env = {"LLM_PROVIDER": "openai", "LLM_MODEL": "gpt-5.4"}
     result = validate_llm_env(env)
     assert result["ok"] is False
     assert result["missing_all_of"] == ["OPENAI_BASE_URL"]

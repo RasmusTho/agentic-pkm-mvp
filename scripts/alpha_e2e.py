@@ -66,9 +66,6 @@ def _default_report_path() -> Path:
 
 
 def _select_layout_note_rel(vault_root: Path) -> str | None:
-    candidates = sorted(p for p in vault_root.glob("*/vault.layout.md") if p.is_file())
-    if len(candidates) <= 1:
-        return None
     try:
         layout = load_layout(vault_root)
     except Exception:
@@ -101,6 +98,13 @@ def _layout_env_defaults(vault_root: Path, layout_note_rel: str | None) -> dict[
     if desk:
         env["VAULT_DESK_DIR_REL"] = desk
     return env
+
+
+def _resolve_e2e_inbox_dir_rel(vault_root: Path, layout_env: dict[str, str]) -> str:
+    layout_inbox = (layout_env.get("VAULT_INBOX_DIR_REL") or "").strip()
+    if layout_inbox:
+        return layout_inbox
+    return get_vault_inbox_dir_rel(vault_root)
 
 
 def _write_runtime_note(note_path: Path, note_uuid: str, *, checked: bool) -> None:
@@ -374,7 +378,9 @@ def main(argv: list[str] | None = None) -> int:
 
     api_base = os.getenv("API_BASE_URL") or _DEFAULT_API_BASE
     vault_root = Path(vault_root_raw).expanduser()
-    inbox_dir_rel = get_vault_inbox_dir_rel(vault_root)
+    layout_rel = _select_layout_note_rel(vault_root)
+    layout_env = _layout_env_defaults(vault_root, layout_rel)
+    inbox_dir_rel = _resolve_e2e_inbox_dir_rel(vault_root, layout_env)
     note_paths: list[Path] = []
     report_checks: dict[str, bool] = {
         "status_invariants_ok": False,
@@ -403,6 +409,7 @@ def main(argv: list[str] | None = None) -> int:
         env.setdefault("WATCHER_MAX_SCANNED_FILES_PER_TICK", "5000")
         env.setdefault("BOOTSTRAP_INGEST_MAX_NOTES", "50")
         runtime_dir = _runtime_note_dir(vault_root, inbox_dir_rel)
+        runtime_dir.mkdir(parents=True, exist_ok=True)
         if runtime_dir.exists():
             for stale in runtime_dir.glob("alpha_e2e_runtime_*.md"):
                 stale.unlink(missing_ok=True)
@@ -412,11 +419,10 @@ def main(argv: list[str] | None = None) -> int:
             stale.unlink(missing_ok=True)
         stop_host = _REPO_ROOT / "tmp" / "WATCHER_STOP_ALPHA_E2E"
         stop_host.unlink(missing_ok=True)
-        layout_rel = _select_layout_note_rel(vault_root)
         if layout_rel and not env.get("VAULT_LAYOUT_NOTE_REL"):
             env["VAULT_LAYOUT_NOTE_REL"] = layout_rel
-        for key, value in _layout_env_defaults(vault_root, layout_rel).items():
-            env.setdefault(key, value)
+        for key, value in layout_env.items():
+            env[key] = value
         _run(["make", "alpha-up"], env=env)
         status = _fetch_json(f"{api_base}/api/status")
         health = _fetch_json(f"{api_base}/api/health")

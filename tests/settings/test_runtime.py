@@ -49,9 +49,9 @@ def test_runtime_loads_llm_routing_settings(tmp_path, monkeypatch):
         {
             "default_chat": {
                 "primary": {
-                    "model_id": "openai.chat.gpt_4_1_mini",
+                    "model_id": "openai.chat.gpt_5_4_mini",
                     "provider": "openai",
-                    "model": "gpt-4.1-mini",
+                    "model": "gpt-5.4-mini",
                 },
                 "fallback": {
                     "mode": "local",
@@ -80,6 +80,6 @@ def test_runtime_loads_llm_routing_settings(tmp_path, monkeypatch):
     bundle = runtime.reload_settings_bundle(notify=False)
 
     assert bundle.llm_routing.default_chat.primary.provider == "openai"
-    assert bundle.llm_routing.default_chat.primary.model_id == "openai.chat.gpt_4_1_mini"
+    assert bundle.llm_routing.default_chat.primary.model_id == "openai.chat.gpt_5_4_mini"
     assert bundle.llm_routing.default_chat.fallback.mode == "local"
     assert bundle.llm_routing.default_embedding.require_compatible_identity is True

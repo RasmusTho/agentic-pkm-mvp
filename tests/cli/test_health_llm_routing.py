@@ -29,7 +29,7 @@ def test_health_llm_router_includes_configured_task_routes(monkeypatch) -> None:
         llm_routing=LLMRoutingSettings(
             tasks={
                 "qa": LLMRoutingSettings.TaskPolicy(
-                    primary=LLMRoutingSettings.RouteTarget(provider="openai", model="gpt-4.1-mini")
+                    primary=LLMRoutingSettings.RouteTarget(provider="openai", model="gpt-5.4-mini")
                 )
             }
         )
