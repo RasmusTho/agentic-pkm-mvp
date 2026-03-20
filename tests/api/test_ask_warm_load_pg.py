@@ -9,6 +9,7 @@ from app.api.app import app
 from app.api.routes import ask as ask_module
 from app.retrieval.hybrid import get_store as get_hybrid_store
 from app.stores import get_object_store, reset_store_backends
+from app.db.dsn import resolve_dsn
 from app.stores.pg import pg_available
 
 
@@ -17,6 +18,7 @@ def test_ask_warm_loads_pg_store(monkeypatch) -> None:
     if not pg_available():
         pytest.skip("Postgres backend not available")
 
+    monkeypatch.setenv("DATABASE_URL", resolve_dsn() or "postgresql://app:app@127.0.0.1:15432/app")
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("EMBED_DIM", "8")
