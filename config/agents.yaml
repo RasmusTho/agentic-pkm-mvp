@@ -3,7 +3,7 @@ merge:
   epsilon_score_gap: 0.25
   near_duplicate_similarity: 0.88
   overlap_similarity: 0.78
-  model: gpt-5-thinking@2025-09
+  model: gpt-5.4
   temperature: 0
   invariants:
     review_state_order: [draft, reviewed, promoted]
@@ -16,7 +16,7 @@ hygiene:
   empty_tokens: 0
   near_empty_tokens: 80
   salvage_llm: true
-  model: gpt-5-thinking@2025-09
+  model: gpt-5.4
   temperature: 0
   archive_path: Archive/Trash
   allow_hard_delete: false

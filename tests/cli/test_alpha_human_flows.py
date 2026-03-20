@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import shutil
 import textwrap
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from app.services.note_log import note_log_path
 from scripts.yaml_roundtrip import load_frontmatter
 
 alpha_human_flows_module = importlib.import_module("app.cli.alpha_human_flows")
+FIXTURE_VAULT = Path(__file__).resolve().parents[1] / "fixtures" / "vault_alpha"
 
 
 def _base_env(tmp_path: Path) -> dict[str, str]:
@@ -42,6 +44,12 @@ def _make_vault(tmp_path: Path) -> Path:
     )
     filler = vault / "Projects" / "other.md"
     filler.write_text("# Other project\nThis note is unrelated.\n", encoding="utf-8")
+    return vault
+
+
+def _copy_fixture_vault(tmp_path: Path) -> Path:
+    vault = tmp_path / "vault"
+    shutil.copytree(FIXTURE_VAULT, vault)
     return vault
 
 
@@ -179,6 +187,25 @@ def test_alpha_human_flows_writes_test_note_via_knowledge_port(tmp_path: Path, m
     result = _run_cli(vault, tmp_path)
     assert result.exit_code == 0, result.output
     assert "Test/Alpha-HumanFlows.md" in writes
+
+
+def test_alpha_human_flows_runs_against_fixture_vault_alpha(tmp_path: Path) -> None:
+    get_store().set_documents([])
+    vault = _copy_fixture_vault(tmp_path)
+
+    result = _run_cli(vault, tmp_path)
+
+    assert result.exit_code == 0, result.output
+    assert 'ASK: "What does the Alpha Human Flows test note say?"' in result.output
+    assert "SOURCES:" in result.output
+    assert "Test/Alpha-HumanFlows.md" in result.output or "Concepts/ExistingUUID.md" in result.output
+
+    test_note = vault / "Test" / "Alpha-HumanFlows.md"
+    frontmatter, body = load_frontmatter(test_note.read_text(encoding="utf-8"))
+    assert frontmatter.get("uuid") == "22222222-2222-2222-2222-222222222222"
+    assert frontmatter.get("review_state") == "promoted"
+    assert frontmatter.get("maturity") == "evergreen"
+    assert "Alpha Human Flows test note for orchestration." in body
 
 
 # Coverage gaps: Flow A sample selection errors not exercised; mirror file creation not asserted (path only);

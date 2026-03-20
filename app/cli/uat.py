@@ -4,7 +4,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Literal, Tuple
 
 from app.promotion.consumer import consume_promotion_intents
 from app.watcher.vault_watcher import run_watcher_tick
@@ -38,6 +38,9 @@ class UATSummary:
 
 class UATAssertionError(Exception):
     pass
+
+
+UATAssertMode = Literal["bootstrap", "converged"]
 
 
 def seed_vault_test_notes(
@@ -81,6 +84,7 @@ def run_vault_test_flow(
     run_panels: bool = True,
     consume_promotions: bool = True,
     assert_expectations: bool = False,
+    assert_mode: UATAssertMode = "bootstrap",
 ) -> UATSummary:
     scope = vault_root.expanduser().resolve() / target_subdir
     if not scope.exists() or not scope.is_dir():
@@ -116,17 +120,34 @@ def run_vault_test_flow(
     summary = UATSummary(watcher=watcher_summary, promotion=promotion_summary)
 
     if assert_expectations and not dry_run:
-        _assert_uat_expectations(summary)
+        _assert_uat_expectations(summary, mode=assert_mode)
 
     return summary
 
 
-def _assert_uat_expectations(summary: UATSummary) -> None:
+def _assert_uat_expectations(summary: UATSummary, *, mode: UATAssertMode = "bootstrap") -> None:
     failures: list[str] = []
-    if summary.watcher.get("panel_promotions", 0) < 1:
-        failures.append("Expected at least one promote.intent.created")
-    if summary.promotion.get("applied", 0) < 1:
-        failures.append("Expected at least one promotion to be applied by consumer")
+    if mode == "bootstrap":
+        if summary.watcher.get("panel_promotions", 0) < 1:
+            failures.append("Expected at least one promote.intent.created")
+        if summary.promotion.get("applied", 0) < 1:
+            failures.append("Expected at least one promotion to be applied by consumer")
+        return _raise_if_failures(failures)
+
+    if mode == "converged":
+        if summary.watcher.get("panel_promotions", 0) != 0:
+            failures.append("Expected no promote.intent.created during converged rerun")
+        if summary.promotion.get("applied", 0) != 0:
+            failures.append("Expected promotion consumer to be a no-op during converged rerun")
+        if summary.promotion.get("errors", 0) != 0:
+            failures.append("Expected no promotion consumer errors during converged rerun")
+        return _raise_if_failures(failures)
+
+    failures.append(f"Unknown UAT assert mode: {mode}")
+    _raise_if_failures(failures)
+
+
+def _raise_if_failures(failures: list[str]) -> None:
     if failures:
         raise UATAssertionError("; ".join(failures))
 
@@ -140,4 +161,5 @@ __all__ = [
     "SEED_SOURCE",
     "DEFAULT_TARGET_SUBDIR",
     "DEFAULT_FOLDER_NAME",
+    "UATAssertMode",
 ]

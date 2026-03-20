@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 from app.watcher.scope import matches_scope
 import hashlib
 import json
@@ -18,9 +19,9 @@ from app.agents.panel.agent import handle_note_update
 from app.agents.panel_agent.policy import watcher_panel_candidate_for_path
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
-from app.events.types import INGEST_VAULT_CHANGED
+from app.events.types import INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
 from app.services.note_uuid import ensure_note_uuid
-from app.services.outbox import write_outbox_event
+from app.services.outbox import insert_object_and_outbox, write_outbox_event
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_value
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
@@ -257,6 +258,35 @@ def _write_markdown_if_changed(note_path: Path, original: str, updated: str) -> 
         return False
 
 
+def _read_panel_note_with_retry(note_path: Path, *, attempts: int = 5, base_sleep: float = 0.2) -> str:
+    for attempt in range(attempts):
+        try:
+            return note_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            if exc.errno in {errno.ENOENT, errno.EPERM, errno.EACCES, errno.EROFS} and attempt + 1 < attempts:
+                time.sleep(base_sleep * (2**attempt))
+                continue
+            raise
+    raise FileNotFoundError(note_path)
+
+
+def _ensure_panel_note_uuid_with_retry(
+    note_path: Path,
+    *,
+    attempts: int = 5,
+    base_sleep: float = 0.2,
+) -> str:
+    for attempt in range(attempts):
+        try:
+            return ensure_note_uuid(note_path)
+        except OSError as exc:
+            if exc.errno in {errno.ENOENT, errno.EPERM, errno.EACCES, errno.EROFS} and attempt + 1 < attempts:
+                time.sleep(base_sleep * (2**attempt))
+                continue
+            raise
+    raise FileNotFoundError(note_path)
+
+
 def _process_panel_note(
     *,
     vault_root: Path,
@@ -264,21 +294,26 @@ def _process_panel_note(
     outbox_path: Path,
     state: WatcherState,
     action_mappings: Mapping[str, PanelActionMapping],
-) -> None:
+) -> int:
     note_path = vault_root / rel_path
+    logger.info(
+        "panel note start relative_path=%s note_path=%s",
+        str(rel_path),
+        str(note_path),
+    )
     try:
-        markdown = note_path.read_text(encoding="utf-8")
+        markdown = _read_panel_note_with_retry(note_path)
     except Exception as exc:
         state.errors += 1
         print(f"WARN: failed to read panel note {note_path}: {exc}")
-        return
+        return 0
 
     try:
-        note_uuid = ensure_note_uuid(note_path)
+        note_uuid = _ensure_panel_note_uuid_with_retry(note_path)
     except Exception as exc:
         state.errors += 1
         print(f"WARN: failed to ensure uuid for {note_path}: {exc}")
-        return
+        return 0
 
     frontmatter, _ = load_frontmatter(markdown)
     note_title = frontmatter.get("title") if isinstance(frontmatter, dict) else None
@@ -295,7 +330,7 @@ def _process_panel_note(
     except Exception as exc:
         state.errors += 1
         print(f"WARN: panel agent failed for {note_path}: {exc}")
-        return
+        return 0
 
     try:
         _write_markdown_if_changed(note_path, markdown, result.updated_markdown)
@@ -319,6 +354,24 @@ def _process_panel_note(
             _write_jsonl_event(event, outbox_path)
         except Exception as exc:
             print(f"WARN: failed to append JSONL outbox event {event.event}: {exc}")
+    emitted_events = len(result.events)
+    if emitted_events <= 0:
+        logger.info(
+            "panel note no events relative_path=%s note_path=%s note_uuid=%s",
+            str(rel_path),
+            str(note_path),
+            note_uuid,
+        )
+        return 0
+    logger.info(
+        "panel note emitted relative_path=%s note_path=%s note_uuid=%s events=%s wrote_markdown=%s",
+        str(rel_path),
+        str(note_path),
+        note_uuid,
+        ",".join(getattr(event, "event", "") for event in result.events),
+        result.updated_markdown != markdown,
+    )
+    return emitted_events
 
 
 
@@ -677,22 +730,44 @@ def _emit_panel_events(
     last_seen = state.last_seen(str(rel))
     state.update_file_state(str(rel), mtime=mtime, content_hash=digest, seen_at=now)
     if last_seen is not None and (now - last_seen) * 1000 < spec.debounce_ms:
+        logger.info(
+            "panel emit skipped debounce relative_path=%s debounce_ms=%s",
+            str(rel),
+            spec.debounce_ms,
+        )
         return None
     if state.rate_window_count(now) >= spec.rate_limit_per_min:
         state.rate_limited += 1
+        logger.info(
+            "panel emit skipped rate_limit relative_path=%s rate_limit_per_min=%s",
+            str(rel),
+            spec.rate_limit_per_min,
+        )
         return None
-    _process_panel_note(
+    emitted_events = _process_panel_note(
         vault_root=cfg.vault_path,
         rel_path=rel,
         outbox_path=cfg.outbox_path,
         state=state,
         action_mappings=action_mappings,
     )
+    if emitted_events <= 0:
+        logger.info(
+            "panel emit produced no events relative_path=%s",
+            str(rel),
+        )
+        return None
     state.intents_emitted += 1
     state.record_rate_event(now)
     state.update_file_state(str(rel), mtime=mtime, content_hash=digest, emitted_at=now)
     trace_id = uuid4().hex
     state.last_trace_id = trace_id
+    logger.info(
+        "panel emit success relative_path=%s emitted_events=%s trace_id=%s",
+        str(rel),
+        emitted_events,
+        trace_id,
+    )
     return trace_id
 
 
@@ -706,19 +781,44 @@ def _emit_watch_event(
     mtime: float,
     content_hash: str | None,
     state: WatcherState,
-) -> str:
+) -> str | None:
     if spec.emit_event == "panel.scan.requested":
-        action_mappings = load_panel_action_mappings()
-        trace = _emit_panel_events(
-            spec=spec,
-            cfg=cfg,
-            rel=rel_path,
-            mtime=mtime,
-            digest=content_hash or "",
-            state=state,
-            action_mappings=action_mappings,
+        trace_id = uuid4().hex
+        payload = {
+            "vault_path": str(vault_root / rel_path),
+            "relative_path": str(rel_path),
+            "mtime": mtime,
+            "hash": content_hash,
+            "watcher": spec.name,
+        }
+        event = OutboxEvent(
+            event=PANEL_SCAN_REQUESTED,
+            source="watcher.registry",
+            trace_id=trace_id,
+            payload=payload,
         )
-        return trace or uuid4().hex
+        outbox_path.parent.mkdir(parents=True, exist_ok=True)
+        with outbox_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event.model_dump(mode="json"), ensure_ascii=False))
+            handle.write("\n")
+        require_db = _db_outbox_required()
+        if require_db and not _has_db_outbox_env():
+            raise RuntimeError("DATABASE_URL or DB_DSN required for watcher DB outbox")
+        if require_db or _has_db_outbox_env():
+            try:
+                write_outbox_event(event)
+            except Exception:
+                state.enqueue_failures_total += 1
+                if require_db:
+                    raise
+                logger.exception(
+                    "watcher db outbox enqueue failed topic=%s trace_id=%s note_path=%s relative_path=%s",
+                    PANEL_SCAN_REQUESTED,
+                    trace_id,
+                    str(vault_root / rel_path),
+                    str(rel_path),
+                )
+        return trace_id
 
     trace_id = uuid4().hex
     payload = {
@@ -747,8 +847,6 @@ def _emit_watch_event(
             raise RuntimeError("DATABASE_URL or DB_DSN required for watcher DB outbox")
         if require_db or _has_db_outbox_env():
             try:
-                from app.services.outbox import insert_object_and_outbox
-
                 insert_object_and_outbox(
                     payload,
                     spec.emit_event,
@@ -894,6 +992,8 @@ def _run_spec_tick(
                 content_hash=current_digest,
                 state=state,
             )
+            if not trace_id:
+                continue
             state.last_trace_id = trace_id
             state.intents_emitted += 1
             emitted_in_tick += 1

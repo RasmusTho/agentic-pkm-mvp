@@ -1,4 +1,5 @@
 
+import json
 import uuid
 from pathlib import Path
 from textwrap import dedent
@@ -158,15 +159,24 @@ def test_watcher_registry_uses_env_paths_heals_uuid_and_applies_panel_policy(
     candidate_text = panel_candidate.read_text(encoding="utf-8")
     candidate_frontmatter, _ = load_frontmatter(candidate_text)
     assert watcher_panel_candidate_for_path(panel_candidate, candidate_frontmatter or {}, candidate_text)
-    assert "<!--ai:assist:start-->" in candidate_text
+    assert "<!--ai:assist:start-->" not in candidate_text
 
     never_text = panel_never.read_text(encoding="utf-8")
     never_frontmatter, _ = load_frontmatter(never_text)
     assert not watcher_panel_candidate_for_path(panel_never, never_frontmatter or {}, never_text)
 
     proactive_text = proactive_note.read_text(encoding="utf-8")
-    assert "%% AI %%" in proactive_text
-    assert "<!--ai:assist:start-->" in proactive_text
+    assert "%% AI %%" not in proactive_text
+    assert "<!--ai:assist:start-->" not in proactive_text
 
     ineligible_text = ineligible_note.read_text(encoding="utf-8")
     assert "%% AI %%" not in ineligible_text
+
+    outbox_records = [
+        json.loads(line)
+        for line in Path(env["INDEX_OUTBOX_PATH"]).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    topics = [rec.get("event") for rec in outbox_records]
+    assert "panel.scan.requested" in topics
+    assert "ingest.vault.changed" in topics
