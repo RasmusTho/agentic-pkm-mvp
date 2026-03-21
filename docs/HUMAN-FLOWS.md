@@ -83,6 +83,17 @@ The system also exists in a longer arc of use:
 The following functions are primary.
 They define what the system must continue to support even as implementation details change.
 
+### Canonical human loops
+
+These loops are compact recurring patterns, not a claim that all work must follow one rigid workflow.
+They summarize the kinds of cycles the system should keep legible and support across changing runtime implementations.
+
+- Capture -> clarify -> place
+- Retrieve -> orient -> act
+- Source -> interpret -> stabilize
+- Intent -> propose -> decide -> execute -> receipt
+- Review -> reclassify -> promote/archive
+
 ### Capture
 
 The system must let the human get material out of fragile working memory and into a durable external

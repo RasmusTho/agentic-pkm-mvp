@@ -42,6 +42,10 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - `v6.0` architecture target: semantics-aligned runtime architecture where context layering,
     overlap relations, primary-human-artifact boundaries, and local-first multi-device assumptions
     are expressed more cleanly than in the current v5.x transitional runtime.
+    - Make the ontology/runtime bridge explicit so human loops, ontology classes, and runtime contracts can be read together without pretending they are the same layer.
+    - Test commitment-first modeling where open loops, projects, waiting states, and execution accountability are not flattened into generic note state.
+    - Separate retrieval, orientation, and resurfacing as related but distinct runtime concerns.
+    - Clarify surface and authority contracts so writing, retention, and system surfaces stay distinct and receipt-bearing actions remain inspectable.
 
 ## Fitness Functions Enforced in CI
 - `pytest -q -c /dev/null -m "not pg and not alpha_llm"` is the primary smoke gate in CI.
@@ -71,7 +75,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
 | v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
 | v5.6 | ReasoningFacade + LangGraph rollout + Orchestrator V2 (flagged) + Vault-as-GUI settings compiler; docs-first kickoff plan in `docs/plans/V56_FORWARD_LINE.md` | Docs-first kickoff (status/roadmap updates) |
-| v6.0 | Wanted-state architecture pass to align runtime boundaries with the newer human/context/artifact semantics; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
+| v6.0 | Wanted-state architecture pass to align runtime boundaries with the newer human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
 
 ## Tracks (details moved)
 - Watcher track details: `docs/tracks/TRACK_WATCHER.md`
