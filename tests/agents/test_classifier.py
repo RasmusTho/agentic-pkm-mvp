@@ -1,51 +1,57 @@
-# PYTEST_SKIP_CLASSIFIER_GUARD
-import os, pytest
-if os.environ.get('SKIP_CLASSIFIER_TESTS','1') == '1':
-    pytest.skip('Classifier v2 rewrite; skipping for now', allow_module_level=True)
+from __future__ import annotations
 
-import os, json
-from psycopg.rows import dict_row
-import psycopg
-from app.agents.normalizer.agent import run as normalize_run
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+
+import app.agents.classifier.agent as classifier_agent
 from app.agents.classifier.agent import run as classify_run
+from app.store import object_store as legacy_object_store
+from app.store.object_store import DomainObject, ObjectStore
+from app.stores.provider import get_stores, reset_memory_stores
 
-def _dsn():
-    return os.environ["DATABASE_URL"].replace("postgresql+psycopg://","postgresql://")
+pytestmark = pytest.mark.not_pg
 
-def _fetch_decisions(oid: str):
-    with psycopg.connect(_dsn(), row_factory=dict_row) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT key, value FROM decisions WHERE object_id=%s ORDER BY created_at DESC", (oid,))
-            return cur.fetchall()
 
-def test_classifier_fallback_and_trust(tmp_path, monkeypatch):
-    import os
-    try:
-        from app.agents import normalize_run, classify_run
-    except Exception:
-        from app.agents.normalize import normalize_run  # type: ignore
-        from app.agents.classify import classify_run  # type: ignore
-    from app.agents._test_helpers import _fetch_decisions
-    from app.stores.decisions import put_decision
+def test_classifier_falls_back_to_heuristic_and_persists_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _StubClient:
+        def chat(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            return '{"type":"idea","trust":"own","tags":["topic/ignore"],"confidence":0.2}'
 
-    os.environ['LLM_PROVIDER'] = 'mock'
-    os.environ['LLM_MOCK_RESPONSE'] = 'UNSURE'
+    monkeypatch.setattr(classifier_agent, "get_chat_client", lambda intent: _StubClient())
 
-    src = tmp_path / 'sample.md'
-    src.write_text('# Titel\n\nDetta är en importerad text utan källor.\nLänk: http://example.com')
+    reset_memory_stores()
+    legacy_object_store._MEMORY_STORE.clear()
 
-    norm = normalize_run(str(src), trace_id='t-classify-1')
-    oid = norm['object_id']
+    object_id = str(uuid4())
+    ObjectStore().save_object(
+        DomainObject(
+            uuid=object_id,
+            kind="note",
+            payload={
+                "text": "# Titel\n\nDetta ar en importerad text utan kallor.\nLank: http://example.com",
+            },
+            source_ref=str(tmp_path / "sample.md"),
+            created_at=datetime.now(timezone.utc),
+        ),
+        emit_outbox=False,
+    )
 
-    res = classify_run(oid, trace_id='t-classify-1')
-    value = res['classification']
+    result = classify_run(object_id, trace_id="t-classify-1")
+    classification = result["classification"]
 
-    assert value['type'] == 'note'
-    assert value['trust'] in {'provisional','external'}
-    assert 0.5 <= value['confidence'] <= 0.7
+    assert classification["type"] == "note"
+    assert classification["trust"] == "provisional"
+    assert classification["confidence"] == 0.55
+    assert sorted(classification["tags"]) == ["topic/has_title", "topic/links"]
 
-    # Persist innan vi kontrollerar loggen
-    put_decision(object_id=oid, agent='classifier', kind='classify', key='classification', value=value)
-
-    rows = _fetch_decisions(oid)
-    assert any(r['key'] == 'classification' for r in rows)
+    _, decisions = get_stores()
+    latest = decisions.latest(object_id=object_id, key="classification")
+    assert latest is not None
+    assert latest["agent"] == "classifier"
+    assert latest["kind"] == "classification"
+    assert latest["value"] == classification

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-SETTINGS_PATH = ROOT / "app" / "settings.py"
+SETTINGS_PATH = ROOT / "app" / "settings" / "__init__.py"
 DOC_PATHS = (
     ROOT / "README.md",
     ROOT / "docs" / "OPERATIONS.md",
@@ -25,7 +25,7 @@ def read_current_version() -> str:
     text = SETTINGS_PATH.read_text(encoding="utf-8")
     match = VERSION_REGEX.search(text)
     if not match:
-        raise ValueError("app_version not found in settings.py")
+        raise ValueError("app_version not found in app.settings")
     return match.group("version")
 
 
