@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List
 
 from app.knowledge.write_ops import write_note_from_absolute
+from app.settings.default_vault_layout import load_default_vault_layout
 from app.vault.layout import ensure_vault_layout_report
 
 
@@ -84,13 +85,9 @@ class YggdrasilScaffolder:
 
         return {"root": [yggdrasil_root], "created": created, "existed": list(set(existed))}
 
-    @staticmethod
-    def _layout_defaults_template_path() -> Path:
-        return Path(__file__).resolve().parents[2] / "docs" / "settings" / "default-vault-layout.yaml"
-
     @classmethod
     def _load_layout_defaults(cls) -> dict:
-        payload = yaml.safe_load(cls._layout_defaults_template_path().read_text(encoding="utf-8")) or {}
+        payload = load_default_vault_layout()
         return payload if isinstance(payload, dict) else {}
 
     @staticmethod
@@ -119,7 +116,7 @@ class YggdrasilScaffolder:
         defaults = cls._load_layout_defaults()
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = yaml.safe_dump(defaults, sort_keys=False, allow_unicode=True)
-        write_note_from_absolute(path, payload, vault_root=path.parent.parent)
+        write_note_from_absolute(path.expanduser().resolve(), payload, vault_root=path.parent.parent.expanduser().resolve())
 
 
 __all__ = ["YggdrasilScaffolder"]

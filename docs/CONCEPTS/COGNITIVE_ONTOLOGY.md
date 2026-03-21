@@ -47,9 +47,8 @@ The main remaining sharpening work is now narrower:
   letting runtime policy become the ontology,
 - keeping current repo working language such as `writing plane` and `retention plane` explicitly
   provisional until better semantic grounding is chosen,
-- keeping artifact/projection distinctions visible without making runtime representation the center
-  of the ontology,
-- and keeping `source` clear when it means epistemic role rather than operational emitter.
+- and continuing to translate the sharper ontology into runtime and architecture deltas without
+  overstating current implementation.
 
 ## Why this ontology exists
 

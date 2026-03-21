@@ -8,11 +8,11 @@ from typing import Any, Dict
 
 import yaml
 
-from app.config.paths import resolve_system_settings_path
 from app.vault.layout import load_layout
 
 
 _SETTINGS_REL_PATH = Path("_system") / "settings" / "system-settings.yaml"
+_ALT_SETTINGS_REL_PATH = Path("@Settings") / "system-settings.yaml"
 
 
 @dataclass(frozen=True)
@@ -58,11 +58,11 @@ def _extract_paths(settings: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _paths_data(vault_root: Path) -> Dict[str, str]:
-    settings_path = resolve_system_settings_path(vault_root=vault_root)
-    if settings_path is None:
-        settings_path = vault_root / _SETTINGS_REL_PATH
-    settings = _read_system_settings(settings_path)
-    return _extract_paths(settings)
+    for settings_path in (vault_root / _SETTINGS_REL_PATH, vault_root / _ALT_SETTINGS_REL_PATH):
+        settings = _read_system_settings(settings_path)
+        if settings:
+            return _extract_paths(settings)
+    return {}
 
 
 def resolve_vault_inbox_dir_rel(vault_root: Path) -> VaultPathValue:

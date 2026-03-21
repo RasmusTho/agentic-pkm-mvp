@@ -66,9 +66,13 @@ Current sources:
 - `docs/CONCEPTS/COGNITIVE_AXES_AND_SPHERES.md`
 - `docs/CONCEPTS/CONTEXT_AND_ARTIFACT_DIMENSIONS.md`
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
+- `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md`
+- `docs/CONCEPTS/CREATIVE_PROCESS_CONTRACT.md`
 
 Status:
-- mostly ready for architecture-facing use
+- mostly ready for architecture-facing use, but review should explicitly preserve newer companion
+  contracts around salience/resurfacing and creative process rather than flattening them back into
+  retrieval, lifecycle, or task semantics
 
 ### 4. Catalog/path projection posture
 
@@ -104,7 +108,9 @@ When the gate above is met, architecture review should focus on questions like:
 - does archive exposure preserve provenance and boundaries,
 - are path/layout assumptions carrying too much meaning,
 - do agent/event/store seams preserve artifact/projection distinctions,
-- and are derived signals being mistaken for durable truth?
+- are derived signals being mistaken for durable truth,
+- is resurfacing being confused with retrieval,
+- and do creative/runtime surfaces preserve exploratory ambiguity and selective stabilization?
 
 ## Finding classification rule
 
