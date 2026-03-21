@@ -212,6 +212,79 @@ def test_panel_graph_llm_can_select_unchecked(monkeypatch) -> None:
     assert statuses["promote.evergreen"] == "triggered"
 
 
+def test_panel_graph_llm_empty_selection_uses_instruction_hint_for_single_promotion(monkeypatch) -> None:
+    mapping = PanelActionMapping(
+        id="promote.evergreen",
+        intent_type="promotion",
+        downstream_event="review.promote.evergreen",
+        params={"maturity": "evergreen"},
+    )
+    action = PanelIntentAction(id=mapping.id, label="Make this note evergreen", checked=True, mapping=mapping)
+    note = NoteRef(uuid=TEST_NOTE_UUID, path=TEST_NOTE_PATH, origin=TEST_NOTE_ORIGIN)
+    panel = PanelInfo(
+        panel_id="panel-1",
+        instruction="Make this note evergreen. Do not summarize; just promote it.",
+        raw_block=None,
+    )
+    payload = PanelIntentPayload(note=note, panel=panel, actions=[action])
+    intent = PanelIntentEvent(payload=payload, trace_id="trace-graph-llm-empty-promotion")
+    catalog = PanelActionCatalog.from_descriptors(
+        [
+            PanelActionDescriptor(
+                id="promote.evergreen",
+                intent_type="promotion",
+                downstream_event="review.promote.evergreen",
+                labels=["Make this note evergreen", "Promote to evergreen"],
+                description="Promote note to evergreen",
+                llm_hint="Choose this when the instruction explicitly asks to promote or make the note evergreen.",
+            )
+        ]
+    )
+    state = _state_from_intent(intent, catalog=catalog)
+
+    monkeypatch.setattr(
+        "app.agents.panel_agent.graph.get_chat_client",
+        lambda intent: _StubChatClient(json.dumps({"actions": []})),
+    )
+
+    result = run_panel_graph(state, decider_mode="llm")
+    event_names = {getattr(evt, "event", None) for evt in result.emitted_events}
+    assert "promote.intent.created" in event_names
+    statuses = {r.id: r.status for r in result.action_results}
+    assert statuses["promote.evergreen"] == "triggered"
+
+
+def test_panel_graph_llm_empty_selection_does_not_force_non_promotion(monkeypatch) -> None:
+    action = PanelIntentAction(id="panel.reply", label="Reflect only, no promotion", checked=True, mapping=None)
+    note = NoteRef(uuid=TEST_NOTE_UUID, path=TEST_NOTE_PATH, origin=TEST_NOTE_ORIGIN)
+    panel = PanelInfo(panel_id="panel-1", instruction="Reflect only, no promotion.", raw_block=None)
+    payload = PanelIntentPayload(note=note, panel=panel, actions=[action])
+    intent = PanelIntentEvent(payload=payload, trace_id="trace-graph-llm-empty-chat")
+    catalog = PanelActionCatalog.from_descriptors(
+        [
+            PanelActionDescriptor(
+                id="panel.reply",
+                intent_type="chat",
+                downstream_event="panel.reply.created",
+                labels=["Reflect only, no promotion"],
+                description="Leave a brief reply in the panel log.",
+            )
+        ]
+    )
+    state = _state_from_intent(intent, catalog=catalog)
+
+    monkeypatch.setattr(
+        "app.agents.panel_agent.graph.get_chat_client",
+        lambda intent: _StubChatClient(json.dumps({"actions": []})),
+    )
+
+    result = run_panel_graph(state, decider_mode="llm")
+    event_names = {getattr(evt, "event", None) for evt in result.emitted_events}
+    assert "promote.intent.created" not in event_names
+    statuses = {r.id: r.status for r in result.action_results}
+    assert statuses["panel.reply"] == "skipped"
+
+
 def test_panel_graph_skips_idempotent_duplicate() -> None:
     mapping = PanelActionMapping(
         id="promote.evergreen",
