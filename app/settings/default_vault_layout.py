@@ -8,7 +8,7 @@ import yaml
 
 
 def _template_path() -> Path:
-    return Path(__file__).resolve().parents[2] / "docs" / "settings" / "default-vault-layout.yaml"
+    return Path(__file__).with_name("default-vault-layout.yaml")
 
 
 def load_default_vault_layout() -> dict[str, Any]:
