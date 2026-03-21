@@ -78,6 +78,69 @@ Additional clarification candidates discovered during the first alignment pass:
   that runtime scope, retrieval, and path decisions can be evaluated against something more stable
   than provisional wording alone.
 
+## Tier 1 ontology debt
+
+These gaps are now explicit Tier 1 debt.
+They are not vague "needs review later" items.
+They are domain-level ontology gaps that should be defined clearly before later architecture or
+schema work tries to compensate for them implicitly.
+
+### 1. Projection layer
+
+Problem:
+- the repo still lacks a canonical generic `Projection` concept in the ontology layer,
+- even though the active system repeatedly distinguishes between a human-facing vault note and its
+  runtime/store/index/mirror representations in practice.
+
+Why this is Tier 1:
+- the difference between artifact and runtime representation is already central to the repo's
+  meaning,
+- and leaving it under-modeled guarantees continued drift in ingest, retrieval, mirror, and store
+  language.
+
+Done means:
+- the ontology contains a canonical generic `Projection` concept,
+- the distinction between artifact and projection is stated in ontology-first language,
+- and active docs can refer to runtime/store/search representations without inventing ad hoc terms
+  each time.
+
+### 2. Source as role vs type
+
+Problem:
+- the ontology still says `Source Artifact` while also admitting that sourcehood is often a role
+  played by an artifact in context.
+
+Why this is Tier 1:
+- this is a domain statement about how knowledge work functions,
+- not primarily an architecture or schema question,
+- and retrieval/citation semantics cannot stay clean while this ambiguity remains unresolved.
+
+Done means:
+- the ontology states whether `source` is canonically:
+  - a role,
+  - a type,
+  - or a narrow hybrid with explicit criteria,
+- and the active docs stop relying on unresolved tension between `Source Artifact` as class and
+  `source` as role.
+
+### 3. Temporal decay / epistemic degradation over time
+
+Problem:
+- the ontology distinguishes `review_state` and `maturity`,
+- but still lacks a clear semantic account of how an artifact or claim can become less safe,
+  current, or applicable over time without anyone actively re-reviewing it.
+
+Why this is Tier 1:
+- this is a real domain phenomenon in second-brain use,
+- and it affects how the system should later treat older "reviewed" or "evergreen" material in
+  retrieval and answer formation.
+
+Done means:
+- the ontology names the phenomenon explicitly,
+- it is distinguished from maturity and review posture,
+- and active docs can talk about time-based epistemic degradation without forcing it into lifecycle
+  or archive language.
+
 ## Workstream A — Active SoT document rewrites
 
 ### Priority 1: terminology and ontology boundary
