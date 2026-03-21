@@ -49,7 +49,7 @@ Canonical artifacts must remain portable, readable without the system, and carry
 
 Derived artifacts are rebuildable views:
 - indexes, embeddings, projections, caches, summaries, and other machine views
-- operational traces, receipts, and audit records retained for observability and legibility
+- operational traces such as audit/event records, plus distinct receipt artifacts that may be assembled from those traces for observability and legibility
 
 Derived artifacts may be persisted for performance and auditability, but they must never become the only remaining copy of meaning.
 

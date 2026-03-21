@@ -53,9 +53,10 @@ They are a bridge vocabulary for reading the current repo, not a schema proposal
 | authority basis | The basis on which the system may expose, infer, or change something: provenance, policy, explicit user intent, confirmed review, or bounded runtime authorization. |
 
 Reading rule:
-- a human-facing note is usually an artifact,
-- a task/project/waiting structure is usually a commitment,
-- a runtime audit row or event log is usually a receipt or operation trace,
+- a human-facing note is an artifact,
+- a task/project/waiting structure is a commitment,
+- a runtime audit row or event log is an operational trace, not a receipt by itself,
+- receipts are distinct accountability artifacts that may be assembled or derived from operational traces plus execution context,
 - and a single stored record may project more than one class without collapsing those classes into one meaning.
 
 ## Persistence surfaces
@@ -78,6 +79,14 @@ Reading rule:
 - writing and retention surfaces can both contain canonical artifacts,
 - the system surface can contain durable accountability records,
 - but the system surface should not silently become the only remaining copy of meaning.
+
+## Receipts
+
+Receipts are distinct accountability artifacts, not a synonym for every operational record.
+They should make a meaningful action legible in terms of what happened, under what authority, on what basis, and with what result.
+
+Raw audit rows, outbox events, and similar operational traces do not automatically satisfy receipt requirements by themselves.
+They may support receipt construction and reconstruction, but a receipt remains a distinct accountability artifact assembled from traces plus the relevant execution context.
 
 ## Retrieval, orientation, and resurfacing
 
