@@ -7,6 +7,7 @@ from typing import Any, Iterable
 
 import yaml
 
+from app.config.paths import resolve_system_settings_path
 from app.knowledge.write_ops import write_note_from_absolute
 
 
@@ -25,6 +26,7 @@ class VaultLayout:
     include_folders: list[str] | None
     ignore_glob: list[str] | None
     note_path: Path
+    runtime_dir_rel: str | None = None
     version: str = "1"
 
 
@@ -83,7 +85,9 @@ def _coerce_str(value: object | None) -> str:
 
 
 def _read_system_settings(vault_root: Path) -> dict[str, Any]:
-    path = vault_root / _SETTINGS_REL_PATH
+    path = resolve_system_settings_path(vault_root=vault_root)
+    if path is None:
+        path = vault_root / _SETTINGS_REL_PATH
     if not path.exists():
         return {}
     try:
@@ -91,6 +95,16 @@ def _read_system_settings(vault_root: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _paths_block(settings: dict[str, Any]) -> dict[str, Any]:
+    raw = settings.get("paths")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _layout_block(settings: dict[str, Any]) -> dict[str, Any]:
+    raw = settings.get("layout")
+    return raw if isinstance(raw, dict) else {}
 
 
 def _system_dir_hint(vault_root: Path) -> str:
@@ -190,6 +204,7 @@ def load_layout(vault_root: Path) -> VaultLayout:
     system_folder = _coerce_str(frontmatter.get("system_folder") or os.getenv("VAULT_SYSTEM_DIR_REL"))
     inbox_folder = _coerce_str(frontmatter.get("inbox_folder") or os.getenv("VAULT_INBOX_DIR_REL"))
     desk_folder = _coerce_str(frontmatter.get("desk_folder") or os.getenv("VAULT_DESK_DIR_REL"))
+    runtime_dir_rel = _coerce_str(frontmatter.get("runtime_dir_rel") or os.getenv("VAULT_RUNTIME_DIR_REL"))
 
     if not system_folder or not inbox_folder or not desk_folder:
         raise ValueError(
@@ -213,24 +228,25 @@ def load_layout(vault_root: Path) -> VaultLayout:
         include_folders=include_folders,
         ignore_glob=ignore_glob,
         note_path=note_path,
+        runtime_dir_rel=runtime_dir_rel or None,
         version=version,
     )
 
 
 def _render_layout_note(layout: VaultLayout) -> str:
-    frontmatter = yaml.safe_dump(
-        {
-            "version": layout.version,
-            "system_folder": layout.system_folder,
-            "inbox_folder": layout.inbox_folder,
-            "desk_folder": layout.desk_folder,
-            "root_folders": layout.root_folders,
-            "include_folders": layout.include_folders or [],
-            "ignore_glob": layout.ignore_glob or [],
-        },
-        sort_keys=False,
-        allow_unicode=True,
-    ).strip()
+    payload = {
+        "version": layout.version,
+        "system_folder": layout.system_folder,
+        "inbox_folder": layout.inbox_folder,
+        "desk_folder": layout.desk_folder,
+        "root_folders": layout.root_folders,
+        "include_folders": layout.include_folders or [],
+        "ignore_glob": layout.ignore_glob or [],
+    }
+    if layout.runtime_dir_rel:
+        payload["runtime_dir_rel"] = layout.runtime_dir_rel
+
+    frontmatter = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True).strip()
 
     body = (
         "# Vault Layout Contract\n"
@@ -259,25 +275,53 @@ def load_or_create_layout(vault_root: Path) -> VaultLayout:
     except FileNotFoundError:
         pass
 
-    system_folder = (os.getenv("VAULT_SYSTEM_DIR_REL") or "").strip()
-    inbox_folder = (os.getenv("VAULT_INBOX_DIR_REL") or "").strip()
-    desk_folder = (os.getenv("VAULT_DESK_DIR_REL") or "").strip()
+    settings = _read_system_settings(vault_root)
+    paths = _paths_block(settings)
+    layout_block = _layout_block(settings)
+
+    system_folder = (
+        os.getenv("VAULT_SYSTEM_DIR_REL")
+        or _coerce_str(layout_block.get("system_folder"))
+        or _coerce_str(paths.get("system_dir_rel"))
+    ).strip()
+    inbox_folder = (
+        os.getenv("VAULT_INBOX_DIR_REL")
+        or _coerce_str(layout_block.get("inbox_folder"))
+        or _coerce_str(paths.get("inbox_dir_rel"))
+    ).strip()
+    desk_folder = (
+        os.getenv("VAULT_DESK_DIR_REL")
+        or _coerce_str(layout_block.get("desk_folder"))
+    ).strip()
+    runtime_dir_rel = (
+        os.getenv("VAULT_RUNTIME_DIR_REL")
+        or _coerce_str(layout_block.get("runtime_dir_rel"))
+        or _coerce_str(paths.get("runtime_dir_rel"))
+    ).strip()
 
     if not system_folder or not inbox_folder or not desk_folder:
         raise ValueError(
             "Cannot create vault.layout.md without explicit folder names. Set VAULT_SYSTEM_DIR_REL + "
-            "VAULT_INBOX_DIR_REL + VAULT_DESK_DIR_REL (or create the note manually)."
+            "VAULT_INBOX_DIR_REL + VAULT_DESK_DIR_REL, or provide layout defaults in system-settings.yaml."
         )
+
+    root_folders = _normalize_optional_list(layout_block.get("root_folders"))
+    if not root_folders:
+        root_folders = [system_folder, inbox_folder, desk_folder]
+
+    include_folders = _normalize_optional_list(layout_block.get("include_folders"))
+    ignore_glob = _normalize_optional_list(layout_block.get("ignore_glob"))
 
     note_path = vault_root / system_folder / _layout_note_filename()
     layout = VaultLayout(
         system_folder=system_folder,
         inbox_folder=inbox_folder,
         desk_folder=desk_folder,
-        root_folders=[system_folder, inbox_folder, desk_folder],
-        include_folders=None,
-        ignore_glob=None,
+        root_folders=root_folders,
+        include_folders=include_folders,
+        ignore_glob=ignore_glob,
         note_path=note_path,
+        runtime_dir_rel=runtime_dir_rel or None,
         version="1",
     )
 
