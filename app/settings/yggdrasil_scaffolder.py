@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import yaml
 from pathlib import Path
 from typing import List
 
 from app.knowledge.write_ops import write_note_from_absolute
+from app.settings.default_vault_layout import load_default_vault_layout
+from app.vault.layout import ensure_vault_layout_report
 
 
 class YggdrasilScaffolder:
@@ -58,13 +61,34 @@ class YggdrasilScaffolder:
 
         settings_dir = mimer_root / "@Settings"
         placeholder = settings_dir / "global.md"
-        if not any(settings_dir.iterdir()):
+        system_settings = settings_dir / "system-settings.yaml"
+
+        if not placeholder.exists():
             self._write_settings_placeholder(mimer_root, placeholder)
             created.append(placeholder)
-        elif placeholder.exists():
+        else:
             existed.append(placeholder)
 
+        if not system_settings.exists():
+            self._write_default_system_settings(system_settings)
+            created.append(system_settings)
+        else:
+            existed.append(system_settings)
+
+        layout, _, _ = ensure_vault_layout_report(mimer_root)
+        for folder in [layout.system_folder, layout.inbox_folder, layout.desk_folder]:
+            folder_path = mimer_root / folder
+            if folder_path.exists():
+                existed.append(folder_path)
+            else:
+                created.append(folder_path)
+
         return {"root": [yggdrasil_root], "created": created, "existed": list(set(existed))}
+
+    @classmethod
+    def _load_layout_defaults(cls) -> dict:
+        payload = load_default_vault_layout()
+        return payload if isinstance(payload, dict) else {}
 
     @staticmethod
     def _write_settings_placeholder(vault_root: Path, placeholder: Path) -> None:
@@ -86,6 +110,13 @@ class YggdrasilScaffolder:
         resolved_root = vault_root.expanduser().resolve()
         resolved_path = placeholder.expanduser().resolve()
         write_note_from_absolute(resolved_path, content, vault_root=resolved_root)
+
+    @classmethod
+    def _write_default_system_settings(cls, path: Path) -> None:
+        defaults = cls._load_layout_defaults()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = yaml.safe_dump(defaults, sort_keys=False, allow_unicode=True).encode("utf-8")
+        path.write_bytes(payload)
 
 
 __all__ = ["YggdrasilScaffolder"]
