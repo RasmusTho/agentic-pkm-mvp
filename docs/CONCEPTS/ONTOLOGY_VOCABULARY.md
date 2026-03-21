@@ -14,12 +14,26 @@ It answers:
 
 This document is subordinate to:
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
+- `docs/CONCEPTS/CONTEXT_TERMINOLOGY_CONTRACT.md`
+- `docs/CONCEPTS/CONTEXT_REPRESENTATION_POSTURE.md`
 - `docs/PROJECT_KERNEL.md`
 
 ## Usage rule
 
 When a term appears in multiple ontology layers, the canonical human-first meaning wins.
 Implementation terms may remain in code and migration-era docs, but should be interpreted through the vocabulary below.
+
+Temperature/storage metaphors such as `hot`, `warm`, `cool`, `cold`, and sometimes `archive`
+should not carry canonical semantics by themselves.
+Current repo working language may use:
+- `writing surface` / `writing plane`
+- `retention surface` / `retention plane`
+- `retained artifact`
+
+Important:
+- this memo does **not** treat those terms as settled field-standard language,
+- only as current repo-level working language pending further semantic refinement,
+- see `docs/research/cognitive-semantics-literature-memo.md`.
 
 ## Canonical vocabulary
 
@@ -29,8 +43,15 @@ Implementation terms may remain in code and migration-era docs, but should be in
 | `Human` | Actor | The primary bearer of meaning, authority, and accountability. | "user" when meaning/authority is central | Reducing the human to just an API caller |
 | `System Agent` | Actor | A bounded assisting actor that can observe, propose, retrieve, transform, plan, or execute within limits. | runtime component names when discussing agency in general | Using "agent" for every helper, pipeline, or service without clarifying role |
 | `Delegation` | Provenance / accountability | A bounded authorization from a human to a system agent. | implicit "auto-run" framing | Treating automation as authority-free |
+| `Sphere` | Context structure | An overlapping region of human life, concern, practice, or meaning. | `domain` when the point is lived belonging | Treating human context as an exclusive bucket by default |
+| `Situated Role Identity` | Context structure / relation | The mode of self, tone, responsibility, and judgment active in a situation. | vague `persona` talk when role-bound meaning is central | Requiring a heavy identity engine just to acknowledge role-sensitive use |
+| `Context` | Context structure | A situated configuration of currently relevant spheres, role identities, purposes, commitments, and constraints. | `domain` when the point is what is relevant right now | Treating all context as long-lived static classification |
+| `Shared Participation` | Context relation | The relation by which an artifact, commitment, or concern meaningfully belongs to more than one sphere or context. | `bridge` when the point is overlap in meaning | Treating overlap as if it exists only after a runtime permission object is created |
+| `Operational Scope` | Boundary / runtime-facing context term | A narrower working boundary used for retrieval, action gating, path defaults, and similar runtime behavior. | broad human use of `domain` when runtime scope is what is meant | Letting operational scope pretend to be the whole human model |
+| `Explicit Cross-Scope Allowance` | Boundary / permission relation | A bounded, auditable permission for persistent or reusable crossing between operational scopes. | `bridge` when the permission function should be explicit | Treating the allowance as the primary human mental model of overlap |
 | `Cognitive Artifact` | Artifact | Any persistent or semi-persistent object used in thinking, creating, remembering, planning, or orienting. | "object" as a general domain word | Using "object" as if it were already semantically clear |
 | `Work Artifact` | Artifact | A cognitive artifact used to advance work or thinking. | generic "note" when the artifact is not specifically a vault note | Collapsing all work artifacts into notes |
+| `Retained Artifact` | Artifact | Current repo working term for a cognitive artifact preserved for long-horizon retention, rediscovery, citation, or later reuse without requiring immediate note conversion. | `archive artifact`, `cold object` when functional meaning matters | Letting storage-temperature metaphors define the concept or treating this wording as more literature-settled than it is |
 | `Source Artifact` | Artifact / role | A cognitive artifact used as evidence, grounding, or reference in a context. | "source" as if it were always a distinct base type | Treating "source" as an intrinsic type in all contexts |
 | `Creative Artifact` | Artifact | A cognitive artifact for generative or exploratory creative work. | forcing creative material into "knowledge" vocabulary | Assuming all artifacts are propositional knowledge |
 | `Project Artifact` | Artifact | A cognitive artifact tied to a project or multi-step effort over time. | generic "document" | Treating project structure as just tags or metadata |
@@ -39,7 +60,9 @@ Implementation terms may remain in code and migration-era docs, but should be in
 | `Mirror Artifact` | Artifact / projection-facing specialization | A portable machine-side projection of a human-facing artifact with selected metadata/history. | vague `note log` or raw `mirror` when portability/projection is meant | Treating the mirror as the primary human artifact |
 | `Receipt Artifact` | Artifact / accountability specialization | A human-legible system artifact that records what happened, with what authority, and with what result. | generic `log` when accountability is meant | Treating receipts as backend-only diagnostics |
 | `Execution Artifact` | Artifact / process specialization | A generated artifact used to coordinate or record execution rather than to serve as a human project or note. | overloading `plan` or `run` | Treating execution artifacts as human commitments by default |
-| `Vault Note` | Artifact / implementation-facing specialization | A human-facing editable artifact in the warm plane, typically represented as a vault markdown note. | generic "note" when warm-surface specificity matters | Using "note" to mean every artifact in the system |
+| `Vault Note` | Artifact / implementation-facing specialization | A human-facing editable artifact in the current repo working concept of a writing plane, typically represented as a vault markdown note. | generic "note" when writing-surface specificity matters | Using "note" to mean every artifact in the system |
+| `Writing Plane` | Boundary / plane | Current repo working term for the primary human-facing editable writing surface. | `warm plane` when the functional meaning matters | Treating temperature metaphor as canonical or treating this wording as final field-backed ontology |
+| `Retention Plane` | Boundary / plane | Current repo working term for the retained-material surface for rediscovery, inspection, citation, and later reuse. | `cold plane`, `archive plane` when the functional meaning matters | Letting low-frequency-storage analogies define the concept or treating this wording as final field-backed ontology |
 | `Commitment` | Commitment structure | Something requiring attention, maintenance, progress, or decision. | overloading "task" or "project" | Modeling all open loops as notes |
 | `Project` | Commitment structure | A commitment requiring multiple steps over time. | generic "plan" or "set" when commitment is meant | Treating project as just a folder or tag |
 | `Next Action` | Commitment structure | The next concrete step that can advance a commitment. | vague "action" when GTD-like meaning matters | Using "action" for both checkbox label and ontological action without distinction |
@@ -62,13 +85,16 @@ Implementation terms may remain in code and migration-era docs, but should be in
 
 | Existing term | Observed drift | Most likely ontology class | Recommendation |
 | --- | --- | --- | --- |
-| `note` | Used for warm artifact, markdown file, object kind, and generic content unit | `Vault Note` or `Work Artifact` depending on context | Reserve `Vault Note` for warm editable notes; use `Cognitive Artifact` / `Work Artifact` elsewhere |
+| `note` | Used for writing artifact, markdown file, object kind, and generic content unit | `Vault Note` or `Work Artifact` depending on context | Reserve `Vault Note` for writing-surface editable notes; use `Cognitive Artifact` / `Work Artifact` elsewhere |
 | `object` | Used for domain artifact, store row, external file surrogate, and generic payload container | Usually implementation-facing `Object Record`, not base ontology | Avoid as a domain term; use artifact language in docs and reserve object for storage/runtime when necessary |
 | `source` | Used for provenance origin, evidence artifact, emitter identity, and file path | `Source Artifact`, `Provenance`, or emitter attribution depending on context | Always qualify: `source artifact`, `source emitter`, `source_ref`, or `origin` |
 | `agent` | Used for true assisting actors, deterministic pipelines, services, and roles | `System Agent` or role | Keep `System Agent` for bounded assisting actors; call simple components/services by their architectural name when agency is not intended |
 | `review` | Used for process, state field, approval, and promotion-related gating | `Review` transition/process | Distinguish `review` (process), `review state` (state marker), and approval/acceptance (decision/transition) |
 | `promotion` | Used for panel intent, agent flow, maturity change, and frontmatter update | `Promotion` transition | Treat as a transition with associated intent/receipt, not a standalone object |
 | `memory` | Used for human memory, external memory, in-process cache, and historical memory-store designs | `external cognitive support` at domain level; implementation varies | Constrain usage carefully; do not use `memory` as a blanket synonym for artifact store |
+| `warm` / `cold` / `hot` / `cool` | Used as if cognitive function were a storage-temperature tier | Usually `writing plane`, `retention plane`, or a salience distinction depending on context | Treat as non-canonical metaphor; rewrite active SoT docs toward function language |
+| `domain` | Used for lived life area, runtime retrieval boundary, storage grouping, and trust/exposure policy | Usually `Operational Scope`; sometimes `Sphere` or `Context` depending on meaning | Do not let `domain` silently carry all context jobs at once |
+| `bridge` | Used for overlap in meaning, repeated cross-context reuse, and runtime permission structure | Usually `Explicit Cross-Scope Allowance`; sometimes `Shared Participation` if the point is human overlap | Avoid using it as the default mental model of overlap |
 | `plan` | Used for commitment structure, generated execution artifact, and planner output schema | `Plan Artifact` or `Project` depending on context | Distinguish project/commitment from execution plan |
 | `action` | Used for checkbox labels, ontological operations, tool calls, and next actions | `Action`, `Next Action`, or action-catalog item depending on context | Qualify as `next action`, `catalog action`, or `performed action` |
 | `artifact` | Sometimes means any content, sometimes only durable human-readable output | `Cognitive Artifact` | Prefer as the general domain term over `object` |
@@ -102,6 +128,8 @@ Implementation terms may remain in code and migration-era docs, but should be in
   - ontological `System Agent`,
   - runtime component,
   - and role in a workflow.
+- Development-time terms such as `coding agent`, `Codex`, or repo assistant do not belong to this
+  runtime ontology layer; read those from `docs/DEV_WORKFLOW.md` and `.codex/AGENTS.md`.
 
 ## Runtime seam notes
 
@@ -154,6 +182,8 @@ The following terms should be corrected first in active SoT docs:
 7. `memory`
 8. `plan`
 9. `action`
+10. `domain`
+11. `bridge`
 
 ## Source of truth rule
 

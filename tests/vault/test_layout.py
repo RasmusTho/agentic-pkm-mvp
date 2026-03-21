@@ -191,7 +191,6 @@ def test_ensure_vault_layout_can_bootstrap_from_settings_file(tmp_path: Path, mo
     assert layout.root_folders == ["⚙️ System", "📥 Inbox", "🛠️ Workbench"]
     assert layout.include_folders == ["📥 Inbox", "🛠️ Workbench"]
 
-
 def test_ensure_vault_layout_does_not_fallback_to_other_vault_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -227,8 +226,6 @@ def test_ensure_vault_layout_does_not_fallback_to_other_vault_settings(
 
     with pytest.raises(ValueError):
         ensure_vault_layout(target_vault)
-
-
 def test_normalize_md_filename_does_not_double_extension() -> None:
     assert normalize_md_filename("ingest.override.md") == "ingest.override.md"
     assert normalize_md_filename("ingest.override") == "ingest.override.md"

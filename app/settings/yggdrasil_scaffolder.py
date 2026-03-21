@@ -115,8 +115,8 @@ class YggdrasilScaffolder:
     def _write_default_system_settings(cls, path: Path) -> None:
         defaults = cls._load_layout_defaults()
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = yaml.safe_dump(defaults, sort_keys=False, allow_unicode=True).encode("utf-8")
-        path.write_bytes(payload)
+        payload = yaml.safe_dump(defaults, sort_keys=False, allow_unicode=True)
+        write_note_from_absolute(path.expanduser().resolve(), payload, vault_root=path.parent.parent.expanduser().resolve())
 
 
 __all__ = ["YggdrasilScaffolder"]

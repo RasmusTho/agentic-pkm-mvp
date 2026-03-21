@@ -1,27 +1,20 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
+import yaml
 
-DEFAULT_VAULT_LAYOUT: dict[str, Any] = {
-    "version": "1",
-    "layout": {
-        "system_folder": "⚙️ System",
-        "inbox_folder": "📥 Inbox",
-        "desk_folder": "🛠️ Workbench",
-        "runtime_dir_rel": "⚙️ System/Runtime/Alpha",
-        "root_folders": ["⚙️ System", "📥 Inbox", "🛠️ Workbench"],
-        "include_folders": ["📥 Inbox", "🛠️ Workbench"],
-        "ignore_glob": [],
-    },
-    "paths": {
-        "system_dir_rel": "⚙️ System",
-        "inbox_dir_rel": "📥 Inbox",
-        "runtime_dir_rel": "⚙️ System/Runtime/Alpha",
-    },
-}
+
+def _template_path() -> Path:
+    return Path(__file__).with_name("default-vault-layout.yaml")
 
 
 def load_default_vault_layout() -> dict[str, Any]:
-    return deepcopy(DEFAULT_VAULT_LAYOUT)
+    payload = yaml.safe_load(_template_path().read_text(encoding="utf-8")) or {}
+    data = payload if isinstance(payload, dict) else {}
+    return deepcopy(data)
+
+
+__all__ = ["load_default_vault_layout"]

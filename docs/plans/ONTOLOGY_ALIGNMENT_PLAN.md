@@ -13,14 +13,32 @@ Its role is to identify:
 - which changes are naming/clarity changes versus deeper model changes.
 
 Authoritative concept sources:
+- `docs/CONCEPTS/COGNITIVE_AXES_AND_SPHERES.md`
+- `docs/CONCEPTS/CONTEXT_MODEL_DECISION_FRAME.md`
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
 - `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`
+- `docs/CONCEPTS/STATE_AXES_CONTRACT.md`
+- `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md`
+- `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md`
+- `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`
 
 Current normalization recommendation:
 - `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md`
 
 Current implementation-spec draft:
 - `docs/plans/STATE_AXIS_SEPARATION_SPEC.md`
+
+Current status and decision memo:
+- `docs/plans/ONTOLOGY_STATUS_NEXT_DECISIONS.md`
+
+Current execution coordination:
+- `docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md`
+
+Execution posture:
+- continue aligned plans rather than abandoning them,
+- route architecture-sized desired-state changes into `docs/plans/V60_ARCHITECTURE_TARGET.md`,
+- and treat the newer human-function → ontology → requirements chain as the semantic anchor for
+  further runtime or documentation work.
 
 ## Current diagnosis
 
@@ -45,12 +63,83 @@ These terms are currently used across multiple ontology layers:
 - runtime representation.
 
 Additional clarification candidates discovered during the first alignment pass:
+- Several "importance" ideas may need separation into different axes:
+  salience, self-relevance, durability, integration into thinking, and actionability.
 - `Vault Note` likely needs explicit treatment in the ontology, not only in the vocabulary.
 - `Artifact` versus `Projection` needs stronger separation.
 - `Review`, `Promotion`, and `Maturity` appear semantically distinct even where the runtime currently compresses them.
 - `Plan` likely needs a clearer split between commitment support and generated execution artifact.
 - `Source` needs separation between epistemic artifact-role and operational emitter attribution.
 - `System Artifact` may later need refinement into narrower subclasses such as receipt, mirror, and execution artifacts.
+- `Domain` may be too rigid if it is carrying the whole human context model; later passes may need
+  a clearer distinction between overlapping spheres, situated contexts, and narrower operational
+  scopes.
+- Architecture review should wait until the minimum context-model decision frame is clear enough
+  that runtime scope, retrieval, and path decisions can be evaluated against something more stable
+  than provisional wording alone.
+
+## Tier 1 ontology debt
+
+These gaps are now explicit Tier 1 debt.
+They are not vague "needs review later" items.
+They are domain-level ontology gaps that should be defined clearly before later architecture or
+schema work tries to compensate for them implicitly.
+
+### 1. Projection layer
+
+Problem:
+- the repo still lacks a canonical generic `Projection` concept in the ontology layer,
+- even though the active system repeatedly distinguishes between a human-facing vault note and its
+  runtime/store/index/mirror representations in practice.
+
+Why this is Tier 1:
+- the difference between artifact and runtime representation is already central to the repo's
+  meaning,
+- and leaving it under-modeled guarantees continued drift in ingest, retrieval, mirror, and store
+  language.
+
+Done means:
+- the ontology contains a canonical generic `Projection` concept,
+- the distinction between artifact and projection is stated in ontology-first language,
+- and active docs can refer to runtime/store/search representations without inventing ad hoc terms
+  each time.
+
+### 2. Source as role vs type
+
+Problem:
+- the ontology still says `Source Artifact` while also admitting that sourcehood is often a role
+  played by an artifact in context.
+
+Why this is Tier 1:
+- this is a domain statement about how knowledge work functions,
+- not primarily an architecture or schema question,
+- and retrieval/citation semantics cannot stay clean while this ambiguity remains unresolved.
+
+Done means:
+- the ontology states whether `source` is canonically:
+  - a role,
+  - a type,
+  - or a narrow hybrid with explicit criteria,
+- and the active docs stop relying on unresolved tension between `Source Artifact` as class and
+  `source` as role.
+
+### 3. Temporal decay / epistemic degradation over time
+
+Problem:
+- the ontology distinguishes `review_state` and `maturity`,
+- but still lacks a clear semantic account of how an artifact or claim can become less safe,
+  current, or applicable over time without anyone actively re-reviewing it.
+
+Why this is Tier 1:
+- this is a real domain phenomenon in second-brain use,
+- and it affects how the system should later treat older "reviewed" or "evergreen" material in
+  retrieval and answer formation.
+
+Done means:
+- the ontology names the phenomenon explicitly,
+- it is distinguished from maturity and review posture,
+- and active docs can talk about time-based epistemic degradation without forcing it into lifecycle
+  or archive language.
 
 ## Workstream A — Active SoT document rewrites
 

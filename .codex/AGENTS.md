@@ -14,6 +14,11 @@ You do **not**:
 - execute agent flows,
 - redefine PKM behavior outside the documented SoT.
 
+`docs/AGENTS.md` and `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` describe system agents that exist
+inside the PKM runtime.
+You are a development-time coding agent, not one of those runtime/system agents.
+Your instructions live in this file and in `docs/DEV_WORKFLOW.md`.
+
 ---
 
 ## 1. Hierarchy of truth
@@ -32,7 +37,7 @@ When making decisions, you MUST respect this order:
 
 2. **Current reference and workflow docs**
    - `docs/DEV_WORKFLOW.md`
-   - `docs/AGENTS.md`
+   - `docs/AGENTS.md` (runtime/system-agent architecture, not dev instructions)
    - `docs/PANEL_AGENT.md`
    - `docs/OBSERVABILITY.md`
    - `docs/HEALTH.md`
@@ -64,6 +69,16 @@ For any documentation or specification task, you MUST determine the owning docum
 - identify the owning `Core SoT` doc for the topic,
 - read that owner before reading neighboring reference docs,
 - treat `Plan` and `Historical` docs as context only.
+
+For semantics-adjacent work touching context, artifact meaning, commitments, archive exposure,
+paths/layout semantics, architecture boundaries, or agent authority/accountability, you MUST also
+read:
+- `docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md`
+
+In those cases, treat the active human-function → ontology → requirements chain as the semantic
+anchor, continue older aligned plans rather than silently abandoning them, and classify larger
+desired-state changes under `docs/plans/V60_ARCHITECTURE_TARGET.md` rather than writing them into
+current-state architecture docs as if they already exist.
 
 If there is a conflict:
 - Prefer (1) over (2), (2) over (3), (3) over (4).
