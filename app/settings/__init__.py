@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     store_backend: str = "memory"
 
     app_version: str = "0.1.0"
+    debug: bool = False
     api_key: str | None = None
     rate_limit_enabled: bool = False
     rate_limit_redis_url: str | None = None
@@ -28,12 +29,19 @@ class Settings(BaseSettings):
     chunk_overlap: int = 120
     watch_dir: str = "watchfolder"
     processed_dir: str = "watchfolder/processed"
-    inbox_subdir: str = "@" + "In" + "box"
     staging_db_path: str = "storage/staging.duckdb"
 
     @property
     def database_url(self) -> str:
         return self.db_dsn
+
+    @property
+    def DATABASE_URL(self) -> str:
+        return self.database_url
+
+    @property
+    def DEBUG(self) -> bool:
+        return self.debug
 
     @property
     def psycopg_dsn(self) -> str:

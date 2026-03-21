@@ -63,6 +63,8 @@ Also read:
 
 Aligned work should continue.
 It should not be abandoned merely because the semantic baseline has become clearer.
+Desired-state architecture should not be written back into current-state SoT docs as if it already
+exists.
 
 If an existing plan or initiative:
 - supports the same human needs,
@@ -94,6 +96,9 @@ then it should be retained and relinked to the current document chain rather tha
   - current-state correction,
   - enablement,
   - or `v6.0` target-state work.
+- if it belongs in `v6.0` target-state work, keep that design intent in
+  `docs/plans/V60_ARCHITECTURE_TARGET.md` or another target-state plan rather than rewriting
+  `docs/ARCHITECTURE.md` as if the runtime already matched it.
 
 ## Classification rule for concurrent work
 

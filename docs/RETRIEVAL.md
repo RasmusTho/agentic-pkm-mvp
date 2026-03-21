@@ -42,6 +42,10 @@ Optional operational-scope filtering:
 - matching may use document payload markers such as `domain` / `bridge_domains`
 - path- or `source_ref`-derived hints are runtime heuristics for current scope handling, not the
   full semantics of human context or artifact meaning
+- the broader semantic replacement lives upstream in:
+  - `docs/CONCEPTS/CONTEXT_TERMINOLOGY_CONTRACT.md`
+  - `docs/CONCEPTS/CONTEXT_REPRESENTATION_POSTURE.md`
+  - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
 
 ## Optional Rerank (Current)
 Rerank is opt-in and controlled by env vars:
