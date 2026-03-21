@@ -14,17 +14,46 @@ import app.store.object_store as legacy_store
 from app.ingest.vault_root import _ingest_file
 from app.obs.log import with_trace_id
 from app.stores import get_object_store, reset_store_backends
+from app.vault.layout import load_layout
+from app.vault.paths import get_vault_inbox_dir_rel
 
 PKM_ALPHA_ROOT = Path(os.getenv("PKM_ALPHA_ROOT", "vault"))
 
-INBOX_DIR = os.getenv("VAULT_INBOX_DIR_REL", "Inbox")
-WORKBENCH_DIR = os.getenv("VAULT_WORKBENCH_DIR_REL", "Workbench")
 
-NOTE_PATHS: Dict[str, Path] = {
-    "research": Path(INBOX_DIR) / "Desicion science for data scientists 2.md",
-    "concept": Path("settings/Overview.md"),
-    "project": Path(WORKBENCH_DIR) / "galaxy-test.md",
-}
+def _resolve_workbench_dir() -> str:
+    env_value = (os.getenv("VAULT_WORKBENCH_DIR_REL") or "").strip()
+    if env_value:
+        return env_value
+    try:
+        return load_layout(PKM_ALPHA_ROOT).desk_folder
+    except Exception:
+        return "Workbench"
+
+
+def _candidate_note_paths() -> Dict[str, tuple[Path, ...]]:
+    inbox_dir = get_vault_inbox_dir_rel(PKM_ALPHA_ROOT)
+    workbench_dir = _resolve_workbench_dir()
+    return {
+        "research": (
+            Path(inbox_dir) / "Desicion science for data scientists 2.md",
+            Path("Inbox") / "Desicion science for data scientists 2.md",
+            Path("📥 Inbox") / "Desicion science for data scientists 2.md",
+        ),
+        "concept": (Path("settings/Overview.md"),),
+        "project": (
+            Path(workbench_dir) / "galaxy-test.md",
+            Path("Workbench") / "galaxy-test.md",
+            Path("🛠️ Workbench") / "galaxy-test.md",
+        ),
+    }
+
+
+def _resolve_note_path(key: str) -> Path:
+    for rel_path in _candidate_note_paths()[key]:
+        path = (PKM_ALPHA_ROOT / rel_path).expanduser()
+        if path.exists():
+            return path
+    return (PKM_ALPHA_ROOT / _candidate_note_paths()[key][0]).expanduser()
 
 # Stable ids to keep tests deterministic even though the normalizer generates UUID4 values.
 DETERMINISTIC_UUIDS: Dict[str, str] = {
@@ -90,8 +119,7 @@ def load_pkm_alpha_subset_for_reasoning(object_store=None) -> dict[str, str]:
     with _patched_normalizer_uuids(uuid_sequence):
         ids: dict[str, str] = {}
         for key in _NOTE_ORDER:
-            rel_path = NOTE_PATHS[key]
-            path = (PKM_ALPHA_ROOT / rel_path).expanduser()
+            path = _resolve_note_path(key)
             if not path.exists():
                 raise FileNotFoundError(f"pkm-alpha note missing: {path}")
             obj_id = _ingest_file(path, trace_id=with_trace_id(None))

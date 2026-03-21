@@ -1540,9 +1540,11 @@ if [ -n "$layout_system" ]; then
   printf "VAULT_SYSTEM_DIR_REL=%s\n" "$layout_system" >> "$runtime_env_path"
 fi
 if [ -n "$layout_inbox" ] && [ -z "${WATCHER_SCOPE_GLOB:-}" ]; then
-  layout_scope_glob="${layout_inbox}/*.md,${layout_inbox}/**/*.md"
-  printf "WATCHER_SCOPE_GLOB=%s\n" "$layout_scope_glob" >> "$runtime_env_path"
-  export WATCHER_SCOPE_GLOB="$layout_scope_glob"
+  layout_scope_glob="$(derive_start_full_system_scope_glob "$layout_inbox")"
+  if [ -n "$layout_scope_glob" ]; then
+    printf "WATCHER_SCOPE_GLOB=%s\n" "$layout_scope_glob" >> "$runtime_env_path"
+    export WATCHER_SCOPE_GLOB="$layout_scope_glob"
+  fi
 fi
 
 if [ -n "$layout_inbox" ] && [ -n "$layout_system" ]; then

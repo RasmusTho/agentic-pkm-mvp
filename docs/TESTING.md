@@ -4,11 +4,21 @@ Authority: Canonical testing and validation strategy for the active baseline, in
 # TESTING
 
 ## Layers
-- Unit: pure functions and single-agent logic
-- Contract: `.done` event payload shape and DB side-effects per agent
-- E2E: normalizer → classifier → chunker → deduper → citation → indexer → reviewer → projector
-- LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`)
+- Unit testing: pure functions and single-agent logic in isolation.
+- Integration testing: component boundaries such as API ↔ stores ↔ services, routing compilation, and outbox/store interactions.
+- System testing: end-to-end runtime flows such as note → ingest → index → ASK or watcher → panel → promotion chains.
+- System integration testing (SIT): opt-in flows that exercise multiple runtime systems or external dependencies together, such as live LLM/provider wiring and full startup/runtime verification.
+- Contract: `.done` event payload shape and DB side-effects per agent.
+- LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`).
 - Property-based ingest invariants: `tests/ingest/test_normalize_properties.py` ensures normalize outputs Core-6 fields robustly.
+
+## Layer mapping
+| Layer | Focus | Representative suites | Command |
+| --- | --- | --- | --- |
+| Unit | Correct logic in one function/class/module | `tests/components/llm/test_router.py`, `tests/settings/test_model_registry.py`, `tests/guards/test_no_hardcoded_inbox_scope.py` | `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/components/llm/test_router.py tests/settings/test_model_registry.py tests/guards/test_no_hardcoded_inbox_scope.py -m "not pg"` |
+| Integration | Boundaries and data integration inside this repo | `tests/settings/test_runtime.py`, `tests/settings/test_auto_heal.py`, `tests/cli/test_health_llm_routing.py`, `tests/runtime/test_startup_env.py` | `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/settings/test_runtime.py tests/settings/test_auto_heal.py tests/cli/test_health_llm_routing.py tests/runtime/test_startup_env.py -m "not pg"` |
+| System | Whole-system end-to-end flows in a production-like local test harness | `tests/e2e/test_reality_mvp_pipeline.py`, `tests/e2e/test_watcher_registry_e2e.py` | `STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/e2e/test_reality_mvp_pipeline.py tests/e2e/test_watcher_registry_e2e.py -m "not pg"` |
+| SIT | Cross-system/runtime/provider integration, often opt-in or environment-dependent | `tests/e2e/test_panel_llm_e2e.py`, `tests/reasoning/test_reasoning_llm_live_alpha.py`, `tests/cli/test_llm_doctor_cli.py` | `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/cli/test_llm_doctor_cli.py -m "not pg"` |
 
 ## Execution Model
 

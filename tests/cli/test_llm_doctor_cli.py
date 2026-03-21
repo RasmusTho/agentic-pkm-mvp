@@ -7,6 +7,8 @@ from app.cli import cli
 
 
 def test_llm_check_reports_unreachable(monkeypatch):
+    for key in ("OLLAMA_BASE_URL", "OLLAMA_URL", "OLLAMA_HOST", "OPENAI_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setenv("OLLAMA_URL", "http://127.0.0.1:9")
     runner = CliRunner()
@@ -19,6 +21,8 @@ def test_llm_check_reports_unreachable(monkeypatch):
 
 
 def test_llm_check_strict_fails(monkeypatch):
+    for key in ("OLLAMA_BASE_URL", "OLLAMA_URL", "OLLAMA_HOST", "OPENAI_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setenv("OLLAMA_URL", "http://127.0.0.1:9")
     runner = CliRunner()

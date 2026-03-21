@@ -9,6 +9,7 @@ import httpx
 
 from app.config.llm import get_provider
 from app.embedding_config import assert_embed_dim, get_embed_dim, l2_normalize
+from app.llm.endpoints import require_ollama_base_url
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _MOCK_EMBED_MODEL = "mock-embedding"
@@ -37,24 +38,8 @@ def _extract_error_detail(response: httpx.Response) -> str | None:
         return text
     return None
 
-
-def _normalize_ollama_url(url: str) -> str:
-    clean = (url or "").rstrip("/")
-    if clean.endswith("/v1"):
-        clean = clean[:-3]
-    return clean
-
-
 def _ollama_base_url() -> str:
-    base_url = _normalize_ollama_url(
-        os.getenv("OLLAMA_BASE_URL", "")
-        or os.getenv("OLLAMA_URL", "")
-        or os.getenv("OLLAMA_HOST", "")
-        or os.getenv("OPENAI_BASE_URL", "")
-    )
-    if not base_url:
-        raise RuntimeError("OLLAMA_BASE_URL, OLLAMA_URL, OLLAMA_HOST, or OPENAI_BASE_URL is required for embeddings")
-    return base_url
+    return require_ollama_base_url(strip_v1=True, context="embeddings")
 
 
 def get_embed_model() -> str:

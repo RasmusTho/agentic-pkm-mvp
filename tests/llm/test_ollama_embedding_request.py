@@ -4,6 +4,8 @@ from app.llm.embeddings import embed_text
 
 
 def test_ollama_embedding_calls_native_endpoint(monkeypatch) -> None:
+    for key in ("OLLAMA_BASE_URL", "OLLAMA_URL", "OLLAMA_HOST", "OPENAI_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setenv("OLLAMA_HOST", "https://ollama.local:11434/")
     monkeypatch.setenv("EMBED_DIM", "3")

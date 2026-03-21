@@ -8,6 +8,7 @@ INGEST_NORMALIZE_DONE = "ingest.normalize.done"
 INGEST_CHUNK_DONE = "ingest.chunk.done"
 INGEST_INDEX_DONE = "ingest.index.done"
 INGEST_VAULT_CHANGED = "ingest.vault.changed"
+PANEL_SCAN_REQUESTED = "panel.scan.requested"
 INDEX_OBJECT_EMBEDDED = "index.object.embedded"
 INDEX_EMBEDDING_FAILED = "index.embedding.failed"
 TEXT_CHUNK_CREATED = "text.chunk.created"
@@ -72,6 +73,7 @@ __all__ = [
     "INGEST_CHUNK_DONE",
     "INGEST_INDEX_DONE",
     "INGEST_VAULT_CHANGED",
+    "PANEL_SCAN_REQUESTED",
     "INDEX_OBJECT_EMBEDDED",
     "INDEX_EMBEDDING_FAILED",
     "TEXT_CHUNK_CREATED",

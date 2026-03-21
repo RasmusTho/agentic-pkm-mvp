@@ -1,9 +1,10 @@
 import json
 from datetime import datetime, timezone
 
+from app.events.panel import NoteRef, PanelInfo, PanelIntentExecutedEvent, PanelIntentExecutedPayload
 from app.events.models import new_event
 from app.events.types import INGEST_OBJECT_CREATED
-from app.services.outbox import write_outbox_event
+from app.services.outbox import append_jsonl_outbox_event, coerce_outbox_event, write_outbox_event
 
 
 class FakeConn:
@@ -40,3 +41,48 @@ def test_write_outbox_event_serializes_payload():
     assert data["payload"]["kind"] == "capture_note"
     assert data["payload"]["event"] == INGEST_OBJECT_CREATED
     assert attempts == 0
+
+
+def test_write_outbox_event_accepts_panel_event_source_models():
+    conn = FakeConn()
+    event = PanelIntentExecutedEvent(
+        payload=PanelIntentExecutedPayload(
+            note=NoteRef(uuid="note-1", path="Inbox/note.md"),
+            panel=PanelInfo(panel_id="panel-1", instruction="Promote"),
+        )
+    )
+
+    write_outbox_event(event, conn)
+
+    assert len(conn.executed) == 1
+    sql, params = conn.executed[0]
+    assert "insert into outbox" in sql.lower()
+    topic, payload_json, created_at, attempts = params
+
+    assert topic == "panel.intent.executed"
+    data = json.loads(payload_json)
+    assert data["source"] == "panel_agent"
+    assert data["payload"]["note"]["uuid"] == "note-1"
+    assert data["payload"]["panel"]["panel_id"] == "panel-1"
+    assert attempts == 0
+
+
+def test_coerce_outbox_event_uses_typed_payload_not_full_event_envelope(tmp_path):
+    event = PanelIntentExecutedEvent(
+        payload=PanelIntentExecutedPayload(
+            note=NoteRef(uuid="note-1", path="Inbox/note.md"),
+            panel=PanelInfo(panel_id="panel-1", instruction="Promote"),
+        )
+    )
+
+    outbox_event = coerce_outbox_event(event, default_source="panel_agent.runtime")
+
+    assert outbox_event is not None
+    assert outbox_event.source == "panel_agent"
+    assert outbox_event.payload["note"]["uuid"] == "note-1"
+    assert "event" not in outbox_event.payload
+
+    outbox_path = tmp_path / "outbox.jsonl"
+    assert append_jsonl_outbox_event(outbox_path, event, default_source="panel_agent.runtime") is True
+    records = [json.loads(line) for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert records[0]["payload"]["panel"]["panel_id"] == "panel-1"
