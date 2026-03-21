@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from urllib.request import urlopen
 from uuid import uuid4
 
 import pytest
@@ -22,13 +21,45 @@ def _skip_if_no_llm() -> None:
 
 
 def _skip_if_live_llm_unavailable() -> None:
-    base_url = (os.getenv("OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/")
-    try:
-        with urlopen(f"{base_url}/api/tags", timeout=3) as response:
-            if response.status != 200:
-                raise RuntimeError(f"ollama status {response.status}")
-    except Exception as exc:
-        pytest.skip(f"live panel LLM unavailable; Ollama probe failed: {exc}")
+    script = """
+import json
+from _pytest.monkeypatch import MonkeyPatch
+from app.services.llm import _deterministic_llm_response, call_llm
+from tests.e2e.test_panel_llm_e2e import _enable_live_llm
+
+mp = MonkeyPatch()
+_enable_live_llm(mp)
+raw = None
+for _ in range(3):
+    candidate = call_llm(
+        "panel_agent.decider.probe",
+        {
+            "system": "Return JSON with an actions array using the provided id.",
+            "user": "Choose promote.evergreen if live LLM routing is available.",
+        },
+        agent="panel_agent",
+        kind="panel.decider",
+        trace_id="panel-llm-probe",
+    )
+    raw = candidate
+    if candidate.strip() != _deterministic_llm_response().strip():
+        break
+print(json.dumps({"live": raw is not None and raw.strip() != _deterministic_llm_response().strip(), "raw": raw}))
+mp.undo()
+"""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("PYTEST_")}
+    env["STORE_BACKEND"] = "memory"
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    payload = json.loads(completed.stdout.strip().splitlines()[-1])
+    if not payload.get("live"):
+        pytest.skip("live panel LLM unavailable; decider probe fell back to deterministic response")
 
 
 def _enable_live_llm(monkeypatch: pytest.MonkeyPatch) -> None:

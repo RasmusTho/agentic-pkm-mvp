@@ -208,6 +208,24 @@ def _select_actions_from_instruction_hint(
     text = normalize_label(instruction)
     if not text:
         return None
+    if any(
+        phrase in text
+        for phrase in (
+            "do not promote",
+            "don't promote",
+            "dont promote",
+            "not promote",
+            "no promotion",
+            "without promotion",
+            "do not make this note evergreen",
+            "don't make this note evergreen",
+            "dont make this note evergreen",
+            "do not make evergreen",
+            "don't make evergreen",
+            "dont make evergreen",
+        )
+    ):
+        return None
 
     promotion_actions = [
         action
