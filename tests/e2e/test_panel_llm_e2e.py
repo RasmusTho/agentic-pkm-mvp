@@ -29,17 +29,22 @@ from tests.e2e.test_panel_llm_e2e import _enable_live_llm
 
 mp = MonkeyPatch()
 _enable_live_llm(mp)
-raw = call_llm(
-    "panel_agent.decider.probe",
-    {
-        "system": "Return JSON with an actions array using the provided id.",
-        "user": "Choose promote.evergreen if live LLM routing is available.",
-    },
-    agent="panel_agent",
-    kind="panel.decider",
-    trace_id="panel-llm-probe",
-)
-print(json.dumps({"live": raw.strip() != _deterministic_llm_response().strip(), "raw": raw}))
+raw = None
+for _ in range(3):
+    candidate = call_llm(
+        "panel_agent.decider.probe",
+        {
+            "system": "Return JSON with an actions array using the provided id.",
+            "user": "Choose promote.evergreen if live LLM routing is available.",
+        },
+        agent="panel_agent",
+        kind="panel.decider",
+        trace_id="panel-llm-probe",
+    )
+    raw = candidate
+    if candidate.strip() != _deterministic_llm_response().strip():
+        break
+print(json.dumps({"live": raw is not None and raw.strip() != _deterministic_llm_response().strip(), "raw": raw}))
 mp.undo()
 """
     env = {key: value for key, value in os.environ.items() if not key.startswith("PYTEST_")}
@@ -63,6 +68,7 @@ def _enable_live_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LLM_PROVIDER", os.getenv("LLM_PROVIDER") or "ollama")
     monkeypatch.setenv("OLLAMA_URL", os.getenv("OLLAMA_URL") or "http://127.0.0.1:11434")
     monkeypatch.setenv("LLM_MODEL", os.getenv("LLM_MODEL") or "llama3.1:8b")
+    monkeypatch.setenv("LLM_TIMEOUT", os.getenv("LLM_TIMEOUT") or "30")
     monkeypatch.setattr(llm_config, "_ACTIVE_PROVIDER", None)
 
 
