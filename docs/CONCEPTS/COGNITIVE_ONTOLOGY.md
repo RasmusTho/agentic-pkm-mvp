@@ -16,51 +16,40 @@ This is a domain contract, not a schema document.
 
 Related documents:
 - `docs/PROJECT_KERNEL.md`
+- `docs/CONCEPTS/COGNITIVE_AXES_AND_SPHERES.md`
+- `docs/CONCEPTS/CONTEXT_MODEL_DECISION_FRAME.md`
+- `docs/CONCEPTS/CONTEXT_TERMINOLOGY_CONTRACT.md`
+- `docs/CONCEPTS/CONTEXT_REPRESENTATION_POSTURE.md`
+- `docs/CONCEPTS/CONTEXT_AND_ARTIFACT_DIMENSIONS.md`
 - `docs/CONCEPTS/LAYERING_MODEL.md`
-- `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`
+- `docs/CONCEPTS/ARCHIVE_BRAIN_CONTRACT.md`
 - `docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md`
+- `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`
 - `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`
+- `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md`
+- `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md`
+- `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`
 
-## Open clarification points
+## Current ontology posture
 
-The ontology in this document is active, but some areas need further sharpening as the active SoT
-docs are revised.
+The ontology in this document is now explicit on several points that were previously muddy:
+- `Vault Note` is treated as a distinct human-facing artifact class,
+- `Commitment` structures are distinct from execution artifacts,
+- `Mirror Artifact`, `Receipt Artifact`, and `Execution Artifact` are explicit subclasses,
+- and review posture, maturity, and promotion are treated as distinct semantics rather than one
+  blended lifecycle idea.
 
-The most important current clarification points are:
-- **Vault Note as explicit class**: the ontology likely needs to elevate the warm-surface `Vault Note`
-  from an example of `Work Artifact` to an explicit specialization, because the active docs treat it
-  as a distinct human contract surface.
-- **Artifact vs projection**: the ontology currently emphasizes artifacts more than projections,
-  mirrors, and runtime representations. Future revisions should make this distinction more explicit.
-- **Review vs promotion vs maturity**: the runtime currently compresses some of these semantics. The
-  ontology should continue to treat them as distinct transitions / state families unless a later
-  contract says otherwise.
-- **Plan as commitment support vs execution artifact**: a distinction is emerging between
-  commitment/project structure and generated execution plans. The ontology should likely separate
-  these more clearly.
-- **Source as artifact-role vs emitter attribution**: the term `source` is overloaded between
-  epistemic role and operational attribution; future revisions should keep those meanings distinct.
-- **System artifact subclasses**: `Receipt Artifact`, `Mirror Artifact`, and `Execution Artifact`
-  may need explicit treatment rather than living only under the broader `System Artifact` class.
-
-Runtime evidence gathered from the first seam review:
-- `app/ingest/vault_alpha.py` treats the vault note as a distinct ingest path with:
-  - frontmatter UUID as canonical identity,
-  - mirror UUID only as healing/provenance support,
-  - a dedicated mirror path under `System/Metadata/VaultMirror`,
-  - and repeated `kind="note"` projections into runtime stores and indexes.
-- `app/planner/schema.py` models `Plan` as an execution artifact with `source_object_uuid`,
-  `trigger`, and step kinds such as `agent_call`, `tool_call`, and `decision`; this is much closer
-  to an execution plan than to a human project or commitment structure.
-- `app/promotion/consumer.py` and `app/services/note_update.py` currently realize promotion mainly
-  as a frontmatter/store mutation of `review_state`, even when the payload language refers to
-  `maturity` or promotion intent. This supports keeping `review`, `promotion`, and `maturity`
-  distinct in the ontology even if the runtime currently compresses them.
-- `app/services/note_log.py` defines the mirror path as a canonical per-note log location, but the
-  implementation is still thin. This supports separating `Mirror Artifact` from richer receipt/log
-  artifacts in later ontology passes.
-
-These are refinement points, not evidence that the ontology direction is wrong.
+The main remaining sharpening work is now narrower:
+- relating context structures such as sphere, context, situated role identity, shared
+  participation, and operational scope more precisely to future boundary policy and
+  representation rules,
+- clarifying how explicit cross-scope permissions should relate to broader human overlap without
+  letting runtime policy become the ontology,
+- keeping current repo working language such as `writing plane` and `retention plane` explicitly
+  provisional until better semantic grounding is chosen,
+- keeping artifact/projection distinctions visible without making runtime representation the center
+  of the ontology,
+- and keeping `source` clear when it means epistemic role rather than operational emitter.
 
 ## Why this ontology exists
 
@@ -83,13 +72,14 @@ Knowledge artifacts are only one subset of the artifacts in this domain.
 
 ## Ontological layers
 
-The canonical ontology has six top-level layers:
+The canonical ontology has seven top-level layers:
 1. Actors
-2. Artifacts
-3. Commitment structures
-4. Cognitive and creative operations
-5. Metacognitive layer
-6. Provenance and accountability
+2. Context structures
+3. Artifacts
+4. Commitment structures
+5. Cognitive and creative operations
+6. Metacognitive layer
+7. Provenance and accountability
 
 These layers are distinct and must not be collapsed into one another.
 
@@ -129,7 +119,127 @@ Delegation defines:
 - with what review or confirmation requirements,
 - how the delegation can be revoked or narrowed.
 
-## 2. Artifacts
+## 2. Context structures
+
+The system exists across different human contexts, not only across different files or workflows.
+
+These structures are first-class in the ontology because they shape meaning, relevance, trust, and
+appropriate action.
+
+### Sphere
+
+A sphere is an overlapping region of human life, concern, practice, or meaning.
+
+Problem solved:
+- human life is not naturally partitioned into one exclusive set of buckets,
+- and the same artifact, commitment, or concern may genuinely matter across several parts of life
+  at once.
+
+Examples:
+- work,
+- private life,
+- creative practice,
+- roleplaying/world-building,
+- reflective/self-development work,
+- learning.
+
+A sphere is therefore not a file bucket.
+It is a first-class ontological structure for lived belonging and relevance.
+
+### Situated Role Identity
+
+A situated role identity is the human's context-bound mode of self within a situation:
+the posture, tone, responsibility structure, and expectations that make that situation livable and
+usable.
+
+Problem solved:
+- different contexts do not only contain different content; they often involve different ways of
+  thinking, deciding, speaking, and judging relevance.
+
+The canonical base term in the relevant literature is role identity; "situated" matters here
+because what is salient depends on context.
+
+The ontology does not require a heavy identity engine.
+It does require acknowledging that context boundaries protect different situated ways of being,
+working, and deciding.
+
+### Context
+
+A context is a situated configuration of currently relevant spheres, role identities, purposes,
+commitments, and constraints.
+
+Problem solved:
+- what matters in a given moment is often more specific than long-lived sphere membership,
+- and different operations may be appropriate in one situation even when the broader spheres are the
+  same.
+
+Context is therefore more temporal and situational than sphere.
+It helps explain why the same artifact may be approached differently at different times.
+
+### Operational Scope (`domain` in current repo language)
+
+An operational scope is a narrower working boundary used by the system for retrieval, action
+gating, path defaults, and other runtime decisions.
+
+Current caution:
+- current repo language often says `domain` here,
+- but operational scope should not be mistaken for the whole human semantics of belonging.
+
+Problem solved:
+- the runtime still needs a stricter working boundary than the full human context model provides.
+
+Examples:
+- the active work scope for a retrieval,
+- the current private scope on a device,
+- a bounded scope used for suggestions or writes.
+
+Operational scope may later be represented on artifacts and operations, but it is not the same
+thing as sphere or context.
+
+### Shared Participation
+
+Shared participation is the relation by which an artifact, commitment, or concern meaningfully
+belongs to more than one sphere or situated context.
+
+Problem solved:
+- human life contains genuine overlap,
+- and the system should not force that overlap into a false one-bucket fiction.
+
+Shared participation is the primary ontological explanation for overlap.
+It says that overlap is real, not exceptional.
+
+### Explicit Cross-Scope Allowance (`bridge` in current repo language)
+
+An explicit cross-scope allowance is a bounded permission that authorizes recurring or reusable
+runtime exposure across operational scopes without collapsing them into one undifferentiated space.
+
+Problem solved:
+- some real human overlap needs a durable operational expression,
+- and the system must support that without turning it into accidental contamination.
+
+A cross-scope allowance:
+- authorizes a bounded kind of reuse or exposure across operational scopes,
+- preserves the fact that the participating scopes remain distinct,
+- and makes persistent crossing intelligible rather than implicit.
+
+`Bridge` may remain acceptable as current repo working language for this narrower mechanism, but it
+should not be treated as the primary mental model of overlap.
+
+### Shared Artifact Participation
+
+An artifact may participate in more than one sphere or context because its meaning genuinely spans
+them.
+
+Problem solved:
+- some artifacts are genuinely reusable across contexts and should not be forced into a false
+  single-home fiction at the meaning level.
+
+This does not erase operational boundaries.
+It describes how overlap can exist without collapse.
+When persistent runtime crossing is needed, an explicit cross-scope allowance may be added on top of
+that broader overlap.
+
+## 3. Artifacts
 
 ### Cognitive Artifact
 
@@ -150,7 +260,7 @@ Examples:
 
 ### Vault Note
 
-A vault note is a human-facing editable work artifact in the warm plane.
+A vault note is a human-facing editable work artifact in the writing plane.
 
 It is a special case of work artifact that deserves explicit treatment because the active system
 already treats it as a distinct contract surface:
@@ -158,12 +268,52 @@ already treats it as a distinct contract surface:
 - it carries the most important human-visible identity/provenance markers,
 - and it is projected into multiple runtime representations without being reducible to them.
 
+### Primary Human Artifact
+
+A primary human artifact is a human-facing artifact intended to remain directly intelligible and
+usable over time without requiring hidden runtime state in order to make basic sense.
+
+Problem solved:
+- the user's core meaning-bearing artifacts should outlive any one implementation, stack, or support
+  mechanism.
+
+Examples:
+- vault notes,
+- reflective artifacts the human revisits directly,
+- project artifacts used as enduring human reference surfaces,
+- other human-facing artifacts intentionally treated as primary meaning surfaces.
+
+Not every artifact is primary in this sense.
+Mirrors, indexes, and other derivative system structures may support primary artifacts without
+becoming their ontological equals.
+
 ### Source Artifact
 
 A source artifact is a cognitive artifact used as evidence, grounding, memory support, or reference.
 
 Important:
 - "source" is often a role played by an artifact in context, not always its intrinsic type.
+
+### Retained Artifact
+
+A retained artifact is a cognitive artifact preserved primarily for long-horizon retention,
+rediscovery, citation, or later reuse rather than for immediate writing-surface editing.
+
+Problem solved:
+- not everything worth keeping should have to become a note before it can remain cognitively useful.
+
+Examples:
+- PDFs,
+- documents,
+- media,
+- messages,
+- project files,
+- reference collections,
+- hobby/reference material.
+
+A retained artifact often plays the role of source artifact, but the two ideas are not identical:
+- `retained` names a preservation/reuse function,
+- `source` names an epistemic role in context.
 
 ### Creative Artifact
 
@@ -209,8 +359,7 @@ Examples:
 - mirrors,
 - plans generated for execution.
 
-This class is intentionally broad for now.
-Later revisions may split out narrower specializations such as:
+This class remains broad, but explicit subclasses now include:
 - receipt artifacts,
 - mirror artifacts,
 - execution artifacts.
@@ -238,7 +387,7 @@ Examples:
 - orchestration traces,
 - run-scoped control artifacts.
 
-## 3. Commitment structures
+## 4. Commitment structures
 
 The system is not only an artifact environment; it is also a commitment and attention environment.
 
@@ -272,7 +421,7 @@ A review cycle is a recurring practice of re-orienting, re-evaluating, and resto
 
 A context of action is the situational frame that determines when a next action is relevant, feasible, or appropriate.
 
-## 4. Cognitive and creative operations
+## 5. Cognitive and creative operations
 
 ### Cognitive Operation
 
@@ -309,7 +458,7 @@ It is a special case of broader operations such as:
 - synthesis,
 - orientation.
 
-## 5. Metacognitive layer
+## 6. Metacognitive layer
 
 The system must support not only cognition but also metacognition.
 
@@ -343,7 +492,7 @@ Cognitive load is the practical burden placed on the human's working attention a
 
 The system should reduce unnecessary load without erasing orientation or responsibility.
 
-## 6. Provenance and accountability
+## 7. Provenance and accountability
 
 ### Provenance
 
@@ -407,6 +556,11 @@ Examples:
 - recency,
 - salience.
 
+Important:
+- `domain` may appear as a property on artifacts, operations, or records,
+- but ontologically it refers back to a first-class context structure rather than being only a
+  metadata field.
+
 ### Transitions
 
 Transitions are changes over time.
@@ -431,12 +585,14 @@ Important:
 
 1. The human remains the primary bearer of meaning and final authority.
 2. System agents are bounded assisting actors, not autonomous owners of meaning.
-3. The system must support creative work, knowledge work, planning, reflection, and memory, not only retrieval.
-4. Commitment structures are first-class; the domain is not artifact-only.
-5. Ask / Q&A is a narrow operational surface, not the center of the ontology.
-6. Roles, states, and transitions must not be confused with entity types.
-7. Provenance, receipts, and authority boundaries are part of the domain itself, not afterthought metadata.
-8. The ontology must remain implementation-agnostic; schema and runtime terms may represent it, but may not redefine it.
+3. Context structures such as sphere, context, situated role identity, shared participation, and
+   operational scope are first-class; they are not only metadata or access filters.
+4. The system must support creative work, knowledge work, planning, reflection, and memory, not only retrieval.
+5. Commitment structures are first-class; the ontology is not artifact-only.
+6. Ask / Q&A is a narrow operational surface, not the center of the ontology.
+7. Roles, states, and transitions must not be confused with entity types.
+8. Provenance, receipts, and authority boundaries are part of the ontology itself, not afterthought metadata.
+9. The ontology must remain implementation-agnostic; schema and runtime terms may represent it, but may not redefine it.
 
 ## Sources
 
@@ -444,7 +600,11 @@ Important:
 - `docs/HUMAN-FLOWS.md`
 - `docs/ARCHITECTURE.md`
 - `docs/CONCEPTS/LAYERING_MODEL.md`
+- `docs/CONCEPTS/ARCHIVE_BRAIN_CONTRACT.md`
+- `docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md`
 - `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`
+- [Stets & Burke, "Identity Theory and Social Identity Theory"](https://voidnetwork.gr/wp-content/uploads/2016/09/Identity-Theory-and-Social-Identity-Theory-by-Jan-E.-Stets-and-Peter-J.-Burke.pdf)
+- [Kaplan, Garner et al., Frontiers paper using "situated role identity" / DSMRI framing](https://informalscience.org/wp-content/uploads/2025/01/Kaplan-Garner-Rush-Smith-2023-Frontiers-in-Education.pdf)
 - David Chalmers & Andy Clark, "The Extended Mind"
 - Edwin Hutchins, distributed cognition framing
 - cognitive offloading / external memory literature

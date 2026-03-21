@@ -10,6 +10,8 @@ Scope:
 - runtime toggles, wiring, and watcher-facing behavior
 
 For the system-level multi-agent architecture, agent matrix, and LangGraph/A2A direction, use `docs/AGENTS.md`.
+For the canonical distinction between mirror artifacts and receipt artifacts, use
+`docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`.
 
 ## PanelAgent Runtime V1 (current baseline)
 - Runtime V1 uses a fixed mapping from panel actions to follow-up events (e.g., promotion intents) and writes receipts into an in-note AI status callout; the panel stays a small working set with no history.
@@ -19,6 +21,7 @@ For the system-level multi-agent architecture, agent matrix, and LangGraph/A2A d
 - Action catalog (`docs/settings/panel-actions.md`) is the canonical list of actions (id, kind, labels/synonyms, description/llm_hint, downstream event, params). Rule-mode matches checkbox labels deterministically; LLM-mode is opt-in and uses the catalog + panel/note context with checkboxes as hints.
 - Checkboxes are treated as explicit consent; executed items remove their checkbox from the panel working set.
 - Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
+- The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
 
 ## PanelAgent 2.0 (planned v5.6)
 - Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `app/agents/panel_agent/graph.py`).
@@ -34,6 +37,7 @@ For the system-level multi-agent architecture, agent matrix, and LangGraph/A2A d
   - Actions heading: `## AI-åtgärder` (localized variants supported)
   - Checkboxes: `- [ ]` or `- [x]` (checked means run the action)
 - AI status callout (foldable, outside the panel): `> [!info]- AI status` with receipt lines (`- ✅ ...`, `- ⚠️ ...`, `- ⏳ ...`). The runtime appends receipts for executed/failed actions and trims to the last 20; already-executed IDs remove their checkbox from the panel on re-run.
+- This callout is a human-visible receipt overlay on the warm surface, not the canonical mirror artifact.
 - Legacy notes that only use the headings without fences are still parsed; new panels should use fences.
 - Panel content is not indexed or used as knowledge.
 
@@ -105,7 +109,7 @@ Make this note evergreen
 - `panel.intent.executed` — payload `{note, panel, actions:[{id,label,checked,status,emitted_events}], executed_action_ids:[...]}` (source `panel_agent` / trigger `runtime`).
 - `panel.action.triggered` — payload `{note, panel_id, action:{id,label}, target_event}` for handled actions.
 - `panel.action.logged` — payload `{note, panel_id, action:{id,label,checked}, reason, mapping?}` for unmapped/unimplemented actions.
-- `promote.intent.created` — payload includes `{note, panel, action, instruction, maturity}` plus `{action_id, intent_source="panel.note", note.path}`; emitted when a checked action has `intent_type: promotion`; downstream consumer uses `note.path` to patch the vault note frontmatter (e.g., `review_state: evergreen`).
+- `promote.intent.created` — payload includes `{note, panel, action, instruction, maturity}` plus `{action_id, intent_source="panel.note", note.path}`; emitted when a checked action has `intent_type: promotion`; downstream consumer uses `note.path` to patch the vault note frontmatter (for example `maturity: evergreen` plus a compatibility-mapped review posture).
 
 ## Wiring configuration
 - Default wiring: `docs/settings/panel-action-wiring.yaml` (maps canonical action ids to target events).
@@ -113,4 +117,4 @@ Make this note evergreen
 - Validation: config must define an `actions` list with `id`, `kind` (event|intent, defaults to event), and `event_type`/`target_event` (or `intent_type`). Unknown/invalid configs emit a warning and fall back to the default wiring; runtime behaviour stays unchanged.
 - CLI/Watcher use the same wiring; panel decider (rule/LLM) still selects actions, wiring only controls emitted events.
 
-Promotion intents (`promote.intent.created`) represent intent-only; apply effects by running the promotion consumer (`python -m app.cli promote-consume`), which emits `promote.done` when successful and updates the vault note frontmatter via the note writer path (Store updates remain optional).
+Promotion intents (`promote.intent.created`) represent intent-only; apply effects by running the promotion consumer (`python -m app.cli promote-consume`), which emits `promote.done` when successful and updates the vault note frontmatter via the note writer path, writing standing changes to `maturity` and review posture separately (Store updates remain optional).

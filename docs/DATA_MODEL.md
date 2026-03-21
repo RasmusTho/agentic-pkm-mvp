@@ -9,8 +9,10 @@ See `docs/CORE_CONTRACT.md`.
 
 Related docs:
 - `docs/CORE_CONTRACT.md` for the semantic contract mirrored here
+- `docs/CONCEPTS/STATE_AXES_CONTRACT.md` for canonical `review_state` / `maturity` semantics
+- `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md` for canonical mirror vs receipt separation
 - `docs/DB_SCHEMA.md` for table-level schema detail
-- `docs/FRONTMATTER.md` for warm-surface metadata ownership
+- `docs/FRONTMATTER.md` for writing-surface metadata ownership
 - `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md` for the current recommendation on separating
   human artifacts, projections, review posture, maturity, promotion, and execution plans
 
@@ -23,6 +25,8 @@ Normalization note:
 - `review_state` is currently the active review/mutation-posture axis.
 - `maturity` is a distinct semantic axis where enabled, even if active runtime paths sometimes
   collapse promotion outcomes into `review_state`.
+- legacy payload values such as `review_state: evergreen` should be treated as compatibility data,
+  not canonical state-axis truth.
 - `kind` is policy routing, not artifact ontology.
 
 ## Mirror rules
@@ -38,8 +42,8 @@ Projection clarification:
 ## Canonical vs derived artifacts
 
 Canonical artifacts are the durable sources of meaning:
-- warm artifacts: human-authored, editable notes on the writing surface
-- cold artifacts: archived source material that remains retrievable and citable without being forced into the writing surface
+- writing artifacts: human-authored, editable notes on the writing surface
+- retained artifacts: retained source-rich material that remains retrievable and citable without being forced into the writing surface
 
 Canonical artifacts must remain portable, readable without the system, and carry stable identity plus provenance.
 
@@ -56,13 +60,13 @@ introduced.
 
 This system persists across three conceptual surfaces:
 
-### Warm surface (human writing)
+### Writing surface (human writing)
 - canonical, editable notes
 - minimal, human-first metadata
 - no silent rewriting of meaning; durable changes require explicit review/apply intent
 
-### Cold surface (archive brain)
-- canonical source artifacts intended for retrieval and citation
+### Retention surface
+- canonical retained artifacts intended for retrieval, citation, inspection, and later reuse
 - exposure is gated by domain + trust policy
 
 ### System plane (operations + audit)
@@ -75,7 +79,7 @@ This plane may also contain:
 - mirror artifacts,
 - and low-level event records.
 
-System-plane persistence must avoid polluting the warm writing surface while remaining inspectable and portable.
+System-plane persistence must avoid polluting the writing surface while remaining inspectable and portable.
 
 ## Audit and receipts
 
@@ -86,6 +90,10 @@ Receipts are first-class and must make meaningful system actions reconstructable
 - what changed, if anything, and how to reverse it
 
 Receipts may be surfaced through UI affordances, but they must remain available even if the presentation layer changes.
+
+Mirror/receipt clarification:
+- mirror projections and receipt artifacts are related but distinct implementation concepts,
+- and operational records such as audit rows are not automatically identical to receipt artifacts.
 
 ## Tables (current mirror surface)
 

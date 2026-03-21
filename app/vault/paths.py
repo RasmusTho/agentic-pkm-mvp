@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 import yaml
 
+from app.config.paths import resolve_system_settings_path
 from app.vault.layout import load_layout
 
 
@@ -57,7 +58,10 @@ def _extract_paths(settings: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _paths_data(vault_root: Path) -> Dict[str, str]:
-    settings = _read_system_settings(vault_root / _SETTINGS_REL_PATH)
+    settings_path = resolve_system_settings_path(vault_root=vault_root)
+    if settings_path is None:
+        settings_path = vault_root / _SETTINGS_REL_PATH
+    settings = _read_system_settings(settings_path)
     return _extract_paths(settings)
 
 

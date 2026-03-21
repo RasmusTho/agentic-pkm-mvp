@@ -13,14 +13,32 @@ Its role is to identify:
 - which changes are naming/clarity changes versus deeper model changes.
 
 Authoritative concept sources:
+- `docs/CONCEPTS/COGNITIVE_AXES_AND_SPHERES.md`
+- `docs/CONCEPTS/CONTEXT_MODEL_DECISION_FRAME.md`
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
 - `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`
+- `docs/CONCEPTS/STATE_AXES_CONTRACT.md`
+- `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md`
+- `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md`
+- `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`
 
 Current normalization recommendation:
 - `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md`
 
 Current implementation-spec draft:
 - `docs/plans/STATE_AXIS_SEPARATION_SPEC.md`
+
+Current status and decision memo:
+- `docs/plans/ONTOLOGY_STATUS_NEXT_DECISIONS.md`
+
+Current execution coordination:
+- `docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md`
+
+Execution posture:
+- continue aligned plans rather than abandoning them,
+- route architecture-sized desired-state changes into `docs/plans/V60_ARCHITECTURE_TARGET.md`,
+- and treat the newer human-function → ontology → requirements chain as the semantic anchor for
+  further runtime or documentation work.
 
 ## Current diagnosis
 
@@ -45,12 +63,20 @@ These terms are currently used across multiple ontology layers:
 - runtime representation.
 
 Additional clarification candidates discovered during the first alignment pass:
+- Several "importance" ideas may need separation into different axes:
+  salience, self-relevance, durability, integration into thinking, and actionability.
 - `Vault Note` likely needs explicit treatment in the ontology, not only in the vocabulary.
 - `Artifact` versus `Projection` needs stronger separation.
 - `Review`, `Promotion`, and `Maturity` appear semantically distinct even where the runtime currently compresses them.
 - `Plan` likely needs a clearer split between commitment support and generated execution artifact.
 - `Source` needs separation between epistemic artifact-role and operational emitter attribution.
 - `System Artifact` may later need refinement into narrower subclasses such as receipt, mirror, and execution artifacts.
+- `Domain` may be too rigid if it is carrying the whole human context model; later passes may need
+  a clearer distinction between overlapping spheres, situated contexts, and narrower operational
+  scopes.
+- Architecture review should wait until the minimum context-model decision frame is clear enough
+  that runtime scope, retrieval, and path decisions can be evaluated against something more stable
+  than provisional wording alone.
 
 ## Workstream A — Active SoT document rewrites
 

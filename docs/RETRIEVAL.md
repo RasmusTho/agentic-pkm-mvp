@@ -36,8 +36,12 @@ Current weights:
 - `combined = 0.5*bm25_norm + 0.4*emb_norm + 0.1*overlap_bonus`
 
 ### Scope filter
-Optional domain scoping:
-- `ASK_DOMAIN_SCOPE=<domain>` filters docs to that domain (or bridge domains) when doc payload contains `domain`/`bridge_domains` or when `source_ref` path implies a domain folder.
+Optional operational-scope filtering:
+- the current runtime uses `ASK_DOMAIN_SCOPE` and `bridge_domains` as compatibility labels for a
+  narrower scope filter and explicit inclusion mechanism
+- matching may use document payload markers such as `domain` / `bridge_domains`
+- path- or `source_ref`-derived hints are runtime heuristics for current scope handling, not the
+  full semantics of human context or artifact meaning
 
 ## Optional Rerank (Current)
 Rerank is opt-in and controlled by env vars:

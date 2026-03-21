@@ -10,6 +10,7 @@ Policies are defined via vault-as-GUI settings and compiled into runtime policy 
 
 Related docs:
 - `docs/CORE_CONTRACT.md` for the semantic contract that remains stable across kinds
+- `docs/CONCEPTS/STATE_AXES_CONTRACT.md` for canonical state-axis meanings and value sets
 - `docs/SETTINGS.md` for policy compilation and runtime settings resolution
 - `docs/FRONTMATTER.md` for metadata ownership on the warm surface
 - `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md` for the current recommendation on separating
@@ -26,6 +27,8 @@ Axis interpretation:
 - `maturity` should be read as development/standing when enabled.
 - `promotion` should be read as a transition family that may affect one or more axes, not as an axis
   in itself.
+- kind policies may narrow allowed values, but the global meaning of the axes comes from
+  `docs/CONCEPTS/STATE_AXES_CONTRACT.md`.
 
 ## Example policy profiles
 

@@ -19,6 +19,11 @@ and artifact, see `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`.
 For the canonical ontology of `System Agent`, `Agent Role`, `Delegation`, `Authority Boundary`, and
 `Receipt`, see `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md`.
 
+This document is about agents that exist inside the PKM system/runtime.
+It is not the instruction set for development-time coding agents or repo automation.
+Development-time guidance lives in `docs/DEV_WORKFLOW.md`, `.codex/AGENTS.md`, and
+`docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md`.
+
 Use `docs/PANEL_AGENT.md` for PanelAgent-specific runtime behavior, panel syntax, emitted events, and wiring details.
 See `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md` for the current recommendation on separating
 execution-plan language, promotion transitions, and runtime projections from the broader ontology.
@@ -41,87 +46,6 @@ Functional reminder:
   creative work, and accountable action for the human.
 - they should not be treated as if their current runtime decomposition were itself the product's
   primary meaning.
-
-## Test Policy For Agents
-
-This section defines the default testing policy that coding agents should follow when they change this repo.
-The goal is not "maximum tests per PR"; the goal is steady, policy-driven growth in coverage over time.
-
-### Core rule
-
-- Every non-trivial code change should either:
-  - add or update a test at the lowest reasonable layer, or
-  - explain why an existing test layer already covers the change and no new test is needed.
-
-### Layer selection policy
-
-- Prefer the lowest layer that can prove the behavior:
-  - logic bug in one function: add/update a unit test
-  - schema or envelope regression: add/update a contract test
-  - boundary regression between services/stores/CLI/API: add/update an integration test
-  - runtime flow regression visible to operators or humans: add/update a system/E2E or UAT test
-- Do not jump straight to broad E2E when a unit or contract test would prove the same thing faster and more deterministically.
-- Do add a higher-layer regression when the bug or feature is specifically about cross-component behavior, runtime wiring, idempotence, or user-visible side effects.
-
-### Required-by-change-type policy
-
-- Changes to pure parsing, transforms, helpers, or isolated business logic:
-  - require unit coverage
-- Changes to event shapes, outbox behavior, promotion semantics, watcher policy, or settings compilation:
-  - require unit/contract coverage
-  - should usually add targeted integration or E2E coverage if behavior crosses a boundary
-- Changes to runtime queueing, watcher execution, worker dispatch, startup/runtime env, or backend wiring:
-  - require integration or system coverage
-- Changes to human/operator-visible flows such as panel automation, receipts, promotion behavior, startup/runtime verification, or UAT:
-  - require system/E2E or UAT coverage
-- Changes to retrieval/ASK quality:
-  - require deterministic regression coverage first
-  - opt-in eval coverage should be added when ranking/quality behavior materially changes
-
-### Regression policy
-
-- A bugfix should normally add a regression test that would fail before the fix.
-- If the bug spans multiple layers, add:
-  - one test at the lowest layer that captures the root cause
-  - one higher-layer regression only if the failure was visible at runtime or via operator/user behavior
-- For watcher/panel/promotion/runtime changes, prefer regressions that assert:
-  - idempotence on rerun
-  - no unintended mutations
-  - expected events/receipts/counters
-  - status/health visibility when relevant
-
-### UAT and runtime policy
-
-- Changes that touch watcher, panel, promotion, runtime loop, startup verification, or alpha-E2E should be evaluated against the runtime contract, not only local unit tests.
-- When relevant, agents should reuse or extend:
-  - the UAT harness
-  - alpha-E2E/runtime-contract assertions
-  - metamorphic or cold-rebuild regressions
-- Do not weaken UAT assertions to make tests pass unless the runtime contract itself is intentionally being changed and the docs are updated in the same PR.
-
-### CI policy
-
-- Agents should map their test additions to the intended CI roles in `docs/TESTING.md`:
-  - `pr-smoke`
-  - `integration-nightly`
-  - `release-uat`
-- New regression coverage should be placed in the narrowest CI lane that matches its purpose.
-- Avoid adding slow, flaky, or environment-heavy tests to PR-blocking lanes unless the protected behavior is truly merge-critical.
-
-### Documentation policy
-
-- If a change alters what test layer is required, what counts as correct runtime behavior, or what CI lane owns a regression, update `docs/TESTING.md`.
-- If a change alters how coding agents are expected to choose or add tests, update this document.
-- If runtime/UAT semantics change, update the relevant runbook as part of the same change.
-
-### Default PR expectation for agents
-
-- A good agent PR should leave behind:
-  - the code change
-  - the smallest defensible test change set
-  - updated docs when the policy or runtime contract changed
-
-That is the mechanism by which coverage should increase over time: every change pays a small, explicit testing cost at the right layer.
 
 ## Ontology vs architecture
 

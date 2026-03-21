@@ -10,9 +10,10 @@ idempotent automation. It is a contract of meaning, not a YAML schema requiremen
 Related docs:
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` for the human-first ontology that distinguishes actors, artifacts, commitments, operations, roles, states, and receipts
 - `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` for the normalized vocabulary around `note`, `object`, `source`, `agent`, `review`, and related overloaded terms
+- `docs/CONCEPTS/STATE_AXES_CONTRACT.md` for the canonical semantics of `review_state` and `maturity`
 - `docs/DATA_MODEL.md` for how Core-6 is mirrored in persistence surfaces
 - `docs/NOTE_KIND_POLICIES.md` for policy-selected state axes outside Core-6
-- `docs/FRONTMATTER.md` for warm-surface metadata ownership and write constraints
+- `docs/FRONTMATTER.md` for writing-surface metadata ownership and write constraints
 
 ## Purpose
 - Define the smallest stable identity + provenance surface that can be shared between:
@@ -49,10 +50,14 @@ In particular:
 | `trust` | Guardrail level constraining how the artifact may inform suggestions, assertions, or durable changes. | System-owned (human-authorized changes). | Derived from policy, provenance, or review actions. |
 | `review_state` | Review gate protecting reviewed artifacts from mutation. | System-owned (human-authorized changes). | Derived from review actions or policy defaults. |
 
+State-axis clarification:
+- `review_state` is canonical for review/mutation posture only.
+- `maturity` is a separate axis outside Core-6 and is defined in `docs/CONCEPTS/STATE_AXES_CONTRACT.md`.
+
 ## Human-first interpretation
 
 Core-6 must be interpreted through the human-first ontology:
-- a `Vault Note` is a warm-surface human artifact,
+- a `Vault Note` is a writing-surface human artifact,
 - a runtime/store row is a projection or mirror,
 - a source artifact is often a role played by an artifact in context,
 - review and promotion are transitions/processes, not base entity types.
@@ -64,8 +69,8 @@ these six semantic coordinates must remain stable.
 ## Contract rules
 - Core-6 is a semantic contract, not a literal YAML requirement.
 - Absence of YAML does not imply absence of semantics; Core-6 may be implicit or derived.
-- Warm human-facing notes remain the primary human contract surface for vault-based work; they express intent and meaning.
-- External/cold artifacts may also project Core-6 without becoming vault notes.
+- Writing-surface human notes remain the primary human contract surface for vault-based work; they express intent and meaning.
+- External/retained artifacts may also project Core-6 without becoming vault notes.
 - The DB/system plane is a normalized mirror or projection of the contract, not the source of truth for human meaning.
 - Policy-selected axes may extend the artifact view, but they do not become part of Core-6 unless this document changes.
 - Runtime/storage terms such as `object`, `store_objects`, or payload-specific shapes may represent Core-6, but they do not define its meaning.
