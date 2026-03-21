@@ -7,7 +7,6 @@ from typing import Any, Iterable
 
 import yaml
 
-from app.config.paths import resolve_system_settings_path
 from app.knowledge.write_ops import write_note_from_absolute
 
 
@@ -15,6 +14,7 @@ LAYOUT_NOTE_NAME = "vault.layout.md"
 SYSTEM_NOTE_TITLE = "Vault Structure – Human-First Orientation (Mimer)"
 
 _SETTINGS_REL_PATH = Path("_system") / "settings" / "system-settings.yaml"
+_ALT_SETTINGS_REL_PATH = Path("@Settings") / "system-settings.yaml"
 
 
 @dataclass(frozen=True)
@@ -85,16 +85,15 @@ def _coerce_str(value: object | None) -> str:
 
 
 def _read_system_settings(vault_root: Path) -> dict[str, Any]:
-    path = resolve_system_settings_path(vault_root=vault_root)
-    if path is None:
-        path = vault_root / _SETTINGS_REL_PATH
-    if not path.exists():
-        return {}
-    try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    for path in (vault_root / _SETTINGS_REL_PATH, vault_root / _ALT_SETTINGS_REL_PATH):
+        if not path.exists():
+            continue
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+    return {}
 
 
 def _paths_block(settings: dict[str, Any]) -> dict[str, Any]:

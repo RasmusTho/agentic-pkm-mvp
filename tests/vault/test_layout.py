@@ -192,6 +192,43 @@ def test_ensure_vault_layout_can_bootstrap_from_settings_file(tmp_path: Path, mo
     assert layout.include_folders == ["📥 Inbox", "🛠️ Workbench"]
 
 
+def test_ensure_vault_layout_does_not_fallback_to_other_vault_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_vault = tmp_path / "target-vault"
+    target_vault.mkdir()
+
+    ygg_root = tmp_path / "Yggdrasil"
+    settings_dir = ygg_root / "Mimer" / "@Settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    (settings_dir / "system-settings.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "layout": {
+                    "system_folder": "⚙️ System",
+                    "inbox_folder": "📥 Inbox",
+                    "desk_folder": "🛠️ Workbench",
+                },
+                "paths": {
+                    "system_dir_rel": "⚙️ System",
+                    "inbox_dir_rel": "📥 Inbox",
+                },
+            },
+            sort_keys=False,
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("YGGDRASIL_ROOT", str(ygg_root))
+    monkeypatch.delenv("VAULT_SYSTEM_DIR_REL", raising=False)
+    monkeypatch.delenv("VAULT_INBOX_DIR_REL", raising=False)
+    monkeypatch.delenv("VAULT_DESK_DIR_REL", raising=False)
+
+    with pytest.raises(ValueError):
+        ensure_vault_layout(target_vault)
+
+
 def test_normalize_md_filename_does_not_double_extension() -> None:
     assert normalize_md_filename("ingest.override.md") == "ingest.override.md"
     assert normalize_md_filename("ingest.override") == "ingest.override.md"

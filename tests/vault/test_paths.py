@@ -178,3 +178,35 @@ def test_paths_use_at_settings_when_present(monkeypatch, tmp_path: Path) -> None
     assert get_vault_inbox_dir_rel(tmp_path) == "📥 Inbox"
     assert get_vault_runtime_dir_rel(tmp_path) == "⚙️ System/Runtime/Alpha"
     assert get_vault_system_dir_rel(tmp_path) == "⚙️ System"
+
+
+def test_paths_do_not_fallback_to_other_vault_settings(monkeypatch, tmp_path: Path) -> None:
+    target_vault = tmp_path / "target-vault"
+    target_vault.mkdir()
+
+    ygg_root = tmp_path / "Yggdrasil"
+    settings_dir = ygg_root / "Mimer" / "@Settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    (settings_dir / "system-settings.yaml").write_text(
+        "\n".join(
+            [
+                "paths:",
+                "  inbox_dir_rel: 📥 Inbox",
+                "  runtime_dir_rel: ⚙️ System/Runtime/Alpha",
+                "  system_dir_rel: ⚙️ System",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("YGGDRASIL_ROOT", str(ygg_root))
+    monkeypatch.delenv("VAULT_INBOX_DIR_REL", raising=False)
+    monkeypatch.delenv("VAULT_RUNTIME_DIR_REL", raising=False)
+    monkeypatch.delenv("VAULT_SYSTEM_DIR_REL", raising=False)
+
+    with pytest.raises(FileNotFoundError):
+        get_vault_inbox_dir_rel(target_vault)
+    with pytest.raises(FileNotFoundError):
+        get_vault_runtime_dir_rel(target_vault)
+    with pytest.raises(FileNotFoundError):
+        get_vault_system_dir_rel(target_vault)
