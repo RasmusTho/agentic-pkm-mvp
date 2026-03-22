@@ -1,4 +1,6 @@
 State: Reference convention (semantic clarity; minimal working rule for concept ownership and change visibility).
+Doc role: Reference
+Authority: Minimal working convention for concept ownership, precedence, and semantic change visibility across Core SoT concept docs.
 
 # Definition Ownership
 
@@ -42,7 +44,7 @@ When two Core SoT docs define overlapping aspects of the same concept:
 
 - the more specific specialist concept doc governs within its explicitly declared scope,
 - the general ontology governs outside that scope,
-- and if there is still tension, the more recently reviewed doc is the temporary reading default until one of the docs records the conflict explicitly.
+- and if there is still tension, the more recently reviewed doc may be used as a temporary reading hint, but explicit owning scope still outranks review recency until one of the docs records the conflict explicitly.
 
 Conflicts should be resolved by clarifying one of the owning docs, not by allowing silent divergence to persist.
 
