@@ -84,7 +84,7 @@ class PlannerAgent:
         wants_evergreen = self._goal_wants_evergreen(goal)
         primitive_action, primitive_args = normalize_plan_state_action(
             "request_promotion_transition" if wants_evergreen else "set_review_state",
-            {"maturity": "evergreen"} if wants_evergreen else {"review_state": "processed"},
+            {"maturity": "evergreen"} if wants_evergreen else {"review_state": "provisional"},
         )
         return PlanStep(
             id=step_id,

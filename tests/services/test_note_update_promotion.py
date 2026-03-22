@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.domain.state_axes import resolve_promotion_axes
+from app.domain.state_axes import normalize_promotion_payload, resolve_promotion_axes
 from app.services.note_update import apply_promotion_frontmatter
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -60,3 +60,19 @@ def test_resolve_promotion_axes_accepts_legacy_review_state_evergreen() -> None:
 
     assert axes.review_state == "reviewed"
     assert axes.maturity == "evergreen"
+
+
+def test_normalize_promotion_payload_keeps_event_name_compatibility_and_adds_transition() -> None:
+    payload = normalize_promotion_payload(
+        {
+            "note": {"uuid": "UUID-4", "path": "vault/Note.md"},
+            "action": {"id": "promote.evergreen", "label": "Promote to evergreen"},
+            "maturity": "evergreen",
+        }
+    )
+
+    assert payload["maturity"] == "evergreen"
+    assert payload["transition"] == {
+        "family": "promotion",
+        "target_maturity": "evergreen",
+    }

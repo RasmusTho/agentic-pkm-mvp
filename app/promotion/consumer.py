@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping
 
-from app.domain.state_axes import normalize_promotion_target, resolve_promotion_axes
+from app.domain.state_axes import normalize_promotion_payload, resolve_promotion_axes
 from app.events.schema import OutboxEvent, make_outbox_event
 from app.events.types import PROMOTE_DONE, PROMOTE_ERROR, PROMOTE_INTENT_CREATED
 from app.events.models import new_event
@@ -128,12 +128,10 @@ def _handle_promotion_payload(
         title = None
     if not note_path_value:
         note_path_value = payload.get("note_path") if isinstance(payload, dict) else None
-    target_maturity = ""
-    if isinstance(payload, dict):
-        target_maturity = normalize_promotion_target(payload)
+    normalized_payload = normalize_promotion_payload(payload)
     axes = resolve_promotion_axes(
-        maturity=target_maturity or None,
-        review_state=payload.get("review_state") if isinstance(payload, dict) else None,
+        maturity=normalized_payload.get("maturity"),
+        review_state=normalized_payload.get("review_state"),
     )
 
     if not note_uuid:

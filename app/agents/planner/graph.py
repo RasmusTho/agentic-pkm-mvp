@@ -8,7 +8,7 @@ from langgraph.graph import StateGraph, START, END
 from app.agents.base.graph import AgentState
 from app.agents.planner.agent import PlannerAgent
 from app.domain.state_axes import normalize_plan_state_action
-from app.domain.plan import Plan, PlanStep
+from app.domain.plan import Plan
 from app.store.object_store import ObjectStore
 import app.guardrails as guardrails
 

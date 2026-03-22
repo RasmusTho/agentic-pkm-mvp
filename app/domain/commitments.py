@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 
 CommitmentKind = Literal[
@@ -29,7 +29,7 @@ class CommitmentHandle:
     source_goal: str | None = None
 
     def to_dict(self) -> dict[str, str]:
-        payload = {"commitment_kind": self.commitment_kind}
+        payload: dict[str, str] = {"commitment_kind": self.commitment_kind}
         if self.target_ref:
             payload["target_ref"] = self.target_ref
         if self.summary:
@@ -43,7 +43,7 @@ def normalize_commitment_kind(value: object) -> CommitmentKind:
     cleaned = str(value or "").strip().lower()
     if cleaned not in FIRST_WAVE_COMMITMENT_KINDS:
         raise ValueError(f"unsupported commitment_kind '{value}'")
-    return cleaned  # type: ignore[return-value]
+    return cast(CommitmentKind, cleaned)
 
 
 def make_commitment_handle(
