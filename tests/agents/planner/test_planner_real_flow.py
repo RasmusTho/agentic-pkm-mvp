@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.agents.planner.graph import run_planner_for_goal
+from app.agents.planner.graph import PlannerGraph, run_planner_for_goal
 from app.domain.plan import Plan
 from app.store.object_store import DomainObject, ObjectStore
 
@@ -72,3 +72,32 @@ def test_planner_subplan_seed_preserves_non_evergreen_goal() -> None:
     fm = (updated.payload or {}).get("frontmatter", {})
     assert fm.get("review_state") == "processed"
     assert "maturity" not in fm
+
+
+def test_planner_run_carries_commitment_handles_without_persisting_them_into_plan_steps() -> None:
+    store = ObjectStore()
+    note_uuid = _make_note(store)
+    goal = f"Review return for project note {note_uuid}"
+    planner = PlannerGraph(goal=goal, store=store, max_steps=0, max_replans=0)
+
+    final_state = planner.run(
+        {
+            "input": {"goal": goal},
+            "goal": goal,
+            "current_plan_id": None,
+            "current_step_id": None,
+            "total_steps": 0,
+            "max_total_steps": 0,
+        }
+    )
+
+    handles = final_state.get("commitment_handles") or []
+    assert {handle.commitment_kind for handle in handles} == {"project", "review_return"}
+    primary_handle = final_state.get("primary_commitment_handle")
+    assert primary_handle is not None
+    assert primary_handle.commitment_kind == "review_return"
+
+    plan = final_state.get("plan")
+    assert isinstance(plan, Plan)
+    assert all("commitment_kind" not in step.args for step in plan.steps)
+    assert all("commitment_handle" not in step.args for step in plan.steps)
