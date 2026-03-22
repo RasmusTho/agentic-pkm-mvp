@@ -49,12 +49,17 @@ Canonical artifacts must remain portable, readable without the system, and carry
 
 Derived artifacts are rebuildable views:
 - indexes, embeddings, projections, caches, summaries, and other machine views
-- operational traces, receipts, and audit records retained for observability and legibility
+- operational traces such as audit/event records, plus distinct receipt artifacts that may be assembled from those traces for observability and legibility
 
 Derived artifacts may be persisted for performance and auditability, but they must never become the only remaining copy of meaning.
 
 Execution plans belong to the derived/system side unless and until a separate human project model is
 introduced.
+
+## Semantic distinction reminder
+- Human-facing artifacts are meaning-bearing and should remain readable as artifacts rather than as mere store rows.
+- Commitment structures are a separate semantic class even when the current runtime stores some of their state near notes or artifact projections.
+- System and receipt artifacts are accountability or execution surfaces; they may be durable and important without becoming the primary source of human meaning.
 
 ## Persistence surfaces
 

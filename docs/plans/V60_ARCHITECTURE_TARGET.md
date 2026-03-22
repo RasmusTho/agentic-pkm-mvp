@@ -157,6 +157,29 @@ Implication:
   delayed convergence rather than requiring strict immediate consistency.
 - instance provenance and replica state should remain distinguishable from artifact identity.
 
+### 8. Salience and resurfacing are architecture concerns, not hidden ranking side effects
+
+Wanted state:
+- retrieval and resurfacing are treated as related but distinct architecture concerns,
+- attentional salience and surfacing need can influence runtime behavior without becoming hidden
+  control semantics,
+- and `zone` remains a derived overlay rather than the de facto ontology of what matters.
+
+Implication:
+- future architecture should expose how resurfacing works, what signals it may use, and why it does
+  not override trust, scope, or provenance boundaries.
+
+### 9. Creative-process support is preserved as a first-class architecture concern
+
+Wanted state:
+- runtime surfaces can preserve fragments, alternatives, revision, world continuity, and selective
+  stabilization without forcing everything into settled knowledge or task structures,
+- and hobby/RPG use remains a legitimate validating case rather than an afterthought.
+
+Implication:
+- future retrieval, writing, mirror, and support surfaces should not erase exploratory ambiguity or
+  partial canon-like stabilization merely because those are harder to model.
+
 ## Likely v6.0 architecture themes
 
 These are not yet commitments, but they are the most plausible themes the review should test
@@ -170,6 +193,9 @@ against the current runtime:
   surfaces
 - architecture that treats local-first multi-device use and eventual consistency as part of normal
   operation rather than a later bolt-on
+- architecture that treats resurfacing as distinct from retrieval and keeps `zone` derived
+- architecture that preserves creative-process semantics rather than flattening them into knowledge
+  maturity or commitments
 
 ## Architectural delta from v5.5 to v6.0
 
@@ -294,6 +320,33 @@ Architectural consequence:
 - implementation seams remain important, but they should be judged by whether they preserve these
   invariants rather than by whether they are convenient internal boundaries.
 
+### 8. From hidden salience heuristics to explicit resurfacing architecture
+
+Current tendency:
+- attentional relevance is easy to leave implicit inside ranking, recency, or `zone`-like overlays.
+
+Wanted delta:
+- resurfacing is treated as a deliberate architectural capability distinct from retrieval,
+- salience remains derived and explainable,
+- and `zone` stays a bounded overlay rather than a hidden source of semantic authority.
+
+Architectural consequence:
+- future runtime design should separate findability from resurfacing need and preserve explanations
+  for why something came back into view.
+
+### 9. From generic artifact handling to creative-process-aware runtime support
+
+Current tendency:
+- runtime design language is still strongest around knowledge, retrieval, commitments, and scope.
+
+Wanted delta:
+- runtime surfaces preserve creative fragments, threads, iteration, revision, world continuity, and
+  selective stabilization,
+- without forcing exploratory material into settled-note or task semantics too early.
+
+Architectural consequence:
+- future writing, retrieval, mirroring, and support surfaces should preserve exploratory ambiguity,
+  alternatives, and partial stabilization as normal runtime realities.
 ## How to use this delta
 
 When evaluating architecture findings or proposed changes:

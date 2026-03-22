@@ -12,6 +12,7 @@ This architecture focuses on the runtime and data model for the Mimer module (th
 
 Related documents and authority boundaries:
 - `docs/HUMAN-FLOWS.md` is the user-facing behavior contract. Any architecture change that alters user-visible behavior should be validated against it before shipping.
+- `docs/ONTOLOGY_RUNTIME_BRIDGE.md` is the cross-layer reading guide connecting human functions, semantic classes, persistence surfaces, and runtime contracts. It does not replace the owning SoT docs, but it should be used when architecture wording risks collapsing those layers.
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` defines the broader human-first second-brain ontology. This document uses narrower runtime and storage language where needed and should not be read as the full domain ontology.
 - `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` defines the normalized vocabulary and explains where repo terms such as `note`, `object`, `agent`, `source`, and `promotion` drift across layers.
 - `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md` clarifies how artifacts, projections, and source roles should be distinguished when runtime/store/search layers need narrower representations.
@@ -99,6 +100,14 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 - The map also marks:
   - Internal interface abstractions (`VaultPort`, `KnowledgePort`, store protocols).
   - Representative internal functions used as runtime seams between modules.
+
+## Layered reading model
+- Human cognitive functions are a product-level design lens for why the system exists and what it should help the user do.
+- The ontology/policy layer explains what kinds of things the runtime is dealing with and what boundaries or authority bases apply.
+- The runtime orchestration layer explains how the current system coordinates bounded work through stores, events, agents, and pipelines.
+- The infrastructure layer explains where persistence, transport, provider calls, and process boundaries live.
+- Not every human function implies a separate runtime agent, service, or queue.
+- Deterministic pipelines remain valid runtime substrate when they satisfy the same contracts more clearly and safely than richer agent structures.
 
 ## Reading Rules
 - This document is architecture-first, not ontology-first: terms such as `object`, `store_objects`, `agent`, and `event` refer to runtime representations and execution units unless stated otherwise.

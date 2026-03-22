@@ -173,7 +173,6 @@ They are part of how agent action remains acceptable in a human-first system.
 Receipt semantics should be read together with
 `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`, which distinguishes receipts from raw
 operational traces and broader audit records.
-
 ## Distinctions that must remain explicit
 
 ### Agent vs role
