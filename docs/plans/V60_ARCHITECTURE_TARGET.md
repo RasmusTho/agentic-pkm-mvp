@@ -12,6 +12,11 @@ It exists so the repo can:
 
 This document is not authoritative for the current runtime.
 For current-state questions, `docs/ARCHITECTURE.md` still wins.
+`docs/STATUS.md` remains the current operational baseline posture.
+
+This document should be read as a target-state consolidation of semantic directions that already
+exist elsewhere in the repo.
+It is not a license to rewrite the current runtime as if the target were already implemented.
 
 ## Why a separate target-state doc is needed
 
@@ -75,6 +80,9 @@ The high-level direction is:
 - narrower operational scope in runtime,
 - relation-first handling of overlap,
 - cleaner distinction between primary human artifacts and projections,
+- explicit separation between writing, retention, and system surfaces,
+- clearer treatment of commitments as their own semantic family,
+- clearer separation between retrieval, orientation, and resurfacing,
 - and less accidental meaning carried by path, one-field scope, or old runtime terminology.
 
 ## Wanted-state pillars
@@ -110,18 +118,69 @@ Wanted state:
 Implication:
 - machine-side structures may assist, but they should not become the hidden center of meaning.
 
-### 4. Retrieval should combine scope, relations, and provenance rather than overloading one boundary
+### 4. Persistence surfaces stay explicit rather than collapsing into one vague storage model
+
+Wanted state:
+- the architecture names and preserves three persistence surfaces:
+  - a writing surface for human-authored editable artifacts,
+  - a retention surface for retained source-rich artifacts kept for retrieval, citation, and later
+    reuse,
+  - and a system surface for mirrors, indexes, traces, receipts, execution artifacts, and runtime
+    support structures,
+- these surfaces may interact, but they should not be treated as one undifferentiated
+  `notes/storage` layer.
+
+Implication:
+- future runtime design should make it easier to see which surface is carrying human-authored
+  meaning, which surface is carrying retained material, and which surface exists for execution or
+  accountability support.
+- the system surface must not silently become the only real source of meaning simply because it is
+  structurally convenient.
+
+### 5. Commitments remain a distinct semantic family rather than generic note state
+
+Wanted state:
+- commitments are modeled as a distinct concern within the architecture,
+- open loops, projects, next actions, waiting states, and execution accountability remain legible
+  as commitment-oriented structures,
+- and they are not flattened into generic artifact lifecycle labels, generic note state, or runtime
+  execution-plan language.
+
+Implication:
+- future runtime design should distinguish commitments from:
+  - artifacts and retained material,
+  - execution plans and orchestration artifacts,
+  - generic review or lifecycle labels used for notes or projections.
+- this is a target-state semantic direction, not a claim that a full commitment runtime already
+  exists.
+
+### 6. Retrieval should combine scope, relations, and provenance rather than overloading one boundary
 
 Wanted state:
 - retrieval defaults remain conservative,
-- but can draw on explicit relations, retained artifacts, and overlap structures without pretending
-  the path tree or one domain field is the full truth.
+- but can draw on explicit relations, provenance, retained artifacts, and overlap structures
+  without pretending the path tree or one domain field is the full truth.
 
 Implication:
 - retrieval architecture should be reviewed for places where it is too flat, too scope-only, or too
   path-derived.
 
-### 5. Filesystem and path stay projections, not master ontology
+### 7. Retrieval, orientation, and resurfacing stay related but distinct
+
+Wanted state:
+- retrieval, orientation, and resurfacing are treated as related but separate capabilities,
+- retrieval is not treated as the whole solution to human re-orientation,
+- resurfacing is not reduced to ranking or query-answer relevance,
+- and salience may influence runtime behavior without becoming hidden semantic authority.
+
+Implication:
+- future architecture should expose these distinctions clearly enough that:
+  - findability does not masquerade as orientation,
+  - resurfacing does not masquerade as retrieval,
+  - and derived overlays such as `zone` remain bounded runtime aids rather than the ontology of what
+    matters.
+
+### 8. Filesystem and path stay projections, not master ontology
 
 Wanted state:
 - one primary stored location remains compatible with richer context relations,
@@ -131,7 +190,7 @@ Implication:
 - architecture should not force path family, vault root, or folder placement to become the main
   semantic engine.
 
-### 6. Accountability and explainability remain architecture-level invariants
+### 9. Accountability and explainability remain architecture-level invariants
 
 Wanted state:
 - cross-scope allowances, retrieval context, agent actions, and durable changes remain inspectable
@@ -140,7 +199,25 @@ Wanted state:
 Implication:
 - richer semantics must not come at the cost of legibility or trust.
 
-### 7. Local-first multi-device operation is designed as an architecture property, not an afterthought
+### 10. Surface, authority, and accountability distinctions stay explicit
+
+Wanted state:
+- the architecture keeps the distinctions between:
+  - human-facing artifacts,
+  - retained artifacts,
+  - mirror artifacts,
+  - receipt artifacts,
+  - and execution/runtime traces,
+  explicit enough that adjacent surfaces do not collapse into each other.
+
+Implication:
+- mirror artifacts should continue to mean projection/portability support rather than generic action
+  history,
+- receipt artifacts should continue to mean accountability surfaces rather than generic logs,
+- and traces, audit rows, or event streams should remain supporting execution records rather than
+  being treated as the full human-legible accountability model.
+
+### 11. Local-first multi-device operation is designed as an architecture property, not an afterthought
 
 Wanted state:
 - architecture tolerates heterogeneous device roles,
@@ -157,19 +234,7 @@ Implication:
   delayed convergence rather than requiring strict immediate consistency.
 - instance provenance and replica state should remain distinguishable from artifact identity.
 
-### 8. Salience and resurfacing are architecture concerns, not hidden ranking side effects
-
-Wanted state:
-- retrieval and resurfacing are treated as related but distinct architecture concerns,
-- attentional salience and surfacing need can influence runtime behavior without becoming hidden
-  control semantics,
-- and `zone` remains a derived overlay rather than the de facto ontology of what matters.
-
-Implication:
-- future architecture should expose how resurfacing works, what signals it may use, and why it does
-  not override trust, scope, or provenance boundaries.
-
-### 9. Creative-process support is preserved as a first-class architecture concern
+### 12. Creative-process support is preserved as a first-class architecture concern
 
 Wanted state:
 - runtime surfaces can preserve fragments, alternatives, revision, world continuity, and selective
@@ -187,13 +252,17 @@ against the current runtime:
 
 - a more explicit separation between artifact identity, context relations, and runtime scope
 - cleaner runtime handling of shared participation vs cross-scope allowance
+- clearer architectural treatment of writing, retention, and system persistence surfaces
+- commitment-first modeling that does not collapse projects, open loops, waiting states, and next
+  actions into generic note lifecycle labels
 - retrieval that can reason over relation-bearing context instead of a single flattened scope model
+- explicit separation between retrieval, orientation, and resurfacing, with salience kept derived
+  and inspectable
 - a reduced tendency for watcher/path/layout assumptions to act as domain truth
 - clearer seams between human-facing artifacts, mirror surfaces, receipt surfaces, and execution
   surfaces
 - architecture that treats local-first multi-device use and eventual consistency as part of normal
   operation rather than a later bolt-on
-- architecture that treats resurfacing as distinct from retrieval and keeps `zone` derived
 - architecture that preserves creative-process semantics rather than flattening them into knowledge
   maturity or commitments
 
@@ -255,11 +324,49 @@ Architectural consequence:
 - runtime seams should make it harder for machine-side projections to silently become the real
   source of truth.
 
-### 4. From scope-only retrieval to relation-aware retrieval
+### 4. From vague storage language to explicit persistence surfaces
+
+Current tendency:
+- notes, storage, mirrors, retained material, and system metadata are still easy to read as one
+  loosely unified persistence model.
+
+Wanted delta:
+- the architecture explicitly distinguishes:
+  - writing surface,
+  - retention surface,
+  - system surface,
+  without implying that all runtime hard-routing is already implemented.
+
+Architectural consequence:
+- future runtime contracts should make it harder for human-authored artifacts, retained artifacts,
+  and system-plane execution/accountability records to collapse into one vague storage abstraction.
+- the system surface may hold durable support structures, but it must not silently become the only
+  real semantic center.
+
+### 5. From flattened commitment handling to commitment-first semantics
+
+Current tendency:
+- open loops, projects, next actions, waiting states, and accountability-bearing execution concerns
+  are still easy to flatten into generic note state, generic review labels, or execution-plan
+  vocabulary.
+
+Wanted delta:
+- commitments are treated as a distinct semantic family,
+- and architecture keeps them separate from:
+  - human-facing artifacts,
+  - retained artifacts,
+  - execution plans,
+  - and generic lifecycle labels.
+
+Architectural consequence:
+- future runtime design should preserve commitment semantics without pretending that the target-state
+  commitment model is already implemented.
+
+### 6. From scope-only retrieval to relation-aware retrieval
 
 Current tendency:
 - retrieval remains largely governed by scope filters, path hints, and flattened runtime metadata,
-- even when richer context and provenance semantics exist elsewhere in the repo.
+  even when richer context and provenance semantics exist elsewhere in the repo.
 
 Wanted delta:
 - retrieval remains conservative by default,
@@ -271,7 +378,23 @@ Architectural consequence:
 - retrieval architecture should evolve toward combining multiple bounded signals rather than
   overloading one boundary mechanism.
 
-### 5. From filesystem as semantic engine to filesystem as projection
+### 7. From retrieval-as-orientation to explicit retrieval/orientation/resurfacing separation
+
+Current tendency:
+- retrieval, orientation, resurfacing, ranking, recency, and `zone` overlays are easy to read as
+  one blended concern.
+
+Wanted delta:
+- retrieval remains the find/return capability,
+- orientation remains the help-the-human-regain-situational-understanding capability,
+- resurfacing remains the bring-back-into-attention capability,
+- and salience remains a derived influence rather than hidden semantic authority.
+
+Architectural consequence:
+- future runtime design should expose why something was found, why something was surfaced again, and
+  why those are not always the same explanation.
+
+### 8. From filesystem as semantic engine to filesystem as projection
 
 Current tendency:
 - path, folder family, and storage location still risk carrying too much semantic weight in runtime
@@ -285,7 +408,22 @@ Architectural consequence:
 - one primary stored location must remain compatible with richer relations, overlapping spheres, and
   later schema evolution.
 
-### 6. From single-runtime assumptions to distributed local-first continuity
+### 9. From collapsed support surfaces to explicit authority and accountability seams
+
+Current tendency:
+- mirrors, receipt-like note status, runtime traces, and execution artifacts are still easy to read
+  as one blended family of support surfaces.
+
+Wanted delta:
+- architecture keeps human-facing artifacts, retained artifacts, mirror artifacts, receipt
+  artifacts, and execution/runtime traces distinct enough that each can carry the right authority.
+
+Architectural consequence:
+- future runtime design should preserve projection/portability semantics for mirrors,
+  accountability semantics for receipts, and trace semantics for runtime records without forcing
+  them into one store-shaped meaning.
+
+### 10. From single-runtime assumptions to distributed local-first continuity
 
 Current tendency:
 - parts of the architecture still implicitly assume one main runtime view with secondary sync or
@@ -303,7 +441,7 @@ Architectural consequence:
 - while keeping instance provenance and replica-local state distinct from the underlying artifact's
   identity.
 
-### 7. From architecture-by-implementation-seam to architecture-by-human invariant
+### 11. From architecture-by-implementation-seam to architecture-by-human invariant
 
 Current tendency:
 - runtime seams such as watcher logic, path assumptions, metadata projections, or legacy labels can
@@ -320,21 +458,7 @@ Architectural consequence:
 - implementation seams remain important, but they should be judged by whether they preserve these
   invariants rather than by whether they are convenient internal boundaries.
 
-### 8. From hidden salience heuristics to explicit resurfacing architecture
-
-Current tendency:
-- attentional relevance is easy to leave implicit inside ranking, recency, or `zone`-like overlays.
-
-Wanted delta:
-- resurfacing is treated as a deliberate architectural capability distinct from retrieval,
-- salience remains derived and explainable,
-- and `zone` stays a bounded overlay rather than a hidden source of semantic authority.
-
-Architectural consequence:
-- future runtime design should separate findability from resurfacing need and preserve explanations
-  for why something came back into view.
-
-### 9. From generic artifact handling to creative-process-aware runtime support
+### 12. From generic artifact handling to creative-process-aware runtime support
 
 Current tendency:
 - runtime design language is still strongest around knowledge, retrieval, commitments, and scope.
@@ -347,6 +471,7 @@ Wanted delta:
 Architectural consequence:
 - future writing, retrieval, mirroring, and support surfaces should preserve exploratory ambiguity,
   alternatives, and partial stabilization as normal runtime realities.
+
 ## How to use this delta
 
 When evaluating architecture findings or proposed changes:
@@ -379,9 +504,14 @@ This target-state doc becomes actionable when:
 ## Related documents
 
 - `docs/ARCHITECTURE.md`
+- `docs/STATUS.md`
 - `docs/plans/ARCHITECTURE_REVIEW_READINESS.md`
 - `docs/PROJECT_KERNEL.md`
 - `docs/HUMAN-FLOWS.md`
+- `docs/ROADMAP.md`
+- `docs/ONTOLOGY_RUNTIME_BRIDGE.md`
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
+- `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`
+- `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`
 - `docs/CONCEPTS/CONTEXT_TERMINOLOGY_CONTRACT.md`
 - `docs/CONCEPTS/CONTEXT_REPRESENTATION_POSTURE.md`
