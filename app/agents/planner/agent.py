@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from app.domain.commitments import CommitmentHandle, build_commitment_handles_for_goal
+from app.domain.commitments import CommitmentHandle, CommitmentKind, make_commitment_handle
 from app.domain.state_axes import normalize_plan_state_action
 from app.domain.plan import Plan, PlanStep
 from app.store.object_store import ObjectStore
@@ -36,8 +36,34 @@ class PlannerAgent:
     def _goal_wants_evergreen(self, goal: str) -> bool:
         return "evergreen" in goal.lower()
 
+    def _infer_commitment_kinds_from_goal(self, goal: str) -> list[CommitmentKind]:
+        lowered = goal.lower()
+        kinds: list[CommitmentKind] = []
+        if "next action" in lowered:
+            kinds.append("next_action")
+        if "waiting" in lowered or "await" in lowered:
+            kinds.append("waiting")
+        if "review return" in lowered or "revisit" in lowered:
+            kinds.append("review_return")
+        if "project" in lowered:
+            kinds.append("project")
+        if not kinds:
+            kinds.append("open_loop")
+        return kinds
+
     def build_commitment_handles(self, goal: str, *, target: Optional[str]) -> list[CommitmentHandle]:
-        return build_commitment_handles_for_goal(goal, target_ref=target)
+        cleaned_goal = str(goal or "").strip()
+        if not cleaned_goal:
+            return []
+        return [
+            make_commitment_handle(
+                commitment_kind=kind,
+                target_ref=target,
+                summary=cleaned_goal,
+                source_goal=cleaned_goal,
+            )
+            for kind in self._infer_commitment_kinds_from_goal(cleaned_goal)
+        ]
 
     def build_seed_primitive_step(self, goal: str, target: Optional[str], *, step_id: str = "primitive-1") -> PlanStep:
         wants_evergreen = self._goal_wants_evergreen(goal)

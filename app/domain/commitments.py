@@ -61,40 +61,10 @@ def make_commitment_handle(
     )
 
 
-def build_commitment_handles_for_goal(goal: str, *, target_ref: str | None = None) -> list[CommitmentHandle]:
-    cleaned_goal = str(goal or "").strip()
-    lowered = cleaned_goal.lower()
-    if not cleaned_goal:
-        return []
-
-    kinds: list[CommitmentKind] = []
-    if "next action" in lowered:
-        kinds.append("next_action")
-    if "waiting" in lowered or "await" in lowered:
-        kinds.append("waiting")
-    if "review return" in lowered or "revisit" in lowered:
-        kinds.append("review_return")
-    if "project" in lowered:
-        kinds.append("project")
-    if not kinds:
-        kinds.append("open_loop")
-
-    return [
-        CommitmentHandle(
-            commitment_kind=kind,
-            target_ref=target_ref or None,
-            summary=cleaned_goal,
-            source_goal=cleaned_goal,
-        )
-        for kind in kinds
-    ]
-
-
 __all__ = [
     "CommitmentHandle",
     "CommitmentKind",
     "FIRST_WAVE_COMMITMENT_KINDS",
-    "build_commitment_handles_for_goal",
     "make_commitment_handle",
     "normalize_commitment_kind",
 ]

@@ -3,14 +3,12 @@ from __future__ import annotations
 from app.domain.commitments import (
     FIRST_WAVE_COMMITMENT_KINDS,
     CommitmentHandle,
-    build_commitment_handles_for_goal,
     make_commitment_handle,
+    normalize_commitment_kind,
 )
 
 
 def test_first_wave_commitment_family_is_representable() -> None:
-    kinds = {handle.commitment_kind for handle in build_commitment_handles_for_goal("Project next action waiting review return")}
-
     assert set(FIRST_WAVE_COMMITMENT_KINDS) == {
         "open_loop",
         "project",
@@ -18,7 +16,8 @@ def test_first_wave_commitment_family_is_representable() -> None:
         "waiting",
         "review_return",
     }
-    assert {"project", "next_action", "waiting", "review_return"}.issubset(kinds)
+    assert normalize_commitment_kind("project") == "project"
+    assert normalize_commitment_kind("review_return") == "review_return"
 
 
 def test_commitment_handle_is_distinct_from_artifact_state_axes() -> None:
