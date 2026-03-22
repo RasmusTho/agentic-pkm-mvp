@@ -1,13 +1,8 @@
 State: Reference convention (semantic clarity; minimal working rule for concept ownership and change visibility).
-Doc role: Reference
-Authority: Defines the repo's minimal reference convention for where established concept definitions live, how downstream docs should relate to them, and how semantic changes should be made visible without adding governance overhead. It does not create or override concept meaning.
-Owner: `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` and the specialist Core SoT concept docs that explicitly own narrower concept areas
-Last reviewed: 2026-03-22
 
 # Definition Ownership
 
 ## Purpose
-
 This document defines a minimal working convention for semantic clarity across the repo.
 
 It exists to answer four practical questions:
@@ -29,14 +24,7 @@ It applies when:
 - another doc uses that concept,
 - or two Core SoT docs touch overlapping aspects of the same concept.
 
-## Related Docs
-
-- `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
-- `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`
-- `docs/DOCS_INDEX.md`
-- `docs/templates/DOC_TEMPLATE.md`
-
-## Rule 1 - Owning definition
+## Rule 1 — Owning definition
 
 An established concept definition is owned by its Core SoT concept doc.
 
@@ -48,7 +36,7 @@ In practice:
 This document does not create new meanings.
 It only makes ownership legible.
 
-## Rule 2 - Precedence
+## Rule 2 — Precedence
 
 When two Core SoT docs define overlapping aspects of the same concept:
 
@@ -58,7 +46,7 @@ When two Core SoT docs define overlapping aspects of the same concept:
 
 Conflicts should be resolved by clarifying one of the owning docs, not by allowing silent divergence to persist.
 
-## Rule 3 - Downstream reference convention
+## Rule 3 — Downstream reference convention
 
 Downstream docs must not silently introduce local redefinitions of terms already defined in Core SoT concept docs.
 
@@ -69,7 +57,7 @@ When precision does not require an explicit citation, the reader should assume t
 
 This is a reading and writing discipline, not a runtime mechanism.
 
-## Rule 4 - Change visibility
+## Rule 4 — Change visibility
 
 When a semantic change is made to an established concept definition in an owning Core SoT doc, the maintainer should add a short `Changed:` note at the bottom of that owning doc.
 
@@ -82,7 +70,7 @@ The note should be one line and should name:
 
 Example:
 
-- `Changed: Receipt - clarified that a receipt is a human-legible accountability record, not a generic runtime trace. 2026-03-22.`
+- `Changed: Receipt — clarified that a receipt is a human-legible accountability record, not a generic runtime trace. 2026-03-22.`
 
 No concept-level version numbers are required at this stage.
 

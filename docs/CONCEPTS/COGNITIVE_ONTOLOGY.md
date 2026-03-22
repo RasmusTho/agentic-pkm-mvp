@@ -5,6 +5,7 @@ State: Concept contract (human-first ontology for the second-brain domain; imple
 ## Purpose
 
 This document defines the canonical human-first ontology for the system.
+Specialist concept contracts under `docs/CONCEPTS/` have explicit precedence for the narrower concept areas they declare; this document remains authoritative for the general ontology outside those explicitly claimed scopes.
 
 It exists to answer questions of meaning before questions of representation:
 - what kinds of things exist in the domain,

@@ -129,7 +129,7 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | docs/templates/DOC_TEMPLATE.md | Document template | Aligned (forward line v5.x) | 2026-03-14 | Standard template for new docs; defines metadata, scope, authority, and writing structure. |
 | docs/INVENTORY.md | Runtime inventory | Aligned (forward line v5.x) | 2026-02-05 | Reference inventory (no file:line); update alongside code. |
 | docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-02-05 | Definitions updated to match v5.5 baseline (outbox/JSONL audit, rerank hooks). |
-| docs/CONCEPTS/DEFINITION_OWNERSHIP.md | Definition ownership convention | Aligned (forward line v5.x) | 2026-03-22 | Reference-only convention for where established concept definitions live, how downstream docs should cite them, how overlapping concept docs are read, and how semantic changes should be surfaced with lightweight `Changed:` notes. |
+| docs/CONCEPTS/DEFINITION_OWNERSHIP.md | Definition ownership convention | Reference | 2026-03-22 | Minimal working convention for precedence, downstream reference discipline, and semantic change visibility across Core SoT concept docs. |
 | docs/legacy/CHANGELOG.md | Docs changelog | Legacy (archived) | 2026-02-05 | Historical; prefer STATUS/ROADMAP for current baseline and forward line. |
 | docs/legacy/PLANNER.md | Planner contract | Legacy (archived) | 2026-02-05 | Historical reference; planner/orchestrator behavior has evolved. |
 | docs/legacy/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
