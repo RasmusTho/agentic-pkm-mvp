@@ -19,8 +19,9 @@ _COMMITMENT_PRIORITY: dict[CommitmentKind, int] = {
 
 class PlannerAgent:
     """
-    Minimal planner agent placeholder.
-    Creates a top-level plan for a given goal; execution is delegated to PlannerGraph.
+    Minimal execution-plan agent placeholder.
+    Creates a runtime execution plan for a goal; it does not model human commitments or projects.
+    Execution is delegated to PlannerGraph.
     """
 
     def __init__(self, store: Optional[ObjectStore] = None) -> None:

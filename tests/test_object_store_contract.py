@@ -11,7 +11,7 @@ def test_fake_object_store_roundtrip():
         uuid="1234-test-uuid",
         kind="capture_note",
         payload={
-            "frontmatter": {"uuid": "1234-test-uuid", "review_state": "inbox"},
+            "frontmatter": {"uuid": "1234-test-uuid", "review_state": "draft"},
             "body": "hello from test",
         },
         source_ref="cap-test",

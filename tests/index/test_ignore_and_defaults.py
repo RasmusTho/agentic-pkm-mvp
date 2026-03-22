@@ -7,19 +7,19 @@ from app.vault.paths import get_vault_inbox_dir_rel
 RULES = [
     {"when": {"review_state": "inbox"}, "action": "exclude"},
     {"when": {"review_state": "archived"}, "action": "include", "weight": 0.25},
-    {"when": {"review_state": "promoted"}, "action": "include", "weight": 1.0},
+    {"when": {"review_state": "reviewed"}, "action": "include", "weight": 1.0},
     {"when": {"maturity": "evergreen"}, "action": "include", "weight": 1.2},
     {"when": {"review_state": "evergreen"}, "action": "include", "weight": 1.2},
-    {"when": {"review_state": "processed"}, "action": "include", "weight": 0.8},
+    {"when": {"review_state": "provisional"}, "action": "include", "weight": 0.8},
 ]
 
 
-def write(p: Path, s: str):
+def write(p: Path, s: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(s, encoding="utf-8")
 
 
-def test_ignore_glob_and_path_defaults(tmp_path: Path):
+def test_ignore_glob_and_path_defaults(tmp_path: Path) -> None:
     root = tmp_path / "vault"
     inbox_dir = get_vault_inbox_dir_rel(root)
     write(root / inbox_dir / "a.md", "inbox body")

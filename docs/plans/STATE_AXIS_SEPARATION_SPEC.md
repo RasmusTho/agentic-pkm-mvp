@@ -296,6 +296,36 @@ The current implementation wave resolves the core decisions needed for the first
 - Tests now assert canonical state-axis outcomes instead of treating `review_state = evergreen` as
   the preferred sink.
 
+### Implemented scope in this cleanup wave
+
+- Remaining current-runtime callers that previously produced legacy axis values now normalize at the
+  state-axis boundary before emitting runtime-facing payloads or derived metadata.
+- New canonical outputs in this wave prefer:
+  - `review_state = draft|provisional|reviewed|protected|archived`
+  - `maturity = raw|draft|developing|stable|evergreen`
+- Legacy values remain compatibility-only input at selected boundaries:
+  - `review_state: evergreen`
+  - `review_state: processed`
+  - `review_state: promoted`
+  - `review_state: inbox`
+  - `review_state: logged`
+- Derived runtime metadata may still carry workflow compatibility markers when needed, but those are
+  no longer the canonical meaning of `review_state`.
+- Execution-plan wording has been clarified so planner/runtime plan artifacts are not described as if
+  they were the human commitment/project layer.
+
+### Audit posture for remaining legacy semantics
+
+| Value / pattern | Current classification | Current posture |
+| --- | --- | --- |
+| `review_state: evergreen` | Compatibility-only | Accepted on input, normalized to `maturity: evergreen` + `review_state: reviewed` |
+| `processed` | Compatibility-only | Accepted on input, normalized to `review_state: provisional` |
+| `promoted` | Compatibility-only | Accepted on input, normalized to `review_state: reviewed`; some legacy utilities still use it and remain follow-up work |
+| `inbox` | Not a canonical state axis | Treated as workflow/intake compatibility where still needed; not a canonical `review_state` output |
+| `logged` | Compatibility-only / kind-specific legacy | Accepted on input, normalized to `review_state: provisional` |
+| Plain review-state mutation used as standing/promotion | Obsolete / should be migrated | Current planner/orchestrator/promotion paths route through the normalization boundary |
+| Execution plan language used as human commitment/project language | Obsolete / should be clarified | Current docs/code should describe plans as runtime execution artifacts only |
+
 ### Deferred for later waves
 
 - Broader cleanup of remaining legacy workflow/status values outside the promotion path.

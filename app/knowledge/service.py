@@ -4,7 +4,7 @@ import logging
 import os
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable, TypeVar, cast
+from typing import Callable, TypeVar, cast
 
 from app.knowledge.adapters import FsVaultAdapter, ObsidianCliAdapter
 from app.knowledge.contracts import KnowledgePort, NoteLocator, SearchHit, WriteReceipt
@@ -138,6 +138,9 @@ def resolve_knowledge_port(
         if effective.allow_fallback and fallback is not None:
             logger.warning("Obsidian CLI unavailable; using fallback knowledge adapter")
             return fallback
+
+    if not effective.allow_fallback or fallback is None:
+        return primary
 
     return HybridKnowledgePort(
         primary=primary,

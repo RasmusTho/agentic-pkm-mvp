@@ -101,7 +101,7 @@ def test_alpha_human_flows_is_idempotent(tmp_path: Path) -> None:
 
     assert uuid1 == uuid2
     assert body2.count("## AI-instruktion") == 1
-    assert fm2.get("review_state") == "promoted"
+    assert fm2.get("review_state") == "reviewed"
     assert fm2.get("maturity") == "evergreen"
     assert body1 == body2 or body2.endswith(body1)  # allow trailing newline normalization
 
@@ -203,7 +203,7 @@ def test_alpha_human_flows_runs_against_fixture_vault_alpha(tmp_path: Path) -> N
     test_note = vault / "Test" / "Alpha-HumanFlows.md"
     frontmatter, body = load_frontmatter(test_note.read_text(encoding="utf-8"))
     assert frontmatter.get("uuid") == "22222222-2222-2222-2222-222222222222"
-    assert frontmatter.get("review_state") == "promoted"
+    assert frontmatter.get("review_state") == "reviewed"
     assert frontmatter.get("maturity") == "evergreen"
     assert "Alpha Human Flows test note for orchestration." in body
 

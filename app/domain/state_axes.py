@@ -17,6 +17,13 @@ CANONICAL_MATURITY_VALUES = (
     "stable",
     "evergreen",
 )
+LEGACY_REVIEW_STATES = (
+    "evergreen",
+    "processed",
+    "promoted",
+    "inbox",
+    "logged",
+)
 
 _LEGACY_REVIEW_STATE_ALIASES = {
     "evergreen": "reviewed",
@@ -26,7 +33,7 @@ _LEGACY_REVIEW_STATE_ALIASES = {
     "logged": "provisional",
 }
 
-_ALLOWED_REVIEW_STATE_VALUES = set(CANONICAL_REVIEW_STATES) | set(_LEGACY_REVIEW_STATE_ALIASES)
+_ALLOWED_REVIEW_STATE_VALUES = set(CANONICAL_REVIEW_STATES) | set(LEGACY_REVIEW_STATES)
 _ALLOWED_MATURITY_VALUES = set(CANONICAL_MATURITY_VALUES)
 
 
@@ -38,6 +45,10 @@ class PromotionAxes:
 
 def _cleaned_state_value(value: Any) -> str:
     return str(value or "").strip().lower()
+
+
+def is_legacy_review_state(value: Any) -> bool:
+    return _cleaned_state_value(value) in _LEGACY_REVIEW_STATE_ALIASES
 
 
 def normalize_review_state(value: Any) -> str:
@@ -74,6 +85,48 @@ def review_state_for_maturity(maturity: Any) -> str:
     if cleaned:
         return "draft"
     return "provisional"
+
+
+def normalize_artifact_state_axes(
+    fields: Mapping[str, Any],
+    *,
+    default_review_state: str = "draft",
+    workflow_state: Any = None,
+) -> dict[str, Any]:
+    normalized_fields = dict(fields)
+    raw_review_state = _cleaned_state_value(fields.get("review_state"))
+    normalized_maturity = normalize_maturity(fields.get("maturity"))
+    if not normalized_maturity:
+        normalized_maturity = legacy_maturity_from_review_state(raw_review_state)
+
+    normalized_review_state = normalize_review_state(raw_review_state)
+    if not normalized_review_state:
+        if normalized_maturity:
+            normalized_review_state = review_state_for_maturity(normalized_maturity)
+        else:
+            normalized_review_state = normalize_review_state(default_review_state) or "draft"
+
+    effective_workflow_state = _cleaned_state_value(workflow_state or fields.get("workflow_state"))
+    if raw_review_state == "inbox" and not effective_workflow_state:
+        effective_workflow_state = "inbox"
+
+    normalized_fields["review_state"] = normalized_review_state
+    if normalized_maturity:
+        normalized_fields["maturity"] = normalized_maturity
+    else:
+        normalized_fields.pop("maturity", None)
+
+    if effective_workflow_state:
+        normalized_fields["workflow_state"] = effective_workflow_state
+    else:
+        normalized_fields.pop("workflow_state", None)
+
+    if raw_review_state and is_legacy_review_state(raw_review_state):
+        normalized_fields["legacy_review_state"] = raw_review_state
+    else:
+        normalized_fields.pop("legacy_review_state", None)
+
+    return normalized_fields
 
 
 def resolve_promotion_axes(*, maturity: Any = None, review_state: Any = None) -> PromotionAxes:
@@ -176,9 +229,12 @@ def normalize_plan_state_action(action_name: str | None, args: Mapping[str, Any]
 __all__ = [
     "CANONICAL_MATURITY_VALUES",
     "CANONICAL_REVIEW_STATES",
+    "LEGACY_REVIEW_STATES",
     "PromotionAxes",
     "build_promotion_transition",
+    "is_legacy_review_state",
     "legacy_maturity_from_review_state",
+    "normalize_artifact_state_axes",
     "normalize_maturity",
     "normalize_plan_state_action",
     "normalize_promotion_payload",

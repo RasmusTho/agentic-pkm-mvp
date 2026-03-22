@@ -202,6 +202,15 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 - Planner/orchestrator normalization keeps external event compatibility (`promote.intent.created`)
   while routing internal promotion work through explicit transition semantics (`request_promotion_transition`
   with `transition.family = promotion` and `transition.target_maturity`).
+- Compatibility-only legacy `review_state` inputs still accepted at normalization boundaries are:
+  `evergreen`, `processed`, `promoted`, `inbox`, and `logged`. Current runtime callers should not
+  produce those values as new canonical state-axis outputs.
+- Workflow/status handling such as inbox intake remains distinct from the state axes. Where the
+  current runtime still needs inbox-like filtering or routing, treat it as compatibility or
+  workflow metadata rather than as the canonical meaning of `review_state`.
+- Execution plans are runtime orchestration artifacts. They must not be read as equivalent to the
+  human commitment/project layer described in `docs/PROJECT_KERNEL.md` and the commitment concept
+  contracts.
 - Derived / overlay metadata: system-owned overlays such as `zone`, recency, or salience are computed from signals and remain outside the core contract.
 - Agent reasoning operates on Core-6 + state axes + policy profiles (see `docs/NOTE_KIND_POLICIES.md`) + derived overlays.
 

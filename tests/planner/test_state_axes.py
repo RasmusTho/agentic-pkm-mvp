@@ -4,9 +4,11 @@ from app.domain.state_axes import (
     CANONICAL_MATURITY_VALUES,
     CANONICAL_REVIEW_STATES,
     build_promotion_transition,
+    is_legacy_review_state,
     normalize_plan_state_action,
     normalize_promotion_payload,
     normalize_promotion_target,
+    normalize_review_state,
     resolve_promotion_axes,
 )
 
@@ -54,6 +56,13 @@ def test_normalize_promotion_payload_accepts_transition_shape() -> None:
         "target_maturity": "evergreen",
     }
     assert normalized["maturity"] == "evergreen"
+
+
+def test_legacy_review_state_values_are_compatibility_only() -> None:
+    assert is_legacy_review_state("processed") is True
+    assert is_legacy_review_state("draft") is False
+    assert normalize_review_state("logged") == "provisional"
+    assert normalize_review_state("promoted") == "reviewed"
 
 
 def test_canonical_axis_value_sets_match_state_axis_contract() -> None:
