@@ -14,6 +14,11 @@ def test_yggdrasil_init_scaffolds_directories(tmp_path):
     settings_dir = mimer_root / "@Settings"
     assert settings_dir.is_dir()
     assert any(settings_dir.iterdir())
+    assert (settings_dir / "system-settings.yaml").exists()
+    assert (mimer_root / "⚙️ System").is_dir()
+    assert (mimer_root / "📥 Inbox").is_dir()
+    assert (mimer_root / "🛠️ Workbench").is_dir()
+    assert (mimer_root / "⚙️ System" / "vault.layout.md").exists()
 
     for name in ["Hugin", "Munin", "Ratatosk", "Brokkr", "Tyr", "Heimdall"]:
         assert (tmp_path / name).is_dir()

@@ -28,7 +28,7 @@ Trust can change over time (e.g., after review). Any trust change is a first-cla
 
 Trust never acts alone; it gates behavior within the canonical boundary model:
 - **Domain** is the primary scope boundary. Trust does not grant cross-domain permission.
-- **Plane** constrains exposure and durability (warm editing surface vs cold archive vs system plane).
+- **Plane** constrains exposure and durability (writing surface vs retention surface vs system plane).
 - **Zone** influences prioritization (ranking/attention), not permission.
 
 Rule of thumb: **Zone can reorder; Trust can degrade verbs; Domain/Plane can forbid crossings unless explicitly bridged.**
@@ -71,8 +71,8 @@ Automation may write when all of the following hold:
 
 ### Requires explicit confirmation (human intent gate)
 Confirmation is required when any of the following are true:
-- The write changes **warm, human-facing artifacts** (content, titles, durable classifications).
-- The action **crosses a domain boundary** (including materialization of cold/archive content into a warm artifact).
+- The write changes **writing-surface, human-facing artifacts** (content, titles, durable classifications).
+- The action **crosses a domain boundary** (including materialization of retained content into a writing artifact).
 - The action upgrades trust (a **trust delta**), or treats external/machine-derived material as confirmed.
 
 ### Must never be auto-applied

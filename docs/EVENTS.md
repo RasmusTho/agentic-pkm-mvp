@@ -8,6 +8,9 @@ This document describes the event artifacts emitted by the system and recorded i
 In the active baseline, the DB outbox is canonical and JSONL remains audit/diagnostic only. This document defines the canonical event envelope and the meanings of key event types.
 
 Compatibility and evolution are governed by `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`.
+Mirror/receipt separation is governed conceptually by `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`.
+Receipt/trace/accountability distinctions are clarified in
+`docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`.
 
 Connector/watcher/inbox action vocabulary and delta feed guardrails are captured in `docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md`, so the event catalog and the new connector terminology stay aligned.
 
@@ -178,6 +181,8 @@ Examples in the current runtime:
 - `promote.done` / `promote.error` = execution-result layer
 
 The event stream is not, by itself, the complete receipt model.
+It is primarily an operational trace surface that may support later receipt or audit construction.
+It is also not identical to the metadata mirror.
 
 ## References
 
