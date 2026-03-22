@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping
 
-from app.domain.state_axes import normalize_promotion_target, review_state_for_maturity
+from app.domain.state_axes import normalize_promotion_target, resolve_promotion_axes
 from app.events.schema import OutboxEvent, make_outbox_event
 from app.events.types import PROMOTE_DONE, PROMOTE_ERROR, PROMOTE_INTENT_CREATED
 from app.events.models import new_event
@@ -63,17 +63,23 @@ def _save_cursor(cursor_path: Path | None, outbox_path: Path, line_index: int) -
 _PROMOTION_DEDUP = EventDedupStore()
 
 
-def _apply_promotion_to_store(note_uuid: str, desired_state: str, trace_id: str | None, note_path: Path | None) -> None:
+def _apply_promotion_to_store(
+    note_uuid: str,
+    maturity: str | None,
+    review_state: str,
+    trace_id: str | None,
+    note_path: Path | None,
+) -> None:
     store = ObjectStore()
     existing = store.get_object(note_uuid)
     payload = dict(existing.payload or {}) if existing else {}
-    review_state = review_state_for_maturity(desired_state)
     promotion_meta = {
-        "state": desired_state,
+        "state": maturity or review_state,
         "applied_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     payload["promotion"] = promotion_meta
-    payload["maturity"] = desired_state
+    if maturity:
+        payload["maturity"] = maturity
     payload["review_state"] = review_state
     if existing is None:
         obj = DomainObject(
@@ -122,9 +128,13 @@ def _handle_promotion_payload(
         title = None
     if not note_path_value:
         note_path_value = payload.get("note_path") if isinstance(payload, dict) else None
-    desired_state = "promoted"
+    target_maturity = ""
     if isinstance(payload, dict):
-        desired_state = normalize_promotion_target(payload) or desired_state
+        target_maturity = normalize_promotion_target(payload)
+    axes = resolve_promotion_axes(
+        maturity=target_maturity or None,
+        review_state=payload.get("review_state") if isinstance(payload, dict) else None,
+    )
 
     if not note_uuid:
         summary["errors"] += 1
@@ -147,13 +157,12 @@ def _handle_promotion_payload(
         return summary
 
     note_path = Path(str(note_path_value))
-    review_state = review_state_for_maturity(desired_state)
     if not apply_promotion_frontmatter(
         note_path,
         note_uuid,
-        review_state,
+        axes.review_state,
         optional_title=title,
-        maturity=desired_state,
+        maturity=axes.maturity,
     ):
         summary["errors"] += 1
         emit(
@@ -169,16 +178,22 @@ def _handle_promotion_payload(
         summary["emitted"] += 1
         return summary
 
-    _apply_promotion_to_store(note_uuid, desired_state, trace_id, note_path)
+    _apply_promotion_to_store(
+        note_uuid,
+        axes.maturity,
+        axes.review_state,
+        trace_id,
+        note_path,
+    )
     summary["applied"] += 1
     emit(
         PROMOTE_DONE,
         {
             "note_uuid": note_uuid,
             "note_path": str(note_path),
-            "state": desired_state,
-            "maturity": desired_state,
-            "review_state": review_state,
+            "state": axes.maturity or axes.review_state,
+            "maturity": axes.maturity,
+            "review_state": axes.review_state,
             "source_event": event_id,
         },
         trace_id,

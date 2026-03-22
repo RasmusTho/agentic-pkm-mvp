@@ -7,7 +7,7 @@ from langgraph.graph import StateGraph, START, END
 
 from app.agents.base.graph import AgentState
 from app.agents.planner.agent import PlannerAgent
-from app.domain.state_axes import review_state_for_maturity
+from app.domain.state_axes import normalize_plan_state_action
 from app.domain.plan import Plan, PlanStep
 from app.store.object_store import ObjectStore
 import app.guardrails as guardrails
@@ -220,24 +220,29 @@ class PlannerGraph:
         if not obj:
             return {"ok": False, "reason": "missing_object", "target": target}
 
-        if action_name in ("update_review_state", "promote_to_evergreen", "set_review_state", "set_maturity"):
-            new_state = args.get("review_state") or "processed"
-            new_maturity = args.get("maturity")
-            if action_name == "promote_to_evergreen":
-                new_maturity = new_maturity or "evergreen"
-                new_state = args.get("review_state") or review_state_for_maturity(str(new_maturity))
+        normalized_action, normalized_args = normalize_plan_state_action(action_name, args)
+
+        if normalized_action in ("set_review_state", "set_maturity", "request_promotion_transition"):
             payload = obj.payload or {}
             frontmatter = payload.get("frontmatter") or {}
-            frontmatter["review_state"] = new_state
-            if new_maturity:
-                frontmatter["maturity"] = str(new_maturity)
+
+            if normalized_action in ("set_review_state", "request_promotion_transition"):
+                frontmatter["review_state"] = normalized_args.get("review_state") or "processed"
+
+            if normalized_action in ("set_maturity", "request_promotion_transition"):
+                new_maturity = normalized_args.get("maturity")
+                if new_maturity:
+                    frontmatter["maturity"] = str(new_maturity)
+
             payload["frontmatter"] = frontmatter
             obj.payload = payload
-            # Save updated object
             self.store.save_object(obj, emit_outbox=False)
-            result = {"ok": True, "action": action_name, "review_state": new_state, "target": target}
-            if new_maturity:
-                result["maturity"] = str(new_maturity)
+
+            result = {"ok": True, "action": normalized_action, "target": target}
+            if "review_state" in frontmatter:
+                result["review_state"] = frontmatter["review_state"]
+            if "maturity" in frontmatter:
+                result["maturity"] = frontmatter["maturity"]
             return result
 
         return {"ok": False, "reason": "unknown_action", "action": action_name, "target": target}

@@ -193,6 +193,10 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 ## Core Contract, State Axes, and Overlays
 - Core contract: Core-6 is the minimal semantic projection (uuid, title, origin, source_ref, trust, review_state). Fields may be explicit or derived; see `docs/CORE_CONTRACT.md`.
 - State axes: orthogonal and policy-driven via vault settings; policies define which axes are enabled, locked, or forced.
+- Current promotion compatibility rule: promotion paths now write `maturity` as the primary standing
+  sink when a standing transition is known (for example `evergreen`), while `review_state` remains
+  the review/mutation posture field. Legacy notes that still express standing through
+  `review_state: evergreen` remain accepted as compatibility input during the migration period.
 - Derived / overlay metadata: system-owned overlays such as `zone`, recency, or salience are computed from signals and remain outside the core contract.
 - Agent reasoning operates on Core-6 + state axes + policy profiles (see `docs/NOTE_KIND_POLICIES.md`) + derived overlays.
 
