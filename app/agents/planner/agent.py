@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from app.domain.commitments import CommitmentHandle, build_commitment_handles_for_goal
 from app.domain.state_axes import normalize_plan_state_action
 from app.domain.plan import Plan, PlanStep
 from app.store.object_store import ObjectStore
@@ -22,7 +23,6 @@ class PlannerAgent:
         match = uuid_re.search(goal)
         if match:
             return match.group(0)
-        # fallback: last token if it looks like a uuid-ish string
         tokens = goal.split()
         if tokens:
             last = tokens[-1]
@@ -35,6 +35,9 @@ class PlannerAgent:
 
     def _goal_wants_evergreen(self, goal: str) -> bool:
         return "evergreen" in goal.lower()
+
+    def build_commitment_handles(self, goal: str, *, target: Optional[str]) -> list[CommitmentHandle]:
+        return build_commitment_handles_for_goal(goal, target_ref=target)
 
     def build_seed_primitive_step(self, goal: str, target: Optional[str], *, step_id: str = "primitive-1") -> PlanStep:
         wants_evergreen = self._goal_wants_evergreen(goal)

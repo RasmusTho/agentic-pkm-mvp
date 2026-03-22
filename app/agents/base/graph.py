@@ -6,7 +6,7 @@ from langgraph.graph import StateGraph, START, END
 class AgentState(TypedDict, total=False):
     trace_id: str
     input: dict
-    plan: str
+    plan: Any
     act_result: dict
     reflection: dict
     output: dict
@@ -15,6 +15,7 @@ class AgentState(TypedDict, total=False):
     current_step_id: Optional[str]
     total_steps: Optional[int]
     max_total_steps: Optional[int]
+    commitment_handles: list[Any]
 
 @dataclass
 class PERSpec:

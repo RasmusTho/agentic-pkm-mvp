@@ -55,8 +55,6 @@ class PlannerGraph:
         current_plan_id = state.get("current_plan_id")
         plan: Plan
 
-        plan: Plan
-
         if current_plan_id:
             stored = self.store.get_object(current_plan_id)
             if stored:
@@ -75,6 +73,10 @@ class PlannerGraph:
         state["goal"] = state.get("goal") or self.goal
         state.setdefault("current_step_id", None)
         state["current_plan_id"] = plan.uuid
+        state["commitment_handles"] = self.agent.build_commitment_handles(
+            state["goal"],
+            target=next((step.target for step in plan.steps if step.target), None),
+        )
         return state
 
     def _executor_node(self, state: AgentState) -> AgentState:
@@ -99,7 +101,6 @@ class PlannerGraph:
             if pending is None:
                 break
 
-            # Composite: spawn sub-plan if depth allows
             if pending.kind == "composite":
                 subplan = plan.try_create_subplan_for_step(
                     pending.id,
@@ -109,7 +110,6 @@ class PlannerGraph:
                 )
                 if subplan:
                     if not subplan.steps:
-                        # seed sub-plan with a concrete primitive step
                         subplan.steps.append(
                             self.agent.build_seed_primitive_step(
                                 subplan.goal,
@@ -118,7 +118,6 @@ class PlannerGraph:
                             )
                         )
                     self.agent.save_plan(subplan)
-                    # Run sub-plan with a nested graph to update its status
                     sub_graph = PlannerGraph(
                         goal=subplan.goal,
                         store=self.store,
@@ -139,7 +138,6 @@ class PlannerGraph:
                         subplan = Plan.from_object(stored_sub)
                     pending.state = "done" if subplan.status == "done" else "failed"
                 else:
-                    # depth exceeded → demote to primitive no-op to respect bounds
                     pending.kind = "primitive"
                     pending.action = pending.action or "noop"
                     pending.state = "pending"
@@ -148,7 +146,6 @@ class PlannerGraph:
                 self.agent.save_plan(plan)
                 continue
 
-            # Primitive execution path
             pre_decision = guardrails.run_pre_guardrails(
                 pending.action or "unknown_action",
                 pending.args,
@@ -203,7 +200,6 @@ class PlannerGraph:
             if plan.status == "failed":
                 break
 
-        # persist final plan state for this invocation
         self.agent.save_plan(plan)
         state["plan"] = plan
         return state
@@ -252,11 +248,9 @@ class PlannerGraph:
         if not isinstance(plan, Plan):
             return state
 
-        # Bounds enforcement
         if plan.executed_steps > (plan.max_steps or self.max_steps):
             plan.status = "failed"
 
-        # Completion detection
         if plan.status != "failed":
             if all(step.state == "done" for step in plan.steps):
                 plan.status = "done"
@@ -320,8 +314,4 @@ def run_planner_for_goal(
         stored = planner.store.get_object(plan_id)
         if stored:
             return Plan.from_object(stored)
-
-    raise RuntimeError("PlannerGraph did not produce a plan")
-
-
-__all__ = ["PlannerGraph", "run_planner_for_goal"]
+    raise RuntimeError("planner did not produce a Plan")
