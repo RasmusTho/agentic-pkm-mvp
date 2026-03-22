@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.agents.panel.integration import handle_panel_update
 from app.components.concurrency import OptimisticWriteGuard
+from app.domain.state_axes import resolve_promotion_axes
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.orchestrator.handler import OrchestratorContext
 from app.services.note_uuid import ensure_note_uuid
@@ -41,9 +42,9 @@ def apply_promotion_frontmatter(
     *,
     maturity: str | None = None,
 ) -> bool:
-    # `new_review_state` remains the primary compatibility input for current callers.
-    # During the state-axis migration, callers may also pass `maturity` explicitly so
-    # promotion standing can be persisted without overloading review posture.
+    # Current callers still pass `new_review_state`, including legacy `evergreen`.
+    # During the first state-axis separation wave we normalize that input here so
+    # standing is written to `maturity` while `review_state` keeps review posture.
     try:
         markdown = note_path.read_text(encoding="utf-8")
     except Exception:
@@ -72,11 +73,10 @@ def apply_promotion_frontmatter(
     if optional_title and not fm.get("title"):
         fm["title"] = optional_title
 
-    target_maturity = str(maturity or new_review_state).strip()
-    if target_maturity:
-        fm["maturity"] = target_maturity
-
-    fm["review_state"] = new_review_state
+    axes = resolve_promotion_axes(maturity=maturity, review_state=new_review_state)
+    if axes.maturity:
+        fm["maturity"] = axes.maturity
+    fm["review_state"] = axes.review_state
 
     updated = dump_frontmatter(fm, body)
     if updated != markdown:

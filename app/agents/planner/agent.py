@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from app.domain.state_axes import review_state_for_maturity
+from app.domain.state_axes import normalize_plan_state_action
 from app.domain.plan import Plan, PlanStep
 from app.store.object_store import ObjectStore
 
@@ -38,11 +38,9 @@ class PlannerAgent:
 
     def build_seed_primitive_step(self, goal: str, target: Optional[str], *, step_id: str = "primitive-1") -> PlanStep:
         wants_evergreen = self._goal_wants_evergreen(goal)
-        primitive_action = "promote_to_evergreen" if wants_evergreen else "update_review_state"
-        primitive_args = (
-            {"review_state": review_state_for_maturity("evergreen"), "maturity": "evergreen"}
-            if wants_evergreen
-            else {"review_state": "processed"}
+        primitive_action, primitive_args = normalize_plan_state_action(
+            "request_promotion_transition" if wants_evergreen else "set_review_state",
+            {"maturity": "evergreen"} if wants_evergreen else {"review_state": "processed"},
         )
         return PlanStep(
             id=step_id,
