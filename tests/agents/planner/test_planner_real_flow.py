@@ -39,7 +39,12 @@ def test_planner_runs_real_mutation_on_note() -> None:
     assert plan.goal == goal
     assert plan.executed_steps > 0
     assert plan.status in ("done", "in_progress")
-    assert any(step.kind == "primitive" and step.target == note_uuid for step in plan.steps)
+    assert any(
+        step.kind == "primitive"
+        and step.target == note_uuid
+        and step.action == "request_promotion_transition"
+        for step in plan.steps
+    )
 
     updated = store.get_object(note_uuid)
     assert updated is not None
@@ -56,6 +61,12 @@ def test_planner_subplan_seed_preserves_non_evergreen_goal() -> None:
     plan = run_planner_for_goal(goal=goal, store=store, max_steps=5, max_replans=1)
 
     assert isinstance(plan, Plan)
+    assert any(
+        step.kind == "primitive"
+        and step.target == note_uuid
+        and step.action == "set_review_state"
+        for step in plan.steps
+    )
     updated = store.get_object(note_uuid)
     assert updated is not None
     fm = (updated.payload or {}).get("frontmatter", {})
