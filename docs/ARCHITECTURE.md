@@ -15,6 +15,11 @@ Related documents and authority boundaries:
 - `docs/ONTOLOGY_RUNTIME_BRIDGE.md` is the cross-layer reading guide connecting human functions, semantic classes, persistence surfaces, and runtime contracts. It does not replace the owning SoT docs, but it should be used when architecture wording risks collapsing those layers.
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` defines the broader human-first second-brain ontology. This document uses narrower runtime and storage language where needed and should not be read as the full domain ontology.
 - `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` defines the normalized vocabulary and explains where repo terms such as `note`, `object`, `agent`, `source`, and `promotion` drift across layers.
+- `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md` clarifies how artifacts, projections, and source roles should be distinguished when runtime/store/search layers need narrower representations.
+- `docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md` clarifies how instance identity, device roles, replicas, and instance provenance should be understood without collapsing them into artifact identity.
+- `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md` clarifies how salience,
+  attentional relevance, and surfacing need should be understood upstream of the runtime `zone`
+  overlay.
 - `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md` is a historical reference for external dependencies, deployment topology, and human-facing surfaces from the v4.10 foundation snapshot. It is useful background, but it is not authoritative for the current v5.5 baseline.
 - `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md` is a historical high-level module map retained for orientation and naming continuity. It may not reflect current v5.5 wiring and should not be treated as the active system map when evaluating current behavior.
 
@@ -173,6 +178,8 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 ## Zone Overlay
 - The runtime currently exposes a derived `zone` overlay for attentional proximity and surface
   shaping.
+- Read `zone` as a runtime projection over salience signals, not as the canonical ontology of what
+  matters.
 - Historical or compatibility language may describe these overlays with temperature-like labels such
   as `hot`, `warm`, or `cold`, but those metaphors are not the authoritative architectural
   semantics.

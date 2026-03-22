@@ -9,6 +9,8 @@ Authority: Canonical decision on how `Mirror Artifact` and `Receipt Artifact` sh
 This document records the decision on whether `Mirror Artifact` and `Receipt Artifact` should
 remain only an ontological distinction or become distinct first-class implementation concepts.
 
+The broader receipt-vs-trace-vs-audit distinction is clarified in
+`docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`.
 The primary question is not architectural elegance.
 It is which distinct human and cognitive functions the system must serve:
 - preserving a stable machine-side projection of human work,

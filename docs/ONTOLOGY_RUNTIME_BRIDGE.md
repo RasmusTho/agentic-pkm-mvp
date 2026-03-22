@@ -9,6 +9,7 @@ This document bridges three things that are easy to flatten when read separately
 - and the runtime contracts that implement a narrower operational slice of that meaning.
 
 It is a reading aid, not a replacement owner.
+Bridge vocabulary in this document inherits its meaning from the owning Core SoT concept docs and must not silently diverge from those definitions.
 `docs/HUMAN-FLOWS.md` remains the human-facing behavior contract.
 `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` and related concept docs remain the semantic owners.
 `docs/ARCHITECTURE.md`, `docs/FRONTMATTER.md`, and `docs/DATA_MODEL.md` remain the active runtime and persistence contract surfaces.

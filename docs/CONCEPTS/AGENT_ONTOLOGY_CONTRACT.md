@@ -24,6 +24,7 @@ Related docs:
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
 - `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`
 - `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`
+- `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`
 - `docs/AGENTS.md`
 - `docs/HUMAN-FLOWS.md`
 
@@ -169,6 +170,9 @@ A receipt must make it possible to reconstruct:
 Receipts are not optional diagnostics.
 They are part of how agent action remains acceptable in a human-first system.
 
+Receipt semantics should be read together with
+`docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`, which distinguishes receipts from raw
+operational traces and broader audit records.
 ## Distinctions that must remain explicit
 
 ### Agent vs role

@@ -5,6 +5,7 @@ State: Concept contract (human-first ontology for the second-brain domain; imple
 ## Purpose
 
 This document defines the canonical human-first ontology for the system.
+Specialist concept contracts under `docs/CONCEPTS/` have explicit precedence for the narrower concept areas they declare; this document remains authoritative for the general ontology outside those explicitly claimed scopes.
 
 It exists to answer questions of meaning before questions of representation:
 - what kinds of things exist in the domain,
@@ -26,9 +27,15 @@ Related documents:
 - `docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md`
 - `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`
 - `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`
+- `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md`
 - `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md`
 - `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md`
 - `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`
+- `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`
+- `docs/CONCEPTS/TEMPORAL_VALIDITY_AND_STALENESS_CONTRACT.md`
+- `docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md`
+- `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md`
+- `docs/CONCEPTS/CREATIVE_PROCESS_CONTRACT.md`
 
 ## Current ontology posture
 
@@ -47,8 +54,16 @@ The main remaining sharpening work is now narrower:
   letting runtime policy become the ontology,
 - keeping current repo working language such as `writing plane` and `retention plane` explicitly
   provisional until better semantic grounding is chosen,
-- and continuing to translate the sharper ontology into runtime and architecture deltas without
-  overstating current implementation.
+- keeping artifact/projection distinctions visible without making runtime representation the center
+  of the ontology,
+- keeping `source` clear when it means epistemic role rather than operational emitter,
+- and clarifying how runtime projections should relate to artifacts without becoming ontological
+  replacements for them,
+- and clarifying how instance/device/replica semantics relate to artifact identity in a local-first
+  multi-device system,
+- and clarifying how salience and surfacing semantics relate to runtime `zone` overlays without
+  letting ranking or heuristics become ontology,
+- and giving creative process deeper treatment than a single `Creative Artifact` class.
 
 ## Why this ontology exists
 
@@ -195,6 +210,13 @@ Examples:
 Operational scope may later be represented on artifacts and operations, but it is not the same
 thing as sphere or context.
 
+### Instance
+
+An instance is one local runtime context of the system for the same human.
+
+It matters for provenance, sync, accountability, and replica interpretation, but it is not the same
+thing as the human or as the artifact.
+
 ### Shared Participation
 
 Shared participation is the relation by which an artifact, commitment, or concern meaningfully
@@ -286,12 +308,35 @@ Not every artifact is primary in this sense.
 Mirrors, indexes, and other derivative system structures may support primary artifacts without
 becoming their ontological equals.
 
-### Source Artifact
+### Projection
 
-A source artifact is a cognitive artifact used as evidence, grounding, memory support, or reference.
+A projection is a bounded representation of an artifact created for a specific surface, operation,
+or system need.
+
+Problem solved:
+- artifacts often need runtime/store/search/boundary representations,
+- but those representations are not the same thing as the underlying artifact.
+
+Examples:
+- frontmatter summaries,
+- store payloads,
+- retrieval documents,
+- response objects,
+- portable machine-side mirrors.
+
+A projection may preserve some but not all of the artifact's meaning, provenance, or state.
+It is therefore representation-level, not the ontological center.
+
+### Source Role
+
+A source role is the epistemic role an artifact plays when it is used as evidence, grounding,
+memory support, or reference in a context.
 
 Important:
-- "source" is often a role played by an artifact in context, not always its intrinsic type.
+- `source` is canonically a role in context,
+- not always an intrinsic artifact type,
+- and older repo language such as `source artifact` should usually be read as shorthand for an
+  artifact functioning in a source role.
 
 ### Retained Artifact
 
@@ -325,6 +370,9 @@ Examples:
 - partial drafts,
 - form experiments,
 - speculative notes.
+
+Creative artifacts often participate in broader creative threads, iterative revision, and selective
+stabilization over time; see `docs/CONCEPTS/CREATIVE_PROCESS_CONTRACT.md`.
 
 ### Project Artifact
 
@@ -375,6 +423,11 @@ Its role is to support portability, healing, provenance, and cross-instance cont
 
 A receipt artifact is a system artifact whose main purpose is to provide a human-legible account of
 what happened, under what authority, and with what result.
+
+### Operational Trace
+
+An operational trace is a runtime coordination or diagnostic record that helps the system reconstruct
+or inspect what happened without automatically being the full human-facing accountability surface.
 
 ### Execution Artifact
 
@@ -447,6 +500,15 @@ The following are canonical examples:
 - reuse,
 - reflect.
 
+Creative operations often include:
+- ideate,
+- vary,
+- combine,
+- draft,
+- revise,
+- test for coherence,
+- and selectively stabilize parts of an evolving body of work.
+
 ### Ask / retrieval
 
 Question-answering is not a foundational ontological primitive.
@@ -469,13 +531,50 @@ A metacognitive state describes the human's or system's orientation toward under
 
 An attention state describes what currently competes for the human's focus or concern.
 
+### Attentional Salience
+
+Attentional salience is the degree to which an artifact, commitment, or concern is mentally near,
+activated, or ready-to-hand in a situation.
+
+It is usually situational and derived rather than a durable artifact essence.
+
+### Attentional Relevance
+
+Attentional relevance is the degree to which something would be useful, timely, or important to
+surface in the current context.
+
+It is distinct from salience:
+- something may be mentally near without being useful,
+- and something may deserve resurfacing even when it is not mentally near.
+
 ### Open Loop
 
 An open loop is anything that still has the human's attention without yet being sufficiently clarified, organized, delegated, or closed.
 
+### Surfacing Need
+
+Surfacing need is the practical need for the system to bring something back into view in order to
+support orientation, review, completion, or timely action.
+
 ### Monitoring
 
 Monitoring is the act of checking whether something is understood, remembered, progressing, trustworthy, or in need of re-evaluation.
+
+### Temporal Validity
+
+Temporal validity is the degree to which an artifact, claim, or representation still fits the world,
+context, or intended use over time.
+
+### Staleness
+
+Staleness is the condition in which an artifact or claim may no longer be safely assumed current
+without re-evaluation.
+
+### Drift
+
+Drift is the mismatch that appears when an artifact's content, assumptions, references, or
+applicability no longer align well with the surrounding world, tool landscape, commitments, or
+knowledge base.
 
 ### Calibration
 
@@ -500,6 +599,14 @@ Provenance is the context that explains where an artifact, proposal, action, or 
 ### Receipt
 
 A receipt is a human-legible record that something happened, by whom or by what, with which authority, on what basis, and with what result.
+
+### Audit Record
+
+An audit record is a durable inspectable record preserved for later verification, reconstruction,
+or review.
+
+An audit record may support or generate a receipt, but it is not automatically the same thing as a
+human-legible receipt.
 
 ### Authority Boundary
 
@@ -558,7 +665,8 @@ Examples:
 Important:
 - `domain` may appear as a property on artifacts, operations, or records,
 - but ontologically it refers back to a first-class context structure rather than being only a
-  metadata field.
+  metadata field,
+- and instance-local metadata should not be mistaken for artifact identity.
 
 ### Transitions
 
@@ -578,7 +686,9 @@ Important:
 - review is a transition or process, not merely a label,
 - promotion, review, and maturity should be kept distinct unless an explicit contract collapses
   them for a specific runtime path,
-- "evergreen" should be treated as a role or quality/state outcome rather than as a base class.
+- "evergreen" should be treated as a role or quality/state outcome rather than as a base class,
+- and temporal validity, staleness, and drift should not be silently collapsed into either
+  `maturity` or `review_state`.
 
 ## Contract rules
 

@@ -99,7 +99,6 @@ They summarize the kinds of cycles the system should keep legible and support ac
 The system must let the human get material out of fragile working memory and into a durable external
 surface quickly enough that important thoughts, tasks, fragments, and source references are not
 lost.
-
 Capture must work for:
 - notes,
 - source material,

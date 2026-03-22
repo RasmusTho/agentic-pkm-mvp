@@ -286,6 +286,8 @@ The system should support gradual creative development, recombination, and retur
 ### Ontology consequences
 
 - creative artifacts must remain first-class,
+- creative process must remain first-class,
+- iterative development and selective stabilization must be possible without premature closure,
 - artifact development must not be reduced to knowledge maturation alone,
 - and exploratory standing must remain legitimate.
 

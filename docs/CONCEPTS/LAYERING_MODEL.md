@@ -14,6 +14,8 @@ Terminology note:
 - because this boundary is about cognitive function and exposure, not storage temperature or access frequency,
 - but the literature does not yet justify treating those labels as final field-standard terminology; see
   `docs/research/cognitive-semantics-literature-memo.md`.
+- salience and attentional relevance semantics live upstream of this document; see
+  `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md`.
 - likewise, the current `domain` term in this document should be read as a stricter scope/boundary
   concept, not necessarily as the full human semantics of belonging; see
   `docs/CONCEPTS/COGNITIVE_AXES_AND_SPHERES.md`.

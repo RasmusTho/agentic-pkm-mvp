@@ -155,6 +155,7 @@ Implication:
   are incomplete on a given device.
 - sync, ingestion, and derived-state rebuild flows should be safe under lag, partial visibility, and
   delayed convergence rather than requiring strict immediate consistency.
+- instance provenance and replica state should remain distinguishable from artifact identity.
 
 ### 8. Salience and resurfacing are architecture concerns, not hidden ranking side effects
 
@@ -298,7 +299,9 @@ Wanted delta:
 
 Architectural consequence:
 - sync, ingest, receipts, rebuild flows, and retrieval must tolerate lag, partial replicas, and
-  delayed convergence without making central artifacts unintelligible or unsafe.
+  delayed convergence without making central artifacts unintelligible or unsafe,
+- while keeping instance provenance and replica-local state distinct from the underlying artifact's
+  identity.
 
 ### 7. From architecture-by-implementation-seam to architecture-by-human invariant
 
@@ -344,7 +347,6 @@ Wanted delta:
 Architectural consequence:
 - future writing, retrieval, mirroring, and support surfaces should preserve exploratory ambiguity,
   alternatives, and partial stabilization as normal runtime realities.
-
 ## How to use this delta
 
 When evaluating architecture findings or proposed changes:

@@ -50,9 +50,10 @@ Important:
 | `Operational Scope` | Boundary / runtime-facing context term | A narrower working boundary used for retrieval, action gating, path defaults, and similar runtime behavior. | broad human use of `domain` when runtime scope is what is meant | Letting operational scope pretend to be the whole human model |
 | `Explicit Cross-Scope Allowance` | Boundary / permission relation | A bounded, auditable permission for persistent or reusable crossing between operational scopes. | `bridge` when the permission function should be explicit | Treating the allowance as the primary human mental model of overlap |
 | `Cognitive Artifact` | Artifact | Any persistent or semi-persistent object used in thinking, creating, remembering, planning, or orienting. | "object" as a general domain word | Using "object" as if it were already semantically clear |
+| `Projection` | Representation / boundary | A bounded representation of an artifact for a runtime, store, search, mirror, or API purpose. | raw `object` when representation is what is meant | Treating a projection as the whole artifact |
 | `Work Artifact` | Artifact | A cognitive artifact used to advance work or thinking. | generic "note" when the artifact is not specifically a vault note | Collapsing all work artifacts into notes |
 | `Retained Artifact` | Artifact | Current repo working term for a cognitive artifact preserved for long-horizon retention, rediscovery, citation, or later reuse without requiring immediate note conversion. | `archive artifact`, `cold object` when functional meaning matters | Letting storage-temperature metaphors define the concept or treating this wording as more literature-settled than it is |
-| `Source Artifact` | Artifact / role | A cognitive artifact used as evidence, grounding, or reference in a context. | "source" as if it were always a distinct base type | Treating "source" as an intrinsic type in all contexts |
+| `Source Role` | Role / epistemic relation | The role an artifact plays when used as evidence, grounding, or reference in a context. | broad unqualified `source` when epistemic role is what matters | Treating sourcehood as always intrinsic |
 | `Creative Artifact` | Artifact | A cognitive artifact for generative or exploratory creative work. | forcing creative material into "knowledge" vocabulary | Assuming all artifacts are propositional knowledge |
 | `Project Artifact` | Artifact | A cognitive artifact tied to a project or multi-step effort over time. | generic "document" | Treating project structure as just tags or metadata |
 | `Reflective Artifact` | Artifact | A cognitive artifact used for reflection, self-observation, or learning. | "journal note" when broader reflection is intended | Implicitly treating reflection as therapy-only |
@@ -80,6 +81,9 @@ Important:
 | `Provenance` | Provenance | The explanatory context for origin, dependence, and transformation. | reducing to `origin` or path alone | Treating provenance as just metadata garnish |
 | `Metacognitive State` | Metacognitive layer | A state concerning understanding, uncertainty, attention, load, or calibration. | hiding this behind retrieval/ranking language | Ignoring open loops, attention, and calibration |
 | `Open Loop` | Metacognitive layer / commitment structure | Anything that still has the human's attention without being sufficiently clarified or closed. | generic "inbox item" when broader meaning is intended | Treating all open loops as content artifacts |
+| `Attentional Salience` | Metacognitive layer / projection-facing semantic | How mentally near, activated, or ready-to-hand something is in a situation. | vague `hot` / `foreground` language when the semantic meaning matters | Treating salience as a permanent artifact essence |
+| `Attentional Relevance` | Metacognitive layer / relation | How useful, timely, or important something would be to surface in the current context. | flattening it into retrieval score or recency alone | Treating ranking heuristics as the full ontology |
+| `Zone` | Runtime overlay / projection | A derived runtime overlay for attentional proximity or surface shaping. | treating `hot/warm/cold` as canonical | Letting zone language redefine the ontology of relevance |
 
 ## Drift map for overloaded repo terms
 
@@ -87,17 +91,19 @@ Important:
 | --- | --- | --- | --- |
 | `note` | Used for writing artifact, markdown file, object kind, and generic content unit | `Vault Note` or `Work Artifact` depending on context | Reserve `Vault Note` for writing-surface editable notes; use `Cognitive Artifact` / `Work Artifact` elsewhere |
 | `object` | Used for domain artifact, store row, external file surrogate, and generic payload container | Usually implementation-facing `Object Record`, not base ontology | Avoid as a domain term; use artifact language in docs and reserve object for storage/runtime when necessary |
-| `source` | Used for provenance origin, evidence artifact, emitter identity, and file path | `Source Artifact`, `Provenance`, or emitter attribution depending on context | Always qualify: `source artifact`, `source emitter`, `source_ref`, or `origin` |
+| `source` | Used for provenance origin, evidence role, emitter identity, and file path | Usually `Source Role`, `Provenance`, or emitter attribution depending on context | Always qualify: `source role`, `source emitter`, `source_ref`, or `origin` |
 | `agent` | Used for true assisting actors, deterministic pipelines, services, and roles | `System Agent` or role | Keep `System Agent` for bounded assisting actors; call simple components/services by their architectural name when agency is not intended |
 | `review` | Used for process, state field, approval, and promotion-related gating | `Review` transition/process | Distinguish `review` (process), `review state` (state marker), and approval/acceptance (decision/transition) |
 | `promotion` | Used for panel intent, agent flow, maturity change, and frontmatter update | `Promotion` transition | Treat as a transition with associated intent/receipt, not a standalone object |
 | `memory` | Used for human memory, external memory, in-process cache, and historical memory-store designs | `external cognitive support` at domain level; implementation varies | Constrain usage carefully; do not use `memory` as a blanket synonym for artifact store |
 | `warm` / `cold` / `hot` / `cool` | Used as if cognitive function were a storage-temperature tier | Usually `writing plane`, `retention plane`, or a salience distinction depending on context | Treat as non-canonical metaphor; rewrite active SoT docs toward function language |
+| `zone` | Used for salience semantics, ranking buckets, and UI foreground/background language | Usually runtime `Zone` overlay informed by `Attentional Salience` / `Attentional Relevance` | Keep as runtime overlay language; point upstream when semantic meaning matters |
 | `domain` | Used for lived life area, runtime retrieval boundary, storage grouping, and trust/exposure policy | Usually `Operational Scope`; sometimes `Sphere` or `Context` depending on meaning | Do not let `domain` silently carry all context jobs at once |
 | `bridge` | Used for overlap in meaning, repeated cross-context reuse, and runtime permission structure | Usually `Explicit Cross-Scope Allowance`; sometimes `Shared Participation` if the point is human overlap | Avoid using it as the default mental model of overlap |
 | `plan` | Used for commitment structure, generated execution artifact, and planner output schema | `Plan Artifact` or `Project` depending on context | Distinguish project/commitment from execution plan |
 | `action` | Used for checkbox labels, ontological operations, tool calls, and next actions | `Action`, `Next Action`, or action-catalog item depending on context | Qualify as `next action`, `catalog action`, or `performed action` |
 | `artifact` | Sometimes means any content, sometimes only durable human-readable output | `Cognitive Artifact` | Prefer as the general domain term over `object` |
+| `projection` | Used inconsistently for mirrors, store rows, retrieval docs, and frontmatter summaries | `Projection` | Use for bounded representations, not for the artifact itself |
 | `receipt` | Used sparsely despite being conceptually central | `Receipt` | Promote as the canonical accountability term |
 
 ## Interpretation rules for key docs

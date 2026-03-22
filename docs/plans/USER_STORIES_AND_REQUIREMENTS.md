@@ -205,6 +205,8 @@ or task structures.
 ### Ontology implications
 
 - creative artifacts must remain first-class,
+- creative process must remain first-class,
+- fragments, threads, and iterative revision must not be collapsed into knowledge maturation alone,
 - not all artifact development is knowledge maturation.
 
 ## 7. Hobby / RPG work

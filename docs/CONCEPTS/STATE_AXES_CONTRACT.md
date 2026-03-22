@@ -16,6 +16,7 @@ It exists to prevent these meanings from being silently collapsed back into one 
 Related docs:
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
 - `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`
+- `docs/CONCEPTS/TEMPORAL_VALIDITY_AND_STALENESS_CONTRACT.md`
 - `docs/CORE_CONTRACT.md`
 - `docs/NOTE_KIND_POLICIES.md`
 - `docs/FRONTMATTER.md`
@@ -138,7 +139,8 @@ The canonical global value set for `maturity` is:
 - whether mutation is allowed,
 - whether review has occurred,
 - whether the artifact is active in an inbox/workflow,
-- or whether a transition intent has been emitted.
+- whether a transition intent has been emitted,
+- or whether the artifact remains temporally current.
 
 ## Canonical relation between the axes
 
@@ -153,6 +155,8 @@ Normalization rules:
 Current canonical compatibility policy:
 - promotion to `maturity = evergreen` should map new writes toward `review_state = reviewed`
   rather than `review_state = evergreen`.
+- `evergreen` should not be interpreted as permanently current; temporal validity and staleness are
+  separate semantics.
 
 ## Legacy compatibility
 

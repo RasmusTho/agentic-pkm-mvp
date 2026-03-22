@@ -20,8 +20,10 @@ The final list can be optionally re-ranked via the rerank hook adapter.
 Interpretation note:
 - retrieval operates over runtime documents/projections, not directly over the full ontology of
   human artifacts.
-- a retrieval hit is therefore a derived retrieval object pointing back to a source artifact or
-  vault-note projection.
+- a retrieval hit is therefore a derived retrieval projection pointing back to an artifact that may
+  currently be playing a source role.
+- attentional salience may influence ranking or resurfacing logic, but retrieval itself is not the
+  whole semantics of attentional relevance.
 
 ## Hybrid Search (Current)
 Entry point: `app/retrieval/hybrid.py:hybrid_search(query, k=8, ...)`
@@ -46,6 +48,8 @@ Optional operational-scope filtering:
   - `docs/CONCEPTS/CONTEXT_TERMINOLOGY_CONTRACT.md`
   - `docs/CONCEPTS/CONTEXT_REPRESENTATION_POSTURE.md`
   - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
+  - `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md`
+  - `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md`
 
 ## Optional Rerank (Current)
 Rerank is opt-in and controlled by env vars:
@@ -71,7 +75,7 @@ Implementation lives under `app/retrieval/rerank/` and is applied via `app/retri
 
 Interpretation:
 - `doc_id` identifies the retrieval document/projection used in scoring.
-- `source_ref` points back to the source location known to the runtime.
+- `source_ref` points back to the runtime-known location of the artifact or retained material.
 - `payload` is retrieval metadata, not the canonical meaning of the artifact.
 
 ## Delta / Known Limits
