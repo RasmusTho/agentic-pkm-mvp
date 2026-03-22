@@ -8,6 +8,14 @@ from app.domain.state_axes import normalize_plan_state_action
 from app.domain.plan import Plan, PlanStep
 from app.store.object_store import ObjectStore
 
+_COMMITMENT_PRIORITY: dict[CommitmentKind, int] = {
+    "review_return": 0,
+    "next_action": 1,
+    "waiting": 2,
+    "project": 3,
+    "open_loop": 4,
+}
+
 
 class PlannerAgent:
     """
@@ -64,6 +72,13 @@ class PlannerAgent:
             )
             for kind in self._infer_commitment_kinds_from_goal(cleaned_goal)
         ]
+
+    def select_primary_commitment_handle(
+        self, handles: list[CommitmentHandle]
+    ) -> CommitmentHandle | None:
+        if not handles:
+            return None
+        return min(handles, key=lambda handle: _COMMITMENT_PRIORITY.get(handle.commitment_kind, 99))
 
     def build_seed_primitive_step(self, goal: str, target: Optional[str], *, step_id: str = "primitive-1") -> PlanStep:
         wants_evergreen = self._goal_wants_evergreen(goal)

@@ -93,6 +93,9 @@ def test_planner_run_carries_commitment_handles_without_persisting_them_into_pla
 
     handles = final_state.get("commitment_handles") or []
     assert {handle.commitment_kind for handle in handles} == {"project", "review_return"}
+    primary_handle = final_state.get("primary_commitment_handle")
+    assert primary_handle is not None
+    assert primary_handle.commitment_kind == "review_return"
 
     plan = final_state.get("plan")
     assert isinstance(plan, Plan)

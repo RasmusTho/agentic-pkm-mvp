@@ -73,10 +73,12 @@ class PlannerGraph:
         state["goal"] = state.get("goal") or self.goal
         state.setdefault("current_step_id", None)
         state["current_plan_id"] = plan.uuid
-        state["commitment_handles"] = self.agent.build_commitment_handles(
+        commitment_handles = self.agent.build_commitment_handles(
             state["goal"],
             target=next((step.target for step in plan.steps if step.target), None),
         )
+        state["commitment_handles"] = commitment_handles
+        state["primary_commitment_handle"] = self.agent.select_primary_commitment_handle(commitment_handles)
         return state
 
     def _executor_node(self, state: AgentState) -> AgentState:

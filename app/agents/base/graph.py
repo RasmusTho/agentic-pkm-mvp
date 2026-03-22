@@ -21,6 +21,7 @@ class AgentState(TypedDict, total=False):
     total_steps: Optional[int]
     max_total_steps: Optional[int]
     commitment_handles: list[CommitmentHandle]
+    primary_commitment_handle: CommitmentHandle | None
 
 
 @dataclass
