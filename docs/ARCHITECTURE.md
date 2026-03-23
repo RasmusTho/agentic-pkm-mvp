@@ -147,17 +147,12 @@ current architecture language.
 
 ## Operational topology (current reality, not locked core architecture)
 
-The following is current operational reality for the forward line.
-It is not the timeless core architecture of the system:
-- Mac mini acts as the current master node and primary runtime host
-- iCloud and Git are both used as practical transport layers
-- iPad is primarily a consumer/reading/editing node via iCloud
-- laptop or satellite nodes may sync through Git and run narrower or delayed local capability sets
-- the runtime reacts to changed files rather than treating one transport as architecturally special
-
-Design consequence:
-- file-based eventual consistency is the important runtime assumption
-- transport mechanism is secondary
+Current operational reality includes heterogeneous device roles and practical transport choices.
+The authoritative user-facing description lives in `docs/HUMAN-FLOWS.md`, while this architecture
+document records only the architectural consequence:
+- the runtime reacts to changed files rather than treating iCloud or Git as semantically primary
+- file-based eventual consistency matters more than any one transport
+- device asymmetry is an operational condition, not a different ontology of artifacts
 
 See also:
 - `docs/HUMAN-FLOWS.md`
@@ -244,7 +239,8 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
   realized through watcher/worker flows over local files and synced replicas.
 - `EmbeddingProvider` is the abstraction boundary for embedding generation. Embeddings are
   provider/model-tagged derived runtime artifacts and must not be treated as stable identity
-  records.
+  records. In current code this is expressed through the embedding config/runtime stack rather than
+  a single named interface.
 
 ## Zone Overlay
 - The runtime currently exposes a derived `zone` overlay for attentional proximity and surface

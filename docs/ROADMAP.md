@@ -71,12 +71,8 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 
 ## Operational topology note
 
-Current operational reality for the forward line:
-- Mac mini acts as the current master node and runtime host
-- iCloud is used for practical file propagation to narrower devices such as iPad
-- Git is used for practical propagation to laptop/satellite setups
-
-This is an operational decision, not a separate roadmap milestone or a locked core-architecture law.
+Current operational topology is documented as operational reality, not as a roadmap deliverable or
+locked architecture law. See `docs/HUMAN-FLOWS.md` for the authoritative user-facing description.
 
 ## Version ladder (summary)
 | Version | Intent | State |

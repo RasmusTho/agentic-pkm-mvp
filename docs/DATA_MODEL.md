@@ -122,17 +122,11 @@ It defines a recovery posture for a local-first single-user system.
 
 ## Companion note field set
 
-The companion note field set is intentionally bounded.
-Current forward-line field list:
-- `uuid`
-- `source_ref`
-- `title`
-- `content_hash`
-- `ingest_state`
-- `last_ingested`
-- `created_by_instance`
+The companion note field set is intentionally bounded and canonically defined in
+`docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`.
 
-Field semantics remain owned by `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`.
+This document depends on that contract rather than redefining the field list here.
+Only the persistence and rebuild implications belong in the data-model layer.
 
 ## Audit and receipts
 
