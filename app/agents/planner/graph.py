@@ -8,7 +8,7 @@ from langgraph.graph import StateGraph, START, END
 from app.agents.base.graph import AgentState
 from app.agents.planner.agent import PlannerAgent
 from app.domain.state_axes import normalize_plan_state_action
-from app.domain.plan import Plan, PlanStep
+from app.domain.plan import Plan
 from app.store.object_store import ObjectStore
 import app.guardrails as guardrails
 
@@ -28,8 +28,8 @@ DEFAULT_MAX_TOTAL_STEPS = _env_int("PLANNER_MAX_TOTAL_STEPS_PER_TASK", 50)
 
 class PlannerGraph:
     """
-    Minimal PlannerGraph skeleton with planner → executor → evaluator nodes.
-    Execution/evaluation are no-ops for Phase 1; planner node seeds or loads a plan.
+    Minimal execution-plan graph with planner -> executor -> evaluator nodes.
+    This graph manages runtime execution steps, not human commitment or project semantics.
     """
 
     def __init__(
@@ -225,7 +225,7 @@ class PlannerGraph:
             frontmatter = payload.get("frontmatter") or {}
 
             if normalized_action in ("set_review_state", "request_promotion_transition"):
-                frontmatter["review_state"] = normalized_args.get("review_state") or "processed"
+                frontmatter["review_state"] = normalized_args.get("review_state") or "provisional"
 
             if normalized_action in ("set_maturity", "request_promotion_transition"):
                 new_maturity = normalized_args.get("maturity")

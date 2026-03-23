@@ -4,6 +4,7 @@ import logging
 import os
 from dataclasses import replace
 from pathlib import Path
+from typing import Callable, TypeVar, cast
 
 from app.knowledge.adapters import FsVaultAdapter, ObsidianCliAdapter
 from app.knowledge.contracts import KnowledgePort, NoteLocator, SearchHit, WriteReceipt
@@ -16,6 +17,8 @@ from app.knowledge.health import obsidian_dependency_status
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings, load_knowledge_settings
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 
 def _resolve_fs_root() -> Path:
@@ -37,7 +40,12 @@ class HybridKnowledgePort:
         self.fallback = fallback
         self.allow_fallback = allow_fallback
 
-    def _execute_with_fallback(self, operation: str, runner, subject: str):
+    def _execute_with_fallback(
+        self,
+        operation: str,
+        runner: Callable[[KnowledgePort], _T],
+        subject: str,
+    ) -> _T:
         try:
             return runner(self.primary)
         except (KnowledgeDependencyError, KnowledgeTransportError) as exc:
@@ -52,7 +60,7 @@ class HybridKnowledgePort:
             )
             result = runner(self.fallback)
             if isinstance(result, WriteReceipt):
-                return replace(result, fallback_used=True)
+                return cast(_T, replace(result, fallback_used=True))
             return result
 
     def read_note(self, locator: NoteLocator) -> str:
@@ -118,27 +126,27 @@ def resolve_knowledge_port(
 
     primary = _build_adapter(effective.primary_adapter, fs_root=fs_root)
     fallback: KnowledgePort | None = None
-    if effective.allow_fallback:
-        if effective.fallback_adapter != KnowledgeAdapter.FS_VAULT:
-            raise KnowledgeConfigError("Only fs_vault fallback is supported in non-strict mode")
+    if effective.fallback_adapter is not None:
         fallback = _build_adapter(effective.fallback_adapter, fs_root=fs_root)
 
-    if effective.primary_adapter == KnowledgeAdapter.OBSIDIAN_CLI:
-        dep = obsidian_dependency_status()
-        if dep.ok:
-            if fallback is None:
-                return primary
-            return HybridKnowledgePort(primary=primary, fallback=fallback, allow_fallback=True)
+    status = obsidian_dependency_status()
+    if effective.primary_adapter == KnowledgeAdapter.OBSIDIAN_CLI and not status.ok:
         if effective.strict_startup:
-            raise KnowledgeDependencyError(f"Obsidian dependency check failed: {dep.details}")
-        if not effective.allow_fallback:
-            raise KnowledgeDependencyError("Obsidian dependency unavailable and fallback is disabled")
-        if fallback is None:
-            raise KnowledgeConfigError("Fallback adapter is required when fallback is enabled")
-        logger.warning("Knowledge startup fallback selected after Obsidian dependency failure: %s", dep.details)
-        return fallback
+            raise KnowledgeDependencyError(
+                f"Obsidian CLI adapter is not available: {status.details}"
+            )
+        if effective.allow_fallback and fallback is not None:
+            logger.warning("Obsidian CLI unavailable; using fallback knowledge adapter")
+            return fallback
 
-    return primary
+    if not effective.allow_fallback or fallback is None:
+        return primary
+
+    return HybridKnowledgePort(
+        primary=primary,
+        fallback=fallback,
+        allow_fallback=effective.allow_fallback,
+    )
 
 
 __all__ = ["HybridKnowledgePort", "resolve_knowledge_port"]

@@ -12,7 +12,7 @@ from app.store.object_store import DomainObject, ObjectStore
 pytestmark = [pytest.mark.not_pg]
 
 
-def _make_note(store: ObjectStore, review_state: str = "inbox") -> str:
+def _make_note(store: ObjectStore, review_state: str = "draft") -> str:
     note_uuid = str(uuid4())
     obj = DomainObject(
         uuid=note_uuid,
@@ -70,7 +70,7 @@ def test_planner_subplan_seed_preserves_non_evergreen_goal() -> None:
     updated = store.get_object(note_uuid)
     assert updated is not None
     fm = (updated.payload or {}).get("frontmatter", {})
-    assert fm.get("review_state") == "processed"
+    assert fm.get("review_state") == "provisional"
     assert "maturity" not in fm
 
 

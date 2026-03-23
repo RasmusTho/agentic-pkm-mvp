@@ -15,7 +15,7 @@ def _make_note(store: ObjectStore) -> str:
         uuid=note_uuid,
         kind="note",
         payload={
-            "frontmatter": {"uuid": note_uuid, "review_state": "inbox"},
+            "frontmatter": {"uuid": note_uuid, "review_state": "draft"},
             "body": "Test note",
         },
         source_ref=None,
@@ -52,7 +52,7 @@ def test_planner_node_attaches_commitment_handles_to_state_only() -> None:
 
     stored_note = store.get_object(note_uuid)
     frontmatter = (stored_note.payload or {}).get("frontmatter", {})
-    assert frontmatter == {"uuid": note_uuid, "review_state": "inbox"}
+    assert frontmatter == {"uuid": note_uuid, "review_state": "draft"}
 
 
 def test_planner_node_represents_all_first_wave_commitment_kinds_in_state_only() -> None:

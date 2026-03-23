@@ -707,7 +707,7 @@ def alpha_human_flows(
     """
     Flows: A) ingest sample notes; B) ensure Test/Alpha-HumanFlows.md exists;
     C) ingest + report mirror path; D) insert AI panel and reingest;
-    E) set promoted/evergreen frontmatter and reingest; F) run ASK queries.
+    E) set reviewed/evergreen frontmatter and reingest; F) run ASK queries.
     """
     resolved = _resolve_vault_root_path(vault_root, allow_env=False, fallback_to_default=True)
     if resolved is None:

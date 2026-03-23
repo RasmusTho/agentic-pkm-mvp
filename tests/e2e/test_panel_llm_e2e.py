@@ -10,7 +10,6 @@ from uuid import uuid4
 import pytest
 
 from app.agents.panel_agent import execute_panel_intent, run_panel_intent_for_note
-from app.stores import reset_store_backends
 
 pytestmark = pytest.mark.panel_llm_e2e
 
@@ -174,7 +173,6 @@ from uuid import uuid4
 from _pytest.monkeypatch import MonkeyPatch
 
 from tests.e2e.test_panel_llm_e2e import _enable_live_llm, _note_markdown, _read_outbox, _seed_note
-from app.stores import reset_store_backends
 from app.agents.panel_agent.agent import run_panel_intent_for_note
 from app.agents.panel_agent.runtime import execute_panel_intent
 

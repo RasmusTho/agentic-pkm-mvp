@@ -19,8 +19,9 @@ _COMMITMENT_PRIORITY: dict[CommitmentKind, int] = {
 
 class PlannerAgent:
     """
-    Minimal planner agent placeholder.
-    Creates a top-level plan for a given goal; execution is delegated to PlannerGraph.
+    Minimal execution-plan agent placeholder.
+    Creates a runtime execution plan for a goal; it does not model human commitments or projects.
+    Execution is delegated to PlannerGraph.
     """
 
     def __init__(self, store: Optional[ObjectStore] = None) -> None:
@@ -84,7 +85,7 @@ class PlannerAgent:
         wants_evergreen = self._goal_wants_evergreen(goal)
         primitive_action, primitive_args = normalize_plan_state_action(
             "request_promotion_transition" if wants_evergreen else "set_review_state",
-            {"maturity": "evergreen"} if wants_evergreen else {"review_state": "processed"},
+            {"maturity": "evergreen"} if wants_evergreen else {"review_state": "provisional"},
         )
         return PlanStep(
             id=step_id,

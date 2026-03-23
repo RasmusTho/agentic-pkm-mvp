@@ -94,7 +94,7 @@ def generate_notes(bundle: Dict[str, Any]) -> Dict[str, Any]:
     fm = {
         "uuid": bundle["capture_id"],
         "kind": "capture",
-        "review_state": "inbox",
+        "review_state": "draft",
         "areas": bundle.get("areas", []),
         "signal_quality": bundle.get("signal_quality", "unknown")
     }

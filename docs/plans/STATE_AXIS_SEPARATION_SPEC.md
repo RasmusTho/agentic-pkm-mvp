@@ -245,69 +245,92 @@ Prefer:
 - `frontmatter["maturity"] == "evergreen"`
 - `frontmatter["review_state"] == "<review posture>"`
 
-Short transition period:
-- tests may allow either the legacy mirror or the normalized pair while migration is in progress
+This wave now treats the normalized pair as the canonical expectation:
+- `frontmatter["maturity"] == "evergreen"`
+- `frontmatter["review_state"] == "reviewed"`
 
-## Source-of-truth decisions required
+## Implemented v5.x wave status
 
-These decisions must be made before code changes go too far:
+The current implementation wave resolves the core decisions needed for the first separation pass.
 
-1. What are the canonical allowed values for `review_state`?
-2. What are the canonical allowed values for `maturity`?
-3. Should `review_state = evergreen` remain accepted indefinitely, or only during migration?
-4. What review posture should promotion to `evergreen` imply:
-   - `reviewed`
-   - `protected`
-   - something else
-5. Should `promote.intent.created` stay as the external event name during the first migration wave?
+### Settled decisions
 
-## Recommended answers
-
-These are my current recommended answers based on the runtime and docs work:
-
-1. `review_state` should be normalized around review posture:
+1. Canonical `review_state` values:
    - `draft`
    - `provisional`
    - `reviewed`
    - `protected`
    - `archived`
-
-2. `maturity` should be normalized around standing:
+2. Canonical `maturity` values:
    - `raw`
    - `draft`
    - `developing`
    - `stable`
    - `evergreen`
-
-3. `review_state = evergreen` should be treated as legacy-compatible, not preferred.
-
-4. Promotion to `evergreen` should imply:
+3. `review_state: evergreen` remains accepted as compatibility input, but it is no longer a
+   canonical output.
+4. Promotion to `evergreen` now normalizes toward:
    - `maturity = evergreen`
-   - `review_state = reviewed` or `protected`
+   - `review_state = reviewed`
+5. External event name compatibility remains unchanged:
+   - `promote.intent.created`
 
-5. `promote.intent.created` should remain the external event name in the first migration wave, with
-   a richer payload and clearer internal normalization.
+### Implemented scope in this wave
 
-## Concrete change list
+- `app/domain/state_axes.py` is the single normalization boundary for:
+  - canonical value sets
+  - legacy `review_state` compatibility aliases
+  - planner action normalization
+  - promotion payload normalization
+- Promotion application paths now normalize toward canonical axis outputs:
+  - `maturity: evergreen`
+  - `review_state: reviewed`
+- Planner/orchestrator normalization now treats promotion as an explicit transition request:
+  - `update_review_state` -> `set_review_state`
+  - `promote_to_evergreen` -> `request_promotion_transition`
+- Promotion payloads normalize toward explicit transition semantics while preserving current event
+  compatibility:
+  - `transition.family = "promotion"`
+  - `transition.target_maturity = "..."`
+  - legacy top-level `maturity` remains accepted and is still mirrored for compatibility
+- Tests now assert canonical state-axis outcomes instead of treating `review_state = evergreen` as
+  the preferred sink.
 
-### Wave 1
+### Implemented scope in this cleanup wave
 
-- Add state-axis normalization helper(s)
-- Update promotion apply path to write `maturity`
-- Keep compatibility writes for legacy `review_state`
-- Update tests to expect `maturity`
-- Add explicit comments/docs in affected runtime modules
+- Remaining current-runtime callers that previously produced legacy axis values now normalize at the
+  state-axis boundary before emitting runtime-facing payloads or derived metadata.
+- New canonical outputs in this wave prefer:
+  - `review_state = draft|provisional|reviewed|protected|archived`
+  - `maturity = raw|draft|developing|stable|evergreen`
+- Legacy values remain compatibility-only input at selected boundaries:
+  - `review_state: evergreen`
+  - `review_state: processed`
+  - `review_state: promoted`
+  - `review_state: inbox`
+  - `review_state: logged`
+- Derived runtime metadata may still carry workflow compatibility markers when needed, but those are
+  no longer the canonical meaning of `review_state`.
+- Execution-plan wording has been clarified so planner/runtime plan artifacts are not described as if
+  they were the human commitment/project layer.
 
-### Wave 2
+### Audit posture for remaining legacy semantics
 
-- Normalize planner primitive action names
-- Normalize promotion payload internals
-- Reduce direct reliance on `review_state = evergreen`
+| Value / pattern | Current classification | Current posture |
+| --- | --- | --- |
+| `review_state: evergreen` | Compatibility-only | Accepted on input, normalized to `maturity: evergreen` + `review_state: reviewed` |
+| `processed` | Compatibility-only | Accepted on input, normalized to `review_state: provisional` |
+| `promoted` | Compatibility-only | Accepted on input, normalized to `review_state: reviewed`; some legacy utilities still use it and remain follow-up work |
+| `inbox` | Not a canonical state axis | Treated as workflow/intake compatibility where still needed; not a canonical `review_state` output |
+| `logged` | Compatibility-only / kind-specific legacy | Accepted on input, normalized to `review_state: provisional` |
+| Plain review-state mutation used as standing/promotion | Obsolete / should be migrated | Current planner/orchestrator/promotion paths route through the normalization boundary |
+| Execution plan language used as human commitment/project language | Obsolete / should be clarified | Current docs/code should describe plans as runtime execution artifacts only |
 
-### Wave 3
+### Deferred for later waves
 
-- Consider event-family cleanup (`promotion.*` vs `promote.*`)
-- Consider stronger schema/runtime separation for execution plans vs human commitments
+- Broader cleanup of remaining legacy workflow/status values outside the promotion path.
+- Any external event family rename beyond `promote.intent.created`.
+- Stronger separation between execution-plan semantics and human commitment/project semantics.
 
 ## Files likely affected when implementation starts
 

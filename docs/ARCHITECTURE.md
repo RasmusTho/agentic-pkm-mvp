@@ -183,8 +183,9 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 - Historical or compatibility language may describe these overlays with temperature-like labels such
   as `hot`, `warm`, or `cold`, but those metaphors are not the authoritative architectural
   semantics.
-- Zones are orthogonal to lifecycle (inbox -> processed/staging -> evergreen -> archived) and to
-  temporal value (ephemeral vs normal vs evergreen longevity).
+- Zones are orthogonal to workflow/status handling and to the state axes. They must not be used as
+  a proxy for `review_state` or `maturity`, and they remain separate from temporal value
+  (ephemeral vs normal vs evergreen longevity).
 - A note may be high-value and peripheral, or short-lived and currently active, without forcing one
   axis to stand in for the other.
 - Zones are derived from runtime signals such as recency, relations, and usage; they are not
@@ -193,10 +194,23 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 ## Core Contract, State Axes, and Overlays
 - Core contract: Core-6 is the minimal semantic projection (uuid, title, origin, source_ref, trust, review_state). Fields may be explicit or derived; see `docs/CORE_CONTRACT.md`.
 - State axes: orthogonal and policy-driven via vault settings; policies define which axes are enabled, locked, or forced.
-- Current promotion compatibility rule: promotion paths now write `maturity` as the primary standing
+- Current promotion compatibility rule: promotion paths now write `maturity` as the canonical standing
   sink when a standing transition is known (for example `evergreen`), while `review_state` remains
-  the review/mutation posture field. Legacy notes that still express standing through
-  `review_state: evergreen` remain accepted as compatibility input during the migration period.
+  the canonical review/mutation posture field. Legacy notes or payloads that still express standing
+  through `review_state: evergreen` remain accepted as compatibility input, but canonical writes
+  normalize that state to `maturity: evergreen` plus `review_state: reviewed`.
+- Planner/orchestrator normalization keeps external event compatibility (`promote.intent.created`)
+  while routing internal promotion work through explicit transition semantics (`request_promotion_transition`
+  with `transition.family = promotion` and `transition.target_maturity`).
+- Compatibility-only legacy `review_state` inputs still accepted at normalization boundaries are:
+  `evergreen`, `processed`, `promoted`, `inbox`, and `logged`. Current runtime callers should not
+  produce those values as new canonical state-axis outputs.
+- Workflow/status handling such as inbox intake remains distinct from the state axes. Where the
+  current runtime still needs inbox-like filtering or routing, treat it as compatibility or
+  workflow metadata rather than as the canonical meaning of `review_state`.
+- Execution plans are runtime orchestration artifacts. They must not be read as equivalent to the
+  human commitment/project layer described in `docs/PROJECT_KERNEL.md` and the commitment concept
+  contracts.
 - Derived / overlay metadata: system-owned overlays such as `zone`, recency, or salience are computed from signals and remain outside the core contract.
 - Agent reasoning operates on Core-6 + state axes + policy profiles (see `docs/NOTE_KIND_POLICIES.md`) + derived overlays.
 
