@@ -62,6 +62,25 @@ Validation rules:
 - URI rendering helpers may stay outside adapter classes but must only consume `NoteLocator` (no ad-hoc vault/path parsing).
 - No domain/service code may construct `NoteLocator` directly from env vars; use shared locator helpers instead.
 
+## Allowed write operations
+
+The KnowledgePort boundary is the normative write path for:
+- normal vault note writes and appends,
+- UUID healing writes back into vault notes,
+- companion-note creation and update,
+- bounded system-surface writes under system-owned paths,
+- and repair writes that restore continuity metadata without silently redefining human meaning.
+
+System-owned path clarification:
+- `_system/companions/` is a system-owned vault path for companion-note artifacts.
+- Runtime/services may write there only through KnowledgePort or approved helpers built on top of it.
+
+KnowledgePort may not:
+- bypass write-policy and safety checks through ad-hoc direct filesystem mutations as the normative
+  path,
+- silently redefine human-authored meaning-bearing body content under the banner of healing,
+- or promote runtime/index artifacts into human-surface truth by write side effect alone.
+
 ## Required test baseline
 1. Contract tests for `NoteLocator` portability constraints.
 2. Settings tests for adapter policy parsing + invalid combinations.

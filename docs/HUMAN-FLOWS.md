@@ -22,6 +22,8 @@ For the broader ontology of the system as a second-brain environment, see:
 - `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md`
 - `docs/CONCEPTS/STATE_AXES_CONTRACT.md`
 - `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`
+- `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`
+- `docs/plans/ARTIFACT_MODEL_AND_LIFECYCLES.md`
 - `docs/plans/USER_STORIES_AND_REQUIREMENTS.md`
 - `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md`
 
@@ -265,6 +267,14 @@ Core functions should remain available even on narrower devices or partial satel
 
 Richer assistance may vary by device role as long as that asymmetry is understandable and does not threaten trust in the underlying artifacts.
 
+Current operational examples the system should remain compatible with:
+- a Mac mini acting as the richer home/master runtime node,
+- an iPad reading and lightly editing through iCloud-backed file sync,
+- and a laptop/satellite node using Git-backed synchronization with narrower or delayed local capability.
+
+The human contract is not that every device behaves identically.
+The contract is that the important artifacts remain understandable, recoverable, and usable.
+
 ### Preserve long-lived artifacts beyond the current system
 
 The system must treat the human's central artifacts as longer-lived than any current stack, runtime, or implementation choice.
@@ -414,6 +424,7 @@ The system should make it increasingly clear whether something is primarily:
 - a waiting item,
 - a creative fragment,
 - a reflective artifact,
+- a companion note or other system-surface continuity artifact,
 - or a system receipt/status surface.
 
 The human should not need to force everything into one representation too early.
@@ -696,6 +707,23 @@ The current baseline exposes these main surfaces:
   outcomes.
 
 These surfaces are important only insofar as they serve the human functions described above.
+
+The human may also occasionally observe system-surface artifacts such as companion notes.
+Those artifacts are not normal authoring surfaces, but their presence should still remain legible
+enough that the human is not surprised by them.
+
+### Satellite and tablet flow
+
+The system should support a practical flow where:
+- the Mac mini runs the richer ingest/watch/runtime loop,
+- iCloud propagates changed vault files to an iPad for reading and light editing,
+- Git propagates tracked files to a laptop or narrower satellite,
+- and the runtime reacts to changed files rather than assuming one transport is the only real one.
+
+This means:
+- companion notes may travel with the vault's system-owned files,
+- runtime DB/index state may differ temporarily across nodes,
+- but continuity should still be recoverable from the file-based artifacts.
 
 ## 14. Current baseline realization
 

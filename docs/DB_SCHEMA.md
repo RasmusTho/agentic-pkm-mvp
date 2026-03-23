@@ -20,6 +20,8 @@ Related docs:
 - `docs/DATA_MODEL.md` for semantic ownership and persistence-surface meaning
 - `docs/EVENTS.md` for the canonical outbox envelope carried in `outbox.payload`
 - `docs/OPERATIONS.md` for runtime health checks involving the DB outbox
+- `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md` for the file-based continuity artifact related to
+  note identity repair
 - `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md` for the current normalization recommendation on
   artifact/projection boundaries and compressed state vocabulary
 
@@ -27,6 +29,36 @@ Interpretation rule:
 - schema terms such as `objects`, `kind`, `payload`, and `outbox` describe the current physical
   representation layer.
 - they must not be read as the canonical ontology of the domain.
+- DB state is rebuildable from vault notes + companion notes; schema descriptions here must not be
+  interpreted as making DB semantically primary.
+
+## Identity-metadata history (forward-line direction)
+
+Forward-line documentation now reserves SCD-style history for identity-metadata fields only.
+
+Typical identity-metadata fields:
+- `uuid`
+- `source_ref`
+- bounded title continuity metadata when needed for repair
+- continuity-oriented ingest/healing state
+
+Expected physical shape when implemented:
+- identity tracking table with `valid_from` / `valid_to`
+- one active row per identity-metadata dimension under current validity
+
+Scope limit:
+- this SCD-style posture applies only to identity-metadata history
+- it does not apply to chunks, embeddings, or summaries
+
+## Derived-layer invalidation rule
+
+Chunks, embeddings, and similar derived runtime artifacts should not use SCD-style history as the
+default continuity model.
+
+Instead they are:
+- invalidated when source content or model assumptions change,
+- replaced/rebuilt,
+- and interpreted as derivative runtime state rather than identity ledger rows.
 
 ## Core Tables (Store)
 
@@ -57,6 +89,10 @@ Interpretation rule:
 - `dim` (`int`, default `1536`)
 - `embedding` (either `double precision[]` with a cardinality check, or `vector` when vector extension is enabled in older branches)
 - `created_at` (`timestamptz`, default `now()`)
+- Interpretation:
+  - embeddings are derived runtime artifacts
+  - every embedding should be tagged with the generating provider/model
+  - embeddings do not participate in the identity-history/SCD pattern
 
 ### `decisions`
 - `id` (`uuid`, PK; default varies by migration)
@@ -103,3 +139,6 @@ Interpretation:
 
 ## Explicit Deltas / Known Gaps
 - This repo still contains historical migration lineage and merge history under `app/alembic/versions/`. If you hit unexpected columns or migration conflicts, inspect the migration set and record the intended baseline delta in the same change.
+- Companion-note and identity-history tables described in forward-line docs may not yet exist in
+  the current physical schema; where absent, read them as forward-line schema direction rather than
+  as already-shipped baseline tables.
