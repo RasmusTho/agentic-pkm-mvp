@@ -85,6 +85,39 @@ def test_relation_neighbors_unique_order(monkeypatch, backend):
     assert rel.neighbors(src, rel="related_to") == [a, b]
 
 
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_relation_memberships_roundtrip_multi_value(monkeypatch, backend):
+    if backend == "pg" and not _pg_available():
+        pytest.skip("Postgres backend not available")
+    if backend == "pg":
+        monkeypatch.setenv("DATABASE_URL", resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app"))
+    monkeypatch.setenv("STORE_BACKEND", backend)
+    rel = get_relation_index()
+    src = uuid4()
+
+    rel.add_membership(src, rel="sphere_membership", value="work")
+    rel.add_membership(src, rel="sphere_membership", value="creative", payload={"source": "test"})
+
+    memberships = rel.memberships(src, rel="sphere_membership")
+    assert [(entry.relation_type, entry.value) for entry in memberships] == [
+        ("sphere_membership", "work"),
+        ("sphere_membership", "creative"),
+    ]
+    assert memberships[1].payload == {"source": "test"}
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_relation_memberships_are_optional_and_empty_by_default(monkeypatch, backend):
+    if backend == "pg" and not _pg_available():
+        pytest.skip("Postgres backend not available")
+    if backend == "pg":
+        monkeypatch.setenv("DATABASE_URL", resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app"))
+    monkeypatch.setenv("STORE_BACKEND", backend)
+    rel = get_relation_index()
+
+    assert rel.memberships(uuid4(), rel="sphere_membership") == []
+
+
 def test_pg_vector_index_query_dim_mismatch(monkeypatch):
     if not _pg_available():
         pytest.skip("Postgres backend not available")

@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import Iterable, Protocol, TypedDict, Optional
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Protocol, TypedDict, Optional
 from uuid import UUID
 
 from app.components.embeddings import EmbeddingIdentity
@@ -53,7 +54,17 @@ class VectorIndex(Protocol):
     def count_vectors(self) -> int: ...
 
 
+@dataclass(frozen=True)
+class RelationMembership:
+    object_id: UUID
+    relation_type: str
+    value: str
+    payload: dict[str, Any] = field(default_factory=dict)
+
+
 class RelationIndex(Protocol):
     def link(self, src: UUID, dst: UUID, *, rel: str, payload: dict | None = None) -> None: ...
     def neighbors(self, src: UUID, *, rel: str, k: int = 20) -> list[UUID]: ...
     def has_any(self, src: UUID) -> bool: ...
+    def add_membership(self, src: UUID, *, rel: str, value: str, payload: dict | None = None) -> None: ...
+    def memberships(self, src: UUID, *, rel: str | None = None) -> list[RelationMembership]: ...
