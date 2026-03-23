@@ -9,12 +9,30 @@ Authority: Describes the additive seam now landed in the current runtime and the
 This document records the first bounded enablement wave for broader sphere/context representation in
 the current v5.x runtime.
 
-The goal of this wave is narrow:
-- make it possible for an artifact to belong to one or more broader spheres/contexts,
-- keep that representation additive and optional,
-- and preserve the current operational-scope runtime boundary unchanged.
+This note started as the bounded prep step after state-axis cleanup and now records the first
+enablement wave that actually landed.
 
-This is not full v6.0 context architecture.
+It exists to answer two narrow questions:
+- what is the smallest additive relation/context seam the repo can introduce now,
+- and what exactly did this first landed wave change without pretending that `v6.0` is already here.
+
+Read this together with:
+- `docs/ARCHITECTURE.md`
+- `docs/STATUS.md`
+- `docs/PROJECT_KERNEL.md`
+- `docs/plans/V60_ARCHITECTURE_TARGET.md`
+- `docs/CONCEPTS/CONTEXT_TERMINOLOGY_CONTRACT.md`
+- `docs/CONCEPTS/CONTEXT_REPRESENTATION_POSTURE.md`
+
+## Current posture after state-axis cleanup
+
+The active runtime now has a bounded state-axis posture:
+- `maturity` is the canonical standing sink
+- `review_state` is the canonical review/mutation posture field
+- legacy workflow/status values remain compatibility-only inputs rather than preferred runtime outputs
+
+That means the next meaningful semantic flattening lives more in context modeling than in
+artifact-state modeling.
 
 ## What is enabled in this wave
 
@@ -46,6 +64,7 @@ This is not full v6.0 context architecture.
 - Object-store contracts were not made to require sphere/context membership.
 - No commitment runtime, schema family, or broader v6.0 context object model was introduced.
 - No graph-database-specific architecture was introduced.
+- Filesystem/path semantics were not changed.
 
 ## Why this seam is safe
 
@@ -62,6 +81,7 @@ This is not full v6.0 context architecture.
   without replacing conservative defaults.
 - Later refactors that separate operational scope, broader belonging, and explicit allowances more
   cleanly across retrieval and policy surfaces.
+- Commitment/runtime separation work in a later, separate track.
 
 ## Non-goals for this wave
 
