@@ -159,6 +159,12 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 - Read these as current implementation terms, not as the full human context model.
 - By default, retrieval remains conservative and excludes results outside the active operational
   scope unless explicit inclusion is present.
+- The runtime now includes an additive relation-store seam for broader belonging metadata via
+  optional `sphere_membership` memberships on artifacts.
+- This seam represents broader sphere/context participation only. It does not replace operational
+  scope, does not embed permission semantics, and does not make retrieval or ranking relation-driven
+  by default in the current baseline.
+- Absence of `sphere_membership` data is a normal state and must preserve current runtime behavior.
 - Panel/UI sections are a control surface and MUST NOT be indexed as knowledge.
 - When writes are blocked (WriteGuard / `safe_mode`), reviewed notes MUST NOT be mutated without explicit intent/APPLY.
 
@@ -230,6 +236,9 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
   policy axes like kind/status/priority); system metadata (signals, zone inference inputs,
   relations, promotions, usage counts) remains in the runtime data layer and stores. Core-6 remains
   a projection ({uuid, title, origin, source_ref, trust, review_state}) and is not the full truth.
+- Broader sphere/context belonging can now be stored additively in the relation store as optional
+  `sphere_membership` memberships keyed by artifact `uuid`; this is enablement toward richer
+  relation-first context handling, not the full v6.0 target state.
 
 ### Note Log in the metadata mirror
 - For each vault note/uuid there is a matching `uuid.md` in the metadata mirror (`System/Metadata/VaultMirror/<vault-relative path>/`).
