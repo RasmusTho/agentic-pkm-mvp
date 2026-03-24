@@ -20,6 +20,9 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - Watcher → panel → planner/orchestrator automation with safety limits now includes dedup reports, promotion consumer visibility, and explicit skipped receipts.
   - Vault-first config validation (panel wiring, watcher, outbox) with schema enforcement and `python -m app.cli.settings_explain`.
 - **Next**
+  - **Artifact identity + companion note contract** — lock the artifact model, companion-note contract, and identity-healing order so vault note + companion note remain sufficient to rebuild runtime DB/index state. Near-term implementation work includes companion-note creation/update, conservative healing logs, and bounded identity-metadata history.
+  - **SyncLayer abstraction** — make the file-change/reactive sync abstraction explicit so the runtime stays transport-agnostic across iCloud/Git driven change propagation.
+  - **EmbeddingProvider tagging hardening** — ensure every embedding remains explicitly tagged with provider/model identity and is treated as a derived runtime artifact rather than an identity anchor.
   - **Quality Wave: Registry Watcher Evaluation Stack** — A: contract tests for watcher→panel→promotion event chain; B: golden vault + seeded snapshots; C: metamorphic runs (interval/max-ticks/scope overrides); D: cold rebuild coverage (empty store + existing mirrors); E: fitness gates (status/outbox counters, idempotence, no dup intents on rerun); F: scripted UAT harness (CLI-first). **Done means** idempotence proven (first run vs rerun stable), event chain proven (registry watcher → `ingest.vault.changed` → worker → `panel.intent.*` → `promote.*`), deterministic diffs on golden vault, and gates enforced in CI/UAT. **Modules & Files to be touched during implementation**: `app/watcher/registry.py`, `configs/watchers.yaml`, `app/agents/panel_agent/*`, `app/components/settings/panel_actions_loader.py`, `app/promotion/consumer.py`, outbox writer/reader + status command modules, CLI `watcher run`/status modules, `app/fitness/*` and `ops/quality/baselines.yaml`, `docs/examples/vault_test_seed/*`.
   - **ReasoningFacade + basic graph builder** (BLOCKER for LangGraph rollout).
     - Rationale: prevents pattern fragmentation; all LangGraph agents route reasoning/tool calls through the facade.
@@ -65,6 +68,11 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 3) ASK API returning `{uuid, title, origin, zone?, path/source_ref}` with latency; hybrid retrieval across planes.
 4) Observability backend + interim GUI surfacing object counts, ingest runs/errors, ASK usage.
 5) Orchestrator runtime V1 available via CLI/plan path for external ingest; future LangGraph/MCP remains additive.
+
+## Operational topology note
+
+Current operational topology is documented as operational reality, not as a roadmap deliverable or
+locked architecture law. See `docs/HUMAN-FLOWS.md` for the authoritative user-facing description.
 
 ## Version ladder (summary)
 | Version | Intent | State |

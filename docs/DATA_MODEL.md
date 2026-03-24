@@ -11,6 +11,9 @@ Related docs:
 - `docs/CORE_CONTRACT.md` for the semantic contract mirrored here
 - `docs/CONCEPTS/STATE_AXES_CONTRACT.md` for canonical `review_state` / `maturity` semantics
 - `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md` for canonical mirror vs receipt separation
+- `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md` for the first-class system artifact used for note
+  continuity and repair
+- `docs/plans/ARTIFACT_MODEL_AND_LIFECYCLES.md` for surfaces, authority matrix, and healing order
 - `docs/DB_SCHEMA.md` for table-level schema detail
 - `docs/FRONTMATTER.md` for writing-surface metadata ownership
 - `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md` for the current recommendation on separating
@@ -33,6 +36,8 @@ Normalization note:
 - Objects in the DB mirror vault notes and external source artifacts; they do not override artifact meaning.
 - Missing YAML does not imply missing semantics; Core-6 and state axes may be implicit or derived.
 - Zones, metrics, embeddings, and scores are derived and can be rebuilt from the source content.
+- Companion notes are part of the file-based continuity set used to rebuild runtime state; DB is not
+  the semantic authority from which companion notes are conceptually generated.
 
 Projection clarification:
 - a runtime/store row is a projection or record of an artifact,
@@ -52,6 +57,11 @@ Derived artifacts are rebuildable views:
 - operational traces such as audit/event records, plus distinct receipt artifacts that may be assembled from those traces for observability and legibility
 
 Derived artifacts may be persisted for performance and auditability, but they must never become the only remaining copy of meaning.
+
+Companion-note clarification:
+- companion notes are system artifacts, but they are not merely derived runtime caches
+- they are durable file-based continuity artifacts alongside vault notes
+- chunks, embeddings, and summaries remain the derivative layer
 
 Execution plans belong to the derived/system side unless and until a separate human project model is
 introduced.
@@ -78,6 +88,7 @@ This system persists across three conceptual surfaces:
 - receipts, audits, traces, and other operational records
 - rebuildable indexes and machine views
 - configuration artifacts and their validation/audit receipts
+- companion notes and related continuity/repair artifacts
 
 This plane may also contain:
 - execution artifacts such as generated plans,
@@ -85,6 +96,37 @@ This plane may also contain:
 - and low-level event records.
 
 System-plane persistence must avoid polluting the writing surface while remaining inspectable and portable.
+
+## Identity-metadata and bounded history
+
+Identity-related metadata may need bounded history over time.
+Examples:
+- `uuid` continuity records
+- `source_ref` path changes
+- title continuity where needed for repair
+- ingest-state transitions relevant to continuity/recovery
+
+Forward-line posture:
+- SCD-style history applies only to identity-metadata fields
+- it does not apply to chunks, embeddings, summaries, or other derived runtime artifacts
+- derived runtime artifacts are invalidated and replaced rather than history-versioned as identity records
+
+## Bidirectional recovery
+
+The recovery relationship is bidirectional for resilience:
+- vault note + companion note -> rebuild DB/runtime state
+- DB/runtime identity metadata -> rebuild missing companion note when available
+
+This does not make DB semantically primary.
+It defines a recovery posture for a local-first single-user system.
+
+## Companion note field set
+
+The companion note field set is intentionally bounded and canonically defined in
+`docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`.
+
+This document depends on that contract rather than redefining the field list here.
+Only the persistence and rebuild implications belong in the data-model layer.
 
 ## Audit and receipts
 

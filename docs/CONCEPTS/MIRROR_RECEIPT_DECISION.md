@@ -93,6 +93,22 @@ It is not defined by being the machine-side projection of the source artifact.
 
 The current runtime should now be read as follows:
 
+### Companion note
+
+The `Companion Note` is the per-note system tracking artifact used for continuity and repair.
+
+It is:
+- a first-class system artifact,
+- the canonical note-level continuity/repair tracker in the forward line,
+- and distinct from both the broader portability concept of `Mirror Artifact` and the human-legible
+  accountability concept of `Receipt Artifact`.
+
+It is not:
+- the full receipt model,
+- or merely a convenience projection/cache.
+
+See `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`.
+
 ### VaultMirror
 
 `System/Metadata/VaultMirror/...` is the canonical mirror surface.
@@ -104,6 +120,11 @@ It is:
   fingerprint.
 
 It is **not** the canonical full receipt model.
+
+Clarifying note:
+- `mirror artifact` remains the broader portability/projection concept,
+- while `companion note` is the narrower per-note system-tracking artifact for identity continuity
+  and repair.
 
 ### AI status callout in notes
 
@@ -184,7 +205,8 @@ not as proof that the existing VaultMirror file is the canonical receipt/log mod
 
 This has two implications:
 - future refactors may rename or split this boundary,
-- and new code should avoid using `note_log` wording when the actual concern is mirror projection.
+- and new code/docs should avoid using `note_log` or `mirror note` wording when the actual concern
+  is the companion-note continuity artifact.
 
 ## Migration direction
 
@@ -193,4 +215,6 @@ The intended migration direction is:
 2. treat AI status / similar human-visible records as receipt surfaces rather than as mirror state,
 3. preserve the rule that event streams are not the full receipt model,
 4. introduce stricter receipt artifacts in the system plane when the implementation is ready,
-5. and reduce legacy "log" wording where it hides the mirror/receipt distinction.
+5. reduce legacy "log" wording where it hides the mirror/receipt distinction,
+6. and distinguish the per-note `Companion Note` from the broader `Mirror Artifact` concept where
+   portability/projection language still matters.

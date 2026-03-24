@@ -16,6 +16,10 @@ Related documents and authority boundaries:
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` defines the broader human-first second-brain ontology. This document uses narrower runtime and storage language where needed and should not be read as the full domain ontology.
 - `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` defines the normalized vocabulary and explains where repo terms such as `note`, `object`, `agent`, `source`, and `promotion` drift across layers.
 - `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md` clarifies how artifacts, projections, and source roles should be distinguished when runtime/store/search layers need narrower representations.
+- `docs/plans/ARTIFACT_MODEL_AND_LIFECYCLES.md` defines the forward-line artifact model, three
+  surfaces, lifecycle posture, and scenario-bound authority matrix for note identity/healing.
+- `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md` defines the companion note as the first-class
+  system-surface artifact for continuity and repair.
 - `docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md` clarifies how instance identity, device roles, replicas, and instance provenance should be understood without collapsing them into artifact identity.
 - `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md` clarifies how salience,
   attentional relevance, and surfacing need should be understood upstream of the runtime `zone`
@@ -48,6 +52,22 @@ The current runtime sits inside a small local system boundary:
   - optional observability stack components such as Prometheus and Grafana.
 
 In the current v5.5 baseline, the implemented center of gravity is still the Mimer module: vault-first ingestion, indexing, retrieval, and agent behavior around the Obsidian knowledge surface. Other Yggdrasil modules remain useful conceptual boundaries, but they are not equally implemented in the current runtime.
+
+## Artifact surfaces (current reading, forward-line aligned)
+
+Read the current architecture through three artifact surfaces:
+- human surface: vault notes on the Obsidian writing surface
+- system surface: companion notes and related continuity/repair artifacts
+- runtime surface: DB objects, chunks, embeddings, summaries, and other local operational views
+
+The owning artifact-model plan is `docs/plans/ARTIFACT_MODEL_AND_LIFECYCLES.md`.
+This architecture doc uses that model as the forward-line reading frame and must not reintroduce a
+DB-primary or single-rule identity model.
+
+Recovery posture:
+- vault note + companion note are the portable file-based continuity set
+- runtime DB/index state is rebuildable from that set
+- runtime state may help recover a missing companion note, but it is not semantically primary
 
 ## Fitness Functions
 
@@ -90,6 +110,22 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 - See `docs/COMPONENTS.md` for the canonical, human- and machine-readable list of active components (stores, agents, embeddings, rerankers, eval stack, observability). Update it when wiring new component entrypoints under `app/components/*`.
 - The outbox/event system uses a common envelope (`event`, `trace_id`, `source`, `timestamp`, `payload`, `meta`) defined in `app/events/schema.py` and enforced by architecture tests; emitters should write via outbox helpers to preserve the contract.
 
+## System-of-systems view
+
+The current runtime should be read as a small system-of-systems arrangement:
+- Obsidian/human editing is the human-surface environment
+- system-owned companion artifacts preserve continuity and repair state in the system surface
+- local runtime persistence and indexes provide the runtime surface
+- watchers, workers, and ingest flows react to changed files and refresh runtime state
+
+This repo's runtime therefore depends on clear boundaries between:
+- human meaning-bearing artifacts,
+- system continuity artifacts,
+- and derived runtime/index artifacts
+
+Those boundaries are narrower than the full Yggdrasil ontology, but they must remain explicit in
+current architecture language.
+
 ## Boundary Map (Current)
 - Current architecture boundary map (Mermaid source): `docs/diagrams/architecture.mmd`.
 - Current rendered/runtime-facing diagram companion: `docs/DIAGRAMS.md`.
@@ -108,6 +144,19 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 - The infrastructure layer explains where persistence, transport, provider calls, and process boundaries live.
 - Not every human function implies a separate runtime agent, service, or queue.
 - Deterministic pipelines remain valid runtime substrate when they satisfy the same contracts more clearly and safely than richer agent structures.
+
+## Operational topology (current reality, not locked core architecture)
+
+Current operational reality includes heterogeneous device roles and practical transport choices.
+The authoritative user-facing description lives in `docs/HUMAN-FLOWS.md`, while this architecture
+document records only the architectural consequence:
+- the runtime reacts to changed files rather than treating iCloud or Git as semantically primary
+- file-based eventual consistency matters more than any one transport
+- device asymmetry is an operational condition, not a different ontology of artifacts
+
+See also:
+- `docs/HUMAN-FLOWS.md`
+- `docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md`
 
 ## Reading Rules
 - This document is architecture-first, not ontology-first: terms such as `object`, `store_objects`, `agent`, and `event` refer to runtime representations and execution units unless stated otherwise.
@@ -181,6 +230,18 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
   the canonical name of the current baseline architecture.
 - Collaboration/multi-user stays out of scope for Reality-MVP; the current work is single-user, vault-first reliability.
 
+## Abstraction boundaries (current direction)
+
+- `KnowledgePort` is the canonical write/read boundary for vault-facing note operations. Healing
+  writes and companion-note writes must route through it or approved helpers built on top of it.
+- `SyncLayer` is the operational abstraction that reacts to file changes and sync consequences
+  without hard-coding one transport as the semantic source of change. In current reality this is
+  realized through watcher/worker flows over local files and synced replicas.
+- `EmbeddingProvider` is the abstraction boundary for embedding generation. Embeddings are
+  provider/model-tagged derived runtime artifacts and must not be treated as stable identity
+  records. In current code this is expressed through the embedding config/runtime stack rather than
+  a single named interface.
+
 ## Zone Overlay
 - The runtime currently exposes a derived `zone` overlay for attentional proximity and surface
   shaping.
@@ -240,14 +301,18 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
   `sphere_membership` memberships keyed by artifact `uuid`; this is enablement toward richer
   relation-first context handling, not the full v6.0 target state.
 
-### Note Log in the metadata mirror
-- For each vault note/uuid there is a matching `uuid.md` in the metadata mirror (`System/Metadata/VaultMirror/<vault-relative path>/`).
-- This file is currently the mirror projection surface for the note and may carry some log-like or
-  receipt-like information during the transition period.
-- It should not be interpreted as the full canonical receipt model; see
-  `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`.
-- The mirror remains portable Markdown that can move via Git between instances even when local
-  stores or other derived runtime layers differ.
+### Companion note in the system surface
+- For each tracked vault note/uuid the forward-line model defines a companion note under
+  `vault/_system/companions/<uuid>.md`.
+- The companion note is a first-class system artifact for continuity and repair, not merely a
+  convenience cache or derived runtime projection.
+- Companion notes plus vault notes must be sufficient to rebuild runtime DB/index state from
+  scratch.
+- Runtime DB state may help rebuild a missing companion note when available, but that is a recovery
+  path rather than proof of DB primacy.
+- Earlier `VaultMirror` path language should be read as transitional compatibility language for the
+  broader mirror/projection concept; see `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md` and
+  `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`.
 
 ## Current Runtime Surfaces
 1) **Vault ingestion** — CLI/agent path to ingest selected Obsidian folders, normalize vault notes into Core-6 projections, persist them in ObjectStore, emit Outbox events, chunk/index into VectorIndex, and keep provenance intact.
