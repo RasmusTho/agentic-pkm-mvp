@@ -374,10 +374,91 @@ This target-state doc becomes actionable when:
 - those findings have been classified into current bug, enablement, or `v6.0` target-state change,
 - and the repo can sequence changes without corrupting `docs/ARCHITECTURE.md` as current-state SoT.
 
+## Architecture review findings (2026-03-25)
+
+This section records the first pass of concrete runtime findings classified against the accepted
+concept contracts. The exit condition in this document has been triggered: findings are now
+classified, and sequencing can begin.
+
+### Current-state bugs (violate already accepted contracts — fix in v5.x)
+
+**Finding 1: Domain inferred from path as fallback**
+- Location: `app/retrieval/hybrid.py` lines 135-145, `_extract_domain()`
+- Contract violated: `LAYERING_MODEL.md` §Missing or unknown domain — unclassified content must
+  not be assumed to belong to the active domain. `CONTEXT_REPRESENTATION_POSTURE.md` — domain is
+  a durable marker the runtime depends on, not a silent derivation.
+- Current behavior: if `payload["domain"]` is absent, falls back to `path.parts[0]` — making
+  moving a note between folders silently change its domain.
+- Fix: treat missing domain as `unscoped`; remove path-based inference.
+
+**Finding 2: Zone read from artifact payload as if stored**
+- Location: `app/agents/ask/graph.py:22`, `app/agents/ask/utils.py:38,70`, `app/api/routes/ask.py:91-92`
+- Contract violated: `LAYERING_MODEL.md` §Zone is derived, not a gate — zone affects
+  prioritization, not permission; it is not a stored artifact field.
+- Current behavior: zone is read from payload at retrieval time but is never written during ingest
+  (`app/ingest/vault_alpha.py` has no zone assignment). All reads will silently return `None`.
+- Fix: remove zone reads from artifact payloads; compute zone dynamically at retrieval time from
+  recency/relations/usage signals.
+
+**Finding 3: Domain not validated or recorded at write boundary**
+- Location: `app/ingest/vault_alpha.py:501-544` (ingest never sets domain), `app/store/object_store.py`
+  (accepts any payload without domain validation), `app/retrieval/hybrid.py:158-164`
+- Contract violated: `LAYERING_MODEL.md` §Contract rules — "Every boundary crossing is
+  explainable." and "Domain is the primary boundary."
+- Current behavior: artifacts without domain are neither rejected nor marked `unscoped`; no audit
+  trail of domain assignment exists.
+- Fix: validate domain at `store.put()` time; mark missing as `unscoped`; emit ingest event
+  recording assigned domain; update `_doc_in_scope()` to treat missing domain as `False`
+  (conservative, not permissive).
+
+### Enabling changes (reduce coupling, prepare path — may land in v5.x)
+
+**Finding 4: Mirror conflates artifact identity with audit log**
+- Location: `app/ingest/vault_alpha.py:331-363` (`_write_mirror()`), `app/services/note_log.py:6-19`
+- Context: mirror at `System/Metadata/VaultMirror/<path>/<uuid>.md` mixes frontmatter (identity
+  fields: uuid, title, review_state, maturity) with audit markers (ingest_fingerprint).
+- `ARCHITECTURE.md` acknowledges this is provisional: "It should not be interpreted as the full
+  canonical receipt model."
+- Enablement: separate mirror writing into (a) minimal projection (identity fields only) and (b)
+  receipt/audit log written separately. Ensure mirror path is in ingest ignore list.
+
+**Finding 5: Promotion mutates artifact state without a clear transition record**
+- Location: `app/promotion/consumer.py:66-91`, `app/services/note_update.py:36-88`
+- Context: promotion writes `review_state` and `maturity` into both ObjectStore payload and vault
+  frontmatter. No durable receipt records who authorized the promotion or when.
+- `ONTOLOGY_VOCABULARY.md` flags this as an open seam: "promotion currently resolves into
+  review_state mutation in both vault frontmatter and store payload."
+- Enablement: emit a distinct promotion event (not just a state mutation); record a human-legible
+  receipt artifact per promotion. The dual-write (store + vault) can remain for now; the receipt
+  is the prep work.
+
+### v6.0 target-state changes (larger semantic moves — describe here, sequence later)
+
+**Finding 6: Single `domain` field represents all of human context**
+- Directly maps to V60 pillar §1 (context model is layered, not flattened).
+- Current runtime uses one flat string `domain` and `bridge_domains` list where the terminology
+  contracts call for `sphere`, `situated role identity`, `context`, and `shared participation`
+  as distinct semantic dimensions.
+- Runtime locations: `app/retrieval/hybrid.py:148-155, 158-164`, `app/promotion/consumer.py:66-91`
+- v6.0 action: introduce richer context relation model with explicit fields and relations.
+  `domain` field becomes strictly `operational_scope`.
+
+**Finding 7: `kind` is hardcoded to `"note"` for all ingested artifacts**
+- Location: `app/ingest/vault_alpha.py:350, 512, 542, 562`
+- Contract referenced: `docs/NOTE_KIND_POLICIES.md` — kind routes policy and does not define
+  structure. `ARCHITECTURE.md` §Note Kind Policies — different artifact classes (vault note,
+  source artifact, reflective artifact, creative artifact, system artifact) should activate
+  different metadata axes.
+- v6.0 action: introduce artifact kind determination at ingest time; each kind routes to a policy
+  profile. Current hardcode stays as `vault_note` until the routing table is defined.
+
+---
+
 ## Related documents
 
 - `docs/ARCHITECTURE.md`
 - `docs/plans/ARCHITECTURE_REVIEW_READINESS.md`
+- `docs/adr/ADR-0006-deepagents-harness.md`
 - `docs/PROJECT_KERNEL.md`
 - `docs/HUMAN-FLOWS.md`
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
