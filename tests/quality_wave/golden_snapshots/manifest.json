@@ -1,0 +1,41 @@
+{
+  "evergreen-strategy.md": {
+    "expected_frontmatter_changes": {
+      "maturity": "evergreen",
+      "review_state": "reviewed"
+    },
+    "must_not_change": ["uuid", "title", "ai_panel_auto_run", "State"],
+    "body_must_match_seed": false,
+    "panel_processed": true
+  },
+  "manual-policy.md": {
+    "expected_frontmatter_changes": {},
+    "must_not_change": ["uuid", "title", "ai_panel_auto_run", "State"],
+    "body_must_match_seed": true,
+    "panel_processed": false
+  },
+  "mixed-actions.md": {
+    "expected_frontmatter_changes": {},
+    "must_not_change": ["uuid", "title", "ai_panel_auto_run", "State"],
+    "body_must_match_seed": true,
+    "panel_processed": false
+  },
+  "reflection-journal.md": {
+    "expected_frontmatter_changes": {},
+    "must_not_change": ["uuid", "title", "ai_panel_auto_run", "State"],
+    "body_must_match_seed": false,
+    "panel_processed": true
+  },
+  "summary-request.md": {
+    "expected_frontmatter_changes": {},
+    "must_not_change": ["uuid", "title", "ai_panel_auto_run", "State"],
+    "body_must_match_seed": true,
+    "panel_processed": false
+  },
+  "unknown-action.md": {
+    "expected_frontmatter_changes": {},
+    "must_not_change": ["uuid", "title", "ai_panel_auto_run", "State"],
+    "body_must_match_seed": false,
+    "panel_processed": true
+  }
+}
