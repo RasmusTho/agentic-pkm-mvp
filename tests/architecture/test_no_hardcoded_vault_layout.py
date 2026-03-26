@@ -22,8 +22,15 @@ _SKIP_DIRS = {
     ("scripts", "dev"),
 }
 
+_SKIP_FILES = {
+    # Packaged product template consumed via app.settings.default_vault_layout.
+    Path("app/settings/default-vault-layout.yaml"),
+}
+
 
 def _should_skip(rel: Path) -> bool:
+    if rel in _SKIP_FILES:
+        return True
     parts = rel.parts
     if len(parts) >= 2 and (parts[0], parts[1]) in _SKIP_DIRS:
         return True

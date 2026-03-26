@@ -7,6 +7,10 @@ auto_run:
 paths:
   index_outbox: tmp/index-outbox.jsonl
   watcher_tick_log: tmp/watcher_tick.jsonl
+  watcher_heartbeat: tmp/watcher_heartbeat.json
+  worker_heartbeat: tmp/worker_heartbeat.json
+  watcher_state: tmp/watcher_state.json
+  watcher_stop_file: tmp/WATCHER_STOP
   panel_event_log: tmp/index-outbox.jsonl
 ---
 # Watcher Settings

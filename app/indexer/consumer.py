@@ -86,7 +86,7 @@ def process_event(evt: Dict[str, Any]) -> None:
     obj_payload = dict(obj.payload or {})
     text = _extract_text(obj_payload)
 
-    embedder = get_embeddings_client(LLMTaskIntent(task_kind="embed", determinism_required=True))
+    embedder = get_embeddings_client(LLMTaskIntent(task_kind="embed", strict_identity_required=True))
     embedding = embedder.embed_text(text)
     identity = get_embedding_identity(client=embedder)
 

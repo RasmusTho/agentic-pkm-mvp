@@ -98,7 +98,7 @@ def _process_outbox_event(
     *,
     vector_index: MemoryVectorIndex,
 ) -> None:
-    client = get_embeddings_client(LLMTaskIntent(task_kind="embed", determinism_required=True))
+    client = get_embeddings_client(LLMTaskIntent(task_kind="embed", strict_identity_required=True))
     vec = client.embed_text(payload["text"])
     identity = client.identity
     vector_index.upsert(

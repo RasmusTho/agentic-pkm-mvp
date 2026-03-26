@@ -12,8 +12,27 @@ This architecture focuses on the runtime and data model for the Mimer module (th
 
 Related documents and authority boundaries:
 - `docs/HUMAN-FLOWS.md` is the user-facing behavior contract. Any architecture change that alters user-visible behavior should be validated against it before shipping.
+- `docs/ONTOLOGY_RUNTIME_BRIDGE.md` is the cross-layer reading guide connecting human functions, semantic classes, persistence surfaces, and runtime contracts. It does not replace the owning SoT docs, but it should be used when architecture wording risks collapsing those layers.
+- `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` defines the broader human-first second-brain ontology. This document uses narrower runtime and storage language where needed and should not be read as the full domain ontology.
+- `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` defines the normalized vocabulary and explains where repo terms such as `note`, `object`, `agent`, `source`, and `promotion` drift across layers.
+- `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md` clarifies how artifacts, projections, and source roles should be distinguished when runtime/store/search layers need narrower representations.
+- `docs/plans/ARTIFACT_MODEL_AND_LIFECYCLES.md` defines the forward-line artifact model, three
+  surfaces, lifecycle posture, and scenario-bound authority matrix for note identity/healing.
+- `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md` defines the companion note as the first-class
+  system-surface artifact for continuity and repair.
+- `docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md` clarifies how instance identity, device roles, replicas, and instance provenance should be understood without collapsing them into artifact identity.
+- `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md` clarifies how salience,
+  attentional relevance, and surfacing need should be understood upstream of the runtime `zone`
+  overlay.
 - `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md` is a historical reference for external dependencies, deployment topology, and human-facing surfaces from the v4.10 foundation snapshot. It is useful background, but it is not authoritative for the current v5.5 baseline.
 - `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md` is a historical high-level module map retained for orientation and naming continuity. It may not reflect current v5.5 wiring and should not be treated as the active system map when evaluating current behavior.
+
+Function-first reading rule:
+- `docs/HUMAN-FLOWS.md` defines what the system is meant to help the human do.
+- this document defines how the currently active runtime is wired in order to support some of those
+  functions.
+- if implementation wording in this document starts to redefine the human purpose of the system, the
+  human-flow and concept documents win.
 
 ## System Context (Current)
 
@@ -33,6 +52,22 @@ The current runtime sits inside a small local system boundary:
   - optional observability stack components such as Prometheus and Grafana.
 
 In the current v5.5 baseline, the implemented center of gravity is still the Mimer module: vault-first ingestion, indexing, retrieval, and agent behavior around the Obsidian knowledge surface. Other Yggdrasil modules remain useful conceptual boundaries, but they are not equally implemented in the current runtime.
+
+## Artifact surfaces (current reading, forward-line aligned)
+
+Read the current architecture through three artifact surfaces:
+- human surface: vault notes on the Obsidian writing surface
+- system surface: companion notes and related continuity/repair artifacts
+- runtime surface: DB objects, chunks, embeddings, summaries, and other local operational views
+
+The owning artifact-model plan is `docs/plans/ARTIFACT_MODEL_AND_LIFECYCLES.md`.
+This architecture doc uses that model as the forward-line reading frame and must not reintroduce a
+DB-primary or single-rule identity model.
+
+Recovery posture:
+- vault note + companion note are the portable file-based continuity set
+- runtime DB/index state is rebuildable from that set
+- runtime state may help recover a missing companion note, but it is not semantically primary
 
 ## Fitness Functions
 
@@ -60,6 +95,8 @@ Architecture describes how things are wired today; these documents define what m
 
 - `docs/CORE_RUNTIME_AGENTIC_LAB_BOUNDARY.md`
 - `docs/PROJECT_KERNEL.md`
+- `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
+- `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`
 - `docs/CONCEPTS/LAYERING_MODEL.md`
 - `docs/CONCEPTS/PORTABILITY_CONTRACT.md`
 - `docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md`
@@ -73,6 +110,22 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 - See `docs/COMPONENTS.md` for the canonical, human- and machine-readable list of active components (stores, agents, embeddings, rerankers, eval stack, observability). Update it when wiring new component entrypoints under `app/components/*`.
 - The outbox/event system uses a common envelope (`event`, `trace_id`, `source`, `timestamp`, `payload`, `meta`) defined in `app/events/schema.py` and enforced by architecture tests; emitters should write via outbox helpers to preserve the contract.
 
+## System-of-systems view
+
+The current runtime should be read as a small system-of-systems arrangement:
+- Obsidian/human editing is the human-surface environment
+- system-owned companion artifacts preserve continuity and repair state in the system surface
+- local runtime persistence and indexes provide the runtime surface
+- watchers, workers, and ingest flows react to changed files and refresh runtime state
+
+This repo's runtime therefore depends on clear boundaries between:
+- human meaning-bearing artifacts,
+- system continuity artifacts,
+- and derived runtime/index artifacts
+
+Those boundaries are narrower than the full Yggdrasil ontology, but they must remain explicit in
+current architecture language.
+
 ## Boundary Map (Current)
 - Current architecture boundary map (Mermaid source): `docs/diagrams/architecture.mmd`.
 - Current rendered/runtime-facing diagram companion: `docs/DIAGRAMS.md`.
@@ -83,6 +136,34 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 - The map also marks:
   - Internal interface abstractions (`VaultPort`, `KnowledgePort`, store protocols).
   - Representative internal functions used as runtime seams between modules.
+
+## Layered reading model
+- Human cognitive functions are a product-level design lens for why the system exists and what it should help the user do.
+- The ontology/policy layer explains what kinds of things the runtime is dealing with and what boundaries or authority bases apply.
+- The runtime orchestration layer explains how the current system coordinates bounded work through stores, events, agents, and pipelines.
+- The infrastructure layer explains where persistence, transport, provider calls, and process boundaries live.
+- Not every human function implies a separate runtime agent, service, or queue.
+- Deterministic pipelines remain valid runtime substrate when they satisfy the same contracts more clearly and safely than richer agent structures.
+
+## Operational topology (current reality, not locked core architecture)
+
+Current operational reality includes heterogeneous device roles and practical transport choices.
+The authoritative user-facing description lives in `docs/HUMAN-FLOWS.md`, while this architecture
+document records only the architectural consequence:
+- the runtime reacts to changed files rather than treating iCloud or Git as semantically primary
+- file-based eventual consistency matters more than any one transport
+- device asymmetry is an operational condition, not a different ontology of artifacts
+
+See also:
+- `docs/HUMAN-FLOWS.md`
+- `docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md`
+
+## Reading Rules
+- This document is architecture-first, not ontology-first: terms such as `object`, `store_objects`, `agent`, and `event` refer to runtime representations and execution units unless stated otherwise.
+- `Note` here usually means a human-facing vault note (`Vault Note`) in the writing/human plane.
+- `Object` here usually means a runtime/store projection or ingestable unit, not the full meaning of an artifact.
+- `Agent` here usually means an architectural/runtime unit; some are rich system agents, while others are closer to deterministic pipelines or execution components.
+- `Review`, `promotion`, and related labels should be read as transition/process families in the runtime, not as proof that the ontology has only one lifecycle axis.
 
 ## SoT lines
 - **SoT v5.5 Reality-MVP baseline (locked)** — watcher auto-run gate + panel action provenance + concurrency/idempotency guardrails on top of the stable vault ingest, hybrid retrieval/ASK, observability/status surfaces, and orchestrator runtime V1.
@@ -122,27 +203,81 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 - See `docs/CONCURRENCY.md`, `docs/EVENTS.md`, and `app/promotion/consumer.py` for the enacted guardrails and testing strategy.
 
 ## Boundary Enforcement
-- Domain-scoped retrieval defaults to excluding cross-domain results; set `ASK_DOMAIN_SCOPE` to the active domain and use `bridge_domains` for explicit inclusion.
+- Current runtime retrieval uses `ASK_DOMAIN_SCOPE` and `bridge_domains` as compatibility labels
+  for a narrower operational-scope filter and explicit inclusion mechanism.
+- Read these as current implementation terms, not as the full human context model.
+- By default, retrieval remains conservative and excludes results outside the active operational
+  scope unless explicit inclusion is present.
+- The runtime now includes an additive relation-store seam for broader belonging metadata via
+  optional `sphere_membership` memberships on artifacts.
+- This seam represents broader sphere/context participation only. It does not replace operational
+  scope, does not embed permission semantics, and does not make retrieval or ranking relation-driven
+  by default in the current baseline.
+- Absence of `sphere_membership` data is a normal state and must preserve current runtime behavior.
 - Panel/UI sections are a control surface and MUST NOT be indexed as knowledge.
 - When writes are blocked (WriteGuard / `safe_mode`), reviewed notes MUST NOT be mutated without explicit intent/APPLY.
 
 ## Reality-MVP Orientation
 - Primary focus: make ingestion of the real Obsidian vault stable, add a minimal external ingest path, expose a reliable ASK API, and ship observability plus an interim GUI so the system is usable end to end.
-- Zoned cognition overlay (Active/ Warm/ Cold) applied on top of the knowledge base; zones are derived from signals (usage, recency, trust) rather than folder names.
+- A derived `zone` overlay is applied on top of the knowledge base; it is computed from signals
+  such as usage, recency, and trust rather than from folder names.
 - Two planes: Obsidian vault as the human graph (LYT + PARA) with minimal human frontmatter, and an external corpus plane (newsletters/emails/PDFs) that is indexed and retrievable but never rendered as Obsidian notes.
-- Metadata backbone lives in Stores + SetDB/AMG: Core-6 frontmatter remains a projection for humans (see `docs/CORE_CONTRACT.md`), while system metadata (signals, relations, usage counts, agent reflections) sits in the data layer.
+- Metadata backbone lives in the current Store-backed data layer.
+  Core-6 frontmatter remains a projection for humans at the vault/runtime boundary (see
+  `docs/CORE_CONTRACT.md`), while system metadata (signals, relations, usage counts, agent
+  reflections) sits in rebuildable runtime data structures and stores.
+- Historical `SetDB/AMG` terminology may still appear in lineage docs, but it should not be read as
+  the canonical name of the current baseline architecture.
 - Collaboration/multi-user stays out of scope for Reality-MVP; the current work is single-user, vault-first reliability.
 
-## Zoned Cognition Overlay
-- Active (Hot): the few items currently competing for conscious attention; small, rotating set.
-- Semi-Active (Warm): ongoing projects/areas referenced regularly but not hourly.
-- Peripheral (Cold): long-term or background material that should stay searchable without cluttering the surface; Cold can still contain evergreen, high-value notes.
-- Zones are orthogonal to lifecycle (inbox → processed/staging → evergreen → archived) and to temporal value (ephemeral vs normal vs evergreen longevity). A note can be evergreen and Cold, or ephemeral and Active.
-- Zones are derived overlays driven by system metadata (recency, relations, usage), not mandatory folder/tag names; they can be projected into ASK responses and GUI status but do not dictate file layout.
+## Abstraction boundaries (current direction)
+
+- `KnowledgePort` is the canonical write/read boundary for vault-facing note operations. Healing
+  writes and companion-note writes must route through it or approved helpers built on top of it.
+- `SyncLayer` is the operational abstraction that reacts to file changes and sync consequences
+  without hard-coding one transport as the semantic source of change. In current reality this is
+  realized through watcher/worker flows over local files and synced replicas.
+- `EmbeddingProvider` is the abstraction boundary for embedding generation. Embeddings are
+  provider/model-tagged derived runtime artifacts and must not be treated as stable identity
+  records. In current code this is expressed through the embedding config/runtime stack rather than
+  a single named interface.
+
+## Zone Overlay
+- The runtime currently exposes a derived `zone` overlay for attentional proximity and surface
+  shaping.
+- Read `zone` as a runtime projection over salience signals, not as the canonical ontology of what
+  matters.
+- Historical or compatibility language may describe these overlays with temperature-like labels such
+  as `hot`, `warm`, or `cold`, but those metaphors are not the authoritative architectural
+  semantics.
+- Zones are orthogonal to workflow/status handling and to the state axes. They must not be used as
+  a proxy for `review_state` or `maturity`, and they remain separate from temporal value
+  (ephemeral vs normal vs evergreen longevity).
+- A note may be high-value and peripheral, or short-lived and currently active, without forcing one
+  axis to stand in for the other.
+- Zones are derived from runtime signals such as recency, relations, and usage; they are not
+  mandatory folder/tag names and do not dictate file layout.
 
 ## Core Contract, State Axes, and Overlays
 - Core contract: Core-6 is the minimal semantic projection (uuid, title, origin, source_ref, trust, review_state). Fields may be explicit or derived; see `docs/CORE_CONTRACT.md`.
 - State axes: orthogonal and policy-driven via vault settings; policies define which axes are enabled, locked, or forced.
+- Current promotion compatibility rule: promotion paths now write `maturity` as the canonical standing
+  sink when a standing transition is known (for example `evergreen`), while `review_state` remains
+  the canonical review/mutation posture field. Legacy notes or payloads that still express standing
+  through `review_state: evergreen` remain accepted as compatibility input, but canonical writes
+  normalize that state to `maturity: evergreen` plus `review_state: reviewed`.
+- Planner/orchestrator normalization keeps external event compatibility (`promote.intent.created`)
+  while routing internal promotion work through explicit transition semantics (`request_promotion_transition`
+  with `transition.family = promotion` and `transition.target_maturity`).
+- Compatibility-only legacy `review_state` inputs still accepted at normalization boundaries are:
+  `evergreen`, `processed`, `promoted`, `inbox`, and `logged`. Current runtime callers should not
+  produce those values as new canonical state-axis outputs.
+- Workflow/status handling such as inbox intake remains distinct from the state axes. Where the
+  current runtime still needs inbox-like filtering or routing, treat it as compatibility or
+  workflow metadata rather than as the canonical meaning of `review_state`.
+- Execution plans are runtime orchestration artifacts. They must not be read as equivalent to the
+  human commitment/project layer described in `docs/PROJECT_KERNEL.md` and the commitment concept
+  contracts.
 - Derived / overlay metadata: system-owned overlays such as `zone`, recency, or salience are computed from signals and remain outside the core contract.
 - Agent reasoning operates on Core-6 + state axes + policy profiles (see `docs/NOTE_KIND_POLICIES.md`) + derived overlays.
 
@@ -154,23 +289,40 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 
 ## Planes and Metadata Surfaces
 - Vault plane (Obsidian): the human graph of linkable notes; minimal human frontmatter is allowed/encouraged, but the system does not require heavy YAML. Notes belong here when the user might want to read or link them directly.
-- External corpus plane: imported newsletters/emails/PDFs/raw docs that should be searchable and usable for answers but should not appear as notes. These objects live only in Stores/AMG with origins such as `origin: external_newsletter` and review states like `external_raw`.
-- Human frontmatter vs system metadata: frontmatter is for user-facing fields (Core-6 plus optional policy axes like kind/status/priority); system metadata (signals, zone inference inputs, relations, promotions, usage counts) remains in SetDB/AMG and Stores. Core-6 remains a projection ({uuid, title, origin, source_ref, trust, review_state}) and is not the full truth.
+- External corpus plane: imported newsletters/emails/PDFs/raw docs that should be searchable and
+  usable for answers but should not appear as notes. These ingestable artifacts live in the
+  Store-backed runtime data layer with origins such as `origin: external_newsletter` and review
+  states like `external_raw`.
+- Human frontmatter vs system metadata: frontmatter is for user-facing fields (Core-6 plus optional
+  policy axes like kind/status/priority); system metadata (signals, zone inference inputs,
+  relations, promotions, usage counts) remains in the runtime data layer and stores. Core-6 remains
+  a projection ({uuid, title, origin, source_ref, trust, review_state}) and is not the full truth.
+- Broader sphere/context belonging can now be stored additively in the relation store as optional
+  `sphere_membership` memberships keyed by artifact `uuid`; this is enablement toward richer
+  relation-first context handling, not the full v6.0 target state.
 
-### Note Log in the metadata mirror
-- For each object/uuid in the vault there is a matching `uuid.md` in the metadata mirror (`System/Metadata/VaultMirror/<vault-relative path>/`).
-- The same file is both metadata mirror and per-note log: it collects agent runs, promotion history, provenance, and any future satellite sync evidence so the machine history follows the object regardless of backend.
-- The Note Log is portable Markdown that can move via Git between instances even when SetDB/AMG or other Stores differ.
+### Companion note in the system surface
+- For each tracked vault note/uuid the forward-line model defines a companion note under
+  `vault/_system/companions/<uuid>.md`.
+- The companion note is a first-class system artifact for continuity and repair, not merely a
+  convenience cache or derived runtime projection.
+- Companion notes plus vault notes must be sufficient to rebuild runtime DB/index state from
+  scratch.
+- Runtime DB state may help rebuild a missing companion note when available, but that is a recovery
+  path rather than proof of DB primacy.
+- Earlier `VaultMirror` path language should be read as transitional compatibility language for the
+  broader mirror/projection concept; see `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md` and
+  `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`.
 
 ## Current Runtime Surfaces
-1) **Vault ingestion** — CLI/agent path to ingest selected Obsidian folders, normalize into Core-6 envelopes, persist in ObjectStore, emit Outbox events, chunk/index into VectorIndex, and keep provenance intact.
+1) **Vault ingestion** — CLI/agent path to ingest selected Obsidian folders, normalize vault notes into Core-6 projections, persist them in ObjectStore, emit Outbox events, chunk/index into VectorIndex, and keep provenance intact.
    - Targeted ingest is available via `ingest-vault-paths` for specific markdown files (reuses the same pipeline; first v5.1 watcher-ready step and the entrypoint watchers will call).
    - Panel/runtime entrypoint: `panel run-many` runs the same PanelAgent parse/runtime for multiple notes (emit-only supported) and remains the manual CLI hook for multi-note runs. Watcher auto-run treats AI-fenced notes as candidates once `WATCHER_AUTO_EXEC=1` is armed and only `ai_panel_auto_run: never` (`ai_panel: { auto_run: never }`) blocks the run.
    - Registry watcher: config-driven loop (`configs/watchers.yaml`, `python -m app.cli watcher run`) emits `panel.scan.requested` and `ingest.vault.changed`, writes heartbeat + tick logs, and enqueues DB outbox events. JSONL outbox is audit-only.
    - Legacy snapshot watcher (`vault-watcher-run`) is dev-only and not used in runtime start-system flows.
-2) **External corpus ingest (minimal)** — a small drop folder/pipeline for real external documents ingested as `external_raw` objects, stored in ObjectStore and indexed without surfacing as vault notes (txt/md drop-folder CLI implemented; newsletters/PDFs can extend the same path).
+2) **External corpus ingest (minimal)** — a small drop folder/pipeline for real external documents ingested as `external_raw` runtime objects, stored in ObjectStore and indexed without surfacing as vault notes (txt/md drop-folder CLI implemented; newsletters/PDFs can extend the same path).
 3) **ASK API** — FastAPI endpoint returning answer text plus sources `{uuid, title, origin (vault/external), zone overlay if known, path/source_ref}` and latency; uses hybrid retrieval over both planes with an in-process HybridStore warmed from `store_objects` on first use. Zone overlays are planned but not yet populated in responses.
-4) **Observability backend** — status service that aggregates per-store object counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency; exposed via CLI and interim GUI.
+4) **Observability backend** — status service that aggregates per-store projection counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency; exposed via CLI and interim GUI.
 5) **Interim GUI** — simple FastAPI-served page (root `/`) that shows status (object counts, last ingest, ASK stats) and an ASK input with answers + visible sources; explicitly a temporary observability/interaction surface.
 6) **Panel action catalog & watcher settings** — the canonical action catalog (`docs/settings/panel-actions.md`) + `vault/@Settings/watchers.md` describe allowed `watcher_allowed` actions, auto-run env (`WATCHER_AUTO_EXEC`), and outbox paths; `python -m app.cli settings-explain` and `python -m app.cli settings-validate` emit provenance + validation output for reviews.
 All current runtime surfaces build on the same Store abstraction (ObjectStore, VectorIndex, RelationIndex), event envelope, and vault-first write boundary.

@@ -4,9 +4,6 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"
-DEFAULT_API_KEY = "sk-local"
-DEFAULT_MODEL = "llama3.1:8b"
 DEFAULT_MODE = "skip"  # run | skip
 
 
@@ -26,10 +23,24 @@ def configure_eval_openai_env() -> EvalLLMConfig:
     typically Ollama (e.g., llama3.1:8b) exposed via `OPENAI_BASE_URL`.
     """
 
-    base_url = os.getenv("EVAL_LLM_BASE_URL", os.getenv("OPENAI_BASE_URL", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL
-    api_key = os.getenv("EVAL_LLM_API_KEY", os.getenv("OPENAI_API_KEY", DEFAULT_API_KEY)).strip() or DEFAULT_API_KEY
-    model = os.getenv("EVAL_LLM_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    base_url = os.getenv("EVAL_LLM_BASE_URL", os.getenv("OPENAI_BASE_URL", "")).strip()
+    api_key = os.getenv("EVAL_LLM_API_KEY", os.getenv("OPENAI_API_KEY", "")).strip()
+    model = os.getenv("EVAL_LLM_MODEL", "").strip()
     mode = os.getenv("EVAL_LLM_MODE", DEFAULT_MODE).strip().lower() or DEFAULT_MODE
+    if mode != "run":
+        return EvalLLMConfig(base_url=base_url, api_key=api_key, model=model, mode=mode)
+
+    missing = [
+        name
+        for name, value in (
+            ("EVAL_LLM_BASE_URL", base_url),
+            ("EVAL_LLM_API_KEY", api_key),
+            ("EVAL_LLM_MODEL", model),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(f"Missing eval LLM config: {', '.join(missing)}")
 
     # Set OpenAI-compatible envs expected by deepeval/clients
     os.environ.setdefault("OPENAI_BASE_URL", base_url)

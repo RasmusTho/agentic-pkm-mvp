@@ -1,12 +1,17 @@
 from __future__ import annotations
-from typing import TypedDict, Any, Callable, Optional
+
 from dataclasses import dataclass
-from langgraph.graph import StateGraph, START, END
+from typing import Callable, Optional, TypedDict
+
+from langgraph.graph import END, START, StateGraph
+
+from app.domain.commitments import CommitmentHandle
+
 
 class AgentState(TypedDict, total=False):
     trace_id: str
     input: dict
-    plan: str
+    plan: object
     act_result: dict
     reflection: dict
     output: dict
@@ -15,6 +20,9 @@ class AgentState(TypedDict, total=False):
     current_step_id: Optional[str]
     total_steps: Optional[int]
     max_total_steps: Optional[int]
+    commitment_handles: list[CommitmentHandle]
+    primary_commitment_handle: CommitmentHandle | None
+
 
 @dataclass
 class PERSpec:
@@ -23,6 +31,7 @@ class PERSpec:
     act: Callable[[AgentState], AgentState]
     reflect: Callable[[AgentState], AgentState]
     emit: Callable[[AgentState], AgentState]
+
 
 def build_graph(spec: PERSpec):
     g = StateGraph(AgentState)

@@ -4,11 +4,42 @@ Authority: Canonical testing and validation strategy for the active baseline, in
 # TESTING
 
 ## Layers
-- Unit: pure functions and single-agent logic
-- Contract: `.done` event payload shape and DB side-effects per agent
-- E2E: normalizer → classifier → chunker → deduper → citation → indexer → reviewer → projector
-- LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`)
+- Unit testing: pure functions and single-agent logic in isolation.
+- Integration testing: component boundaries such as API ↔ stores ↔ services, routing compilation, and outbox/store interactions.
+- System testing: end-to-end runtime flows such as note → ingest → index → ASK or watcher → panel → promotion chains.
+- System integration testing (SIT): opt-in flows that exercise multiple runtime systems or external dependencies together, such as live LLM/provider wiring and full startup/runtime verification.
+- Contract: `.done` event payload shape and DB side-effects per agent.
+- LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`).
 - Property-based ingest invariants: `tests/ingest/test_normalize_properties.py` ensures normalize outputs Core-6 fields robustly.
+
+## Layer mapping
+| Layer | Focus | Representative suites | Command |
+| --- | --- | --- | --- |
+| Unit | Correct logic in one function/class/module | `tests/components/llm/test_router.py`, `tests/settings/test_model_registry.py`, `tests/guards/test_no_hardcoded_inbox_scope.py` | `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/components/llm/test_router.py tests/settings/test_model_registry.py tests/guards/test_no_hardcoded_inbox_scope.py -m "not pg"` |
+| Integration | Boundaries and data integration inside this repo | `tests/settings/test_runtime.py`, `tests/settings/test_auto_heal.py`, `tests/cli/test_health_llm_routing.py`, `tests/runtime/test_startup_env.py` | `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/settings/test_runtime.py tests/settings/test_auto_heal.py tests/cli/test_health_llm_routing.py tests/runtime/test_startup_env.py -m "not pg"` |
+| System | Whole-system end-to-end flows in a production-like local test harness | `tests/e2e/test_reality_mvp_pipeline.py`, `tests/e2e/test_watcher_registry_e2e.py` | `STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/e2e/test_reality_mvp_pipeline.py tests/e2e/test_watcher_registry_e2e.py -m "not pg"` |
+| SIT | Cross-system/runtime/provider integration, often opt-in or environment-dependent | `tests/e2e/test_panel_llm_e2e.py`, `tests/reasoning/test_reasoning_llm_live_alpha.py`, `tests/cli/test_llm_doctor_cli.py` | `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/cli/test_llm_doctor_cli.py -m "not pg"` |
+
+## Execution Model
+
+The active strategy is a four-level pyramid. Each level protects a different class of regression and should remain explicit in both docs and CI.
+
+| Level | Purpose | Typical scope | Gate posture |
+| --- | --- | --- | --- |
+| Unit + contract | Catch logic/schema regressions early | pure functions, adapters, event shapes, settings validation | PR-blocking |
+| Integration | Prove backend/runtime seams | pg-backed stores, queue wiring, API/store seams, CLI/service boundaries | PR-blocking for touched seams or nightly |
+| System / E2E | Prove the canonical runtime chain works | watcher/runtime loop, ingest→index→ASK, docker/runtime smoke | PR smoke plus broader nightly |
+| UAT / release | Prove operator-visible behavior on a golden vault pack | seeded vault, receipts/intents, rerun idempotence, status/health assertions | release/UAT gate |
+
+### Change-to-test mapping
+
+| Change type | Minimum required coverage |
+| --- | --- |
+| Pure business logic / parser / helper | unit + nearby contract tests |
+| Event schema, outbox, promotion, watcher policy | unit + contract + targeted integration/e2e |
+| Store/backend/runtime queue changes | unit + pg/integration + system/e2e |
+| Operator flow, watcher automation, panel/promotion UX | system/e2e + UAT harness |
+| Retrieval/ASK behavior | unit + e2e + opt-in eval when relevance/quality changes materially |
 
 ## Evaluation Stack (Registry Watcher / Panel / Promotion)
 - **A. Contract tests** — assert watcher→panel→promotion event envelopes and payload invariants; run via `pytest -q tests/e2e/test_watcher_registry_e2e.py -m "not pg"` (exact command may move to `tests/fitness`).
@@ -18,12 +49,38 @@ Authority: Canonical testing and validation strategy for the active baseline, in
 - **E. Fitness gates** — status/outbox counters checked post-run (`panel_runs`, `promote.intent.created/done`) with idempotence (no duplicate intents on rerun) enforced in CI (`app/fitness/*`, `ops/quality/baselines.yaml`).
 - **F. Scripted UAT** — CLI harness for registry watcher + promotion consumer + status assertions; runs on memory backend and real vaults with the golden seed pack.
 
+### UAT contract
+
+The scripted UAT harness should behave like a release candidate check, not just a demo command. At minimum it must assert:
+
+- at least one `promote.intent.created` is emitted from the seeded vault pack
+- at least one promotion is applied without watcher/promotion errors
+- policy-gated notes remain skipped
+- the seeded evergreen note reaches the expected frontmatter state
+- a second run over the same snapshot produces no new watcher/panel/promotion side effects
+- the harness emits a machine-readable report for CI/UAT automation
+
 ## CI And Fitness Gates
 
 - GitHub Actions workflows are the enforced CI surface for lint, tests, and fitness gating.
 - The fitness gate contract is:
   - `python -m app.fitness.report` emits `CI SUMMARY ...` lines
   - CI fails whenever `GATES.ok != true`
+
+## CI Roles
+
+The CI surface should stay small and explicit. The intended steady-state roles are:
+
+| Workflow role | Purpose | Expected posture |
+| --- | --- | --- |
+| `pr-smoke` | Fast merge blocker: lint, settings validation, `not pg` smoke, architecture/contract checks, fitness summary parsing | required on PRs |
+| `integration-nightly` | Slower pg-backed and metamorphic coverage for runtime seams and rebuild/idempotence checks | nightly / scheduled |
+| `release-uat` | Golden-vault runtime verification with the UAT harness and operator-facing assertions | release/UAT gate |
+
+Older overlapping workflows may still exist while the surface is being consolidated, but new coverage should map to these roles instead of adding more partial gates.
+
+Current implementation checkpoint:
+- `.github/workflows/integration-nightly.yaml` runs the runtime-contract regression slice (metamorphic watcher coverage, alpha/UAT contract helpers, and cold-rebuild regression tests).
 
 ## Required baseline checks
 

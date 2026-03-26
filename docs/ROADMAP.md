@@ -21,6 +21,9 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - Watcher → panel → planner/orchestrator automation with safety limits now includes dedup reports, promotion consumer visibility, and explicit skipped receipts.
   - Vault-first config validation (panel wiring, watcher, outbox) with schema enforcement and `python -m app.cli.settings_explain`.
 - **Next**
+  - **Artifact identity + companion note contract** — lock the artifact model, companion-note contract, and identity-healing order so vault note + companion note remain sufficient to rebuild runtime DB/index state. Near-term implementation work includes companion-note creation/update, conservative healing logs, and bounded identity-metadata history.
+  - **SyncLayer abstraction** — make the file-change/reactive sync abstraction explicit so the runtime stays transport-agnostic across iCloud/Git driven change propagation.
+  - **EmbeddingProvider tagging hardening** — ensure every embedding remains explicitly tagged with provider/model identity and is treated as a derived runtime artifact rather than an identity anchor.
   - **Quality Wave: Registry Watcher Evaluation Stack** — Prerequisite: v5.5C decider (delivered). Sequencing: A → B (parallel with C) → D → E → F (gate). A: contract tests for watcher→panel→promotion event chain; B: golden vault + seeded snapshots; C: metamorphic runs (interval/max-ticks/scope overrides); D: cold rebuild coverage (empty store + existing mirrors); E: fitness gates (status/outbox counters, idempotence, no dup intents on rerun); F: scripted UAT harness (CLI-first) — F gates the Quality Wave as done. **Done means** idempotence proven (first run vs rerun stable), event chain proven (registry watcher → `ingest.vault.changed` → worker → `panel.intent.*` → `promote.*`), deterministic diffs on golden vault, and gates enforced in CI/UAT. **Modules & Files to be touched during implementation**: `app/watcher/registry.py`, `configs/watchers.yaml`, `app/agents/panel_agent/*`, `app/components/settings/panel_actions_loader.py`, `app/promotion/consumer.py`, outbox writer/reader + status command modules, CLI `watcher run`/status modules, `app/fitness/*` and `ops/quality/baselines.yaml`, `docs/examples/vault_test_seed/*`.
   - **ReasoningFacade + basic graph builder** (BLOCKER for LangGraph rollout; unblocked after Quality Wave done).
     - Rationale: prevents pattern fragmentation; all LangGraph agents route reasoning/tool calls through the facade.
@@ -41,6 +44,13 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - Reasoning/reflective layers with eval gates; expanded observability counters for orchestration/A2A.
   - Satellite Sync (multi-instance / master–satellite topology) — plan in `docs/plans/PROTOCOL_SATELLITE_SYNC.md`; enters active track after single-instance LangGraph rollout stabilizes.
   - Collaboration/multi-user: enters planning only after single-user flows are operationally accepted (watcher auto-exec + LangGraph phases stable + Satellite Sync baseline proven).
+  - `v6.0` architecture target: semantics-aligned runtime architecture where context layering,
+    overlap relations, primary-human-artifact boundaries, and local-first multi-device assumptions
+    are expressed more cleanly than in the current v5.x transitional runtime.
+    - Make the ontology/runtime bridge explicit so human loops, ontology classes, and runtime contracts can be read together without pretending they are the same layer.
+    - Test commitment-first modeling where open loops, projects, waiting states, and execution accountability are not flattened into generic note state.
+    - Separate retrieval, orientation, and resurfacing as related but distinct runtime concerns.
+    - Clarify surface and authority contracts so writing, retention, and system surfaces stay distinct and receipt-bearing actions remain inspectable.
 
 ## Fitness Functions Enforced in CI
 - `pytest -q -c /dev/null -m "not pg and not alpha_llm"` is the primary smoke gate in CI.
@@ -61,6 +71,11 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 4) Observability backend + interim GUI surfacing object counts, ingest runs/errors, ASK usage.
 5) Orchestrator runtime V1 available via CLI/plan path for external ingest; future LangGraph/MCP remains additive.
 
+## Operational topology note
+
+Current operational topology is documented as operational reality, not as a roadmap deliverable or
+locked architecture law. See `docs/HUMAN-FLOWS.md` for the authoritative user-facing description.
+
 ## Version ladder (summary)
 | Version | Intent | State |
 | --- | --- | --- |
@@ -71,6 +86,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 | v5.5C | Panel LangGraph decider hardening | Delivered |
 | v5.5D | Watcher auto-exec; watcher→planner/orchestrator automation | Planned |
 | v5.6 | ReasoningFacade + LangGraph rollout + Orchestrator V2 (flagged) + Vault-as-GUI settings compiler; docs-first kickoff plan in `docs/plans/V56_FORWARD_LINE.md` | Docs-first kickoff (status/roadmap updates) |
+| v6.0 | Wanted-state architecture pass to align runtime boundaries with the newer human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
 
 ## Forward-line dependency chain
 

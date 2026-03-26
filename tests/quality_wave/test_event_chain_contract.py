@@ -281,7 +281,8 @@ class TestFullEventChain:
         _, note_uuid, _ = self._run_chain(tmp_path, monkeypatch)
         obj = ObjectStore().get_object(note_uuid)
         assert obj is not None
-        assert obj.payload.get("review_state") == "evergreen"
+        assert obj.payload.get("review_state") == "reviewed"
+        assert obj.payload.get("maturity") == "evergreen"
         assert obj.payload.get("promotion", {}).get("state") == "evergreen"
 
 

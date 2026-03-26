@@ -27,9 +27,8 @@ def test_compose_watcher_worker_have_db_outbox_env() -> None:
     for service_name in ("api", "watcher", "worker"):
         service = services.get(service_name) or {}
         env = _compose_env(service)
-        assert env.get("DATABASE_URL")
-        assert env.get("DB_DSN")
-        assert env.get("STORE_BACKEND") == "pg"
+        env_file = service.get("env_file") or []
+        assert "./config/runtime.defaults.env" in env_file
         assert "VAULT_SYSTEM_DIR_REL" in env
         assert "VAULT_INBOX_DIR_REL" in env
         assert "VAULT_DESK_DIR_REL" in env
@@ -50,8 +49,8 @@ def test_compose_watcher_scope_glob_is_optional_passthrough() -> None:
     assert "WATCHER_SCOPE_GLOB" not in env
     env_file = watcher.get("env_file") or []
     assert env_file
-    assert env_file[0]["path"] == "${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}"
-    assert env_file[0]["required"] is False
+    assert env_file[1]["path"] == "${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}"
+    assert env_file[1]["required"] is False
 
 
 def test_compose_watcher_uses_registry_command() -> None:
@@ -94,6 +93,7 @@ def test_start_full_system_requires_database_url_for_runtime() -> None:
 def test_start_full_system_applies_watcher_auto_exec_default() -> None:
     script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
     assert "scripts/lib/start_full_system_env.sh" in script
+    assert "scripts/lib/runtime_endpoint_probe.sh" in script
     assert "apply_start_full_system_defaults" in script
 
 
@@ -102,6 +102,11 @@ def test_start_full_system_clears_obsidian_gate_fields_in_status_merge() -> None
     assert '"obsidian_gate_enabled"' in script
     assert '"obsidian_gate_ok"' in script
     assert '"obsidian_gate_detail"' in script
+    assert '"startup_succeeded"' in script
+    assert '"runtime_verified"' in script
+    assert '"operator_interrupted"' in script
+    assert '"ollama_endpoint_repaired"' in script
+    assert '"ollama_effective_base_url"' in script
 
 
 def test_start_full_system_strict_gate_checks_installer_version() -> None:
@@ -118,14 +123,45 @@ def test_start_full_system_has_vault_rw_probe() -> None:
 
 
 def test_start_full_system_preserves_explicit_env_over_dotenv() -> None:
-    script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+    script = Path("scripts/lib/load_env_defaults.sh").read_text(encoding="utf-8")
     assert 'if key in os.environ' in script
 
 
 def test_start_full_system_derives_watcher_scope_from_layout_inbox() -> None:
     script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
-    assert 'layout_scope_glob="${layout_inbox}/*.md,${layout_inbox}/**/*.md"' in script
+    helper = Path("scripts/lib/start_full_system_env.sh").read_text(encoding="utf-8")
+    assert 'layout_scope_glob="$(derive_start_full_system_scope_glob "$layout_inbox")"' in script
+    assert "derive_start_full_system_scope_glob()" in helper
     assert 'printf "WATCHER_SCOPE_GLOB=%s\\n" "$layout_scope_glob" >> "$runtime_env_path"' in script
+
+
+def test_start_full_system_runs_runtime_verification_and_endpoint_probe() -> None:
+    script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+    assert "auto_configure_ollama_runtime_endpoint" in script
+    assert "bash scripts/verify_runtime_stack.sh" in script
+    assert "make persist-runtime-repairs" in script
+    assert 'API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"' in script
+
+
+def test_verify_runtime_stack_waits_for_service_health_transitions() -> None:
+    script = Path("scripts/verify_runtime_stack.sh").read_text(encoding="utf-8")
+    assert "wait_for_service_ok()" in script
+    assert 'VERIFY_RUNTIME_SERVICE_WAIT_SECONDS' in script
+    assert "starting|created|restarting|missing" in script
+
+
+def test_verify_runtime_stack_extracts_health_json_from_mixed_output() -> None:
+    script = Path("scripts/verify_runtime_stack.sh").read_text(encoding="utf-8")
+    assert 'health_output=$(run_docker_compose exec -T api python -m app.cli health --json)' in script
+    assert 'health json payload not found in output' in script
+
+
+def test_runtime_endpoint_probe_checks_docker_safe_candidates() -> None:
+    script = Path("scripts/lib/runtime_endpoint_probe.sh").read_text(encoding="utf-8")
+    assert "http://host.docker.internal:11434" in script
+    assert "http://ollama:11434" in script
+    assert "OLLAMA_URL" in script
+    assert "OLLAMA_HOST" in script
 
 
 def test_compose_watcher_fallback_uses_registry_command() -> None:

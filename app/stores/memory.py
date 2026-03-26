@@ -17,6 +17,7 @@ from .base import (
     DecisionsStore,
     ObjectStore,
     ObjectsStore,
+    RelationMembership,
     RelationIndex,
     VectorIndex,
 )
@@ -381,6 +382,7 @@ class MemoryVectorIndex(VectorIndex):
 class MemoryRelationIndex(RelationIndex):
     def __init__(self) -> None:
         self._links: dict[str, dict[UUID, list[dict[str, Any]]]] = {}
+        self._memberships: dict[str, dict[UUID, list[dict[str, Any]]]] = {}
 
     def link(self, src: UUID, dst: UUID, *, rel: str, payload: dict | None = None) -> None:
         rel_map = self._links.setdefault(rel, {})
@@ -405,3 +407,30 @@ class MemoryRelationIndex(RelationIndex):
                     if entry["dst"] == src:
                         return True
         return False
+
+    def add_membership(self, src: UUID, *, rel: str, value: str, payload: dict | None = None) -> None:
+        rel_map = self._memberships.setdefault(rel, {})
+        memberships = rel_map.setdefault(src, [])
+        for entry in memberships:
+            if entry["value"] == value:
+                entry["payload"] = dict(payload or {})
+                return
+        memberships.append({"value": value, "payload": dict(payload or {})})
+
+    def memberships(self, src: UUID, *, rel: str | None = None) -> list[RelationMembership]:
+        if rel is not None:
+            rel_items = ((rel, self._memberships.get(rel, {})),)
+        else:
+            rel_items = self._memberships.items()
+        out: list[RelationMembership] = []
+        for relation_type, rel_map in rel_items:
+            for entry in rel_map.get(src, []):
+                out.append(
+                    RelationMembership(
+                        object_id=src,
+                        relation_type=relation_type,
+                        value=str(entry["value"]),
+                        payload=dict(entry.get("payload") or {}),
+                    )
+                )
+        return out

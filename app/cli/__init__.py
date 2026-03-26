@@ -707,7 +707,7 @@ def alpha_human_flows(
     """
     Flows: A) ingest sample notes; B) ensure Test/Alpha-HumanFlows.md exists;
     C) ingest + report mirror path; D) insert AI panel and reingest;
-    E) set promoted/evergreen frontmatter and reingest; F) run ASK queries.
+    E) set reviewed/evergreen frontmatter and reingest; F) run ASK queries.
     """
     resolved = _resolve_vault_root_path(vault_root, allow_env=False, fallback_to_default=True)
     if resolved is None:
@@ -1228,6 +1228,13 @@ def uat_seed_vault_test(vault_root: Path, target_subdir: str, folder: str, overw
 @click.option("--run-panels/--no-run-panels", default=True, show_default=True)
 @click.option("--consume-promotions/--no-consume-promotions", default=True, show_default=True)
 @click.option("--assert", "assert_expectations", is_flag=True, help="Fail if expected intents/effects are missing.")
+@click.option(
+    "--assert-mode",
+    type=click.Choice(["bootstrap", "converged"], case_sensitive=False),
+    default="bootstrap",
+    show_default=True,
+    help="Assertion profile for scripted UAT: first successful run vs stable rerun.",
+)
 def uat_run_vault_test(
     vault_root: Path,
     target_subdir: str,
@@ -1238,6 +1245,7 @@ def uat_run_vault_test(
     run_panels: bool,
     consume_promotions: bool,
     assert_expectations: bool,
+    assert_mode: str,
 ) -> None:
     resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=False)
     if resolved is None:
@@ -1253,6 +1261,7 @@ def uat_run_vault_test(
             run_panels=run_panels,
             consume_promotions=consume_promotions,
             assert_expectations=assert_expectations,
+            assert_mode=assert_mode.lower(),
         )
     except FileNotFoundError as exc:
         raise click.BadParameter(str(exc))

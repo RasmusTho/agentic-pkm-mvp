@@ -5,8 +5,9 @@ from typing import Any, Tuple
 
 from langgraph.graph import END, START, StateGraph
 
+from app.domain.state_axes import build_promotion_transition
 from app.components.concurrency import IdempotencyGuard
-from app.components.settings.panel_actions_loader import PanelActionCatalog, PanelActionDescriptor
+from app.components.settings.panel_actions_loader import PanelActionCatalog, PanelActionDescriptor, normalize_label
 from app.agents.panel_agent.settings import DeciderMode
 from app.agents.panel_agent.state import PanelAgentState
 from app.agents.panel_agent.wiring import get_default_action_wiring
@@ -73,6 +74,7 @@ def _promotion_event(intent_event: PanelIntentEvent, action: PanelIntentAction, 
     maturity = params.get("maturity")
     if maturity:
         payload["maturity"] = maturity
+        payload["transition"] = build_promotion_transition(target_maturity=str(maturity))
     return OutboxEvent(
         event=target_event,
         trace_id=intent_event.trace_id,
@@ -197,6 +199,62 @@ def _available_actions_for_prompt(catalog: PanelActionCatalog) -> list[PanelActi
     return []
 
 
+def _select_actions_from_instruction_hint(
+    *,
+    actions: list[PanelIntentAction],
+    available: list[PanelActionDescriptor],
+    instruction: str,
+) -> tuple[set[str], dict[str, str]] | None:
+    text = normalize_label(instruction)
+    if not text:
+        return None
+    if any(
+        phrase in text
+        for phrase in (
+            "do not promote",
+            "don't promote",
+            "dont promote",
+            "not promote",
+            "no promotion",
+            "without promotion",
+            "do not make this note evergreen",
+            "don't make this note evergreen",
+            "dont make this note evergreen",
+            "do not make evergreen",
+            "don't make evergreen",
+            "dont make evergreen",
+        )
+    ):
+        return None
+
+    promotion_actions = [
+        action
+        for action in actions
+        if action.mapping is not None and (action.mapping.intent_type or "").lower() == "promotion"
+    ]
+    if len(actions) != 1 or len(promotion_actions) != 1:
+        return None
+
+    action = promotion_actions[0]
+    descriptor = next((item for item in available if item.id == action.id), None)
+    labels = []
+    if descriptor is not None:
+        labels.extend(descriptor.labels or [])
+        labels.extend(descriptor.aliases or [])
+        if descriptor.description:
+            labels.append(descriptor.description)
+        if descriptor.llm_hint:
+            labels.append(descriptor.llm_hint)
+    labels.append(action.label)
+
+    normalized_labels = [normalize_label(value) for value in labels if value]
+    keyword_hit = any(keyword in text for keyword in ("promote", "promotion", "evergreen"))
+    label_hit = any(label and (label in text or text in label) for label in normalized_labels)
+    if not keyword_hit and not label_hit:
+        return None
+    return {action.id}, {action.id: "instruction_hint_fallback"}
+
+
 def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str]] | None:
     assert state.intent_event is not None, "PanelAgentState must include intent_event"
     actions = list(state.actions)
@@ -275,6 +333,14 @@ def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str
                 selected.add(action_id)
                 if reason:
                     reasons[action_id] = reason
+        if not selected:
+            hinted = _select_actions_from_instruction_hint(
+                actions=actions,
+                available=available,
+                instruction=state.panel.instruction or "",
+            )
+            if hinted is not None:
+                return hinted
         # Empty set is a valid decision (LLM chose to run nothing).
         return selected, reasons
     except Exception:

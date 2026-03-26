@@ -4,6 +4,7 @@ import uuid
 
 import pytest
 
+from app.db.dsn import resolve_dsn
 from app.observability.status_service import get_store_status
 from app.stores import get_object_store, reset_store_backends
 from app.stores.pg import pg_available
@@ -14,6 +15,7 @@ def test_status_counts_pg_objects(monkeypatch) -> None:
     if not pg_available():
         pytest.skip("Postgres backend not available")
 
+    monkeypatch.setenv("DATABASE_URL", resolve_dsn() or "postgresql://app:app@127.0.0.1:15432/app")
     monkeypatch.setenv("STORE_BACKEND", "pg")
     reset_store_backends()
     store = get_object_store()

@@ -9,6 +9,8 @@ from scripts.alpha_e2e import (
     _index_rebuild_command,
     _maybe_auto_rebuild_index,
     _maybe_teardown,
+    _resolve_e2e_inbox_dir_rel,
+    _select_layout_note_rel,
     validate_runtime_progress,
     validate_status_invariants,
 )
@@ -202,6 +204,47 @@ def test_runtime_note_path_and_content(tmp_path) -> None:
     content = note_path.read_text(encoding="utf-8")
     assert f"uuid: {note_uuid}" in content
     assert note_uuid in note_path.name
+
+
+def test_resolve_e2e_inbox_dir_rel_prefers_layout_over_inherited_env(tmp_path, monkeypatch) -> None:
+    vault_root = tmp_path / "vault"
+    system_dir = vault_root / "⚙️ System"
+    system_dir.mkdir(parents=True)
+    (system_dir / "vault.layout.md").write_text(
+        "---\n"
+        "version: '1'\n"
+        "system_folder: ⚙️ System\n"
+        "inbox_folder: 📥 Inbox\n"
+        "desk_folder: 🛠️ Workbench\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
+
+    inbox_dir_rel = _resolve_e2e_inbox_dir_rel(
+        vault_root,
+        {"VAULT_INBOX_DIR_REL": "📥 Inbox"},
+    )
+
+    assert inbox_dir_rel == "📥 Inbox"
+
+
+def test_select_layout_note_rel_returns_single_layout_note(tmp_path) -> None:
+    vault_root = tmp_path / "vault"
+    system_dir = vault_root / "⚙️ System"
+    system_dir.mkdir(parents=True)
+    layout_note = system_dir / "vault.layout.md"
+    layout_note.write_text(
+        "---\n"
+        "version: '1'\n"
+        "system_folder: ⚙️ System\n"
+        "inbox_folder: 📥 Inbox\n"
+        "desk_folder: 🛠️ Workbench\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    assert _select_layout_note_rel(vault_root) == "⚙️ System/vault.layout.md"
 
 
 def test_cleanup_runtime_notes_removes_files(tmp_path) -> None:

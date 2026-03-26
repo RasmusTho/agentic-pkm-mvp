@@ -4,11 +4,23 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.vault.paths import get_vault_inbox_dir_rel
 
 
 def test_debug_panel_endpoint_parses_actions_and_returns_mapping_summary(tmp_path, monkeypatch) -> None:
     vault_root = tmp_path / "vault"
-    note_rel = Path("Inbox/_alpha_e2e/test.md")
+    system_dir = vault_root / "⚙️ System"
+    system_dir.mkdir(parents=True)
+    (system_dir / "vault.layout.md").write_text(
+        "---\n"
+        "version: '1'\n"
+        "system_folder: ⚙️ System\n"
+        "inbox_folder: 📥 Inbox\n"
+        "desk_folder: 🛠️ Workbench\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    note_rel = Path(get_vault_inbox_dir_rel(vault_root)) / "_alpha_e2e" / "test.md"
     note_path = vault_root / note_rel
     note_path.parent.mkdir(parents=True, exist_ok=True)
     note_path.write_text(

@@ -5,11 +5,10 @@ from pathlib import Path
 
 def note_log_path(note_uuid: str, vault_relative_path: Path | str) -> Path:
     """
-    Return the canonical per-note log path (`uuid.md`) under the VaultMirror metadata tree,
+    Return the canonical per-note mirror path (`uuid.md`) under the VaultMirror metadata tree,
     preserving the note's vault-relative folder structure for sync/merge.
-    TODO: Future mirror writes should materialize system-owned metadata/log entries here
-    (frontmatter + agent decisions, not full note bodies). Humans should read but not edit
-    these files; automation will append new log entries per ingest/promotion run.
+    This path is the current mirror projection surface, not the full receipt model.
+    Future refactors may split mirror- and receipt-oriented writes more explicitly.
     """
     uuid_str = str(note_uuid).strip()
     rel_path = Path(str(vault_relative_path).lstrip("/"))

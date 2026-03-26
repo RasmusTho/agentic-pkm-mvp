@@ -4,13 +4,22 @@ errors=0
 fail(){ echo "  ❌ $*"; errors=$((errors+1)); }
 ok(){ echo "  ✅ $*"; }
 
+if [[ -x ".venv/bin/python" ]]; then
+  PYTHON_BIN=".venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="$(command -v python3)"
+else
+  PYTHON_BIN="python"
+fi
+
 echo "==> 1) Check required files exist"
 must_exist=(
   app/main.py
   app/api/app.py
   app/api/routers/agent.py
-  app/api/routers/interesting.py
-  app/api/routers/dashboard.py
+  app/api/routes/ask.py
+  app/api/routes/status.py
+  app/api/routes/search.py
   app/search/__init__.py
   .github/workflows/smoke.yml
   requirements-smoke.txt
@@ -27,7 +36,7 @@ for f in "${must_exist[@]}"; do
 done
 
 echo "==> 2) Import checks"
-python - << 'PY'
+"$PYTHON_BIN" - << 'PY'
 import importlib
 import sys
 
@@ -52,8 +61,9 @@ def must(mod, attrs=None):
 must("app.main", ["app"])
 must("app.api.app", ["app"])
 must("app.api.routers.agent", ["router"])
-must("app.api.routers.interesting", ["router"])
-must("app.api.routers.dashboard", ["router"])
+must("app.api.routes.ask", ["router"])
+must("app.api.routes.status", ["router"])
+must("app.api.routes.search", ["router"])
 must("app.search")
 
 svc = importlib.import_module("app.search.service")
@@ -71,7 +81,7 @@ if [[ $? -ne 0 ]]; then
 fi
 
 echo "==> 3) README CI summary"
-if grep -q 'LATENCY / EVAL / DELTA / RELATION COVERAGE / RELATIONS / DIARIZATION / REASONING / GATES' README.md; then
+if grep -q 'CI SUMMARY' README.md; then
   ok "README CI summary present"
 else
   fail "README missing CI summary line"

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import Mapping, Sequence
 
-_ANY_OF_OLLAMA = ["OLLAMA_URL", "OPENAI_BASE_URL"]
+_ANY_OF_OLLAMA = ["OLLAMA_BASE_URL", "OLLAMA_URL", "OLLAMA_HOST", "OPENAI_BASE_URL"]
 
 
 def normalize_provider(value: str | None) -> str | None:
     if value is None:
         return None
     normalized = value.strip().lower()
+    if normalized == "llm":
+        return "ollama"
     return normalized or None
 
 

@@ -41,6 +41,60 @@ class Providers(BaseModel):
 
 
 class LLMRoutingSettings(BaseModel):
+    class RouteTarget(BaseModel):
+        model_id: str | None = Field(
+            default=None,
+            description="Model registry id for this route. Provider/model are derived from it when present.",
+        )
+        provider: str | None = Field(
+            default=None,
+            description="Provider id for this route (mock|ollama|openai|deepseek).",
+        )
+        model: str | None = Field(
+            default=None,
+            description="Model override for this route.",
+        )
+        profile: str | None = Field(
+            default=None,
+            description="Optional embedding profile override when routing embed tasks.",
+        )
+
+    class FallbackPolicy(BaseModel):
+        mode: Literal["never", "local", "allowed", "skip"] = Field(
+            default="never",
+            description="Fallback policy when the preferred route cannot be used.",
+        )
+        model_id: str | None = Field(
+            default=None,
+            description="Fallback model registry id when fallback is allowed.",
+        )
+        provider: str | None = Field(
+            default=None,
+            description="Fallback provider override when fallback is allowed.",
+        )
+        model: str | None = Field(
+            default=None,
+            description="Fallback model override when fallback is allowed.",
+        )
+        profile: str | None = Field(
+            default=None,
+            description="Fallback embedding profile override when fallback is allowed.",
+        )
+
+    class TaskPolicy(BaseModel):
+        primary: "LLMRoutingSettings.RouteTarget" = Field(
+            default_factory=lambda: LLMRoutingSettings.RouteTarget(),
+            description="Preferred route for this task class.",
+        )
+        fallback: "LLMRoutingSettings.FallbackPolicy" = Field(
+            default_factory=lambda: LLMRoutingSettings.FallbackPolicy(),
+            description="Fallback behavior for this task class.",
+        )
+        require_compatible_identity: bool = Field(
+            default=False,
+            description="Require fallback to preserve embedding identity compatibility.",
+        )
+
     default_provider: str | None = Field(
         default=None,
         description="Default LLM provider override for router (vault-configurable).",
@@ -56,6 +110,28 @@ class LLMRoutingSettings(BaseModel):
     task_overrides: Dict[str, Dict[str, str]] = Field(
         default_factory=dict,
         description="Per task_kind provider/model overrides (future use).",
+    )
+    default_chat: "LLMRoutingSettings.TaskPolicy" = Field(
+        default_factory=lambda: LLMRoutingSettings.TaskPolicy(),
+        description="Default task policy for chat/completion work.",
+    )
+    default_reasoning: "LLMRoutingSettings.TaskPolicy" = Field(
+        default_factory=lambda: LLMRoutingSettings.TaskPolicy(),
+        description="Default task policy for reasoning-heavy work.",
+    )
+    default_embedding: "LLMRoutingSettings.TaskPolicy" = Field(
+        default_factory=lambda: LLMRoutingSettings.TaskPolicy(require_compatible_identity=True),
+        description="Default task policy for embeddings and retrieval/index identity.",
+    )
+    default_eval: "LLMRoutingSettings.TaskPolicy" = Field(
+        default_factory=lambda: LLMRoutingSettings.TaskPolicy(
+            fallback=LLMRoutingSettings.FallbackPolicy(mode="skip")
+        ),
+        description="Default task policy for eval tooling.",
+    )
+    tasks: Dict[str, "LLMRoutingSettings.TaskPolicy"] = Field(
+        default_factory=dict,
+        description="Per task_kind routing policies.",
     )
 
 
@@ -116,7 +192,7 @@ class QaLLMSettings(BaseModel):
         json_schema_extra={"allowed": ["mock", "ollama", "http"]},
     )
     model: str = Field(default="llama3.1:8b-instruct", description="Model identifier for QA prompts.")
-    host: str = Field(default="http://127.0.0.1:11434", description="Base URL for local providers.")
+    host: str = Field(default="", description="Base URL for local providers.")
     timeout_s: float = Field(default=120.0, description="HTTP timeout in seconds.")
     max_tokens: int = Field(default=512, description="Maximum tokens per response.")
 
@@ -198,4 +274,3 @@ class SettingsBundle(BaseModel):
     agents: Dict[str, Any] = Field(default_factory=dict)
     yggdrasil_paths: Optional[YggdrasilPaths] = None
     instance: InstanceSettings = Field(default_factory=InstanceSettings)
-

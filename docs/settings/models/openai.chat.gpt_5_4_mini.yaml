@@ -1,0 +1,6 @@
+id: openai.chat.gpt_5_4_mini
+status: active
+kind: chat
+provider: openai
+model: gpt-5.4-mini
+notes: Current lower-latency OpenAI chat default for everyday ask, QA, and classification flows.

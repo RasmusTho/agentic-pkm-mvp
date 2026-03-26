@@ -14,6 +14,9 @@ Owner: Satellite sync forward-line planning
 
 This draft defines how a master Yggdrasil instance and one or more satellite instances for the same human synchronize knowledge. The focus is text-first sync (Markdown notes + VaultMirror logs) using Git/iCloud as transport, and how `instance_id` and per-note logs fit in. It is a conceptual contract for future implementation, not current production behaviour, and is the canonical plan for v5.x master/satellite sync in the roadmap.
 
+The upstream ontology/semantics for `instance`, `device role`, `replica`, and instance provenance
+are clarified in `docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md`.
+
 ## 1. Instance roles and identity
 
 - Runtimes: typically one master (e.g., home Mac mini) plus zero or more satellites (e.g., work machine, laptop).

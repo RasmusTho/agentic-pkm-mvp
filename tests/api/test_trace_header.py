@@ -22,3 +22,6 @@ def test_trace_header_roundtrip(monkeypatch):
     assert response.headers.get("x-trace-id") == "abc123"
     assert captured["trace_id"] == "abc123"
     assert captured["kwargs"].get("object_id") == "trace-1"
+    assert captured["obj"]["review_state"] == "draft"
+    assert captured["obj"]["legacy_review_state"] == "inbox"
+    assert captured["obj"]["workflow_state"] == "inbox"

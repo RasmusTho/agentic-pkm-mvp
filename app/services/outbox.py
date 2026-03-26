@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from app.events.models import Event, new_event
@@ -92,14 +93,95 @@ def bootstrap(conn: Any = None) -> None:
             conn.close()
 
 
+def event_source_name(value: Any, *, default: str = "app") -> str:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or default
+    component = getattr(value, "component", None)
+    if component:
+        return str(component)
+    return default
+
+
+def event_payload_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(mode="json")
+        return dict(dumped) if isinstance(dumped, dict) else {}
+    if hasattr(value, "dict"):
+        dumped = value.dict()  # type: ignore[call-arg]
+        return dict(dumped) if isinstance(dumped, dict) else {}
+    try:
+        return dict(value)
+    except Exception:
+        return {}
+
+
+def coerce_outbox_event(event: Any, *, default_source: str = "app") -> OutboxEvent | None:
+    if isinstance(event, OutboxEvent):
+        return event
+    if isinstance(event, Event):
+        return OutboxEvent(
+            event=event.event_type,
+            event_id=event.event_id,
+            trace_id=event.trace_id or "",
+            source=event_source_name(event.source, default=default_source),
+            timestamp=event.created_at,
+            payload=event_payload_dict(event.payload),
+        )
+    event_name = getattr(event, "event", None) or getattr(event, "event_type", None)
+    if not event_name:
+        return None
+    payload = event_payload_dict(getattr(event, "payload", None))
+    trace_id = getattr(event, "trace_id", None) or ""
+    event_id = getattr(event, "event_id", None) or ""
+    timestamp = getattr(event, "timestamp", None) or getattr(event, "created_at", None) or ""
+    return OutboxEvent(
+        event=str(event_name),
+        event_id=str(event_id),
+        trace_id=str(trace_id),
+        source=event_source_name(getattr(event, "source", None), default=default_source),
+        timestamp=str(timestamp),
+        payload=payload,
+    )
+
+
+def serialize_outbox_record(event: Any, *, default_source: str = "app") -> dict[str, Any] | None:
+    if isinstance(event, dict):
+        return dict(event)
+    if hasattr(event, "model_dump"):
+        dumped = event.model_dump(mode="json")
+        if isinstance(dumped, dict):
+            return dumped
+    coerced = coerce_outbox_event(event, default_source=default_source)
+    if coerced is None:
+        return None
+    return coerced.model_dump(mode="json")
+
+
+def append_jsonl_outbox_event(outbox_path: Path, event: Any, *, default_source: str = "app") -> bool:
+    record = serialize_outbox_record(event, default_source=default_source)
+    if record is None:
+        return False
+    outbox_path.parent.mkdir(parents=True, exist_ok=True)
+    with outbox_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False))
+        handle.write("\n")
+    return True
+
+
 def _coerce_event(event: Event | OutboxEvent) -> Event:
     if isinstance(event, Event):
         return event
+    payload = event_payload_dict(getattr(event, "payload", None))
     return new_event(
         event_type=event.event,
-        payload=dict(event.payload),
+        payload=dict(payload),
         trace_id=event.trace_id,
-        source=event.source,
+        source=event_source_name(getattr(event, "source", None), default="app"),
         event_id=event.event_id,
         created_at=event.timestamp,
     )
@@ -234,4 +316,15 @@ def ack_outbox(*args, **kwargs) -> bool:
             conn.close()
 
 
-__all__ = ["write_outbox_event", "insert_object_and_outbox", "poll_outbox_one", "ack_outbox", "bootstrap"]
+__all__ = [
+    "write_outbox_event",
+    "insert_object_and_outbox",
+    "poll_outbox_one",
+    "ack_outbox",
+    "bootstrap",
+    "event_source_name",
+    "event_payload_dict",
+    "coerce_outbox_event",
+    "serialize_outbox_record",
+    "append_jsonl_outbox_event",
+]
