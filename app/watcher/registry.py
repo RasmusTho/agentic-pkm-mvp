@@ -97,6 +97,8 @@ def _scan_markdown(vault_root: Path, scan_root: Path, scope_glob: str) -> Iterab
             rel = path.relative_to(vault_root)
         except Exception:
             continue
+        if any(part.startswith(".") for part in rel.parts):
+            continue
         if not _matches_scope(rel, scope_glob):
             continue
         try:
