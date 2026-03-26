@@ -148,6 +148,7 @@ flowchart LR
 8) Eval gating guidance (Docs, Offline now): Document eval modes (mock/skip/live) and provider requirements; AC: doc page snippet, env examples, CI ensures eval tests skip when unset.
 9) Outbox consumer contract (Docs, Offline now): Define expected consumer behaviour (ordering, retries, DLQ); AC: contract doc, example consumer pseudocode, idempotency key guidance.
 10) MCP/tool test harness (CI/Docs, Offline later): Add deterministic harness for tool adapters; AC: tests using mock executor, coverage report, documented usage.
+11) PKM runtime/storage + model benchmark protocol (Docs, Offline now): Define a measurement-first protocol for comparing internal SSD vs external SSD placements and local vs cloud model routes on the real PKM runtime. AC: doc records canonical metric names for runtime liveness and end-to-end human-loop latency (`startup_to_healthy_ms`, heartbeat freshness, `vault_change_to_indexed_ms`, `panel_intent_created_ms`, `promote_done_ms`, `ask_query_latency_ms`, degraded-state counts), specifies scenario runs (single-note change, burst ingest, ASK, panel/promote, rebuild/restart), and requires every sample to carry storage/runtime/model profile tags. Explicitly defer hard thresholds and migration decisions until enough baseline data has been collected in normal hobby-project operation.
 
 ## 6) Open Questions / Missing Evidence
 - DLQ/retry semantics for outbox consumers not documented (Unknown).
