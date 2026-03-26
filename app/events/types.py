@@ -59,6 +59,14 @@ PROMOTE_ORPHAN_OVERRIDE = "promote.orphan.override"
 PROMOTION_DECISION_PENDING = "promotion.pending_move"
 PROMOTE_SKIP_MOVE = "promote.skip.move"
 
+PANEL_INTENT_CREATED = "panel.intent.created"
+PANEL_INTENT_EXECUTED = "panel.intent.executed"
+PANEL_ACTION_LOGGED = "panel.action.logged"
+PANEL_LOG_CREATED = "panel.log.created"
+PANEL_SCAN_REQUESTED = "panel.scan.requested"
+
+WATCHER_RUN = "watcher.run"
+
 ASK_QUERY_RECEIVED = "ask.query.received"
 JOBS_BACKFILL_DONE = "jobs.backfill.done"
 RELATION_MISSING = "relation.missing"
@@ -115,6 +123,12 @@ __all__ = [
     "PROMOTE_ORPHAN_OVERRIDE",
     "PROMOTION_DECISION_PENDING",
     "PROMOTE_SKIP_MOVE",
+    "PANEL_INTENT_CREATED",
+    "PANEL_INTENT_EXECUTED",
+    "PANEL_ACTION_LOGGED",
+    "PANEL_LOG_CREATED",
+    "PANEL_SCAN_REQUESTED",
+    "WATCHER_RUN",
     "ASK_QUERY_RECEIVED",
     "JOBS_BACKFILL_DONE",
     "RELATION_MISSING",

@@ -1,4 +1,4 @@
-State: v5.5B delivered (planner pipeline + CLI-first orchestration + promotion consumer); v5.5C decider in progress.
+State: v5.5C delivered (LangGraph decider hardening: rule default + opt-in LLM mode with fallback + telemetry).
 # Track — PanelAgent LangGraph (v5.5)
 
 Scope: PanelAgent evolution toward LangGraph inner loops with catalog-driven decider, planner/orchestrator integration, and watcher automation.
@@ -10,8 +10,8 @@ Scope: PanelAgent evolution toward LangGraph inner loops with catalog-driven dec
 - Planner pipeline (v5.5A): `PanelActionIntent` + opt-in planner mode (`PANEL_AGENT_PIPELINE=planner`) to create plans from panel actions.
 - CLI-first orchestration (v5.5B): panel-originated plans executable via orchestrator + promotion tool; promotion consumer emits `promote.done` applying review_state/promotion metadata.
 
-## In progress (v5.5C)
-- LangGraph decider hardening and default readiness; rule remains default while LLM mode stays opt-in.
+## Delivered (v5.5C)
+- LangGraph decider hardening: rule mode is default and deterministic; LLM mode (`PANEL_AGENT_DECIDER=llm`) is opt-in with automatic fallback to rule on error; telemetry surfaces action selections and reasons in status counters; no external event-contract changes.
 
 ## Planned (forward line)
 - Watcher auto-exec path for panel plans with safety limits (gated by concurrency/idempotency guards).
