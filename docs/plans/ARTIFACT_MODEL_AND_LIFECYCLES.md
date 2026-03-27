@@ -1,4 +1,4 @@
-State: SoT v5.6 forward line (artifact model)
+State: SoT v5.x forward line (v5.6 artifact model)
 Doc role: Plan — foundational
 Authority: Foundational artifact-model plan for the v5.6 forward line. This document must be stable before companion-note contract or related architecture/data-model changes are extended further.
 
@@ -41,6 +41,15 @@ Without an explicit artifact model, the system risks:
 
 This plan prevents that drift.
 
+## Quick map
+
+| Artifact type | Primary surface | Normal authority posture | Rebuild / recovery role |
+| --- | --- | --- | --- |
+| Vault Note | Human surface | Primary human artifact; frontmatter UUID is strongest direct identity signal in the normal case | Together with companion note, rebuilds runtime state |
+| Companion Note | System surface | Primary portable system continuity artifact for tracked vault notes | Supports identity repair; may be rebuilt from runtime state when missing |
+| DB Object | Runtime surface | Runtime record, not semantic source of truth | Rebuilt from vault note + companion note; may rebuild missing companion note in recovery cases |
+| Chunks / Embeddings | Runtime surface | Derived only; never identity authority | Invalidated/rebuilt from runtime content |
+| Summaries / derived views | Runtime surface | Derived only; non-authoritative by default | Refreshed or rebuilt from source/runtime state |
 ## Artifact types
 
 ### Vault Note

@@ -213,6 +213,7 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | docs/adr/0001-externa-komponenter.md | ADR external components | Legacy (archived) | 2025-12-07 | Superseded by SYSTEM_DESIGN_v4.10 and LLM/COMPONENTS docs. |
 | docs/adr/0004-outbox-latency.md | ADR outbox latency | Partially outdated | 2026-02-05 | Targeted outbox→index <=2s; intent only (not enforced as CI gate); delta vs v5.5 baseline noted. |
 | docs/adr/0005-per-loop.md | ADR PER loop | Partially outdated | 2026-02-05 | Historical rationale for shared PER base; v5.5 uses mixed loop/graph implementations; delta noted. |
+| docs/adr/ADR-0006-deepagents-harness.md | ADR DeepAgents harness | Proposed | 2026-03-25 | Evaluation memo for DeepAgents as outer agent harness; decision pending pilot. |
 | docs/adrs/ADR-00xx-promotion-agent.md | ADR promotion agent | Partially outdated | 2026-02-05 | Historical lifecycle intent; current baseline uses DB outbox + idempotent promotion consumer; delta noted. |
 
 ## Legacy and Archive

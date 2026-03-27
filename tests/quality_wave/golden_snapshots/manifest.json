@@ -1,44 +1,41 @@
 {
   "evergreen-strategy.md": {
-    "body_chars": 1100,
-    "maturity": "evergreen",
-    "review_state": "reviewed",
-    "title": "Evergreen Strategy Note",
-    "uuid": "11111111-1111-4111-8111-111111111111"
+    "expected_frontmatter_changes": {
+      "maturity": "evergreen",
+      "review_state": "reviewed"
+    },
+    "must_not_change": ["uuid", "title", "ai_panel_auto_run", "State"],
+    "body_must_match_seed": false,
+    "panel_processed": true
   },
   "manual-policy.md": {
-    "body_chars": 398,
-    "maturity": null,
-    "review_state": null,
-    "title": "Never Opt-Out Note",
-    "uuid": "66666666-6666-4666-8666-666666666666"
+    "expected_frontmatter_changes": {},
+    "must_not_change": ["uuid", "title", "ai_panel_auto_run", "State"],
+    "body_must_match_seed": true,
+    "panel_processed": false
   },
   "mixed-actions.md": {
-    "body_chars": 610,
-    "maturity": null,
-    "review_state": null,
-    "title": "Mixed Actions Note",
-    "uuid": "33333333-3333-4333-8333-333333333333"
+    "expected_frontmatter_changes": {},
+    "must_not_change": ["uuid", "title", "ai_panel_auto_run", "State"],
+    "body_must_match_seed": true,
+    "panel_processed": false
   },
   "reflection-journal.md": {
-    "body_chars": 1087,
-    "maturity": null,
-    "review_state": null,
-    "title": "Reflection Journal",
-    "uuid": "22222222-2222-4222-8222-222222222222"
+    "expected_frontmatter_changes": {},
+    "must_not_change": ["uuid", "title", "ai_panel_auto_run", "State"],
+    "body_must_match_seed": false,
+    "panel_processed": true
   },
   "summary-request.md": {
-    "body_chars": 425,
-    "maturity": null,
-    "review_state": null,
-    "title": "Summary Request",
-    "uuid": "44444444-4444-4444-8444-444444444444"
+    "expected_frontmatter_changes": {},
+    "must_not_change": ["uuid", "title", "ai_panel_auto_run", "State"],
+    "body_must_match_seed": true,
+    "panel_processed": false
   },
   "unknown-action.md": {
-    "body_chars": 851,
-    "maturity": null,
-    "review_state": null,
-    "title": "Unknown Action Probe",
-    "uuid": "55555555-5555-4555-8555-555555555555"
+    "expected_frontmatter_changes": {},
+    "must_not_change": ["uuid", "title", "ai_panel_auto_run", "State"],
+    "body_must_match_seed": false,
+    "panel_processed": true
   }
 }

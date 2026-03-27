@@ -126,6 +126,11 @@ Clarifying note:
   continuity and repair function previously served by VaultMirror,
 - code modules `note_mirror.py` and `note_log.py` are legacy and will be removed.
 
+Clarifying note:
+- `mirror artifact` remains the broader portability/projection concept,
+- while `companion note` is the narrower per-note system-tracking artifact for identity continuity
+  and repair.
+
 See `docs/plans/COMPANION_NOTE_AND_AGENT_CONTEXT_PLAN.md` for the implementation plan.
 
 ### AI status callout in notes
@@ -204,9 +209,14 @@ They should not be treated as merely "mirror metadata".
 
 `app/services/note_log.py` is a legacy module being replaced by `app/services/companion_note.py`.
 
-New code must use companion note terminology and the `_system/companions/<uuid>.md` path. The
-`note_log` and `note_mirror` modules will be removed when the companion note service is
-implemented.
+New code must use companion note terminology and the `_system/companions/<uuid>.md` path.
+
+This has three implications:
+- future refactors may rename or split this boundary,
+- new code/docs should avoid using `note_log` or `mirror note` wording when the actual concern is
+  the companion-note continuity artifact,
+- and the `note_log` / `note_mirror` modules should be removed once the companion note service is
+  fully implemented.
 
 ## Migration direction
 
@@ -215,8 +225,12 @@ The intended migration direction is:
 2. treat AI status / similar human-visible records as receipt surfaces rather than as mirror state,
 3. preserve the rule that event streams are not the full receipt model,
 4. introduce stricter receipt artifacts in the system plane when the implementation is ready,
-5. remove legacy `note_log` / `note_mirror` / `VaultMirror` code and paths,
-6. and keep `mirror artifact` as a valid broader concept even though the concrete per-note
+5. reduce legacy "log" wording where it hides the mirror/receipt distinction,
+6. remove legacy `note_log` / `note_mirror` / `VaultMirror` code and paths as the new boundary
+   lands,
+7. distinguish the per-note `Companion Note` from the broader `Mirror Artifact` concept where
+   portability/projection language still matters,
+8. and keep `mirror artifact` as a valid broader concept even though the concrete per-note
    implementation is now the companion note.
 
 See `docs/plans/COMPANION_NOTE_AND_AGENT_CONTEXT_PLAN.md` for the phased implementation plan.

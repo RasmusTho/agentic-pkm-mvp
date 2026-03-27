@@ -1,4 +1,4 @@
-State: SoT v5.6 forward line (companion note contract)
+State: SoT v5.x forward line (v5.6 companion note contract)
 Doc role: Core SoT
 Authority: Canonical definition of the companion note as a first-class system artifact for continuity, identity repair, and bounded system-side tracking of vault notes.
 
@@ -55,6 +55,11 @@ It belongs to the system surface, not the normal human writing surface.
 If runtime compatibility still references older mirror-oriented paths, that should be treated as a
 transitional implementation detail rather than a contradiction of this contract.
 
+Compatibility note:
+- older `System/Metadata/VaultMirror/...` files should be read as proto-companion continuity
+  artifacts during transition
+- forward-line docs define `_system/companions/` as the intended steady-state location
+- migration and compatibility behavior should remain explicit until implementation fully converges
 ## Minimal field set
 
 The companion note must carry a bounded field set sufficient for continuity and repair.
@@ -99,7 +104,6 @@ The companion note must not carry:
 - `origin` — implicit for vault-sourced companions,
 - agent action history or classification results — these belong in the runtime DB,
 - full note content or body text — read the vault note directly.
-
 ## Lifecycle
 
 ### Creation trigger
@@ -119,6 +123,25 @@ The companion note may be updated when:
 - a note is soft-deleted,
 - or a permanent deletion is recognized and the companion is retained as a bounded continuity/audit artifact.
 
+### Ingest states
+
+Canonical forward-line `ingest_state` values:
+- `untracked`
+- `known`
+- `indexed`
+- `stale`
+- `healing_needed`
+- `soft_deleted`
+- `archived`
+
+Interpretation:
+- `untracked` = continuity artifact exists but active runtime tracking is not yet established
+- `known` = tracked identity exists, but full ingest/index completion is not yet the current state
+- `indexed` = ingest/index cycle completed for the current known content/version
+- `stale` = source content/path metadata changed and runtime state may need refresh
+- `healing_needed` = continuity or identity inconsistency requires repair workflow
+- `soft_deleted` = tracked note is treated as removed from active use without full continuity erasure
+- `archived` = continuity artifact retained for long-horizon traceability after archival transition
 ### Missing companion handling
 
 If the companion note is missing:
@@ -203,6 +226,15 @@ The companion note therefore acts as:
 - the first file-based recovery source after direct frontmatter identity,
 - and a durable continuity artifact when runtime state is missing or stale.
 
+## Forward implementation anchors
+
+These abstractions are already meaningful in the docs, even where implementation is still
+transitional:
+- `KnowledgePort` = the normative write boundary for vault- and companion-note mutations
+- `SyncLayer` = current watcher/worker/react-to-file-change flows, later to be made more explicit as
+  a named abstraction
+- `EmbeddingProvider` = the current provider/model-tagged embedding boundary, implemented today
+  through the embedding configuration/runtime stack and later documentable as a clearer interface
 ## Human should never edit this
 
 In practice, "human should never edit this" means:
@@ -244,7 +276,6 @@ The companion note differs from VaultMirror in that it:
 - includes an attachment manifest,
 - follows the bounded field set defined in this contract,
 - and writes through KnowledgePort.
-
 ## Forward note on linking convention
 
 The human-facing and system-facing linking conventions for vault note <-> companion note should be
@@ -254,3 +285,13 @@ That future documentation should preserve:
 - Obsidian-first title/file linking on the human surface,
 - UUID-based continuity on the system side,
 - and conservative repair behavior when those signals diverge.
+
+## Required test baseline when implementation proceeds
+
+When the companion-note contract is implemented or hardened in runtime code, the minimum expected
+test/guardrail set should include:
+- architecture/boundary tests proving companion-note writes route through `KnowledgePort`
+- contract tests for healing-order behavior across note/companion/DB/path/hash scenarios
+- regression tests for missing-companion rebuild and stale-companion repair
+- explicit ambiguity tests proving semantic similarity never auto-assigns identity
+- compatibility tests for transitional `VaultMirror` -> companion-note migration behavior

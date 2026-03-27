@@ -150,7 +150,6 @@ class TestFitnessGateEvaluation:
         assert report["checks"]["rerun_no_changes"] is True
         assert report["checks"]["rerun_no_panel_side_effects"] is True
         assert seed.destination.exists()
-
     def test_parse_summary_lines_roundtrip(self) -> None:
         lines = [
             "CI SUMMARY LATENCY QAS003=1.000000s QAS010=0.000100s",

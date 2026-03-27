@@ -39,6 +39,8 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 ### Now
 - Ground the v5.6 objectives in a docs-first kickoff: the detailed plan in `docs/plans/V56_FORWARD_LINE.md` captures the pillars, acceptance criteria, and immediate signal checks the forward line needs to ship.
 - Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, skipped receipts, and write-guard state are surfaced in status, events, and the new CLI `settings-explain` output before any runtime gate opens.
+- The artifact-model and companion-note contract docs are part of this v5.6 forward-line kickoff
+  rather than a change to the locked v5.5 baseline.
 - Harden the PanelAgent LangGraph pilot (panel action catalog + planner pipeline + promotion consumer) so its telemetry, provenance, and gating sensors stay deterministic while remaining opt-in.
 ### Next
 - Sequence the ReasoningFacade + LangGraph rollout for one additional agent pool, ensuring instrumentation feeds into the fitness gates and the orchestrator V2 experiment flag remains gated until stability signals arrive.

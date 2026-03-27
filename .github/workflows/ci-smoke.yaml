@@ -91,6 +91,7 @@ jobs:
             tests/ports/test_vault_port_contract.py \
             tests/services/test_filesystem_vault_adapter.py \
             tests/services/test_vault_sync_lifecycle.py \
+            tests/quality_wave \
             --maxfail=1 -ra --durations=20
 
       - name: Ensure persisted vector index artifact exists

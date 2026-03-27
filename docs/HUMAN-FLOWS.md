@@ -740,6 +740,9 @@ This means:
 - runtime DB/index state may differ temporarily across nodes,
 - but continuity should still be recoverable from the file-based artifacts.
 
+This section is the authoritative user-facing description of the current operational topology.
+Architecture and roadmap docs may reference it, but should not duplicate device-specific narrative
+unnecessarily.
 ## 14. Current baseline realization
 
 The current baseline realizes only part of the broader function set.
@@ -781,7 +784,7 @@ It uses them as orientation for what kinds of human function a system like this 
 The current runtime remains relevant, but secondary.
 
 - Ingest projects artifacts into runtime stores and rebuildable indexes.
-- VaultMirror preserves machine-side projections for continuity and healing.
+- Companion notes preserve system-side continuity and healing context for tracked vault notes.
 - PanelAgent provides bounded suggestion/action surfaces inside notes.
 - Promotion flows currently carry only part of the broader artifact/commitment model.
 - Watchers and orchestration are implementation conveniences, not the essence of the human

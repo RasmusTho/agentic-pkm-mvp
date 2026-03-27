@@ -24,8 +24,7 @@ def _reset() -> None:
     object_store_module._MEMORY_STORE.clear()
     reset_promotion_dedup_store()
 
-
-def _setup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, outbox_name: str = "outbox.jsonl") -> Path:
+def _setup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -36,7 +35,7 @@ def _setup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, outbox_name: 
     monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "config")
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "capture")
     monkeypatch.setenv("VAULT_DESK_DIR_REL", "workbench")
-    outbox_path = tmp_path / outbox_name
+    outbox_path = tmp_path / "outbox.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     return outbox_path
 
@@ -92,10 +91,8 @@ def _mirror_paths(vault_root: Path) -> list[Path]:
 def _run_seeded_flow(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    *,
-    outbox_name: str = "outbox.jsonl",
 ) -> tuple[Path, object, Path, list[dict], dict[str, object]]:
-    outbox_path = _setup_env(monkeypatch, tmp_path, outbox_name=outbox_name)
+    outbox_path = _setup_env(monkeypatch, tmp_path)
     vault = tmp_path / "vault"
     vault.mkdir(parents=True, exist_ok=True)
     seed = seed_vault_test_notes(vault_root=vault, target_subdir="Test")
@@ -183,7 +180,7 @@ class TestColdRebuildIdempotency:
     def test_rebuild_reuses_existing_mirrors_after_store_reset(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        _setup_env(monkeypatch, tmp_path, outbox_name="outbox-first.jsonl")
+        _setup_env(monkeypatch, tmp_path)
         vault_root = tmp_path / "vault"
         vault_root.mkdir(parents=True, exist_ok=True)
         seed = seed_vault_test_notes(vault_root=vault_root, target_subdir="Test")
@@ -207,7 +204,6 @@ class TestColdRebuildIdempotency:
         assert second.processed_notes == first.processed_notes
         assert _mirror_paths(vault_root) == first_mirrors
         assert seed.destination.exists()
-
 
 class TestColdStartCoreFields:
     def test_objects_have_valid_core6_fields(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
