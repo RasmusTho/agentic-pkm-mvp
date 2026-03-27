@@ -330,7 +330,7 @@ def run_alpha_human_flows(
     if not dry_run:
         try:
             _ingest_note(test_note_path)
-            click.echo(f"   reingest after promotion: ok (mirror: {mirror_path})")
+            click.echo(f"   reingest after promotion: ok (companion: {companion_note_path})")
         except Exception as exc:  # pragma: no cover - defensive
             click.echo(f"   reingest failed: {exc}")
     else:

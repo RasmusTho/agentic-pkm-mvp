@@ -7,6 +7,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -16,7 +17,7 @@ from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGES
 from app.observability.tracer import start_span
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
 from app.services.indexer import handle_ingest_object_created
-from app.services.note_mirror import upsert_note_mirror
+from app.services.companion_note import CompanionNote, scan_attachments, write_companion
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import ack_outbox, bootstrap, poll_outbox_one
 from app.vault.paths import get_vault_inbox_dir_rel
@@ -222,12 +223,6 @@ def _stabilized_note_text(note_path: Path, *, attempts: int = 6, base_sleep: flo
     return None
 
 
-def _compute_ingest_fingerprint(text: str, path: Path) -> dict[str, int | str]:
-    return {
-        "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        "mtime_ns": path.stat().st_mtime_ns,
-    }
-
 
 def handle_panel_scan_requested(
     payload: Mapping[str, Any], *, vault_root: Path | None = None
@@ -315,20 +310,25 @@ def handle_ingest_vault_changed(
     else:
         try:
             rel_path = note_path.relative_to(resolved_root)
-            upsert_note_mirror(
+            text_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            write_companion(
                 resolved_root,
-                rel_path,
-                note_uuid=note_uuid,
-                title=str(frontmatter.get("title") or note_path.stem),
-                review_state=str(frontmatter.get("review_state") or "provisional"),
-                maturity=str(frontmatter.get("maturity") or "note"),
-                ingest_fingerprint=_compute_ingest_fingerprint(content, note_path),
+                CompanionNote(
+                    uuid=note_uuid,
+                    source_ref=str(rel_path),
+                    title=str(frontmatter.get("title") or note_path.stem),
+                    content_hash=text_sha256,
+                    ingest_state="tracked",
+                    last_ingested=datetime.now(timezone.utc).isoformat(),
+                    created_by_instance="",
+                    attachments=scan_attachments(content),
+                ),
             )
         except OSError as exc:
             if exc.errno in {errno.EPERM, errno.EACCES, errno.EROFS}:
                 _warn_once(
-                    f"mirror_write_perm:{note_path}",
-                    "mirror write skipped (permission) note_path=%s errno=%s",
+                    f"companion_write_perm:{note_path}",
+                    "companion write skipped (permission) note_path=%s errno=%s",
                     note_path,
                     exc.errno,
                 )

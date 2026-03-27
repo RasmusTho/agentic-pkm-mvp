@@ -4,7 +4,7 @@ import json
 import uuid
 from pathlib import Path
 
-from app.services.note_log import note_log_path
+from app.services.companion_note import read_companion
 from app.store.object_store import ObjectStore
 from app.workers import outbox_worker
 from scripts.yaml_roundtrip import load_frontmatter
@@ -107,17 +107,16 @@ def test_handle_ingest_vault_changed_heals_uuid_using_vault_layout_inbox(
     assert isinstance(frontmatter, dict)
     healed_uuid = str(frontmatter.get("uuid") or "").strip()
     assert healed_uuid
-    mirror_path = vault_root / note_log_path(healed_uuid, Path("📥 Inbox/uuidless.md"))
-    assert mirror_path.exists()
-    mirror_frontmatter, _ = load_frontmatter(mirror_path.read_text(encoding="utf-8"))
-    assert mirror_frontmatter.get("uuid") == healed_uuid
-    assert mirror_frontmatter.get("source_ref") == "📥 Inbox/uuidless.md"
+    companion = read_companion(vault_root, healed_uuid)
+    assert companion is not None, "Companion note should exist after ingest"
+    assert companion.uuid == healed_uuid
+    assert companion.source_ref == "📥 Inbox/uuidless.md"
 
     obj = ObjectStore().get_object(healed_uuid)
     assert obj is not None
 
 
-def test_handle_ingest_vault_changed_creates_missing_mirror_for_existing_uuid(
+def test_handle_ingest_vault_changed_creates_companion_for_existing_uuid(
     tmp_path: Path, monkeypatch
 ) -> None:
     reset_memory_stores()
@@ -144,11 +143,10 @@ def test_handle_ingest_vault_changed_creates_missing_mirror_for_existing_uuid(
     summary = outbox_worker.handle_ingest_vault_changed(payload, vault_root=vault_root)
     assert summary.ingested == 1
 
-    mirror_path = vault_root / note_log_path(note_uuid, Path("📥 Inbox/existing-uuid.md"))
-    assert mirror_path.exists()
-    mirror_frontmatter, _ = load_frontmatter(mirror_path.read_text(encoding="utf-8"))
-    assert mirror_frontmatter.get("uuid") == note_uuid
-    assert mirror_frontmatter.get("source_ref") == "📥 Inbox/existing-uuid.md"
+    companion = read_companion(vault_root, note_uuid)
+    assert companion is not None, "Companion note should exist after ingest"
+    assert companion.uuid == note_uuid
+    assert companion.source_ref == "📥 Inbox/existing-uuid.md"
 
 
 def test_handle_ingest_vault_changed_uses_relative_path_when_payload_path_is_host_absolute(

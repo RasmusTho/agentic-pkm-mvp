@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+from pathlib import Path
 from typing import Any, Tuple
 
 from langgraph.graph import END, START, StateGraph
@@ -11,6 +14,7 @@ from app.components.settings.panel_actions_loader import PanelActionCatalog, Pan
 from app.agents.panel_agent.settings import DeciderMode
 from app.agents.panel_agent.state import PanelAgentState
 from app.agents.panel_agent.wiring import get_default_action_wiring
+from app.services.note_context import ContextBudget, NoteContext, NoteContextError, build_note_context
 from app.events.panel import (
     PanelActionLoggedEvent,
     PanelEventSource,
@@ -28,6 +32,15 @@ from app.components.llm.fabric import get_chat_client
 from app.components.llm.router import LLMTaskIntent
 
 _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
+
+logger = logging.getLogger(__name__)
+
+PANEL_BUDGET = ContextBudget(
+    max_body_chars=2000,
+    include_relations=True,
+    include_attachments=True,
+    include_history=False,
+)
 
 
 def _build_panel_source() -> PanelEventSource:
@@ -309,6 +322,63 @@ def _select_actions_from_instruction_hint(
     return {action.id}, {action.id: "instruction_hint_fallback"}
 
 
+def _resolve_vault_root(state: PanelAgentState) -> Path | None:
+    """Return the vault root from state or VAULT_ROOT env var."""
+    if state.vault_root is not None:
+        return state.vault_root
+    env = os.getenv("VAULT_ROOT")
+    if env:
+        return Path(env).expanduser()
+    return None
+
+
+def _build_note_snippet(state: PanelAgentState) -> str:
+    """Build the note snippet for the LLM prompt.
+
+    Tries NoteContext for a rich, structured view. Falls back to the legacy
+    truncated ``note_content`` when NoteContext cannot be assembled.
+    """
+    vault_root = _resolve_vault_root(state)
+    if vault_root is not None:
+        try:
+            ctx = build_note_context(
+                uuid=state.note.uuid,
+                vault_root=vault_root,
+                budget=PANEL_BUDGET,
+            )
+            return _format_note_context(ctx)
+        except (NoteContextError, Exception) as exc:  # noqa: BLE001
+            logger.debug("NoteContext unavailable for %s, using snippet fallback: %s", state.note.uuid, exc)
+
+    # Fallback: legacy truncated snippet
+    return (state.note_content or "")[:800]
+
+
+def _format_note_context(ctx: NoteContext) -> str:
+    """Format a NoteContext into a prompt-friendly string."""
+    parts: list[str] = []
+
+    if ctx.frontmatter:
+        fm_lines = [f"  {k}: {v}" for k, v in ctx.frontmatter.items()]
+        parts.append("Frontmatter:\n" + "\n".join(fm_lines))
+
+    if ctx.body:
+        label = "Body (truncated):" if ctx.body_truncated else "Body:"
+        parts.append(f"{label}\n{ctx.body}")
+
+    if ctx.backlinks:
+        parts.append("Backlinks:\n" + "\n".join(f"  - {bl}" for bl in ctx.backlinks))
+
+    if ctx.attachments:
+        att_lines = [f"  - {a.ref}" for a in ctx.attachments]
+        parts.append("Attachments:\n" + "\n".join(att_lines))
+
+    if ctx.outgoing_links:
+        parts.append("Outgoing links:\n" + "\n".join(f"  - {ol}" for ol in ctx.outgoing_links))
+
+    return "\n\n".join(parts) if parts else ""
+
+
 def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str]] | None:
     assert state.intent_event is not None, "PanelAgentState must include intent_event"
     actions = list(state.actions)
@@ -349,7 +419,7 @@ def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str
     )
     user_parts = [
         f"Instruction: {state.panel.instruction}",
-        f"Note (snippet): {(state.note_content or '')[:800]}",
+        f"Note context:\n{_build_note_snippet(state)}",
         "Checkbox hints:",
         *hint_lines,
         "Available actions (canonical):",
