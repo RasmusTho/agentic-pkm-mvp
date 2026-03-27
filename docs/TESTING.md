@@ -73,14 +73,16 @@ The CI surface should stay small and explicit. The intended steady-state roles a
 
 | Workflow role | Purpose | Expected posture |
 | --- | --- | --- |
-| `pr-smoke` | Fast merge blocker: lint, settings validation, `not pg` smoke, architecture/contract checks, fitness summary parsing | required on PRs |
-| `integration-nightly` | Slower pg-backed and metamorphic coverage for runtime seams and rebuild/idempotence checks | nightly / scheduled |
-| `release-uat` | Golden-vault runtime verification with the UAT harness and operator-facing assertions | release/UAT gate |
+| `pr-smoke` | Fast merge blocker: lint, settings validation, `not pg` smoke, architecture/contract checks, Quality Wave suite, fitness summary parsing | required on PRs |
+| `integration-nightly` | Full `pytest -m "not pg and not alpha_llm"` suite (736+ tests), runtime contract regressions, fitness gates | nightly / scheduled |
+| `release-uat` | Quality Wave gate (UAT harness + golden vault + full QW suite), fitness gates | release/UAT gate (tags + manual) |
 
 Older overlapping workflows may still exist while the surface is being consolidated, but new coverage should map to these roles instead of adding more partial gates.
 
-Current implementation checkpoint:
-- `.github/workflows/integration-nightly.yaml` runs the runtime-contract regression slice (metamorphic watcher coverage, alpha/UAT contract helpers, and cold-rebuild regression tests).
+Current implementation:
+- `.github/workflows/ci-smoke.yaml` — PR smoke including `tests/quality_wave/` (99 QW tests).
+- `.github/workflows/integration-nightly.yaml` — full suite nightly at 02:00 UTC + runtime contract regressions + fitness gates.
+- `.github/workflows/release-uat.yaml` — UAT harness + golden vault + full QW suite + fitness gates; triggered on version tags and manual dispatch.
 
 ## Required baseline checks
 
