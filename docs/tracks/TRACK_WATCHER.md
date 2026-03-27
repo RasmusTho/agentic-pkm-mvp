@@ -1,4 +1,4 @@
-State: v5.4 delivered (watcher MVP + hardening); v5.5D auto-exec gated on concurrency guards.
+State: v5.4 delivered (watcher MVP + hardening); v5.5D auto-exec gated on concurrency guards; v5.6A now documents operator-facing enablement signals.
 # Track — Watcher (v5.1–v5.4 delivered)
 
 Scope: snapshot-based vault watcher CLI/daemon, policy-gated panel auto-runs, ergonomics (dry-run, max-notes), Docker-first deployment. Runtime now standardizes on the registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`).
@@ -19,11 +19,18 @@ Scope: snapshot-based vault watcher CLI/daemon, policy-gated panel auto-runs, er
 - Panel actions MUST be idempotent (`ai:id` executes at most once).
 - Reference: `docs/CONCURRENCY.md`.
 
+## v5.6A: Operator enablement signals
+- `python -m app.cli settings-explain` is the canonical pre-enable check for watcher gate state, allowlist validity, provenance, and path resolution.
+- `python -m app.cli status` is the runtime snapshot for watcher automation counters, last tick skips, write-guard state, and last-run skip reasons.
+- Safe-to-enable now means the effective auto-exec mode, allowlist, skip counters, and provenance/write-guard context are coherent.
+- `WATCHER_AUTO_EXEC=1` is necessary but not sufficient on its own; operators should use the CLI surfaces and the runbook together.
+
 ## Operational notes
 - Watcher remains polling/snapshot-based (no OS file events).
 - DB outbox is the authoritative queue; `index-outbox.jsonl` is telemetry only. The watcher enqueues intents/events to the DB outbox so the worker processes them.
 - Once watcher auto-exec is armed, any AI-fenced note is a candidate unless explicitly opted out with `ai_panel_auto_run: never`.
 - Summaries report changed, ingest_attempted/ingested, panel_candidates/runs, skipped_policy/limit, promotions, errors, dry_run flag.
+- Watcher automation receipts should be read through `settings-explain`, `status`, and watcher tick/outbox logs together; treat one signal in isolation as insufficient for rollout decisions.
 
 ## Links
 - Forward plan items: see `docs/ROADMAP.md` (Now/Next).

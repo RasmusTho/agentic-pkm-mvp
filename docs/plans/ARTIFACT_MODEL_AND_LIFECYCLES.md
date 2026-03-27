@@ -50,7 +50,6 @@ This plan prevents that drift.
 | DB Object | Runtime surface | Runtime record, not semantic source of truth | Rebuilt from vault note + companion note; may rebuild missing companion note in recovery cases |
 | Chunks / Embeddings | Runtime surface | Derived only; never identity authority | Invalidated/rebuilt from runtime content |
 | Summaries / derived views | Runtime surface | Derived only; non-authoritative by default | Refreshed or rebuilt from source/runtime state |
-
 ## Artifact types
 
 ### Vault Note

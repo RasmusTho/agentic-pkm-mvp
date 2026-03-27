@@ -8,6 +8,8 @@ This document defines what should be sufficiently clear before the repo spends s
 a full architecture or system-design review.
 
 The goal is to avoid reviewing architecture against a moving or under-specified human model.
+It also exists to keep principles, structure, sequencing, and implementation planning in the right
+documents while that review happens.
 
 ## Why this gate exists
 
@@ -20,6 +22,25 @@ misalignments.
 ## Readiness criteria
 
 The following should be clear enough before a deeper architecture review:
+
+### 0. Design-layer document split
+
+The repo should be clear on which document owns:
+- stable design principles,
+- structural architecture,
+- roadmap sequencing,
+- current operational truth,
+- and detailed plan/track work.
+
+Current sources:
+- `docs/DESIGN_PRINCIPLES.md`
+- `docs/ARCHITECTURE.md`
+- `docs/ROADMAP.md`
+- `docs/STATUS.md`
+- `docs/DOCS_INDEX.md`
+
+Status:
+- now established, but should be preserved as adjacent docs are revised
 
 ### 1. Human function baseline
 
@@ -103,6 +124,9 @@ Status:
 ## What the next architecture review should examine
 
 When the gate above is met, architecture review should focus on questions like:
+- are interaction, cognition, execution, memory, and governance being kept distinct enough,
+- is the architecture still drifting toward agent-per-function decomposition where capability-based composition would be cleaner,
+- are Panel and Chat being kept separate as interaction surfaces with different authority,
 - does runtime scope behavior reflect the intended context model,
 - are retrieval defaults too narrow or too flat,
 - does archive exposure preserve provenance and boundaries,
@@ -136,6 +160,7 @@ Before the context-model baseline is clearer, the repo should avoid spending ene
 like:
 - exact service decomposition,
 - exact graph/store topology,
+- detailed backlog slicing masquerading as architecture,
 - or detailed refactors of runtime boundaries
 
 because those decisions may be downstream of unresolved semantics.
@@ -143,6 +168,8 @@ because those decisions may be downstream of unresolved semantics.
 ## Immediate next step
 
 The next pass can move into architecture review, but with a narrow brief:
+- preserve the design-principles / architecture / roadmap / status split,
+- test whether capability-based composition is clearer than agent-per-function framing in the places under review,
 - test whether current runtime scope behavior matches the context terminology and representation
   posture,
 - identify places where one-field `domain` assumptions still flatten richer context semantics,

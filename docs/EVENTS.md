@@ -7,6 +7,11 @@ Authority: Canonical event envelope and event meaning contract for emitted runti
 This document describes the event artifacts emitted by the system and recorded in the outbox path.
 In the active baseline, the DB outbox is canonical and JSONL remains audit/diagnostic only. This document defines the canonical event envelope and the meanings of key event types.
 
+Reading note:
+- this document owns the current event contract,
+- not the full target-state architecture,
+- and not the permanent decomposition of system behavior into event-emitting agents.
+
 Compatibility and evolution are governed by `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`.
 Mirror/receipt separation is governed conceptually by `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`.
 Receipt/trace/accountability distinctions are clarified in
@@ -19,6 +24,8 @@ Normalization note:
 - `source` in an event means emitter attribution, not automatically a `Source Artifact`,
 - transition families such as review and promotion may require separate intent/execution/receipt
   layers even when the current event catalog is not yet fully normalized.
+- event flow remains part of current runtime coordination, but should not by itself be read as the
+  architectural center of interaction, cognition, or execution design.
 
 
 ## Outbox envelope (canonical)

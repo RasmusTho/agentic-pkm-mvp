@@ -130,6 +130,26 @@ class TestIdempotencyCounters:
 
 
 class TestFitnessGateEvaluation:
+    def test_uat_report_matches_summary_payload(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _setup_env(monkeypatch, tmp_path)
+        vault = tmp_path / "vault"
+        vault.mkdir(parents=True, exist_ok=True)
+        seed = seed_vault_test_notes(vault_root=vault, target_subdir="Test")
+        summary = run_vault_test_flow(vault_root=vault, target_subdir="Test", assert_expectations=False)
+
+        assert summary.report_path is not None
+        report_path = summary.report_path
+        assert report_path.exists()
+
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        assert report["watcher"] == summary.watcher
+        assert report["promotion"] == summary.promotion
+        assert report["rerun"] == (summary.rerun or {})
+        assert report["checks"] == (summary.checks or {})
+        assert report["failed_checks"] == []
+        assert report["checks"]["rerun_no_changes"] is True
+        assert report["checks"]["rerun_no_panel_side_effects"] is True
+        assert seed.destination.exists()
     def test_parse_summary_lines_roundtrip(self) -> None:
         lines = [
             "CI SUMMARY LATENCY QAS003=1.000000s QAS010=0.000100s",

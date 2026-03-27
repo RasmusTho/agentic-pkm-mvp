@@ -1,7 +1,12 @@
-State: SoT v4.10 (Reality-MVP) and v5.x (PanelAgent Runtime + registry watcher) are locked baselines; watcher track v5.1–v5.4 is implemented and now runs via the registry watcher.
+State: SoT v4.10 (Reality-MVP) and v5.x (PanelAgent Runtime + registry watcher) are locked baselines; watcher track v5.1–v5.4 is implemented and now runs via the registry watcher; v5.6A adds explicit operator enablement checks.
 # UAT — PanelAgent + Registry Watcher
 
 Purpose: practical, low-risk UAT flow for exercising PanelAgent runtime and the registry watcher on a small subset of vault notes.
+
+Reading note:
+- this runbook validates the current runtime path,
+- not the full target-state architecture,
+- and not a permanent commitment to one agent/event decomposition beyond the current baseline.
 
 ## 1) Preconditions
 - Reality-MVP (SoT v4.10) is in place: ingest, ASK, observability, orchestrator runtime V1.
@@ -11,6 +16,7 @@ Purpose: practical, low-risk UAT flow for exercising PanelAgent runtime and the 
   - Runtime entrypoint: `python -m app.cli watcher run`.
 - Runtime DB outbox is available (`DATABASE_URL` or `DB_DSN`); JSONL outbox is audit/diagnostic only.
 - Use a test vault or a clearly marked subset (3–10 notes) in PKM-Alpha.
+- Before any auto-exec enablement, run `python -m app.cli settings-explain` and `python -m app.cli status` and confirm the watcher gate, allowlist validity, write guard, and recent skip reasons are coherent.
 
 ## 2) Prepare test notes
 - Pick a handful of notes (3–10) for UAT; keep the rest untouched.
@@ -47,6 +53,7 @@ Purpose: practical, low-risk UAT flow for exercising PanelAgent runtime and the 
    - Watcher computes panel candidacy and emits summaries.
    - Panel auto-exec is skipped when `WATCHER_AUTO_EXEC=0`.
    - Ingest still runs for changed notes; inbox UUID healing can occur as part of ingest.
+   - `python -m app.cli status` should show `Watcher automation` with `mode=emit-only` and non-error skip counters.
 
 ## 5) Registry watcher pass — full run
 1. Re-run with panel auto-exec armed:
@@ -58,9 +65,11 @@ Purpose: practical, low-risk UAT flow for exercising PanelAgent runtime and the 
    - emit DB outbox events for ingest and panel runs,
    - run PanelAgent runtime only for candidate notes that are not opted out,
    - keep JSONL outbox as an audit log only.
+   - `python -m app.cli settings-explain` should show the effective gate as enabled, the allowlist, and watcher settings provenance.
 
 ## 6) What to observe & rollback posture
 - Status: `python -m app.cli status` (or status API) should reflect ingest counts and runs; ASK should surface the UAT notes with source refs.
+- Enablement signals: `settings-explain` should agree with `status` on auto-exec mode, allowlist, and write-guard context before an operator treats watcher auto-run as safe.
 - DB outbox: inspect `outbox` table (or `/api/events/tail` if available) for `panel.intent.*` and `promote.intent.created`.
 - JSONL audit: `INDEX_OUTBOX_PATH` lines should mirror watcher emissions but are not consumed by the worker.
 - Safety: watcher does not rewrite note bodies; downstream agents may update frontmatter/mirrors only. UAT is scoped to the selected notes; the rest of the vault is untouched.
@@ -70,3 +79,4 @@ Purpose: practical, low-risk UAT flow for exercising PanelAgent runtime and the 
 - Scope: single-user UAT on a subset of notes; no multi-user or remote watcher yet.
 - Registry watcher is the runtime standard; legacy snapshot watchers are dev-only.
 - Policy can be refined later (per-panel modes, additional triggers) without changing the current contract.
+- This runbook should be read together with `docs/DESIGN_PRINCIPLES.md` and `docs/ARCHITECTURE.md` so operational validation does not get mistaken for the full design model.

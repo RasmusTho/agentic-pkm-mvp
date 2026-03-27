@@ -85,6 +85,8 @@ The system also exists in a longer arc of use:
 The following functions are primary.
 They define what the system must continue to support even as implementation details change.
 
+Automation is additive to these human functions. When the runtime is allowed to act on the user's behalf, it must still preserve authorship, provenance, and a visible receipt trail so the human can tell what happened and why.
+
 ### Canonical human loops
 
 These loops are compact recurring patterns, not a claim that all work must follow one rigid workflow.
@@ -232,6 +234,19 @@ This means:
 The system should therefore support both:
 - protected separation when contexts should stay apart,
 - and explicit, reusable overlap when the human wants stable participation across contexts.
+
+### Support safe operator enablement
+
+When the system exposes automated watcher behavior, the operator must be able to decide whether it is safe to enable without reading implementation code.
+
+The system should make the following questions answerable from `settings-explain`, `status`, and the runbook:
+- what the effective watcher auto-exec mode is,
+- which actions are allowlisted,
+- whether the allowlist matches the loaded panel actions,
+- whether provenance and write-guard metadata are present,
+- and whether recent watcher ticks show only expected skips and receipts.
+
+The operator decision should not depend on a single environment variable alone.
 
 ### Support long-term evolution of the system itself
 
@@ -728,7 +743,6 @@ This means:
 This section is the authoritative user-facing description of the current operational topology.
 Architecture and roadmap docs may reference it, but should not duplicate device-specific narrative
 unnecessarily.
-
 ## 14. Current baseline realization
 
 The current baseline realizes only part of the broader function set.

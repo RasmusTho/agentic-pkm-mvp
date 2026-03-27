@@ -21,7 +21,7 @@ def test_write_mirror_uses_knowledge_port(tmp_path: Path, monkeypatch) -> None:
         resolved_path.write_text(content, encoding="utf-8")
         return None
 
-    monkeypatch.setattr("app.ingest.vault_alpha.write_note_from_absolute", _fake_write_note)
+    monkeypatch.setattr("app.services.note_mirror.write_note_from_absolute", _fake_write_note)
 
     mirror_path = _write_mirror(
         vault_root,

@@ -67,6 +67,7 @@ def run_panel_intent_for_note(
     note_uuid: str,
     trace_id: str | None = None,
     *,
+    trigger: str = "cli",
     write_outbox: bool = True,
     outbox_path: Path | None = None,
 ) -> List[PanelIntentEvent]:
@@ -89,7 +90,7 @@ def run_panel_intent_for_note(
         event = PanelIntentEvent(
             payload=payload,
             trace_id=resolved_trace_id,
-            source=PanelEventSource(trigger="cli", component="panel_agent", sot="v5.0-step1"),
+            source=PanelEventSource(trigger=trigger, component="panel_agent", sot="v5.0-step1"),
         )
         events.append(event)
         if write_outbox:

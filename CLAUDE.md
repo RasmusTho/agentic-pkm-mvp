@@ -191,3 +191,13 @@ For each request:
 - **Resurfacing is distinct from retrieval**; `zone` stays a derived overlay, not hidden semantic authority
 - **Creative-process support** (fragments, alternatives, revision, world continuity) is a first-class architecture concern
 - **Accountability and explainability** remain architecture-level invariants across all of the above
+
+## Design-layer split
+
+Keep the high-level docs in their intended roles:
+
+- `docs/DESIGN_PRINCIPLES.md` owns stable design rules and document-layer boundaries.
+- `docs/ARCHITECTURE.md` owns structural boundaries and invariants.
+- `docs/ROADMAP.md` owns sequencing and adoption gates rather than backlog detail.
+- `docs/STATUS.md` owns present-tense operational truth.
+- `docs/plans/*` and `docs/tracks/*` own implementation planning detail.

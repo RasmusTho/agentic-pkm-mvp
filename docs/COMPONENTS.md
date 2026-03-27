@@ -6,6 +6,7 @@ Authority: Current component catalog and dependency boundary reference for the a
 Canonical list of current modular building blocks.
 
 This document is an implementation catalog (it may mention current entrypoints/config). Kernel-level intent and stability contracts live in `docs/PROJECT_KERNEL.md`.
+System-level design rules for modularity, capability-based composition, and documentation-layer boundaries live in `docs/DESIGN_PRINCIPLES.md`.
 For the ontology/runtime distinction behind terms such as `artifact`, `object`, `agent`, `plan`,
 and `promotion`, also read:
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
@@ -55,6 +56,10 @@ Interpretation note:
 
 ## Retrieval & ranking
 
+Interpretation note:
+- retrieval and ranking entries in this section should be read as reusable building blocks,
+- not as evidence that retrieval must remain architecturally centered in one agent surface.
+
 - **Hybrid retrieval** — Combined lexical + semantic retrieval with optional reranking overlays.
   Current runtime scope filtering uses `ASK_DOMAIN_SCOPE` + `bridge_domains` as compatibility
   labels for a narrower operational-scope policy, not as the full context model. Maturity:
@@ -68,12 +73,20 @@ Changing embedding profiles safely: 1) sanity-check with `python -m app.cli embe
 
 ## ASK / reasoning
 
+Interpretation note:
+- current ASK and panel-related entries below describe active runtime surfaces and scaffolding,
+- while the broader direction is to separate interaction surfaces from reusable cognition and capability layers.
+
 - **ASK API** — Question answering endpoint returning answers plus source references/latency. Maturity: Baseline.
 - **Reasoning layer** — Optional structured reasoning overlays (claims/evidence/inference). Maturity: Experimental.
 - **ReasoningFacade** — Shared reasoning/tool entrypoint for LangGraph agents. Maturity: Planned. Forward-line only; not part of the locked v5.5 baseline.
 - **BaseLangGraphAgent** — Common agent scaffolding for LangGraph inner loops. Maturity: Planned. Forward-line only; not part of the locked v5.5 baseline.
 - **Panel agent** — Panel parsing + intent emission/execution for note interaction. Maturity: Active.
 - **LLM router + fabric** — Canonical access layer for chat + embeddings (`app/components/llm/router.py`, `app/components/llm/fabric.py`). High-level modules must use `get_chat_client` / `get_embeddings_client`; routes are reported via `/api/health`. Maturity: Active.
+
+Direction note:
+- ASK remains a valid current runtime surface,
+- but the design direction is to build retrieval and reasoning as reusable capabilities that can serve multiple interaction surfaces rather than extending an agent-per-function model.
 
 ## Eval stack
 

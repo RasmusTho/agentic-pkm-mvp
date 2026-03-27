@@ -13,6 +13,7 @@ DB or index layers semantically primary.
 
 This contract complements:
 - `docs/plans/ARTIFACT_MODEL_AND_LIFECYCLES.md`
+- `docs/plans/COMPANION_NOTE_AND_AGENT_CONTEXT_PLAN.md`
 - `docs/FRONTMATTER.md`
 - `docs/CORE_CONTRACT.md`
 - `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`
@@ -59,7 +60,6 @@ Compatibility note:
   artifacts during transition
 - forward-line docs define `_system/companions/` as the intended steady-state location
 - migration and compatibility behavior should remain explicit until implementation fully converges
-
 ## Minimal field set
 
 The companion note must carry a bounded field set sufficient for continuity and repair.
@@ -76,6 +76,34 @@ Minimum field list:
 Additional bounded continuity or healing metadata may exist when consistent with this contract, but
 the companion note must not silently become a dump for arbitrary runtime internals.
 
+### Attachment manifest (bounded extension)
+
+When a vault note references non-markdown files via Obsidian embed syntax (`![[file.png]]`,
+`![[file.pdf]]`, etc.), the companion note may carry a bounded attachment manifest:
+
+```yaml
+attachments:
+  - ref: <vault-relative path to file>
+    content_hash: <sha256 or null if file missing>
+```
+
+The attachment manifest records which files are part of the artifact's observable surface. It is:
+- bounded: only files explicitly referenced via `![[...]]` embed syntax in the note body,
+- observational: it records what the system sees, not what the system enforces,
+- not an ownership claim: the same file may appear in multiple companion manifests,
+- not an auto-repair mechanism: if an embed reference disappears from the vault note, the
+  attachment is removed from the manifest at next ingest. The system must never write `![[...]]`
+  back into a vault note — that would rewrite human meaning.
+
+### Fields explicitly not in the companion note
+
+The companion note must not carry:
+- `review_state` — owned by vault note frontmatter,
+- `maturity` — owned by vault note frontmatter,
+- `kind` — implicit for tracked vault artifacts,
+- `origin` — implicit for vault-sourced companions,
+- agent action history or classification results — these belong in the runtime DB,
+- full note content or body text — read the vault note directly.
 ## Lifecycle
 
 ### Creation trigger
@@ -114,7 +142,6 @@ Interpretation:
 - `healing_needed` = continuity or identity inconsistency requires repair workflow
 - `soft_deleted` = tracked note is treated as removed from active use without full continuity erasure
 - `archived` = continuity artifact retained for long-horizon traceability after archival transition
-
 ### Missing companion handling
 
 If the companion note is missing:
@@ -208,7 +235,6 @@ transitional:
   a named abstraction
 - `EmbeddingProvider` = the current provider/model-tagged embedding boundary, implemented today
   through the embedding configuration/runtime stack and later documentable as a clearer interface
-
 ## Human should never edit this
 
 In practice, "human should never edit this" means:
@@ -221,6 +247,35 @@ In practice, "human should never edit this" means:
 This does not mean the file must be hidden from the user.
 It means the file is system-owned, not user-authored.
 
+## Role in agent context
+
+The companion note is not the agent's working memory. It is the agent's **identity anchor** for a
+tracked artifact.
+
+When agents need rich per-artifact context, they should use a Note Context abstraction that
+assembles information from all three surfaces:
+- companion note (identity, content_hash, attachment manifest, ingest_state),
+- vault note (full text, frontmatter, structure, embeds),
+- runtime DB (relations, classification, agent history, policy).
+
+The companion note contributes the portable identity and continuity kernel that makes the rest of
+the context assembleable. Agent operational state (executed actions, classification results,
+promotion history) belongs in the runtime DB, not in the companion note.
+
+See `docs/plans/COMPANION_NOTE_AND_AGENT_CONTEXT_PLAN.md` for the implementation plan.
+
+## Relation to VaultMirror (legacy)
+
+The earlier `System/Metadata/VaultMirror/...` path and `note_mirror`/`note_log` code modules are
+the legacy implementation of a subset of companion note functionality. They are being replaced by
+the companion note service.
+
+The companion note differs from VaultMirror in that it:
+- uses flat UUID-based path (`_system/companions/<uuid>.md`) instead of directory-preserving path,
+- does not duplicate human-owned fields (`review_state`, `maturity`),
+- includes an attachment manifest,
+- follows the bounded field set defined in this contract,
+- and writes through KnowledgePort.
 ## Forward note on linking convention
 
 The human-facing and system-facing linking conventions for vault note <-> companion note should be
