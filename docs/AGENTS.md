@@ -7,6 +7,10 @@ This document covers the system-level view of agents in the current architecture
 - LangGraph/AgentState direction,
 - coordination via Outbox, Planner, and future A2A envelopes.
 
+It does not claim that every important system behavior should become its own agent.
+Where reusable behavior is better modeled as a capability or bounded subsystem, that should remain
+the preferred direction.
+
 This document is downstream of the human-function documents.
 Its purpose is not to define what the system is for, but to describe how the current runtime
 organizes assisting units in service of those functions.
@@ -23,6 +27,7 @@ This document is about agents that exist inside the PKM system/runtime.
 It is not the instruction set for development-time coding agents or repo automation.
 Development-time guidance lives in `docs/DEV_WORKFLOW.md`, `.codex/AGENTS.md`, and
 `docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md`.
+System-level design rules for modularity, capability composition, and documentation layering live in `docs/DESIGN_PRINCIPLES.md`.
 
 Use `docs/PANEL_AGENT.md` for PanelAgent-specific runtime behavior, panel syntax, emitted events, and wiring details.
 See `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md` for the current recommendation on separating
@@ -37,9 +42,19 @@ Use `docs/TESTING.md` for the canonical test layers, CI roles, and runtime/UAT v
 - The matrix is therefore best read as a runtime coordination map, not a pure ontology table.
 
 ## Design principle
+- Agent structure should follow the system design principles in `docs/DESIGN_PRINCIPLES.md`: boundary-first design, capability-based composition, explicit mutation authority, and governance before autonomy.
 - Non-trivial decision logic should move toward “LangGraph inner, events/A2A outer”: each agent owns an explicit `AgentState` and LangGraph graph for internal choices, while coordination between agents happens via Outbox events/A2A envelopes orchestrated by the Orchestrator/Planner.
+- Agent-per-function decomposition should not be expanded when the same behavior is better modeled as a reusable capability.
 - PanelAgent is the concrete example: LangGraph runtime with an action catalog driving a configurable decider (`PANEL_AGENT_DECIDER=rule|llm`), defaulting to deterministic rule-mode while offering opt-in LLM-based selection.
 - Current adoption is phased: ASK and PanelAgent use LangGraph; most other agents remain deterministic pipelines until v5.6 rollout phases.
+
+## Current architectural direction
+
+- The runtime should be read as capability-oriented even where older agent labels still exist.
+- Retrieval, reranking, context building, reasoning support, and transformation support should evolve toward reusable capabilities rather than proliferating agent identities.
+- Interaction, cognition, execution, memory, and governance are separate concerns; agent structure should not collapse those boundaries.
+- Panel and Chat should be understood as distinct interaction surfaces with different authority, not as interchangeable shells around the same agent behavior.
+- Richer cognition may be introduced incrementally, but governance and mutation authority remain upstream constraints on agent evolution.
 
 Functional reminder:
 - these runtime units exist to support capture, retrieval, commitment handling, review, learning,
@@ -76,6 +91,10 @@ Interpretation:
   artifacts.
 
 Flow: `query → retrieve (hybrid search) → rerank (ask_score + reranker) → answer (LLM optional)`. The canonical implementation lives in `app/agents/ask/graph.py` and is invoked by `/api/ask`.
+
+Direction note:
+- this remains a valid current runtime surface,
+- but the v6 direction treats ASK as a surface built on reusable capabilities rather than as the architectural center of retrieval or reasoning.
 
 ## Example graph
 `retrieve -> draft -> self-check -> final` (max 2 iterations)
@@ -115,6 +134,7 @@ Interpretation notes:
 - `Promotion` and `Review` in this table refer to transition/process families, not standalone entity types.
 - Several rows operate mainly on runtime projections and event flows rather than directly on the full
   human ontology of artifacts.
+- The table is a current coordination map, not a target-state claim that the system should keep or expand one-agent-per-function decomposition.
 
 ## Planner (Reality-MVP)
 - Builds hierarchical plans (parent_plan + depth) and enforces bounds (max depth/steps/replans/total steps).

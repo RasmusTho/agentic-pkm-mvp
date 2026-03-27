@@ -22,6 +22,8 @@ For the broader ontology of the system as a second-brain environment, see:
 - `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md`
 - `docs/CONCEPTS/STATE_AXES_CONTRACT.md`
 - `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`
+- `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`
+- `docs/plans/ARTIFACT_MODEL_AND_LIFECYCLES.md`
 - `docs/plans/USER_STORIES_AND_REQUIREMENTS.md`
 - `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md`
 
@@ -82,6 +84,8 @@ The system also exists in a longer arc of use:
 
 The following functions are primary.
 They define what the system must continue to support even as implementation details change.
+
+Automation is additive to these human functions. When the runtime is allowed to act on the user's behalf, it must still preserve authorship, provenance, and a visible receipt trail so the human can tell what happened and why.
 
 ### Canonical human loops
 
@@ -231,6 +235,19 @@ The system should therefore support both:
 - protected separation when contexts should stay apart,
 - and explicit, reusable overlap when the human wants stable participation across contexts.
 
+### Support safe operator enablement
+
+When the system exposes automated watcher behavior, the operator must be able to decide whether it is safe to enable without reading implementation code.
+
+The system should make the following questions answerable from `settings-explain`, `status`, and the runbook:
+- what the effective watcher auto-exec mode is,
+- which actions are allowlisted,
+- whether the allowlist matches the loaded panel actions,
+- whether provenance and write-guard metadata are present,
+- and whether recent watcher ticks show only expected skips and receipts.
+
+The operator decision should not depend on a single environment variable alone.
+
 ### Support long-term evolution of the system itself
 
 The system must remain compatible with the fact that the user's needs, practices, and preferred workflows will change.
@@ -264,6 +281,14 @@ Core functions should remain available even on narrower devices or partial satel
 - and other minimum continuity functions.
 
 Richer assistance may vary by device role as long as that asymmetry is understandable and does not threaten trust in the underlying artifacts.
+
+Current operational examples the system should remain compatible with:
+- a Mac mini acting as the richer home/master runtime node,
+- an iPad reading and lightly editing through iCloud-backed file sync,
+- and a laptop/satellite node using Git-backed synchronization with narrower or delayed local capability.
+
+The human contract is not that every device behaves identically.
+The contract is that the important artifacts remain understandable, recoverable, and usable.
 
 ### Preserve long-lived artifacts beyond the current system
 
@@ -414,6 +439,7 @@ The system should make it increasingly clear whether something is primarily:
 - a waiting item,
 - a creative fragment,
 - a reflective artifact,
+- a companion note or other system-surface continuity artifact,
 - or a system receipt/status surface.
 
 The human should not need to force everything into one representation too early.
@@ -696,6 +722,23 @@ The current baseline exposes these main surfaces:
   outcomes.
 
 These surfaces are important only insofar as they serve the human functions described above.
+
+The human may also occasionally observe system-surface artifacts such as companion notes.
+Those artifacts are not normal authoring surfaces, but their presence should still remain legible
+enough that the human is not surprised by them.
+
+### Satellite and tablet flow
+
+The system should support a practical flow where:
+- the Mac mini runs the richer ingest/watch/runtime loop,
+- iCloud propagates changed vault files to an iPad for reading and light editing,
+- Git propagates tracked files to a laptop or narrower satellite,
+- and the runtime reacts to changed files rather than assuming one transport is the only real one.
+
+This means:
+- companion notes may travel with the vault's system-owned files,
+- runtime DB/index state may differ temporarily across nodes,
+- but continuity should still be recoverable from the file-based artifacts.
 
 ## 14. Current baseline realization
 

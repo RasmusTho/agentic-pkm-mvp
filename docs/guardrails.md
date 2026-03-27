@@ -4,7 +4,7 @@ State: SoT v5.5 Reality-MVP baseline locked (watcher/panel safety + concurrency 
 ## Quality guardrails (runtime)
 - **Determinism first**: watcher/panel flows must be idempotent and safe by default.
 - **Write safety**: `DEFAULT_WRITE_GUARD` blocks stale writes and prevents silent file corruption.
-- **Action safety**: watcher auto-run only when explicitly allowed in frontmatter (`ai_panel_auto_run: watcher`) and when actions are allowlisted via `vault/@Settings/watchers.md`.
+- **Action safety**: once watcher auto-exec is armed, AI-fenced notes may auto-run unless frontmatter explicitly opts out with `ai_panel_auto_run: never`; actions must still be allowlisted via `vault/@Settings/watchers.md`.
 - **Dedup + idempotency**: DedupTaskQueue prevents duplicate watcher auto-exec; EventDedupStore skips duplicate `promote.intent.created`.
 
 ## LLM eval guardrails (diagnostic)

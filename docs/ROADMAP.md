@@ -47,6 +47,139 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
     - Separate retrieval, orientation, and resurfacing as related but distinct runtime concerns.
     - Clarify surface and authority contracts so writing, retention, and system surfaces stay distinct and receipt-bearing actions remain inspectable.
 
+## Capability-Based Architecture & Agent Evolution
+
+This section defines the v6 direction without changing the locked SoT v5.5 guarantees or the active v5.6 rollout contracts.
+It follows the design rules in `docs/DESIGN_PRINCIPLES.md`: principles first, structure second, sequencing third, implementation detail elsewhere.
+The working plan detail for this section lives in `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`.
+
+Sequencing rule:
+- v5.6 should be read here primarily as an invariant and stabilization layer, not as a strict linear prerequisite list for every v6 design decision.
+- The design goal is to preserve the contracts v5.6 is establishing while allowing v6 structural work to be defined in parallel.
+
+Decisions already fixed for this direction:
+- ASK is deprecated as the architectural center rather than expanded.
+- Retrieval is treated as a reusable capability rather than a standalone agent.
+- Interaction is primary on the user-facing side; retrieval, reasoning, ingestion, and indexing remain foundational capabilities used by different interaction surfaces and automation paths.
+- Deep Agents start only after structural separation is in place.
+- Chat precedes Panel for Deep Agent rollout because read-only cognition is the safer entry surface.
+- Execution remains governed and mediated; reasoning alone must not trigger mutation.
+- The long-term system spans manual through automated and reactive through proactive behavior under governance.
+
+## Phase 0 — Stabilization (v5.6, current)
+
+- Finish the current v5.6 enablement work needed for structural separation.
+- Keep current runtime contracts stable and deterministic.
+- No Deep Agents in production mutation flows.
+- No execution outside the controlled action layer.
+
+## Phase 1 — v6.0 Baseline (Structural Separation)
+
+Introduce explicit system layers:
+
+- Interaction Layer:
+  - Panel (primary, mutation-capable)
+  - Chat (planned, read-only)
+- Orchestration Layer:
+  - LangGraph (control plane, deterministic)
+- Capability Layer:
+  - retrieval (`retrieve`, `rerank`, `context_build`)
+  - reasoning (future)
+  - transformation (future)
+- Execution Layer:
+  - controlled actions only
+  - no LLM direct mutation
+- Memory Layer:
+  - AMG + stores
+- Governance Layer:
+  - policies
+  - admissibility
+  - provenance
+  - approval
+
+Deliverables:
+
+- ASK fully deprecated; no new development.
+- Retrieval extracted into a capability layer.
+- Interaction, cognition, execution, memory, and governance separated clearly enough to evolve independently.
+- Template-based bounded agents and reusable capabilities can coexist without collapsing into one central agent.
+- Governed mutation paths remain explicit and mediated across interaction and automation surfaces.
+
+## Phase 2 — Deep Agent Introduction (Thin Slice, Post-v6.0)
+
+Introduce Deep Agents under strict constraints.
+
+Scope:
+
+- Chat surface only.
+- Read-only mode.
+- No system mutation.
+- No execution access.
+
+Capabilities:
+
+- planning
+- decomposition
+- multi-step reasoning
+- retrieval orchestration
+
+Explicit rule: "Deep Agents cannot execute actions or mutate system state."
+
+Deliverables:
+
+- Chat becomes the first safe cognition sandbox.
+- Deep Agent behavior remains decoupled from execution authority.
+
+## Phase 3 — Panel Integration (Controlled Cognition)
+
+Extend Deep Agents into Panel.
+
+Scope:
+
+- planning only
+- proposal generation only
+
+Constraints:
+
+- No direct execution.
+- All actions must go through:
+  - policy checks
+  - validation
+  - event pipeline
+
+Panel remains a primary command-oriented mutation surface, but not the only governed mutation path in the long-term system.
+
+## Phase 4 — Execution Layer Expansion (Future)
+
+Introduce controlled execution evolution under governance and sandboxing.
+
+Explicit rule: "LLM reasoning must never directly trigger execution."
+
+## Phase 5 — Governance & Scaling
+
+- Strengthen governance layer.
+- Introduce:
+  - policy enforcement engines
+  - audit trails
+  - execution constraints
+- Consider NemoClaw-like patterns (optional).
+
+## Interaction Model Evolution
+
+- Panel = command surface (`intent -> action`).
+- Chat = exploration surface (`reasoning -> insight`).
+- The broader system spans manual, assisted, reactive automation, and proactive automation under governance.
+- Both share:
+  - `AgentState`
+  - capability layer
+  - cognition layer (Deep Agents, future)
+
+## ASK Decomposition
+
+- ASK marked deprecated as an architectural center.
+- Retrieval extracted into capability layer.
+- No new central retrieval agent should be created to recentralize the architecture.
+
 ## Fitness Functions Enforced in CI
 - `pytest -q -c /dev/null -m "not pg and not alpha_llm"` is the primary smoke gate in CI.
 - `ops/quality/baselines.yaml` writes the `GATES` block and must report `ok=true` for merges; CI pipelines rely on that signal.

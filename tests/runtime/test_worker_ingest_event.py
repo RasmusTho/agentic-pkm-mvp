@@ -4,6 +4,7 @@ import json
 import uuid
 from pathlib import Path
 
+from app.services.note_log import note_log_path
 from app.store.object_store import ObjectStore
 from app.workers import outbox_worker
 from scripts.yaml_roundtrip import load_frontmatter
@@ -106,9 +107,48 @@ def test_handle_ingest_vault_changed_heals_uuid_using_vault_layout_inbox(
     assert isinstance(frontmatter, dict)
     healed_uuid = str(frontmatter.get("uuid") or "").strip()
     assert healed_uuid
+    mirror_path = vault_root / note_log_path(healed_uuid, Path("📥 Inbox/uuidless.md"))
+    assert mirror_path.exists()
+    mirror_frontmatter, _ = load_frontmatter(mirror_path.read_text(encoding="utf-8"))
+    assert mirror_frontmatter.get("uuid") == healed_uuid
+    assert mirror_frontmatter.get("source_ref") == "📥 Inbox/uuidless.md"
 
     obj = ObjectStore().get_object(healed_uuid)
     assert obj is not None
+
+
+def test_handle_ingest_vault_changed_creates_missing_mirror_for_existing_uuid(
+    tmp_path: Path, monkeypatch
+) -> None:
+    reset_memory_stores()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    vault_root = tmp_path / "vault"
+    inbox = vault_root / "📥 Inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+
+    note_uuid = str(uuid.uuid4())
+    note_path = inbox / "existing-uuid.md"
+    note_path.write_text(
+        f"---\nuuid: {note_uuid}\ntitle: Existing UUID\n---\n\nBody\n",
+        encoding="utf-8",
+    )
+
+    payload = {
+        "vault_path": str(note_path),
+        "relative_path": "📥 Inbox/existing-uuid.md",
+        "hash": "test-hash",
+        "mtime": 123.0,
+    }
+
+    summary = outbox_worker.handle_ingest_vault_changed(payload, vault_root=vault_root)
+    assert summary.ingested == 1
+
+    mirror_path = vault_root / note_log_path(note_uuid, Path("📥 Inbox/existing-uuid.md"))
+    assert mirror_path.exists()
+    mirror_frontmatter, _ = load_frontmatter(mirror_path.read_text(encoding="utf-8"))
+    assert mirror_frontmatter.get("uuid") == note_uuid
+    assert mirror_frontmatter.get("source_ref") == "📥 Inbox/existing-uuid.md"
 
 
 def test_handle_ingest_vault_changed_uses_relative_path_when_payload_path_is_host_absolute(

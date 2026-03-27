@@ -9,8 +9,14 @@ Use it as a visual companion to:
 - `docs/ARCHITECTURE.md` for boundary and runtime shape
 - `docs/COMPONENTS.md` for component ownership
 - `docs/EVENTS.md` for event contracts
+- `docs/DESIGN_PRINCIPLES.md` for the higher-level design rules that these diagrams do not own
 
 Historical diagrams live in `docs/archive/architecture/DIAGRAMS.md`.
+
+Reading note:
+- these diagrams show current runtime wiring and operator-visible flow,
+- not the full target-state architectural decomposition,
+- and not the complete design-layer distinction between interaction, cognition, execution, memory, and governance.
 
 ## System Boundary
 
@@ -137,6 +143,12 @@ flowchart TD
   Ask --> Answer["Answer + Sources"]
   Answer --> User
 ```
+
+## Directional Reading Notes
+
+- In the current runtime view, Panel appears as the mutation-capable interaction surface.
+- ASK appears as the current question-answering surface, but should not be read as the long-term architectural center of retrieval or reasoning.
+- These visuals emphasize current event and worker wiring; they do not replace the capability-oriented and system-of-systems framing in `docs/ARCHITECTURE.md` and `docs/DESIGN_PRINCIPLES.md`.
 
 ## Notes
 

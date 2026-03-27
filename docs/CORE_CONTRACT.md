@@ -14,6 +14,8 @@ Related docs:
 - `docs/DATA_MODEL.md` for how Core-6 is mirrored in persistence surfaces
 - `docs/NOTE_KIND_POLICIES.md` for policy-selected state axes outside Core-6
 - `docs/FRONTMATTER.md` for writing-surface metadata ownership and write constraints
+- `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md` for the file-based continuity artifact that anchors
+  note identity together with the vault note
 
 ## Purpose
 - Define the smallest stable identity + provenance surface that can be shared between:
@@ -43,7 +45,7 @@ In particular:
 ## Core-6 fields (canonical)
 | Field | Purpose | Ownership | Implicit/derived? |
 | --- | --- | --- | --- |
-| `uuid` | Stable artifact identity across notes, stores, and mirrors. | System-owned. | May be derived (e.g., generated on ingest) and projected into notes. |
+| `uuid` | Stable artifact identity across notes, companion notes, stores, and runtime mirrors. | System-owned. | Must live in the file for portable identity continuity, even when initially derived/healed by ingest. |
 | `title` | Human-facing label for the artifact. | Human-owned. | May be derived (e.g., filename) when unambiguous. |
 | `origin` | Provenance source (vault, external, capture pipeline). | System-owned. | Derived from ingest context and source plane. |
 | `source_ref` | Stable locator (vault path, external URI, or system handle). | System-owned. | Derived from the storage handle or vault path. |
@@ -70,6 +72,8 @@ these six semantic coordinates must remain stable.
 - Core-6 is a semantic contract, not a literal YAML requirement.
 - Absence of YAML does not imply absence of semantics; Core-6 may be implicit or derived.
 - Writing-surface human notes remain the primary human contract surface for vault-based work; they express intent and meaning.
+- For vault notes, `uuid` in frontmatter plus the companion note form the primary file-based
+  identity anchors used for rebuild and repair.
 - External/retained artifacts may also project Core-6 without becoming vault notes.
 - The DB/system plane is a normalized mirror or projection of the contract, not the source of truth for human meaning.
 - Policy-selected axes may extend the artifact view, but they do not become part of Core-6 unless this document changes.

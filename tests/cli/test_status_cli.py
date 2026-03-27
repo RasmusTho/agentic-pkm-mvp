@@ -11,6 +11,7 @@ from app.observability.status_model import (
     IntentStatus,
     StoreStatus,
     SystemStatus,
+    WatcherAutomationStatus,
 )
 
 
@@ -70,6 +71,29 @@ def test_status_cli_prints_snapshot(monkeypatch):
             ingest_runs_by_plane={"vault": 1, "external": 1},
             source_path="/tmp/outbox.jsonl",
         ),
+        watcher_automation=WatcherAutomationStatus(
+            auto_exec_enabled=True,
+            mode="auto-exec",
+            source="env",
+            env_key="WATCHER_AUTO_EXEC",
+            raw_value="1",
+            default_enabled=False,
+            allowed_actions=["promote.evergreen"],
+            invalid_allowed_actions=[],
+            source_path="/tmp/watchers.md",
+            tick_log_path="/tmp/watcher_tick.jsonl",
+            panel_event_log_path="/tmp/outbox.jsonl",
+            writes_allowed=True,
+            write_guard_mode="open",
+            last_tick_timestamp="2025-01-01T00:00:00Z",
+            last_tick_panel_candidates=2,
+            last_tick_panel_skipped_policy=1,
+            last_tick_panel_skipped_auto_exec=0,
+            last_run_skipped_dedup=1,
+            last_run_skipped_idempotent=0,
+            last_run_skipped_writes_blocked=0,
+            last_run_skipped_allowed_actions=0,
+        ),
     )
     monkeypatch.setattr("app.cli.get_system_status", lambda: snapshot)
 
@@ -91,5 +115,9 @@ def test_status_cli_prints_snapshot(monkeypatch):
     assert "total=2 (24h=1)" in result.output
     assert "promotion executed:" in result.output
     assert "watcher runs: total=4" in result.output
+    assert "Watcher automation:" in result.output
+    assert "gate: auto-exec (enabled=True, source=env, env=WATCHER_AUTO_EXEC, raw=1, default=False)" in result.output
+    assert "allowlist: promote.evergreen" in result.output
+    assert "last_run_skips: dedup=1" in result.output
     assert "ingest runs by plane:" in result.output
     assert "source: /tmp/outbox.jsonl" in result.output

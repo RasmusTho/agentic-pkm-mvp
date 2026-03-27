@@ -29,8 +29,6 @@ from app.components.llm.router import LLMTaskIntent
 
 _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 
-_IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
-
 
 def _build_panel_source() -> PanelEventSource:
     return PanelEventSource(trigger="runtime", component="panel_agent", sot="v5.0-runtime1")
@@ -55,6 +53,44 @@ def _build_action_result(
         emitted_events=emitted,
         details=details,
     )
+
+
+def _execution_mode(state: PanelAgentState) -> str:
+    raw = str(state.policy_flags.get("execution_mode") or "").strip().lower()
+    if raw in {"manual", "watcher"}:
+        return raw
+    intent_event = getattr(state, "intent_event", None)
+    trigger = str(getattr(getattr(intent_event, "source", None), "trigger", "") or "").strip().lower()
+    if trigger == "watcher":
+        return "watcher"
+    return "manual"
+
+
+def _action_resolution_reason(
+    state: PanelAgentState,
+    action: PanelIntentAction,
+) -> str | None:
+    catalog = state.action_catalog
+    if not action.checked:
+        return "unchecked"
+
+    if catalog and catalog.has_ambiguous_label(action.label):
+        return "ambiguous_action"
+
+    mapping = action.mapping
+    if mapping is None:
+        return "unmapped_action"
+
+    if catalog and catalog.actions and catalog.get(mapping.id) is None:
+        return "unknown_mapping"
+
+    mode = _execution_mode(state)
+    if mode == "watcher" and catalog:
+        descriptor = catalog.get(mapping.id)
+        if descriptor and (descriptor.manual_only or not descriptor.watcher_allowed):
+            return "watcher_not_allowed"
+
+    return None
 
 
 def _promotion_event(intent_event: PanelIntentEvent, action: PanelIntentAction, *, target_event: str = "promote.intent.created") -> OutboxEvent:
@@ -110,7 +146,7 @@ def _logged_event(intent_event: PanelIntentEvent, action: PanelIntentAction, rea
 
 
 def _handle_action(
-    intent_event: PanelIntentEvent,
+    state: PanelAgentState,
     action: PanelIntentAction,
     *,
     override_checked: bool | None = None,
@@ -128,6 +164,8 @@ def _handle_action(
             action_to_use, status="skipped", emitted=[], reason=reason or "unchecked"
         ), emitted
 
+    assert state.intent_event is not None, "PanelAgentState must include intent_event"
+    intent_event = state.intent_event
     note_id = intent_event.payload.note.uuid
     if action_to_use.id and _IDEMPOTENCY_GUARD.seen_action(note_id, action_to_use.id):
         return _build_action_result(
@@ -138,8 +176,24 @@ def _handle_action(
         ), emitted
 
     mapping = action_to_use.mapping
+    resolution_reason = _action_resolution_reason(state, action_to_use)
     wiring = action_wiring or {}
     target_event = wiring.get(action_to_use.id)
+    if resolution_reason in {"ambiguous_action", "unmapped_action", "unknown_mapping", "watcher_not_allowed"}:
+        logged = _logged_event(intent_event, action_to_use, resolution_reason)
+        emitted.append(logged)
+        emitted_names.append(logged.event)
+        _IDEMPOTENCY_GUARD.mark_action(note_id, action_to_use.id)
+        return (
+            _build_action_result(
+                action_to_use,
+                status="logged",
+                emitted=emitted_names,
+                reason=logged.payload.get("reason"),
+            ),
+            emitted,
+        )
+
     if mapping and (mapping.intent_type or "").lower() == "promotion":
         target = target_event or "promote.intent.created"
         promote_event = _promotion_event(intent_event, action_to_use, target_event=target)
@@ -149,7 +203,7 @@ def _handle_action(
         _IDEMPOTENCY_GUARD.mark_action(note_id, action_to_use.id)
         return _build_action_result(action_to_use, status="triggered", emitted=emitted_names), emitted
 
-    logged_reason = reason or ("unhandled_action" if mapping else "unmapped_action")
+    logged_reason = reason or "unhandled_action"
     logged = _logged_event(intent_event, action_to_use, logged_reason)
     emitted.append(logged)
     emitted_names.append(logged.event)
@@ -366,7 +420,11 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
             override_checked = action.id in selected_ids
         reason = reasons.get(action.id) if reasons else None
         result, new_events = _handle_action(
-            state.intent_event, action, override_checked=override_checked, reason=reason, action_wiring=state.action_wiring
+            state,
+            action,
+            override_checked=override_checked,
+            reason=reason,
+            action_wiring=state.action_wiring,
         )
         actions.append(result)
         emitted.extend(new_events)

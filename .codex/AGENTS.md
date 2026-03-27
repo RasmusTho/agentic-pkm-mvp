@@ -26,6 +26,7 @@ Your instructions live in this file and in `docs/DEV_WORKFLOW.md`.
 When making decisions, you MUST respect this order:
 
 1. **Core SoT docs (mandatory)**
+   - `docs/DESIGN_PRINCIPLES.md`
    - `docs/STATUS.md`
    - `docs/ARCHITECTURE.md`
    - `docs/HUMAN-FLOWS.md`
@@ -62,6 +63,13 @@ When making decisions, you MUST respect this order:
      → useful for orientation and historical context, but not authoritative for the current v5.5 baseline.
 
 Use `docs/DOCS_INDEX.md` to determine whether a document is Core SoT, Reference, Plan, or Historical before treating it as a decision input.
+
+Document responsibility split:
+- `docs/DESIGN_PRINCIPLES.md` owns stable design rules and documentation-layer boundaries.
+- `docs/ARCHITECTURE.md` owns structural boundaries and invariants.
+- `docs/ROADMAP.md` owns sequencing and adoption gates.
+- `docs/STATUS.md` owns current operational truth.
+- `docs/plans/*` and `docs/tracks/*` own detailed implementation planning.
 
 For any documentation or specification task, you MUST determine the owning document before drafting edits:
 - start in `docs/DOCS_INDEX.md`,
@@ -193,6 +201,12 @@ For every non-trivial change, follow this sequence:
      - preserve sharp responsibility boundaries,
      - keep normative statements close to the document that owns them,
      - move operational or implementation detail out of spec docs when it obscures the contract.
+   - Keep design layers distinct:
+     - principles docs define stable rules,
+     - architecture docs define structure,
+     - roadmap docs define sequencing,
+     - status docs define present truth,
+     - plan/track docs hold backlog-like detail.
 
 7. **Follow the document change algorithm**
    - For any docs change, execute this sequence:
@@ -204,6 +218,7 @@ For every non-trivial change, follow this sequence:
      - remove or rewrite duplicate statements instead of leaving conflicting copies behind.
    - Do not start by editing the easiest document to reach. Start with the owner.
    - Do not create a sibling doc to avoid touching an owner doc.
+   - Do not put backlog-like task lists into `docs/ROADMAP.md` when the material belongs in `docs/plans/*` or `docs/tracks/*`.
    - Do not leave a redirect/stub indefinitely once inbound references are removed.
    - If a topic no longer needs its own document, merge it into the owner and delete or archive the old file.
 

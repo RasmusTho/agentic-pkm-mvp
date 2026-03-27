@@ -78,6 +78,15 @@ class WatcherSettings:
     source: SettingsSource
 
 
+@dataclass(frozen=True)
+class AutoExecResolution:
+    env_key: str
+    default_enabled: bool
+    enabled: bool
+    source: str
+    raw_value: str | None
+
+
 def load_watcher_settings(vault_root: Path | None = None) -> WatcherSettings:
     path = _settings_file(vault_root)
     data = _read_frontmatter(path)
@@ -160,9 +169,29 @@ def resolve_auto_exec_enabled(
     vault_root: Path | None = None,
     env: Mapping[str, str] | None = None,
 ) -> bool:
+    return resolve_auto_exec_state(vault_root=vault_root, env=env).enabled
+
+
+def resolve_auto_exec_state(
+    *,
+    vault_root: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> AutoExecResolution:
     settings = load_watcher_settings(vault_root)
     env_map = os.environ if env is None else env
     raw = env_map.get(settings.auto_exec_env)
     if raw is None:
-        return settings.auto_exec_default
-    return str(raw).strip().lower() in _TRUE_VALUES
+        return AutoExecResolution(
+            env_key=settings.auto_exec_env,
+            default_enabled=settings.auto_exec_default,
+            enabled=settings.auto_exec_default,
+            source="settings_default",
+            raw_value=None,
+        )
+    return AutoExecResolution(
+        env_key=settings.auto_exec_env,
+        default_enabled=settings.auto_exec_default,
+        enabled=str(raw).strip().lower() in _TRUE_VALUES,
+        source="env",
+        raw_value=str(raw),
+    )

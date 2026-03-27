@@ -56,6 +56,35 @@ mappings:
     return path
 
 
+def _settings_file_with_flags(
+    tmp_path: Path,
+    *,
+    action_id: str,
+    label: str,
+    intent_type: str,
+    downstream_event: str,
+    manual_only: bool = False,
+    watcher_allowed: bool = True,
+) -> Path:
+    path = tmp_path / "panel-actions.md"
+    manual_only_line = "    manual_only: true\n" if manual_only else ""
+    watcher_allowed_line = "    watcher_allowed: false\n" if not watcher_allowed else ""
+    path.write_text(
+        f"""---
+mappings:
+  - id: "{action_id}"
+    label: "{label}"
+    intent_type: "{intent_type}"
+    downstream_event: "{downstream_event}"
+{manual_only_line}{watcher_allowed_line}    params:
+      maturity: "evergreen"
+---
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
 def _panel_markdown(action_label: str, checked: bool = True) -> str:
     mark = "x" if checked else " "
     return f"""%% AI:Start %%
@@ -176,6 +205,40 @@ def test_runtime_llm_filters_executed_actions(tmp_path: Path, monkeypatch: pytes
     topics = {rec["event"] for rec in records}
     assert "promote.intent.created" not in topics
     assert "panel.action.triggered" not in topics
+
+
+def test_runtime_watcher_mode_blocks_manual_only_actions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    note_uuid = str(uuid4())
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    settings_path = _settings_file_with_flags(
+        tmp_path,
+        action_id="note.archive",
+        label="Archive this note",
+        intent_type="archival",
+        downstream_event="note.archive",
+        manual_only=True,
+        watcher_allowed=False,
+    )
+    markdown = _panel_markdown("Archive this note", checked=True)
+    _seed_note(note_uuid, markdown)
+
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-panel-watcher", trigger="watcher")
+    assert len(events) == 1
+    assert events[0].source.trigger == "watcher"
+
+    result = execute_panel_intent(events[0], outbox_path=outbox_path)
+    assert isinstance(result, PanelRuntimeResult)
+    assert result.actions[0].status == "logged"
+    assert result.actions[0].details.get("reason") == "watcher_not_allowed"
+
+    records = _read_outbox(outbox_path)
+    topics = {rec["event"] for rec in records}
+    assert "panel.action.logged" in topics
+    assert "promote.intent.created" not in topics
 
 
 def test_runtime_restart_does_not_reemit_executed_actions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
