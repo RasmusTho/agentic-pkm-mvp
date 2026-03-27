@@ -19,7 +19,9 @@ See also:
 - `docs/CONCEPTS/STATE_AXES_CONTRACT.md` (canonical `review_state` / `maturity` semantics)
 - `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md` (canonical mirror vs receipt separation)
 - `docs/CORE_CONTRACT.md` (Core-6 semantic contract)
+- `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md` (companion note continuity/repair contract)
 - `docs/HUMAN-FLOWS.md` (human-facing behavior constraints for note mutation)
+- `docs/plans/ARTIFACT_MODEL_AND_LIFECYCLES.md` (artifact surfaces, authority matrix, healing order)
 - `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md` (current normalization recommendation for
   `review_state`, `maturity`, `promotion`, and mirror/receipt boundaries)
 
@@ -59,8 +61,12 @@ The system may propose changes to these (SUGGEST), but must not silently overwri
 
 ### System-owned (bounded)
 The system may maintain small, bounded metadata needed for safety and stability, such as:
-- A stable identity handle (e.g., uuid) when missing.
-- VaultMirror fingerprint UUID reuse SHOULD also match normalized titles to avoid collisions on identical bodies.
+- A stable identity handle (`uuid`) which must live in the file and is PKA-owned rather than
+  Obsidian-owned.
+- Companion-note and identity-healing reuse SHOULD consider normalized titles/aliases as
+  Obsidian-facing continuity signals, but title is not by itself a sufficient global identity rule.
+- `source_ref` as a vault-relative path continuity field when present, with the explicit limitation
+  that it is mutable and secondary to stable identity records.
 - Guardrails like trust/review_state and derived overlays (zone/recency/salience).
 - Policy-selected state markers only when authorized via APPLY.
 
@@ -81,8 +87,14 @@ It should not become the only durable home for:
 Frontmatter writes must follow the trust semantics:
 
 ### May be automatic
-- Non-semantic, stability-supporting fields (e.g., ensuring a stable identity handle) when missing.
+- Non-semantic, stability-supporting fields (e.g., ensuring or healing a stable `uuid`) when
+  missing or lost.
 - Only when the write does not change the human’s meaning and does not cross boundaries.
+
+Healing-write clarification:
+- `uuid` healing writes must go through `KnowledgePort`.
+- Healing is scenario-bound and should follow the artifact-model authority matrix rather than an
+  unconditional "frontmatter wins" rule.
 
 ### Requires explicit confirmation
 - Any write that changes meaning-bearing classification (domain, durable taxonomy, claims) or any durable workflow decision.
@@ -101,11 +113,11 @@ Receipts and cursors are operational artifacts:
 - They belong primarily in the system plane, so they remain available and auditable without polluting the writing surface.
 - They may be mirrored into the writing-surface note only as a bounded, clearly non-authoritative status surface (for human convenience).
 
-Mirror note / receipt clarification:
-- the metadata mirror is a portable machine-side projection of a vault note,
-- it may also surface receipt-like information,
-- but it should not be treated as identical to the full receipt model; see
-  `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`.
+Companion note / receipt clarification:
+- the companion note is the first-class system artifact for note continuity and repair,
+- broader mirror language still applies to portability/projection concepts in some legacy docs,
+- and neither companion notes nor mirror artifacts should be treated as identical to the full
+  receipt model; see `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`.
 
 If a note displays status/receipts, it must remain clear that:
 - The note body is still the human’s writing.

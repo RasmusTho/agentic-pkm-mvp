@@ -14,7 +14,7 @@ def _sample_markdown_with_panel() -> str:
 def test_policy_defaults_to_manual() -> None:
     frontmatter = {}
     assert get_auto_run_mode(frontmatter) == "manual"
-    assert watcher_may_run_panel(frontmatter) is False
+    assert watcher_may_run_panel(frontmatter) is True
 
 
 def test_policy_allows_watcher() -> None:
@@ -38,7 +38,7 @@ def test_policy_accepts_nested_config() -> None:
 def test_policy_handles_unknown_value() -> None:
     fm = {"ai_panel_auto_run": "unexpected"}
     assert get_auto_run_mode(fm) == "manual"
-    assert watcher_may_run_panel(fm) is False
+    assert watcher_may_run_panel(fm) is True
 
 
 def test_watcher_panel_candidate_flags_ai_fence_notes() -> None:

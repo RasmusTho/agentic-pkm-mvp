@@ -66,6 +66,7 @@ class PanelRuntimeResult(BaseModel):
 
 
 def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | None = None) -> PanelRuntimeResult:
+    policy_flags = {"execution_mode": "watcher" if intent_event.source.trigger == "watcher" else "manual"}
     resolved_outbox = _resolve_outbox_path(outbox_path)
     catalog = load_panel_action_catalog()
     wiring = get_default_action_wiring()
@@ -95,6 +96,7 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
         note_content=note_text,
         panel_hints=panel_hints,
         executed_action_ids=sorted(executed_ids),
+        policy_flags=policy_flags,
     )
     decider_mode = get_panel_agent_decider()
     state = run_panel_graph(initial_state, decider_mode=decider_mode)

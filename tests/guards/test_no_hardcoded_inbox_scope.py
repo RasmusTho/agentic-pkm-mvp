@@ -13,6 +13,7 @@ TOKENS = (
 
 ALLOWED_FILES = {
     "tests/guards/test_no_hardcoded_inbox_scope.py",
+    "app/settings/default-vault-layout.yaml",
 }
 
 SCAN_PATHS = (

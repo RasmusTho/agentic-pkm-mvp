@@ -23,6 +23,7 @@ from app.obs.log import with_trace_id
 from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
 from app.services.note_log import note_log_path
+from app.services.note_mirror import upsert_note_mirror
 from app.services.note_uuid import ensure_note_uuid
 from app.store.object_store import DomainObject, ObjectStore
 from app.stores import get_object_store
@@ -341,26 +342,36 @@ def _write_mirror(
     existing_body: str | None = None,
 ) -> Path:
     mirror_path = vault_root / note_log_path(note_uuid, rel_path)
-    mirror_path.parent.mkdir(parents=True, exist_ok=True)
-    frontmatter = dict(existing_frontmatter or {})
-    frontmatter.update(
-        {
-            "uuid": note_uuid,
-            "title": title,
-            "kind": "note",
-            "origin": "vault",
-            "source_ref": str(rel_path),
-            "review_state": review_state,
-            "maturity": maturity,
-            "ingest_fingerprint": ingest_fingerprint,
-        }
+    if existing_frontmatter is not None or existing_body is not None:
+        mirror_path.parent.mkdir(parents=True, exist_ok=True)
+        frontmatter = dict(existing_frontmatter or {})
+        frontmatter.update(
+            {
+                "uuid": note_uuid,
+                "title": title,
+                "kind": "note",
+                "origin": "vault",
+                "source_ref": str(rel_path),
+                "review_state": review_state,
+                "maturity": maturity,
+                "ingest_fingerprint": ingest_fingerprint,
+            }
+        )
+        body = existing_body if (existing_body or "").strip() else f"Mirror for {rel_path}"
+        content = dump_frontmatter(frontmatter, body)
+        resolved_root = vault_root.expanduser().resolve()
+        resolved_mirror = mirror_path.expanduser().resolve()
+        write_note_from_absolute(resolved_mirror, content, vault_root=resolved_root)
+        return mirror_path
+    return upsert_note_mirror(
+        vault_root,
+        rel_path,
+        note_uuid=note_uuid,
+        title=title,
+        review_state=review_state,
+        maturity=maturity,
+        ingest_fingerprint=ingest_fingerprint,
     )
-    body = existing_body if (existing_body or "").strip() else f"Mirror for {rel_path}"
-    content = dump_frontmatter(frontmatter, body)
-    resolved_root = vault_root.expanduser().resolve()
-    resolved_mirror = mirror_path.expanduser().resolve()
-    write_note_from_absolute(resolved_mirror, content, vault_root=resolved_root)
-    return mirror_path
 
 
 def _select_candidates(

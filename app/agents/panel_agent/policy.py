@@ -121,9 +121,10 @@ def watcher_panel_candidate(
 def watcher_may_run_panel(frontmatter: Mapping[str, Any]) -> bool:
     """
     True when watcher-driven panel runtime is allowed for this note.
+    Once watcher auto-exec is armed, any AI-fenced note is eligible unless explicitly opted out.
     Manual CLI runs are always allowed.
     """
-    return get_auto_run_mode(frontmatter) == "watcher"
+    return get_auto_run_mode(frontmatter) != "never"
 
 
 __all__ = [

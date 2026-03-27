@@ -6,8 +6,10 @@ from pathlib import Path
 import pytest
 
 from app.cli.uat import SEED_SOURCE, run_vault_test_flow, seed_vault_test_notes
+from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.promotion.consumer import reset_promotion_dedup_store
 from app.store import object_store as object_store_module
+from app.stores import reset_store_backends
 from scripts.yaml_roundtrip import load_frontmatter
 
 pytestmark = pytest.mark.not_pg
@@ -23,7 +25,7 @@ def _reset() -> None:
     reset_promotion_dedup_store()
 
 
-def _setup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+def _setup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, outbox_name: str = "outbox.jsonl") -> Path:
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -34,7 +36,7 @@ def _setup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "config")
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "capture")
     monkeypatch.setenv("VAULT_DESK_DIR_REL", "workbench")
-    outbox_path = tmp_path / "outbox.jsonl"
+    outbox_path = tmp_path / outbox_name
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     return outbox_path
 
@@ -80,11 +82,20 @@ def _seed_names() -> list[str]:
     return sorted(path.name for path in SEED_SOURCE.glob("*.md"))
 
 
+def _mirror_paths(vault_root: Path) -> list[Path]:
+    mirror_root = vault_root / "System" / "Metadata" / "VaultMirror"
+    if not mirror_root.exists():
+        return []
+    return sorted(mirror_root.rglob("*.md"))
+
+
 def _run_seeded_flow(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    outbox_name: str = "outbox.jsonl",
 ) -> tuple[Path, object, Path, list[dict], dict[str, object]]:
-    outbox_path = _setup_env(monkeypatch, tmp_path)
+    outbox_path = _setup_env(monkeypatch, tmp_path, outbox_name=outbox_name)
     vault = tmp_path / "vault"
     vault.mkdir(parents=True, exist_ok=True)
     seed = seed_vault_test_notes(vault_root=vault, target_subdir="Test")
@@ -168,6 +179,34 @@ class TestColdRebuildIdempotency:
         }
 
         assert second_frontmatter == first_frontmatter
+
+    def test_rebuild_reuses_existing_mirrors_after_store_reset(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _setup_env(monkeypatch, tmp_path, outbox_name="outbox-first.jsonl")
+        vault_root = tmp_path / "vault"
+        vault_root.mkdir(parents=True, exist_ok=True)
+        seed = seed_vault_test_notes(vault_root=vault_root, target_subdir="Test")
+        seed_paths = sorted(seed.destination.glob("*.md"))
+
+        reset_store_backends()
+        first = run_vault_alpha_ingest_paths(vault_root, seed_paths)
+        first_mirrors = _mirror_paths(vault_root)
+        assert first_mirrors, "expected ingest to create mirrors"
+
+        reset_store_backends()
+        object_store_module._MEMORY_STORE.clear()
+        reset_promotion_dedup_store()
+
+        second = run_vault_alpha_ingest_paths(vault_root, seed_paths)
+        captured = capsys.readouterr()
+
+        assert "cold rebuild" in captured.out.lower()
+        assert second.scanned == first.scanned
+        assert second.ingested == first.ingested
+        assert second.processed_notes == first.processed_notes
+        assert _mirror_paths(vault_root) == first_mirrors
+        assert seed.destination.exists()
 
 
 class TestColdStartCoreFields:

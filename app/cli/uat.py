@@ -132,7 +132,7 @@ def _build_uat_checks(
             and str(evergreen_frontmatter.get("maturity") or "") == "evergreen"
         ),
         "manual_note_unchanged": (
-            str(manual_frontmatter.get("ai_panel_auto_run") or "") == "manual"
+            str(manual_frontmatter.get("ai_panel_auto_run") or "") == "never"
             and "maturity" not in manual_frontmatter
         ),
         "mixed_actions_stays_safe": str(mixed_actions_frontmatter.get("review_state") or "") in {"", "reviewed"},

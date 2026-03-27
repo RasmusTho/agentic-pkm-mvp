@@ -48,24 +48,45 @@ class PanelActionCatalog(BaseModel):
 
     actions: List[PanelActionDescriptor] = Field(default_factory=list)
     label_index: Dict[str, str] = Field(default_factory=dict)
+    ambiguous_labels: Dict[str, list[str]] = Field(default_factory=dict)
 
     @classmethod
     def from_descriptors(cls, descriptors: Iterable[PanelActionDescriptor]) -> "PanelActionCatalog":
+        descriptors_list = list(descriptors)
         label_index: Dict[str, str] = {}
-        for descriptor in descriptors:
+        conflicts: Dict[str, set[str]] = {}
+        seen: Dict[str, str] = {}
+        for descriptor in descriptors_list:
             labels = descriptor.all_labels() or [descriptor.id]
             for label in labels:
                 key = normalize_label(label)
-                if key and key not in label_index:
+                if not key:
+                    continue
+                existing = seen.get(key)
+                if existing and existing != descriptor.id:
+                    conflicts.setdefault(key, set()).update({existing, descriptor.id})
+                    label_index.pop(key, None)
+                    continue
+                if key not in label_index:
                     label_index[key] = descriptor.id
-        return cls(actions=list(descriptors), label_index=label_index)
+                    seen[key] = descriptor.id
+        return cls(
+            actions=descriptors_list,
+            label_index=label_index,
+            ambiguous_labels={key: sorted(values) for key, values in conflicts.items()},
+        )
 
     def find_by_label(self, label: str) -> Optional[PanelActionDescriptor]:
         key = normalize_label(label)
+        if key in self.ambiguous_labels:
+            return None
         action_id = self.label_index.get(key)
         if not action_id:
             return None
         return self.get(action_id)
+
+    def has_ambiguous_label(self, label: str) -> bool:
+        return normalize_label(label) in self.ambiguous_labels
 
     def get(self, action_id: str) -> Optional[PanelActionDescriptor]:
         for action in self.actions:

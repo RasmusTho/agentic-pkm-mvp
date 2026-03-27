@@ -296,6 +296,45 @@ Treat these as forward-line or specialized-reference topics owned by:
 - `docs/AGENTS.md`
 - `docs/tracks/*`
 
+## Layered System Architecture (v6 Direction)
+
+This section describes the intended v6 direction. It does not override the locked v5.5 baseline or active v5.6 contracts.
+
+- LangGraph is the control plane for deterministic orchestration and canonical runtime state progression.
+- Deep Agents are the cognition layer for planning, decomposition, and multi-step reasoning. They are introduced only after v6.0 structural separation is in place.
+- The capability layer contains reusable functions such as retrieval, reranking, and context building. Capabilities are shared infrastructure, not conceptual centers of the system.
+- The interaction layer consists of Panel and Chat as distinct runtime surfaces with different authority and mutation rules.
+- The execution layer contains controlled effectors only. LLM reasoning must not directly mutate notes or trigger execution.
+- The memory layer remains AMG plus backing stores as the canonical persistence substrate.
+- The governance layer enforces policies, admissibility, provenance, approval, and auditability across all mutation paths.
+- This layering treats Yggdrasil as a system-of-systems: interaction, cognition, execution, memory, and governance are separated so they can evolve independently without collapsing authority boundaries.
+
+## Interaction Surfaces
+
+### Panel
+
+- Embedded in note.
+- Driven by explicit intent.
+- Produces structured outputs such as actions and proposals.
+- Remains the only mutation entry point.
+- May use richer cognition later, but execution still flows through policy, validation, and the event pipeline.
+
+### Chat
+
+- External to note.
+- Optimized for exploratory reasoning.
+- May span multi-note context.
+- Read-only by default.
+- Serves as the first sandbox for Deep Agent rollout because it isolates cognition from execution risk.
+
+## Capability Model
+
+- Retrieval is a capability, not an agent.
+- Retrieval must be reusable across Panel, Chat, and future cognition surfaces without creating another agent-specific control center.
+- Capabilities are reusable, composable, and testable.
+- Agents and orchestration layers invoke capabilities through explicit planning and state transitions.
+- ASK remains a valid current runtime/API surface in the v5.x line, but it is deprecated as the architectural center for v6 direction. New design work should not introduce fresh agent-per-function patterns around retrieval.
+
 ## Historical Material
 
 Historical topology, older runtime surfaces, and superseded architecture detail live outside this document:

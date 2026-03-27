@@ -47,6 +47,140 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
     - Separate retrieval, orientation, and resurfacing as related but distinct runtime concerns.
     - Clarify surface and authority contracts so writing, retention, and system surfaces stay distinct and receipt-bearing actions remain inspectable.
 
+## Capability-Based Architecture & Agent Evolution
+
+This section defines the v6 direction without changing the locked SoT v5.5 guarantees or the active v5.6 rollout contracts. Decisions below are intentional: ASK is deprecated rather than expanded, retrieval is extracted as a reusable capability, Deep Agents start only after v6.0 structural separation, Chat precedes Panel for Deep Agent rollout, and execution remains mediated by governance and the controlled action layer.
+
+## Phase 0 — Stabilization (v5.6, current)
+
+- Complete PanelAgent as default interaction path.
+- Finalize `AgentState` as canonical runtime state (LangGraph).
+- Deliver vault-as-GUI settings compiler (typed, validated, provenance-aware).
+- Stabilize event contracts:
+  - `intent.created`
+  - `plan.generated`
+  - `action.proposed`
+  - `action.executed`
+- No Deep Agents in production flows.
+- No execution outside controlled action layer.
+
+## Phase 1 — v6.0 Baseline (Structural Separation)
+
+Introduce explicit system layers:
+
+- Interaction Layer:
+  - Panel (primary, mutation-capable)
+  - Chat (planned, read-only)
+- Orchestration Layer:
+  - LangGraph (control plane, deterministic)
+- Capability Layer:
+  - retrieval (`retrieve`, `rerank`, `context_build`)
+  - reasoning (future)
+  - transformation (future)
+- Execution Layer:
+  - controlled actions only
+  - no LLM direct mutation
+- Memory Layer:
+  - AMG + stores
+- Governance Layer:
+  - policies
+  - admissibility
+  - provenance
+  - approval
+
+Deliverables:
+
+- ASK fully deprecated; no new development.
+- Retrieval extracted into `app/capabilities/*`.
+- PanelAgent uses capability layer, not embedded retrieval logic.
+- Clear separation between interaction and cognition.
+- All system mutations pass `intent -> plan -> proposal -> validation -> execution`.
+
+## Phase 2 — Deep Agent Introduction (Thin Slice, Post-v6.0)
+
+Introduce Deep Agents under strict constraints.
+
+Scope:
+
+- Chat surface only.
+- Read-only mode.
+- No system mutation.
+- No execution access.
+
+Capabilities:
+
+- planning
+- decomposition
+- multi-step reasoning
+- retrieval orchestration
+
+Explicit rule: "Deep Agents cannot execute actions or mutate system state."
+
+Deliverables:
+
+- Chat v1 (minimal implementation).
+- Deep Agent integrated as cognition engine.
+- Uses capability layer (`retrieval`, etc.).
+- No coupling to execution layer.
+
+## Phase 3 — Panel Integration (Controlled Cognition)
+
+Extend Deep Agents into Panel.
+
+Scope:
+
+- planning only
+- proposal generation only
+
+Constraints:
+
+- No direct execution.
+- All actions must go through:
+  - policy checks
+  - validation
+  - event pipeline
+
+Panel remains:
+
+- the only mutation entry point
+
+## Phase 4 — Execution Layer Expansion (Future)
+
+Introduce controlled execution evolution.
+
+- Evaluate OpenClaw or similar execution runtime.
+- Introduce sandboxed execution.
+- Enforce:
+  - policy layer
+  - approval gates
+  - idempotency
+
+Explicit rule: "LLM reasoning must never directly trigger execution."
+
+## Phase 5 — Governance & Scaling
+
+- Strengthen governance layer.
+- Introduce:
+  - policy enforcement engines
+  - audit trails
+  - execution constraints
+- Consider NemoClaw-like patterns (optional).
+
+## Interaction Model Evolution
+
+- Panel = command surface (`intent -> action`).
+- Chat = exploration surface (`reasoning -> insight`).
+- Both share:
+  - `AgentState`
+  - capability layer
+  - cognition layer (Deep Agents, future)
+
+## ASK Decomposition
+
+- ASK marked deprecated as an architectural center.
+- Retrieval extracted into capability layer.
+- No new agent-per-function patterns allowed.
+
 ## Fitness Functions Enforced in CI
 - `pytest -q -c /dev/null -m "not pg and not alpha_llm"` is the primary smoke gate in CI.
 - `ops/quality/baselines.yaml` writes the `GATES` block and must report `ok=true` for merges; CI pipelines rely on that signal.

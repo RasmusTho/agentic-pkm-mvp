@@ -93,17 +93,40 @@ It is not defined by being the machine-side projection of the source artifact.
 
 The current runtime should now be read as follows:
 
-### VaultMirror
+### Companion note
 
-`System/Metadata/VaultMirror/...` is the canonical mirror surface.
+The `Companion Note` is the per-note system tracking artifact used for continuity and repair.
 
 It is:
-- a `Mirror Artifact` surface,
-- the current portable machine-side projection of a vault note,
-- and a valid place for projection-oriented metadata such as identity, source reference, and ingest
-  fingerprint.
+- a first-class system artifact,
+- the canonical note-level continuity/repair tracker in the forward line,
+- and distinct from both the broader portability concept of `Mirror Artifact` and the human-legible
+  accountability concept of `Receipt Artifact`.
 
-It is **not** the canonical full receipt model.
+It is not:
+- the full receipt model,
+- or merely a convenience projection/cache.
+
+See `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`.
+
+### VaultMirror (legacy, being replaced)
+
+`System/Metadata/VaultMirror/...` was the previous mirror surface implementation.
+
+It is being replaced by the companion note at `vault/_system/companions/<uuid>.md`, which provides
+the same continuity/identity function with:
+- flat UUID-based path instead of directory-preserving path,
+- a bounded field set that does not duplicate human-owned metadata (`review_state`, `maturity`),
+- an attachment manifest for tracking the full artifact surface,
+- and writes routed through KnowledgePort.
+
+Clarifying note:
+- `mirror artifact` remains a valid broader portability/projection concept,
+- the `companion note` is the concrete per-note system-tracking artifact that implements the
+  continuity and repair function previously served by VaultMirror,
+- code modules `note_mirror.py` and `note_log.py` are legacy and will be removed.
+
+See `docs/plans/COMPANION_NOTE_AND_AGENT_CONTEXT_PLAN.md` for the implementation plan.
 
 ### AI status callout in notes
 
@@ -179,18 +202,21 @@ They should not be treated as merely "mirror metadata".
 
 ## Decision on `note_log_path`
 
-`app/services/note_log.py` should now be interpreted as a legacy name for a mirror-path contract,
-not as proof that the existing VaultMirror file is the canonical receipt/log model.
+`app/services/note_log.py` is a legacy module being replaced by `app/services/companion_note.py`.
 
-This has two implications:
-- future refactors may rename or split this boundary,
-- and new code should avoid using `note_log` wording when the actual concern is mirror projection.
+New code must use companion note terminology and the `_system/companions/<uuid>.md` path. The
+`note_log` and `note_mirror` modules will be removed when the companion note service is
+implemented.
 
 ## Migration direction
 
 The intended migration direction is:
-1. keep `VaultMirror` as the explicit mirror surface,
+1. replace `VaultMirror` with companion note as the per-note system-surface artifact,
 2. treat AI status / similar human-visible records as receipt surfaces rather than as mirror state,
 3. preserve the rule that event streams are not the full receipt model,
 4. introduce stricter receipt artifacts in the system plane when the implementation is ready,
-5. and reduce legacy "log" wording where it hides the mirror/receipt distinction.
+5. remove legacy `note_log` / `note_mirror` / `VaultMirror` code and paths,
+6. and keep `mirror artifact` as a valid broader concept even though the concrete per-note
+   implementation is now the companion note.
+
+See `docs/plans/COMPANION_NOTE_AND_AGENT_CONTEXT_PLAN.md` for the phased implementation plan.

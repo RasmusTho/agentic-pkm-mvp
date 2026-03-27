@@ -18,7 +18,7 @@ from app.events.panel import (
 )
 from app.events.schema import make_outbox_event
 from app.outbox.events import emit_index_embedding_requested, emit_index_object_embedded
-from app.watcher.events import build_watcher_run_event
+from app.watcher.events import build_watcher_run_event, emit_watcher_run_event
 
 
 def _parse_ts(ts: str) -> datetime:
@@ -58,6 +58,11 @@ def _assert_watcher_payload(payload: dict) -> None:
         "panel_promotions",
         "panel_skipped_policy",
         "panel_skipped_limit",
+        "panel_skipped_auto_exec",
+        "panel_skipped_allowed_actions",
+        "skipped_dedup",
+        "skipped_idempotent",
+        "skipped_writes_blocked",
         "errors",
         "dry_run",
         "limit_exceeded",
@@ -137,6 +142,11 @@ def test_outbox_event_type_matrix(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
             "panel_promotions": 1,
             "panel_skipped_policy": 0,
             "panel_skipped_limit": 0,
+            "panel_skipped_auto_exec": 2,
+            "panel_skipped_allowed_actions": 1,
+            "skipped_dedup": 3,
+            "skipped_idempotent": 4,
+            "skipped_writes_blocked": 5,
             "errors": 0,
             "dry_run": False,
             "limit_exceeded": False,
@@ -222,3 +232,77 @@ def test_outbox_event_type_matrix(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
             assert field in record
         payload_check(record.get("payload") or {})
         _assert_no_embedding(record)
+
+
+def test_watcher_run_payload_mirrors_skip_reasons(tmp_path: Path) -> None:
+    event = build_watcher_run_event(
+        {
+            "changed": 7,
+            "ingest_attempted": 7,
+            "ingested": 6,
+            "panel_candidates": 4,
+            "panel_runs": 2,
+            "panel_promotions": 1,
+            "panel_skipped_policy": 1,
+            "panel_skipped_limit": 2,
+            "panel_skipped_auto_exec": 3,
+            "panel_skipped_allowed_actions": 4,
+            "skipped_dedup": 5,
+            "skipped_idempotent": 6,
+            "skipped_writes_blocked": 7,
+            "errors": 0,
+            "dry_run": False,
+            "limit_exceeded": False,
+            "snapshot_path": "tmp/snapshot.json",
+        },
+        vault_root=tmp_path,
+        snapshot_path="tmp/snapshot.json",
+        trigger="test",
+        trace_id="trace-watcher-skip-reasons",
+    ).model_dump(mode="json")
+
+    _assert_envelope(event)
+    payload = event["payload"]
+    assert payload["panel_skipped_auto_exec"] == 3
+    assert payload["panel_skipped_allowed_actions"] == 4
+    assert payload["skipped_dedup"] == 5
+    assert payload["skipped_idempotent"] == 6
+    assert payload["skipped_writes_blocked"] == 7
+
+
+def test_emit_watcher_run_event_persists_skip_reasons(tmp_path: Path) -> None:
+    outbox = tmp_path / "watcher-outbox.jsonl"
+    event = emit_watcher_run_event(
+        {
+            "changed": 1,
+            "ingest_attempted": 1,
+            "ingested": 1,
+            "panel_candidates": 1,
+            "panel_runs": 1,
+            "panel_promotions": 1,
+            "panel_skipped_policy": 0,
+            "panel_skipped_limit": 0,
+            "panel_skipped_auto_exec": 8,
+            "panel_skipped_allowed_actions": 9,
+            "skipped_dedup": 10,
+            "skipped_idempotent": 11,
+            "skipped_writes_blocked": 12,
+            "errors": 0,
+            "dry_run": False,
+            "limit_exceeded": False,
+            "snapshot_path": "tmp/snapshot.json",
+        },
+        vault_root=tmp_path,
+        snapshot_path="tmp/snapshot.json",
+        outbox_path=outbox,
+        trigger="test",
+        trace_id="trace-watcher-emit",
+    )
+
+    record = json.loads(outbox.read_text(encoding="utf-8").splitlines()[-1])
+    assert event.event == "watcher.run"
+    assert record["payload"]["panel_skipped_auto_exec"] == 8
+    assert record["payload"]["panel_skipped_allowed_actions"] == 9
+    assert record["payload"]["skipped_dedup"] == 10
+    assert record["payload"]["skipped_idempotent"] == 11
+    assert record["payload"]["skipped_writes_blocked"] == 12

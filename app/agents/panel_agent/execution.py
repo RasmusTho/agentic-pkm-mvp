@@ -68,10 +68,12 @@ def run_panel_note_execution(
     trace_id: str | None = None,
     outbox_path: Path | None = None,
     persist_created_to_db: bool = False,
+    trigger: str = "cli",
 ) -> PanelNoteExecutionResult:
     intent_events = run_panel_intent_for_note(
         note_uuid,
         trace_id=trace_id,
+        trigger=trigger,
         write_outbox=True,
         outbox_path=outbox_path,
     )
