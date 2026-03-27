@@ -86,6 +86,18 @@ def _summary_key_fields(summary: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _run_tick(
+    monkeypatch: pytest.MonkeyPatch,
+    cfg: registry.RegistryConfig,
+    spec: registry.WatcherSpec,
+    state: WatcherState,
+    *,
+    now: float,
+) -> dict[str, object]:
+    monkeypatch.setattr(registry.time, "time", lambda: now)
+    return registry._run_spec_tick(cfg, spec, state, now=now)
+
+
 @pytest.mark.parametrize("note_count", [1, 3])
 def test_narrower_scope_fewer_or_equal_changes(
     tmp_path: Path,
@@ -106,8 +118,8 @@ def test_narrower_scope_fewer_or_equal_changes(
         _write_note(narrow_cfg.vault_path / rel, source.read_text(encoding="utf-8"), mtime=source.stat().st_mtime)
         _write_note(wide_cfg.vault_path / rel, source.read_text(encoding="utf-8"), mtime=source.stat().st_mtime)
 
-    narrow_summary = registry._run_spec_tick(narrow_cfg, narrow_spec, WatcherState(), now=1_700_000_500.0)
-    wide_summary = registry._run_spec_tick(wide_cfg, wide_spec, WatcherState(), now=1_700_000_500.0)
+    narrow_summary = _run_tick(monkeypatch, narrow_cfg, narrow_spec, WatcherState(), now=1_700_000_500.0)
+    wide_summary = _run_tick(monkeypatch, wide_cfg, wide_spec, WatcherState(), now=1_700_000_500.0)
 
     assert narrow_summary["changed_in_tick"] <= wide_summary["changed_in_tick"]
     assert narrow_summary["scanned_files"] <= wide_summary["scanned_files"]
@@ -125,9 +137,9 @@ def test_more_ticks_unchanged_vault_same_total(
         _write_note(cfg.vault_path / "Inbox" / f"note-{idx}.md", f"payload {idx}", mtime=1_700_000_000 + idx)
 
     state = WatcherState()
-    first = registry._run_spec_tick(cfg, spec, state, now=1_700_000_100.0)
-    second = registry._run_spec_tick(cfg, spec, state, now=1_700_000_101.0)
-    third = registry._run_spec_tick(cfg, spec, state, now=1_700_000_102.0)
+    first = _run_tick(monkeypatch, cfg, spec, state, now=1_700_000_100.0)
+    second = _run_tick(monkeypatch, cfg, spec, state, now=1_700_000_101.0)
+    third = _run_tick(monkeypatch, cfg, spec, state, now=1_700_000_102.0)
 
     assert first["changed_in_tick"] == note_count
     assert second["changed_in_tick"] == 0
@@ -146,7 +158,7 @@ def test_rate_limit_zero_no_emissions(
     for idx in range(note_count):
         _write_note(cfg.vault_path / "Inbox" / f"note-{idx}.md", f"payload {idx}", mtime=1_700_000_000 + idx)
 
-    summary = registry._run_spec_tick(cfg, spec, WatcherState(), now=1_700_000_200.0)
+    summary = _run_tick(monkeypatch, cfg, spec, WatcherState(), now=1_700_000_200.0)
 
     assert summary["changed_in_tick"] == note_count
     assert summary["emitted_in_tick"] == 0
@@ -165,8 +177,8 @@ def test_idempotent_same_params_same_summary(
     _write_note(cfg.vault_path / "Inbox" / "same.md", "stable", mtime=1_700_000_000)
     _write_note(cfg.vault_path / "Archive" / "other.md", "archive", mtime=1_700_000_100)
 
-    summary_one = registry._run_spec_tick(cfg, spec, WatcherState(), now=1_700_000_300.0)
-    summary_two = registry._run_spec_tick(cfg, spec, WatcherState(), now=1_700_000_300.0)
+    summary_one = _run_tick(monkeypatch, cfg, spec, WatcherState(), now=1_700_000_300.0)
+    summary_two = _run_tick(monkeypatch, cfg, spec, WatcherState(), now=1_700_000_300.0)
 
     assert _summary_key_fields(summary_one) == _summary_key_fields(summary_two)
 
@@ -184,12 +196,12 @@ def test_more_notes_more_or_equal_scanned(
         _write_note(cfg.vault_path / "Inbox" / f"note-{idx}.md", f"payload {idx}", mtime=1_700_000_000 + idx)
 
     state = WatcherState()
-    first = registry._run_spec_tick(cfg, spec, state, now=1_700_000_400.0)
+    first = _run_tick(monkeypatch, cfg, spec, state, now=1_700_000_400.0)
 
     for idx in range(initial_count, initial_count + added_count):
         _write_note(cfg.vault_path / "Inbox" / f"note-{idx}.md", f"payload {idx}", mtime=1_700_000_100 + idx)
 
-    second = registry._run_spec_tick(cfg, spec, state, now=1_700_000_401.0)
+    second = _run_tick(monkeypatch, cfg, spec, state, now=1_700_000_401.0)
 
     assert first["scanned_files"] == initial_count
     assert second["scanned_files"] >= first["scanned_files"]
@@ -207,7 +219,7 @@ def test_max_scanned_files_caps_processing(
     for idx in range(10):
         _write_note(cfg.vault_path / "Inbox" / f"note-{idx}.md", f"payload {idx}", mtime=1_700_000_000 + idx)
 
-    summary = registry._run_spec_tick(cfg, spec, WatcherState(), now=1_700_000_500.0)
+    summary = _run_tick(monkeypatch, cfg, spec, WatcherState(), now=1_700_000_500.0)
 
     assert summary["scanned_files"] == 10
     assert summary["bad_tick"] is True
@@ -218,7 +230,7 @@ def test_empty_vault_zero_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     _install_fake_emit(monkeypatch)
     cfg, spec = _make_cfg(tmp_path)
 
-    summary = registry._run_spec_tick(cfg, spec, WatcherState(), now=1_700_000_600.0)
+    summary = _run_tick(monkeypatch, cfg, spec, WatcherState(), now=1_700_000_600.0)
 
     assert summary["changed_in_tick"] == 0
     assert summary["scanned_files"] == 0
@@ -236,7 +248,7 @@ def test_debounce_zero_processes_immediately(
     for idx in range(note_count):
         _write_note(cfg.vault_path / "Inbox" / f"note-{idx}.md", f"payload {idx}", mtime=1_700_000_000 + idx)
 
-    summary = registry._run_spec_tick(cfg, spec, WatcherState(), now=1_700_000_700.0)
+    summary = _run_tick(monkeypatch, cfg, spec, WatcherState(), now=1_700_000_700.0)
 
     assert summary["changed_in_tick"] == note_count
     assert summary["emitted_in_tick"] == note_count
@@ -254,7 +266,7 @@ def test_scope_excludes_dotfolders(
     _write_note(cfg.vault_path / ".obsidian" / "settings.md", "hidden", mtime=1_700_000_000)
     _write_note(cfg.vault_path / "Inbox" / "visible.md", "visible", mtime=1_700_000_001)
 
-    summary = registry._run_spec_tick(cfg, spec, WatcherState(), now=1_700_000_800.0)
+    summary = _run_tick(monkeypatch, cfg, spec, WatcherState(), now=1_700_000_800.0)
 
     assert summary["scanned_files"] == 1
     assert summary["changed_in_tick"] == 1
