@@ -43,6 +43,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
   rather than a change to the locked v5.5 baseline.
 - Harden the PanelAgent LangGraph pilot (panel action catalog + planner pipeline + promotion consumer) so its telemetry, provenance, and gating sensors stay deterministic while remaining opt-in.
 ### Next
+- **Companion Note + Note Context** — replace VaultMirror with flat companion files at `vault/_system/companions/<uuid>.md`; introduce `NoteContext` assembler for agent-facing rich context. 8-part plan: `docs/plans/COMPANION_NOTE_AND_NOTE_CONTEXT.md`. Parts 1–5 deliver portable identity; Parts 6–7 wire Note Context into Panel Agent (eliminating the 800-char snippet). Event contracts unchanged. Blocks agent quality improvements in v5.6+.
 - Sequence the ReasoningFacade + LangGraph rollout for one additional agent pool, ensuring instrumentation feeds into the fitness gates and the orchestrator V2 experiment flag remains gated until stability signals arrive.
 - Expand the vault-as-GUI settings compiler and operator surfaces so the forward line can describe runtime topology with complete provenance and precedence in both `settings-explain` and `status`.
 - Align CLI/docs runbooks with the v5.6 narrative: update `docs/ROADMAP.md`, status snapshots, and the runbooks so operators know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe.
@@ -90,6 +91,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 | Watcher auto-exec | Guarded by dedup + optimistic writes + idempotency | Safe enablement only after gates and receipts prove stable behavior |
 | LangGraph rollout | Active for ASK and PanelAgent-related flows only | Expand in phases after ReasoningFacade/basic graph builder land |
 | Orchestrator V2 | Not baseline | Flagged preview only |
+| Companion Note + Note Context | VaultMirror (`System/Metadata/VaultMirror`) is active but planned for replacement | Flat `_system/companions/<uuid>.md` + NoteContext assembler; 8-part plan in `docs/plans/COMPANION_NOTE_AND_NOTE_CONTEXT.md` |
 
 For detailed sequencing, version history, and roadmap ladder, use:
 - `docs/ROADMAP.md`

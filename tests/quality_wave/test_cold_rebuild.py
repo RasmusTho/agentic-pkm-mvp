@@ -82,10 +82,11 @@ def _seed_names() -> list[str]:
 
 
 def _mirror_paths(vault_root: Path) -> list[Path]:
-    mirror_root = vault_root / "System" / "Metadata" / "VaultMirror"
-    if not mirror_root.exists():
+    """Get companion note paths (replaces legacy VaultMirror paths)."""
+    companion_root = vault_root / "_system" / "companions"
+    if not companion_root.exists():
         return []
-    return sorted(mirror_root.rglob("*.md"))
+    return sorted(companion_root.glob("*.md"))
 
 
 def _run_seeded_flow(

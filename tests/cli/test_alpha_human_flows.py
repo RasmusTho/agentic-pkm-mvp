@@ -9,7 +9,7 @@ from click.testing import CliRunner
 
 from app.cli import cli
 from app.retrieval.hybrid import get_store
-from app.services.note_log import note_log_path
+from app.services.companion_note import companion_path
 from scripts.yaml_roundtrip import load_frontmatter
 
 alpha_human_flows_module = importlib.import_module("app.cli.alpha_human_flows")
@@ -123,7 +123,7 @@ def test_alpha_human_flows_dry_run_makes_no_changes(tmp_path: Path) -> None:
     assert not outbox.exists()
 
 
-def test_alpha_human_flows_reports_mirror_path(tmp_path: Path) -> None:
+def test_alpha_human_flows_reports_companion_path(tmp_path: Path) -> None:
     get_store().set_documents([])
     vault = _make_vault(tmp_path)
 
@@ -133,8 +133,8 @@ def test_alpha_human_flows_reports_mirror_path(tmp_path: Path) -> None:
     test_note = vault / "Test" / "Alpha-HumanFlows.md"
     frontmatter, _ = load_frontmatter(test_note.read_text(encoding="utf-8"))
     note_uuid = str(frontmatter.get("uuid") or "").strip()
-    expected_mirror = note_log_path(note_uuid, Path("Test/Alpha-HumanFlows.md"))
-    assert str(expected_mirror) in result.output
+    expected_companion = companion_path(note_uuid)
+    assert str(expected_companion) in result.output
 
 
 def test_alpha_human_flows_runs_ask_flow(tmp_path: Path) -> None:
