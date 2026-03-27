@@ -18,6 +18,11 @@ This document should be read as a target-state consolidation of semantic directi
 exist elsewhere in the repo.
 It is not a license to rewrite the current runtime as if the target were already implemented.
 
+Read this together with:
+- `docs/DESIGN_PRINCIPLES.md` for the stable design rules,
+- `docs/ROADMAP.md` for the condensed phase sequence,
+- `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` for the working plan on capability-based composition, interaction surfaces, and staged agent evolution.
+
 ## Why a separate target-state doc is needed
 
 The current repo is in a transitional position:
@@ -79,6 +84,7 @@ The high-level direction is:
 - richer human semantics above runtime storage boundaries,
 - narrower operational scope in runtime,
 - relation-first handling of overlap,
+- clearer separation between interaction, cognition, execution, memory, and governance,
 - cleaner distinction between primary human artifacts and projections,
 - explicit separation between writing, retention, and system surfaces,
 - clearer treatment of commitments as their own semantic family,
@@ -180,6 +186,19 @@ Implication:
   - and derived overlays such as `zone` remain bounded runtime aids rather than the ontology of what
     matters.
 
+### 7A. Capability-based composition replaces agent-per-function expansion
+
+Wanted state:
+- reusable capabilities become the preferred building blocks for retrieval, orientation support,
+  resurfacing support, reasoning support, and transformation support,
+- while agents and orchestrators focus on bounded decision-making and coordination,
+- and interaction surfaces are kept distinct from cognition mechanisms and execution authority.
+
+Implication:
+- the architecture should avoid treating each reusable function as a new architectural agent,
+- and should prefer explicit contracts between interaction, cognition, execution, memory, and
+  governance over monolithic agent identities.
+
 ### 8. Filesystem and path stay projections, not master ontology
 
 Wanted state:
@@ -216,6 +235,18 @@ Implication:
 - receipt artifacts should continue to mean accountability surfaces rather than generic logs,
 - and traces, audit rows, or event streams should remain supporting execution records rather than
   being treated as the full human-legible accountability model.
+
+### 10A. Interaction surfaces stay separate from cognition and execution
+
+Wanted state:
+- Panel and Chat are distinct interaction systems with different authority boundaries,
+- richer cognition can be shared across them without erasing their different roles,
+- and execution remains downstream of governance rather than bundled into the interaction surface itself.
+
+Implication:
+- future architecture should not treat read-only cognition and mutation-capable interaction as one
+  generic conversation surface,
+- and should keep the safe introduction path for richer cognition separate from execution expansion.
 
 ### 11. Local-first multi-device operation is designed as an architecture property, not an afterthought
 
