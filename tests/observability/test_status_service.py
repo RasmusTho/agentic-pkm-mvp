@@ -18,6 +18,48 @@ def test_get_system_status_includes_ingest_and_ask_metrics(monkeypatch, tmp_path
     monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("STORE_BACKEND", "memory")
     outbox_path = tmp_path / "status-outbox.jsonl"
+    tick_log = tmp_path / "watcher_tick.jsonl"
+    watchers = tmp_path / "vault" / "@Settings" / "watchers.md"
+    watchers.parent.mkdir(parents=True, exist_ok=True)
+    watchers.write_text(
+        "---\n"
+        "auto_run:\n"
+        "  auto_exec_default: false\n"
+        "  allowed_actions:\n"
+        "    - promote.evergreen\n"
+        "paths:\n"
+        f"  index_outbox: {outbox_path}\n"
+        f"  watcher_tick_log: {tick_log}\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    panel_actions = tmp_path / "panel-actions.md"
+    panel_actions.write_text(
+        "---\n"
+        "mappings:\n"
+        "  - id: promote.evergreen\n"
+        "    label: Promote\n"
+        "    intent_type: promotion\n"
+        "    downstream_event: promote.intent.created\n"
+        "    params:\n"
+        "      maturity: evergreen\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    tick_log.write_text(
+        json.dumps(
+            {
+                "timestamp": "2025-01-01T00:10:00Z",
+                "panel_candidates": 2,
+                "panel_skipped_policy": 1,
+                "panel_skipped_auto_exec": 2,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "vault"))
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(panel_actions))
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     status_service.INDEX_OUTBOX_PATH = outbox_path
     store = get_object_store()
@@ -70,6 +112,11 @@ def test_get_system_status_includes_ingest_and_ask_metrics(monkeypatch, tmp_path
     assert status.events.promote_created_total == 0
     assert status.events.promotion_executed_total == 0
     assert status.events.ingest_runs_by_plane.get("vault") == 1
+    assert status.watcher_automation is not None
+    assert status.watcher_automation.mode == "emit-only"
+    assert status.watcher_automation.allowed_actions == ["promote.evergreen"]
+    assert status.watcher_automation.last_tick_panel_candidates == 2
+    assert status.watcher_automation.last_tick_panel_skipped_auto_exec == 2
 
 
 def test_event_counts_from_outbox(monkeypatch, tmp_path):
@@ -106,3 +153,77 @@ def test_event_counts_from_outbox(monkeypatch, tmp_path):
     assert status.events.watcher_runs_24h == 1
     assert status.events.source_path == str(outbox)
     assert status.intents.promote_created_total == 1
+
+
+def test_get_system_status_includes_watcher_automation_details(monkeypatch, tmp_path):
+    reset_store_backends()
+    reset_ingest_meta()
+    reset_ask_metrics()
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    vault = tmp_path / "vault"
+    settings_dir = vault / "@Settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    (settings_dir / "watchers.md").write_text(
+        "---\n"
+        "auto_run:\n"
+        "  auto_exec_default: false\n"
+        "  allowed_actions:\n"
+        "    - promote.evergreen\n"
+        "paths:\n"
+        f"  watcher_tick_log: {tmp_path / 'watcher_tick.jsonl'}\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+
+    tick_log = tmp_path / "watcher_tick.jsonl"
+    tick_log.write_text(
+        json.dumps(
+            {
+                "timestamp": "2025-01-01T00:00:00Z",
+                "panel_candidates": 2,
+                "panel_skipped_policy": 1,
+                "panel_skipped_auto_exec": 0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    outbox = tmp_path / "outbox.jsonl"
+    outbox.write_text(
+        json.dumps(
+            {
+                "event": "watcher.run",
+                "timestamp": "2025-01-01T00:00:00Z",
+                "payload": {
+                    "skipped_dedup": 3,
+                    "skipped_idempotent": 0,
+                    "skipped_writes_blocked": 0,
+                    "panel_skipped_allowed_actions": 1,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.setattr("app.observability.status_service.INDEX_OUTBOX_PATH", outbox)
+
+    status = get_system_status()
+
+    assert status.watcher_automation is not None
+    assert status.watcher_automation.auto_exec_enabled is True
+    assert status.watcher_automation.mode == "auto-exec"
+    assert status.watcher_automation.source == "env"
+    assert status.watcher_automation.default_enabled is False
+    assert status.watcher_automation.allowed_actions == ["promote.evergreen"]
+    assert status.watcher_automation.last_tick_panel_candidates == 2
+    assert status.watcher_automation.last_tick_panel_skipped_policy == 1
+    assert status.watcher_automation.last_tick_panel_skipped_auto_exec == 0
+    assert status.watcher_automation.last_run_skipped_dedup == 3
+    assert status.watcher_automation.last_run_skipped_allowed_actions == 1
