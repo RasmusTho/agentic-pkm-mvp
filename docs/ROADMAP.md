@@ -51,6 +51,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 
 This section defines the v6 direction without changing the locked SoT v5.5 guarantees or the active v5.6 rollout contracts.
 It follows the design rules in `docs/DESIGN_PRINCIPLES.md`: principles first, structure second, sequencing third, implementation detail elsewhere.
+The working plan detail for this section lives in `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`.
 
 Decisions already fixed for this direction:
 - ASK is deprecated as the architectural center rather than expanded.
@@ -61,12 +62,10 @@ Decisions already fixed for this direction:
 
 ## Phase 0 — Stabilization (v5.6, current)
 
-- Complete PanelAgent as default interaction path.
-- Finalize `AgentState` as canonical runtime state (LangGraph).
-- Deliver vault-as-GUI settings compiler (typed, validated, provenance-aware).
-- Stabilize the active intent, proposal, and execution contract families without breaking current runtime compatibility.
-- No Deep Agents in production flows.
-- No execution outside controlled action layer.
+- Finish the current v5.6 enablement work needed for structural separation.
+- Keep current runtime contracts stable and deterministic.
+- No Deep Agents in production mutation flows.
+- No execution outside the controlled action layer.
 
 ## Phase 1 — v6.0 Baseline (Structural Separation)
 
@@ -96,9 +95,9 @@ Deliverables:
 
 - ASK fully deprecated; no new development.
 - Retrieval extracted into a capability layer.
-- PanelAgent uses capability layer, not embedded retrieval logic.
-- Clear separation between interaction and cognition.
-- All LLM-directed mutations pass `intent -> plan -> proposal -> validation -> execution`.
+- Interaction, cognition, execution, memory, and governance separated clearly enough to evolve independently.
+- Panel remains the mutation-capable interaction surface.
+- All LLM-directed mutations remain governed and mediated.
 
 ## Phase 2 — Deep Agent Introduction (Thin Slice, Post-v6.0)
 
@@ -122,10 +121,8 @@ Explicit rule: "Deep Agents cannot execute actions or mutate system state."
 
 Deliverables:
 
-- Chat v1 (minimal implementation).
-- Deep Agent integrated as cognition engine.
-- Uses capability layer (`retrieval`, etc.).
-- No coupling to execution layer.
+- Chat becomes the first safe cognition sandbox.
+- Deep Agent behavior remains decoupled from execution authority.
 
 ## Phase 3 — Panel Integration (Controlled Cognition)
 
@@ -144,20 +141,11 @@ Constraints:
   - validation
   - event pipeline
 
-Panel remains:
-
-- the only mutation entry point
+Panel remains the only mutation entry point.
 
 ## Phase 4 — Execution Layer Expansion (Future)
 
-Introduce controlled execution evolution.
-
-- Evaluate OpenClaw or similar execution runtime.
-- Introduce sandboxed execution.
-- Enforce:
-  - policy layer
-  - approval gates
-  - idempotency
+Introduce controlled execution evolution under governance and sandboxing.
 
 Explicit rule: "LLM reasoning must never directly trigger execution."
 
