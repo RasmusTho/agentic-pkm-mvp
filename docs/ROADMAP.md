@@ -93,12 +93,12 @@ locked architecture law. See `docs/HUMAN-FLOWS.md` for the authoritative user-fa
 
 ```
 v5.5C done ✓
-  → Quality Wave A (event chain contracts) ✓  ← tests/quality_wave/
-  → Quality Wave B/C (golden vault + metamorphic runs)
-  → Quality Wave D (cold rebuild)
-  → Quality Wave E (fitness gates)
-  → Quality Wave F (scripted UAT — gates entire wave)
-    → ReasoningFacade + basic graph builder
+  → Quality Wave A (event chain contracts) ✓
+  → Quality Wave B/C (golden vault + metamorphic runs) ✓
+  → Quality Wave D (cold rebuild + watcher registry contracts) ✓
+  → Quality Wave E (fitness gates) ✓
+  → Quality Wave F (scripted UAT — gates entire wave) ✓  ← 99 tests, 7 files
+    → ReasoningFacade + basic graph builder  ← UNBLOCKED
       → Orchestrator V2 flag (preview)
       → LangGraph rollout Phase 1 (pilot agent)
         → Phase 2 (two agents + planner/orchestrator stable)

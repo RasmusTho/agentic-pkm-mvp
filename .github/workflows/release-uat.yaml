@@ -1,14 +1,14 @@
-name: integration-nightly
+name: release-uat
 
 on:
-  schedule:
-    - cron: "0 2 * * *"
   workflow_dispatch:
+  push:
+    tags: ['v*']
 
 jobs:
-  full-suite:
+  uat-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     env:
       PYTHONPATH: ${{ github.workspace }}
       STORE_BACKEND: memory
@@ -40,21 +40,27 @@ jobs:
       - name: Prepare tmp dir
         run: mkdir -p tmp
 
-      - name: Full test suite (memory, not pg)
-        timeout-minutes: 20
+      - name: "Quality Wave gate (UAT harness)"
         run: |
-          pytest -c /dev/null -q \
-            -m "not pg and not alpha_llm" \
-            --durations=30 \
-            | tee tmp/nightly-pytest.log
+          pytest -c /dev/null -v \
+            tests/quality_wave/test_uat_harness.py \
+            -m "not pg" \
+            --tb=short
 
-      - name: Runtime contract regressions
+      - name: "Golden vault snapshots"
+        run: |
+          pytest -c /dev/null -v \
+            tests/quality_wave/test_golden_vault_snapshot.py \
+            -m "not pg" \
+            --tb=short
+
+      - name: "Full Quality Wave suite"
         run: |
           pytest -c /dev/null -q \
-            tests/e2e/test_runtime_contract_regressions.py \
-            tests/cli/test_uat_run_cli.py \
-            tests/test_alpha_e2e_invariants.py \
-            tests/fitness/test_runtime_contract.py
+            tests/quality_wave/ \
+            -m "not pg" \
+            --durations=10 \
+            | tee tmp/uat-pytest.log
 
       - name: Fitness report
         run: |
@@ -76,9 +82,9 @@ jobs:
               raise SystemExit(f"CI gates failed: {gates}")
           PY
 
-      - name: Upload test log
+      - name: Upload UAT log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nightly-pytest-log
-          path: tmp/nightly-pytest.log
+          name: uat-pytest-log
+          path: tmp/uat-pytest.log
