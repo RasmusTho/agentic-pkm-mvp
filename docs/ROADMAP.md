@@ -53,9 +53,14 @@ This section defines the v6 direction without changing the locked SoT v5.5 guara
 It follows the design rules in `docs/DESIGN_PRINCIPLES.md`: principles first, structure second, sequencing third, implementation detail elsewhere.
 The working plan detail for this section lives in `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`.
 
+Sequencing rule:
+- v5.6 should be read here primarily as an invariant and stabilization layer, not as a strict linear prerequisite list for every v6 design decision.
+- The design goal is to preserve the contracts v5.6 is establishing while allowing v6 structural work to be defined in parallel.
+
 Decisions already fixed for this direction:
 - ASK is deprecated as the architectural center rather than expanded.
 - Retrieval is treated as a reusable capability rather than a standalone agent.
+- Interaction is primary; retrieval and reasoning remain supporting capabilities used by different interaction surfaces.
 - Deep Agents start only after structural separation is in place.
 - Chat precedes Panel for Deep Agent rollout because read-only cognition is the safer entry surface.
 - Execution remains governed and mediated; reasoning alone must not trigger mutation.

@@ -107,6 +107,7 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 - The ontology/policy layer explains what kinds of things the runtime is dealing with and what boundaries or authority bases apply.
 - The runtime orchestration layer explains how the current system coordinates bounded work through stores, events, agents, and pipelines.
 - The infrastructure layer explains where persistence, transport, provider calls, and process boundaries live.
+- Interaction remains architecturally primary: retrieval, reasoning, and other reusable mechanisms should be read as supporting capabilities rather than as the whole organizing model of the system.
 - Not every human function implies a separate runtime agent, service, or queue.
 - Deterministic pipelines remain valid runtime substrate when they satisfy the same contracts more clearly and safely than richer agent structures.
 
@@ -301,6 +302,7 @@ Treat these as forward-line or specialized-reference topics owned by:
 
 This section describes the intended v6 direction. It does not override the locked v5.5 baseline or active v5.6 contracts.
 
+- Interaction is the primary organizing concern for the user-facing architecture; cognition and reusable capabilities support those interaction surfaces.
 - The architecture is organized around five distinct concerns: interaction, cognition, execution, memory, and governance.
 - LangGraph is the current and planned control-plane mechanism for deterministic orchestration and explicit runtime state progression.
 - Deep Agents are a future cognition mechanism for planning, decomposition, and multi-step reasoning. They are introduced only after structural separation is in place.
@@ -319,6 +321,7 @@ This section describes the intended v6 direction. It does not override the locke
 - Produces structured outputs such as actions and proposals.
 - Remains the only mutation entry point.
 - May use richer cognition later, but execution still flows through policy, validation, and the event pipeline.
+- Should be read as a command and intent-capture surface, not as a generic chat surface.
 
 ### Chat
 
@@ -327,6 +330,7 @@ This section describes the intended v6 direction. It does not override the locke
 - May span multi-note context.
 - Read-only surface.
 - Serves as the first sandbox for Deep Agent rollout because it isolates cognition from execution risk.
+- Should be read as an exploratory cognition surface, not as a mutation path.
 
 ## Capability Model
 

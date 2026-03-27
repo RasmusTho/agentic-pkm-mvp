@@ -15,6 +15,7 @@ This document holds the working plan for moving the system toward:
 - and governed execution.
 
 It exists so the roadmap can stay phase-oriented without turning into a delivery backlog.
+It also makes explicit that the v5.6 line should be treated mainly as a stabilization layer for invariants rather than as a rigid step-by-step prerequisite chain.
 
 ## Scope
 
@@ -57,6 +58,12 @@ It exists so the roadmap can stay phase-oriented without turning into a delivery
 - Treating retrieval as an agent encourages unnecessary control-center behavior and tighter coupling.
 - The architecture should instead expose retrieval as a reusable capability that can be orchestrated by different surfaces and cognition mechanisms.
 
+### Interaction is primary; retrieval is supporting
+
+- The core design question is how the human interacts with the system, not where retrieval happens.
+- Panel and Chat are therefore first-class architectural surfaces.
+- Retrieval, reasoning, and transformation support those surfaces rather than organizing the whole architecture around themselves.
+
 ### Deep Agents start in Chat before Panel
 
 - Chat is the safer Deep Agent entry surface because it is read-only.
@@ -82,6 +89,28 @@ It exists so the roadmap can stay phase-oriented without turning into a delivery
 - This keeps the architecture flexible without erasing important authority distinctions.
 
 ## Planned Sequence
+
+## v5.6 Invariants vs. Deferred Work
+
+The repo should not treat all v5.6 work as equally blocking for v6 structure.
+
+### Must-have invariants before structural progression
+
+- `AgentState` is stable enough to act as a shared runtime-state contract.
+- The intent and action pipeline is stable enough to preserve deterministic mutation paths.
+- The settings/compiler layer is reliable enough to expose topology and policy with provenance.
+- Panel is stable enough to act as the current mutation-capable interaction baseline.
+
+### Can continue later without blocking the v6 structure definition
+
+- Full watcher automation rollout.
+- Non-critical edge-case hardening outside the core invariants above.
+- Broader LangGraph adoption across every runtime unit.
+- Advanced or optional flows that do not define the core layer boundaries.
+
+Working rule:
+- respect the invariants that v5.6 is establishing,
+- but do not force the entire v6 structural design to wait on every forward-line task.
 
 ### Phase 0 — Stabilization (v5.6)
 

@@ -59,6 +59,13 @@ It exists to keep high-level design work systematic:
 - Capabilities should be composable, testable, and reusable across multiple interaction surfaces.
 - Agents and orchestrators may use capabilities, but capabilities should not become hidden control centers.
 
+### 2A. Interaction-First Architecture
+
+- Interaction is primary; retrieval, reasoning, and transformation are supporting capabilities.
+- The architecture should be organized first around how the human interacts with the system and what authority that interaction carries.
+- Retrieval should not become the conceptual center of the architecture just because it is widely reused.
+- Different interaction surfaces may share capabilities while still preserving different authority, persistence, and output semantics.
+
 ### 3. Separation of System Layers
 
 - Interaction, cognition, execution, memory, and governance are distinct layers.
@@ -129,6 +136,13 @@ It exists to keep high-level design work systematic:
   - Introduces a larger structural shift that depends on broader design alignment and phased adoption.
 
 When in doubt, classify the change before editing the docs.
+
+## Sequencing Rules
+
+- Treat stabilization lines such as v5.6 primarily as invariant layers, not as sacred linear delivery order.
+- Respect the contracts those lines establish even when target-state design work begins in parallel.
+- Extract the must-have blockers from a stabilization line before moving structural work forward; do not assume every active item is a prerequisite.
+- Starting target-state design early is valid when it does not break current contracts or blur current truth.
 
 ## Decision Heuristics
 
