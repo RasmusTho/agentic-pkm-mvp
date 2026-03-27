@@ -50,7 +50,7 @@ It also makes explicit that the v5.6 line should be treated mainly as a stabiliz
 
 - ASK may remain a valid runtime/API surface in the v5.x line.
 - ASK should not remain the conceptual center for retrieval, reasoning, or future cognition.
-- New design work should not extend the agent-per-function framing around ASK.
+- New design work should not extend a special central-agent framing around ASK.
 
 ### Retrieval becomes a capability, not an agent
 
@@ -62,7 +62,13 @@ It also makes explicit that the v5.6 line should be treated mainly as a stabiliz
 
 - The core design question is how the human interacts with the system, not where retrieval happens.
 - Panel and Chat are therefore first-class architectural surfaces.
-- Retrieval, reasoning, and transformation support those surfaces rather than organizing the whole architecture around themselves.
+- Retrieval, reasoning, transformation, ingestion, and indexing support those surfaces rather than organizing the whole architecture around themselves.
+
+### Bounded template agents remain part of the design
+
+- The system is not moving toward one central general-purpose agent.
+- It may still include many bounded agents with narrow roles, shared scaffolding, and differentiated prompts or policies.
+- Capability-based composition and template-based agents should reinforce each other rather than be treated as opposites.
 
 ### Deep Agents start in Chat before Panel
 
@@ -87,6 +93,12 @@ It also makes explicit that the v5.6 line should be treated mainly as a stabiliz
 - Interaction, cognition, execution, memory, and governance are treated as separate but coordinated subsystems.
 - The design goal is modularity with replaceability, not one monolithic agent runtime.
 - This keeps the architecture flexible without erasing important authority distinctions.
+
+### The operating spectrum is broad
+
+- The intended system spans manual, assisted, reactive automation, and proactive automation.
+- The design should therefore support both interaction-rich and automation-heavy paths under the same governance model.
+- The target is not one mode of operation, but a governed spectrum.
 
 ## Planned Sequence
 
@@ -129,6 +141,7 @@ Expected shifts:
 - Retrieval is extracted into a capability layer.
 - Panel uses capabilities rather than embedded retrieval-centric logic.
 - Mutation-capable flows are modeled as `intent -> plan -> proposal -> validation -> execution`.
+- Foundational capabilities such as ingestion and indexing remain explicit and first-class in the architecture.
 
 ### Phase 2 — Deep Agent Introduction in Chat
 
@@ -181,14 +194,14 @@ Expected focus:
 - Command-oriented surface.
 - Explicit intent.
 - Mutation-capable, but only through controlled and validated paths.
-- Remains the only mutation entry point in the planned model.
+- Remains a primary governed mutation surface in the planned model.
 
 ### Chat
 
 - Exploration-oriented surface.
-- Read-only.
+- Starts read-only.
 - Used as the safe cognition sandbox for richer reasoning and decomposition.
-- Not an execution surface.
+- May later participate in governed mutation paths, but that should be a later architecture decision rather than an early assumption.
 
 ## What Stays Out of the Roadmap
 

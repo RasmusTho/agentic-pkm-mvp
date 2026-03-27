@@ -60,10 +60,11 @@ Sequencing rule:
 Decisions already fixed for this direction:
 - ASK is deprecated as the architectural center rather than expanded.
 - Retrieval is treated as a reusable capability rather than a standalone agent.
-- Interaction is primary; retrieval and reasoning remain supporting capabilities used by different interaction surfaces.
+- Interaction is primary on the user-facing side; retrieval, reasoning, ingestion, and indexing remain foundational capabilities used by different interaction surfaces and automation paths.
 - Deep Agents start only after structural separation is in place.
 - Chat precedes Panel for Deep Agent rollout because read-only cognition is the safer entry surface.
 - Execution remains governed and mediated; reasoning alone must not trigger mutation.
+- The long-term system spans manual through automated and reactive through proactive behavior under governance.
 
 ## Phase 0 — Stabilization (v5.6, current)
 
@@ -101,8 +102,8 @@ Deliverables:
 - ASK fully deprecated; no new development.
 - Retrieval extracted into a capability layer.
 - Interaction, cognition, execution, memory, and governance separated clearly enough to evolve independently.
-- Panel remains the mutation-capable interaction surface.
-- All LLM-directed mutations remain governed and mediated.
+- Template-based bounded agents and reusable capabilities can coexist without collapsing into one central agent.
+- Governed mutation paths remain explicit and mediated across interaction and automation surfaces.
 
 ## Phase 2 — Deep Agent Introduction (Thin Slice, Post-v6.0)
 
@@ -146,7 +147,7 @@ Constraints:
   - validation
   - event pipeline
 
-Panel remains the only mutation entry point.
+Panel remains a primary command-oriented mutation surface, but not the only governed mutation path in the long-term system.
 
 ## Phase 4 — Execution Layer Expansion (Future)
 
@@ -167,6 +168,7 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 
 - Panel = command surface (`intent -> action`).
 - Chat = exploration surface (`reasoning -> insight`).
+- The broader system spans manual, assisted, reactive automation, and proactive automation under governance.
 - Both share:
   - `AgentState`
   - capability layer
@@ -176,7 +178,7 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 
 - ASK marked deprecated as an architectural center.
 - Retrieval extracted into capability layer.
-- No new agent-per-function patterns allowed.
+- No new central retrieval agent should be created to recentralize the architecture.
 
 ## Fitness Functions Enforced in CI
 - `pytest -q -c /dev/null -m "not pg and not alpha_llm"` is the primary smoke gate in CI.

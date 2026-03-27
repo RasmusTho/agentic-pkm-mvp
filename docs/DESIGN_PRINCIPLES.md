@@ -55,16 +55,23 @@ It exists to keep high-level design work systematic:
 
 ### 2. Capability-Based Composition
 
-- Reusable capabilities are preferred over agent-per-function decomposition.
+- Reusable capabilities are preferred over monolithic central-agent decomposition.
 - Capabilities should be composable, testable, and reusable across multiple interaction surfaces.
 - Agents and orchestrators may use capabilities, but capabilities should not become hidden control centers.
+- Bounded template-based agents remain valid when narrow responsibilities, shared scaffolding, and predictable behavior are important.
 
 ### 2A. Interaction-First Architecture
 
-- Interaction is primary; retrieval, reasoning, and transformation are supporting capabilities.
-- The architecture should be organized first around how the human interacts with the system and what authority that interaction carries.
+- Interaction is primary for the user-facing architecture; retrieval, reasoning, transformation, ingestion, and indexing are foundational supporting capabilities.
+- The architecture should be organized first around how the human interacts with the system, what authority that interaction carries, and which foundational capabilities support it.
 - Retrieval should not become the conceptual center of the architecture just because it is widely reused.
 - Different interaction surfaces may share capabilities while still preserving different authority, persistence, and output semantics.
+
+### 2B. Foundation Before Agency
+
+- Ingestion, indexing, retrieval, and memory maintenance are foundational cognitive-system capabilities, not secondary plumbing.
+- Advanced agency is a core requirement of the system, but the foundation should be strong before the most ambitious agent behavior is rolled out broadly.
+- Foundation work should therefore be treated as enabling core capability, not as a detour away from the agentic goal.
 
 ### 3. Separation of System Layers
 
@@ -77,12 +84,14 @@ It exists to keep high-level design work systematic:
 - Mutation rights must be explicit and narrow.
 - Cognition alone must not imply execution authority.
 - Any path that can mutate durable state must be policy-bounded, auditable, and reviewable.
+- The architecture may include multiple governed mutation paths; the design goal is governed mutation, not necessarily one exclusive mutation surface.
 
 ### 5. Governance Before Autonomy
 
 - Governance is a prerequisite, not an afterthought.
 - New cognition or automation must be introduced only where policy, admissibility, provenance, approval, and auditability remain intact.
 - Read-only cognition surfaces should precede mutation-capable autonomous behavior.
+- The system is expected to span a spectrum from manual to automated and from reactive to proactive; governance must hold across that full range.
 
 ### 6. Contracts Over Implementations
 

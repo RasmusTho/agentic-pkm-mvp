@@ -107,7 +107,7 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 - The ontology/policy layer explains what kinds of things the runtime is dealing with and what boundaries or authority bases apply.
 - The runtime orchestration layer explains how the current system coordinates bounded work through stores, events, agents, and pipelines.
 - The infrastructure layer explains where persistence, transport, provider calls, and process boundaries live.
-- Interaction remains architecturally primary: retrieval, reasoning, and other reusable mechanisms should be read as supporting capabilities rather than as the whole organizing model of the system.
+- Interaction remains architecturally primary on the user-facing side: retrieval, reasoning, ingestion, indexing, and other reusable mechanisms should be read as foundational supporting capabilities rather than as the whole organizing model of the system.
 - Not every human function implies a separate runtime agent, service, or queue.
 - Deterministic pipelines remain valid runtime substrate when they satisfy the same contracts more clearly and safely than richer agent structures.
 
@@ -131,11 +131,11 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 - Legacy `scripts/fs_watcher.py` note lifecycle operations route through `VaultPort` (`FilesystemVaultAdapter`) rather than direct sink/pass-through writes.
 - DB outbox is canonical in runtime; JSONL outbox is audit/diagnostic only.
 
-### Architecture Statement: Multi-agent outer, LangGraph inner
-- Outer architecture: many autonomous agents coordinate via events/A2A envelopes; the Orchestrator routes/executes plans but does not embed each agent’s internal reasoning or decision logic.
-- Inner architecture: each agent is modeled as a LangGraph-driven state machine with an explicit `AgentState`; non-trivial decisions (what to do, in what order) belong inside these graphs rather than outer pipelines.
-- Tools/MCP: tools are actions an agent chooses from within its LangGraph; they should not be hard-wired at the pipeline/Orchestrator level beyond routing envelopes.
-- Examples: the ASK agent already follows this pattern (`app/agents/ask/graph.py` + `AgentState`); PanelAgent is partially aligned today (Runtime V1 fixed mapping) with a planned migration to the same LangGraph + AgentState pattern (PanelAgent 2.0).
+### Architecture Statement: Bounded Agents on Shared Foundations
+- The architecture is expected to include multiple bounded agents with narrow responsibilities rather than one central general agent.
+- Shared scaffolding such as `AgentState`, LangGraph control patterns, common prompts, policies, and capabilities should provide the reusable foundation for those agents.
+- Tools/MCP: tools are actions an agent chooses from within its LangGraph or equivalent bounded control flow; they should not be hard-wired at the pipeline/Orchestrator level beyond routing envelopes.
+- Foundational capabilities such as ingestion, indexing, retrieval, reasoning support, and execution/governance support remain first-class even when they are not expressed as standalone agents.
 - Current adoption is phased: ASK and PanelAgent use LangGraph; most other agents remain deterministic pipelines until v5.6 rollout phases.
 
 ## Agent Implementation Pattern (Current Direction)
@@ -302,7 +302,7 @@ Treat these as forward-line or specialized-reference topics owned by:
 
 This section describes the intended v6 direction. It does not override the locked v5.5 baseline or active v5.6 contracts.
 
-- Interaction is the primary organizing concern for the user-facing architecture; cognition and reusable capabilities support those interaction surfaces.
+- Interaction is the primary organizing concern for the user-facing architecture; cognition and reusable capabilities support those interaction surfaces, while foundational capabilities such as ingestion and indexing remain first-class elsewhere in the system.
 - The architecture is organized around five distinct concerns: interaction, cognition, execution, memory, and governance.
 - LangGraph is the current and planned control-plane mechanism for deterministic orchestration and explicit runtime state progression.
 - Deep Agents are a future cognition mechanism for planning, decomposition, and multi-step reasoning. They are introduced only after structural separation is in place.
@@ -319,7 +319,7 @@ This section describes the intended v6 direction. It does not override the locke
 - Embedded in note.
 - Driven by explicit intent.
 - Produces structured outputs such as actions and proposals.
-- Remains the only mutation entry point.
+- Is one important governed mutation surface in the planned model.
 - May use richer cognition later, but execution still flows through policy, validation, and the event pipeline.
 - Should be read as a command and intent-capture surface, not as a generic chat surface.
 
@@ -328,9 +328,9 @@ This section describes the intended v6 direction. It does not override the locke
 - External to note.
 - Optimized for exploratory reasoning.
 - May span multi-note context.
-- Read-only surface.
-- Serves as the first sandbox for Deep Agent rollout because it isolates cognition from execution risk.
-- Should be read as an exploratory cognition surface, not as a mutation path.
+- Starts as a read-only sandbox for early Deep Agent rollout because it isolates cognition from execution risk.
+- May later participate in governed mutation paths, but that should not be assumed in the current baseline.
+- Should be read as an exploratory cognition surface first, not as a settled UI embodiment or unrestricted execution path.
 
 ## Capability Model
 
@@ -338,7 +338,7 @@ This section describes the intended v6 direction. It does not override the locke
 - Retrieval must be reusable across Panel, Chat, and future cognition surfaces without creating another agent-specific control center.
 - Capabilities are reusable, composable, and testable.
 - Agents and orchestration layers invoke capabilities through explicit planning and state transitions.
-- ASK remains a valid current runtime/API surface in the v5.x line, but it is deprecated as the architectural center for v6 direction. New design work should not introduce fresh agent-per-function patterns around retrieval.
+- ASK remains a valid current runtime/API surface in the v5.x line, but it is deprecated as the architectural center for v6 direction. New design work should not rebuild retrieval around a special central agent, even if bounded agents remain common elsewhere in the system.
 
 ## Historical Material
 
