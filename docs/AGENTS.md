@@ -23,6 +23,7 @@ This document is about agents that exist inside the PKM system/runtime.
 It is not the instruction set for development-time coding agents or repo automation.
 Development-time guidance lives in `docs/DEV_WORKFLOW.md`, `.codex/AGENTS.md`, and
 `docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md`.
+System-level design rules for modularity, capability composition, and documentation layering live in `docs/DESIGN_PRINCIPLES.md`.
 
 Use `docs/PANEL_AGENT.md` for PanelAgent-specific runtime behavior, panel syntax, emitted events, and wiring details.
 See `docs/plans/RUNTIME_ONTOLOGY_NORMALIZATION.md` for the current recommendation on separating
@@ -37,7 +38,9 @@ Use `docs/TESTING.md` for the canonical test layers, CI roles, and runtime/UAT v
 - The matrix is therefore best read as a runtime coordination map, not a pure ontology table.
 
 ## Design principle
+- Agent structure should follow the system design principles in `docs/DESIGN_PRINCIPLES.md`: boundary-first design, capability-based composition, explicit mutation authority, and governance before autonomy.
 - Non-trivial decision logic should move toward “LangGraph inner, events/A2A outer”: each agent owns an explicit `AgentState` and LangGraph graph for internal choices, while coordination between agents happens via Outbox events/A2A envelopes orchestrated by the Orchestrator/Planner.
+- Agent-per-function decomposition should not be expanded when the same behavior is better modeled as a reusable capability.
 - PanelAgent is the concrete example: LangGraph runtime with an action catalog driving a configurable decider (`PANEL_AGENT_DECIDER=rule|llm`), defaulting to deterministic rule-mode while offering opt-in LLM-based selection.
 - Current adoption is phased: ASK and PanelAgent use LangGraph; most other agents remain deterministic pipelines until v5.6 rollout phases.
 

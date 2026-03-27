@@ -61,6 +61,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - Governance -> active concern across policy, provenance, admissibility, approval, and auditability.
 
 The system is not yet an autonomous agent system. All execution remains controlled and mediated.
+High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.md`; roadmap and architecture should stay aligned to that split.
 
 ## Status fields (baseline vs forward line)
 - `sot_baseline_version`: locked SoT v5.5 Reality-MVP baseline.

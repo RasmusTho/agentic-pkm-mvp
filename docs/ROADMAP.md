@@ -49,18 +49,22 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 
 ## Capability-Based Architecture & Agent Evolution
 
-This section defines the v6 direction without changing the locked SoT v5.5 guarantees or the active v5.6 rollout contracts. Decisions below are intentional: ASK is deprecated rather than expanded, retrieval is extracted as a reusable capability, Deep Agents start only after v6.0 structural separation, Chat precedes Panel for Deep Agent rollout, and execution remains mediated by governance and the controlled action layer.
+This section defines the v6 direction without changing the locked SoT v5.5 guarantees or the active v5.6 rollout contracts.
+It follows the design rules in `docs/DESIGN_PRINCIPLES.md`: principles first, structure second, sequencing third, implementation detail elsewhere.
+
+Decisions already fixed for this direction:
+- ASK is deprecated as the architectural center rather than expanded.
+- Retrieval is treated as a reusable capability rather than a standalone agent.
+- Deep Agents start only after structural separation is in place.
+- Chat precedes Panel for Deep Agent rollout because read-only cognition is the safer entry surface.
+- Execution remains governed and mediated; reasoning alone must not trigger mutation.
 
 ## Phase 0 — Stabilization (v5.6, current)
 
 - Complete PanelAgent as default interaction path.
 - Finalize `AgentState` as canonical runtime state (LangGraph).
 - Deliver vault-as-GUI settings compiler (typed, validated, provenance-aware).
-- Stabilize event contracts:
-  - `intent.created`
-  - `plan.generated`
-  - `action.proposed`
-  - `action.executed`
+- Stabilize the active intent, proposal, and execution contract families without breaking current runtime compatibility.
 - No Deep Agents in production flows.
 - No execution outside controlled action layer.
 
@@ -91,10 +95,10 @@ Introduce explicit system layers:
 Deliverables:
 
 - ASK fully deprecated; no new development.
-- Retrieval extracted into `app/capabilities/*`.
+- Retrieval extracted into a capability layer.
 - PanelAgent uses capability layer, not embedded retrieval logic.
 - Clear separation between interaction and cognition.
-- All system mutations pass `intent -> plan -> proposal -> validation -> execution`.
+- All LLM-directed mutations pass `intent -> plan -> proposal -> validation -> execution`.
 
 ## Phase 2 — Deep Agent Introduction (Thin Slice, Post-v6.0)
 

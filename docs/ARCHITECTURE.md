@@ -11,6 +11,7 @@ Those documents are kept for reference but are not active truth for the current 
 This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system.
 
 Related documents and authority boundaries:
+- `docs/DESIGN_PRINCIPLES.md` defines the stable design rules for modularity, flexibility, authority separation, and documentation layering. Use it before changing architecture wording or roadmap framing.
 - `docs/HUMAN-FLOWS.md` is the user-facing behavior contract. Any architecture change that alters user-visible behavior should be validated against it before shipping.
 - `docs/ONTOLOGY_RUNTIME_BRIDGE.md` is the cross-layer reading guide connecting human functions, semantic classes, persistence surfaces, and runtime contracts. It does not replace the owning SoT docs, but it should be used when architecture wording risks collapsing those layers.
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` defines the broader human-first second-brain ontology. This document uses narrower runtime and storage language where needed and should not be read as the full domain ontology.
@@ -300,14 +301,14 @@ Treat these as forward-line or specialized-reference topics owned by:
 
 This section describes the intended v6 direction. It does not override the locked v5.5 baseline or active v5.6 contracts.
 
-- LangGraph is the control plane for deterministic orchestration and canonical runtime state progression.
-- Deep Agents are the cognition layer for planning, decomposition, and multi-step reasoning. They are introduced only after v6.0 structural separation is in place.
-- The capability layer contains reusable functions such as retrieval, reranking, and context building. Capabilities are shared infrastructure, not conceptual centers of the system.
-- The interaction layer consists of Panel and Chat as distinct runtime surfaces with different authority and mutation rules.
-- The execution layer contains controlled effectors only. LLM reasoning must not directly mutate notes or trigger execution.
+- The architecture is organized around five distinct concerns: interaction, cognition, execution, memory, and governance.
+- LangGraph is the current and planned control-plane mechanism for deterministic orchestration and explicit runtime state progression.
+- Deep Agents are a future cognition mechanism for planning, decomposition, and multi-step reasoning. They are introduced only after structural separation is in place.
+- The capability layer provides reusable functions such as retrieval, reranking, and context building. Capabilities are shared building blocks, not conceptual centers of the system.
+- The execution layer contains controlled effectors only. Reasoning must not directly mutate notes or trigger execution.
 - The memory layer remains AMG plus backing stores as the canonical persistence substrate.
-- The governance layer enforces policies, admissibility, provenance, approval, and auditability across all mutation paths.
-- This layering treats Yggdrasil as a system-of-systems: interaction, cognition, execution, memory, and governance are separated so they can evolve independently without collapsing authority boundaries.
+- The governance layer enforces policies, admissibility, provenance, approval, and auditability across mutation-capable paths.
+- This structure treats Yggdrasil as a system-of-systems so the layers can evolve independently without collapsing authority boundaries.
 
 ## Interaction Surfaces
 
@@ -324,7 +325,7 @@ This section describes the intended v6 direction. It does not override the locke
 - External to note.
 - Optimized for exploratory reasoning.
 - May span multi-note context.
-- Read-only by default.
+- Read-only surface.
 - Serves as the first sandbox for Deep Agent rollout because it isolates cognition from execution risk.
 
 ## Capability Model
