@@ -1,39 +1,91 @@
+"""
+Verifies that vault_alpha ingest writes a companion note (replacing the old VaultMirror).
+
+Replaces the legacy test_vault_alpha_mirror_port.py which tested _write_mirror().
+The companion note is now the system identity surface for each vault note.
+"""
 from __future__ import annotations
 
+import pytest
 from pathlib import Path
 
-from app.ingest.vault_alpha import _write_mirror
-from app.services.note_log import note_log_path
-from scripts.yaml_roundtrip import load_frontmatter
+from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
+from app.services.companion_note import companion_path, read_companion
+from app.stores import reset_store_backends
 
 
-def test_write_mirror_uses_knowledge_port(tmp_path: Path, monkeypatch) -> None:
+@pytest.fixture()
+def _mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv(
+        "LLM_MOCK_RESPONSE",
+        '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}',
+    )
+    reset_store_backends()
+
+
+def test_ingest_writes_companion_note(tmp_path: Path, _mock_env: None) -> None:
+    """After ingest the companion file must exist under _system/companions/<uuid>.md."""
     vault_root = tmp_path / "vault"
-    rel_path = Path("Concepts/Example.md")
-    note_uuid = "11111111-1111-1111-1111-111111111111"
-    writes: list[str] = []
-
-    def _fake_write_note(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
-        resolved_root = (vault_root or tmp_path).resolve()
-        resolved_path = Path(path).resolve()
-        writes.append(resolved_path.relative_to(resolved_root).as_posix())
-        resolved_path.parent.mkdir(parents=True, exist_ok=True)
-        resolved_path.write_text(content, encoding="utf-8")
-        return None
-
-    monkeypatch.setattr("app.ingest.vault_alpha.write_note_from_absolute", _fake_write_note)
-
-    mirror_path = _write_mirror(
-        vault_root,
-        rel_path,
-        note_uuid=note_uuid,
-        title="Example",
-        review_state="provisional",
-        maturity="note",
-        ingest_fingerprint={"text_sha256": "abc", "mtime_ns": 1},
+    vault_root.mkdir()
+    note_uuid = "aaaabbbb-cccc-dddd-eeee-111111111111"
+    note_path = vault_root / "Concepts" / "Example.md"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(
+        f"---\nuuid: {note_uuid}\ntitle: Example\n---\nSome content here.\n",
+        encoding="utf-8",
     )
 
-    expected_path = note_log_path(note_uuid, rel_path).as_posix()
-    assert expected_path in writes
-    frontmatter, _ = load_frontmatter(mirror_path.read_text(encoding="utf-8"))
-    assert frontmatter.get("uuid") == note_uuid
+    summary = run_vault_alpha_ingest_paths(vault_root, [note_path])
+
+    assert summary.ingested == 1
+    companion = read_companion(vault_root, note_uuid)
+    assert companion is not None, "companion note should have been created by ingest"
+    assert companion.uuid == note_uuid
+    assert companion.source_ref == "Concepts/Example.md"
+    assert companion.ingest_state == "tracked"
+    assert companion.content_hash  # non-empty sha256
+
+
+def test_ingest_companion_lives_at_flat_uuid_path(tmp_path: Path, _mock_env: None) -> None:
+    """Companion file must be at _system/companions/<uuid>.md — NOT under System/Metadata/VaultMirror."""
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    note_uuid = "12341234-5678-5678-5678-abcdabcdabcd"
+    note_path = vault_root / "Cards" / "Deep" / "nested.md"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(
+        f"---\nuuid: {note_uuid}\ntitle: Nested\n---\nNested content.\n",
+        encoding="utf-8",
+    )
+
+    run_vault_alpha_ingest_paths(vault_root, [note_path])
+
+    expected_companion = vault_root / companion_path(note_uuid)
+    assert expected_companion.exists(), f"companion not found at {expected_companion}"
+
+    # Legacy path must NOT be written
+    legacy_root = vault_root / "System" / "Metadata" / "VaultMirror"
+    assert not legacy_root.exists(), "VaultMirror directory must not be created"
+
+
+def test_ingest_companion_has_no_forbidden_fields(tmp_path: Path, _mock_env: None) -> None:
+    """Companion must not contain review_state, maturity, or ingest_fingerprint (dict)."""
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    note_uuid = "deadbeef-dead-beef-dead-beefdeadbeef"
+    note_path = vault_root / "Notes" / "policy-check.md"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(
+        f"---\nuuid: {note_uuid}\ntitle: Policy Check\nreview_state: provisional\nmaturity: note\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    run_vault_alpha_ingest_paths(vault_root, [note_path])
+
+    companion_file = vault_root / companion_path(note_uuid)
+    text = companion_file.read_text(encoding="utf-8")
+    assert "review_state" not in text, "companion must not copy review_state from vault note"
+    assert "maturity" not in text, "companion must not copy maturity from vault note"
+    assert "ingest_fingerprint" not in text, "companion must not use legacy ingest_fingerprint dict"

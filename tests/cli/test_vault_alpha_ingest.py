@@ -18,6 +18,7 @@ from app.cli import cli
 from app.ingest import vault_alpha as vault_alpha
 from app.ingest.vault_alpha import _compute_ingest_fingerprint, run_vault_alpha_ingest
 from app.retrieval.hybrid import get_store
+from app.services.companion_note import companion_path, read_companion, write_companion, CompanionNote
 from app.stores import get_object_store, reset_store_backends
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
@@ -118,22 +119,38 @@ def _expected_uuid(rel_path: Path, frontmatter_uuid: object | None = None, mirro
     return str(uuid.uuid5(vault_alpha._VAULT_NOTE_UUID_NAMESPACE, rel_path.as_posix()))
 
 
-def _seed_mirror_only_note(vault: Path) -> tuple[Path, str, dict[str, int | str]]:
-    note_path = vault / "Concepts" / "MirrorOnly.md"
-    body = "Mirror-only note with no frontmatter.\n"
+def _seed_companion_only_note(vault: Path) -> tuple[Path, str, str]:
+    """Create a note without UUID in frontmatter + a pre-existing companion for it.
+
+    This simulates the healing scenario where a companion exists (from a previous
+    ingest) but the frontmatter uuid is missing — the ingest should recover the uuid
+    from the companion via content_hash lookup.
+
+    The companion title must match what vault_alpha._derive_title() produces from the
+    note body, otherwise the title guard in _find_companion_by_fingerprint() will
+    reject the hash match.
+    """
+    note_path = vault / "Concepts" / "CompanionOnly.md"
+    # Give the note a # heading so _derive_title extracts a clean, predictable title
+    body = "# Companion Only\n\nNote body without frontmatter uuid.\n"
     note_path.write_text(body, encoding="utf-8")
-    fingerprint = _compute_ingest_fingerprint(strip_ai_panels(body).strip(), note_path)
+    stripped = strip_ai_panels(body).strip()
+    fingerprint = _compute_ingest_fingerprint(stripped, note_path)
+    text_sha256 = str(fingerprint.get("text_sha256", ""))
     note_uuid = "55555555-5555-5555-5555-555555555555"
-    mirror_path = vault / "System/Metadata/VaultMirror/Concepts" / f"{note_uuid}.md"
-    mirror_path.parent.mkdir(parents=True, exist_ok=True)
-    mirror_frontmatter = {
-        "uuid": note_uuid,
-        "source_ref": "Concepts/MirrorOnly.md",
-        "ingest_fingerprint": fingerprint,
-    }
-    mirror_body = "Mirror for Concepts/MirrorOnly.md"
-    mirror_path.write_text(dump_frontmatter(mirror_frontmatter, mirror_body), encoding="utf-8")
-    return note_path, note_uuid, fingerprint
+    from datetime import datetime, timezone
+    # Title must match vault_alpha._derive_title() output: "Companion Only"
+    companion = CompanionNote(
+        uuid=note_uuid,
+        source_ref="Concepts/CompanionOnly.md",
+        title="Companion Only",
+        content_hash=text_sha256,
+        ingest_state="tracked",
+        last_ingested=datetime.now(timezone.utc).isoformat(),
+        created_by_instance="test-seed",
+    )
+    write_companion(vault, companion)
+    return note_path, note_uuid, text_sha256
 
 
 @pytest.fixture(autouse=True)
@@ -186,35 +203,26 @@ def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
     fm_needs, _ = load_frontmatter(needs_uuid.read_text(encoding="utf-8"))
     assert _bare_uuid(fm_needs.get("uuid"))
     expected_uuid = _expected_uuid(Path("Concepts/NeedsUUID.md"), fm_needs.get("uuid"))
-    mirror_dir = vault / "System/Metadata/VaultMirror/Concepts"
-    mirror_files = []
-    for candidate in mirror_dir.glob("*.md"):
-        fm, body = load_frontmatter(candidate.read_text(encoding="utf-8"))
-        if fm.get("uuid") == expected_uuid:
-            mirror_files.append(candidate)
-            assert "Mirror for Concepts/NeedsUUID.md" in body
-    assert mirror_files, "Expected mirror file for NeedsUUID"
-    mirror_fm, _ = load_frontmatter(mirror_files[0].read_text(encoding="utf-8"))
-    assert mirror_fm.get("uuid") == expected_uuid
-    assert mirror_fm.get("origin") == "vault"
-    assert mirror_fm.get("kind") == "note"
-    assert mirror_fm.get("review_state") == "provisional"
-    assert mirror_fm.get("maturity") == "note"
+    companion = read_companion(vault, expected_uuid)
+    assert companion is not None, "Companion note should have been created for NeedsUUID"
+    assert companion.uuid == expected_uuid
+    assert companion.source_ref == "Concepts/NeedsUUID.md"
+    assert companion.ingest_state == "tracked"
+    assert companion.content_hash
+    # Companion must NOT contain human-owned fields
+    companion_file_text = (vault / companion_path(expected_uuid)).read_text(encoding="utf-8")
+    assert "review_state" not in companion_file_text
+    assert "maturity" not in companion_file_text
 
     existing = vault / "Concepts" / "ExistingUUID.md"
     fm_existing, _ = load_frontmatter(existing.read_text(encoding="utf-8"))
     expected_existing_uuid = _expected_uuid(Path("Concepts/ExistingUUID.md"), fm_existing.get("uuid"))
-    mirror_existing_dir = vault / "System/Metadata/VaultMirror/Concepts"
-    existing_mirrors = [p for p in mirror_existing_dir.glob("*.md") if expected_existing_uuid in p.name]
-    assert existing_mirrors
-    mirror_existing_fm, _ = load_frontmatter(existing_mirrors[0].read_text(encoding="utf-8"))
-    assert mirror_existing_fm.get("uuid") == expected_existing_uuid
+    companion_existing = read_companion(vault, expected_existing_uuid)
+    assert companion_existing is not None
+    assert companion_existing.uuid == expected_existing_uuid
 
-    mirrored_paths = [vault / "System" / "Internal.md", vault / "Templates" / "NoteTemplate.md"]
-    for path in mirrored_paths:
-        mirror_candidate = vault / "System/Metadata/VaultMirror" / path.relative_to(vault).parent
-        assert mirror_candidate.exists()
-        assert any(mirror_candidate.glob("*.md"))
+    # Legacy VaultMirror directory must NOT be created
+    assert not (vault / "System" / "Metadata" / "VaultMirror").exists()
 
 
 def test_vault_alpha_ingest_persists_uuid_to_note_mirror_and_store(tmp_path: Path) -> None:
@@ -245,11 +253,11 @@ def test_vault_alpha_ingest_persists_uuid_to_note_mirror_and_store(tmp_path: Pat
     note_uuid = _expected_uuid(Path("Concepts/NeedsUUID.md"), fm_needs.get("uuid"))
     parsed_uuid = uuid.UUID(note_uuid)
 
-    mirror_path = vault / "System/Metadata/VaultMirror/Concepts" / f"{note_uuid}.md"
-    assert mirror_path.exists()
-    mirror_fm, _ = load_frontmatter(mirror_path.read_text(encoding="utf-8"))
-    assert mirror_fm.get("uuid") == note_uuid
-    assert mirror_fm.get("source_ref") == "Concepts/NeedsUUID.md"
+    companion = read_companion(vault, note_uuid)
+    assert companion is not None, "Companion note should exist after ingest"
+    assert companion.uuid == note_uuid
+    assert companion.source_ref == "Concepts/NeedsUUID.md"
+    assert companion.content_hash  # sha256 populated
 
     store = get_object_store()
     stored = store.get(parsed_uuid)
@@ -259,23 +267,62 @@ def test_vault_alpha_ingest_persists_uuid_to_note_mirror_and_store(tmp_path: Pat
     assert payload.get("text")
 
 
-def test_vault_alpha_ingest_warns_on_mirror_conflict(tmp_path: Path) -> None:
+def test_vault_alpha_ingest_warns_on_companion_uuid_conflict(tmp_path: Path) -> None:
+    """
+    Companion conflict scenario: companion file at _system/companions/<fm_uuid>.md
+    contains a different uuid in its frontmatter (data corruption). Ingest should
+    warn and use the frontmatter UUID (authority: healing priority step 1 > step 2).
+    """
+    from datetime import datetime, timezone
+
     reset_store_backends()
     get_store().set_documents([])
     vault = _prepare_vault(tmp_path)
+
+    # Create a note with frontmatter UUID and write a CORRUPT companion that has
+    # a different uuid field inside the file.
+    front_uuid = "33333333-3333-3333-3333-333333333333"
+    corrupt_companion_uuid = "44444444-4444-4444-4444-444444444444"
+    conflict_note = vault / "Concepts" / "CompanionConflict.md"
+    conflict_note.write_text(
+        f"---\nuuid: {front_uuid}\ntitle: CompanionConflict\n---\nBody with conflict.\n",
+        encoding="utf-8",
+    )
+    # Write a companion at the frontmatter-uuid path but with a DIFFERENT uuid inside
+    corrupt_companion = CompanionNote(
+        uuid=corrupt_companion_uuid,  # intentionally wrong
+        source_ref="Concepts/CompanionConflict.md",
+        title="CompanionConflict",
+        content_hash="somehash",
+        ingest_state="tracked",
+        last_ingested=datetime.now(timezone.utc).isoformat(),
+        created_by_instance="test-corrupt",
+    )
+    # Write it at the FRONTMATTER uuid path (which is the lookup key)
+    corrupt_path = vault / "_system" / "companions" / f"{front_uuid}.md"
+    corrupt_path.parent.mkdir(parents=True, exist_ok=True)
+    from scripts.yaml_roundtrip import dump_frontmatter as _dump_fm
+    corrupt_path.write_text(
+        _dump_fm(
+            {
+                "uuid": corrupt_companion_uuid,  # conflict: uuid in file ≠ filename
+                "source_ref": "Concepts/CompanionConflict.md",
+                "title": "CompanionConflict",
+                "content_hash": "somehash",
+                "ingest_state": "tracked",
+                "last_ingested": datetime.now(timezone.utc).isoformat(),
+                "created_by_instance": "test-corrupt",
+            },
+            "",
+        ),
+        encoding="utf-8",
+    )
+
     runner = CliRunner()
     env = _base_env(tmp_path)
-
     result = runner.invoke(
         cli,
-        [
-            "vault-alpha-ingest",
-            "--vault-root",
-            str(vault),
-            "--max-notes",
-            "10",
-            "--include-test-note",
-        ],
+        ["vault-alpha-ingest", "--vault-root", str(vault), "--max-notes", "20", "--include-test-note"],
         env=env,
     )
 
@@ -285,18 +332,14 @@ def test_vault_alpha_ingest_warns_on_mirror_conflict(tmp_path: Path) -> None:
     except Exception:
         stderr_output = ""
     warning_output = result.output + (stderr_output or "")
-    assert "mirror uuid" in warning_output
+    assert "companion uuid" in warning_output
 
-    conflict = vault / "Concepts" / "MirrorConflict.md"
-    fm_conflict, _ = load_frontmatter(conflict.read_text(encoding="utf-8"))
-    front_uuid = fm_conflict.get("uuid")
-    expected_uuid = _expected_uuid(Path("Concepts/MirrorConflict.md"), front_uuid)
-
+    # Frontmatter UUID wins; companion should be rewritten with correct uuid
     store = get_object_store()
-    stored = store.get(uuid.UUID(expected_uuid))
+    stored = store.get(uuid.UUID(front_uuid))
     assert stored is not None
-    mirror_path = vault / "System/Metadata/VaultMirror/Concepts" / f"{expected_uuid}.md"
-    assert mirror_path.exists()
+    companion = read_companion(vault, front_uuid)
+    assert companion is not None
 
 
 def test_vault_alpha_ingest_rewrites_uuid_to_wikilink_and_parses_existing_formats(tmp_path: Path) -> None:
@@ -335,11 +378,10 @@ def test_vault_alpha_ingest_rewrites_uuid_to_wikilink_and_parses_existing_format
     fm_prelinked, _ = load_frontmatter(prelinked.read_text(encoding="utf-8"))
     assert _bare_uuid(fm_prelinked.get("uuid")) == prelinked_uuid
 
-    mirror_prelinked = vault / "System/Metadata/VaultMirror/Concepts" / f"{prelinked_uuid}.md"
-    assert mirror_prelinked.exists()
-    mirror_prelinked_fm, _ = load_frontmatter(mirror_prelinked.read_text(encoding="utf-8"))
-    assert mirror_prelinked_fm.get("uuid") == prelinked_uuid
-    assert mirror_prelinked_fm.get("ingest_fingerprint")
+    companion_prelinked = read_companion(vault, prelinked_uuid)
+    assert companion_prelinked is not None, "Companion note should exist for Prelinked"
+    assert companion_prelinked.uuid == prelinked_uuid
+    assert companion_prelinked.content_hash  # sha256 populated
 
     store = get_object_store()
     stored_prelinked = store.get(uuid.UUID(prelinked_uuid))
@@ -347,11 +389,16 @@ def test_vault_alpha_ingest_rewrites_uuid_to_wikilink_and_parses_existing_format
     assert (stored_prelinked.get("payload") or {}).get("ingest_fingerprint")
 
 
-def test_vault_alpha_ingest_heals_missing_frontmatter_with_mirror_when_store_empty(tmp_path: Path) -> None:
+def test_vault_alpha_ingest_heals_missing_frontmatter_with_companion_when_store_empty(tmp_path: Path) -> None:
+    """
+    Healing scenario: a companion note exists for a note that has no UUID in frontmatter.
+    The ingest should recover the UUID from the companion via content_hash lookup and
+    write it back to the vault note's frontmatter.
+    """
     reset_store_backends()
     get_store().set_documents([])
     vault = _prepare_vault(tmp_path)
-    note_path, note_uuid, _ = _seed_mirror_only_note(vault)
+    note_path, seeded_uuid, seeded_hash = _seed_companion_only_note(vault)
     env = _base_env(tmp_path)
 
     with patch.dict(os.environ, env, clear=False):
@@ -360,28 +407,24 @@ def test_vault_alpha_ingest_heals_missing_frontmatter_with_mirror_when_store_emp
 
         frontmatter, _ = load_frontmatter(note_path.read_text(encoding="utf-8"))
         healed_uuid = _bare_uuid(frontmatter.get("uuid"))
-        assert healed_uuid
+        assert healed_uuid, "UUID should have been healed into frontmatter"
+        assert healed_uuid == seeded_uuid, "Healed UUID should match the pre-seeded companion UUID"
 
-        mirror_dir = vault / "System/Metadata/VaultMirror/Concepts"
-        mirror_path = mirror_dir / f"{healed_uuid}.md"
-        assert mirror_path.exists()
-        mirror_fm, _ = load_frontmatter(mirror_path.read_text(encoding="utf-8"))
-        assert mirror_fm.get("uuid") == healed_uuid
-        front_fp = mirror_fm.get("ingest_fingerprint")
-        assert front_fp
+        companion = read_companion(vault, healed_uuid)
+        assert companion is not None
+        assert companion.uuid == healed_uuid
+        assert companion.content_hash
 
         store = get_object_store()
         stored = store.get(uuid.UUID(healed_uuid))
         assert stored is not None
         stored_payload = stored.get("payload") or {}
-        assert stored_payload.get("ingest_fingerprint") == front_fp
+        assert stored_payload.get("ingest_fingerprint")
 
         summary_force = run_vault_alpha_ingest(vault, max_notes=0, include_test_note=False, force=True)
         assert summary_force.ingested > 0
         fm_after_force, _ = load_frontmatter(note_path.read_text(encoding="utf-8"))
         assert _bare_uuid(fm_after_force.get("uuid"))
-        mirror_after_force, _ = load_frontmatter(mirror_path.read_text(encoding="utf-8"))
-        assert mirror_after_force.get("ingest_fingerprint") == front_fp
 
         summary_skip = run_vault_alpha_ingest(vault, max_notes=0, include_test_note=False, force=False)
         assert summary_skip.errors == 0

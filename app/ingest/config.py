@@ -12,7 +12,7 @@ from app.vault.layout import VaultLayout, load_or_create_layout, normalize_md_fi
 
 DEFAULT_VAULT_ROOT = Path("vault")
 
-_BASE_IGNORES = [".obsidian/**", ".trash/**", "System/Metadata/VaultMirror/**"]
+_BASE_IGNORES = [".obsidian/**", ".trash/**", "_system/companions/**"]
 
 
 @dataclass(frozen=True)

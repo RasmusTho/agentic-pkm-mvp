@@ -24,7 +24,7 @@ def test_ingest_defaults_use_layout_note(tmp_path: Path) -> None:
     assert "Legacy/**" in config.ignore_glob
     assert ".obsidian/**" in config.ignore_glob
     assert ".trash/**" in config.ignore_glob
-    assert "System/Metadata/VaultMirror/**" in config.ignore_glob
+    assert "_system/companions/**" in config.ignore_glob
     assert "⚙️ System/**" not in config.ignore_glob
     assert "⚙️ System/vault.layout.md" not in config.ignore_glob
 
