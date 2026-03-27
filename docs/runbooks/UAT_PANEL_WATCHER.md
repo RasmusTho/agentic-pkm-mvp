@@ -3,6 +3,11 @@ State: SoT v4.10 (Reality-MVP) and v5.x (PanelAgent Runtime + registry watcher) 
 
 Purpose: practical, low-risk UAT flow for exercising PanelAgent runtime and the registry watcher on a small subset of vault notes.
 
+Reading note:
+- this runbook validates the current runtime path,
+- not the full target-state architecture,
+- and not a permanent commitment to one agent/event decomposition beyond the current baseline.
+
 ## 1) Preconditions
 - Reality-MVP (SoT v4.10) is in place: ingest, ASK, observability, orchestrator runtime V1.
 - PanelAgent Runtime V1 (SoT v5.x) is working (`panel.intent.*`, `panel.log.created`, `promote.intent.created`).
@@ -74,3 +79,4 @@ Purpose: practical, low-risk UAT flow for exercising PanelAgent runtime and the 
 - Scope: single-user UAT on a subset of notes; no multi-user or remote watcher yet.
 - Registry watcher is the runtime standard; legacy snapshot watchers are dev-only.
 - Policy can be refined later (per-panel modes, additional triggers) without changing the current contract.
+- This runbook should be read together with `docs/DESIGN_PRINCIPLES.md` and `docs/ARCHITECTURE.md` so operational validation does not get mistaken for the full design model.

@@ -2,6 +2,11 @@ State: SoT v5.5 Reality-MVP baseline locked with the forward line now tracking v
 # Observability
 This document is the runtime observability contract for logs, counters, heartbeats, and status interpretation.
 
+Reading note:
+- observability surfaces describe how the current runtime is monitored,
+- not the full target-state architecture,
+- and not a claim that counters or event paths alone define the system design.
+
 For adjacent operational surfaces:
 - use `docs/OPERATIONS.md` as the top-level operations playbook
 - use `docs/HEALTH.md` for health CLI behavior and contract details
@@ -27,6 +32,10 @@ Logs are the primary tracing surface; no external APM is required for the curren
 - Canonical compose stack: `db`, `api`, `watcher`, `worker` (registry watcher).
 - The watcher writes audit JSONL events and enqueues DB outbox events; the worker consumes the DB outbox for ingest and promotion side effects.
 - Treat `events_log` as append-only audit and `worker_queue` as the live queue; do not derive pending across them unless `worker_queue.mode` is `file`/`jsonl` and explicitly wired.
+
+Architectural reading note:
+- these monitoring and queue interpretations are current operational truth,
+- but they should not be mistaken for the higher-level separation between interaction, cognition, execution, memory, and governance.
 
 ## Status snapshot (CLI)
 - `app.observability.status_service.get_system_status()` aggregates per-plane object counts (vault vs external), ingest run timestamps/error counts (via ingest summaries), and ASK query counts/latency/error counts over the last 24h window.

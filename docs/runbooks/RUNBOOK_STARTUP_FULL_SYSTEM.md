@@ -3,6 +3,11 @@ State: SoT v5.x forward line (full-system startup)
 
 Use this runbook to bring up the Alpha Compose Runtime and validate runtime health before running gap tests or other checks.
 
+Reading note:
+- this runbook is about current startup and operator validation,
+- not the full target-state architecture,
+- and not a claim that the current compose/runtime wiring is the permanent system decomposition.
+
 ## Command-first startup
 1. From repo root, run:
 ```
@@ -26,6 +31,10 @@ make alpha-up
 - The worker consumes the DB outbox to perform ingest, panel, and promotion side effects, emitting `panel.intent.*`, `promote.intent.created`, and `promote.done` on success.
 - Inbox UUID healing is performed by the worker on `ingest.vault.changed` for notes under the inbox folder (from `vault.layout.md` or `VAULT_INBOX_DIR_REL`) so notes do not linger without `uuid:` after a worker pass.
 - Status/health surfaces should be used for operator gating (`required_ok` is the primary signal).
+
+Architectural reading note:
+- this describes the current operational runtime loop,
+- while the higher-level architecture still distinguishes interaction, cognition, execution, memory, and governance above these startup mechanics.
 
 Deprecated:
 - `scripts/run_alpha_stack.sh` and `scripts/run_alpha_live.sh` are legacy helpers. Use `make alpha-up` instead.
