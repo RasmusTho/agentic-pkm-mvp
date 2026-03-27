@@ -13,7 +13,7 @@ from app.store.object_store import DomainObject, ObjectStore
 pytestmark = [pytest.mark.not_pg]
 
 
-def _make_note(store: ObjectStore, review_state: str = "inbox") -> str:
+def _make_note(store: ObjectStore, review_state: str = "draft") -> str:
     note_uuid = str(uuid4())
     obj = DomainObject(
         uuid=note_uuid,
@@ -54,7 +54,7 @@ def test_guardrails_can_block_and_prevent_mutation(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(guardrails, "run_pre_guardrails", fake_block)
 
     store = ObjectStore()
-    note_uuid = _make_note(store, review_state="inbox")
+    note_uuid = _make_note(store, review_state="draft")
     goal = f"Promote note {note_uuid}"
 
     plan = run_planner_for_goal(goal=goal, store=store, max_steps=3, max_replans=0, max_depth=0)
@@ -67,4 +67,4 @@ def test_guardrails_can_block_and_prevent_mutation(monkeypatch: pytest.MonkeyPat
     assert updated is not None
     fm = (updated.payload or {}).get("frontmatter", {})
     # mutation should not have happened
-    assert fm.get("review_state") == "inbox"
+    assert fm.get("review_state") == "draft"

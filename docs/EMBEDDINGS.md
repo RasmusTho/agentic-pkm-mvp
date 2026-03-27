@@ -8,8 +8,9 @@ Embeddings are **derived artifacts** (rebuildable). The canonical source of trut
 ## Goals
 
 - One consistent embedding pipeline across runtime (API/worker) that honors configuration:
+  - `vault/@Settings/llm_routing.md` / `runtime/settings/llm_routing.yaml`
   - `LLM_PROVIDER`
-  - `OLLAMA_HOST`
+  - `OLLAMA_HOST` / `OLLAMA_URL`
   - `EMBED_MODEL`
   - `EMBED_DIM`
   - `EMBED_NORMALIZE` (if present; defaults to normalized vectors)
@@ -32,6 +33,9 @@ Embeddings are **derived artifacts** (rebuildable). The canonical source of trut
 6. Indexer emits index events to outbox (success/failure) with provenance.
 
 ## Configuration
+
+Embedding provider/model choice is a user setting first, not a hidden runtime default. The preferred embedding route
+comes from the compiled task policy; env vars supply defaults only when the policy leaves a field unset.
 
 ### Required / primary env vars
 
@@ -94,6 +98,16 @@ This identity must be:
 - resolved **before** embedding,
 - recorded with the vector index metadata / provenance,
 - attached to emitted indexing events.
+
+### Fallback rule
+
+Embeddings do not allow generic provider fallback. The runtime may:
+- repair the endpoint for the chosen provider (for example, choose a Docker-reachable Ollama base URL),
+- keep using the same provider/model/identity, and
+- continue only if the resolved identity remains compatible.
+
+The runtime must not silently switch to another embedding model/provider that changes provider, model, dimension, or normalization.
+If the preferred embedding identity is unavailable and no compatible fallback exists, startup should fail or require index rebuild.
 
 ### Why identity matters
 

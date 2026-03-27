@@ -29,6 +29,7 @@ Compiler:
 - `python -m app.cli settings compile`
 
 Runtime settings cover the panel action catalog and watcher policy; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli settings-validate` / `python -m app.cli settings-explain`.
+They also include task-specific LLM routing policy via `vault/@Settings/llm_routing.md` -> `runtime/settings/llm_routing.yaml`.
 
 Settings tiering guidance (operator-facing vs dev/lab-only), inventory, and migration targets are described below.
 Runtime profile switch for tier enforcement: `PKM_SETTINGS_PROFILE=operator|lab` (default `operator`).
@@ -51,7 +52,7 @@ High-impact examples:
   - `WATCHER_AUTO_EXEC`
   - `WATCHER_SCOPE_GLOB`
   - `watcher_settings.allowed_actions`
-  - `LLM_PROVIDER` and model endpoint selection
+  - task-specific LLM model selection and fallback policy
   - `PANEL_PROACTIVE_ASSIST`
 - Dev/Lab-only:
   - `INDEX_OUTBOX_PATH` as JSONL audit path
@@ -146,3 +147,4 @@ The registry lists canonical event IDs, producers/consumers, and optional schema
 - Use `python -m app.cli settings-validate --json` to validate compiled settings and registry consistency.
 - Use `python -m app.cli settings-explain --json` to inspect precedence and provenance.
 - When changing a registry or settings artifact, update the owning doc and validation expectations in the same change.
+- Treat `vault/@Settings/llm_routing.md` as the user-facing source of truth for chat, reasoning, embedding, and eval model choices. The compiler derives providers from the model registry.

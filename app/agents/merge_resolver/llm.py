@@ -7,7 +7,7 @@ def _read(path: str) -> str:
 
 def build_prompt(loc: Dict[str, Any]) -> Dict[str, str]:
     kind = "concept"
-    review_order = ["draft", "reviewed", "promoted"]
+    review_order = ["draft", "reviewed", "protected"]
     immutables = ["uuid"]
     similarity = 0.9
     urlA = 0.0
@@ -21,7 +21,7 @@ def build_prompt(loc: Dict[str, Any]) -> Dict[str, str]:
         "SIMILARITY_THRESHOLD: {similarity}\nURL_A_SCORE: {urlA}\nURL_B_SCORE: {urlB}\n\n"
         "BASE_YAML:\n{base_yaml}\n\nA_YAML:\n{a_yaml}\n\nB_YAML:\n{b_yaml}\n\n"
         "BASE_DOC:\n{base}\n\nA_DOC:\n{a}\n\nB_DOC:\n{b}\n\n"
-        'Return a single-line JSON: {{"choice":"A|B|BASE|CONFLICT","reason":"brief","review_state":"draft|reviewed|promoted"}}\n'
+        'Return a single-line JSON: {{"choice":"A|B|BASE|CONFLICT","reason":"brief","review_state":"draft|reviewed|protected"}}\n'
     )
 
     usr = tpl.format(

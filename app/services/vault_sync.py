@@ -17,6 +17,7 @@ from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGES
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.write_guard import DEFAULT_WRITE_GUARD
 from app.services.inbox import append_change, append_conflict
+from app.domain.state_axes import normalize_artifact_state_axes
 from app.services.outbox import insert_object_and_outbox
 from app.services.settings import policy
 
@@ -249,7 +250,8 @@ def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, f
     path_str = str(note_path)
     uuid_value = frontmatter["uuid"]
     title = frontmatter.get("title") or note_path.stem
-    review_state = frontmatter.get("review_state", "inbox")
+    normalized_frontmatter = normalize_artifact_state_axes(frontmatter, default_review_state="provisional")
+    review_state = normalized_frontmatter["review_state"]
     fm_hash = _hash_dict(frontmatter)
     body_hash = _hash_text(body)
     mtime = datetime.fromtimestamp(note_path.stat().st_mtime, tz=timezone.utc) if note_path.exists() else datetime.now(timezone.utc)
@@ -263,8 +265,9 @@ def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, f
                 {
                     "title": title,
                     "review_state": review_state,
+                    "maturity": normalized_frontmatter.get("maturity"),
                     "content": body,
-                    "frontmatter": frontmatter,
+                    "frontmatter": normalized_frontmatter,
                 }
             )
             try:
@@ -338,6 +341,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
         is_active = False
 
     uuid_value = frontmatter["uuid"]
+    normalized_frontmatter = normalize_artifact_state_axes(frontmatter, default_review_state="provisional")
     fm_hash = _hash_dict(frontmatter)
     body_hash = _hash_text(body)
     mtime = datetime.fromtimestamp(note_path.stat().st_mtime, tz=timezone.utc)
@@ -415,7 +419,8 @@ def sync_markdown(path: str) -> dict[str, Any]:
         obj_payload = {
             "uuid": uuid_value,
             "title": frontmatter.get("title") or note_path.stem,
-            "review_state": frontmatter.get("review_state", "inbox"),
+            "review_state": normalized_frontmatter["review_state"],
+            "maturity": normalized_frontmatter.get("maturity"),
             "content": body,
             "path": str(note_path),
         }
@@ -434,7 +439,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                 "title": obj_payload["title"],
                 "review_state": obj_payload["review_state"],
                 "content": obj_payload["content"],
-                "frontmatter": frontmatter,
+                "frontmatter": normalized_frontmatter,
             }
         )
         wrote = False

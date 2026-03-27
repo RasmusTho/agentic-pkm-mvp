@@ -7,9 +7,25 @@ Authority: Canonical event envelope and event meaning contract for emitted runti
 This document describes the event artifacts emitted by the system and recorded in the outbox path.
 In the active baseline, the DB outbox is canonical and JSONL remains audit/diagnostic only. This document defines the canonical event envelope and the meanings of key event types.
 
+Reading note:
+- this document owns the current event contract,
+- not the full target-state architecture,
+- and not the permanent decomposition of system behavior into event-emitting agents.
+
 Compatibility and evolution are governed by `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`.
+Mirror/receipt separation is governed conceptually by `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`.
+Receipt/trace/accountability distinctions are clarified in
+`docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`.
 
 Connector/watcher/inbox action vocabulary and delta feed guardrails are captured in `docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md`, so the event catalog and the new connector terminology stay aligned.
+
+Normalization note:
+- events are operational artifacts, not the full ontology of the domain,
+- `source` in an event means emitter attribution, not automatically a `Source Artifact`,
+- transition families such as review and promotion may require separate intent/execution/receipt
+  layers even when the current event catalog is not yet fully normalized.
+- event flow remains part of current runtime coordination, but should not by itself be read as the
+  architectural center of interaction, cognition, or execution design.
 
 
 ## Outbox envelope (canonical)
@@ -46,6 +62,15 @@ Outbox events MUST NOT carry embedding vectors.
 - Events may carry embedding metadata (dimension, model, counts) but not the raw vector payload.
 
 ## Event catalog (selected)
+
+## Interpretation rules
+
+- `object_id` and related fields are runtime/store identifiers unless explicitly qualified as human
+  artifact identifiers.
+- `note` payload fragments usually point to a vault note reference, not to the entire ontology of an
+  artifact.
+- `promote.*` and `promotion.*` names currently coexist; read them as belonging to the same broad
+  transition family in the current runtime, not as proof of a finalized naming model.
 
 ### `index.embedding.requested`
 
@@ -139,6 +164,32 @@ Payload typically includes:
 - `panel` reference
 - `action` reference
 - `instruction`
+
+Interpretation:
+- this is an intent event,
+- not the promotion transition itself,
+- and not a human-legible receipt.
+
+## Event-family normalization guidance
+
+The active runtime still mixes:
+- transition-family names (`promotion.*`)
+- imperative/process names (`promote.*`)
+- and state-mutation consequences carried elsewhere in runtime data.
+
+Until a later migration normalizes event names, interpret them through these layers:
+1. intent event
+2. execution/result event
+3. receipt/accountability artifact
+
+Examples in the current runtime:
+- `panel.intent.created` = intent-creation layer
+- `promote.intent.created` = transition intent layer
+- `promote.done` / `promote.error` = execution-result layer
+
+The event stream is not, by itself, the complete receipt model.
+It is primarily an operational trace surface that may support later receipt or audit construction.
+It is also not identical to the metadata mirror.
 
 ## References
 

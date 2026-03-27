@@ -707,7 +707,7 @@ def alpha_human_flows(
     """
     Flows: A) ingest sample notes; B) ensure Test/Alpha-HumanFlows.md exists;
     C) ingest + report mirror path; D) insert AI panel and reingest;
-    E) set promoted/evergreen frontmatter and reingest; F) run ASK queries.
+    E) set reviewed/evergreen frontmatter and reingest; F) run ASK queries.
     """
     resolved = _resolve_vault_root_path(vault_root, allow_env=False, fallback_to_default=True)
     if resolved is None:
@@ -1077,6 +1077,55 @@ def status() -> None:
                 click.echo(f"    - {plane}: {count}")
         if getattr(events, 'source_path', None):
             click.echo(f"  source: {events.source_path}")
+    watcher_automation = getattr(status, "watcher_automation", None)
+    if watcher_automation:
+        click.echo("Watcher automation:")
+        click.echo(
+            "  gate: "
+            f"{watcher_automation.mode} "
+            f"(enabled={watcher_automation.auto_exec_enabled}, "
+            f"source={watcher_automation.source}, env={watcher_automation.env_key}, "
+            f"raw={watcher_automation.raw_value or '-'}, default={watcher_automation.default_enabled})"
+        )
+        click.echo(
+            "  allowlist: "
+            f"{', '.join(watcher_automation.allowed_actions) if watcher_automation.allowed_actions else '-'}"
+        )
+        click.echo(
+            "  invalid_actions: "
+            f"{', '.join(watcher_automation.invalid_allowed_actions) if watcher_automation.invalid_allowed_actions else '-'}"
+        )
+        click.echo(
+            "  write_guard: "
+            f"writes_allowed={watcher_automation.writes_allowed} mode={watcher_automation.write_guard_mode or '-'}"
+        )
+        click.echo(
+            "  paths: "
+            f"settings={watcher_automation.source_path or '-'} "
+            f"tick_log={watcher_automation.tick_log_path or '-'} "
+            f"panel_event_log={watcher_automation.panel_event_log_path or '-'}"
+        )
+        if watcher_automation.last_tick_timestamp:
+            click.echo(
+                "  last_tick: "
+                f"ts={watcher_automation.last_tick_timestamp} "
+                f"candidates={watcher_automation.last_tick_panel_candidates or 0} "
+                f"skipped_policy={watcher_automation.last_tick_panel_skipped_policy or 0} "
+                f"skipped_auto_exec={watcher_automation.last_tick_panel_skipped_auto_exec or 0}"
+            )
+        if (
+            watcher_automation.last_run_skipped_dedup is not None
+            or watcher_automation.last_run_skipped_idempotent is not None
+            or watcher_automation.last_run_skipped_writes_blocked is not None
+            or watcher_automation.last_run_skipped_allowed_actions is not None
+        ):
+            click.echo(
+                "  last_run_skips: "
+                f"dedup={watcher_automation.last_run_skipped_dedup or 0} "
+                f"idempotent={watcher_automation.last_run_skipped_idempotent or 0} "
+                f"writes_blocked={watcher_automation.last_run_skipped_writes_blocked or 0} "
+                f"allowed_actions={watcher_automation.last_run_skipped_allowed_actions or 0}"
+            )
     click.echo("ASK:")
     avg_latency = (
         f"{status.ask.avg_latency_ms_24h:.0f} ms" if status.ask.avg_latency_ms_24h is not None else "-"
@@ -1228,6 +1277,13 @@ def uat_seed_vault_test(vault_root: Path, target_subdir: str, folder: str, overw
 @click.option("--run-panels/--no-run-panels", default=True, show_default=True)
 @click.option("--consume-promotions/--no-consume-promotions", default=True, show_default=True)
 @click.option("--assert", "assert_expectations", is_flag=True, help="Fail if expected intents/effects are missing.")
+@click.option(
+    "--assert-mode",
+    type=click.Choice(["bootstrap", "converged"], case_sensitive=False),
+    default="bootstrap",
+    show_default=True,
+    help="Assertion profile for scripted UAT: first successful run vs stable rerun.",
+)
 def uat_run_vault_test(
     vault_root: Path,
     target_subdir: str,
@@ -1238,6 +1294,7 @@ def uat_run_vault_test(
     run_panels: bool,
     consume_promotions: bool,
     assert_expectations: bool,
+    assert_mode: str,
 ) -> None:
     resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=False)
     if resolved is None:
@@ -1253,6 +1310,7 @@ def uat_run_vault_test(
             run_panels=run_panels,
             consume_promotions=consume_promotions,
             assert_expectations=assert_expectations,
+            assert_mode=assert_mode.lower(),
         )
     except FileNotFoundError as exc:
         raise click.BadParameter(str(exc))

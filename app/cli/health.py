@@ -11,7 +11,8 @@ from typing import Any, Dict
 
 import httpx
 
-from app.components.llm.fabric import describe_default_routes
+from app.components.llm.fabric import describe_default_route_policies, describe_default_routes
+from app.eval.llm_client import DEFAULT_MODE as DEFAULT_EVAL_MODE
 from app.knowledge.errors import KnowledgeConfigError
 from app.knowledge.health import obsidian_dependency_status
 from app.knowledge.settings import KnowledgeAdapter, load_knowledge_settings
@@ -108,13 +109,27 @@ def _check_outbox_path() -> Dict[str, Any]:
 
 
 def _check_ollama() -> Dict[str, Any]:
-    provider = os.environ.get("LLM_PROVIDER", "ollama").lower()
-    base = os.environ.get("OLLAMA_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
+    provider = (os.environ.get("LLM_PROVIDER") or "").strip().lower()
+    if provider == "llm":
+        provider = "ollama"
+    base = (
+        os.environ.get("OLLAMA_BASE_URL")
+        or os.environ.get("OLLAMA_URL")
+        or os.environ.get("OLLAMA_HOST")
+        or os.environ.get("OPENAI_BASE_URL")
+        or ""
+    ).rstrip("/")
     if provider != "ollama":
         result = _result(True, "Hoppar över Ollama-koll (LLM_PROVIDER != ollama)", data={"skipped": True})
         result["provider"] = provider
         result["base_url"] = base
         return result
+    if not base:
+        return _result(
+            False,
+            "OLLAMA_BASE_URL, OLLAMA_URL, OLLAMA_HOST eller OPENAI_BASE_URL saknas",
+            data={"provider": provider},
+        )
     try:
         resp = httpx.get(f"{base}/api/tags", timeout=float(os.environ.get("LLM_TIMEOUT", "5")))
         resp.raise_for_status()
@@ -138,10 +153,119 @@ def _check_llm_router() -> Dict[str, Any]:
         "ok": True,
         "detail": "router ready",
         "selected_defaults": describe_default_routes(),
+        "route_policies": describe_default_route_policies(),
         "forced_overrides": {
             "provider": forced_provider or "",
             "model": forced_model or "",
         },
+    }
+
+
+def _provider_env_check(provider: str, model: str) -> Dict[str, Any]:
+    normalized = (provider or "").strip().lower()
+    resolved_model = (model or "").strip()
+    if not resolved_model:
+        return {"ok": False, "detail": "route model is missing", "status": "fail"}
+    if normalized in {"", "mock", "deterministic"}:
+        return {"ok": True, "detail": f"deterministic/local route ({resolved_model})", "status": "ok"}
+    if normalized == "ollama":
+        result = _check_ollama()
+        return {
+            "ok": bool(result.get("ok")),
+            "detail": result.get("detail", ""),
+            "status": "ok" if result.get("ok") else "fail",
+            "base_url": result.get("base_url"),
+        }
+    if normalized == "openai":
+        base = (os.getenv("OPENAI_BASE") or "").strip()
+        api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        ok = bool(base and api_key)
+        detail = "OpenAI route configured" if ok else "OPENAI_BASE and OPENAI_API_KEY are required"
+        return {"ok": ok, "detail": detail, "status": "ok" if ok else "fail", "base_url": base}
+    if normalized == "deepseek":
+        base = (os.getenv("DEEPSEEK_BASE") or "").strip()
+        api_key = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
+        ok = bool(base and api_key)
+        detail = "DeepSeek route configured" if ok else "DEEPSEEK_BASE and DEEPSEEK_API_KEY are required"
+        return {"ok": ok, "detail": detail, "status": "ok" if ok else "fail", "base_url": base}
+    return {"ok": False, "detail": f"Unsupported provider for route verification: {normalized}", "status": "fail"}
+
+
+def _check_llm_task_routes(router_check: Dict[str, Any]) -> Dict[str, Any]:
+    policies = router_check.get("route_policies") or {}
+    route_statuses: Dict[str, Any] = {}
+    overall = True
+
+    for task_kind, item in policies.items():
+        effective = item.get("effective") or {}
+        provider = str(effective.get("provider") or "").strip().lower()
+        model = str(effective.get("model") or "").strip()
+        eval_mode = (os.getenv("EVAL_LLM_MODE") or DEFAULT_EVAL_MODE).strip().lower() or DEFAULT_EVAL_MODE
+        if task_kind == "eval" and eval_mode == "skip":
+            route_statuses[task_kind] = {
+                "ok": True,
+                "detail": "eval skipped",
+                "status": "skipped",
+                "provider": provider,
+                "model": model,
+            }
+            continue
+        probe = _provider_env_check(provider, model)
+        route_statuses[task_kind] = {
+            "ok": bool(probe.get("ok")),
+            "detail": probe.get("detail", ""),
+            "status": probe.get("status", "fail"),
+            "provider": provider,
+            "model": model,
+            "base_url": probe.get("base_url"),
+        }
+        if probe.get("ok") is False:
+            overall = False
+
+    detail = "task routes ready" if overall else "one or more task routes are not ready"
+    return {"ok": overall, "detail": detail, "routes": route_statuses}
+
+
+def _check_embedding_index() -> Dict[str, Any]:
+    try:
+        from app.index.doctor import diagnose_index
+
+        diag = diagnose_index()
+    except Exception as exc:
+        return {"ok": False, "detail": f"index doctor failed: {exc}", "status": "fail"}
+
+    rebuild_required = bool(diag.get("rebuild_required"))
+    empty_index = bool(diag.get("empty_index"))
+    compatible_identity = diag.get("compatible_identity")
+    detail: str
+    status: str
+    if rebuild_required:
+        detail = str(diag.get("rebuild_reason") or "embedding identity rebuild required")
+        status = "rebuild_required"
+    elif empty_index:
+        detail = "vector index is empty; no rebuild required yet"
+        status = "empty"
+    elif compatible_identity is False:
+        detail = "embedding identity is not compatible with stored index"
+        status = "fail"
+    elif compatible_identity is None:
+        detail = "no stored embedding identity to compare yet"
+        status = "unknown"
+    else:
+        detail = "embedding identity is compatible with the current index"
+        status = "ok"
+    return {
+        "ok": not rebuild_required,
+        "detail": detail,
+        "status": status,
+        "expected_identity": diag.get("expected_identity"),
+        "stored_identity": diag.get("stored_identity"),
+        "compatible_identity": compatible_identity,
+        "empty_index": empty_index,
+        "rebuild_required": rebuild_required,
+        "rebuild_reason": diag.get("rebuild_reason"),
+        "issues": diag.get("issues") or [],
+        "warnings": diag.get("warnings") or [],
     }
 
 
@@ -392,22 +516,16 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
             }
         )
 
-    try:
-        from app.index.doctor import diagnose_index
-
-        diag = diagnose_index()
-        issues = diag.get("issues") or []
-        if issues:
-            actions.append(
-                {
-                    "id": "index_rebuild",
-                    "severity": "required",
-                    "message": "Embedding/index identity mismatch detected",
-                    "command_hint": "python -m app.cli index rebuild --profile default",
-                }
-            )
-    except Exception:
-        pass
+    embedding_index = checks.get("embedding_index", {})
+    if embedding_index.get("rebuild_required"):
+        actions.append(
+            {
+                "id": "index_rebuild",
+                "severity": "required",
+                "message": str(embedding_index.get("detail") or "Embedding/index identity mismatch detected"),
+                "command_hint": "python -m app.cli index rebuild --profile default",
+            }
+        )
 
     llm_providers = checks.get("llm_providers", {})
     active_provider = (llm_providers.get("active_provider") or "").lower()
@@ -471,7 +589,9 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
         "obsidian": _annotate_required(_check_obsidian_dependencies(), required=_obsidian_required()),
     }
     checks["llm_router"] = _annotate_required(_check_llm_router(), required=False)
+    checks["llm_task_routes"] = _annotate_required(_check_llm_task_routes(checks["llm_router"]), required=True)
     checks["llm_providers"] = _annotate_required(_check_llm_providers(checks["ollama"]), required=False)
+    checks["embedding_index"] = _annotate_required(_check_embedding_index(), required=True)
 
     runtime = {
         "watcher": _watcher_runtime_status(),

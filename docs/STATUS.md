@@ -25,27 +25,46 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - ASK warm-load boundary: `/api/ask` hydrates HybridStore through the canonical store interface (`list_objects`) instead of backend-specific `_objects`/raw SQL introspection.
 - DB outbox is canonical in runtime; JSONL (`INDEX_OUTBOX_PATH`) is audit only and should not be used as the worker queue.
 - Required contracts: event compatibility/outbox envelope (`docs/EVENTS.md`), trust semantics, config-as-product, and PanelAgent wiring (`docs/PANEL_AGENT.md` + `docs/settings/panel-actions.md`).
+- State-axis normalization posture: `maturity` is the canonical standing sink, `review_state` is the canonical review/mutation posture field, and legacy values such as `evergreen`, `processed`, `promoted`, `inbox`, and `logged` are compatibility-only inputs rather than preferred runtime outputs.
+- Context enablement posture: the relation store now supports optional `sphere_membership`
+  memberships as broader belonging metadata. This seam is additive only; operational scope still
+  governs conservative runtime behavior and retrieval is not relation-driven by default.
 - Minimal concurrency guarantees: DedupTaskQueue + event_id dedup guard watcher runs, optimistic writes protect note updates, and the promotion consumer uses an EventDedupStore to skip duplicate intents (`docs/CONCURRENCY.md`, `app/promotion/consumer.py`).
 - Settings compiler scope: panel action catalog, watcher settings, and outbox paths now compile with provenance (path/mtime/sha) via `vault/@Settings/watchers.md`, `docs/settings/panel-actions.md`, `python -m app.cli settings-validate`, and `python -m app.cli settings-explain`.
+- Operator enablement signals: `python -m app.cli settings-explain` surfaces watcher auto-exec state, allowlist validity, provenance, and write-guard context; `python -m app.cli status` exposes the same gate plus watcher automation counters, last tick skips, and last-run skip reasons. Treat `allowlist`, `dedup/skipped_*`, `panel_skipped_policy`, and `writes_allowed` as the safe-to-enable checklist, not just the raw `WATCHER_AUTO_EXEC` value.
 - Required tests: `ruff check app tests`, `mypy app`, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`, plus `python -m app.cli settings-validate --json` and the new concurrency/promote/settings regression suites.
 - CI gate workflows: `.github/workflows/ci-smoke.yaml` and `.github/workflows/ci-lite.yml` parse the fitness report summary lines (including `CI SUMMARY GATES ok=<bool>`) and exit non-zero when `GATES.ok != true`, making them the enforced gate jobs that must pass before merges to main.
 
 ## Forward line: SoT v5.6 (Now / Next / Later)
 ### Now
 - Ground the v5.6 objectives in a docs-first kickoff: the detailed plan in `docs/plans/V56_FORWARD_LINE.md` captures the pillars, acceptance criteria, and immediate signal checks the forward line needs to ship.
-- Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, and skipped receipts are surfaced in status, events, and the new CLI `settings-explain` output before any runtime gate opens.
+- Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, skipped receipts, and write-guard state are surfaced in status, events, and the new CLI `settings-explain` output before any runtime gate opens.
+- The artifact-model and companion-note contract docs are part of this v5.6 forward-line kickoff
+  rather than a change to the locked v5.5 baseline.
 - Harden the PanelAgent LangGraph pilot (panel action catalog + planner pipeline + promotion consumer) so its telemetry, provenance, and gating sensors stay deterministic while remaining opt-in.
 ### Next
 - **Companion Note + Note Context** — replace VaultMirror with flat companion files at `vault/_system/companions/<uuid>.md`; introduce `NoteContext` assembler for agent-facing rich context. 8-part plan: `docs/plans/COMPANION_NOTE_AND_NOTE_CONTEXT.md`. Parts 1–5 deliver portable identity; Parts 6–7 wire Note Context into Panel Agent (eliminating the 800-char snippet). Event contracts unchanged. Blocks agent quality improvements in v5.6+.
 - Sequence the ReasoningFacade + LangGraph rollout for one additional agent pool, ensuring instrumentation feeds into the fitness gates and the orchestrator V2 experiment flag remains gated until stability signals arrive.
-- Expand the vault-as-GUI settings compiler (panel actions, watcher settings, outbox paths, plus any new connectors) so the forward line can describe runtime topology with complete provenance and precedence.
-- Align CLI/docs runbooks with the v5.6 narrative: update `docs/ROADMAP.md`, status snapshots, and the new forward-line doc so operators know what signals (watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe.
+- Expand the vault-as-GUI settings compiler and operator surfaces so the forward line can describe runtime topology with complete provenance and precedence in both `settings-explain` and `status`.
+- Align CLI/docs runbooks with the v5.6 narrative: update `docs/ROADMAP.md`, status snapshots, and the runbooks so operators know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe.
 ### Later
 - Extend LangGraph adoption across more agents (Promotion, Reviewer, Hygiene) and the orchestrator V2 control plane once the v5.6A pilot stabilizes.
 - Surface LangGraph/Reasoning rollouts in the evaluation stack (golden vault, metamorphic runs, cold rebuild, fitness gates) so the forward line has measurable acceptance per contract.
 - Begin planning multi-user and external sync guardrails that rely on the v5.6 safe mode (watcher gating + plan audits) before the next forward milestone.
 **Out of scope for the v5.6 kickoff PR**: orchestrator/langgraph plumbing stays opt-in until the defined gates pass; watcher auto-run is controlled by `WATCHER_AUTO_EXEC` (set `WATCHER_AUTO_EXEC=0` for emit-only/safe mode).
 
+## Agent Evolution Track
+
+- ASK -> deprecated as the architectural center for the v6 direction; current v5.x runtime/API compatibility remains in place.
+- Retrieval -> being refactored into a reusable capability layer rather than retained as a dedicated agent.
+- PanelAgent -> primary interaction surface for mutation-capable flows.
+- Chat -> planned as a read-only Deep Agent sandbox.
+- Deep Agents -> planned only after v6.0 structural separation; not active in production mutation flows.
+- Execution layer expansion -> research only.
+- Governance -> active concern across policy, provenance, admissibility, approval, and auditability.
+
+The system is not yet an autonomous agent system. All execution remains controlled and mediated.
+High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.md`; roadmap and architecture should stay aligned to that split.
 
 ## Status fields (baseline vs forward line)
 - `sot_baseline_version`: locked SoT v5.5 Reality-MVP baseline.

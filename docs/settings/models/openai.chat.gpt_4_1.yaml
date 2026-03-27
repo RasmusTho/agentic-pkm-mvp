@@ -1,0 +1,6 @@
+id: openai.chat.gpt_4_1
+status: active
+kind: chat
+provider: openai
+model: gpt-4.1
+notes: Higher-capability cloud reasoning model for planning and heavier synthesis.

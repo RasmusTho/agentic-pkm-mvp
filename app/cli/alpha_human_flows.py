@@ -175,8 +175,8 @@ def _ensure_ai_panel(path: Path, *, vault_root: Path, dry_run: bool) -> bool:
 def _set_promotion_fields(path: Path, *, vault_root: Path, dry_run: bool) -> bool:
     frontmatter, body = load_frontmatter(path.read_text(encoding="utf-8"))
     changed = False
-    if frontmatter.get("review_state") != "promoted":
-        frontmatter["review_state"] = "promoted"
+    if frontmatter.get("review_state") != "reviewed":
+        frontmatter["review_state"] = "reviewed"
         changed = True
     if frontmatter.get("maturity") != "evergreen":
         frontmatter["maturity"] = "evergreen"
@@ -223,7 +223,7 @@ def _render_checklist(sample_size: int) -> str:
         "[ ] B: Ensure Test/Alpha-HumanFlows.md exists with UUID frontmatter",
         "[ ] C: Run pipeline on test note and report companion note path",
         "[ ] D: Add AI panel with wrong fact and re-run ingest",
-        "[ ] E: Mark test note as promoted/evergreen and re-run ingest",
+        "[ ] E: Mark test note as reviewed/evergreen and re-run ingest",
         "[ ] F: Run ASK queries and show answers + sources",
     ]
     return "\n".join(lines)
@@ -241,7 +241,7 @@ def run_alpha_human_flows(
     Orchestrates alpha human flows end-to-end:
     Flow A ingest sample notes, Flow B ensure Test/Alpha-HumanFlows.md exists,
     Flow C ingest + report mirror path, Flow D add AI panel and reingest,
-    Flow E set promoted/evergreen frontmatter and reingest, Flow F run ASK queries.
+    Flow E set reviewed/evergreen frontmatter and reingest, Flow F run ASK queries.
     """
     if explain_only:
         click.echo(_render_checklist(sample_size))

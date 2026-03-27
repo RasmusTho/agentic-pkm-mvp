@@ -6,12 +6,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 TOKENS = (
     "Inbox/**",
+    "Inbox/_alpha_e2e",
     "📥 Inbox",
     "📥 Inbox/**",
 )
 
 ALLOWED_FILES = {
     "tests/guards/test_no_hardcoded_inbox_scope.py",
+    "app/settings/default-vault-layout.yaml",
 }
 
 SCAN_PATHS = (
@@ -56,4 +58,3 @@ def test_no_hardcoded_inbox_scope_defaults() -> None:
                 if token in line:
                     violations.append(f"{rel}:{ln}: {token}")
     assert not violations, "Hardcoded inbox/scope defaults found:\n" + "\n".join(violations)
-

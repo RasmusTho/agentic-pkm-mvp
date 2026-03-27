@@ -58,6 +58,11 @@ alpha_e2e prints a debug dump on failure:
 - `docker compose logs --tail=200 worker`
 - `docker compose logs --tail=200 api`
 
+## Report Artifact
+- `scripts.alpha_e2e` writes `tmp/alpha_e2e_report.json`.
+- Treat that file as the DB-backed release/UAT artifact for the canonical runtime path.
+- The report includes shared contract checks (`status_invariants_ok`, `worker_queue_mode_db`, `runtime_progress_ok`) plus any failure reasons.
+
 You can also run these manually:
 
 ```bash

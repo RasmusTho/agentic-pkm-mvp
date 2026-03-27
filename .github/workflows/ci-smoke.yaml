@@ -89,9 +89,9 @@ jobs:
             tests/architecture/test_obsidian_port_boundaries.py \
             tests/guard/test_no_direct_db_imports.py \
             tests/ports/test_vault_port_contract.py \
-            tests/ports/test_deprecated_sink_compat.py \
             tests/services/test_filesystem_vault_adapter.py \
             tests/services/test_vault_sync_lifecycle.py \
+            tests/quality_wave \
             --maxfail=1 -ra --durations=20
 
       - name: Ensure persisted vector index artifact exists

@@ -10,6 +10,13 @@ def _make_payload_response(url: str, status_code: int, payload: dict) -> httpx.R
     return httpx.Response(status_code, json=payload, request=httpx.Request("POST", url))
 
 
+def _set_ollama_base(monkeypatch: pytest.MonkeyPatch, url: str = "http://ollama.test:11434") -> None:
+    for key in ("OLLAMA_BASE_URL", "OLLAMA_URL", "OLLAMA_HOST", "OPENAI_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OLLAMA_URL", url)
+    embeddings._embed_single.cache_clear()
+
+
 def test_ollama_embed_payload_includes_text_and_dimensions(monkeypatch) -> None:
     called: list[dict] = []
 
@@ -17,6 +24,7 @@ def test_ollama_embed_payload_includes_text_and_dimensions(monkeypatch) -> None:
         called.append({"url": url, "json": kwargs.get("json")})
         return _make_payload_response(url, 200, {"embeddings": [[0.1, -0.1, 0.2, 0.3]]})
 
+    _set_ollama_base(monkeypatch)
     monkeypatch.setattr(httpx, "post", fake_post)
     vector = embeddings.embed_text("payload-test", provider="ollama", model="test", dim=4, normalize=False)
     assert len(called) == 1
@@ -32,6 +40,7 @@ def test_ollama_embed_dimensions_flag(monkeypatch) -> None:
         called.append({"url": url, "json": kwargs.get("json")})
         return _make_payload_response(url, 200, {"embeddings": [[0.1, -0.1, 0.2, 0.3]]})
 
+    _set_ollama_base(monkeypatch)
     monkeypatch.setenv("OLLAMA_EMBED_DIMENSIONS", "0")
     monkeypatch.setattr(httpx, "post", fake_post)
     vector = embeddings.embed_text("payload-dim", provider="ollama", model="test", dim=4, normalize=False)
@@ -46,6 +55,7 @@ def test_ollama_embed_fallback_on_error(monkeypatch) -> None:
             raise httpx.HTTPStatusError("error", request=request, response=httpx.Response(500, request=request))
         return _make_payload_response(url, 200, {"data": [{"embedding": [0.2, 0.4, -0.1, 0.0]}]})
 
+    _set_ollama_base(monkeypatch)
     monkeypatch.setattr(httpx, "post", fake_post)
     vector = embeddings.embed_text("fallback-test", provider="ollama", model="test", dim=4, normalize=False)
     assert vector == [0.2, 0.4, -0.1, 0.0]
@@ -55,6 +65,7 @@ def test_ollama_embed_dim_mismatch_raises(monkeypatch) -> None:
     def fake_post(url: str, **kwargs) -> httpx.Response:
         return _make_payload_response(url, 200, {"embeddings": [[0.1, 0.2]]})
 
+    _set_ollama_base(monkeypatch)
     monkeypatch.setattr(httpx, "post", fake_post)
     with pytest.raises(ValueError) as excinfo:
         embeddings.embed_text("dim-mismatch", provider="ollama", model="test", dim=4, normalize=False)
@@ -67,6 +78,7 @@ def test_ollama_embed_reports_http_errors(monkeypatch) -> None:
         response = httpx.Response(404, request=request)
         raise httpx.HTTPStatusError("not found", request=request, response=response)
 
+    _set_ollama_base(monkeypatch)
     monkeypatch.setattr(httpx, "post", fake_post)
     with pytest.raises(RuntimeError) as excinfo:
         embeddings.embed_text("missing", provider="ollama", model="test", dim=4, normalize=False)

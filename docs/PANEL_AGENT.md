@@ -10,8 +10,17 @@ Scope:
 - runtime toggles, wiring, and watcher-facing behavior
 
 For the system-level multi-agent architecture, agent matrix, and LangGraph/A2A direction, use `docs/AGENTS.md`.
+For the design-layer rules on capability-based composition, interaction surfaces, and governed mutation authority, use `docs/DESIGN_PRINCIPLES.md`.
+For the canonical distinction between mirror artifacts and receipt artifacts, use
+`docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`.
+
+Interpretation note:
+- this document describes the current mutation-capable Panel surface and its runtime contract,
+- not a claim that panel behavior should stay embedded in one architectural agent forever,
+- and not a claim that event/outbox coordination is the whole long-term architecture.
 
 ## PanelAgent Runtime V1 (current baseline)
+- Panel should be read as the current mutation-capable interaction surface in the runtime.
 - Runtime V1 uses a fixed mapping from panel actions to follow-up events (e.g., promotion intents) and writes receipts into an in-note AI status callout; the panel stays a small working set with no history.
 - This is a simplified bridge/runtime loop, not the final agentic design; it keeps watcher and manual panel flows working while the agent migrates to LangGraph.
 - Internal implementation now runs through a LangGraph-based control flow (`PanelAgentState`), but external behaviour and emitted events remain identical.
@@ -19,6 +28,7 @@ For the system-level multi-agent architecture, agent matrix, and LangGraph/A2A d
 - Action catalog (`docs/settings/panel-actions.md`) is the canonical list of actions (id, kind, labels/synonyms, description/llm_hint, downstream event, params). Rule-mode matches checkbox labels deterministically; LLM-mode is opt-in and uses the catalog + panel/note context with checkboxes as hints.
 - Checkboxes are treated as explicit consent; executed items remove their checkbox from the panel working set.
 - Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
+- The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
 
 ## PanelAgent 2.0 (planned v5.6)
 - Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `app/agents/panel_agent/graph.py`).
@@ -27,6 +37,10 @@ For the system-level multi-agent architecture, agent matrix, and LangGraph/A2A d
 - LangGraph control flow now supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `rule` remains the default to preserve current behaviour, while `llm` is an opt-in, experimental action selector using the shared LLM provider.
 - LLM-driven contract tests live under `tests/e2e/test_panel_llm_e2e.py` (gated by `@pytest.mark.panel_llm_e2e` and `PANEL_AGENT_LLM_E2E=1`) to validate end-to-end promotion/non-promotion scenarios using the real decider.
 
+Direction note:
+- the forward direction is richer cognition in support of Panel,
+- but mutation authority remains bounded by policy, validation, deterministic note-writer paths, and downstream controlled execution.
+
 ## Panel syntax (Markdown)
 - Panels are delimited by tolerant AI fences: any `%% ...ai... %%` (case-insensitive) line opens/closes a panel. First fence opens, second closes, third opens the next, etc.
 - Inside a panel:
@@ -34,6 +48,7 @@ For the system-level multi-agent architecture, agent matrix, and LangGraph/A2A d
   - Actions heading: `## AI-åtgärder` (localized variants supported)
   - Checkboxes: `- [ ]` or `- [x]` (checked means run the action)
 - AI status callout (foldable, outside the panel): `> [!info]- AI status` with receipt lines (`- ✅ ...`, `- ⚠️ ...`, `- ⏳ ...`). The runtime appends receipts for executed/failed actions and trims to the last 20; already-executed IDs remove their checkbox from the panel on re-run.
+- This callout is a human-visible receipt overlay on the warm surface, not the canonical mirror artifact.
 - Legacy notes that only use the headings without fences are still parsed; new panels should use fences.
 - Panel content is not indexed or used as knowledge.
 
@@ -64,6 +79,11 @@ Make this note evergreen
 - No LangGraph/planner/tool calls; this remains a lightweight runtime loop on top of Reality-MVP.
 - Markdown mutations (panel cleanup, receipts, promotion frontmatter) flow through the note writer; agents emit intents, and the writer/consumer apply deterministic file updates.
 - Auto-run policy (SoT v5.3, watcher-facing): watchers treat any note that contains an AI panel fence (`%% ...ai... %%`, case-insensitive) as a candidate once the global arm switch `WATCHER_AUTO_EXEC=1` is set. The only per-note opt-out is `ai_panel_auto_run: never` (nested `ai_panel: { auto_run: never }` also works); other modes (`watcher`/`manual`) remain metadata for manual CLI contexts but no longer gate watcher eligibility. Manual CLI commands (`panel run`, `panel run-many`) ignore this policy.
+
+Architectural reading note:
+- these event and writer paths describe the current runtime contract,
+- but they should be read as implementation of the Panel interaction surface,
+- not as proof that every future cognition or capability boundary should be modeled as a dedicated event-emitting agent.
 
 ### Planner pipeline (opt-in)
 - `PANEL_AGENT_PIPELINE=planner` keeps the external runtime behaviour the same and also builds a `PanelActionIntent` for triggered actions, storing a plan via Planner (`plan_panel_actions`).
@@ -105,7 +125,7 @@ Make this note evergreen
 - `panel.intent.executed` — payload `{note, panel, actions:[{id,label,checked,status,emitted_events}], executed_action_ids:[...]}` (source `panel_agent` / trigger `runtime`).
 - `panel.action.triggered` — payload `{note, panel_id, action:{id,label}, target_event}` for handled actions.
 - `panel.action.logged` — payload `{note, panel_id, action:{id,label,checked}, reason, mapping?}` for unmapped/unimplemented actions.
-- `promote.intent.created` — payload includes `{note, panel, action, instruction, maturity}` plus `{action_id, intent_source="panel.note", note.path}`; emitted when a checked action has `intent_type: promotion`; downstream consumer uses `note.path` to patch the vault note frontmatter (e.g., `review_state: evergreen`).
+- `promote.intent.created` — payload includes `{note, panel, action, instruction, maturity}` plus `{action_id, intent_source="panel.note", note.path}`; emitted when a checked action has `intent_type: promotion`; downstream consumer uses `note.path` to patch the vault note frontmatter (for example `maturity: evergreen` plus a compatibility-mapped review posture).
 
 ## Wiring configuration
 - Default wiring: `docs/settings/panel-action-wiring.yaml` (maps canonical action ids to target events).
@@ -113,4 +133,4 @@ Make this note evergreen
 - Validation: config must define an `actions` list with `id`, `kind` (event|intent, defaults to event), and `event_type`/`target_event` (or `intent_type`). Unknown/invalid configs emit a warning and fall back to the default wiring; runtime behaviour stays unchanged.
 - CLI/Watcher use the same wiring; panel decider (rule/LLM) still selects actions, wiring only controls emitted events.
 
-Promotion intents (`promote.intent.created`) represent intent-only; apply effects by running the promotion consumer (`python -m app.cli promote-consume`), which emits `promote.done` when successful and updates the vault note frontmatter via the note writer path (Store updates remain optional).
+Promotion intents (`promote.intent.created`) represent intent-only; apply effects by running the promotion consumer (`python -m app.cli promote-consume`), which emits `promote.done` when successful and updates the vault note frontmatter via the note writer path, writing standing changes to `maturity` and review posture separately (Store updates remain optional).

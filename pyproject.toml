@@ -35,3 +35,6 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*", "tests*"]
+
+[tool.setuptools.package-data]
+"app.settings" = ["*.yaml"]

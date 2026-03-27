@@ -17,6 +17,14 @@ The default retrieval path is an in-process memory store (`app/retrieval/hybrid.
 
 The final list can be optionally re-ranked via the rerank hook adapter.
 
+Interpretation note:
+- retrieval operates over runtime documents/projections, not directly over the full ontology of
+  human artifacts.
+- a retrieval hit is therefore a derived retrieval projection pointing back to an artifact that may
+  currently be playing a source role.
+- attentional salience may influence ranking or resurfacing logic, but retrieval itself is not the
+  whole semantics of attentional relevance.
+
 ## Hybrid Search (Current)
 Entry point: `app/retrieval/hybrid.py:hybrid_search(query, k=8, ...)`
 
@@ -30,8 +38,18 @@ Current weights:
 - `combined = 0.5*bm25_norm + 0.4*emb_norm + 0.1*overlap_bonus`
 
 ### Scope filter
-Optional domain scoping:
-- `ASK_DOMAIN_SCOPE=<domain>` filters docs to that domain (or bridge domains) when doc payload contains `domain`/`bridge_domains` or when `source_ref` path implies a domain folder.
+Optional operational-scope filtering:
+- the current runtime uses `ASK_DOMAIN_SCOPE` and `bridge_domains` as compatibility labels for a
+  narrower scope filter and explicit inclusion mechanism
+- matching may use document payload markers such as `domain` / `bridge_domains`
+- path- or `source_ref`-derived hints are runtime heuristics for current scope handling, not the
+  full semantics of human context or artifact meaning
+- the broader semantic replacement lives upstream in:
+  - `docs/CONCEPTS/CONTEXT_TERMINOLOGY_CONTRACT.md`
+  - `docs/CONCEPTS/CONTEXT_REPRESENTATION_POSTURE.md`
+  - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
+  - `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md`
+  - `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md`
 
 ## Optional Rerank (Current)
 Rerank is opt-in and controlled by env vars:
@@ -54,6 +72,11 @@ Implementation lives under `app/retrieval/rerank/` and is applied via `app/retri
   }
 ]
 ```
+
+Interpretation:
+- `doc_id` identifies the retrieval document/projection used in scoring.
+- `source_ref` points back to the runtime-known location of the artifact or retained material.
+- `payload` is retrieval metadata, not the canonical meaning of the artifact.
 
 ## Delta / Known Limits
 - This retrieval store is in-memory; it is not a durable vector DB.

@@ -1,5 +1,17 @@
 version: 1
 models:
+  - id: openai.chat.gpt_5_4_mini
+    path: docs/settings/models/openai.chat.gpt_5_4_mini.yaml
+    status: active
+  - id: openai.chat.gpt_5_4
+    path: docs/settings/models/openai.chat.gpt_5_4.yaml
+    status: active
+  - id: openai.chat.gpt_4_1_mini
+    path: docs/settings/models/openai.chat.gpt_4_1_mini.yaml
+    status: active
+  - id: openai.chat.gpt_4_1
+    path: docs/settings/models/openai.chat.gpt_4_1.yaml
+    status: active
   - id: ollama.chat.llama3_1_8b
     path: docs/settings/models/ollama.chat.llama3_1_8b.yaml
     status: active
