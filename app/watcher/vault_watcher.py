@@ -71,6 +71,8 @@ def _scan_md_files(vault_root: Path) -> dict[str, float]:
             continue
         if rel.parts and rel.parts[0] == "System" and rel.parts[1:2] == ("Metadata",):
             continue
+        if rel.parts and rel.parts[0] == "_system":
+            continue
         try:
             current[str(rel)] = path.stat().st_mtime
         except Exception:

@@ -31,7 +31,6 @@ from app.services.note_uuid import ensure_note_uuid
 from app.store.object_store import DomainObject, ObjectStore
 from app.stores import get_object_store
 from app.vault.layout import ensure_vault_layout
-from scripts.yaml_roundtrip import load_frontmatter
 
 
 @dataclass
@@ -277,15 +276,15 @@ def _sanitize_uuid(raw: str) -> tuple[str, bool]:
 
 def _derive_note_uuid(
     frontmatter_uuid: str,
-    mirror_uuid: str,
+    companion_uuid: str,
     rel_path: Path,
     *,
     invalid_frontmatter: bool = False,
 ) -> str:
     if frontmatter_uuid:
         return frontmatter_uuid
-    if mirror_uuid:
-        return mirror_uuid
+    if companion_uuid:
+        return companion_uuid
     if invalid_frontmatter:
         return uuid.uuid4().hex
     return str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, rel_path.as_posix()))

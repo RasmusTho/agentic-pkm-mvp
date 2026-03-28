@@ -225,7 +225,7 @@ def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
     assert not (vault / "System" / "Metadata" / "VaultMirror").exists()
 
 
-def test_vault_alpha_ingest_persists_uuid_to_note_mirror_and_store(tmp_path: Path) -> None:
+def test_vault_alpha_ingest_persists_uuid_to_companion_and_store(tmp_path: Path) -> None:
     reset_store_backends()
     get_store().set_documents([])
     vault = _prepare_vault(tmp_path)

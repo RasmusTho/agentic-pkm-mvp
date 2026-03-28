@@ -37,7 +37,7 @@ _VOLATILE_KEYS = {
     "trace_id",
 }
 
-_FRONTMATTER_VOLATILE_KEYS = {"maturity", "review_state"}
+_FRONTMATTER_VOLATILE_KEYS = {"maturity", "review_state", "last_ingested"}
 
 
 @dataclass
@@ -46,7 +46,7 @@ class ChainRun:
     final_records: list[dict[str, Any]]
     object_snapshot: dict[str, dict[str, Any]]
     source_snapshot: dict[str, dict[str, Any]]
-    mirror_snapshot: dict[str, dict[str, Any]]
+    companion_snapshot: dict[str, dict[str, Any]]
     ingest_summary: dict[str, object]
     panel_summary: dict[str, object]
     promotion_summary: dict[str, object]
@@ -206,11 +206,11 @@ def _seeded_note_paths(seed_folder: Path) -> list[Path]:
     return sorted(seed_folder.glob("*.md"))
 
 
-def _mirror_paths(vault_root: Path) -> list[Path]:
-    mirror_root = vault_root / "System" / "Metadata" / "VaultMirror"
-    if not mirror_root.exists():
+def _companion_paths(vault_root: Path) -> list[Path]:
+    companions_dir = vault_root / "_system" / "companions"
+    if not companions_dir.exists():
         return []
-    return sorted(mirror_root.rglob("*.md"))
+    return sorted(companions_dir.rglob("*.md"))
 
 
 def _project_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -303,7 +303,7 @@ def _run_chain(
         final_records=final_records,
         object_snapshot=_snapshot_objects(),
         source_snapshot=_snapshot_markdown_files(seed_folder, _seeded_note_paths(seed_folder)),
-        mirror_snapshot=_snapshot_markdown_files(vault_root, _mirror_paths(vault_root)),
+        companion_snapshot=_snapshot_markdown_files(vault_root, _companion_paths(vault_root)),
         ingest_summary=ingest_summary,
         panel_summary=panel_summary,
         promotion_summary=promotion_summary,
@@ -365,7 +365,7 @@ def test_registry_chain_contract_and_rerun_idempotence(tmp_path: Path, monkeypat
     assert first.promotion_summary["applied"] >= 1
     assert first.object_snapshot
     assert first.source_snapshot
-    assert first.mirror_snapshot
+    assert first.companion_snapshot
 
     rerun_outbox = tmp_path / "outbox-rerun.jsonl"
     rerun = _run_chain(
@@ -383,7 +383,7 @@ def test_registry_chain_contract_and_rerun_idempotence(tmp_path: Path, monkeypat
     assert rerun.promotion_summary["intents_seen"] == 0
     assert rerun.object_snapshot == first.object_snapshot
     assert rerun.source_snapshot == first.source_snapshot
-    assert rerun.mirror_snapshot == first.mirror_snapshot
+    assert rerun.companion_snapshot == first.companion_snapshot
     assert rerun.registry_records
     assert rerun.final_records
     assert all(record.get("event") != "promote.intent.created" for record in rerun.final_records)
@@ -429,5 +429,5 @@ def test_registry_cold_rebuild_recreates_final_state_from_seed_data(
 
     assert rebuild.object_snapshot == first.object_snapshot
     assert rebuild.source_snapshot == first.source_snapshot
-    assert rebuild.mirror_snapshot == first.mirror_snapshot
+    assert rebuild.companion_snapshot == first.companion_snapshot
     _assert_duplicate_gates(rebuild)
