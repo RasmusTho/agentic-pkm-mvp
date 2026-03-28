@@ -162,7 +162,6 @@ def memory_stores():
         "objects": MemoryObjectStore(),
         "vectors": MemoryVectorIndex(),
         "relations": MemoryRelationIndex(),
-        "decisions": InMemoryDecisionsStore(),
     }
 
 
