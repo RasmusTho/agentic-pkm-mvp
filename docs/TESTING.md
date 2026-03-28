@@ -31,6 +31,43 @@ The active strategy is a four-level pyramid. Each level protects a different cla
 | System / E2E | Prove the canonical runtime chain works | watcher/runtime loop, ingest→index→ASK, docker/runtime smoke | PR smoke plus broader nightly |
 | UAT / release | Prove operator-visible behavior on a golden vault pack | seeded vault, receipts/intents, rerun idempotence, status/health assertions | release/UAT gate |
 
+## Dual Validation Model
+
+The repo uses two complementary validation tracks and they must not be collapsed into one gate.
+
+- Baseline verification protects the currently locked runtime baseline described in `docs/STATUS.md`.
+- Human-need acceptance protects the intended product behavior described in `docs/HUMAN-FLOWS.md` and elaborated in `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md`.
+
+Interpretation rule:
+- baseline tests ask "does the current implementation still do what the active baseline claims?"
+- human-need tests ask "does the system satisfy the human situation it is meant to support?"
+
+Gate rule:
+- baseline verification is blocking when it covers active baseline contracts
+- human-need acceptance may begin as non-blocking system-level TDD when the current implementation does not yet fully satisfy the scenario
+- a human-need scenario only becomes a blocking release or smoke gate when the baseline/status docs explicitly claim that capability as part of the active runtime
+
+This distinction is intentional. It prevents the current architecture from becoming the accidental product definition while also preventing target-state scenarios from creating misleading smoke failures before the implementation is ready.
+
+### Human-Need Acceptance Track
+
+Human-need acceptance scenarios should be written from the user-facing contract first, not from the current runtime decomposition.
+
+They should:
+- derive from `docs/HUMAN-FLOWS.md` first and `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md` second
+- express observable user outcomes rather than internal component choreography
+- operate as system-level TDD for the future product shape
+- be classified explicitly as `baseline`, `partial`, or `future` posture in planning/docs before they are promoted into blocking gates
+
+Suggested posture markers:
+- `@pytest.mark.human_uat` for human-need scenario tests
+- `@pytest.mark.release_uat` for blocking release-grade UAT on capabilities already claimed by the active baseline
+
+Expected CI posture:
+- `pr-smoke` protects baseline verification only
+- nightly/on-demand jobs may run broader `human_uat` scenarios even when some are expected to remain non-blocking
+- release gates may include only the subset of human-need scenarios that the active baseline explicitly claims to support
+
 ### Change-to-test mapping
 
 | Change type | Minimum required coverage |
@@ -77,6 +114,11 @@ The CI surface should stay small and explicit. The intended steady-state roles a
 | `integration-nightly` | Full `pytest -m "not pg and not alpha_llm"` suite (736+ tests), runtime contract regressions, fitness gates | nightly / scheduled |
 | `release-uat` | Quality Wave gate (UAT harness + golden vault + full QW suite), fitness gates | release/UAT gate (tags + manual) |
 
+Human-need acceptance scenarios should map onto those roles explicitly instead of silently riding along with smoke:
+- use `pr-smoke` only for active baseline behavior
+- use `integration-nightly` or a dedicated non-blocking acceptance job for broader human-need scenarios that are still driving implementation
+- move a scenario into `release-uat` only after the baseline/status docs say the capability is part of the supported runtime
+
 Older overlapping workflows may still exist while the surface is being consolidated, but new coverage should map to these roles instead of adding more partial gates.
 
 Current implementation:
@@ -116,6 +158,8 @@ Example commands:
   - `pytest -q tests/agents/test_normalizer.py`
 - Eval (opt-in):
   - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "eval"`
+- Human-need acceptance (opt-in):
+  - `RUN_HUMAN_UAT=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/e2e/test_human_need_uat.py -m "human_uat"`
 - PanelAgent LLM E2E (opt-in, real LLM):
   - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/e2e/test_panel_llm_e2e.py -m "panel_llm_e2e"`
 - Registry watcher deterministic E2E:

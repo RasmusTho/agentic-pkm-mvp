@@ -79,6 +79,11 @@ In the current baseline, architecture owns the invariants and boundaries, while 
 - `docs/STATUS.md` for the current rollout posture and baseline lock
 - `docs/OPERATIONS.md` for runtime checks and operator-facing verification
 
+Validation boundary note:
+- architecture tests protect current runtime invariants and boundary contracts
+- they do not, by themselves, prove that the broader human needs in `docs/HUMAN-FLOWS.md` are satisfied
+- when a human-need acceptance scenario reaches beyond the active baseline, keep that distinction explicit in docs and test posture instead of narrowing the scenario to fit the current wiring
+
 At minimum, the following must stay true:
 - the DB outbox remains the canonical queue for runtime side effects,
 - watcher, worker, and ASK paths remain observable through health/status surfaces,

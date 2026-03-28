@@ -22,6 +22,7 @@ def pytest_configure(config) -> None:
         "alpha_llm_live": "live alpha LLM tests",
         "eval": "evaluation/deepeval tests",
         "e2e": "end-to-end scenarios",
+        "human_uat": "human-need acceptance scenarios",
         "panel_llm_e2e": "panel + LLM e2e tests",
     }
     for name, desc in markers.items():
