@@ -1,3 +1,4 @@
+State: Reference guide for the v5.6 forward-line Quality Wave acceptance stack.
 # Quality Wave: v5.6 Acceptance Evaluation Stack
 
 Quality Wave is a comprehensive evaluation framework proving that the v5.6 forward line is ready for broader LangGraph and orchestrator rollout.

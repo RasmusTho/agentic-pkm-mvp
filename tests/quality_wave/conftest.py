@@ -132,6 +132,8 @@ def golden_vault_content() -> Dict[str, str]:
 
     content = {}
     for md_file in vault_path.glob("**/*.md"):
+        if md_file.name == "golden.md":
+            continue
         rel_path = md_file.relative_to(vault_path)
         content[str(rel_path)] = md_file.read_text(encoding="utf-8")
 

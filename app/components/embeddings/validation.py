@@ -13,6 +13,8 @@ KNOWN_PROVIDERS = {
     "anthropic",
     "local",
     "mock",
+    "ollama",
+    "deepseek",
     "legacy",  # Used for auto-tagged legacy embeddings
     "deterministic",  # Used for deterministic/offline embeddings
 }

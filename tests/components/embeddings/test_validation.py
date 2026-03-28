@@ -136,17 +136,27 @@ class TestValidateSingleEmbedding:
 
     def test_validate_checks_provider_valid(self, sample_text, sample_vector) -> None:
         """Should check provider is recognized."""
+        emb = TaggedEmbedding(
+            uuid="id",
+            text=sample_text,
+            vector=sample_vector,
+            tag=EmbeddingTag(provider="unknown-provider", model="model"),  # type: ignore
+        )
         with pytest.raises(ValueError, match="not in known providers"):
-            TaggedEmbedding(
-                uuid="id",
-                text=sample_text,
-                vector=sample_vector,
-                tag=EmbeddingTag(provider="unknown-provider", model="model"),  # type: ignore
-            )
+            validate_single_embedding(emb)
 
     def test_validate_accepts_known_providers(self, sample_text, sample_vector) -> None:
         """Should accept all known providers."""
-        for provider in ["mock", "openai", "anthropic", "local", "legacy", "deterministic"]:
+        for provider in [
+            "mock",
+            "openai",
+            "anthropic",
+            "local",
+            "ollama",
+            "deepseek",
+            "legacy",
+            "deterministic",
+        ]:
             emb = TaggedEmbedding(
                 uuid="id",
                 text=sample_text,
@@ -185,13 +195,9 @@ class TestValidateTagStructure:
 
     def test_validate_checks_provider_is_known(self, sample_text, sample_vector) -> None:
         """Should check provider is in known list."""
+        tag = EmbeddingTag(provider="unknown", model="model")  # type: ignore
         with pytest.raises(ValueError, match="not in known providers"):
-            TaggedEmbedding(
-                uuid="id",
-                text=sample_text,
-                vector=sample_vector,
-                tag=EmbeddingTag(provider="unknown", model="model"),  # type: ignore
-            )
+            validate_tag_structure(tag)
 
 
 class TestKnownProviders:
@@ -217,6 +223,14 @@ class TestKnownProviders:
     def test_known_providers_has_local(self) -> None:
         """local provider should be known."""
         assert "local" in KNOWN_PROVIDERS
+
+    def test_known_providers_has_ollama(self) -> None:
+        """ollama provider should be known."""
+        assert "ollama" in KNOWN_PROVIDERS
+
+    def test_known_providers_has_deepseek(self) -> None:
+        """deepseek provider should be known."""
+        assert "deepseek" in KNOWN_PROVIDERS
 
     def test_known_providers_has_legacy(self) -> None:
         """legacy provider should be known."""

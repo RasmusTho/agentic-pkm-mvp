@@ -20,11 +20,23 @@ def _marker_expr(argv: list[str]) -> str:
     return ""
 
 
+def _normalize_debug_env() -> None:
+    raw = os.environ.get("DEBUG")
+    if raw is None:
+        return
+    if raw.strip().lower() in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
+        return
+    # Test collection imports settings early; keep invalid local shell values
+    # from breaking pytest bootstrap.
+    os.environ["DEBUG"] = "false"
+
+
 # Keep the repo's default unit-test run deterministic even if the developer has
 # DATABASE_URL/DB_DSN exported in their shell.
 #
 # This is intentionally evaluated before importing app modules.
 _mark_expr = _marker_expr(sys.argv).strip().lower()
+_normalize_debug_env()
 if "not pg" in _mark_expr:
     os.environ["STORE_BACKEND"] = "memory"
     os.environ.pop("DATABASE_URL", None)

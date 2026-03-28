@@ -6,6 +6,7 @@ use ReasoningFacade, and handle errors gracefully.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -128,7 +129,7 @@ class TestNodeCallsReasoningFacade:
         mock_reasoning_facade.chat.assert_called_once()
         assert "specific-trace-123" in str(mock_reasoning_facade.chat.call_args)
 
-    def test_node_does_not_call_raw_router(self, state_factory, mock_llm_router):
+    def test_node_does_not_call_raw_router(self, state_factory, mock_llm_router, mock_reasoning_facade):
         state = state_factory()
 
         def router_node(input_state: PilotAgentState) -> PilotAgentState:
@@ -137,7 +138,7 @@ class TestNodeCallsReasoningFacade:
             return input_state
 
         router_node(state)
-        mock_reasoning_facade.call_count == 0
+        assert mock_reasoning_facade.mock_calls == []
 
 
 class TestNodeErrorHandling:
@@ -152,12 +153,13 @@ class TestNodeErrorHandling:
                 input_state.error = str(e)
             return input_state
 
-        # This should not raise; error should be captured in state
-        result = strict_node(None)
-        # Implementation should handle or return something
+        invalid_state = SimpleNamespace(error=None)
+        result = strict_node(invalid_state)
+        assert result.error == "invalid_state_type"
 
     def test_missing_required_fields_recorded_as_error(self, state_factory):
-        state = state_factory(uuid=None)
+        state = state_factory()
+        state.uuid = None
 
         def validation_node(input_state: PilotAgentState) -> PilotAgentState:
             try:

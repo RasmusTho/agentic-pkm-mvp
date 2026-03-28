@@ -134,7 +134,9 @@ class TestMetamorphicStoreBackend:
         # Verify retrieval
         retrieved = obj_store.get(obj_id)
         assert retrieved is not None
-        assert retrieved.get("title") == "Test Note"
+        assert retrieved.get("kind") == "note"
+        assert retrieved.get("source_ref") == "vault/note.md"
+        assert retrieved.get("payload", {}).get("title") == "Test Note"
 
     def test_memory_store_count_consistency(self, memory_stores: dict):
         """Test that memory store counts are consistent."""

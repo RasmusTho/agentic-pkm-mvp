@@ -120,12 +120,11 @@ class TestNoOrphanIntents:
         """Test outbox dedup mechanism filters duplicates."""
         seen: Dict[str, bool] = {}
         processed = []
+        first = make_outbox_event("evt1", source="s1")
+        second = make_outbox_event("evt2", source="s1")
+        duplicate = make_outbox_event("evt1", source="s1").model_copy(update={"event_id": first.event_id})
 
-        events = [
-            make_outbox_event("evt1", source="s1"),
-            make_outbox_event("evt2", source="s1"),
-            make_outbox_event("evt1", source="s1"),
-        ]
+        events = [first, second, duplicate]
 
         for event in events:
             if event.event_id not in seen:

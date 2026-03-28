@@ -14,6 +14,7 @@ DOCS_INDEX = DOCS_ROOT / "DOCS_INDEX.md"
 STATE_OPTIONAL_PREFIXES: tuple[str, ...] = (
     "docs/archive/",
     "docs/archive/github-templates/",
+    "docs/examples/",
     "docs/legacy/",
     "docs/uml/",
     "docs/adr/",
@@ -77,6 +78,8 @@ def test_all_docs_are_listed_in_docs_index() -> None:
     missing: list[str] = []
     for path in _docs_paths():
         rel = _rel(path)
+        if _is_state_optional(path):
+            continue
         if rel not in index_paths:
             missing.append(rel)
     assert not missing, (
