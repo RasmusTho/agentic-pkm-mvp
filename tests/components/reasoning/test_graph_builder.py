@@ -165,3 +165,20 @@ class TestNodeTelemetry:
         compiled = graph.compile()
         result = compiled.invoke({"trace_id": "tel", "step_count": 5, "messages": []})
         assert result["step_count"] == 6
+
+    @pytest.mark.asyncio
+    async def test_wrapper_awaits_async_nodes(self) -> None:
+        """Async graph nodes should be awaited before their result is returned."""
+
+        async def _async_increment(state: dict[str, Any]) -> dict[str, Any]:
+            state["step_count"] = state.get("step_count", 0) + 1
+            return state
+
+        graph = build_agent_graph(
+            "async_telemetry_test",
+            nodes={"step": _async_increment},
+            edges=[("__start__", "step"), ("step", "__end__")],
+        )
+        compiled = graph.compile()
+        result = await compiled.ainvoke({"trace_id": "async", "step_count": 1, "messages": []})
+        assert result["step_count"] == 2

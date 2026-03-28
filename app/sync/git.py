@@ -42,6 +42,8 @@ class GitTransport(SyncLayer):
         self.last_commit: str | None = None
         self.last_sync: float | None = None
         self.last_error: str | None = None
+        self.repo_path: Path | None = None
+        self._pending_change_timestamps: dict[tuple[Any, ...], float] = {}
 
     async def detect_changes(self, path: Path, since_timestamp: float) -> list[FileChange]:
         """Detect changes via git diff HEAD and git status.
@@ -52,8 +54,10 @@ class GitTransport(SyncLayer):
             - Deleted: diff shows removed files
         """
         changes: list[FileChange] = []
+        current_timestamps: dict[tuple[Any, ...], float] = {}
 
         try:
+            self.repo_path = path
             # Get git diff to detect modifications and deletions
             result = subprocess.run(
                 ["git", "diff", "HEAD", "--name-status"],
@@ -70,13 +74,16 @@ class GitTransport(SyncLayer):
                 if not line:
                     continue
 
-                parts = line.split("\t", 1)
-                if len(parts) != 2:
+                parts = line.split("\t")
+                if len(parts) < 2:
                     continue
 
-                op_code, file_path = parts
+                op_code = parts[0]
+                file_path = parts[-1]
                 file_hash = None
                 size = None
+                metadata: dict[str, Any] = {"source": "git"}
+                cache_key: tuple[Any, ...]
 
                 # Get file content for hash
                 full_path = path / file_path
@@ -86,33 +93,46 @@ class GitTransport(SyncLayer):
                         content = full_path.read_bytes()
                         file_hash = hashlib.sha256(content).hexdigest()
                         size = len(content)
+                    cache_key = ("modified", file_path, file_hash)
                 elif op_code == "D":  # Deleted
                     operation = FileOperation.DELETED
+                    cache_key = ("deleted", file_path)
                 elif op_code == "A":  # Added
                     operation = FileOperation.CREATED
                     if full_path.exists():
                         content = full_path.read_bytes()
                         file_hash = hashlib.sha256(content).hexdigest()
                         size = len(content)
-                elif op_code == "R":  # Renamed
+                    cache_key = ("created", file_path, file_hash)
+                elif op_code.startswith("R") and len(parts) >= 3:  # Renamed, e.g. R100
                     operation = FileOperation.RENAMED
+                    old_path = parts[1]
+                    file_path = parts[2]
+                    full_path = path / file_path
                     if full_path.exists():
                         content = full_path.read_bytes()
                         file_hash = hashlib.sha256(content).hexdigest()
                         size = len(content)
+                    similarity = op_code[1:]
+                    metadata["old_path"] = old_path
+                    if similarity:
+                        metadata["similarity"] = similarity
+                    cache_key = ("renamed", old_path, file_path, file_hash)
                 else:
                     continue
 
-                changes.append(
-                    FileChange(
-                        path=file_path,
-                        operation=operation,
-                        timestamp=time.time(),
-                        hash=file_hash,
-                        size=size,
-                        metadata={"source": "git"},
+                timestamp = self._stable_timestamp(cache_key, current_timestamps, full_path)
+                if timestamp > since_timestamp:
+                    changes.append(
+                        FileChange(
+                            path=file_path,
+                            operation=operation,
+                            timestamp=timestamp,
+                            hash=file_hash,
+                            size=size,
+                            metadata=metadata,
+                        )
                     )
-                )
 
             # Get untracked files (created but not staged)
             result = subprocess.run(
@@ -135,20 +155,23 @@ class GitTransport(SyncLayer):
                             content = full_path.read_bytes()
                             file_hash = hashlib.sha256(content).hexdigest()
                             size = len(content)
-
-                            changes.append(
-                                FileChange(
-                                    path=file_path,
-                                    operation=FileOperation.CREATED,
-                                    timestamp=time.time(),
-                                    hash=file_hash,
-                                    size=size,
-                                    metadata={"source": "git"},
+                            cache_key = ("created", file_path, file_hash)
+                            timestamp = self._stable_timestamp(cache_key, current_timestamps, full_path)
+                            if timestamp > since_timestamp:
+                                changes.append(
+                                    FileChange(
+                                        path=file_path,
+                                        operation=FileOperation.CREATED,
+                                        timestamp=timestamp,
+                                        hash=file_hash,
+                                        size=size,
+                                        metadata={"source": "git"},
+                                    )
                                 )
-                            )
 
             self.last_sync = time.time()
             self.last_error = None
+            self._pending_change_timestamps = current_timestamps
 
         except Exception as e:
             self.last_error = str(e)
@@ -162,6 +185,7 @@ class GitTransport(SyncLayer):
         result: dict[str, str] = {}
 
         try:
+            self.repo_path = path
             # Perform git pull
             pull_result = subprocess.run(
                 ["git", "pull", self.remote, self.branch, "--rebase"],
@@ -214,6 +238,7 @@ class GitTransport(SyncLayer):
         applied = 0
 
         try:
+            self.repo_path = path
             # Write files to disk
             for file_path, content in changes.items():
                 full_path = path / file_path
@@ -329,12 +354,16 @@ class GitTransport(SyncLayer):
         pending = 0
         try:
             # Count pending changes
-            result = subprocess.run(
-                ["git", "status", "--porcelain"],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
+            if self.repo_path is not None:
+                result = subprocess.run(
+                    ["git", "status", "--porcelain"],
+                    cwd=self.repo_path,
+                    capture_output=True,
+                    text=True,
+                )
+            else:
+                result = None
+            if result is not None and result.returncode == 0:
                 pending = len([l for l in result.stdout.split("\n") if l])
         except Exception:
             pass
@@ -365,3 +394,23 @@ class GitTransport(SyncLayer):
             logger.error(f"Error detecting conflicts: {e}")
 
         return conflicts
+
+    def _stable_timestamp(
+        self,
+        cache_key: tuple[Any, ...],
+        current_timestamps: dict[tuple[Any, ...], float],
+        full_path: Path | None = None,
+    ) -> float:
+        """Reuse timestamps for unchanged pending git entries across polling cycles."""
+        cached = self._pending_change_timestamps.get(cache_key)
+        if cached is not None:
+            current_timestamps[cache_key] = cached
+            return cached
+
+        if full_path is not None and full_path.exists():
+            timestamp = full_path.stat().st_mtime
+        else:
+            timestamp = time.time()
+
+        current_timestamps[cache_key] = timestamp
+        return timestamp

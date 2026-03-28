@@ -7,6 +7,7 @@ terminal node, telemetry wrapper on every node.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
 from typing import Any, Callable, TypedDict
@@ -33,33 +34,49 @@ def _wrap_node(
 ) -> Callable[..., Any]:
     """Return a wrapper that logs node entry/exit with timing."""
 
-    def _wrapped(state: Any) -> Any:
+    def _trace_id_for_state(state: Any) -> str:
         trace_id = ""
         if isinstance(state, dict):
             trace_id = state.get("trace_id", "")
         elif hasattr(state, "trace_id"):
             trace_id = getattr(state, "trace_id", "") or ""
-        short_trace = trace_id[:8] if trace_id else uuid4().hex[:8]
+        return trace_id[:8] if trace_id else uuid4().hex[:8]
 
+    def _log_enter(short_trace: str) -> float:
         logger.debug(
             "graph.node.enter agent=%s node=%s trace=%s",
             agent_name,
             node_name,
             short_trace,
         )
-        t0 = time.monotonic()
-        try:
-            result = fn(state)
-            return result
-        finally:
-            elapsed_ms = (time.monotonic() - t0) * 1000
-            logger.debug(
-                "graph.node.exit agent=%s node=%s trace=%s elapsed=%.1fms",
-                agent_name,
-                node_name,
-                short_trace,
-                elapsed_ms,
-            )
+        return time.monotonic()
+
+    def _log_exit(short_trace: str, t0: float) -> None:
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.debug(
+            "graph.node.exit agent=%s node=%s trace=%s elapsed=%.1fms",
+            agent_name,
+            node_name,
+            short_trace,
+            elapsed_ms,
+        )
+
+    if inspect.iscoroutinefunction(fn):
+        async def _wrapped(state: Any) -> Any:
+            short_trace = _trace_id_for_state(state)
+            t0 = _log_enter(short_trace)
+            try:
+                return await fn(state)
+            finally:
+                _log_exit(short_trace, t0)
+    else:
+        def _wrapped(state: Any) -> Any:
+            short_trace = _trace_id_for_state(state)
+            t0 = _log_enter(short_trace)
+            try:
+                return fn(state)
+            finally:
+                _log_exit(short_trace, t0)
 
     _wrapped.__name__ = fn.__name__ if hasattr(fn, "__name__") else node_name
     _wrapped.__qualname__ = getattr(fn, "__qualname__", node_name)
