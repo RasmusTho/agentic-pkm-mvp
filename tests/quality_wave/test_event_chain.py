@@ -221,9 +221,9 @@ class TestEventIdempotency:
         seen: Dict[str, bool] = {}
 
         events = [
-            make_outbox_event("evt1", source="s1"),
-            make_outbox_event("evt2", source="s2"),
-            make_outbox_event("evt1", source="s1"),  # Duplicate
+            OutboxEvent(event="evt1", event_id="dedup-001", trace_id=uuid4().hex, source="s1"),
+            OutboxEvent(event="evt2", event_id="dedup-002", trace_id=uuid4().hex, source="s2"),
+            OutboxEvent(event="evt1", event_id="dedup-001", trace_id=uuid4().hex, source="s1"),  # Duplicate
         ]
 
         # Simulate dedup logic
