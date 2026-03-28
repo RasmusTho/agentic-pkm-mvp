@@ -157,7 +157,13 @@ class BenchmarkSuite:
                     continue
                 bl_value = bl_entry["value"]
                 delta = m.value - bl_value
-                delta_pct = delta / bl_value if bl_value != 0 else 0.0
+                if bl_value != 0:
+                    delta_pct = delta / bl_value
+                else:
+                    # Zero baseline: use directional sign so regressions
+                    # are not silently masked (e.g. 0 → positive on a
+                    # lower-is-better metric is bad).
+                    delta_pct = float("inf") if delta > 0 else (float("-inf") if delta < 0 else 0.0)
                 # Regression: metric moved in the *bad* direction beyond threshold.
                 if m.higher_is_better:
                     regression = delta_pct < -threshold

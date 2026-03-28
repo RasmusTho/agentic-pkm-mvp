@@ -347,3 +347,42 @@ class TestErrorHandling:
         )
         comparisons = suite.compare([result])
         assert comparisons == []
+
+    def test_zero_baseline_lower_is_better_flags_regression(self, tmp_path: Path):
+        """A lower-is-better metric going from 0 to >0 must flag regression."""
+        bl_path = tmp_path / "bl.json"
+        bl_path.write_text(json.dumps({
+            "s": {"latency": {"name": "latency", "value": 0.0, "higher_is_better": False}}
+        }))
+        suite = _make_suite()
+        suite.load_baseline(bl_path)
+
+        result = BenchmarkResult(
+            scenario="s",
+            metrics=[MetricValue(name="latency", value=5.0, higher_is_better=False)],
+            timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+            duration_ms=1.0,
+        )
+        comparisons = suite.compare([result])
+        assert len(comparisons) == 1
+        assert comparisons[0].regression is True
+        assert math.isinf(comparisons[0].delta_pct)
+
+    def test_zero_baseline_higher_is_better_no_regression_on_increase(self, tmp_path: Path):
+        """A higher-is-better metric going from 0 to >0 is not a regression."""
+        bl_path = tmp_path / "bl.json"
+        bl_path.write_text(json.dumps({
+            "s": {"accuracy": {"name": "accuracy", "value": 0.0, "higher_is_better": True}}
+        }))
+        suite = _make_suite()
+        suite.load_baseline(bl_path)
+
+        result = BenchmarkResult(
+            scenario="s",
+            metrics=[MetricValue(name="accuracy", value=0.8, higher_is_better=True)],
+            timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+            duration_ms=1.0,
+        )
+        comparisons = suite.compare([result])
+        assert len(comparisons) == 1
+        assert comparisons[0].regression is False

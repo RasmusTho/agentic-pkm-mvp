@@ -117,15 +117,13 @@ class TestNoOrphanIntents:
             seen.add(e.event_id)
 
     def test_outbox_dedup_mechanism(self):
-        """Test outbox dedup mechanism filters duplicates."""
+        """Test outbox dedup mechanism filters duplicates by event_id."""
         seen: Dict[str, bool] = {}
         processed = []
 
-        events = [
-            make_outbox_event("evt1", source="s1"),
-            make_outbox_event("evt2", source="s1"),
-            make_outbox_event("evt1", source="s1"),
-        ]
+        evt1 = make_outbox_event("evt1", source="s1")
+        evt2 = make_outbox_event("evt2", source="s1")
+        events = [evt1, evt2, evt1]  # third is a true duplicate (same event_id)
 
         for event in events:
             if event.event_id not in seen:
