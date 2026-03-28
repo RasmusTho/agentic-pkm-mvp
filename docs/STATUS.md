@@ -17,6 +17,11 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - CI legs assert `docs/ARCHITECTURE.md` contains fitness guard statements, confirm CLI health smoke commands pass, and verify the worker logs show `worker starting`.
 - The runbook ensures `pytest -q -m "not pg and not alpha_llm"` plus curated fitness gates keep the SoT baseline stable before merges.
 
+Validation posture note:
+- blocking smoke/release gates are anchored to the active baseline in this document
+- broader human-need acceptance scenarios may exist in the repo as non-blocking system-level TDD derived from `docs/HUMAN-FLOWS.md`
+- failures in those broader scenarios indicate target-state gaps unless and until this status document promotes the capability into the claimed baseline
+
 ## Baseline Definition (SoT v5.5)
 - Runtime watcher: registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`) is the default; legacy snapshot watchers are dev-only and require `PKM_SETTINGS_PROFILE=lab`.
 - Runtime default: `scripts/start_full_system.sh` sets `WATCHER_AUTO_EXEC=1` unless explicitly set by the operator; set `WATCHER_AUTO_EXEC=0` to run watchers in emit-only mode. Once armed, any note with an AI panel fence is treated as a candidate and actions are filtered through the allowlisted `watcher_settings.allowed_actions`, while the only per-note opt-out is `ai_panel_auto_run: never` (nested form accepted) and manual CLI panel runs remain available.

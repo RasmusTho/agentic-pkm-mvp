@@ -52,6 +52,17 @@ Each scenario below includes:
 - failure modes to avoid,
 - and ontology consequences.
 
+When turning scenarios into executable validation, also record:
+- current implementation posture: `baseline`, `partial`, or `future`
+- test posture: `smoke`, `nightly`, `non-blocking acceptance`, or `release gate`
+- observable signals: the user-visible assertions or receipts that would count as success
+- minimum executable scenario: the smallest seeded or scripted end-to-end flow that exercises the human need without collapsing it into implementation trivia
+
+Interpretation rule:
+- the scenario definition remains human-first even when the current runtime can only satisfy part of it
+- if the current implementation only partially supports a scenario, keep the human acceptance target and mark the posture as `partial` rather than rewriting the scenario around the current internals
+- use `docs/plans/HUMAN_NEED_UAT_STRATEGY.md` for the repo-level policy on how these scenarios relate to smoke and release gates
+
 ## 1. Capture a fleeting thought before it disappears
 
 ### Scenario
@@ -130,6 +141,21 @@ The system should help the user re-orient to current commitments, relevant artif
 - retrieval projections must preserve interpretability,
 - and review/posture signals must not replace orientation signals.
 
+### Validation posture
+
+- current implementation posture: `partial`
+- test posture: `non-blocking acceptance` moving toward `nightly`
+- observable signals:
+  - the user can recover the relevant note/source set for a previously active thread of work
+  - the surfaced result explains enough context to answer "what was I doing?" and "what is next?"
+  - active work, waiting work, and background reference are not flattened into one undifferentiated result
+  - the flow does not require reading raw operational traces to reconstruct context
+- minimum executable scenario:
+  - seed a vault pack with one active project note, one waiting/deferred item, one supporting source, and one older unrelated note
+  - run ingest/index and a realistic retrieval/orientation path
+  - assert that the returned surface includes the active thread and preserves distinctions needed for restart
+  - do not require the current implementation to pass this in smoke until the baseline explicitly claims orientation support
+
 ## 2A. Work with archive material without forcing it into notes
 
 ### Scenario
@@ -171,6 +197,21 @@ functions.
 - cold/archive artifacts remain first-class,
 - source artifacts may remain source artifacts without becoming notes,
 - and archive exposure belongs to product function, not only implementation detail.
+
+### Validation posture
+
+- current implementation posture: `partial`
+- test posture: `non-blocking acceptance` moving toward `nightly`
+- observable signals:
+  - an archived artifact can be found without first being rewritten into a vault note
+  - provenance and source identity remain visible in the result
+  - the user can inspect and cite the retained artifact directly
+  - reuse does not silently materialize the artifact as a warm note
+- minimum executable scenario:
+  - seed one or more retained artifacts such as a PDF, email-like text, or project file in the external corpus path
+  - ingest them into the store/index surfaces used by retrieval
+  - run a retrieval or ask flow that should hit the retained source
+  - assert that the returned result cites the retained artifact with visible provenance and no forced note conversion
 
 ## 3. Move from source material to durable understanding
 
@@ -249,6 +290,21 @@ The system should help clarify commitments, preserve actionability, keep waiting
 - project, commitment, next action, waiting, and review cycle must remain first-class,
 - execution plan must remain downstream and non-substitutive,
 - and accountability around commitment changes matters.
+
+### Validation posture
+
+- current implementation posture: `future`
+- test posture: `non-blocking acceptance`
+- observable signals:
+  - projects, next actions, and waiting states are distinguishable in the surfaced result
+  - review restores confidence in the commitment landscape rather than producing only execution traces
+  - user commitments are not silently rewritten or collapsed into planner artifacts
+  - deferral, renegotiation, and explicit waiting remain visible outcomes
+- minimum executable scenario:
+  - seed a small commitment pack with a project, two next actions, one waiting item, and one stale/open loop
+  - run the system path intended to support review/orientation for commitments
+  - assert that the surfaced result preserves commitment distinctions and does not substitute planner/execution objects for the human commitment model
+  - keep this scenario outside blocking gates until the active baseline explicitly claims commitment support
 
 ## 5. Develop a creative fragment without premature closure
 
@@ -368,6 +424,73 @@ The system should make assistance legible, bounded, and reviewable, especially w
 - receipt remains first-class,
 - authority boundaries and delegation remain first-class,
 - and mirror and receipt must remain distinguishable.
+
+### Validation posture
+
+- current implementation posture: `partial`
+- test posture: `release gate` for baseline-covered actions, otherwise `non-blocking acceptance`
+- observable signals:
+  - the user can tell what action the system took or proposed
+  - the user can inspect the authority basis or trigger path for that action
+  - the result is reversible or bounded when uncertainty remains
+  - receipt surfaces are legible without forcing the user to read raw event logs
+- minimum executable scenario:
+  - seed notes that trigger a bounded system action such as panel-driven promotion or logged non-promotion
+  - run the action through the full stack
+  - assert that a human-visible receipt exists alongside operational traces and that the change/result can be inspected without ambiguity
+
+## 7A. Decide whether watcher automation is safe to enable
+
+### Scenario
+
+The operator wants to enable watcher-driven automation and needs to know whether it is safe to do so without reading implementation code or relying on one environment variable alone.
+
+### User need
+
+Being able to trust system action.
+Supporting safe operator enablement.
+
+### User outcome
+
+The operator can decide whether watcher automation is safe to arm, can explain that decision from surfaced evidence, and can spot when the runtime should remain in a safer mode.
+
+### System function
+
+The system should expose the watcher gate, allowlist validity, settings provenance, write-guard state, and recent skip/receipt signals through operator-facing surfaces rather than only through source inspection.
+
+### Acceptance signals
+
+- the effective watcher mode is visible from supported operator surfaces,
+- the allowlist and its provenance are visible and coherent,
+- write-guard and policy skip context are visible,
+- and the operator can tell the difference between emit-only posture and mutation-capable posture.
+
+### Failure modes to avoid
+
+- requiring the operator to inspect source code or internal settings resolution manually,
+- making safety depend on one raw environment variable without context,
+- exposing counters without enough meaning to support a decision,
+- or making safe mode and active mode look operationally identical.
+
+### Ontology consequences
+
+- operator trust is a first-class product concern,
+- receipts and safety signals must remain intelligible,
+- and governance/authority boundaries must be inspectable rather than implicit.
+
+### Validation posture
+
+- current implementation posture: `baseline`
+- test posture: `release gate`
+- observable signals:
+  - `settings-explain` and `status` agree on effective watcher posture
+  - allowlist validity and provenance are surfaced
+  - write guard and recent skip reasons are surfaced
+  - the operator can distinguish safe-to-enable from not-safe-to-enable without code inspection
+- minimum executable scenario:
+  - seed a small watcher UAT pack with one allowed action, one skipped/policy-gated note, and one no-op note
+  - run the operator flow in emit-only and armed modes
+  - assert that the operator-facing surfaces expose the correct gate, policy, provenance, and skip information needed to support the enablement decision
 
 ## 8. Use the system across multiple domains without losing meaning
 

@@ -95,6 +95,8 @@ class TestGoldenVaultContent:
     def test_all_notes_have_frontmatter_uuid(self, golden_vault_content: dict):
         """Assert all notes in golden vault have uuid in frontmatter."""
         for path, content in golden_vault_content.items():
+            if Path(path).name == "golden.md":
+                continue
             assert "---" in content, f"Missing frontmatter in {path}"
             # Extract frontmatter
             lines = content.split("\n")

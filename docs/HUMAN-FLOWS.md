@@ -98,6 +98,12 @@ They summarize the kinds of cycles the system should keep legible and support ac
 - Intent -> propose -> decide -> execute -> receipt
 - Review -> reclassify -> promote/archive
 
+Validation note:
+- these loops and the everyday scenarios below are the product-level acceptance source for system-level UAT
+- they are intentionally broader than the currently locked runtime baseline
+- when implementation lags the human contract, the scenario should still be kept as a non-blocking acceptance target rather than rewritten to fit today's internals
+- use `docs/TESTING.md` and `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md` to classify whether a scenario is a baseline gate, a partial/non-blocking acceptance target, or a future release gate
+
 ### Capture
 
 The system must let the human get material out of fragile working memory and into a durable external
