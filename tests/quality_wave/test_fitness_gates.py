@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import pytest
 from typing import Dict, Any, Set
+from uuid import uuid4
 from tests.quality_wave.conftest import MetricsCollector, EventChain
-from app.events.schema import make_outbox_event
+from app.events.schema import OutboxEvent, make_outbox_event
 
 
 @pytest.mark.not_pg
@@ -122,9 +123,9 @@ class TestNoOrphanIntents:
         processed = []
 
         events = [
-            make_outbox_event("evt1", source="s1"),
-            make_outbox_event("evt2", source="s1"),
-            make_outbox_event("evt1", source="s1"),
+            OutboxEvent(event="evt1", event_id="dedup-101", trace_id=uuid4().hex, source="s1"),
+            OutboxEvent(event="evt2", event_id="dedup-102", trace_id=uuid4().hex, source="s1"),
+            OutboxEvent(event="evt1", event_id="dedup-101", trace_id=uuid4().hex, source="s1"),
         ]
 
         for event in events:
