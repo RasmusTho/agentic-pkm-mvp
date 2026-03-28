@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import timezone, datetime, timedelta
 
 from app.health_contract import HealthStateMachine
 from app.settings.health_settings import HealthThresholds

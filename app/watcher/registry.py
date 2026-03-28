@@ -9,7 +9,7 @@ import os
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import timezone, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -76,7 +76,7 @@ def _resolve_scope_glob(vault_root: Path) -> tuple[str, str, str]:
 
 
 def _now_iso() -> str:
-    return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
+    return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _hash_file(path: Path) -> tuple[str, int] | None:

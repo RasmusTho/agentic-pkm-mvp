@@ -5,7 +5,7 @@ import hashlib
 import json
 import time
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import timezone, datetime
 from pathlib import Path
 from uuid import uuid4
 

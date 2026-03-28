@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import timezone, datetime
 from pathlib import Path
 
 from app.health_contract import HealthContract, HealthStateMachine
