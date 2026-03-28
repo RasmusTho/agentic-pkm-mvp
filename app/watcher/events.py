@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import timezone, datetime
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
@@ -12,7 +12,7 @@ from app.version import SOT_FORWARD
 
 
 def _now_iso() -> str:
-    return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
+    return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class WatcherEventSource(BaseModel):

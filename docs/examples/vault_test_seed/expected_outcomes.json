@@ -1,0 +1,55 @@
+{
+  "description": "Expected outcomes snapshot for golden vault test seed.",
+  "ingest_metrics": {
+    "total_notes": 5,
+    "notes_with_uuid": 5,
+    "objects_created": 5,
+    "embeddings_created": 5,
+    "relations_indexed": 2
+  },
+  "object_counts": {
+    "total": 5,
+    "by_review_state": {
+      "inbox": 2,
+      "reviewed": 1,
+      "promoted": 1,
+      "unknown": 1
+    },
+    "by_kind": {
+      "note": 4,
+      "card": 1
+    }
+  },
+  "embedding_stats": {
+    "total_embeddings": 5,
+    "model": "text-embedding-3-small",
+    "embedding_dim": 1536,
+    "avg_tokens_per_note": 50
+  },
+  "relation_stats": {
+    "link_relations": 2,
+    "avg_links_per_note": 0.4
+  },
+  "promotion_readiness": {
+    "promotable_notes": 1,
+    "note_path": "Workbench/Draft.md",
+    "note_uuid": "10000000-0000-0000-0000-000000000004"
+  },
+  "retrieval_validation": {
+    "test_queries": [
+      {
+        "query": "simple note",
+        "expected_top_result": "10000000-0000-0000-0000-000000000001"
+      },
+      {
+        "query": "concept card",
+        "expected_top_result": "10000000-0000-0000-0000-000000000003"
+      }
+    ]
+  },
+  "cold_rebuild_invariants": {
+    "lossless": true,
+    "idempotent": true,
+    "reproducible": true
+  }
+}

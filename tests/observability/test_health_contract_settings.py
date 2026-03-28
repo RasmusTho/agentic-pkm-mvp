@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import timezone, datetime
 from pathlib import Path
 
 from app.health_contract import HealthContract, HealthStateMachine
@@ -54,7 +54,7 @@ policy:
     )
     contract = HealthContract(
         state_machine=HealthStateMachine(),
-        now_fn=lambda: datetime(2025, 1, 1, tzinfo=UTC),
+        now_fn=lambda: datetime(2025, 1, 1, tzinfo=timezone.utc),
         vault_root_fn=lambda: vault,
     )
     result = contract.evaluate()
@@ -78,7 +78,7 @@ thresholds:
     )
     contract = HealthContract(
         state_machine=HealthStateMachine(),
-        now_fn=lambda: datetime(2025, 1, 1, tzinfo=UTC),
+        now_fn=lambda: datetime(2025, 1, 1, tzinfo=timezone.utc),
         vault_root_fn=lambda: vault,
     )
     result = contract.evaluate()
@@ -97,11 +97,11 @@ def test_health_contract_reports_recent_outbox_age(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr("app.index.doctor.diagnose_index", lambda: _mock_index_doctor())
     contract = HealthContract(
         state_machine=HealthStateMachine(),
-        now_fn=lambda: datetime(2025, 1, 2, tzinfo=UTC),
+        now_fn=lambda: datetime(2025, 1, 2, tzinfo=timezone.utc),
         vault_root_fn=lambda: tmp_path,
     )
     result = contract.evaluate()
-    expected_age = float((datetime(2025, 1, 2, tzinfo=UTC) - datetime(2025, 1, 1, 12, 0, tzinfo=UTC)).total_seconds())
+    expected_age = float((datetime(2025, 1, 2, tzinfo=timezone.utc) - datetime(2025, 1, 1, 12, 0, tzinfo=timezone.utc)).total_seconds())
     assert abs(result["outbox_recent_age_s"] - expected_age) < 1e-3
 
 
@@ -114,9 +114,9 @@ def test_health_contract_uses_newest_event_age(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("app.index.doctor.diagnose_index", lambda: _mock_index_doctor())
     contract = HealthContract(
         state_machine=HealthStateMachine(),
-        now_fn=lambda: datetime(2025, 1, 2, 10, 0, 20, tzinfo=UTC),
+        now_fn=lambda: datetime(2025, 1, 2, 10, 0, 20, tzinfo=timezone.utc),
         vault_root_fn=lambda: tmp_path,
     )
     result = contract.evaluate()
-    expected_age = float((datetime(2025, 1, 2, 10, 0, 20, tzinfo=UTC) - datetime(2025, 1, 2, 10, 0, 10, tzinfo=UTC)).total_seconds())
+    expected_age = float((datetime(2025, 1, 2, 10, 0, 20, tzinfo=timezone.utc) - datetime(2025, 1, 2, 10, 0, 10, tzinfo=timezone.utc)).total_seconds())
     assert abs(result["outbox_recent_age_s"] - expected_age) < 1e-3

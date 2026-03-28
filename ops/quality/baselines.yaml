@@ -1,32 +1,78 @@
-latency:
-  # Allow more headroom on shared runners; still orders of magnitude tighter than the 0.25s/2s probes.
-  tolerance: 3.0
-  QAS003:
-    value: 1.0
-  QAS010:
-    value: 0.000150
+# Golden metrics baselines for Quality Wave acceptance tests
+# Used by Phase C/D/E to validate stability across parameter changes
 
-eval:
-  candidate_precision: 0.188
-  candidate_ndcg: 0.924
-  baseline_precision: 0.188
-  baseline_ndcg: 0.855
-  delta_precision_min: 0.005
-  delta_ndcg_min: 0.010
-  delta_abs_tolerance: 0.005
+version: 1.0
+description: "Quality Wave v5.6 baseline metrics for golden vault"
+golden_vault_path: "docs/examples/vault_test_seed/"
+created_date: "2025-03-28"
 
-relations:
-  coverage_min: 0.95
-  validity_min: 0.95
-  coverage: 1.0
-  validity: 1.0
+# Phase B: Golden Vault Baselines
+golden_vault:
+  total_notes: 5
+  total_objects: 5
+  total_embeddings: 5
+  total_relations: 2
 
-diarization:
-  chunk_p95_off: 117.0
-  chunk_p95_on: 78.0
-  p95_ratio_max: 0.95
+# Phase C: Metamorphic Run Baselines
+metamorphic_runs:
+  ingest_interval_variations:
+    - interval: 1
+      expected_objects: 5
+      expected_embeddings: 5
+    - interval: 10
+      expected_objects: 5
+      expected_embeddings: 5
+    - interval: 30
+      expected_objects: 5
+      expected_embeddings: 5
 
-reasoning:
-  claims_avg_min: 1.0
-  inferences_avg_min: 0.5
-  conflicts_max: 1.0
+  watcher_tick_variations:
+    - max_ticks: 5
+      expected_objects: 5
+      expected_embeddings: 5
+    - max_ticks: 20
+      expected_objects: 5
+      expected_embeddings: 5
+
+  store_backend_variations:
+    - backend: memory
+      expected_objects: 5
+      expected_embeddings: 5
+    - backend: postgres
+      expected_objects: 5
+      expected_embeddings: 5
+
+# Phase D: Cold Rebuild Baselines
+cold_rebuild:
+  expected_object_count: 5
+  expected_embedding_count: 5
+  lossless: true
+  idempotent: true
+
+# Phase E: Fitness Gates Baselines
+fitness_gates:
+  minimum_ingest_runs: 1
+  minimum_panel_runs: 0
+  minimum_promote_intents: 0
+  minimum_objects: 5
+  minimum_embeddings: 5
+  event_dedup_strict: true
+  idempotent_operations: true
+
+# Phase F: UAT Harness Baselines
+uat_harness:
+  vault_load_required: true
+  min_objects_to_ingest: 5
+  min_embeddings_to_create: 5
+  min_ask_queries_successful: 1
+  watcher_health_required: true
+  worker_health_required: true
+  ask_api_health_required: true
+  idempotency_required: true
+
+# Tolerance thresholds for CI gates
+tolerances:
+  object_count_variance_percent: 0
+  embedding_count_variance_percent: 0
+  timing_variance_percent: 10
+  max_duplicate_events_allowed: 0
