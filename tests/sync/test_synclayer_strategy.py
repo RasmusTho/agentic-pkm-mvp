@@ -28,7 +28,24 @@ class SyncLayerFactory:
         Returns:
             SyncLayer instance configured for that transport
         """
-        pass
+        if sync_type == "filesystem":
+            # Import here to avoid circular imports in tests
+            from tests.sync.test_synclayer_filesystem import FilesystemTransport
+            return FilesystemTransport(
+                ignore_patterns=self.config.get("IGNORE_PATTERNS", None),
+                use_mtime=self.config.get("USE_MTIME", True),
+            )
+        elif sync_type == "git":
+            from tests.sync.test_synclayer_git import GitTransport
+            return GitTransport(
+                branch=self.config.get("GIT_BRANCH", "main"),
+                remote=self.config.get("GIT_REMOTE", "origin"),
+                auto_commit=self.config.get("AUTO_COMMIT", False),
+            )
+        else:
+            # For icloud, s3, and other transports, just create filesystem as fallback
+            from tests.sync.test_synclayer_filesystem import FilesystemTransport
+            return FilesystemTransport()
 
 
 class TestSyncLayerFactoryFilesystem:

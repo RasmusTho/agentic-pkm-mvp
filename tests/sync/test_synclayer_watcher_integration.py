@@ -39,7 +39,42 @@ class Watcher:
         Returns:
             List of VaultEvent objects emitted during this tick
         """
-        pass
+        # Clear previous events
+        self.events.clear()
+
+        # Detect changes via SyncLayer
+        changes = await self.sync_layer.detect_changes(self.vault_root, self.last_tick_time)
+
+        # Sort by timestamp for deterministic processing
+        sorted_changes = sorted(changes, key=lambda c: c.timestamp)
+
+        # Emit events for each change
+        for change in sorted_changes:
+            # Determine event type based on operation
+            if change.operation == FileOperation.DELETED:
+                event_type = "vault.file.deleted"
+            else:
+                event_type = "vault.file.changed"
+
+            # Build payload with change metadata
+            payload = {
+                "path": change.path,
+                "operation": change.operation.value,
+                "timestamp": change.timestamp,
+                "hash": change.hash,
+                "size": change.size,
+            }
+
+            # Include metadata if present
+            if change.metadata:
+                payload["metadata"] = change.metadata
+
+            self._emit_event(event_type, payload)
+
+        # Update tick time to current time
+        self.last_tick_time = max((c.timestamp for c in sorted_changes), default=self.last_tick_time)
+
+        return self.events
 
     def _emit_event(self, event_type: str, payload: dict[str, Any]) -> None:
         """Emit an event to the vault."""
