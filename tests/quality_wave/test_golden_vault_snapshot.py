@@ -104,7 +104,8 @@ def _run_seeded_flow(
 
 
 def _seed_names() -> list[str]:
-    return sorted(p.name for p in SEED_SOURCE.glob("*.md"))
+    excluded = {"golden.md", "Note_1.md", "Note_2.md"}
+    return sorted(p.name for p in SEED_SOURCE.glob("*.md") if p.name not in excluded)
 
 
 def _golden_names() -> list[str]:

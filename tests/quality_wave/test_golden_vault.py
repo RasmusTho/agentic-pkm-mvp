@@ -198,9 +198,11 @@ class TestGoldenVaultReproducibility:
         """Assert golden vault contains no dynamic/timestamp content."""
         for path, content in golden_vault_content.items():
             # No timestamps should be present
-            assert "timestamp:" not in content.lower(), f"Dynamic timestamp in {path}"
-            assert "date:" not in content.lower(), f"Dynamic date in {path}"
-            assert "now" not in content.lower(), f"Dynamic 'now' in {path}"
+            lower = content.lower()
+            assert "timestamp:" not in lower, f"Dynamic timestamp in {path}"
+            assert "date:" not in lower, f"Dynamic date in {path}"
+            assert "generated_at:" not in lower, f"Dynamic generated_at in {path}"
+            assert "updated_at:" not in lower, f"Dynamic updated_at in {path}"
 
 
 @pytest.mark.not_pg

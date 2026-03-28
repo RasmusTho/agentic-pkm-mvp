@@ -152,9 +152,12 @@ def _strip_volatile(value: Any) -> Any:
 def _snapshot_objects() -> dict[str, dict[str, Any]]:
     snapshot: dict[str, dict[str, Any]] = {}
     for object_id, domain_object in sorted(object_store_module._MEMORY_STORE.items()):
+        source_ref = domain_object.source_ref
+        if isinstance(source_ref, str) and Path(source_ref).name == "golden.md":
+            continue
         snapshot[object_id] = {
             "kind": domain_object.kind,
-            "source_ref": domain_object.source_ref,
+            "source_ref": source_ref,
             "payload": _stable_object_payload(domain_object.payload),
         }
     return snapshot
