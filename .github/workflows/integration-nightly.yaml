@@ -9,6 +9,15 @@ jobs:
   full-suite:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.12"
+            experimental: false
+          - python-version: "3.13"
+            experimental: true
     env:
       PYTHONPATH: ${{ github.workspace }}
       STORE_BACKEND: memory
@@ -29,7 +38,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install Python deps
         run: |
@@ -47,6 +56,13 @@ jobs:
             -m "not pg and not alpha_llm" \
             --durations=30 \
             | tee tmp/nightly-pytest.log
+
+      - name: Report canary runtime
+        run: |
+          python - <<'PY'
+          import platform
+          print(f"runtime={platform.python_version()} experimental=${{ matrix.experimental }}")
+          PY
 
       - name: Runtime contract regressions
         run: |
@@ -80,5 +96,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nightly-pytest-log
+          name: nightly-pytest-log-py${{ matrix.python-version }}
           path: tmp/nightly-pytest.log
