@@ -119,7 +119,7 @@ def _seed_note(vault: Path) -> tuple[str, Path]:
         kind="note",
         payload=payload,
         source_ref=str(note_path),
-        created_at=datetime.now(UTC),
+        created_at=datetime.now(timezone.utc),
     )
     ObjectStore().save_object(domain_obj, emit_outbox=False, trace_id="smoke-reality")
     return note_uuid, note_path
@@ -255,7 +255,7 @@ def _seed_ask_corpus() -> list[dict[str, str]]:
             kind="note",
             payload=payload,
             source_ref=entry["title"],
-            created_at=datetime.now(UTC),
+            created_at=datetime.now(timezone.utc),
         )
         store.save_object(obj, emit_outbox=False, trace_id="smoke-ask")
 

@@ -134,7 +134,7 @@ def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
 
 
 def _now_iso_from_timestamp(value: float) -> str:
-    return datetime.fromtimestamp(value, tz=UTC).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _log_tick_diagnostics_registry(

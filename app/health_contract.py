@@ -29,7 +29,7 @@ def _transition_entry(state: str, reason: str, since: datetime) -> dict[str, str
 class HealthStateMachine:
     state: str = "boot"
     reason: str = "initializing"
-    since: datetime = field(default_factory=lambda: datetime.now(UTC))  # noqa: UP017
+    since: datetime = field(default_factory=lambda: datetime.now(timezone.utc))  # noqa: UP017
     bad_counter: int = 0
     good_counter: int = 0
     transition_history: list[dict[str, str]] = field(default_factory=list)
@@ -37,7 +37,7 @@ class HealthStateMachine:
     def reset(self) -> None:
         self.state = "boot"
         self.reason = "initializing"
-        self.since = datetime.now(UTC)  # noqa: UP017
+        self.since = datetime.now(timezone.utc)  # noqa: UP017
         self.bad_counter = 0
         self.good_counter = 0
         self.transition_history = []

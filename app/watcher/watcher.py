@@ -15,7 +15,7 @@ from app.watcher.state import WatcherState
 
 
 def _now_iso_from_timestamp(value: float) -> str:
-    return datetime.fromtimestamp(value, tz=UTC).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _scope_prefix(scope_glob: str) -> str:

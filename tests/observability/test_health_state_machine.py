@@ -7,7 +7,7 @@ from app.settings.health_settings import HealthThresholds
 def test_health_state_machine_hysteresis() -> None:
     machine = HealthStateMachine()
     thresholds = HealthThresholds.defaults()
-    base = datetime(2025, 1, 1, tzinfo=UTC)  # noqa: UP017
+    base = datetime(2025, 1, 1, tzinfo=timezone.utc)  # noqa: UP017
     for i in range(3):
         state, reason, since = machine.update(
             16.0,
