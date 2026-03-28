@@ -49,7 +49,7 @@ class HealthStateMachine:
         *,
         now: datetime | None = None,
     ) -> tuple[str, str, str]:
-        now = now or datetime.now(UTC)  # noqa: UP017
+        now = now or datetime.now(timezone.utc)  # noqa: UP017
         prev_state = self.state
         next_state = self.state
         reason = self.reason
@@ -109,7 +109,7 @@ class HealthContract:
         vault_root_fn: Callable[[], Path] | None = None,
     ):
         self.state_machine = state_machine or HealthStateMachine()
-        self.now_fn = now_fn or (lambda: datetime.now(UTC))  # noqa: UP017
+        self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))  # noqa: UP017
         self.vault_root_fn = vault_root_fn or resolve_vault_root
 
     def evaluate(self) -> dict[str, Any]:
