@@ -20,7 +20,6 @@ import pytest
 
 from app.events.schema import OutboxEvent
 from app.stores.memory import MemoryObjectStore, MemoryVectorIndex, MemoryRelationIndex
-from app.stores.decisions import InMemoryDecisionsStore
 
 
 logger = logging.getLogger(__name__)
