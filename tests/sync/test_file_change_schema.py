@@ -63,7 +63,7 @@ class TestFileChangeCreation:
 
     def test_created_requires_hash(self) -> None:
         """CREATED operation requires hash for verification."""
-        with pytest.raises(AssertionError, match="created requires hash"):
+        with pytest.raises(AssertionError, match=r"requires hash$"):
             FileChange(
                 path="test.md",
                 operation=FileOperation.CREATED,
@@ -73,7 +73,7 @@ class TestFileChangeCreation:
 
     def test_modified_requires_hash(self) -> None:
         """MODIFIED operation requires hash for verification."""
-        with pytest.raises(AssertionError, match="modified requires hash"):
+        with pytest.raises(AssertionError, match=r"requires hash$"):
             FileChange(
                 path="test.md",
                 operation=FileOperation.MODIFIED,
@@ -199,8 +199,11 @@ class TestFileChangeOrdering:
             FileChange("c.md", FileOperation.CREATED, now, "ghi"),
         ]
         # Process in timestamp order
-        for i, change in enumerate(sorted(changes, key=lambda c: c.timestamp)):
-            assert i == [c.path.index(x) for x in "abc"if change.path == x + ".md"][0]
+        sorted_changes = sorted(changes, key=lambda c: c.timestamp)
+        assert len(sorted_changes) == 3
+        assert sorted_changes[0].path == "a.md"
+        assert sorted_changes[1].path == "b.md"
+        assert sorted_changes[2].path == "c.md"
 
 
 class TestFileChangeHash:

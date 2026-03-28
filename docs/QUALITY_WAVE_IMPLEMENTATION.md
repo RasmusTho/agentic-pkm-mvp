@@ -1,3 +1,4 @@
+State: Reference doc for v5.6 forward-line Quality Wave implementation.
 # Quality Wave Implementation Summary
 
 ## Overview
