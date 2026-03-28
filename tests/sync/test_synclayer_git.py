@@ -1,65 +1,22 @@
 """Test GitTransport: git diff, git pull/push, conflict handling, branch isolation."""
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from tests.sync.conftest import FileChange, FileOperation, SyncLayer, SyncResult, SyncStatus
+from app.sync.git import GitTransport
 
 
-class GitTransport(SyncLayer):
-    """Transport layer for git-based change detection.
-
-    Detect changes via git diff (modified), git status (created), deletion via diff.
-    Pull via git pull, push via stage/commit/push.
-    Handles merge conflicts, branch isolation for multi-device.
-    """
-
-    def __init__(
-        self,
-        *,
-        branch: str = "main",
-        remote: str = "origin",
-        auto_commit: bool = False,
-    ) -> None:
-        """Initialize GitTransport.
-
-        Args:
-            branch: Target branch (default: main)
-            remote: Remote name (default: origin)
-            auto_commit: Automatically commit changes (default: False)
-        """
-        self.branch = branch
-        self.remote = remote
-        self.auto_commit = auto_commit
-        self.last_commit: str | None = None
-
-    async def detect_changes(self, path: Path, since_timestamp: float) -> list[FileChange]:
-        """Detect changes via git diff HEAD and git status.
-
-        Returns:
-            - Modified: git diff HEAD
-            - Created: git status --untracked
-            - Deleted: diff shows removed files
-        """
-        pass
-
-    async def pull_changes(self, path: Path, paths: list[str] | None = None) -> dict[str, str]:
-        """Pull changes from remote: git pull origin <branch>."""
-        pass
-
-    async def push_changes(self, path: Path, changes: dict[str, str]) -> SyncResult:
-        """Push changes: stage, commit, push."""
-        pass
-
-    async def status(self) -> SyncStatus:
-        """Return git sync status (healthy, last commit, pending changes)."""
-        pass
-
-    async def _detect_conflicts(self, path: Path) -> list[str]:
-        """Detect merge conflicts in working tree."""
-        pass
+def _completed_process(
+    args: list[str],
+    *,
+    returncode: int = 0,
+    stdout: str = "",
+    stderr: str = "",
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=args, returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 class TestGitTransportInitialization:
@@ -258,3 +215,91 @@ class TestGitTransportConflictMetadata:
     async def test_resolution_hint_in_metadata(self, mock_git_repo: Path) -> None:
         """Metadata can include resolution hint for worker."""
         pass
+
+
+class TestGitTransportReviewRegressions:
+    """Regression coverage for PR review comments on GitTransport."""
+
+    @pytest.mark.asyncio
+    async def test_detect_changes_handles_scored_rename_status(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        renamed = repo / "renamed.md"
+        renamed.write_text("renamed content", encoding="utf-8")
+
+        def fake_run(
+            args: list[str], *, cwd: Path | None = None, capture_output: bool = False, text: bool = False
+        ) -> subprocess.CompletedProcess[str]:
+            if args[:4] == ["git", "diff", "HEAD", "--name-status"]:
+                return _completed_process(args, stdout="R100\told.md\trenamed.md\n")
+            if args[:3] == ["git", "status", "--porcelain"]:
+                return _completed_process(args)
+            raise AssertionError(f"Unexpected command: {args}")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        changes = await GitTransport().detect_changes(repo, since_timestamp=0.0)
+
+        assert len(changes) == 1
+        assert changes[0].operation.value == "renamed"
+        assert changes[0].path == "renamed.md"
+        assert changes[0].metadata == {"source": "git", "old_path": "old.md", "similarity": "100"}
+
+    @pytest.mark.asyncio
+    async def test_detect_changes_reuses_timestamp_for_unchanged_pending_diff(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        note = repo / "note.md"
+        note.write_text("updated", encoding="utf-8")
+
+        stable_mtime = 1_700_000_000
+        note.touch()
+        import os
+
+        os.utime(note, (stable_mtime, stable_mtime))
+
+        def fake_run(
+            args: list[str], *, cwd: Path | None = None, capture_output: bool = False, text: bool = False
+        ) -> subprocess.CompletedProcess[str]:
+            if args[:4] == ["git", "diff", "HEAD", "--name-status"]:
+                return _completed_process(args, stdout="M\tnote.md\n")
+            if args[:3] == ["git", "status", "--porcelain"]:
+                return _completed_process(args)
+            raise AssertionError(f"Unexpected command: {args}")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        transport = GitTransport()
+
+        first_changes = await transport.detect_changes(repo, since_timestamp=0.0)
+        second_changes = await transport.detect_changes(repo, since_timestamp=stable_mtime)
+
+        assert len(first_changes) == 1
+        assert first_changes[0].timestamp == stable_mtime
+        assert second_changes == []
+
+    @pytest.mark.asyncio
+    async def test_status_uses_tracked_repo_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        observed_cwds: list[Path | None] = []
+
+        def fake_run(
+            args: list[str], *, cwd: Path | None = None, capture_output: bool = False, text: bool = False
+        ) -> subprocess.CompletedProcess[str]:
+            observed_cwds.append(cwd)
+            if args[:4] == ["git", "diff", "HEAD", "--name-status"]:
+                return _completed_process(args)
+            if args[:3] == ["git", "status", "--porcelain"]:
+                return _completed_process(args, stdout=" M tracked.md\n?? new.md\n")
+            raise AssertionError(f"Unexpected command: {args}")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        transport = GitTransport()
+
+        await transport.detect_changes(repo, since_timestamp=0.0)
+        status = await transport.status()
+
+        assert observed_cwds[-1] == repo
+        assert status.pending_changes == 2

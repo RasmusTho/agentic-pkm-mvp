@@ -37,7 +37,32 @@ class Worker:
         Args:
             event: VaultEvent with file change info
         """
-        pass
+        # Extract file path from event
+        file_path = event.payload.get("path")
+        if not file_path:
+            return
+
+        # Check if this event indicates a conflict
+        is_conflict = event.payload.get("conflict", False)
+
+        if is_conflict:
+            # Emit conflict event for conflicted files
+            self._emit_event("vault.ingest.conflict", {"path": file_path})
+            return
+
+        # Pull content via SyncLayer
+        content_dict = await self.sync_layer.pull_changes(
+            Path("."),  # Placeholder - would be vault_root in real code
+            paths=[file_path]
+        )
+
+        # Ingest via vault_alpha
+        if file_path in content_dict:
+            content = content_dict[file_path]
+            await self.vault_alpha.ingest(file_path, content)
+
+            # Emit vault.ingest.done event
+            self._emit_event("vault.ingest.done", {"path": file_path})
 
     async def handle_file_deleted_event(self, event: VaultEvent) -> None:
         """Handle vault.file.deleted event.
@@ -45,7 +70,13 @@ class Worker:
         Args:
             event: VaultEvent with file deletion info
         """
-        pass
+        # Extract file path from event
+        file_path = event.payload.get("path")
+        if not file_path:
+            return
+
+        # Emit vault.delete.done event
+        self._emit_event("vault.delete.done", {"path": file_path})
 
     def _emit_event(self, event_type: str, payload: dict[str, Any]) -> None:
         """Emit event to downstream consumers."""

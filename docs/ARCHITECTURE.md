@@ -308,13 +308,12 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
   `vault/_system/companions/<uuid>.md`.
 - The companion note is a first-class system artifact for continuity and repair, not merely a
   convenience cache or derived runtime projection.
-- Companion notes plus vault notes must be sufficient to rebuild runtime DB/index state from
-  scratch.
-- Runtime DB state may help rebuild a missing companion note when available, but that is a recovery
-  path rather than proof of DB primacy.
-- Earlier `VaultMirror` path language should be read as transitional compatibility language for the
-  broader mirror/projection concept; see `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md` and
-  `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`.
+- Companion notes plus vault notes are the portable file-based continuity set and must be sufficient
+  to rebuild runtime DB/index state from scratch.
+- Runtime DB state may help rebuild a missing companion note during recovery, but that is a
+  fallback path rather than proof of DB primacy.
+- For the broader mirror/receipt/projection semantics, see `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`
+  and `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`.
 
 ## Current Runtime Surfaces
 1) **Vault ingestion** — CLI/agent path to ingest selected Obsidian folders, normalize vault notes into Core-6 projections, persist them in ObjectStore, emit Outbox events, chunk/index into VectorIndex, and keep provenance intact.
