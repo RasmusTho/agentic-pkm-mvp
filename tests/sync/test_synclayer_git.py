@@ -303,3 +303,72 @@ class TestGitTransportReviewRegressions:
 
         assert observed_cwds[-1] == repo
         assert status.pending_changes == 2
+
+    @pytest.mark.asyncio
+    async def test_push_changes_fails_when_git_commit_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        commands: list[list[str]] = []
+
+        def fake_run(
+            args: list[str], *, cwd: Path | None = None, capture_output: bool = False, text: bool = False
+        ) -> subprocess.CompletedProcess[str]:
+            commands.append(args)
+            if args[:2] == ["git", "add"]:
+                return _completed_process(args)
+            if args[:2] == ["git", "commit"]:
+                return _completed_process(args, returncode=1, stderr="Author identity unknown")
+            if args[:4] == ["git", "pull", "origin", "main"]:
+                return _completed_process(args)
+            if args[:2] == ["git", "push"]:
+                raise AssertionError("git push should not run after a commit failure")
+            raise AssertionError(f"Unexpected command: {args}")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        result = await GitTransport().push_changes(repo, {"note.md": "updated"})
+
+        assert result.success is False
+        assert result.errors is not None
+        assert any("git commit failed" in error for error in result.errors)
+        assert ["git", "pull", "origin", "main", "--rebase"] in commands
+        assert not any(args[:2] == ["git", "push"] for args in commands)
+
+    @pytest.mark.asyncio
+    async def test_push_changes_fails_when_pull_fails_without_conflicts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        commands: list[list[str]] = []
+
+        def fake_run(
+            args: list[str], *, cwd: Path | None = None, capture_output: bool = False, text: bool = False
+        ) -> subprocess.CompletedProcess[str]:
+            commands.append(args)
+            if args[:2] == ["git", "add"]:
+                return _completed_process(args)
+            if args[:2] == ["git", "commit"]:
+                return _completed_process(args, stdout="[main 1234567] Sync changes from main\n")
+            if args[:4] == ["git", "pull", "origin", "main"]:
+                return _completed_process(args, returncode=1, stderr="fatal: could not read from remote repository")
+            if args[:2] == ["git", "push"]:
+                raise AssertionError("git push should not run when git pull fails")
+            raise AssertionError(f"Unexpected command: {args}")
+
+        async def fake_detect_conflicts(self, path: Path) -> list[str]:
+            assert path == repo
+            return []
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(GitTransport, "_detect_conflicts", fake_detect_conflicts)
+
+        result = await GitTransport().push_changes(repo, {"note.md": "updated"})
+
+        assert result.success is False
+        assert result.conflicts is None
+        assert result.errors is not None
+        assert any("git pull failed" in error for error in result.errors)
+        assert not any(args[:2] == ["git", "push"] for args in commands)
