@@ -10,6 +10,7 @@ import yaml
 from pydantic import ValidationError
 
 from app.events.bus import emit
+from app.components.settings.models_loader import load_models
 from app.settings.panel_actions_settings import PanelActionsSettings, load_panel_actions_settings
 from app.settings.watcher_settings import WatcherSettings, load_watcher_settings
 from .constraints import as_bool, clamp_int, enum_or_default
@@ -19,6 +20,7 @@ from .models import (
     ClassifierSettings,
     GlobalSettings,
     InstanceSettings,
+    LLMRoutingSettings,
     PromotionSettings,
     Providers,
     QaSettings,
@@ -187,6 +189,111 @@ def _hydrate_model(
         return instance, healed, True
 
 
+def _resolve_route_target_model_ids(
+    payload: Dict[str, Any],
+    *,
+    models_by_id: Dict[str, Any],
+    expected_kind: str,
+) -> Dict[str, Any]:
+    resolved = dict(payload)
+    model_id = resolved.get("model_id")
+    if model_id:
+        descriptor = models_by_id.get(str(model_id))
+        if descriptor is None:
+            raise ValueError(f"Unknown llm_routing model_id: {model_id}")
+        if descriptor.kind != expected_kind:
+            raise ValueError(
+                f"Invalid llm_routing model_id {model_id}: expected kind={expected_kind}, got {descriptor.kind}"
+            )
+        resolved["provider"] = descriptor.provider
+        resolved["model"] = descriptor.model
+    return resolved
+
+
+def _resolve_fallback_model_ids(
+    payload: Dict[str, Any],
+    *,
+    models_by_id: Dict[str, Any],
+    expected_kind: str,
+) -> Dict[str, Any]:
+    resolved = dict(payload)
+    model_id = resolved.get("model_id")
+    if model_id:
+        descriptor = models_by_id.get(str(model_id))
+        if descriptor is None:
+            raise ValueError(f"Unknown llm_routing fallback model_id: {model_id}")
+        if descriptor.kind != expected_kind:
+            raise ValueError(
+                f"Invalid llm_routing fallback model_id {model_id}: expected kind={expected_kind}, got {descriptor.kind}"
+            )
+        resolved["provider"] = descriptor.provider
+        resolved["model"] = descriptor.model
+    return resolved
+
+
+def _resolve_task_policy_model_ids(
+    payload: Dict[str, Any],
+    *,
+    models_by_id: Dict[str, Any],
+    expected_kind: str,
+) -> Dict[str, Any]:
+    resolved = dict(payload)
+    primary = resolved.get("primary")
+    if isinstance(primary, dict):
+        resolved["primary"] = _resolve_route_target_model_ids(
+            primary,
+            models_by_id=models_by_id,
+            expected_kind=expected_kind,
+        )
+    fallback = resolved.get("fallback")
+    if isinstance(fallback, dict):
+        resolved["fallback"] = _resolve_fallback_model_ids(
+            fallback,
+            models_by_id=models_by_id,
+            expected_kind=expected_kind,
+        )
+    return resolved
+
+
+def _resolve_llm_routing_model_ids(payload: Dict[str, Any]) -> Dict[str, Any]:
+    models_by_id = load_models()
+    resolved = dict(payload)
+
+    for key in ("default_chat", "default_reasoning", "default_eval"):
+        section = resolved.get(key)
+        if isinstance(section, dict):
+            resolved[key] = _resolve_task_policy_model_ids(
+                section,
+                models_by_id=models_by_id,
+                expected_kind="chat",
+            )
+
+    embedding = resolved.get("default_embedding")
+    if isinstance(embedding, dict):
+        resolved["default_embedding"] = _resolve_task_policy_model_ids(
+            embedding,
+            models_by_id=models_by_id,
+            expected_kind="embedding",
+        )
+
+    tasks = resolved.get("tasks")
+    if isinstance(tasks, dict):
+        task_resolved: Dict[str, Any] = {}
+        for task_kind, task_payload in tasks.items():
+            if not isinstance(task_payload, dict):
+                task_resolved[task_kind] = task_payload
+                continue
+            expected_kind = "embedding" if str(task_kind).strip().lower() == "embed" else "chat"
+            task_resolved[task_kind] = _resolve_task_policy_model_ids(
+                task_payload,
+                models_by_id=models_by_id,
+                expected_kind=expected_kind,
+            )
+        resolved["tasks"] = task_resolved
+
+    return resolved
+
+
 def _update_reference(path: Path, title: str, model: Any, auto_heal: bool, *, vault_root: Path) -> None:
     if not auto_heal or model is None:
         return
@@ -236,6 +343,19 @@ def compile_all(*, auto_heal: bool | None = None) -> SettingsBundle:
         writeback_settings_block(file_paths["providers"], providers_canonical, vault_root=vault_root)
     if "providers" in file_paths:
         _update_reference(file_paths["providers"], "Providers", bundle.providers, auto_heal_enabled, vault_root=vault_root)
+
+    llm_routing_source_payload = _merge_sections(file_sections.get("llm_routing", {}))
+    llm_routing_source_model, llm_routing_canonical, llm_routing_fixed = _hydrate_model(
+        payload=llm_routing_source_payload, model_cls=LLMRoutingSettings
+    )
+    resolved_llm_routing_payload = _resolve_llm_routing_model_ids(
+        llm_routing_source_model.model_dump(exclude_none=True)
+    )
+    bundle.llm_routing = LLMRoutingSettings(**resolved_llm_routing_payload)
+    if auto_heal_enabled and llm_routing_fixed and "llm_routing" in file_paths:
+        writeback_settings_block(file_paths["llm_routing"], llm_routing_canonical, vault_root=vault_root)
+    if "llm_routing" in file_paths:
+        _update_reference(file_paths["llm_routing"], "LLM routing", bundle.llm_routing, auto_heal_enabled, vault_root=vault_root)
 
     embedding_payload = _merge_sections(file_sections.get("embeddings", {}))
     embeddings_model, embeddings_canonical, embeddings_fixed = _hydrate_model(
@@ -290,6 +410,7 @@ def compile_all(*, auto_heal: bool | None = None) -> SettingsBundle:
 
     dump("global.yaml", bundle.global_.model_dump())
     dump("providers.yaml", bundle.providers.model_dump())
+    dump("llm_routing.yaml", bundle.llm_routing.model_dump())
     dump("instance.yaml", bundle.instance.model_dump())
     if bundle.yggdrasil_paths is not None:
         dump("yggdrasil.yaml", bundle.yggdrasil_paths.model_dump())

@@ -17,17 +17,20 @@ from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.filters import strip_ai_panels
 from app.ingest.config import resolve_ingest_config
 from app.index.outbox import append_jsonl
-from app.knowledge.write_ops import write_note_from_absolute
 from app.observability.ingest_meta import record_ingest_run
 from app.obs.log import with_trace_id
 from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
-from app.services.note_log import note_log_path
+from app.services.companion_note import (
+    CompanionNote,
+    read_companion,
+    scan_attachments,
+    write_companion,
+)
 from app.services.note_uuid import ensure_note_uuid
 from app.store.object_store import DomainObject, ObjectStore
 from app.stores import get_object_store
 from app.vault.layout import ensure_vault_layout
-from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 
 @dataclass
@@ -236,6 +239,31 @@ def _normalize_uuid(raw: object | None) -> str:
     return value
 
 
+def _find_companion_by_fingerprint(
+    vault_root: Path, text_sha256: str, title: str | None
+) -> str:
+    """
+    Find a companion UUID by content hash, with an optional title guard.
+
+    The title guard prevents false matches when two notes have identical body
+    text but different titles (e.g. template-based notes or very short notes).
+    Returns an empty string if no unambiguous match is found.
+    """
+    if not text_sha256:
+        return ""
+    from app.services.companion_note import find_companion_by_content_hash
+
+    found = find_companion_by_content_hash(vault_root, text_sha256)
+    if found is None:
+        return ""
+    if title:
+        expected_title = _normalize_title(title)
+        companion_title = _normalize_title(found.title) if found.title else None
+        if companion_title != expected_title:
+            return ""
+    return found.uuid
+
+
 def _sanitize_uuid(raw: str) -> tuple[str, bool]:
     if not raw:
         return "", False
@@ -248,63 +276,19 @@ def _sanitize_uuid(raw: str) -> tuple[str, bool]:
 
 def _derive_note_uuid(
     frontmatter_uuid: str,
-    mirror_uuid: str,
+    companion_uuid: str,
     rel_path: Path,
     *,
     invalid_frontmatter: bool = False,
 ) -> str:
     if frontmatter_uuid:
         return frontmatter_uuid
-    if mirror_uuid:
-        return mirror_uuid
+    if companion_uuid:
+        return companion_uuid
     if invalid_frontmatter:
         return uuid.uuid4().hex
     return str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, rel_path.as_posix()))
 
-
-def _find_mirror_uuid_by_fingerprint(vault_root: Path, text_sha256: str, title: str | None) -> str:
-    if not text_sha256:
-        return ""
-    mirror_root = vault_root / Path("System/Metadata/VaultMirror")
-    if not mirror_root.exists():
-        return ""
-    expected_title = _normalize_title(title) if title else None
-    for cand in mirror_root.rglob("*.md"):
-        try:
-            fm, _ = load_frontmatter(cand.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        ingest_fp = fm.get("ingest_fingerprint")
-        if not isinstance(ingest_fp, dict):
-            continue
-        if ingest_fp.get("text_sha256") != text_sha256:
-            continue
-        if expected_title:
-            mirror_title = _normalize_title(_coerce_to_str(fm.get("title") or "") or "")
-            if mirror_title != expected_title:
-                continue
-        mirror_uuid_raw = _normalize_uuid(fm.get("uuid") or fm.get("id") or "")
-        mirror_uuid, mirror_invalid = _sanitize_uuid(mirror_uuid_raw)
-        if mirror_invalid:
-            continue
-        if mirror_uuid:
-            return mirror_uuid
-    return ""
-
-
-def _load_mirror_frontmatter(vault_root: Path, rel_path: Path) -> tuple[Path | None, dict, str]:
-    mirror_dir = vault_root / Path("System/Metadata/VaultMirror") / rel_path.parent
-    if not mirror_dir.exists():
-        return None, {}, ""
-    for cand in sorted(mirror_dir.glob("*.md")):
-        try:
-            fm, body = load_frontmatter(cand.read_text(encoding="utf-8"))
-            source_ref = str(fm.get("source_ref") or "").strip()
-            if source_ref == str(rel_path):
-                return cand, fm, body
-        except Exception:
-            continue
-    return None, {}, ""
 
 
 def _load_frontmatter_with_reporting(raw_text: str, path: Path) -> tuple[dict, str, bool]:
@@ -327,40 +311,6 @@ def _load_frontmatter_with_reporting(raw_text: str, path: Path) -> tuple[dict, s
         click.echo(f"Warning: Malformed frontmatter in {path}: {exc}", err=True)
         return {}, body.lstrip("\n"), True
 
-
-def _write_mirror(
-    vault_root: Path,
-    rel_path: Path,
-    *,
-    note_uuid: str,
-    title: str,
-    review_state: str,
-    maturity: str,
-    ingest_fingerprint: dict[str, int | str],
-    existing_frontmatter: dict | None = None,
-    existing_body: str | None = None,
-) -> Path:
-    mirror_path = vault_root / note_log_path(note_uuid, rel_path)
-    mirror_path.parent.mkdir(parents=True, exist_ok=True)
-    frontmatter = dict(existing_frontmatter or {})
-    frontmatter.update(
-        {
-            "uuid": note_uuid,
-            "title": title,
-            "kind": "note",
-            "origin": "vault",
-            "source_ref": str(rel_path),
-            "review_state": review_state,
-            "maturity": maturity,
-            "ingest_fingerprint": ingest_fingerprint,
-        }
-    )
-    body = existing_body if (existing_body or "").strip() else f"Mirror for {rel_path}"
-    content = dump_frontmatter(frontmatter, body)
-    resolved_root = vault_root.expanduser().resolve()
-    resolved_mirror = mirror_path.expanduser().resolve()
-    write_note_from_absolute(resolved_mirror, content, vault_root=resolved_root)
-    return mirror_path
 
 
 def _select_candidates(
@@ -433,7 +383,6 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
     if "\x00" in raw_text:
         raise InvalidNoteError("null byte detected", error_type="NullByteError")
     frontmatter, body, _ = _load_frontmatter_with_reporting(raw_text, path)
-    mirror_path, mirror_frontmatter, mirror_body = _load_mirror_frontmatter(vault_root, rel_path)
     frontmatter_uuid_raw = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
     frontmatter_uuid, frontmatter_invalid = _sanitize_uuid(frontmatter_uuid_raw)
     if frontmatter_invalid:
@@ -441,12 +390,12 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
             f"Warning: {rel_path} has invalid frontmatter uuid {frontmatter_uuid_raw}; generating a new uuid.",
             err=True,
         )
-    mirror_uuid_raw = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
-    mirror_uuid, _ = _sanitize_uuid(mirror_uuid_raw)
-    # Frontmatter is the canonical identity; mirror is a log to help heal missing metadata.
-    if frontmatter_uuid and mirror_uuid and frontmatter_uuid != mirror_uuid:
+    companion = read_companion(vault_root, frontmatter_uuid) if frontmatter_uuid else None
+    companion_uuid = companion.uuid if companion else ""
+    # Frontmatter is the canonical identity; companion is the system surface.
+    if frontmatter_uuid and companion_uuid and frontmatter_uuid != companion_uuid:
         click.echo(
-            f"Warning: {rel_path} mirror uuid {mirror_uuid} differs from frontmatter uuid {frontmatter_uuid}; using frontmatter uuid.",
+            f"Warning: {rel_path} companion uuid {companion_uuid} differs from frontmatter uuid {frontmatter_uuid}; using frontmatter uuid.",
             err=True,
         )
 
@@ -456,36 +405,35 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
     stripped_body = strip_ai_panels(body)
     stripped_text = stripped_body.strip()
     ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
+    text_sha256 = str(ingest_fingerprint.get("text_sha256") or "")
 
     fingerprint_uuid = ""
-    if not frontmatter_uuid and not mirror_uuid:
-        fingerprint_uuid = _find_mirror_uuid_by_fingerprint(
-            vault_root,
-            str(ingest_fingerprint.get("text_sha256") or ""),
-            title,
-        )
+    if not frontmatter_uuid and not companion_uuid:
+        fingerprint_uuid = _find_companion_by_fingerprint(vault_root, text_sha256, title)
 
     if frontmatter_invalid:
-        note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid, rel_path, invalid_frontmatter=True)
+        note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid, rel_path, invalid_frontmatter=True)
     else:
-        note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
+        note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid or fingerprint_uuid, rel_path)
 
     try:
-        _write_mirror(
+        write_companion(
             vault_root,
-            rel_path,
-            note_uuid=note_uuid,
-            title=title,
-            review_state=review_state,
-            maturity=maturity,
-            ingest_fingerprint=ingest_fingerprint,
-            existing_frontmatter=mirror_frontmatter if mirror_path else None,
-            existing_body=mirror_body if mirror_path else None,
+            CompanionNote(
+                uuid=note_uuid,
+                source_ref=str(rel_path),
+                title=title,
+                content_hash=text_sha256,
+                ingest_state="tracked",
+                last_ingested=datetime.now(timezone.utc).isoformat(),
+                created_by_instance="",
+                attachments=scan_attachments(stripped_text),
+            ),
         )
     except OSError as exc:
         if _is_locked_error(exc) or _is_permission_denied_error(exc):
             click.echo(
-                f"Warning: could not write mirror for {rel_path}; continuing without mirror update ({exc})",
+                f"Warning: could not write companion for {rel_path}; continuing without companion update ({exc})",
                 err=True,
             )
         else:
@@ -677,12 +625,12 @@ def _ingest_candidates(
     store = get_object_store()
 
     store_count = _store_object_count(store)
-    mirror_root = vault_root / "System/Metadata/VaultMirror"
-    has_mirrors = mirror_root.exists() and any(mirror_root.rglob("*.md"))
-    cold_rebuild = not force and store_count == 0 and has_mirrors
+    companions_dir = vault_root / "_system/companions"
+    has_companions = companions_dir.exists() and any(companions_dir.glob("*.md"))
+    cold_rebuild = not force and store_count == 0 and has_companions
     if cold_rebuild:
         click.echo(
-            "Vault mirrors exist but vault store is empty (0 objects). Treating this as a cold rebuild from the vault (no fingerprint skips)."
+            "Companion notes exist but vault store is empty (0 objects). Treating this as a cold rebuild from the vault (no fingerprint skips)."
         )
 
     ingested = 0
@@ -739,20 +687,18 @@ def _ingest_candidates(
             stripped_text = strip_ai_panels(body).strip()
             ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
             frontmatter_uuid, frontmatter_invalid = _sanitize_uuid(frontmatter_uuid_raw)
-            mirror_path, mirror_frontmatter, _ = _load_mirror_frontmatter(vault_root, rel_path)
-            mirror_uuid_raw = _normalize_uuid(mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or "")
-            mirror_uuid, _ = _sanitize_uuid(mirror_uuid_raw)
+            text_sha256 = str(ingest_fingerprint.get("text_sha256") or "")
+            companion = read_companion(vault_root, frontmatter_uuid) if frontmatter_uuid else None
+            companion_uuid = companion.uuid if companion else ""
             fingerprint_uuid = ""
-            if not frontmatter_uuid and not mirror_uuid:
-                fingerprint_uuid = _find_mirror_uuid_by_fingerprint(
-                    vault_root,
-                    str(ingest_fingerprint.get("text_sha256") or ""),
-                    title,
-                )
+            if not frontmatter_uuid and not companion_uuid:
+                fingerprint_uuid = _find_companion_by_fingerprint(vault_root, text_sha256, title)
+                if fingerprint_uuid:
+                    companion = read_companion(vault_root, fingerprint_uuid)
             if frontmatter_invalid:
-                note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid, rel_path, invalid_frontmatter=True)
+                note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid, rel_path, invalid_frontmatter=True)
             else:
-                note_uuid = _derive_note_uuid(frontmatter_uuid, mirror_uuid or fingerprint_uuid, rel_path)
+                note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid or fingerprint_uuid, rel_path)
             if needs_uuid_write and note_uuid:
                 try:
                     ensure_note_uuid(path, preferred_uuid=note_uuid)
@@ -773,12 +719,10 @@ def _ingest_candidates(
                     parsed_uuid = None
                 existing = store.get(parsed_uuid) if parsed_uuid else None
                 if existing is not None:
-                    payload = existing.get("payload") or {}
-                    stored_fp = payload.get("ingest_fingerprint")
-                    mirror_fp = mirror_frontmatter.get("ingest_fingerprint")
-                    if stored_fp and mirror_fp:
-                        if stored_fp == mirror_fp == ingest_fingerprint:
-                            should_skip = True
+                    companion_for_skip = companion or (read_companion(vault_root, note_uuid) if note_uuid else None)
+                    companion_hash = companion_for_skip.content_hash if companion_for_skip else None
+                    if companion_hash and companion_hash == text_sha256:
+                        should_skip = True
             if should_skip:
                 continue
 

@@ -9,6 +9,7 @@ Document the first v5.6 forward-line milestone so the team can keep v5.5 baselin
 - **LangGraph determinism** — PanelAgent's planner/Promotion consumer path (PanelActionIntent → planner → promotes) stays opt-in through CLI flags while telemetry validates the transition.
 - **Traceable runtime** — Vault-as-GUI settings compiler, `app.cli.settings_explain`, and Status/CI docs describe the provenance/precedence of panel actions, watcher policy, and outbox paths.
 - **Gateproof rollout** — `ci-smoke`, `ci-lite`, and `ci` jobs parse `CI SUMMARY GATES` and fail on `GATES.ok!=true`; the forward line must keep those signals green before any runtime-enable decision.
+- **Agent context infrastructure** — VaultMirror is replaced by companion notes (`vault/_system/companions/<uuid>.md`) and a `NoteContext` assembler that gives agents structured multi-surface context instead of raw 800-char snippets. This is the prerequisite for meaningful agent quality improvements in v5.6+. Full plan: `docs/plans/COMPANION_NOTE_AND_NOTE_CONTEXT.md`. Parts 1–5 can ship independently; Parts 6–7 wire the Panel Agent improvement and should land before the PanelAgent 2.0 milestone.
 
 ## Acceptance criteria
 - The new `docs/STATUS.md` and `docs/ROADMAP.md` sections describe the v5.6 Now/Next/Later plan and trace to this document.

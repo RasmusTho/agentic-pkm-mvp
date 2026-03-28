@@ -17,7 +17,7 @@ from app.knowledge.write_ops import write_note_from_absolute
 from app.obs.log import with_trace_id
 from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
-from app.services.note_log import note_log_path
+from app.services.companion_note import companion_path
 from app.stores import get_object_store
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
@@ -175,8 +175,8 @@ def _ensure_ai_panel(path: Path, *, vault_root: Path, dry_run: bool) -> bool:
 def _set_promotion_fields(path: Path, *, vault_root: Path, dry_run: bool) -> bool:
     frontmatter, body = load_frontmatter(path.read_text(encoding="utf-8"))
     changed = False
-    if frontmatter.get("review_state") != "promoted":
-        frontmatter["review_state"] = "promoted"
+    if frontmatter.get("review_state") != "reviewed":
+        frontmatter["review_state"] = "reviewed"
         changed = True
     if frontmatter.get("maturity") != "evergreen":
         frontmatter["maturity"] = "evergreen"
@@ -221,9 +221,9 @@ def _render_checklist(sample_size: int) -> str:
     lines = [
         f"[ ] A: Sample ingest of up to {sample_size} notes (normalize + classify + index)",
         "[ ] B: Ensure Test/Alpha-HumanFlows.md exists with UUID frontmatter",
-        "[ ] C: Run pipeline on test note and report VaultMirror path",
+        "[ ] C: Run pipeline on test note and report companion note path",
         "[ ] D: Add AI panel with wrong fact and re-run ingest",
-        "[ ] E: Mark test note as promoted/evergreen and re-run ingest",
+        "[ ] E: Mark test note as reviewed/evergreen and re-run ingest",
         "[ ] F: Run ASK queries and show answers + sources",
     ]
     return "\n".join(lines)
@@ -241,7 +241,7 @@ def run_alpha_human_flows(
     Orchestrates alpha human flows end-to-end:
     Flow A ingest sample notes, Flow B ensure Test/Alpha-HumanFlows.md exists,
     Flow C ingest + report mirror path, Flow D add AI panel and reingest,
-    Flow E set promoted/evergreen frontmatter and reingest, Flow F run ASK queries.
+    Flow E set reviewed/evergreen frontmatter and reingest, Flow F run ASK queries.
     """
     if explain_only:
         click.echo(_render_checklist(sample_size))
@@ -281,17 +281,17 @@ def run_alpha_human_flows(
     status = "created" if created and not dry_run else "existing"
     click.echo(f"   test note: {test_note_path} ({status}, uuid={test_uuid})")
 
-    click.echo("3) Flow C – ingest test note and locate mirror")
+    click.echo("3) Flow C – ingest test note and locate companion")
     vault_rel = test_note_path.relative_to(vault_root)
-    mirror_path = note_log_path(test_uuid, vault_rel)
+    companion_note_path = companion_path(test_uuid)
     click.echo(f"   vault path: {vault_rel}")
     if dry_run:
         click.echo("   [dry-run] skipping ingestion")
-        click.echo(f"   mirror path would be: {mirror_path}")
+        click.echo(f"   companion path would be: {companion_note_path}")
     else:
         try:
             _, classification = _ingest_note(test_note_path)
-            click.echo(f"   ingested test note, mirror path: {mirror_path}")
+            click.echo(f"   ingested test note, companion path: {companion_note_path}")
             if classification:
                 click.echo(f"   classification: {classification}")
             else:
@@ -330,7 +330,7 @@ def run_alpha_human_flows(
     if not dry_run:
         try:
             _ingest_note(test_note_path)
-            click.echo(f"   reingest after promotion: ok (mirror: {mirror_path})")
+            click.echo(f"   reingest after promotion: ok (companion: {companion_note_path})")
         except Exception as exc:  # pragma: no cover - defensive
             click.echo(f"   reingest failed: {exc}")
     else:

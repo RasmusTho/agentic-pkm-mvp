@@ -208,6 +208,8 @@ def test_index_rebuild_sets_pg_meta(monkeypatch) -> None:
 
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
+    dsn = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("EMBED_DIM", "8")
@@ -215,10 +217,9 @@ def test_index_rebuild_sets_pg_meta(monkeypatch) -> None:
     _seed_object("pg domain object", source_ref="pg-test")
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["index", "rebuild"])
+    result = runner.invoke(cli, ["index", "rebuild"], env={"DATABASE_URL": dsn})
     assert result.exit_code == 0
 
-    dsn = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT identity_json FROM vector_index_meta WHERE id = 1")
@@ -244,13 +245,15 @@ def test_index_rebuild_resets_missing_meta(monkeypatch) -> None:
 
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
+    dsn = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("EMBED_DIM", "8")
 
     _seed_object("pg meta reset object", source_ref="pg-test")
 
-    dsn = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    get_vector_index()
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM vector_index_meta")
@@ -261,7 +264,7 @@ def test_index_rebuild_resets_missing_meta(monkeypatch) -> None:
             )
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["index", "rebuild"])
+    result = runner.invoke(cli, ["index", "rebuild"], env={"DATABASE_URL": dsn})
     assert result.exit_code == 0
 
     expected = get_embedding_identity(client=get_embedding_client())

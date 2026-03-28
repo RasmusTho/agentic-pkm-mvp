@@ -61,7 +61,7 @@ def test_ingest_override_merges_settings(tmp_path: Path) -> None:
 
     assert config.include_folders == ["📥 Inbox"]
     assert "Legacy/**" in config.ignore_glob
-    for pattern in [".obsidian/**", ".trash/**", "System/Metadata/VaultMirror/**"]:
+    for pattern in [".obsidian/**", ".trash/**", "_system/companions/**"]:
         assert pattern in config.ignore_glob
     assert "⚙️ System/**" not in config.ignore_glob
     assert "⚙️ System/vault.layout.md" not in config.ignore_glob

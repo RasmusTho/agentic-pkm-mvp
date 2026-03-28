@@ -20,11 +20,14 @@ from app.observability.status_model import (
     OutboxLagStatus,
     StoreStatus,
     SystemStatus,
+    WatcherAutomationStatus,
     WorkerQueueStatus,
     WriteGuardStatus,
 )
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
+from app.settings.panel_actions_settings import load_panel_actions_settings, panel_action_ids
+from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_settings, resolve_auto_exec_state
 from app.settings.panel_actions import get_panel_actions_diagnostics
 from app.stores import get_object_store
 from app.version import SOT_FORWARD, get_sot_version, get_sot_metadata
@@ -430,6 +433,51 @@ def _events_log_status() -> EventsLogStatus:
     return EventsLogStatus(path=str(outbox_path), total_lines=total_lines)
 
 
+def _read_last_json_record(path: Path) -> dict | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            last: dict | None = None
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(payload, dict):
+                    last = payload
+            return last
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
+def _last_watcher_run_record(path: Path) -> dict | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            last: dict | None = None
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                event_name = payload.get("event") or payload.get("event_type") or payload.get("topic")
+                if event_name in _WATCHER_EVENT_NAMES:
+                    last = payload
+            return last
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
 def _worker_queue_mode() -> str:
     raw_enabled = (os.getenv("WORKER_ENABLE") or "").strip().lower()
     if raw_enabled and raw_enabled not in _TRUE_VALUES:
@@ -515,6 +563,54 @@ def _get_worker_queue_status() -> WorkerQueueStatus:
     )
 
 
+def _get_watcher_automation_status() -> WatcherAutomationStatus:
+    try:
+        watcher_settings = load_watcher_settings()
+    except Exception:
+        return WatcherAutomationStatus()
+
+    auto_exec = resolve_auto_exec_state()
+    invalid_actions: list[str] = []
+    try:
+        panel_settings = load_panel_actions_settings()
+        invalid_actions = invalid_allowed_actions(watcher_settings, sorted(panel_action_ids(panel_settings)))
+    except Exception:
+        invalid_actions = []
+
+    write_guard = _get_write_guard_status()
+    tick_record = _read_last_json_record(watcher_settings.paths.watcher_tick_log)
+    watcher_run_record = _last_watcher_run_record(watcher_settings.paths.panel_event_log)
+    watcher_payload = watcher_run_record.get("payload") if isinstance(watcher_run_record, dict) else {}
+    if not isinstance(watcher_payload, dict):
+        watcher_payload = {}
+
+    return WatcherAutomationStatus(
+        auto_exec_enabled=auto_exec.enabled,
+        mode="auto-exec" if auto_exec.enabled else "emit-only",
+        source=auto_exec.source,
+        env_key=auto_exec.env_key,
+        raw_value=auto_exec.raw_value,
+        default_enabled=auto_exec.default_enabled,
+        allowed_actions=list(watcher_settings.allowed_actions),
+        invalid_allowed_actions=invalid_actions,
+        source_path=watcher_settings.source.path,
+        source_mtime=watcher_settings.source.mtime,
+        source_sha256=watcher_settings.source.sha256,
+        tick_log_path=str(watcher_settings.paths.watcher_tick_log),
+        panel_event_log_path=str(watcher_settings.paths.panel_event_log),
+        writes_allowed=write_guard.writes_allowed,
+        write_guard_mode=write_guard.mode,
+        last_tick_timestamp=str(tick_record.get("timestamp")) if isinstance(tick_record, dict) and tick_record.get("timestamp") else None,
+        last_tick_panel_candidates=int(tick_record.get("panel_candidates", 0)) if isinstance(tick_record, dict) and tick_record.get("panel_candidates") is not None else None,
+        last_tick_panel_skipped_policy=int(tick_record.get("panel_skipped_policy", 0)) if isinstance(tick_record, dict) and tick_record.get("panel_skipped_policy") is not None else None,
+        last_tick_panel_skipped_auto_exec=int(tick_record.get("panel_skipped_auto_exec", 0)) if isinstance(tick_record, dict) and tick_record.get("panel_skipped_auto_exec") is not None else None,
+        last_run_skipped_dedup=int(watcher_payload.get("skipped_dedup", 0)) if watcher_payload.get("skipped_dedup") is not None else None,
+        last_run_skipped_idempotent=int(watcher_payload.get("skipped_idempotent", 0)) if watcher_payload.get("skipped_idempotent") is not None else None,
+        last_run_skipped_writes_blocked=int(watcher_payload.get("skipped_writes_blocked", 0)) if watcher_payload.get("skipped_writes_blocked") is not None else None,
+        last_run_skipped_allowed_actions=int(watcher_payload.get("panel_skipped_allowed_actions", 0)) if watcher_payload.get("panel_skipped_allowed_actions") is not None else None,
+    )
+
+
 def get_system_status() -> SystemStatus:
     sot_meta = get_sot_metadata()
     ingestion = get_ingestion_status()
@@ -545,6 +641,7 @@ def get_system_status() -> SystemStatus:
         outbox_lag=_get_outbox_lag(),
         events_log=_events_log_status(),
         worker_queue=_get_worker_queue_status(),
+        watcher_automation=_get_watcher_automation_status(),
     )
 
 

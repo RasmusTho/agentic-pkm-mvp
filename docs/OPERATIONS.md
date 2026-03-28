@@ -19,6 +19,7 @@ Reading order:
 
 CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
+- Runtime verification note: `make verify-runtime` is the authoritative local operator check for the live Docker stack because it verifies service health plus in-container CLI health, rather than the host shell environment.
 
 ## Version & Release Workflow
 - Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory (supporting `--dry-run`).
@@ -33,7 +34,7 @@ CLI note:
 
 Current runtime path:
 1. The registry watcher scans the vault and emits DB outbox events.
-2. The worker consumes DB outbox rows and performs ingest/index work.
+2. The worker consumes DB outbox rows and performs ingest/index, panel scan, and promotion work.
 3. Health, status, and metrics confirm whether that path is healthy.
 
 When the issue is startup topology or Compose wiring, switch to `docs/INFRASTRUCTURE.md`.
@@ -113,8 +114,10 @@ Companion docs:
 - Postgres data lives in the `postgres-data` volume; `docker compose down -v` wipes it.
 - The API container runs `scripts/start_api.sh` (migrations + `uvicorn`).
 - The worker runs `python -m app.workers.outbox_worker` (consumes DB outbox).
-- The watcher runs `python -m app.cli watcher run` (registry loop; emits `ingest.vault.changed` or `panel.scan.requested` to outbox).
+- The watcher runs `python -m app.cli watcher run` (registry loop; emits `ingest.vault.changed` or `panel.scan.requested` to outbox only).
 - Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.
+- `scripts/start_full_system.sh` is the supported startup wrapper. It now auto-probes Ollama reachability from inside the containerized runtime and persists the selected Docker-reachable endpoint into `tmp/runtime.env` before declaring startup healthy.
+- When `LLM_PROVIDER=ollama`, startup tries the configured endpoint first, then Docker-safe candidates such as `host.docker.internal`, before failing the run.
 
 Detailed startup, local topology, and recovery procedures live in `docs/INFRASTRUCTURE.md`.
 Task-specific operator walkthroughs live in `docs/runbooks/`.
@@ -138,8 +141,9 @@ Task-specific operator walkthroughs live in `docs/runbooks/`.
 - Health command semantics and degradation rules live in `docs/HEALTH.md`.
 
 Operator triage order:
-1. Run `python -m app.cli health --json`.
-2. Run `python -m app.cli status --json`.
+1. Run `make verify-runtime`.
+2. If you need extra detail, run `docker compose exec -T api python -m app.cli health --json`.
+3. Run `docker compose exec -T api python -m app.cli status`.
 3. Check watcher and worker heartbeat files.
 4. Inspect DB outbox freshness and `delivered_at`.
 5. Escalate to `docs/INFRASTRUCTURE.md` or a task-specific runbook if the issue is startup/runtime-topology specific.
@@ -157,6 +161,7 @@ Use `python -m app.cli <command> --help` for the full, current argument list. Th
 | `settings-explain` | Show settings provenance and effective resolution. |
 | `llm check` | Probe LLM/embedding endpoint reachability. |
 | `pipe <note.md>` | Run ingest for a note/path outside the watcher loop. |
+| `make verify-runtime` | Check container health plus in-container runtime health/status for the live Docker stack. |
 
 Flow mapping:
 - `python -m app.cli watcher run` -> watcher runtime
@@ -172,14 +177,23 @@ python -m app.cli pipe notes/meeting.md
 python -m app.cli settings-explain --json
 ```
 
+Startup/runtime verification now treats task routes and embeddings explicitly:
+- `checks.llm_task_routes` verifies the effective chat/reasoning/embed/eval routes for the current config.
+- `checks.embedding_index` reports `rebuild_required=true|false` and the active/stored embedding identity relationship.
+- `make verify-runtime` prints both the task-route summary and the embedding-index rebuild state from inside the containerized stack.
+
 ## Startup telemetry (startup_status.json)
 - Location: `tmp/startup_status.json` (workspace root on the host).
 - Lifecycle: written by `scripts/start_full_system.sh` on phase changes and in the cleanup trap; the last write happens on exit. Values are merged with the existing file; fields with explicit `None`/empty values are cleared when the writer marks them as clearable.
 - Fields:
   - `phase`, `last_ok_phase`, `exit_code`, `exit_reason`, `timestamp` (last write). `started_at`/`ended_at` may appear when callers add them.
+  - `startup_succeeded`, `runtime_verified`, `operator_interrupted`
+  - `ollama_endpoint_repaired`, `ollama_endpoint_drift`, `ollama_configured_base_url`, `ollama_effective_base_url`, `ollama_endpoint_persist_hint`
   - `llm_probe_step`, `llm_probe_cmd`, `llm_probe_rc`, `llm_probe_output_snippet`
   - `compose_up_step`, `compose_up_cmd`, `compose_up_rc`, `compose_up_output_snippet`
   - `db_probe_step`, `db_probe_cmd`, `db_probe_rc`, `db_probe_output_snippet`
+- Durable fix flow:
+  - If startup auto-repairs the Ollama endpoint, run `make persist-runtime-repairs` to write the working endpoint back to `.env`.
 - Debugging cold-start failures after `docker compose down`:
   - Bucket A: compose-up failure → check `compose_up_*` fields; expect `exit_reason=compose_up_failed` and a short `compose_up_output_snippet`.
   - Bucket B: db container/CID failure → `db_probe_step=compose_ps_db` and an empty/failed `db_probe_output_snippet`.

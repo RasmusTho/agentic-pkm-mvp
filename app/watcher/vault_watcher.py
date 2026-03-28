@@ -11,9 +11,10 @@ from pathlib import Path
 
 from app.agents.panel.agent import handle_note_update
 from app.agents.panel.filters import strip_ai_panels
-from app.agents.panel_agent.policy import watcher_panel_candidate
+from app.agents.panel_agent.policy import watcher_may_run_panel, watcher_panel_candidate
 from app.components.concurrency import DedupTaskQueue, OptimisticWriteGuard, SystemClock, VersionMismatch
 from app.ingest import vault_alpha as vault_alpha
+from app.services.companion_note import find_companion_by_content_hash, read_companion
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
@@ -70,6 +71,8 @@ def _scan_md_files(vault_root: Path) -> dict[str, float]:
             continue
         if rel.parts and rel.parts[0] == "System" and rel.parts[1:2] == ("Metadata",):
             continue
+        if rel.parts and rel.parts[0] == "_system":
+            continue
         try:
             current[str(rel)] = path.stat().st_mtime
         except Exception:
@@ -93,29 +96,24 @@ def _note_uuid_from_frontmatter(
     if frontmatter_uuid:
         return frontmatter_uuid
 
-    mirror_uuid = ""
+    companion_uuid = ""
     if vault_root is not None and rel_path is not None:
-        _, mirror_frontmatter, _ = vault_alpha._load_mirror_frontmatter(vault_root, rel_path)
-        mirror_uuid = vault_alpha._normalize_uuid(
-            mirror_frontmatter.get("uuid") or mirror_frontmatter.get("id") or ""
-        )
-    if mirror_uuid:
-        return mirror_uuid
+        # Direct O(1) lookup — companion is keyed by UUID, so we need frontmatter_uuid
+        # (already extracted above). If found, use companion's uuid as identity anchor.
+        companion = read_companion(vault_root, frontmatter_uuid) if frontmatter_uuid else None
+        companion_uuid = companion.uuid if companion else ""
+    if companion_uuid:
+        return companion_uuid
 
     if vault_root is not None and rel_path is not None and note_path is not None and body is not None:
-        title = vault_alpha._frontmatter_title(frontmatter) or vault_alpha._derive_title(body, note_path)
         stripped_text = strip_ai_panels(body).strip()
         text_sha256 = (
             hashlib.sha256(stripped_text.encode("utf-8")).hexdigest() if stripped_text else ""
         )
         if text_sha256:
-            fingerprint_uuid = vault_alpha._find_mirror_uuid_by_fingerprint(
-                vault_root,
-                text_sha256,
-                title,
-            )
-            if fingerprint_uuid:
-                return fingerprint_uuid
+            found = find_companion_by_content_hash(vault_root, text_sha256)
+            if found:
+                return found.uuid
 
     if rel_path is None:
         return None
@@ -364,7 +362,7 @@ def run_watcher_tick(
         if not isinstance(frontmatter, dict):
             frontmatter = {}
 
-        if watcher_panel_candidate(frontmatter, raw_markdown):
+        if watcher_panel_candidate(frontmatter, raw_markdown) and watcher_may_run_panel(frontmatter):
             policy_allowed_paths.append(path)
         else:
             summary["panel_skipped_policy"] += 1

@@ -14,7 +14,7 @@ from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
 from app.db.dsn import resolve_dsn
 from app.embedding_config import coerce_floats, l2_normalize
 
-from .base import ObjectStore, RelationIndex, VectorIndex
+from .base import ObjectStore, RelationIndex, RelationMembership, VectorIndex
 
 _TABLES_READY = False
 
@@ -22,7 +22,9 @@ _TABLES_READY = False
 def _dsn() -> str:
     url = resolve_dsn()
     if not url:
-        url = os.environ.get("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+        url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        raise RuntimeError("DATABASE_URL is required for postgres store access")
     if url.startswith("postgresql+psycopg://"):
         url = "postgresql://" + url.split("postgresql+psycopg://", 1)[1]
     return url
@@ -73,6 +75,18 @@ def _ensure_tables() -> None:
                     payload JSONB NOT NULL DEFAULT '{}'::jsonb,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     PRIMARY KEY (src_id, dst_id, rel)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS store_relation_memberships (
+                    src_id UUID NOT NULL,
+                    rel TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (src_id, rel, value)
                 )
                 """
             )
@@ -157,6 +171,7 @@ def truncate_pg_tables() -> None:
             cur.execute("TRUNCATE TABLE store_objects")
             cur.execute("TRUNCATE TABLE store_vector_index")
             cur.execute("TRUNCATE TABLE store_relations")
+            cur.execute("TRUNCATE TABLE store_relation_memberships")
             cur.execute("TRUNCATE TABLE vector_index_meta")
 
 
@@ -477,6 +492,55 @@ class PgRelationIndex(RelationIndex):
                 row = cur.fetchone()
         return bool(row)
 
+    def add_membership(self, src: UUID, *, rel: str, value: str, payload: dict | None = None) -> None:
+        _ensure_tables()
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO store_relation_memberships (src_id, rel, value, payload, created_at)
+                    VALUES (%s, %s, %s, %s::jsonb, now())
+                    ON CONFLICT (src_id, rel, value) DO UPDATE
+                    SET payload = EXCLUDED.payload
+                    """,
+                    (src, rel, value, json.dumps(payload or {})),
+                )
+
+    def memberships(self, src: UUID, *, rel: str | None = None) -> list[RelationMembership]:
+        _ensure_tables()
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                if rel is not None:
+                    cur.execute(
+                        """
+                        SELECT src_id, rel, value, payload
+                        FROM store_relation_memberships
+                        WHERE src_id = %s AND rel = %s
+                        ORDER BY created_at ASC
+                        """,
+                        (src, rel),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT src_id, rel, value, payload
+                        FROM store_relation_memberships
+                        WHERE src_id = %s
+                        ORDER BY created_at ASC
+                        """,
+                        (src,),
+                    )
+                rows = cur.fetchall()
+        return [
+            RelationMembership(
+                object_id=row["src_id"],
+                relation_type=str(row["rel"]),
+                value=str(row["value"]),
+                payload=dict(row.get("payload") or {}),
+            )
+            for row in rows
+        ]
+
 
 def inspect_pg_index_state() -> dict:
     """Return diagnostics for the Postgres vector index (identity + dims)."""
@@ -503,5 +567,3 @@ def inspect_pg_index_state() -> dict:
             else:
                 state["rows_wrong_dim"] = None
     return state
-
-

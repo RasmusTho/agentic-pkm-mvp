@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import timezone, datetime
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
@@ -12,7 +12,7 @@ from app.version import SOT_FORWARD
 
 
 def _now_iso() -> str:
-    return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
+    return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class WatcherEventSource(BaseModel):
@@ -30,6 +30,11 @@ class WatcherRunPayload(BaseModel):
     panel_promotions: int
     panel_skipped_policy: int
     panel_skipped_limit: int
+    panel_skipped_auto_exec: int = 0
+    panel_skipped_allowed_actions: int = 0
+    skipped_dedup: int = 0
+    skipped_idempotent: int = 0
+    skipped_writes_blocked: int = 0
     errors: int
     dry_run: bool
     limit_exceeded: bool
@@ -71,6 +76,11 @@ def build_watcher_run_event(
         panel_promotions=_coerce_int(summary.get("panel_promotions")),
         panel_skipped_policy=_coerce_int(summary.get("panel_skipped_policy")),
         panel_skipped_limit=_coerce_int(summary.get("panel_skipped_limit")),
+        panel_skipped_auto_exec=_coerce_int(summary.get("panel_skipped_auto_exec")),
+        panel_skipped_allowed_actions=_coerce_int(summary.get("panel_skipped_allowed_actions")),
+        skipped_dedup=_coerce_int(summary.get("skipped_dedup")),
+        skipped_idempotent=_coerce_int(summary.get("skipped_idempotent")),
+        skipped_writes_blocked=_coerce_int(summary.get("skipped_writes_blocked")),
         errors=_coerce_int(summary.get("errors")),
         dry_run=bool(summary.get("dry_run")),
         limit_exceeded=bool(summary.get("limit_exceeded")),

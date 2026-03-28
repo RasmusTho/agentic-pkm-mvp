@@ -48,11 +48,7 @@ def get_embeddings_client(intent: LLMTaskIntent) -> EmbeddingClientProtocol:
 
 def describe_default_routes() -> dict[str, dict[str, str]]:
     router = LLMRouter()
-    intents = [
-        LLMTaskIntent(task_kind="embed", determinism_required=True),
-        LLMTaskIntent(task_kind="decide"),
-        LLMTaskIntent(task_kind="plan"),
-    ]
+    intents = [intent for intent in router.verification_intents() if intent.task_kind in {"embed", "decide", "plan"}]
     routes = router.default_routes(intents)
     return {
         key: {
@@ -66,4 +62,17 @@ def describe_default_routes() -> dict[str, dict[str, str]]:
     }
 
 
-__all__ = ["LLMTaskIntent", "LLMRoute", "ChatClient", "get_chat_client", "get_embeddings_client", "describe_default_routes"]
+def describe_default_route_policies() -> dict[str, dict[str, object]]:
+    router = LLMRouter()
+    return router.describe_routes(router.verification_intents())
+
+
+__all__ = [
+    "LLMTaskIntent",
+    "LLMRoute",
+    "ChatClient",
+    "get_chat_client",
+    "get_embeddings_client",
+    "describe_default_routes",
+    "describe_default_route_policies",
+]

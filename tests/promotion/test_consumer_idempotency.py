@@ -8,7 +8,7 @@ from app.promotion.consumer import consume_promotion_intents, reset_promotion_de
 
 def _write_note(path: Path, uuid: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"""---\nuuid: {uuid}\nreview_state: inbox\n---\nContent""", encoding="utf-8")
+    path.write_text(f"---\nuuid: {uuid}\nreview_state: draft\n---\nContent", encoding="utf-8")
 
 
 def _event_payload(note_path: Path, note_uuid: str, event_id: str) -> dict:
@@ -19,7 +19,7 @@ def _event_payload(note_path: Path, note_uuid: str, event_id: str) -> dict:
         "source": "panel_agent",
         "payload": {
             "note": {"uuid": note_uuid, "path": str(note_path)},
-            "maturity": "evergreen",
+            "transition": {"family": "promotion", "target_maturity": "evergreen"},
         },
     }
 
@@ -43,4 +43,5 @@ def test_consume_promotion_intents_skips_duplicates(tmp_path: Path) -> None:
     assert summary.get("skipped_duplicates") == 1
 
     content = note_path.read_text(encoding="utf-8")
-    assert "review_state: evergreen" in content
+    assert "review_state: reviewed" in content
+    assert "maturity: evergreen" in content

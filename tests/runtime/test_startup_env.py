@@ -21,6 +21,26 @@ def test_ollama_provider_accepts_ollama_url_only() -> None:
     assert result["ok"] is True
 
 
+def test_ollama_provider_accepts_ollama_host_only() -> None:
+    env = {
+        "LLM_PROVIDER": "ollama",
+        "LLM_MODEL": "llama3.1:8b",
+        "OLLAMA_HOST": "http://ollama:11434",
+    }
+    result = validate_llm_env(env)
+    assert result["ok"] is True
+
+
+def test_ollama_provider_accepts_ollama_base_url_only() -> None:
+    env = {
+        "LLM_PROVIDER": "ollama",
+        "LLM_MODEL": "llama3.1:8b",
+        "OLLAMA_BASE_URL": "http://ollama:11434/v1",
+    }
+    result = validate_llm_env(env)
+    assert result["ok"] is True
+
+
 def test_ollama_provider_accepts_openai_base_url_only() -> None:
     env = {
         "LLM_PROVIDER": "ollama",
@@ -35,11 +55,22 @@ def test_ollama_provider_requires_any_endpoint() -> None:
     env = {"LLM_PROVIDER": "ollama", "LLM_MODEL": "llama3.1:8b"}
     result = validate_llm_env(env)
     assert result["ok"] is False
-    assert result["missing_any_of"] == [["OLLAMA_URL", "OPENAI_BASE_URL"]]
+    assert result["missing_any_of"] == [["OLLAMA_BASE_URL", "OLLAMA_URL", "OLLAMA_HOST", "OPENAI_BASE_URL"]]
+
+
+def test_llm_alias_normalizes_to_ollama() -> None:
+    env = {
+        "LLM_PROVIDER": "llm",
+        "LLM_MODEL": "llama3.1:8b",
+        "OLLAMA_URL": "http://ollama:11434",
+    }
+    result = validate_llm_env(env)
+    assert result["provider"] == "ollama"
+    assert result["ok"] is True
 
 
 def test_openai_provider_requires_openai_base_url() -> None:
-    env = {"LLM_PROVIDER": "openai", "LLM_MODEL": "gpt-4.1"}
+    env = {"LLM_PROVIDER": "openai", "LLM_MODEL": "gpt-5.4"}
     result = validate_llm_env(env)
     assert result["ok"] is False
     assert result["missing_all_of"] == ["OPENAI_BASE_URL"]

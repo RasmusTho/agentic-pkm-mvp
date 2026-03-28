@@ -7,9 +7,12 @@ from typing import List, Mapping, Optional
 
 import httpx
 
+from app.config.llm import get_provider
 from app.embedding_config import assert_embed_dim, get_embed_dim, l2_normalize
+from app.llm.endpoints import require_ollama_base_url
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+_MOCK_EMBED_MODEL = "mock-embedding"
 
 
 def _extract_error_detail(response: httpx.Response) -> str | None:
@@ -35,33 +38,23 @@ def _extract_error_detail(response: httpx.Response) -> str | None:
         return text
     return None
 
-
-def _normalize_ollama_url(url: str) -> str:
-    clean = (url or "").rstrip("/")
-    if clean.endswith("/v1"):
-        clean = clean[:-3]
-    return clean
-
-
-OLLAMA_URL = _normalize_ollama_url(
-    os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434"))
-)
-
-
 def _ollama_base_url() -> str:
-    return _normalize_ollama_url(OLLAMA_URL)
+    return require_ollama_base_url(strip_v1=True, context="embeddings")
 
 
 def get_embed_model() -> str:
     """Return the currently configured embedding model name."""
-    return os.getenv("OLLAMA_EMBED_MODEL", os.getenv("EMBED_MODEL", "nomic-embed-text:latest"))
+    model = os.getenv("OLLAMA_EMBED_MODEL", os.getenv("EMBED_MODEL", "")).strip()
+    if not model:
+        raise RuntimeError("OLLAMA_EMBED_MODEL or EMBED_MODEL is required for embeddings")
+    return model
 
 
-EMBED_MODEL = get_embed_model()
+EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", os.getenv("EMBED_MODEL", "")).strip()
 
 
 def _provider() -> str:
-    return os.getenv("LLM_PROVIDER", "ollama").lower()
+    return get_provider()
 
 
 def get_embedding_provider() -> str:
@@ -203,7 +196,12 @@ def embed_text(
     normalize: bool = True,
 ) -> List[float]:
     provider_val = provider or _provider()
-    model_val = model or get_embed_model()
+    if model:
+        model_val = model
+    elif provider_val == "mock":
+        model_val = _MOCK_EMBED_MODEL
+    else:
+        model_val = get_embed_model()
     dim_val = dim or get_embed_dim()
     vector = list(_embed_single(text, provider_val, model_val, dim_val))
     if normalize:

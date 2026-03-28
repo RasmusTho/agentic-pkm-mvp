@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import timezone, datetime
 from pathlib import Path
 
 from app.health_contract import HealthContract, HealthStateMachine
@@ -50,7 +50,7 @@ incident_log_path: "{log_path}"
 
     contract = HealthContract(
         state_machine=HealthStateMachine(),
-        now_fn=lambda: datetime(2025, 1, 1, tzinfo=UTC),
+        now_fn=lambda: datetime(2025, 1, 1, tzinfo=timezone.utc),
         vault_root_fn=lambda: vault,
     )
     result = contract.evaluate()

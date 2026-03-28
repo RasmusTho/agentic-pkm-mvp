@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.knowledge.adapters import FsVaultAdapter, ObsidianCliAdapter
-from app.knowledge.contracts import NoteLocator, WriteReceipt
+from app.knowledge.contracts import NoteLocator
 from app.knowledge.errors import (
     KnowledgeCapabilityError,
     KnowledgeDependencyError,

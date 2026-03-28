@@ -3,11 +3,11 @@ from __future__ import annotations
 import os
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.index.outbox import DEFAULT_OUTBOX_PATH
 from app.settings.tiering import resolve_dev_lab_env_typed
+from app.settings.watcher_settings import load_watcher_settings
 from app.watcher.heartbeat import DEFAULT_HEARTBEAT_PATH, resolve_heartbeat_path
 
 
@@ -59,13 +59,13 @@ class WatcherConfig:
     debounce_ms: int = 1500
     rate_limit_per_min: int = 30
     backoff_seconds: int = 10
-    state_path: Path = Path("tmp/watcher_state.json")
-    stop_file: Path = Path("tmp/WATCHER_STOP")
-    outbox_path: Path = DEFAULT_OUTBOX_PATH
+    state_path: Path = field(default_factory=lambda: load_watcher_settings().paths.watcher_state)
+    stop_file: Path = field(default_factory=lambda: load_watcher_settings().paths.watcher_stop_file)
+    outbox_path: Path = field(default_factory=lambda: load_watcher_settings().paths.index_outbox)
     heartbeat_path: Path = DEFAULT_HEARTBEAT_PATH
     summary_interval: int = 60
     tick_sleep_seconds: float = 1.0
-    tick_log_path: Path = Path("/app/tmp/watcher_tick.jsonl")
+    tick_log_path: Path = field(default_factory=lambda: load_watcher_settings().paths.watcher_tick_log)
     max_scanned_files_per_tick: int = 500
     max_bytes_read_per_tick: int = 50_000_000
     max_elapsed_ms_per_tick: int = 2000
@@ -79,6 +79,7 @@ class WatcherConfig:
         if enable and not vault_raw:
             raise ValueError("WATCHER_VAULT_PATH is required when WATCHER_ENABLE=1")
         vault_path = Path(vault_raw or ".").expanduser()
+        watcher_settings = load_watcher_settings(vault_path)
 
         scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()
         scope_source = "env:WATCHER_SCOPE_GLOB" if scope_env else "default:vaultwide"
@@ -108,9 +109,9 @@ class WatcherConfig:
             parser=_parse_int_factory(fallback=10),
             logger=logger,
         )
-        outbox_env = os.getenv("INDEX_OUTBOX_PATH") or str(DEFAULT_OUTBOX_PATH)
-        state_path = Path(os.getenv("WATCHER_STATE_PATH", "tmp/watcher_state.json")).expanduser()
-        stop_file = Path(os.getenv("WATCHER_STOP_FILE", "tmp/WATCHER_STOP")).expanduser()
+        outbox_env = os.getenv("INDEX_OUTBOX_PATH") or str(watcher_settings.paths.index_outbox)
+        state_path = Path(os.getenv("WATCHER_STATE_PATH") or watcher_settings.paths.watcher_state).expanduser()
+        stop_file = Path(os.getenv("WATCHER_STOP_FILE") or watcher_settings.paths.watcher_stop_file).expanduser()
         heartbeat_path = resolve_heartbeat_path()
         tick_sleep_seconds = resolve_dev_lab_env_typed(
             "WATCHER_TICK_SLEEP_SECONDS",
@@ -119,7 +120,7 @@ class WatcherConfig:
             logger=logger,
         )
         tick_log_env = os.getenv("WATCHER_TICK_LOG_PATH")
-        tick_log_path = Path(tick_log_env) if tick_log_env else Path("/app/tmp/watcher_tick.jsonl")
+        tick_log_path = Path(tick_log_env).expanduser() if tick_log_env else watcher_settings.paths.watcher_tick_log
         max_scanned_files_per_tick = _as_int(os.getenv("WATCHER_MAX_SCANNED_FILES_PER_TICK"), fallback=500)
         max_bytes_read_per_tick = _as_int(os.getenv("WATCHER_MAX_BYTES_READ_PER_TICK"), fallback=50_000_000)
         max_elapsed_ms_per_tick = _as_int(os.getenv("WATCHER_MAX_ELAPSED_MS_PER_TICK"), fallback=2000)

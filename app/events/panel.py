@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Literal
 from uuid import uuid4
 
@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 
 def _now_iso() -> str:
-    return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
+    return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class PanelActionMapping(BaseModel):

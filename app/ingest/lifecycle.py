@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import timezone, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -102,7 +102,7 @@ def _maybe_enqueue_reflection(object_id: UUID, payload: dict[str, Any], text: st
     REFLECT_DIR.mkdir(parents=True, exist_ok=True)
     entry = {
         "source_object_id": str(object_id),
-        "queued_at": datetime.now(tz=UTC).isoformat(),
+        "queued_at": datetime.now(tz=timezone.utc).isoformat(),
         "payload": payload,
         "text": text,
     }
@@ -115,7 +115,7 @@ def _maybe_enqueue_reflection(object_id: UUID, payload: dict[str, Any], text: st
             "object_id": str(object_id),
             "status": "queued",
             "reason": "low_clarity" if clarity_value is not None and clarity_value < 0.6 else "new_insight",
-            "timestamp": datetime.now(tz=UTC).isoformat(),
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         },
     )
 
@@ -142,7 +142,7 @@ def _update_emergent_analytics(payload: dict[str, Any]) -> None:
             tag_counts[tag] += 1
 
     snapshot = {
-        "updated_at": datetime.now(tz=UTC).isoformat(),
+        "updated_at": datetime.now(tz=timezone.utc).isoformat(),
         "system_intent": dict(intent_counts),
         "emergent_tags": dict(tag_counts),
     }
@@ -159,7 +159,7 @@ def _record_synthesis_relation(object_id: UUID, payload: dict[str, Any]) -> None
         "type": "synthesizes",
         "synthesis_id": str(object_id),
         "related_claims": [str(item) for item in related_claims],
-        "timestamp": datetime.now(tz=UTC).isoformat(),
+        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
     }
     with RELATIONS_LOG.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, ensure_ascii=False) + "\n")

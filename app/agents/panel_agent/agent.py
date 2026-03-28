@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Dict, List
 from uuid import uuid4
@@ -19,6 +18,7 @@ from app.events.panel import (
     PanelIntentPayload,
 )
 from app.outbox.events import INDEX_OUTBOX_PATH
+from app.services.outbox import append_jsonl_outbox_event
 from app.store.object_store import DomainObject, ObjectStore
 
 from .parser import ParsedAction, ParsedPanel, find_panels, parse_panel
@@ -49,7 +49,7 @@ def _note_ref(domain_obj: DomainObject) -> NoteRef:
 def _map_action(action: ParsedAction, catalog: PanelActionCatalog) -> PanelIntentAction:
     descriptor = catalog.find_by_label(action.label)
     mapping = descriptor.to_mapping() if descriptor else None
-    action_id = descriptor.id if descriptor else (normalize_label(action.label) or uuid4().hex)
+    action_id = descriptor.id if descriptor else (action.action_id or normalize_label(action.label) or uuid4().hex)
     return PanelIntentAction(id=action_id, label=action.label, checked=action.checked, mapping=mapping)
 
 
@@ -63,16 +63,14 @@ def _panel_payload(
     actions = [_map_action(action, catalog) for action in parsed.actions]
     panel = PanelInfo(panel_id=panel_id, instruction=parsed.instruction, raw_block=parsed.raw_block)
     return PanelIntentPayload(note=note, panel=panel, actions=actions)
-
-
-def _write_outbox_event(event: PanelIntentEvent) -> None:
-    path = Path(INDEX_OUTBOX_PATH)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event.model_dump(mode="json"), ensure_ascii=False) + "\n")
-
-
-def run_panel_intent_for_note(note_uuid: str, trace_id: str | None = None) -> List[PanelIntentEvent]:
+def run_panel_intent_for_note(
+    note_uuid: str,
+    trace_id: str | None = None,
+    *,
+    trigger: str = "cli",
+    write_outbox: bool = True,
+    outbox_path: Path | None = None,
+) -> List[PanelIntentEvent]:
     """
     Load a note from ObjectStore by UUID, find AI panels, parse them,
     map actions via panel-actions settings, emit panel.intent.created events
@@ -85,16 +83,18 @@ def run_panel_intent_for_note(note_uuid: str, trace_id: str | None = None) -> Li
 
     resolved_trace_id = trace_id or uuid4().hex
     events: list[PanelIntentEvent] = []
+    resolved_outbox = Path(outbox_path) if outbox_path is not None else Path(INDEX_OUTBOX_PATH)
     for block in find_panels(note_text):
         parsed = parse_panel(block.raw_block, panel_id=block.panel_id)
         payload = _panel_payload(parsed, panel_id=block.panel_id, note=note, catalog=catalog)
         event = PanelIntentEvent(
             payload=payload,
             trace_id=resolved_trace_id,
-            source=PanelEventSource(trigger="cli", component="panel_agent", sot="v5.0-step1"),
+            source=PanelEventSource(trigger=trigger, component="panel_agent", sot="v5.0-step1"),
         )
         events.append(event)
-        _write_outbox_event(event)
+        if write_outbox:
+            append_jsonl_outbox_event(resolved_outbox, event, default_source="panel_agent")
     return events
 
 

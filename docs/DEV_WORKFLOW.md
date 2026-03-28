@@ -11,6 +11,18 @@ It is the primary guide for:
 
 It does not define runtime agent behavior. Runtime rules live in `docs/ARCHITECTURE.md`, `docs/AGENTS.md`, `docs/HUMAN-FLOWS.md`, and related SoT docs.
 
+## Development agents vs system agents
+
+This document and `.codex/AGENTS.md` govern development-time contributors, coding agents, and repo
+automation.
+
+`docs/AGENTS.md` and `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` govern system agents that exist
+inside the PKM runtime.
+
+Do not read runtime/system-agent semantics as instructions for development-time agents.
+Do not read dev-layer contributor instructions as if they described runtime agent authority or
+behavior.
+
 ## Scope
 
 - Applies to:
@@ -36,7 +48,8 @@ When making non-trivial changes, read and respect these documents in order:
    - `docs/OPERATIONS.md`
    - `docs/DOCS_INDEX.md`
 2. Current reference and development guidance:
-   - `docs/AGENTS.md`
+   - `docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md`
+   - `docs/AGENTS.md` (runtime/system-agent architecture, not dev instructions)
    - `docs/PANEL_AGENT.md`
    - `docs/TESTING.md`
    - `docs/eval.md`
@@ -58,6 +71,10 @@ When making non-trivial changes, read and respect these documents in order:
 If code and docs disagree, update the docs first or in the same change. Do not silently treat undocumented behavior as the new SoT.
 
 Use `docs/DOCS_INDEX.md` to determine whether a document is Core SoT, Reference, Plan, or Historical before treating it as a decision input.
+
+For semantics-adjacent work touching context, artifact meaning, archive exposure, commitments,
+paths/layout semantics, architecture boundaries, or agent authority/accountability, also treat
+`docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md` as required reading.
 
 ## Development loop
 

@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from app.agents.panel_agent.agent import run_panel_intent_for_note
+from app.agents.panel_agent.execution import run_panel_note_execution
 from app.agents.panel_agent.runtime import PanelRuntimeResult, execute_panel_intent
 from app.components.concurrency import IdempotencyGuard
 from app.store import object_store as object_store_module
@@ -47,6 +48,35 @@ mappings:
     intent_type: "{intent_type}"
     downstream_event: "{downstream_event}"
     params:
+      maturity: "evergreen"
+---
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _settings_file_with_flags(
+    tmp_path: Path,
+    *,
+    action_id: str,
+    label: str,
+    intent_type: str,
+    downstream_event: str,
+    manual_only: bool = False,
+    watcher_allowed: bool = True,
+) -> Path:
+    path = tmp_path / "panel-actions.md"
+    manual_only_line = "    manual_only: true\n" if manual_only else ""
+    watcher_allowed_line = "    watcher_allowed: false\n" if not watcher_allowed else ""
+    path.write_text(
+        f"""---
+mappings:
+  - id: "{action_id}"
+    label: "{label}"
+    intent_type: "{intent_type}"
+    downstream_event: "{downstream_event}"
+{manual_only_line}{watcher_allowed_line}    params:
       maturity: "evergreen"
 ---
 """,
@@ -110,6 +140,7 @@ def test_runtime_emits_promotion_intent_and_execution_event(tmp_path: Path, monk
     payload = promote.get("payload") or {}
     assert payload.get("note", {}).get("uuid") == note_uuid
     assert payload.get("maturity") == "evergreen"
+    assert (payload.get("transition") or {}).get("target_maturity") == "evergreen"
 
 
 def test_runtime_logs_unhandled_actions_without_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -174,6 +205,40 @@ def test_runtime_llm_filters_executed_actions(tmp_path: Path, monkeypatch: pytes
     topics = {rec["event"] for rec in records}
     assert "promote.intent.created" not in topics
     assert "panel.action.triggered" not in topics
+
+
+def test_runtime_watcher_mode_blocks_manual_only_actions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    note_uuid = str(uuid4())
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    settings_path = _settings_file_with_flags(
+        tmp_path,
+        action_id="note.archive",
+        label="Archive this note",
+        intent_type="archival",
+        downstream_event="note.archive",
+        manual_only=True,
+        watcher_allowed=False,
+    )
+    markdown = _panel_markdown("Archive this note", checked=True)
+    _seed_note(note_uuid, markdown)
+
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-panel-watcher", trigger="watcher")
+    assert len(events) == 1
+    assert events[0].source.trigger == "watcher"
+
+    result = execute_panel_intent(events[0], outbox_path=outbox_path)
+    assert isinstance(result, PanelRuntimeResult)
+    assert result.actions[0].status == "logged"
+    assert result.actions[0].details.get("reason") == "watcher_not_allowed"
+
+    records = _read_outbox(outbox_path)
+    topics = {rec["event"] for rec in records}
+    assert "panel.action.logged" in topics
+    assert "promote.intent.created" not in topics
 
 
 def test_runtime_restart_does_not_reemit_executed_actions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -242,3 +307,31 @@ def test_runtime_appends_ai_log_entry(tmp_path: Path, monkeypatch: pytest.Monkey
 
     records = _read_outbox(outbox_path)
     assert any(rec.get("event") == "panel.log.created" for rec in records)
+
+
+def test_run_panel_note_execution_runs_full_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    note_uuid = str(uuid4())
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    settings_path = _settings_file(
+        tmp_path,
+        action_id="promote.evergreen",
+        label="Gör denna anteckning evergreen",
+        intent_type="promotion",
+        downstream_event="review.promote.evergreen",
+    )
+    markdown = _panel_markdown("Gör denna anteckning evergreen", checked=True)
+    _seed_note(note_uuid, markdown)
+
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    result = run_panel_note_execution(note_uuid, trace_id="trace-panel-pipeline", outbox_path=outbox_path)
+
+    assert len(result.intent_events) == 1
+    assert len(result.runtime_results) == 1
+    assert result.emitted_count >= 3
+
+    records = _read_outbox(outbox_path)
+    topics = {rec["event"] for rec in records}
+    assert {"panel.intent.created", "panel.intent.executed", "promote.intent.created"} <= topics

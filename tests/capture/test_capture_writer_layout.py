@@ -1,6 +1,7 @@
 from app.capture.writer import generate_notes
 
-def test_generate_notes_links_entities_and_sets_inbox_state():
+
+def test_generate_notes_links_entities_and_sets_canonical_draft_review_state() -> None:
     bundle = {
         "capture_id": "cap-2025-10-30",
         "summary": "Vi behöver koppla OPNsense till Jaeger via Demerzel.",
@@ -37,21 +38,16 @@ def test_generate_notes_links_entities_and_sets_inbox_state():
     notes = generate_notes(bundle)
     cap_note = notes["capture"]
 
-    # frontmatter shape
     fm = cap_note["frontmatter"]
     assert fm["uuid"] == "cap-2025-10-30"
     assert fm["kind"] == "capture"
-    assert fm["review_state"] == "inbox"
+    assert fm["review_state"] == "draft"
     assert "infra" in fm["areas"]
     assert fm["signal_quality"] == "high"
 
     body = cap_note["body"]
-
-    # entities should be linked in summary & tasks
     assert "[[OPNsense]]" in body
     assert "[[Jaeger]]" in body
     assert "[[Demerzel]]" in body
-
-    # Raw block present at the end
     assert "## Raw" in body
     assert "Råtext här..." in body

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import timezone, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,7 @@ def _transition_entry(state: str, reason: str, since: datetime) -> dict[str, str
 class HealthStateMachine:
     state: str = "boot"
     reason: str = "initializing"
-    since: datetime = field(default_factory=lambda: datetime.now(UTC))  # noqa: UP017
+    since: datetime = field(default_factory=lambda: datetime.now(timezone.utc))  # noqa: UP017
     bad_counter: int = 0
     good_counter: int = 0
     transition_history: list[dict[str, str]] = field(default_factory=list)
@@ -37,7 +37,7 @@ class HealthStateMachine:
     def reset(self) -> None:
         self.state = "boot"
         self.reason = "initializing"
-        self.since = datetime.now(UTC)  # noqa: UP017
+        self.since = datetime.now(timezone.utc)  # noqa: UP017
         self.bad_counter = 0
         self.good_counter = 0
         self.transition_history = []
@@ -49,7 +49,7 @@ class HealthStateMachine:
         *,
         now: datetime | None = None,
     ) -> tuple[str, str, str]:
-        now = now or datetime.now(UTC)  # noqa: UP017
+        now = now or datetime.now(timezone.utc)  # noqa: UP017
         prev_state = self.state
         next_state = self.state
         reason = self.reason
@@ -109,7 +109,7 @@ class HealthContract:
         vault_root_fn: Callable[[], Path] | None = None,
     ):
         self.state_machine = state_machine or HealthStateMachine()
-        self.now_fn = now_fn or (lambda: datetime.now(UTC))  # noqa: UP017
+        self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))  # noqa: UP017
         self.vault_root_fn = vault_root_fn or resolve_vault_root
 
     def evaluate(self) -> dict[str, Any]:

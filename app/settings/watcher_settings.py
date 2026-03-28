@@ -62,6 +62,10 @@ def _resolve_path_setting(candidate: Any, env_key: str, default: Path) -> Path:
 class WatcherPaths:
     index_outbox: Path
     watcher_tick_log: Path
+    watcher_heartbeat: Path
+    worker_heartbeat: Path
+    watcher_state: Path
+    watcher_stop_file: Path
     panel_event_log: Path
 
 
@@ -72,6 +76,15 @@ class WatcherSettings:
     allowed_actions: tuple[str, ...]
     paths: WatcherPaths
     source: SettingsSource
+
+
+@dataclass(frozen=True)
+class AutoExecResolution:
+    env_key: str
+    default_enabled: bool
+    enabled: bool
+    source: str
+    raw_value: str | None
 
 
 def load_watcher_settings(vault_root: Path | None = None) -> WatcherSettings:
@@ -103,6 +116,26 @@ def load_watcher_settings(vault_root: Path | None = None) -> WatcherSettings:
         "WATCHER_TICK_LOG_PATH",
         DEFAULT_WATCHER_TICK_LOG,
     )
+    watcher_heartbeat = _resolve_path_setting(
+        paths_cfg.get("watcher_heartbeat"),
+        "WATCHER_HEARTBEAT_PATH",
+        Path("tmp/watcher_heartbeat.json"),
+    )
+    worker_heartbeat = _resolve_path_setting(
+        paths_cfg.get("worker_heartbeat"),
+        "WORKER_HEARTBEAT_PATH",
+        Path("tmp/worker_heartbeat.json"),
+    )
+    watcher_state = _resolve_path_setting(
+        paths_cfg.get("watcher_state"),
+        "WATCHER_STATE_PATH",
+        Path("tmp/watcher_state.json"),
+    )
+    watcher_stop_file = _resolve_path_setting(
+        paths_cfg.get("watcher_stop_file"),
+        "WATCHER_STOP_FILE",
+        Path("tmp/WATCHER_STOP"),
+    )
     panel_event_log = _resolve_path_setting(
         paths_cfg.get("panel_event_log"),
         "INDEX_OUTBOX_PATH",
@@ -116,6 +149,10 @@ def load_watcher_settings(vault_root: Path | None = None) -> WatcherSettings:
         paths=WatcherPaths(
             index_outbox=index_outbox,
             watcher_tick_log=watcher_tick_log,
+            watcher_heartbeat=watcher_heartbeat,
+            worker_heartbeat=worker_heartbeat,
+            watcher_state=watcher_state,
+            watcher_stop_file=watcher_stop_file,
             panel_event_log=panel_event_log,
         ),
         source=build_source(path),
@@ -132,9 +169,29 @@ def resolve_auto_exec_enabled(
     vault_root: Path | None = None,
     env: Mapping[str, str] | None = None,
 ) -> bool:
+    return resolve_auto_exec_state(vault_root=vault_root, env=env).enabled
+
+
+def resolve_auto_exec_state(
+    *,
+    vault_root: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> AutoExecResolution:
     settings = load_watcher_settings(vault_root)
     env_map = os.environ if env is None else env
     raw = env_map.get(settings.auto_exec_env)
     if raw is None:
-        return settings.auto_exec_default
-    return str(raw).strip().lower() in _TRUE_VALUES
+        return AutoExecResolution(
+            env_key=settings.auto_exec_env,
+            default_enabled=settings.auto_exec_default,
+            enabled=settings.auto_exec_default,
+            source="settings_default",
+            raw_value=None,
+        )
+    return AutoExecResolution(
+        env_key=settings.auto_exec_env,
+        default_enabled=settings.auto_exec_default,
+        enabled=str(raw).strip().lower() in _TRUE_VALUES,
+        source="env",
+        raw_value=str(raw),
+    )

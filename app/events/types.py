@@ -8,6 +8,7 @@ INGEST_NORMALIZE_DONE = "ingest.normalize.done"
 INGEST_CHUNK_DONE = "ingest.chunk.done"
 INGEST_INDEX_DONE = "ingest.index.done"
 INGEST_VAULT_CHANGED = "ingest.vault.changed"
+PANEL_SCAN_REQUESTED = "panel.scan.requested"
 INDEX_OBJECT_EMBEDDED = "index.object.embedded"
 INDEX_EMBEDDING_FAILED = "index.embedding.failed"
 TEXT_CHUNK_CREATED = "text.chunk.created"
@@ -59,6 +60,14 @@ PROMOTE_ORPHAN_OVERRIDE = "promote.orphan.override"
 PROMOTION_DECISION_PENDING = "promotion.pending_move"
 PROMOTE_SKIP_MOVE = "promote.skip.move"
 
+PANEL_INTENT_CREATED = "panel.intent.created"
+PANEL_INTENT_EXECUTED = "panel.intent.executed"
+PANEL_ACTION_LOGGED = "panel.action.logged"
+PANEL_LOG_CREATED = "panel.log.created"
+PANEL_SCAN_REQUESTED = "panel.scan.requested"
+
+WATCHER_RUN = "watcher.run"
+
 ASK_QUERY_RECEIVED = "ask.query.received"
 JOBS_BACKFILL_DONE = "jobs.backfill.done"
 RELATION_MISSING = "relation.missing"
@@ -72,6 +81,7 @@ __all__ = [
     "INGEST_CHUNK_DONE",
     "INGEST_INDEX_DONE",
     "INGEST_VAULT_CHANGED",
+    "PANEL_SCAN_REQUESTED",
     "INDEX_OBJECT_EMBEDDED",
     "INDEX_EMBEDDING_FAILED",
     "TEXT_CHUNK_CREATED",
@@ -115,6 +125,12 @@ __all__ = [
     "PROMOTE_ORPHAN_OVERRIDE",
     "PROMOTION_DECISION_PENDING",
     "PROMOTE_SKIP_MOVE",
+    "PANEL_INTENT_CREATED",
+    "PANEL_INTENT_EXECUTED",
+    "PANEL_ACTION_LOGGED",
+    "PANEL_LOG_CREATED",
+    "PANEL_SCAN_REQUESTED",
+    "WATCHER_RUN",
     "ASK_QUERY_RECEIVED",
     "JOBS_BACKFILL_DONE",
     "RELATION_MISSING",

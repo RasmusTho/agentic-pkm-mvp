@@ -1,0 +1,6 @@
+id: openai.chat.gpt_5_4
+status: active
+kind: chat
+provider: openai
+model: gpt-5.4
+notes: Current flagship OpenAI chat model for complex reasoning, coding, and planning workloads.

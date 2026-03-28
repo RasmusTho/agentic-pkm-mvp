@@ -6,7 +6,9 @@ import psycopg
 
 
 def _dsn() -> str:
-    url = os.environ.get("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        raise RuntimeError("DATABASE_URL is required for postgres store access")
     return url.replace("+psycopg", "")
 
 

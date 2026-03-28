@@ -111,6 +111,8 @@ def stub_index(monkeypatch: pytest.MonkeyPatch) -> StubVectorIndex:
 def clean_llm_env(monkeypatch: pytest.MonkeyPatch):
     """Ensure a clean LLM environment for each test."""
 
+    from app.config import llm as llm_config
+
     keys = [
         "LLM_PROVIDER",
         "LLM_MODEL",
@@ -126,6 +128,7 @@ def clean_llm_env(monkeypatch: pytest.MonkeyPatch):
     ]
     for key in keys:
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(llm_config, "_ACTIVE_PROVIDER", None)
     yield monkeypatch
 
 
@@ -137,6 +140,19 @@ def force_memory_store_for_non_pg(request: pytest.FixtureRequest, monkeypatch: p
         monkeypatch.setenv("STORE_BACKEND", "memory")
         monkeypatch.delenv("DATABASE_URL", raising=False)
         monkeypatch.delenv("DB_DSN", raising=False)
+    yield monkeypatch
+
+
+@pytest.fixture(autouse=True)
+def default_pg_dsn_for_pg_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    """Provide the standard local Postgres DSN for pg-marked tests when unset."""
+
+    if (
+        request.node.get_closest_marker("pg") is not None
+        and os.getenv("DATABASE_URL") is None
+        and os.getenv("DB_DSN") is None
+    ):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
     yield monkeypatch
 
 

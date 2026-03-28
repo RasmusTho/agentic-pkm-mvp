@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, List
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,6 +35,7 @@ class PanelAgentState(BaseModel):
     note_content: str | None = None
     panel_hints: List[dict[str, Any]] = Field(default_factory=list)
     executed_action_ids: List[str] = Field(default_factory=list)
+    vault_root: Path | None = None
 
     # Runtime-populated fields
     intent_event: PanelIntentEvent | None = None

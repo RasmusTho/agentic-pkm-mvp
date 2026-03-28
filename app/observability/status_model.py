@@ -100,6 +100,32 @@ class WorkerQueueStatus(BaseModel):
     source_path: str | None = None
 
 
+class WatcherAutomationStatus(BaseModel):
+    auto_exec_enabled: bool = False
+    mode: str = "emit-only"
+    source: str = "settings_default"
+    env_key: str | None = None
+    raw_value: str | None = None
+    default_enabled: bool | None = None
+    allowed_actions: list[str] = Field(default_factory=list)
+    invalid_allowed_actions: list[str] = Field(default_factory=list)
+    source_path: str | None = None
+    source_mtime: str | None = None
+    source_sha256: str | None = None
+    tick_log_path: str | None = None
+    panel_event_log_path: str | None = None
+    writes_allowed: bool | None = None
+    write_guard_mode: str | None = None
+    last_tick_timestamp: str | None = None
+    last_tick_panel_candidates: int | None = None
+    last_tick_panel_skipped_policy: int | None = None
+    last_tick_panel_skipped_auto_exec: int | None = None
+    last_run_skipped_dedup: int | None = None
+    last_run_skipped_idempotent: int | None = None
+    last_run_skipped_writes_blocked: int | None = None
+    last_run_skipped_allowed_actions: int | None = None
+
+
 class SystemStatus(BaseModel):
     timestamp: datetime
     sot_version: str  # legacy alias for baseline SoT
@@ -119,6 +145,7 @@ class SystemStatus(BaseModel):
     outbox_lag: Optional[OutboxLagStatus] = None
     events_log: Optional[EventsLogStatus] = None
     worker_queue: Optional[WorkerQueueStatus] = None
+    watcher_automation: Optional[WatcherAutomationStatus] = None
 
 
 __all__ = [
@@ -134,5 +161,6 @@ __all__ = [
     "OutboxLagStatus",
     "EventsLogStatus",
     "WorkerQueueStatus",
+    "WatcherAutomationStatus",
     "SystemStatus",
 ]

@@ -31,6 +31,7 @@ def test_indexer_runner_consumes_outbox_pg_without_vectors(tmp_path, monkeypatch
         pytest.skip("Postgres backend not available")
 
     reset_store_backends()
+    monkeypatch.setenv("DATABASE_URL", resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app"))
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("EMBED_DIM", "8")

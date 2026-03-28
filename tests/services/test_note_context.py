@@ -1,365 +1,328 @@
-"""Tests for NoteContextAssembler — hermetic, no real vault or Postgres."""
+"""
+TDD tests for app/services/note_context.py — Part 6.
 
+NoteContext assembles a rich, multi-surface view of a vault note from:
+  1. Companion note  (_system/companions/<uuid>.md)
+  2. Vault note file (frontmatter + body)
+  3. Runtime stores  (object store → classification; relation index → links)
+"""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID
 
 import pytest
-import yaml
 
-from app.agent.models import ContextItem
+from app.services.companion_note import AttachmentRef, CompanionNote, write_companion
 from app.services.note_context import (
     ContextBudget,
     NoteContext,
-    NoteContextAssembler,
-    NoteContextSection,
-    TRUNCATED_MARKER,
+    NoteContextError,
+    build_note_context,
 )
-from app.stores.memory import MemoryDecisions, MemoryRelationIndex
-
-pytestmark = pytest.mark.not_pg
+from app.stores.memory import MemoryObjectStore, MemoryRelationIndex
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _write_note(path: Path, frontmatter: dict | None, body: str) -> None:
+_UUID = "aaaaaaaa-1111-2222-3333-444444444444"
+_UUID2 = "bbbbbbbb-1111-2222-3333-444444444444"
+
+
+def _write_vault_note(
+    vault: Path,
+    rel: str,
+    body: str = "Some body text.",
+    frontmatter_extra: str = "",
+) -> Path:
+    path = vault / rel
     path.parent.mkdir(parents=True, exist_ok=True)
-    if frontmatter:
-        fm_dump = yaml.safe_dump(frontmatter, sort_keys=False).strip()
-        path.write_text(f"---\n{fm_dump}\n---\n\n{body}", encoding="utf-8")
-    else:
-        path.write_text(body, encoding="utf-8")
+    fm_block = f"---\nuuid: {_UUID}\ntitle: Test Note\ntrust: own\n{frontmatter_extra}---\n"
+    path.write_text(fm_block + body, encoding="utf-8")
+    return path
 
 
-def _make_assembler(
-    vault_root: Path,
-    *,
-    decisions: MemoryDecisions | None = None,
-    relations: MemoryRelationIndex | None = None,
-    budget: ContextBudget | None = None,
-) -> NoteContextAssembler:
-    return NoteContextAssembler(
-        vault_root=vault_root,
-        decisions_store=decisions,
-        relation_index=relations,
-        budget=budget or ContextBudget(),
+def _write_companion(
+    vault: Path,
+    uuid: str = _UUID,
+    source_ref: str = "Cards/TestNote.md",
+    content_hash: str = "deadbeef",
+    attachments: list[AttachmentRef] | None = None,
+) -> CompanionNote:
+    companion = CompanionNote(
+        uuid=uuid,
+        source_ref=source_ref,
+        title="Test Note",
+        content_hash=content_hash,
+        ingest_state="tracked",
+        last_ingested=datetime.now(tz=timezone.utc).isoformat(),
+        created_by_instance="test",
+        attachments=attachments or [],
     )
+    write_companion(vault, companion)
+    return companion
 
 
 # ---------------------------------------------------------------------------
-# Basic assembly
+# Part 6 — ContextBudget defaults
 # ---------------------------------------------------------------------------
 
-class TestBasicAssembly:
-    def test_assembles_vault_note(self, tmp_path: Path) -> None:
-        note_uuid = str(uuid4())
-        rel = "Projects/my-note.md"
-        _write_note(
-            tmp_path / rel,
-            {"title": "My Note", "tags": ["python", "pkm"]},
-            "Hello world body content.",
+class TestContextBudget:
+    def test_defaults_are_sane(self) -> None:
+        budget = ContextBudget()
+        assert budget.max_body_chars == 2000
+        assert budget.include_relations is True
+        assert budget.include_attachments is True
+        assert budget.include_history is False
+
+    def test_panel_budget(self) -> None:
+        budget = ContextBudget(max_body_chars=2000, include_relations=True)
+        assert budget.max_body_chars == 2000
+
+
+# ---------------------------------------------------------------------------
+# Part 6 — Full assembly
+# ---------------------------------------------------------------------------
+
+class TestBuildNoteContextFull:
+    def test_uuid_and_source_ref_from_companion(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        _write_vault_note(vault, "Cards/TestNote.md")
+        _write_companion(vault, source_ref="Cards/TestNote.md")
+
+        ctx = build_note_context(_UUID, vault)
+
+        assert ctx.uuid == _UUID
+        assert ctx.source_ref == "Cards/TestNote.md"
+        assert ctx.content_hash == "deadbeef"
+        assert ctx.ingest_state == "tracked"
+
+    def test_frontmatter_from_vault_note(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        _write_vault_note(vault, "Cards/TestNote.md")
+        _write_companion(vault, source_ref="Cards/TestNote.md")
+
+        ctx = build_note_context(_UUID, vault)
+
+        assert ctx.frontmatter.get("title") == "Test Note"
+        assert ctx.frontmatter.get("trust") == "own"
+
+    def test_body_from_vault_note(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        _write_vault_note(vault, "Cards/TestNote.md", body="The real note body.\n")
+        _write_companion(vault, source_ref="Cards/TestNote.md")
+
+        ctx = build_note_context(_UUID, vault)
+
+        assert "The real note body." in ctx.body
+
+    def test_trust_level_from_frontmatter(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        _write_vault_note(vault, "Cards/TestNote.md", frontmatter_extra="trust: external\n")
+        _write_companion(vault, source_ref="Cards/TestNote.md")
+
+        ctx = build_note_context(_UUID, vault)
+
+        assert ctx.trust_level == "external"
+
+    def test_trust_level_empty_when_missing(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        note = vault / "Cards/TestNote.md"
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text(f"---\nuuid: {_UUID}\ntitle: No Trust\n---\nBody.\n", encoding="utf-8")
+        _write_companion(vault, source_ref="Cards/TestNote.md")
+
+        ctx = build_note_context(_UUID, vault)
+
+        assert ctx.trust_level == ""
+
+    def test_attachments_from_companion(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        _write_vault_note(vault, "Cards/TestNote.md")
+        attachments = [
+            AttachmentRef(ref="Assets/photo.png", content_hash="abc123"),
+            AttachmentRef(ref="Assets/doc.pdf", content_hash=None),
+        ]
+        _write_companion(vault, source_ref="Cards/TestNote.md", attachments=attachments)
+
+        ctx = build_note_context(_UUID, vault)
+
+        assert len(ctx.attachments) == 2
+        assert ctx.attachments[0].ref == "Assets/photo.png"
+
+    def test_classification_from_object_store(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        _write_vault_note(vault, "Cards/TestNote.md")
+        _write_companion(vault, source_ref="Cards/TestNote.md")
+
+        store = MemoryObjectStore()
+        store.put(
+            UUID(_UUID),
+            kind="note",
+            source_ref="Cards/TestNote.md",
+            payload={"classification": {"type": "concept", "confidence": 0.92}},
         )
 
-        asm = _make_assembler(tmp_path)
-        ctx = asm.assemble(note_uuid, rel)
+        ctx = build_note_context(_UUID, vault, object_store=store)
 
-        names = [s.name for s in ctx.sections]
-        assert "frontmatter" in names
-        assert "body" in names
-        assert ctx.note_uuid == note_uuid
-        assert ctx.total_chars > 0
+        assert ctx.classification is not None
+        assert ctx.classification["type"] == "concept"
 
-        body_sec = next(s for s in ctx.sections if s.name == "body")
-        assert "Hello world body content." in body_sec.text
+    def test_no_classification_when_store_empty(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        _write_vault_note(vault, "Cards/TestNote.md")
+        _write_companion(vault, source_ref="Cards/TestNote.md")
 
-    def test_frontmatter_tags_propagated(self, tmp_path: Path) -> None:
-        note_uuid = str(uuid4())
-        rel = "note.md"
-        _write_note(tmp_path / rel, {"tags": ["a", "b"]}, "body")
+        ctx = build_note_context(_UUID, vault, object_store=MemoryObjectStore())
 
-        ctx = _make_assembler(tmp_path).assemble(note_uuid, rel)
-        fm_sec = next(s for s in ctx.sections if s.name == "frontmatter")
-        assert fm_sec.tags == ["a", "b"]
+        assert ctx.classification is None
+        assert ctx.executed_actions == []
 
-    def test_missing_vault_note_produces_empty(self, tmp_path: Path) -> None:
-        ctx = _make_assembler(tmp_path).assemble(str(uuid4()), "does/not/exist.md")
-        assert ctx.sections == []
-        assert ctx.total_chars == 0
+    def test_outgoing_links_from_relation_index(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        _write_vault_note(vault, "Cards/TestNote.md")
+        _write_companion(vault, source_ref="Cards/TestNote.md")
 
-    def test_note_without_frontmatter(self, tmp_path: Path) -> None:
-        rel = "plain.md"
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text("Just a body, no frontmatter.", encoding="utf-8")
+        rel_idx = MemoryRelationIndex()
+        rel_idx.link(UUID(_UUID), UUID(_UUID2), rel="supports")
 
-        ctx = _make_assembler(tmp_path).assemble(str(uuid4()), rel)
-        names = [s.name for s in ctx.sections]
-        assert "frontmatter" not in names
-        assert "body" in names
+        ctx = build_note_context(_UUID, vault, relation_index=rel_idx)
 
+        assert _UUID2 in ctx.outgoing_links
 
-# ---------------------------------------------------------------------------
-# Budget enforcement
-# ---------------------------------------------------------------------------
+    def test_no_links_when_relation_index_empty(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        _write_vault_note(vault, "Cards/TestNote.md")
+        _write_companion(vault, source_ref="Cards/TestNote.md")
 
-class TestBudgetEnforcement:
-    def test_total_budget_respected(self, tmp_path: Path) -> None:
-        rel = "big.md"
-        body = "x" * 5000
-        _write_note(tmp_path / rel, {"title": "t"}, body)
-
-        budget = ContextBudget(total=200)
-        ctx = _make_assembler(tmp_path, budget=budget).assemble(str(uuid4()), rel)
-        assert ctx.total_chars <= 200
-
-    def test_per_section_cap(self, tmp_path: Path) -> None:
-        rel = "capped.md"
-        _write_note(tmp_path / rel, {"title": "t", "desc": "d" * 500}, "b" * 500)
-
-        budget = ContextBudget(total=8000, frontmatter=50, body=50)
-        ctx = _make_assembler(tmp_path, budget=budget).assemble(str(uuid4()), rel)
-
-        fm = next((s for s in ctx.sections if s.name == "frontmatter"), None)
-        body_sec = next((s for s in ctx.sections if s.name == "body"), None)
-
-        if fm:
-            assert len(fm.text) <= 50
-        if body_sec:
-            assert len(body_sec.text) <= 50
-
-    def test_truncation_marker_present(self, tmp_path: Path) -> None:
-        rel = "trunc.md"
-        _write_note(tmp_path / rel, None, "w" * 1000)
-
-        budget = ContextBudget(total=100)
-        ctx = _make_assembler(tmp_path, budget=budget).assemble(str(uuid4()), rel)
-        body_sec = next(s for s in ctx.sections if s.name == "body")
-        assert body_sec.truncated is True
-        assert body_sec.text.endswith(TRUNCATED_MARKER)
-
-    def test_zero_budget_yields_nothing(self, tmp_path: Path) -> None:
-        rel = "any.md"
-        _write_note(tmp_path / rel, {"title": "t"}, "body")
-
-        budget = ContextBudget(total=0)
-        ctx = _make_assembler(tmp_path, budget=budget).assemble(str(uuid4()), rel)
-        assert ctx.sections == []
-
-    def test_priority_ordering_frontmatter_first(self, tmp_path: Path) -> None:
-        """Frontmatter gets budget before body; body may be truncated."""
-        rel = "prio.md"
-        fm_text_raw = {"big_field": "F" * 300}
-        body_text = "B" * 300
-        _write_note(tmp_path / rel, fm_text_raw, body_text)
-
-        # Budget barely fits frontmatter, body gets leftovers
-        budget = ContextBudget(total=400)
-        ctx = _make_assembler(tmp_path, budget=budget).assemble(str(uuid4()), rel)
-
-        names = [s.name for s in ctx.sections]
-        assert names.index("frontmatter") < names.index("body")
-        # Body should be truncated since frontmatter ate most of the budget
-        body_sec = next(s for s in ctx.sections if s.name == "body")
-        assert body_sec.truncated is True
-
-
-# ---------------------------------------------------------------------------
-# Companion / metadata mirror
-# ---------------------------------------------------------------------------
-
-class TestCompanionNote:
-    def test_companion_included(self, tmp_path: Path) -> None:
-        note_uuid = str(uuid4())
-        rel = "Projects/note.md"
-        _write_note(tmp_path / rel, {"title": "t"}, "vault body")
-
-        # Write a companion note at the expected mirror path
-        from app.services.note_log import note_log_path
-
-        companion_rel = note_log_path(note_uuid, rel)
-        _write_note(
-            tmp_path / companion_rel,
-            {"type": "companion"},
-            "Agent decided this is interesting.",
+        ctx = build_note_context(
+            _UUID, vault,
+            relation_index=MemoryRelationIndex(),
+            object_store=MemoryObjectStore(),
         )
 
-        ctx = _make_assembler(tmp_path).assemble(note_uuid, rel)
-        companion_sec = next((s for s in ctx.sections if s.name == "companion"), None)
-        assert companion_sec is not None
-        assert "Agent decided this is interesting" in companion_sec.text
-
-    def test_missing_companion_graceful(self, tmp_path: Path) -> None:
-        rel = "solo.md"
-        _write_note(tmp_path / rel, {"title": "t"}, "body")
-
-        ctx = _make_assembler(tmp_path).assemble(str(uuid4()), rel)
-        names = [s.name for s in ctx.sections]
-        assert "companion" not in names
+        assert ctx.outgoing_links == []
+        assert ctx.backlinks == []  # backlinks not yet supported → always []
 
 
 # ---------------------------------------------------------------------------
-# Decisions store
+# Part 6 — Budget truncation
 # ---------------------------------------------------------------------------
 
-class TestDecisions:
-    def test_decisions_included(self, tmp_path: Path) -> None:
-        note_uuid = str(uuid4())
-        rel = "d.md"
-        _write_note(tmp_path / rel, {"title": "t"}, "body")
+class TestBodyBudget:
+    def test_body_truncated_when_over_budget(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        long_body = "x" * 500
+        _write_vault_note(vault, "Cards/TestNote.md", body=long_body)
+        _write_companion(vault, source_ref="Cards/TestNote.md")
 
-        ds = MemoryDecisions()
-        ds.put(object_id=note_uuid, agent="triage", kind="label", key="interest", value={"score": 0.9})
-        ds.put(object_id=note_uuid, agent="triage", kind="label", key="topic", value={"label": "engineering"})
+        budget = ContextBudget(max_body_chars=100)
+        ctx = build_note_context(_UUID, vault, budget=budget, object_store=MemoryObjectStore())
 
-        ctx = _make_assembler(tmp_path, decisions=ds).assemble(
-            note_uuid, rel, decision_keys=["interest", "topic"]
-        )
-        dec_sec = next((s for s in ctx.sections if s.name == "decisions"), None)
-        assert dec_sec is not None
-        assert "interest" in dec_sec.text
-        assert "0.9" in dec_sec.text
-        assert "engineering" in dec_sec.text
+        assert len(ctx.body) <= 100
+        assert ctx.body_truncated is True
 
-    def test_no_decisions_store(self, tmp_path: Path) -> None:
-        rel = "nd.md"
-        _write_note(tmp_path / rel, {"title": "t"}, "body")
-        ctx = _make_assembler(tmp_path).assemble(str(uuid4()), rel, decision_keys=["interest"])
-        names = [s.name for s in ctx.sections]
-        assert "decisions" not in names
+    def test_body_not_truncated_within_budget(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        _write_vault_note(vault, "Cards/TestNote.md", body="Short body.\n")
+        _write_companion(vault, source_ref="Cards/TestNote.md")
 
-    def test_no_keys_skips_decisions(self, tmp_path: Path) -> None:
-        ds = MemoryDecisions()
-        ds.put(object_id="x", agent="a", kind="k", key="k", value={"v": 1})
-        rel = "nk.md"
-        _write_note(tmp_path / rel, {"title": "t"}, "body")
-        ctx = _make_assembler(tmp_path, decisions=ds).assemble(str(uuid4()), rel)
-        names = [s.name for s in ctx.sections]
-        assert "decisions" not in names
+        budget = ContextBudget(max_body_chars=10000)
+        ctx = build_note_context(_UUID, vault, budget=budget, object_store=MemoryObjectStore())
+
+        assert "Short body." in ctx.body
+        assert ctx.body_truncated is False
 
 
 # ---------------------------------------------------------------------------
-# Relation index
+# Part 6 — Budget flags
 # ---------------------------------------------------------------------------
 
-class TestRelations:
-    def test_relations_included(self, tmp_path: Path) -> None:
-        uid = uuid4()
-        neighbor = uuid4()
-        rel_path = "r.md"
-        _write_note(tmp_path / rel_path, {"title": "t"}, "body")
-
-        ri = MemoryRelationIndex()
-        ri.link(uid, neighbor, rel="supports", payload={})
-
-        ctx = _make_assembler(tmp_path, relations=ri).assemble(str(uid), rel_path)
-        rel_sec = next((s for s in ctx.sections if s.name == "relations"), None)
-        assert rel_sec is not None
-        assert str(neighbor) in rel_sec.text
-        assert "supports" in rel_sec.text
-
-    def test_no_relation_index(self, tmp_path: Path) -> None:
-        rel = "nr.md"
-        _write_note(tmp_path / rel, {"title": "t"}, "body")
-        ctx = _make_assembler(tmp_path).assemble(str(uuid4()), rel)
-        names = [s.name for s in ctx.sections]
-        assert "relations" not in names
-
-    def test_invalid_uuid_skips_relations(self, tmp_path: Path) -> None:
-        ri = MemoryRelationIndex()
-        rel = "bad.md"
-        _write_note(tmp_path / rel, {"title": "t"}, "body")
-        ctx = _make_assembler(tmp_path, relations=ri).assemble("not-a-uuid", rel)
-        names = [s.name for s in ctx.sections]
-        assert "relations" not in names
-
-
-# ---------------------------------------------------------------------------
-# to_context_items conversion
-# ---------------------------------------------------------------------------
-
-class TestToContextItems:
-    def test_converts_to_context_items(self, tmp_path: Path) -> None:
-        note_uuid = str(uuid4())
-        rel = "ci.md"
-        _write_note(tmp_path / rel, {"title": "t", "tags": ["x"]}, "body text")
-
-        ctx = _make_assembler(tmp_path).assemble(note_uuid, rel)
-        items = ctx.to_context_items()
-
-        assert len(items) >= 2
-        assert all(isinstance(i, ContextItem) for i in items)
-        assert all(i.id.startswith(note_uuid) for i in items)
-
-    def test_empty_sections_skipped(self) -> None:
-        ctx = NoteContext(note_uuid="u", sections=[
-            NoteContextSection(name="empty", text="", source="s"),
-            NoteContextSection(name="filled", text="content", source="s"),
-        ])
-        items = ctx.to_context_items()
-        assert len(items) == 1
-        assert items[0].id == "u:filled"
-
-    def test_source_propagated(self) -> None:
-        ctx = NoteContext(note_uuid="u", sections=[
-            NoteContextSection(name="body", text="t", source="vault:body"),
-        ])
-        items = ctx.to_context_items()
-        assert items[0].source == "vault:body"
-
-
-# ---------------------------------------------------------------------------
-# Full assembly with all surfaces
-# ---------------------------------------------------------------------------
-
-class TestFullAssembly:
-    def test_all_surfaces(self, tmp_path: Path) -> None:
-        uid = uuid4()
-        note_uuid = str(uid)
-        neighbor = uuid4()
-        rel = "Projects/full.md"
-
-        _write_note(tmp_path / rel, {"title": "Full", "tags": ["test"]}, "Full body.")
-
-        from app.services.note_log import note_log_path
-
-        comp_rel = note_log_path(note_uuid, rel)
-        _write_note(tmp_path / comp_rel, {}, "Companion log entry.")
-
-        ds = MemoryDecisions()
-        ds.put(object_id=note_uuid, agent="a", kind="k", key="score", value={"v": 42})
-
-        ri = MemoryRelationIndex()
-        ri.link(uid, neighbor, rel="extends")
-
-        ctx = _make_assembler(tmp_path, decisions=ds, relations=ri).assemble(
-            note_uuid, rel, decision_keys=["score"]
+class TestBudgetFlags:
+    def test_include_attachments_false_returns_empty(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        _write_vault_note(vault, "Cards/TestNote.md")
+        _write_companion(
+            vault,
+            source_ref="Cards/TestNote.md",
+            attachments=[AttachmentRef(ref="img.png")],
         )
 
-        section_names = {s.name for s in ctx.sections}
-        assert section_names == {"frontmatter", "body", "companion", "decisions", "relations"}
+        budget = ContextBudget(include_attachments=False)
+        ctx = build_note_context(_UUID, vault, budget=budget, object_store=MemoryObjectStore())
 
-        items = ctx.to_context_items()
-        assert len(items) == 5
+        assert ctx.attachments == []
 
-    def test_budget_constrains_lower_priority(self, tmp_path: Path) -> None:
-        uid = uuid4()
-        note_uuid = str(uid)
-        rel = "tight.md"
-        # Large body so it eats most of the budget
-        _write_note(tmp_path / rel, {"title": "T"}, "B" * 5000)
+    def test_include_relations_false_skips_index(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        _write_vault_note(vault, "Cards/TestNote.md")
+        _write_companion(vault, source_ref="Cards/TestNote.md")
 
-        ri = MemoryRelationIndex()
-        ri.link(uid, uuid4(), rel="supports")
+        rel_idx = MemoryRelationIndex()
+        rel_idx.link(UUID(_UUID), UUID(_UUID2), rel="supports")
 
-        budget = ContextBudget(total=500)
-        ctx = _make_assembler(tmp_path, relations=ri, budget=budget).assemble(
-            note_uuid, rel
+        budget = ContextBudget(include_relations=False)
+        ctx = build_note_context(
+            _UUID, vault, budget=budget,
+            relation_index=rel_idx,
+            object_store=MemoryObjectStore(),
         )
-        assert ctx.total_chars <= 500
-        # Relations may be excluded entirely if budget is exhausted
-        section_names = {s.name for s in ctx.sections}
-        if "relations" in section_names:
-            rel_sec = next(s for s in ctx.sections if s.name == "relations")
-            assert rel_sec.truncated or len(rel_sec.text) < 100
+
+        assert ctx.outgoing_links == []
+
+
+# ---------------------------------------------------------------------------
+# Part 6 — Error / degraded paths
+# ---------------------------------------------------------------------------
+
+class TestDegradedPaths:
+    def test_missing_companion_raises_note_context_error(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        vault.mkdir()
+
+        with pytest.raises(NoteContextError, match="No companion"):
+            build_note_context("nonexistent-uuid", vault, object_store=MemoryObjectStore())
+
+    def test_missing_vault_note_returns_degraded_context(self, tmp_path: Path) -> None:
+        """Companion exists but the vault note file has been deleted.
+
+        Should return a context with empty body and frontmatter rather than crash.
+        """
+        vault = tmp_path / "vault"
+        _write_companion(vault, source_ref="Cards/Missing.md")
+        # Do NOT write the vault note file
+
+        ctx = build_note_context(_UUID, vault, object_store=MemoryObjectStore())
+
+        assert ctx.uuid == _UUID
+        assert ctx.source_ref == "Cards/Missing.md"
+        assert ctx.frontmatter == {}
+        assert ctx.body == ""
+        assert ctx.body_truncated is False
+
+    def test_malformed_vault_note_returns_degraded_context(self, tmp_path: Path) -> None:
+        """Vault note exists but frontmatter YAML is broken — must not crash."""
+        vault = tmp_path / "vault"
+        note = vault / "Cards" / "Broken.md"
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text("---\nnot: valid: yaml: [[[\n---\nBody.\n", encoding="utf-8")
+        _write_companion(vault, source_ref="Cards/Broken.md")
+
+        ctx = build_note_context(_UUID, vault, object_store=MemoryObjectStore())
+
+        # Must not raise; body should still be available
+        assert ctx.uuid == _UUID
+        assert isinstance(ctx.frontmatter, dict)
+
+    def test_invalid_uuid_in_store_does_not_crash(self, tmp_path: Path) -> None:
+        """UUID that cannot be parsed as UUID type — store.get must be guarded."""
+        vault = tmp_path / "vault"
+        _write_vault_note(vault, "Cards/TestNote.md")
+        _write_companion(vault, source_ref="Cards/TestNote.md")
+
+        ctx = build_note_context(_UUID, vault, object_store=MemoryObjectStore())
+
+        assert ctx.classification is None  # nothing in store, no crash

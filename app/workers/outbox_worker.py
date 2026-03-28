@@ -1,29 +1,42 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import logging
 import os
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, PROMOTE_INTENT_CREATED
+from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
+from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
+from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED, PROMOTE_INTENT_CREATED
 from app.observability.tracer import start_span
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
 from app.services.indexer import handle_ingest_object_created
+from app.services.companion_note import CompanionNote, scan_attachments, write_companion
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import ack_outbox, bootstrap, poll_outbox_one
 from app.vault.paths import get_vault_inbox_dir_rel
+from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import load_frontmatter
 
 logger = logging.getLogger(__name__)
+_WRITE_GUARD = OptimisticWriteGuard()
 
 
 @dataclass
 class WorkerIngestSummary:
     ingested: int
+
+
+@dataclass
+class WorkerPanelSummary:
+    emitted: int
+    deferred: bool = False
 
 
 def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
@@ -56,9 +69,19 @@ def _ensure_logging_configured() -> None:
 def _resolve_vault_root(vault_root: Path | None = None) -> Path:
     if vault_root is not None:
         return vault_root.expanduser().resolve()
+    watcher_root = os.getenv("WATCHER_VAULT_PATH")
+    if watcher_root:
+        watcher_path = Path(watcher_root).expanduser()
+        if watcher_path.exists():
+            return watcher_path.resolve()
     env_root = os.getenv("VAULT_ROOT")
     if env_root:
-        return Path(env_root).expanduser().resolve()
+        env_path = Path(env_root).expanduser()
+        if env_path.exists():
+            return env_path.resolve()
+    mounted_root = Path("/app/vault")
+    if mounted_root.exists():
+        return mounted_root.resolve()
     return Path("vault").expanduser().resolve()
 
 
@@ -160,6 +183,96 @@ def _maybe_heal_uuid(note_path: Path, vault_root: Path) -> str:
             return ""
 
     return ""
+def _write_markdown_if_changed(note_path: Path, original: str, updated: str) -> bool:
+    if original == updated:
+        return False
+    expected_version = _WRITE_GUARD.compute_version(original.encode("utf-8"))
+    DEFAULT_WRITE_GUARD.assert_writes_allowed("panel worker update")
+    try:
+        _WRITE_GUARD.write_if_unchanged(note_path, expected_version, updated)
+        return True
+    except VersionMismatch:
+        return False
+
+
+def _stabilized_note_text(note_path: Path, *, attempts: int = 6, base_sleep: float = 0.25) -> str | None:
+    previous_signature: tuple[float, int, str] | None = None
+    for attempt in range(attempts):
+        try:
+            before = note_path.stat()
+            raw_text = note_path.read_text(encoding="utf-8")
+            after = note_path.stat()
+        except OSError as exc:
+            if exc.errno in {errno.ENOENT, errno.EPERM, errno.EACCES, errno.EROFS}:
+                if attempt + 1 < attempts:
+                    time.sleep(base_sleep * (2**attempt))
+                    continue
+                return None
+            raise
+        signature = (
+            float(after.st_mtime),
+            int(after.st_size),
+            hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        )
+        if before.st_mtime == after.st_mtime and before.st_size == after.st_size:
+            if signature == previous_signature:
+                return raw_text
+            previous_signature = signature
+        if attempt + 1 < attempts:
+            time.sleep(base_sleep * (2**attempt))
+    return None
+
+
+
+def handle_panel_scan_requested(
+    payload: Mapping[str, Any], *, vault_root: Path | None = None
+) -> WorkerPanelSummary:
+    resolved_root = _resolve_vault_root(vault_root)
+    note_path = _note_path_from_payload(payload, vault_root=resolved_root)
+
+    raw_text = _stabilized_note_text(note_path)
+    if raw_text is None:
+        logger.info("panel scan deferred (file unstable) note_path=%s", note_path)
+        return WorkerPanelSummary(emitted=0, deferred=True)
+
+    frontmatter, _ = load_frontmatter(raw_text)
+    note_uuid = _normalize_uuid_value(frontmatter.get("uuid") if isinstance(frontmatter, dict) else None)
+    healed_uuid = ""
+    if not note_uuid:
+        healed_uuid = _maybe_heal_uuid(note_path, resolved_root)
+        raw_text = _stabilized_note_text(note_path) or raw_text
+        frontmatter, _ = load_frontmatter(raw_text)
+        note_uuid = _normalize_uuid_value(frontmatter.get("uuid") if isinstance(frontmatter, dict) else None) or healed_uuid
+
+    if not note_uuid:
+        logger.info("panel scan skipped (missing uuid) note_path=%s", note_path)
+        return WorkerPanelSummary(emitted=0, deferred=True)
+
+    refresh_panel_note_object(
+        note_uuid=note_uuid,
+        note_path=note_path,
+        raw_text=raw_text,
+        trace_id=str(payload.get("trace_id") or ""),
+    )
+
+    trace_id = str(payload.get("trace_id") or "") or None
+    execution = run_panel_note_execution(
+        note_uuid,
+        trace_id=trace_id,
+        outbox_path=Path(os.getenv("INDEX_OUTBOX_PATH", "/app/tmp/index-outbox.jsonl")).expanduser(),
+        persist_created_to_db=_use_db_outbox(),
+    )
+    emitted = execution.emitted_count
+    if emitted:
+        logger.info("panel scan handled note_path=%s note_uuid=%s emitted=%s", note_path, note_uuid, emitted)
+    else:
+        logger.info("panel scan produced no events note_path=%s note_uuid=%s", note_path, note_uuid)
+    return WorkerPanelSummary(emitted=emitted)
+
+
+def _use_db_outbox() -> bool:
+    backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
+    return backend == "pg" or bool(os.getenv("DATABASE_URL") or os.getenv("DB_DSN"))
 
 def handle_ingest_vault_changed(
     payload: Mapping[str, Any], *, vault_root: Path | None = None
@@ -172,6 +285,9 @@ def handle_ingest_vault_changed(
     try:
         raw_text = note_path.read_text(encoding="utf-8")
     except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            logger.warning("ingest skipped (missing note) note_path=%s", note_path)
+            return WorkerIngestSummary(ingested=0)
         if exc.errno in {errno.EPERM, errno.EACCES, errno.EROFS}:
             _warn_once(
                 f"ingest_read_perm:{note_path}",
@@ -191,6 +307,33 @@ def handle_ingest_vault_changed(
 
     if not note_uuid:
         logger.debug("note missing uuid after heal attempt note_path=%s", note_path)
+    else:
+        try:
+            rel_path = note_path.relative_to(resolved_root)
+            text_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            write_companion(
+                resolved_root,
+                CompanionNote(
+                    uuid=note_uuid,
+                    source_ref=str(rel_path),
+                    title=str(frontmatter.get("title") or note_path.stem),
+                    content_hash=text_sha256,
+                    ingest_state="tracked",
+                    last_ingested=datetime.now(timezone.utc).isoformat(),
+                    created_by_instance="",
+                    attachments=scan_attachments(content),
+                ),
+            )
+        except OSError as exc:
+            if exc.errno in {errno.EPERM, errno.EACCES, errno.EROFS}:
+                _warn_once(
+                    f"companion_write_perm:{note_path}",
+                    "companion write skipped (permission) note_path=%s errno=%s",
+                    note_path,
+                    exc.errno,
+                )
+            else:
+                raise
 
     ingest_obj: dict[str, Any] = {
         "uuid": note_uuid,
@@ -305,6 +448,8 @@ def run(
                             handle_ingest_vault_changed(payload)
                         elif topic == INGEST_OBJECT_DELETED:
                             handle_ingest_object_deleted(payload)
+                        elif topic == PANEL_SCAN_REQUESTED:
+                            handle_panel_scan_requested(payload)
                         elif topic == PROMOTE_INTENT_CREATED:
                             from app.promotion.consumer import consume_promotion_intent_payload
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import timezone, datetime
 
 from .base import Tool, ToolContext, ToolResult
 
@@ -20,7 +20,7 @@ class WriteNoteTool:
         payload = {
             "text": text,
             "tags": tags or [],
-            "created_at": datetime.now(tz=UTC).isoformat(),
+            "created_at": datetime.now(tz=timezone.utc).isoformat(),
         }
         provenance = {"tool": self.name}
         memory_id = await asyncio.to_thread(

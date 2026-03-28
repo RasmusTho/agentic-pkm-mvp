@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+from pathlib import Path
 from typing import Any, Tuple
 
 from langgraph.graph import END, START, StateGraph
 
+from app.domain.state_axes import build_promotion_transition
 from app.components.concurrency import IdempotencyGuard
-from app.components.settings.panel_actions_loader import PanelActionCatalog, PanelActionDescriptor
+from app.components.settings.panel_actions_loader import PanelActionCatalog, PanelActionDescriptor, normalize_label
 from app.agents.panel_agent.settings import DeciderMode
 from app.agents.panel_agent.state import PanelAgentState
 from app.agents.panel_agent.wiring import get_default_action_wiring
+from app.services.note_context import ContextBudget, NoteContext, NoteContextError, build_note_context
 from app.events.panel import (
     PanelActionLoggedEvent,
     PanelEventSource,
@@ -28,7 +33,14 @@ from app.components.llm.router import LLMTaskIntent
 
 _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 
-_IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
+logger = logging.getLogger(__name__)
+
+PANEL_BUDGET = ContextBudget(
+    max_body_chars=2000,
+    include_relations=True,
+    include_attachments=True,
+    include_history=False,
+)
 
 
 def _build_panel_source() -> PanelEventSource:
@@ -56,6 +68,44 @@ def _build_action_result(
     )
 
 
+def _execution_mode(state: PanelAgentState) -> str:
+    raw = str(state.policy_flags.get("execution_mode") or "").strip().lower()
+    if raw in {"manual", "watcher"}:
+        return raw
+    intent_event = getattr(state, "intent_event", None)
+    trigger = str(getattr(getattr(intent_event, "source", None), "trigger", "") or "").strip().lower()
+    if trigger == "watcher":
+        return "watcher"
+    return "manual"
+
+
+def _action_resolution_reason(
+    state: PanelAgentState,
+    action: PanelIntentAction,
+) -> str | None:
+    catalog = state.action_catalog
+    if not action.checked:
+        return "unchecked"
+
+    if catalog and catalog.has_ambiguous_label(action.label):
+        return "ambiguous_action"
+
+    mapping = action.mapping
+    if mapping is None:
+        return "unmapped_action"
+
+    if catalog and catalog.actions and catalog.get(mapping.id) is None:
+        return "unknown_mapping"
+
+    mode = _execution_mode(state)
+    if mode == "watcher" and catalog:
+        descriptor = catalog.get(mapping.id)
+        if descriptor and (descriptor.manual_only or not descriptor.watcher_allowed):
+            return "watcher_not_allowed"
+
+    return None
+
+
 def _promotion_event(intent_event: PanelIntentEvent, action: PanelIntentAction, *, target_event: str = "promote.intent.created") -> OutboxEvent:
     params = action.mapping.params if action.mapping else {}
     payload = {
@@ -73,6 +123,7 @@ def _promotion_event(intent_event: PanelIntentEvent, action: PanelIntentAction, 
     maturity = params.get("maturity")
     if maturity:
         payload["maturity"] = maturity
+        payload["transition"] = build_promotion_transition(target_maturity=str(maturity))
     return OutboxEvent(
         event=target_event,
         trace_id=intent_event.trace_id,
@@ -108,7 +159,7 @@ def _logged_event(intent_event: PanelIntentEvent, action: PanelIntentAction, rea
 
 
 def _handle_action(
-    intent_event: PanelIntentEvent,
+    state: PanelAgentState,
     action: PanelIntentAction,
     *,
     override_checked: bool | None = None,
@@ -126,6 +177,8 @@ def _handle_action(
             action_to_use, status="skipped", emitted=[], reason=reason or "unchecked"
         ), emitted
 
+    assert state.intent_event is not None, "PanelAgentState must include intent_event"
+    intent_event = state.intent_event
     note_id = intent_event.payload.note.uuid
     if action_to_use.id and _IDEMPOTENCY_GUARD.seen_action(note_id, action_to_use.id):
         return _build_action_result(
@@ -136,8 +189,24 @@ def _handle_action(
         ), emitted
 
     mapping = action_to_use.mapping
+    resolution_reason = _action_resolution_reason(state, action_to_use)
     wiring = action_wiring or {}
     target_event = wiring.get(action_to_use.id)
+    if resolution_reason in {"ambiguous_action", "unmapped_action", "unknown_mapping", "watcher_not_allowed"}:
+        logged = _logged_event(intent_event, action_to_use, resolution_reason)
+        emitted.append(logged)
+        emitted_names.append(logged.event)
+        _IDEMPOTENCY_GUARD.mark_action(note_id, action_to_use.id)
+        return (
+            _build_action_result(
+                action_to_use,
+                status="logged",
+                emitted=emitted_names,
+                reason=logged.payload.get("reason"),
+            ),
+            emitted,
+        )
+
     if mapping and (mapping.intent_type or "").lower() == "promotion":
         target = target_event or "promote.intent.created"
         promote_event = _promotion_event(intent_event, action_to_use, target_event=target)
@@ -147,7 +216,7 @@ def _handle_action(
         _IDEMPOTENCY_GUARD.mark_action(note_id, action_to_use.id)
         return _build_action_result(action_to_use, status="triggered", emitted=emitted_names), emitted
 
-    logged_reason = reason or ("unhandled_action" if mapping else "unmapped_action")
+    logged_reason = reason or "unhandled_action"
     logged = _logged_event(intent_event, action_to_use, logged_reason)
     emitted.append(logged)
     emitted_names.append(logged.event)
@@ -197,6 +266,119 @@ def _available_actions_for_prompt(catalog: PanelActionCatalog) -> list[PanelActi
     return []
 
 
+def _select_actions_from_instruction_hint(
+    *,
+    actions: list[PanelIntentAction],
+    available: list[PanelActionDescriptor],
+    instruction: str,
+) -> tuple[set[str], dict[str, str]] | None:
+    text = normalize_label(instruction)
+    if not text:
+        return None
+    if any(
+        phrase in text
+        for phrase in (
+            "do not promote",
+            "don't promote",
+            "dont promote",
+            "not promote",
+            "no promotion",
+            "without promotion",
+            "do not make this note evergreen",
+            "don't make this note evergreen",
+            "dont make this note evergreen",
+            "do not make evergreen",
+            "don't make evergreen",
+            "dont make evergreen",
+        )
+    ):
+        return None
+
+    promotion_actions = [
+        action
+        for action in actions
+        if action.mapping is not None and (action.mapping.intent_type or "").lower() == "promotion"
+    ]
+    if len(actions) != 1 or len(promotion_actions) != 1:
+        return None
+
+    action = promotion_actions[0]
+    descriptor = next((item for item in available if item.id == action.id), None)
+    labels = []
+    if descriptor is not None:
+        labels.extend(descriptor.labels or [])
+        labels.extend(descriptor.aliases or [])
+        if descriptor.description:
+            labels.append(descriptor.description)
+        if descriptor.llm_hint:
+            labels.append(descriptor.llm_hint)
+    labels.append(action.label)
+
+    normalized_labels = [normalize_label(value) for value in labels if value]
+    keyword_hit = any(keyword in text for keyword in ("promote", "promotion", "evergreen"))
+    label_hit = any(label and (label in text or text in label) for label in normalized_labels)
+    if not keyword_hit and not label_hit:
+        return None
+    return {action.id}, {action.id: "instruction_hint_fallback"}
+
+
+def _resolve_vault_root(state: PanelAgentState) -> Path | None:
+    """Return the vault root from state or VAULT_ROOT env var."""
+    if state.vault_root is not None:
+        return state.vault_root
+    env = os.getenv("VAULT_ROOT")
+    if env:
+        return Path(env).expanduser()
+    return None
+
+
+def _build_note_snippet(state: PanelAgentState) -> str:
+    """Build the note snippet for the LLM prompt.
+
+    Tries NoteContext for a rich, structured view. Falls back to the legacy
+    truncated ``note_content`` when NoteContext cannot be assembled.
+    """
+    vault_root = _resolve_vault_root(state)
+    if vault_root is not None:
+        try:
+            ctx = build_note_context(
+                uuid=state.note.uuid,
+                vault_root=vault_root,
+                budget=PANEL_BUDGET,
+            )
+            return _format_note_context(ctx)
+        except (NoteContextError, Exception) as exc:  # noqa: BLE001
+            logger.debug("NoteContext unavailable for %s, using snippet fallback: %s", state.note.uuid, exc)
+
+    # Fallback: legacy truncated snippet
+    return (state.note_content or "")[:800]
+
+
+def _format_note_context(ctx: NoteContext) -> str:
+    """Format a NoteContext into a prompt-friendly string."""
+    parts: list[str] = []
+
+    if ctx.frontmatter:
+        fm_lines = [f"  {k}: {v}" for k, v in ctx.frontmatter.items()]
+        parts.append("Frontmatter:\n" + "\n".join(fm_lines))
+
+    if ctx.body:
+        label = "Body (truncated):" if ctx.body_truncated else "Body:"
+        parts.append(f"{label}\n{ctx.body}")
+
+    if ctx.backlinks:
+        parts.append("Backlinks:\n" + "\n".join(f"  - {bl}" for bl in ctx.backlinks))
+
+    if ctx.attachments:
+        att_lines = [f"  - {a.ref}" for a in ctx.attachments]
+        parts.append("Attachments:\n" + "\n".join(att_lines))
+
+    if ctx.outgoing_links:
+        parts.append("Outgoing links:\n" + "\n".join(f"  - {ol}" for ol in ctx.outgoing_links))
+
+    return "\n\n".join(parts) if parts else ""
+
+
 def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str]] | None:
     assert state.intent_event is not None, "PanelAgentState must include intent_event"
     actions = list(state.actions)
@@ -237,7 +419,7 @@ def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str
     )
     user_parts = [
         f"Instruction: {state.panel.instruction}",
-        f"Note (snippet): {(state.note_content or '')[:800]}",
+        f"Note context:\n{_build_note_snippet(state)}",
         "Checkbox hints:",
         *hint_lines,
         "Available actions (canonical):",
@@ -275,6 +457,14 @@ def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str
                 selected.add(action_id)
                 if reason:
                     reasons[action_id] = reason
+        if not selected:
+            hinted = _select_actions_from_instruction_hint(
+                actions=actions,
+                available=available,
+                instruction=state.panel.instruction or "",
+            )
+            if hinted is not None:
+                return hinted
         # Empty set is a valid decision (LLM chose to run nothing).
         return selected, reasons
     except Exception:
@@ -300,7 +490,11 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
             override_checked = action.id in selected_ids
         reason = reasons.get(action.id) if reasons else None
         result, new_events = _handle_action(
-            state.intent_event, action, override_checked=override_checked, reason=reason, action_wiring=state.action_wiring
+            state,
+            action,
+            override_checked=override_checked,
+            reason=reason,
+            action_wiring=state.action_wiring,
         )
         actions.append(result)
         emitted.extend(new_events)

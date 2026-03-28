@@ -3,10 +3,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import fnmatch
 
+from app.domain.state_axes import normalize_artifact_state_axes
 from app.vault.paths import get_vault_inbox_dir_rel
 
 from .ingest_md import parse_markdown
 from .rules import compile_rules, score_for
+
 
 def walk_markdown_files(root: Path, ignore_glob: List[str]) -> List[Path]:
     files = [p for p in root.rglob("*.md") if p.is_file()]
@@ -28,14 +30,19 @@ def _is_inbox_path(rel_path: str, inbox_dir_rel: str) -> bool:
 
 
 def infer_meta_defaults(rel_path: str, meta: Dict[str, Any], inbox_dir_rel: str) -> Dict[str, Any]:
-    if "review_state" not in meta:
-        if _is_inbox_path(rel_path, inbox_dir_rel):
-            meta["review_state"] = "inbox"
-        elif rel_path.startswith("9_Extras/Archive/") or "/9_Extras/Archive/" in rel_path:
-            meta["review_state"] = "archived"
-        else:
-            meta["review_state"] = "processed"
-    return meta
+    workflow_state = meta.get("workflow_state")
+    default_review_state = "provisional"
+    if _is_inbox_path(rel_path, inbox_dir_rel):
+        workflow_state = workflow_state or "inbox"
+        default_review_state = "draft"
+    elif rel_path.startswith("9_Extras/Archive/") or "/9_Extras/Archive/" in rel_path:
+        default_review_state = "archived"
+
+    return normalize_artifact_state_axes(
+        meta,
+        default_review_state=default_review_state,
+        workflow_state=workflow_state,
+    )
 
 
 def build_index(root: Path, rules_cfg: List[Dict[str, Any]], ignore_glob: List[str]) -> List[Dict[str, Any]]:

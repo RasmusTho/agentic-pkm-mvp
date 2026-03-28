@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 from app.watcher.scope import matches_scope
 import hashlib
 import json
@@ -8,7 +9,7 @@ import os
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import timezone, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,13 +19,12 @@ from app.agents.panel.agent import handle_note_update
 from app.agents.panel_agent.policy import watcher_panel_candidate_for_path
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
-from app.events.types import INGEST_VAULT_CHANGED
-from app.outbox.events import get_index_outbox_path
+from app.events.types import INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
 from app.services.note_uuid import ensure_note_uuid
-from app.services.outbox import write_outbox_event
+from app.services.outbox import append_jsonl_outbox_event, insert_object_and_outbox, write_outbox_event
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_value
-from app.settings.watcher_settings import resolve_auto_exec_enabled
+from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
 from app.vault.layout import load_layout
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
 from app.watcher.state import WatcherState
@@ -40,6 +40,13 @@ MIN_TICK_SLEEP_SECONDS = 0.05
 _WRITE_GUARD = OptimisticWriteGuard()
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ChangedEntry:
+    rel_path: Path
+    mtime: float
+    digest: str
 
 
 def _detect_inbox_dir(vault_root: Path) -> str:
@@ -69,7 +76,7 @@ def _resolve_scope_glob(vault_root: Path) -> tuple[str, str, str]:
 
 
 def _now_iso() -> str:
-    return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
+    return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _hash_file(path: Path) -> tuple[str, int] | None:
@@ -89,6 +96,8 @@ def _scan_markdown(vault_root: Path, scan_root: Path, scope_glob: str) -> Iterab
         try:
             rel = path.relative_to(vault_root)
         except Exception:
+            continue
+        if any(part.startswith(".") for part in rel.parts):
             continue
         if not _matches_scope(rel, scope_glob):
             continue
@@ -125,7 +134,7 @@ def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
 
 
 def _now_iso_from_timestamp(value: float) -> str:
-    return datetime.fromtimestamp(value, tz=UTC).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _log_tick_diagnostics_registry(
@@ -240,10 +249,7 @@ def _finalize_spec_tick(
 
 
 def _write_jsonl_event(event: OutboxEvent, outbox_path: Path) -> None:
-    outbox_path.parent.mkdir(parents=True, exist_ok=True)
-    with outbox_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event.model_dump(mode="json"), ensure_ascii=False))
-        handle.write("\n")
+    append_jsonl_outbox_event(outbox_path, event, default_source="watcher.registry")
 
 
 def _write_markdown_if_changed(note_path: Path, original: str, updated: str) -> bool:
@@ -258,6 +264,35 @@ def _write_markdown_if_changed(note_path: Path, original: str, updated: str) -> 
         return False
 
 
+def _read_panel_note_with_retry(note_path: Path, *, attempts: int = 5, base_sleep: float = 0.2) -> str:
+    for attempt in range(attempts):
+        try:
+            return note_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            if exc.errno in {errno.ENOENT, errno.EPERM, errno.EACCES, errno.EROFS} and attempt + 1 < attempts:
+                time.sleep(base_sleep * (2**attempt))
+                continue
+            raise
+    raise FileNotFoundError(note_path)
+
+
+def _ensure_panel_note_uuid_with_retry(
+    note_path: Path,
+    *,
+    attempts: int = 5,
+    base_sleep: float = 0.2,
+) -> str:
+    for attempt in range(attempts):
+        try:
+            return ensure_note_uuid(note_path)
+        except OSError as exc:
+            if exc.errno in {errno.ENOENT, errno.EPERM, errno.EACCES, errno.EROFS} and attempt + 1 < attempts:
+                time.sleep(base_sleep * (2**attempt))
+                continue
+            raise
+    raise FileNotFoundError(note_path)
+
+
 def _process_panel_note(
     *,
     vault_root: Path,
@@ -265,21 +300,26 @@ def _process_panel_note(
     outbox_path: Path,
     state: WatcherState,
     action_mappings: Mapping[str, PanelActionMapping],
-) -> None:
+) -> int:
     note_path = vault_root / rel_path
+    logger.info(
+        "panel note start relative_path=%s note_path=%s",
+        str(rel_path),
+        str(note_path),
+    )
     try:
-        markdown = note_path.read_text(encoding="utf-8")
+        markdown = _read_panel_note_with_retry(note_path)
     except Exception as exc:
         state.errors += 1
         print(f"WARN: failed to read panel note {note_path}: {exc}")
-        return
+        return 0
 
     try:
-        note_uuid = ensure_note_uuid(note_path)
+        note_uuid = _ensure_panel_note_uuid_with_retry(note_path)
     except Exception as exc:
         state.errors += 1
         print(f"WARN: failed to ensure uuid for {note_path}: {exc}")
-        return
+        return 0
 
     frontmatter, _ = load_frontmatter(markdown)
     note_title = frontmatter.get("title") if isinstance(frontmatter, dict) else None
@@ -296,7 +336,7 @@ def _process_panel_note(
     except Exception as exc:
         state.errors += 1
         print(f"WARN: panel agent failed for {note_path}: {exc}")
-        return
+        return 0
 
     try:
         _write_markdown_if_changed(note_path, markdown, result.updated_markdown)
@@ -320,6 +360,24 @@ def _process_panel_note(
             _write_jsonl_event(event, outbox_path)
         except Exception as exc:
             print(f"WARN: failed to append JSONL outbox event {event.event}: {exc}")
+    emitted_events = len(result.events)
+    if emitted_events <= 0:
+        logger.info(
+            "panel note no events relative_path=%s note_path=%s note_uuid=%s",
+            str(rel_path),
+            str(note_path),
+            note_uuid,
+        )
+        return 0
+    logger.info(
+        "panel note emitted relative_path=%s note_path=%s note_uuid=%s events=%s wrote_markdown=%s",
+        str(rel_path),
+        str(note_path),
+        note_uuid,
+        ",".join(getattr(event, "event", "") for event in result.events),
+        result.updated_markdown != markdown,
+    )
+    return emitted_events
 
 
 
@@ -393,11 +451,12 @@ class RegistryConfig:
             parser=_parse_int_factory(fallback=30),
             logger=logger,
         )
-        outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH", get_index_outbox_path()))
-        state_dir = Path(os.getenv("WATCHER_STATE_DIR", "tmp")).expanduser()
+        watcher_settings = load_watcher_settings(vault_path)
+        outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH") or watcher_settings.paths.index_outbox)
+        state_dir = Path(os.getenv("WATCHER_STATE_DIR") or watcher_settings.paths.watcher_state.parent).expanduser()
         heartbeat_path = Path(os.getenv("WATCHER_HEARTBEAT_PATH", resolve_heartbeat_path()))
         summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), fallback=60)
-        stop_file = Path(os.getenv("WATCHER_STOP_FILE", "/app/tmp/WATCHER_STOP")).expanduser()
+        stop_file = Path(os.getenv("WATCHER_STOP_FILE") or watcher_settings.paths.watcher_stop_file).expanduser()
         tick_sleep_raw = resolve_dev_lab_env_typed(
             "WATCHER_TICK_SLEEP_SECONDS",
             default="0.2",
@@ -406,7 +465,7 @@ class RegistryConfig:
         )
         tick_sleep_seconds = max(tick_sleep_raw, MIN_TICK_SLEEP_SECONDS)
         tick_log_env = os.getenv("WATCHER_TICK_LOG_PATH")
-        tick_log_path = Path(tick_log_env) if tick_log_env else Path("/app/tmp/watcher_tick.jsonl")
+        tick_log_path = Path(tick_log_env).expanduser() if tick_log_env else watcher_settings.paths.watcher_tick_log
         max_scanned_files_per_tick = resolve_dev_lab_env_typed(
             "WATCHER_MAX_SCANNED_FILES_PER_TICK",
             default="500",
@@ -677,22 +736,172 @@ def _emit_panel_events(
     last_seen = state.last_seen(str(rel))
     state.update_file_state(str(rel), mtime=mtime, content_hash=digest, seen_at=now)
     if last_seen is not None and (now - last_seen) * 1000 < spec.debounce_ms:
+        logger.info(
+            "panel emit skipped debounce relative_path=%s debounce_ms=%s",
+            str(rel),
+            spec.debounce_ms,
+        )
         return None
     if state.rate_window_count(now) >= spec.rate_limit_per_min:
         state.rate_limited += 1
+        logger.info(
+            "panel emit skipped rate_limit relative_path=%s rate_limit_per_min=%s",
+            str(rel),
+            spec.rate_limit_per_min,
+        )
         return None
-    _process_panel_note(
+    emitted_events = _process_panel_note(
         vault_root=cfg.vault_path,
         rel_path=rel,
         outbox_path=cfg.outbox_path,
         state=state,
         action_mappings=action_mappings,
     )
+    if emitted_events <= 0:
+        logger.info(
+            "panel emit produced no events relative_path=%s",
+            str(rel),
+        )
+        return None
     state.intents_emitted += 1
     state.record_rate_event(now)
     state.update_file_state(str(rel), mtime=mtime, content_hash=digest, emitted_at=now)
     trace_id = uuid4().hex
     state.last_trace_id = trace_id
+    logger.info(
+        "panel emit success relative_path=%s emitted_events=%s trace_id=%s",
+        str(rel),
+        emitted_events,
+        trace_id,
+    )
+    return trace_id
+
+
+def _collect_changed_entries(
+    cfg: RegistryConfig,
+    spec: WatcherSpec,
+    state: WatcherState,
+    summary: dict[str, object],
+    *,
+    scan_root: Path,
+) -> list[ChangedEntry]:
+    changed_entries: list[ChangedEntry] = []
+    for rel, mtime, path in _scan_markdown(cfg.vault_path, scan_root, spec.scope_glob):
+        summary["scanned_files"] = int(summary["scanned_files"]) + 1
+        rel_str = str(rel)
+        last_mtime = state.last_mtime(rel_str)
+        previous_hash = state.last_hash(rel_str)
+        if last_mtime is not None and last_mtime == mtime:
+            state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash)
+            continue
+        hashed = _hash_file(path)
+        if hashed is None:
+            continue
+        digest, read_bytes = hashed
+        summary["hashed_files"] = int(summary["hashed_files"]) + 1
+        summary["bytes_read"] = int(summary["bytes_read"]) + read_bytes
+        if previous_hash is not None and previous_hash == digest:
+            state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
+            continue
+        changed_entries.append(ChangedEntry(rel_path=rel, mtime=mtime, digest=digest))
+    return changed_entries
+
+
+def _should_skip_changed_entry(
+    *,
+    spec: WatcherSpec,
+    state: WatcherState,
+    last_seen: float | None,
+    now: float,
+) -> tuple[bool, str | None]:
+    if last_seen is not None and (now - last_seen) * 1000 < spec.debounce_ms:
+        return True, "debounce"
+    if state.rate_window_count(now) >= spec.rate_limit_per_min:
+        state.rate_limited += 1
+        return True, "rate_limit"
+    return False, None
+
+
+def _panel_emit_allowed(
+    *,
+    cfg: RegistryConfig,
+    rel_path: Path,
+    summary: dict[str, object],
+    panel_auto_exec_enabled: bool,
+    state: WatcherState,
+) -> bool:
+    candidate, ok = _panel_candidate_for_path(cfg.vault_path / rel_path)
+    if not ok:
+        state.errors += 1
+        return False
+    if candidate:
+        summary["panel_candidates"] = int(summary.get("panel_candidates", 0)) + 1
+    else:
+        summary["panel_skipped_policy"] = int(summary.get("panel_skipped_policy", 0)) + 1
+        return False
+    if not panel_auto_exec_enabled:
+        summary["panel_skipped_auto_exec"] = int(summary.get("panel_skipped_auto_exec", 0)) + 1
+        return False
+    return True
+
+
+def _emit_changed_entry(
+    *,
+    cfg: RegistryConfig,
+    spec: WatcherSpec,
+    state: WatcherState,
+    summary: dict[str, object],
+    entry: ChangedEntry,
+    now: float,
+    panel_auto_exec_enabled: bool,
+    action_mappings: Mapping[str, PanelActionMapping],
+    process_panel_notes_inline: bool,
+) -> str | None:
+    last_seen = state.last_seen(str(entry.rel_path))
+    state.update_file_state(str(entry.rel_path), mtime=entry.mtime, content_hash=entry.digest, seen_at=now)
+    should_skip, reason = _should_skip_changed_entry(spec=spec, state=state, last_seen=last_seen, now=now)
+    if should_skip:
+        if reason == "rate_limit":
+            summary["rate_limited_in_tick"] = int(summary.get("rate_limited_in_tick", 0)) + 1
+        return None
+    if spec.emit_event == "panel.scan.requested" and not _panel_emit_allowed(
+        cfg=cfg,
+        rel_path=entry.rel_path,
+        summary=summary,
+        panel_auto_exec_enabled=panel_auto_exec_enabled,
+        state=state,
+    ):
+        return None
+    current_mtime = entry.mtime
+    current_digest = entry.digest
+    if spec.emit_event == INGEST_VAULT_CHANGED:
+        current_mtime, current_digest = _maybe_heal_ingest_uuid(
+            cfg, state, entry.rel_path, current_mtime, current_digest
+        )
+    trace_id = _emit_watch_event(
+        spec=spec,
+        cfg=cfg,
+        outbox_path=cfg.outbox_path,
+        vault_root=cfg.vault_path,
+        rel_path=entry.rel_path,
+        mtime=current_mtime,
+        content_hash=current_digest,
+        state=state,
+    )
+    if not trace_id:
+        return None
+    state.last_trace_id = trace_id
+    state.intents_emitted += 1
+    state.record_rate_event(now)
+    state.update_file_state(str(entry.rel_path), mtime=current_mtime, content_hash=current_digest, emitted_at=now)
+    if spec.emit_event == PANEL_SCAN_REQUESTED and process_panel_notes_inline:
+        _process_panel_note(
+            vault_root=cfg.vault_path,
+            rel_path=entry.rel_path,
+            outbox_path=cfg.outbox_path,
+            state=state,
+            action_mappings=action_mappings,
+        )
     return trace_id
 
 
@@ -706,19 +915,41 @@ def _emit_watch_event(
     mtime: float,
     content_hash: str | None,
     state: WatcherState,
-) -> str:
+) -> str | None:
     if spec.emit_event == "panel.scan.requested":
-        action_mappings = load_panel_action_mappings()
-        trace = _emit_panel_events(
-            spec=spec,
-            cfg=cfg,
-            rel=rel_path,
-            mtime=mtime,
-            digest=content_hash or "",
-            state=state,
-            action_mappings=action_mappings,
+        trace_id = uuid4().hex
+        payload = {
+            "vault_path": str(vault_root / rel_path),
+            "relative_path": str(rel_path),
+            "mtime": mtime,
+            "hash": content_hash,
+            "watcher": spec.name,
+        }
+        event = OutboxEvent(
+            event=PANEL_SCAN_REQUESTED,
+            source="watcher.registry",
+            trace_id=trace_id,
+            payload=payload,
         )
-        return trace or uuid4().hex
+        append_jsonl_outbox_event(outbox_path, event, default_source="watcher.registry")
+        require_db = _db_outbox_required()
+        if require_db and not _has_db_outbox_env():
+            raise RuntimeError("DATABASE_URL or DB_DSN required for watcher DB outbox")
+        if require_db or _has_db_outbox_env():
+            try:
+                write_outbox_event(event)
+            except Exception:
+                state.enqueue_failures_total += 1
+                if require_db:
+                    raise
+                logger.exception(
+                    "watcher db outbox enqueue failed topic=%s trace_id=%s note_path=%s relative_path=%s",
+                    PANEL_SCAN_REQUESTED,
+                    trace_id,
+                    str(vault_root / rel_path),
+                    str(rel_path),
+                )
+        return trace_id
 
     trace_id = uuid4().hex
     payload = {
@@ -736,10 +967,7 @@ def _emit_watch_event(
         "source": "watcher.registry",
         "payload": payload,
     }
-    outbox_path.parent.mkdir(parents=True, exist_ok=True)
-    with outbox_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False))
-        handle.write("\n")
+    append_jsonl_outbox_event(outbox_path, event, default_source="watcher.registry")
 
     if spec.emit_event == INGEST_VAULT_CHANGED:
         require_db = _db_outbox_required()
@@ -747,8 +975,6 @@ def _emit_watch_event(
             raise RuntimeError("DATABASE_URL or DB_DSN required for watcher DB outbox")
         if require_db or _has_db_outbox_env():
             try:
-                from app.services.outbox import insert_object_and_outbox
-
                 insert_object_and_outbox(
                     payload,
                     spec.emit_event,
@@ -776,6 +1002,7 @@ def _run_spec_tick(
     state: WatcherState,
     *,
     now: float,
+    process_panel_notes_inline: bool = False,
 ) -> dict[str, object]:
     tick_start = now
     state.ticks_run += 1
@@ -822,32 +1049,14 @@ def _run_spec_tick(
         raise FileNotFoundError(f"Vault path not found: {cfg.vault_path}")
 
     scan_root = _derive_scan_root(cfg.vault_path, spec.scope_glob)
-    changed_entries: list[tuple[Path, float, str | None]] = []
-    for rel, mtime, path in _scan_markdown(cfg.vault_path, scan_root, spec.scope_glob):
-        summary["scanned_files"] = int(summary["scanned_files"]) + 1
-        rel_str = str(rel)
-        last_mtime = state.last_mtime(rel_str)
-        previous_hash = state.last_hash(rel_str)
-        if last_mtime is not None and last_mtime == mtime:
-            state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash, seen_at=now)
-            continue
-        hashed = _hash_file(path)
-        if hashed is None:
-            continue
-        digest, read_bytes = hashed
-        summary["hashed_files"] = int(summary["hashed_files"]) + 1
-        summary["bytes_read"] = int(summary["bytes_read"]) + read_bytes
-        if previous_hash is not None and previous_hash == digest:
-            state.update_file_state(rel_str, mtime=mtime, content_hash=digest, seen_at=now)
-            continue
-        changed_entries.append((rel, mtime, digest))
+    changed_entries = _collect_changed_entries(cfg, spec, state, summary, scan_root=scan_root)
 
     summary["changed_in_tick"] = len(changed_entries)
     state.changed_detected += len(changed_entries)
     summary["changed_detected"] = state.changed_detected
 
     emitted_in_tick = 0
-    rate_limited_in_tick = 0
+    summary["rate_limited_in_tick"] = 0
 
     action_mappings: Mapping[str, PanelActionMapping] = {}
     panel_auto_exec_enabled = False
@@ -855,50 +1064,22 @@ def _run_spec_tick(
         action_mappings = load_panel_action_mappings()
         panel_auto_exec_enabled = _auto_exec_enabled(cfg.vault_path)
 
-    for rel, mtime, digest in changed_entries:
-        last_seen = state.last_seen(str(rel))
-        state.update_file_state(str(rel), mtime=mtime, content_hash=digest, seen_at=now)
-        if last_seen is not None and (now - last_seen) * 1000 < spec.debounce_ms:
-            continue
-        if state.rate_window_count(now) >= spec.rate_limit_per_min:
-            state.rate_limited += 1
-            rate_limited_in_tick += 1
-            continue
-        if spec.emit_event == "panel.scan.requested":
-            candidate, ok = _panel_candidate_for_path(cfg.vault_path / rel)
-            if not ok:
-                state.errors += 1
-                continue
-            if candidate:
-                summary["panel_candidates"] = int(summary.get("panel_candidates", 0)) + 1
-            else:
-                summary["panel_skipped_policy"] = int(summary.get("panel_skipped_policy", 0)) + 1
-                continue
-            if not panel_auto_exec_enabled:
-                summary["panel_skipped_auto_exec"] = int(summary.get("panel_skipped_auto_exec", 0)) + 1
-                continue
-        current_mtime = mtime
-        current_digest = digest or ""
-        if spec.emit_event == INGEST_VAULT_CHANGED:
-            current_mtime, current_digest = _maybe_heal_ingest_uuid(
-                cfg, state, rel, current_mtime, current_digest
-            )
+    for entry in changed_entries:
         try:
-            trace_id = _emit_watch_event(
+            trace_id = _emit_changed_entry(
                 spec=spec,
                 cfg=cfg,
-                outbox_path=cfg.outbox_path,
-                vault_root=cfg.vault_path,
-                rel_path=rel,
-                mtime=current_mtime,
-                content_hash=current_digest,
                 state=state,
+                summary=summary,
+                entry=entry,
+                now=now,
+                panel_auto_exec_enabled=panel_auto_exec_enabled,
+                action_mappings=action_mappings,
+                process_panel_notes_inline=process_panel_notes_inline,
             )
-            state.last_trace_id = trace_id
-            state.intents_emitted += 1
+            if not trace_id:
+                continue
             emitted_in_tick += 1
-            state.record_rate_event(now)
-            state.update_file_state(str(rel), mtime=current_mtime, content_hash=current_digest, emitted_at=now)
         except Exception:
             state.errors += 1
             state.backoff_until = now + spec.backoff_seconds
@@ -906,7 +1087,6 @@ def _run_spec_tick(
             break
 
     summary["emitted_in_tick"] = emitted_in_tick
-    summary["rate_limited_in_tick"] = rate_limited_in_tick
     summary["intents_emitted"] = state.intents_emitted
     summary["errors"] = state.errors
     summary["errors_in_tick"] = state.errors - errors_before
@@ -930,7 +1110,13 @@ def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
     }
     now = time.time()
     summaries = {
-        spec.name: _run_spec_tick(cfg, spec, states[spec.name], now=now)
+        spec.name: _run_spec_tick(
+            cfg,
+            spec,
+            states[spec.name],
+            now=now,
+            process_panel_notes_inline=True,
+        )
         for spec in cfg.specs
     }
     enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())

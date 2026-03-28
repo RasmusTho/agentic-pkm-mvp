@@ -41,6 +41,10 @@ index:
     action: include
     weight: 1.0
   - when:
+      maturity: evergreen
+    action: include
+    weight: 1.2
+  - when:
       review_state: evergreen
     action: include
     weight: 1.2
