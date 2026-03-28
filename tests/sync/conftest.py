@@ -1,6 +1,7 @@
 """Fixtures and factories for SyncLayer tests."""
 from __future__ import annotations
 
+import abc
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,6 +10,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+
+class SyncLayer(abc.ABC):
+    """Abstract base for sync transport layers."""
+
+    @abc.abstractmethod
+    async def detect_changes(self, path: Path, since_timestamp: float) -> list[FileChange]:
+        """Detect file changes since *since_timestamp*."""
 
 
 class FileOperation(str, Enum):
