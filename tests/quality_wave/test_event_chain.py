@@ -148,7 +148,7 @@ class TestEventChainPropagation:
         trace_1 = "trace-op-1"
         trace_2 = "trace-op-2"
 
-        # Operation 1
+        # Operation 1: ingest vault change
         event1 = make_outbox_event(
             "ingest.vault.changed",
             source="watcher",
@@ -157,18 +157,21 @@ class TestEventChainPropagation:
         )
         event_chain.append(event1)
 
-        # Operation 2
+        # Operation 2: separate promotion intent (different operation chain)
         event2 = make_outbox_event(
-            "ingest.vault.changed",
-            source="watcher",
+            "panel.intent.created",
+            source="panel.agent",
             trace_id=trace_2,
-            payload={"vault_path": "vault/note2.md"},
+            payload={"uuid": "obj-2", "action": "promote"},
         )
         event_chain.append(event2)
 
         assert len(event_chain.trace_id_map) == 2
         assert trace_1 in event_chain.trace_id_map
         assert trace_2 in event_chain.trace_id_map
+        # Each trace_id maps to a different event type sequence
+        assert event_chain.trace_id_map[trace_1] == ["ingest.vault.changed"]
+        assert event_chain.trace_id_map[trace_2] == ["panel.intent.created"]
         assert event_chain.trace_id_map[trace_1] != event_chain.trace_id_map[trace_2]
 
 
