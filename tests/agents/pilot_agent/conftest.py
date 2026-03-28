@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
@@ -25,6 +26,33 @@ class PilotAgentState:
     executed_actions: list[str] = field(default_factory=list)
     error: str | None = None
     messages: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.uuid, str):
+            raise TypeError("uuid must be str")
+        if not isinstance(self.trace_id, str):
+            raise TypeError("trace_id must be str")
+        if not isinstance(self.budget, int):
+            raise TypeError("budget must be int")
+        if not isinstance(self.step_count, int):
+            raise TypeError("step_count must be int")
+        if self.decision is not None and not isinstance(self.decision, str):
+            raise TypeError("decision must be str | None")
+        if not isinstance(self.executed_actions, list):
+            raise TypeError("executed_actions must be list[str]")
+        if not all(isinstance(action, str) for action in self.executed_actions):
+            raise TypeError("executed_actions must contain only str values")
+        if self.error is not None and not isinstance(self.error, str):
+            raise TypeError("error must be str | None")
+        if not isinstance(self.messages, list):
+            raise TypeError("messages must be list[dict[str, Any]]")
+        if not all(isinstance(message, dict) for message in self.messages):
+            raise TypeError("messages must contain only dict values")
+
+
+# Pytest may load this file as plain `conftest`, while tests import it via its package path.
+# Alias the module identity so dataclass `isinstance` checks stay stable.
+sys.modules.setdefault("tests.agents.pilot_agent.conftest", sys.modules[__name__])
 
 
 @pytest.fixture

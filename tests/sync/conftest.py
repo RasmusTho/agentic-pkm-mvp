@@ -2,64 +2,13 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-
-class FileOperation(str, Enum):
-    """File change operation types."""
-
-    CREATED = "created"
-    MODIFIED = "modified"
-    DELETED = "deleted"
-    RENAMED = "renamed"
-
-
-@dataclass(frozen=True)
-class FileChange:
-    """Represents a single file change in the vault."""
-
-    path: str
-    operation: FileOperation
-    timestamp: float  # Unix timestamp
-    hash: str | None = None  # Content hash for verification
-    size: int | None = None  # File size in bytes
-    metadata: dict[str, Any] | None = None  # User-defined tags (source, conflict, etc.)
-
-    def __post_init__(self) -> None:
-        """Validate FileChange invariants."""
-        if self.operation == FileOperation.DELETED:
-            # Deleted files may not have hash/size
-            pass
-        elif self.operation in (FileOperation.CREATED, FileOperation.MODIFIED):
-            # Created/modified should have hash for verification
-            assert self.hash is not None, f"{self.operation} requires hash"
-
-
-@dataclass(frozen=True)
-class SyncStatus:
-    """Status of the sync layer."""
-
-    is_healthy: bool
-    last_sync: float | None  # Unix timestamp
-    pending_changes: int
-    last_error: str | None = None
-
-
-@dataclass(frozen=True)
-class SyncResult:
-    """Result of a sync operation."""
-
-    success: bool
-    changes_applied: int = 0
-    conflicts: list[str] | None = None  # Paths with conflicts
-    errors: list[str] | None = None  # Error messages
-    metadata: dict[str, Any] | None = None  # Info about sync (layer used, timing, stats)
+from app.sync.base import FileChange, FileOperation, SyncLayer, SyncResult, SyncStatus
 
 
 @pytest.fixture

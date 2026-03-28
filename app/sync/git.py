@@ -289,9 +289,14 @@ class GitTransport(SyncLayer):
             )
 
             if commit_result.returncode != 0:
-                # Might be nothing to commit, which is OK
-                if "nothing to commit" not in commit_result.stdout.lower():
-                    logger.warning(f"git commit: {commit_result.stderr}")
+                # "nothing to commit" is benign; other failures leave staged changes unsynced.
+                commit_stdout = commit_result.stdout.lower()
+                commit_stderr = commit_result.stderr.lower()
+                if "nothing to commit" not in commit_stdout and "nothing to commit" not in commit_stderr:
+                    success = False
+                    error_msg = f"git commit failed: {commit_result.stderr or commit_result.stdout}"
+                    errors.append(error_msg)
+                    logger.error(error_msg)
             else:
                 # Extract commit hash
                 for line in commit_result.stdout.split("\n"):
@@ -315,9 +320,14 @@ class GitTransport(SyncLayer):
                     error_msg = f"Merge conflicts detected in {len(conflicts)} files"
                     errors.append(error_msg)
                     logger.error(error_msg)
+                else:
+                    success = False
+                    error_msg = f"git pull failed: {pull_result.stderr or pull_result.stdout}"
+                    errors.append(error_msg)
+                    logger.error(error_msg)
 
             # Push to remote
-            if success or not conflicts:
+            if success and not conflicts:
                 push_result = subprocess.run(
                     ["git", "push", self.remote, self.branch],
                     cwd=path,
