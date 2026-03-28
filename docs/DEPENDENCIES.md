@@ -50,11 +50,19 @@ Overview of tools and libraries required in each environment.
 
 - Repo minimum: Python `>=3.12`
   - enforced by `pyproject.toml`
+- Repo default and primary validated runtime: Python `3.12`
+  - pinned locally via `.python-version`
 - CI smoke floor: Python `3.12`
   - used as the compatibility floor for baseline validation
+- Forward-compatibility target: Python `3.13`
+  - validated in a non-blocking nightly canary lane before raising the floor
+- Unsupported baseline targets: Python `3.11` and below
+  - do not keep code, typing, or CI pinned to pre-3.12 behavior unless a documented external deployment constraint requires it
 
 Guardrails:
 - keep core code compatible with 3.12
+- prefer language features and library versions that are clean on 3.12 and 3.13
+- raise the minimum only when CI, packaging, and local bootstrap are updated together
 - use the optional scripts below when validating compatibility explicitly:
   - `scripts/py312_compile_check.sh`
   - `scripts/py312_smoke_test.sh`

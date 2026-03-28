@@ -219,11 +219,12 @@ class TestEventIdempotency:
     def test_event_dedup_dict_tracks_seen_ids(self):
         """Assert event dedup mechanism can track and skip duplicates."""
         seen: Dict[str, bool] = {}
+        first = make_outbox_event("evt1", source="s1")
 
         events = [
-            OutboxEvent(event="evt1", event_id="dedup-001", trace_id=uuid4().hex, source="s1"),
-            OutboxEvent(event="evt2", event_id="dedup-002", trace_id=uuid4().hex, source="s2"),
-            OutboxEvent(event="evt1", event_id="dedup-001", trace_id=uuid4().hex, source="s1"),  # Duplicate
+            first,
+            make_outbox_event("evt2", source="s2"),
+            first.model_copy(update={"timestamp": first.timestamp}),  # Duplicate event_id
         ]
 
         # Simulate dedup logic
