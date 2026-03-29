@@ -38,9 +38,6 @@ def _log_provider_info(provider: str) -> None:
 
 def ensure_provider() -> str:
     global _ACTIVE_PROVIDER
-    if _ACTIVE_PROVIDER is not None:
-        return _ACTIVE_PROVIDER
-
     candidate = _normalize_provider(os.getenv("LLM_PROVIDER"))
     enforce = _env_flag("LLM_PROVIDER_ENFORCE", default=False)
 
@@ -51,6 +48,9 @@ def ensure_provider() -> str:
                 "export LLM_PROVIDER=ollama (plus any model/endpoint vars) or LLM_PROVIDER=mock for deterministic runs."
             )
         candidate = "mock"
+
+    if _ACTIVE_PROVIDER == candidate:
+        return _ACTIVE_PROVIDER
 
     _ACTIVE_PROVIDER = candidate
     _log_provider_info(candidate)
