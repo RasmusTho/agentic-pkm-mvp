@@ -15,6 +15,7 @@ Healing log: vault/_system/heal_log.jsonl — append-only, conservative,
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from dataclasses import dataclass, field
@@ -337,6 +338,10 @@ def _companion_to_fm(companion: CompanionNote) -> dict:
             {"ref": a.ref, "content_hash": a.content_hash}
             for a in companion.attachments
         ]
+    if companion.identity_history:
+        # Enforce IDENTITY_HISTORY_MAX: keep only the most recent entries.
+        bounded = companion.identity_history[-IDENTITY_HISTORY_MAX:]
+        fm["identity_history"] = [dataclasses.asdict(e) for e in bounded]
     return fm
 
 
@@ -354,6 +359,19 @@ def _fm_to_companion(fm: dict) -> CompanionNote | None:
                 ref=str(a["ref"]),
                 content_hash=a.get("content_hash"),
             ))
+    identity_history: list[IdentityHistoryEntry] = []
+    for entry in fm.get("identity_history") or []:
+        if isinstance(entry, dict):
+            try:
+                identity_history.append(IdentityHistoryEntry(
+                    timestamp=str(entry.get("timestamp", "")),
+                    event=str(entry.get("event", "")),
+                    before=entry.get("before") if isinstance(entry.get("before"), dict) else {},
+                    after=entry.get("after") if isinstance(entry.get("after"), dict) else {},
+                    reason=str(entry.get("reason", "")),
+                ))
+            except Exception:
+                pass
     return CompanionNote(
         uuid=uuid,
         source_ref=str(fm.get("source_ref", "")),
@@ -363,6 +381,7 @@ def _fm_to_companion(fm: dict) -> CompanionNote | None:
         last_ingested=str(fm.get("last_ingested", "")),
         created_by_instance=str(fm.get("created_by_instance", "")),
         attachments=attachments,
+        identity_history=identity_history,
     )
 
 
@@ -370,6 +389,8 @@ __all__ = [
     "AttachmentRef",
     "CompanionNote",
     "ConflictLog",
+    "IDENTITY_HISTORY_MAX",
+    "IdentityHistoryEntry",
     "companion_path",
     "find_companion_by_content_hash",
     "read_companion",
