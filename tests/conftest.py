@@ -47,11 +47,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import app.search as search_module  # noqa: E402
-import app.search.service as search_service_module  # noqa: E402
-from app.search import get_vector_index as original_get_vector_index  # noqa: E402
-from app.search.vector_index import VectorResult  # noqa: E402
-
 
 @dataclass
 class StoredObject:
@@ -91,15 +86,17 @@ class StubVectorIndex:
         embedding: Sequence[float],
         k: int = 10,
         filters: dict[str, Any] | None = None,
-    ) -> list[VectorResult]:
+    ) -> list[Any]:
         if not self.store:
             return []
         query_vec = list(embedding)
-        results: list[VectorResult] = []
+        results: list[Any] = []
         for object_id, stored in self.store.items():
             if filters and not all(stored.payload.get(k) == v for k, v in filters.items()):
                 continue
             score = sum(a * b for a, b in zip(query_vec, stored.embedding, strict=False))
+            from app.search.vector_index import VectorResult  # noqa: PLC0415
+
             results.append(VectorResult(object_id=object_id, score=score, payload=stored.payload))
         results.sort(key=lambda item: item.score, reverse=True)
         return results[:k]
@@ -107,6 +104,10 @@ class StubVectorIndex:
 
 @pytest.fixture
 def stub_index(monkeypatch: pytest.MonkeyPatch) -> StubVectorIndex:
+    import app.search as search_module  # noqa: PLC0415
+    import app.search.service as search_service_module  # noqa: PLC0415
+    from app.search import get_vector_index as original_get_vector_index  # noqa: PLC0415
+
     index = StubVectorIndex()
 
     def _get_index() -> StubVectorIndex:
@@ -210,6 +211,17 @@ def pytest_addoption(parser) -> None:
             dest="timeout_method",
             default="signal",
             help="No-op stub for pytest-timeout's --timeout-method option.",
+        )
+    except ValueError:
+        pass
+    try:
+        group.addoption(
+            "--faulthandler-timeout",
+            action="store",
+            type=float,
+            dest="faulthandler_timeout",
+            default=None,
+            help="No-op stub for pytest-faulthandler's --faulthandler-timeout option.",
         )
     except ValueError:
         pass
