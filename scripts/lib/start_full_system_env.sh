@@ -2,8 +2,20 @@
 set -euo pipefail
 
 resolve_start_full_system_python_bin() {
+  local script_path script_dir repo_root
+  if [ -n "${PYTHON:-}" ] && [ -x "${PYTHON:-}" ]; then
+    printf '%s\n' "${PYTHON}"
+    return 0
+  fi
   if [ -x ".venv/bin/python" ]; then
     printf '%s\n' ".venv/bin/python"
+    return 0
+  fi
+  script_path="${BASH_SOURCE[0]-$0}"
+  script_dir="$(cd "$(dirname "$script_path")" && pwd)"
+  repo_root="$(cd "${script_dir}/../.." && pwd)"
+  if [ -x "${repo_root}/.venv/bin/python" ]; then
+    printf '%s\n' "${repo_root}/.venv/bin/python"
     return 0
   fi
   if command -v python3.12 >/dev/null 2>&1; then
@@ -41,18 +53,25 @@ apply_start_full_system_defaults() {
 
 infer_start_full_system_vault_layout_env() {
   local vault_root="${1:-}"
+  local python_bin
   if [ -z "$vault_root" ] || [ ! -d "$vault_root" ]; then
     return 0
   fi
 
-  python - "$vault_root" <<'PY'
+  python_bin="$(command -v python || true)"
+  if [ -z "${python_bin:-}" ]; then
+    python_bin="$(resolve_start_full_system_python_bin || true)"
+  fi
+  if [ -z "${python_bin:-}" ]; then
+    return 0
+  fi
+
+  "$python_bin" - "$vault_root" <<'PY'
 from __future__ import annotations
 
 import os
 import sys
 from pathlib import Path
-
-import yaml
 
 vault_root = Path(sys.argv[1]).expanduser()
 
@@ -61,6 +80,41 @@ resolved: dict[str, str] = {}
 
 def _join(*parts: str) -> str:
     return "".join(parts)
+
+
+def _strip_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    return value
+
+
+def _parse_yaml_subset(text: str) -> dict[str, object]:
+    root: dict[str, object] = {}
+    stack: list[tuple[int, dict[str, object]]] = [(-1, root)]
+
+    for raw_line in text.splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        line = raw_line.strip()
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+
+        while len(stack) > 1 and indent <= stack[-1][0]:
+            stack.pop()
+        current = stack[-1][1]
+
+        if not value:
+            nested: dict[str, object] = {}
+            current[key] = nested
+            stack.append((indent, nested))
+            continue
+
+        current[key] = _strip_quotes(value)
+    return root
 
 
 def _parse_frontmatter(path: Path) -> dict[str, object]:
@@ -73,10 +127,7 @@ def _parse_frontmatter(path: Path) -> dict[str, object]:
     parts = raw.split("---", 2)
     if len(parts) < 3:
         return {}
-    try:
-        data = yaml.safe_load(parts[1]) or {}
-    except Exception:
-        return {}
+    data = _parse_yaml_subset(parts[1])
     return data if isinstance(data, dict) else {}
 
 
@@ -87,7 +138,7 @@ def _layout_candidates(root: Path) -> list[Path]:
 def _read_system_settings(root: Path) -> dict[str, object]:
     path = root / "_system" / "settings" / "system-settings.yaml"
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = _parse_yaml_subset(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}

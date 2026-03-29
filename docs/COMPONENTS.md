@@ -115,6 +115,6 @@ Direction note:
 - **Compressive OCR** — Stubbed extension point in `app/components/ocr.py`; not wired into the active runtime. Maturity: Planned.
 
 Documentation and governance surfaces are intentionally tracked elsewhere:
-- development workflow: `docs/DEV_WORKFLOW.md`
+- development workflow: `docs/development/DEV_WORKFLOW.md`
 - data/frontmatter contracts: `docs/DATA_MODEL.md`, `docs/FRONTMATTER.md`
 - eval guidance: `docs/eval.md`, `docs/TESTING.md`

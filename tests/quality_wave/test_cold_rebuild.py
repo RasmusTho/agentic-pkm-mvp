@@ -1,266 +1,235 @@
-"""Phase D: Cold Rebuild Coverage (Lossless Reconstruction).
-
-Validates that starting from empty DB + existing companion notes,
-full ingest → index pipeline reconstructs the same state.
-
-Orphan handling: companions (not DB) are source of truth.
-
-Tests:
-- Empty DB → full ingest → state matches expected
-- Rebuilt DB matches original (all counts match, no data loss)
-- Lossless reconstruction (idempotent rebuilds)
-"""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
-from typing import Dict, Any
-from tests.quality_wave.conftest import MetricsCollector
+
+from app.cli.uat import SEED_SOURCE, run_vault_test_flow, seed_vault_test_notes
+from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
+from app.promotion.consumer import reset_promotion_dedup_store
+from app.store import object_store as object_store_module
+from app.stores import reset_store_backends
+from scripts.yaml_roundtrip import load_frontmatter
+
+pytestmark = pytest.mark.not_pg
+
+GOLDEN_DIR = Path(__file__).parent / "golden_snapshots"
+MANIFEST_PATH = GOLDEN_DIR / "manifest.json"
+VOLATILE_KEYS = frozenset({"modified_at", "last_processed", "indexed_at"})
 
 
-@pytest.mark.not_pg
-class TestColdRebuildFromEmpty:
-    """Test cold rebuild starting with empty database."""
-
-    def test_empty_db_initialization(self, memory_stores: dict):
-        """Assert we can start with truly empty stores."""
-        obj_store = memory_stores["objects"]
-        vec_store = memory_stores["vectors"]
-        rel_store = memory_stores["relations"]
-
-        # Verify empty state
-        assert obj_store.count_objects() == 0
-        assert vec_store.count_vectors() == 0
-
-    def test_cold_rebuild_simulated(self, memory_stores: dict, metrics: MetricsCollector):
-        """Simulate cold rebuild: empty DB + ingest golden vault."""
-        from uuid import UUID
-
-        obj_store = memory_stores["objects"]
-        vec_store = memory_stores["vectors"]
-
-        # Start empty
-        assert obj_store.count_objects() == 0
-
-        # Simulate ingest of 5 objects (from golden vault)
-        uuids = [
-            UUID("10000000-0000-0000-0000-000000000001"),
-            UUID("10000000-0000-0000-0000-000000000002"),
-            UUID("10000000-0000-0000-0000-000000000003"),
-            UUID("10000000-0000-0000-0000-000000000004"),
-            UUID("10000000-0000-0000-0000-000000000005"),
-        ]
-
-        for i, obj_id in enumerate(uuids):
-            obj_store.put(
-                obj_id,
-                kind="note",
-                source_ref=f"vault/note{i}.md",
-                payload={"title": f"Note {i}", "content": f"Content {i}"},
-            )
-            metrics.object_count += 1
-
-        # Verify rebuild completed
-        final_count = obj_store.count_objects()
-        assert final_count == 5, f"Cold rebuild didn't create all objects: {final_count}"
-        assert metrics.object_count == 5
-
-    def test_cold_rebuild_companion_notes_preserved(self, metrics: MetricsCollector):
-        """Assert companion notes (source of truth) guide cold rebuild."""
-        metrics.object_count = 5
-        metrics.embedding_count = 5
-
-        final_snapshot = metrics.snapshot()
-        assert final_snapshot["object_count"] == 5
-        assert final_snapshot["embedding_count"] == 5
+@pytest.fixture(autouse=True)
+def _reset() -> None:
+    object_store_module._MEMORY_STORE.clear()
+    reset_promotion_dedup_store()
 
 
-@pytest.mark.not_pg
-class TestColdRebuildLosslessness:
-    """Test that cold rebuild is lossless (no data loss)."""
-
-    def test_rebuild_matches_original_count(self, expected_outcomes: Dict[str, Any]):
-        """Assert rebuilt DB object count matches expected outcomes."""
-        expected = expected_outcomes["ingest_metrics"]
-
-        metrics_baseline = MetricsCollector()
-        metrics_baseline.object_count = expected["objects_created"]
-        metrics_baseline.embedding_count = expected["embeddings_created"]
-        baseline = metrics_baseline.snapshot()
-
-        metrics_rebuild = MetricsCollector()
-        metrics_rebuild.object_count = expected["objects_created"]
-        metrics_rebuild.embedding_count = expected["embeddings_created"]
-        rebuilt = metrics_rebuild.snapshot()
-
-        assert baseline == rebuilt, (
-            f"Cold rebuild lost data:\n"
-            f"  Original: {baseline}\n"
-            f"  Rebuilt: {rebuilt}"
-        )
-
-    def test_rebuild_preserves_object_kinds(self, memory_stores: dict, expected_outcomes: Dict[str, Any]):
-        """Assert cold rebuild preserves object kind distribution."""
-        from uuid import UUID
-
-        obj_store = memory_stores["objects"]
-        expected = expected_outcomes["object_counts"]["by_kind"]
-
-        kinds = {
-            "note": expected.get("note", 0),
-            "card": expected.get("card", 0),
-        }
-
-        kind_objs: Dict[str, int] = {}
-        obj_id_base = 0x10000000_00000000_00000000
-
-        for kind, count in kinds.items():
-            for i in range(count):
-                obj_id = UUID(f"{obj_id_base + (hash(kind) % 100000) + i:032x}")
-                obj_store.put(
-                    obj_id,
-                    kind=kind,
-                    source_ref=f"vault/{kind}_{i}.md",
-                    payload={"kind": kind},
-                )
-                kind_objs[kind] = kind_objs.get(kind, 0) + 1
-
-        assert kind_objs == kinds, (
-            f"Kind distribution not preserved:\n"
-            f"  Expected: {kinds}\n"
-            f"  Got: {kind_objs}"
-        )
-
-    def test_rebuild_preserves_embeddings(self, memory_stores: dict, metrics: MetricsCollector):
-        """Assert cold rebuild creates embeddings for all objects."""
-        metrics.object_count = 5
-        metrics.embedding_count = 5
-
-        assert metrics.object_count == metrics.embedding_count
+def _setup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, outbox_name: str = "outbox.jsonl") -> Path:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("PANEL_AGENT_DECIDER", "rule")
+    monkeypatch.setenv("PANEL_AGENT_PIPELINE", "direct")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("LLM_MOCK_RESPONSE", '{"type":"note","confidence":0.95}')
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "config")
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", "capture")
+    monkeypatch.setenv("VAULT_DESK_DIR_REL", "workbench")
+    outbox_path = tmp_path / outbox_name
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    return outbox_path
 
 
-@pytest.mark.not_pg
+def _load_manifest() -> dict[str, dict[str, object]]:
+    return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def _parse_note(path: Path) -> tuple[dict[str, object], str]:
+    frontmatter, body = load_frontmatter(path.read_text(encoding="utf-8"))
+    return (frontmatter if isinstance(frontmatter, dict) else {}), body
+
+
+def _strip_volatile(frontmatter: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in frontmatter.items() if key not in VOLATILE_KEYS}
+
+
+def _read_outbox(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _events_of_type(records: list[dict], event_type: str) -> list[dict]:
+    return [record for record in records if record.get("event") == event_type]
+
+
+def _assert_envelope(record: dict, expected_event: str) -> None:
+    assert record.get("event") == expected_event
+    assert isinstance(record.get("event_id"), str) and record["event_id"]
+    assert isinstance(record.get("trace_id"), str) and record["trace_id"]
+    source = record.get("source")
+    if isinstance(source, dict):
+        assert source.get("component")
+    else:
+        assert isinstance(source, str) and source
+    assert isinstance(record.get("payload"), dict)
+    timestamp = record.get("timestamp", "")
+    assert isinstance(timestamp, str) and timestamp
+
+
+def _seed_names() -> list[str]:
+    return sorted(_load_manifest().keys())
+
+
+def _mirror_paths(vault_root: Path) -> list[Path]:
+    """Get companion note paths (replaces legacy VaultMirror paths)."""
+    companion_root = vault_root / "_system" / "companions"
+    if not companion_root.exists():
+        return []
+    return sorted(companion_root.glob("*.md"))
+
+
+def _run_seeded_flow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    outbox_name: str = "outbox.jsonl",
+) -> tuple[Path, object, Path, list[dict], dict[str, object]]:
+    outbox_path = _setup_env(monkeypatch, tmp_path, outbox_name=outbox_name)
+    vault = tmp_path / "vault"
+    vault.mkdir(parents=True, exist_ok=True)
+    seed = seed_vault_test_notes(vault_root=vault, target_subdir="Test")
+    summary = run_vault_test_flow(vault_root=vault, target_subdir="Test", assert_expectations=False)
+    return seed.destination, summary, outbox_path, _read_outbox(outbox_path), dict(object_store_module._MEMORY_STORE)
+
+
+class TestColdStartPrecondition:
+    def test_store_starts_empty(self) -> None:
+        object_store_module._MEMORY_STORE.clear()
+        assert len(object_store_module._MEMORY_STORE) == 0
+
+
+class TestColdRebuildMatchesGolden:
+    def test_cold_start_produces_objects(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _, _, _, _, objects = _run_seeded_flow(tmp_path, monkeypatch)
+
+        assert objects
+        source_names = {Path(domain_object.source_ref).name for domain_object in objects.values()}
+        assert set(_seed_names()).issubset(source_names)
+        for object_id, domain_object in objects.items():
+            assert object_id
+            assert domain_object.uuid == object_id
+            assert domain_object.kind == "note"
+            assert domain_object.source_ref
+
+    def test_cold_start_matches_golden_frontmatter(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        seeded_folder, _, _, _, _ = _run_seeded_flow(tmp_path, monkeypatch)
+
+        for note_name in _seed_names():
+            actual_fm, _ = _parse_note(seeded_folder / note_name)
+            golden_fm, _ = _parse_note(GOLDEN_DIR / note_name.replace(".md", ".golden.md"))
+            assert _strip_volatile(actual_fm) == _strip_volatile(golden_fm), note_name
+
+    def test_cold_start_matches_golden_body(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        seeded_folder, _, _, _, _ = _run_seeded_flow(tmp_path, monkeypatch)
+
+        for note_name in _seed_names():
+            _, actual_body = _parse_note(seeded_folder / note_name)
+            _, golden_body = _parse_note(GOLDEN_DIR / note_name.replace(".md", ".golden.md"))
+            assert actual_body == golden_body, note_name
+
+
+class TestColdRebuildEventChain:
+    def test_cold_start_emits_promote_events(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _, _, _, records, _ = _run_seeded_flow(tmp_path, monkeypatch)
+
+        assert _events_of_type(records, "promote.intent.created")
+        assert _events_of_type(records, "promote.done")
+
+    def test_cold_start_event_envelopes_valid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _, _, _, records, _ = _run_seeded_flow(tmp_path, monkeypatch)
+
+        event_records = [record for record in records if record.get("event")]
+        assert event_records
+        for record in event_records:
+            _assert_envelope(record, str(record["event"]))
+
+
 class TestColdRebuildIdempotency:
-    """Test that rebuilding twice yields identical state (idempotency)."""
+    def test_rerun_from_cold_is_idempotent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _, summary, _, _, _ = _run_seeded_flow(tmp_path, monkeypatch)
 
-    def test_rebuild_once_vs_twice(self, memory_stores: dict, metrics: MetricsCollector):
-        """Assert: rebuild once = rebuild twice (idempotent)."""
-        from uuid import UUID
+        checks = summary.checks or {}
+        assert checks.get("rerun_no_changes") is True
+        assert checks.get("rerun_no_panel_side_effects") is True
 
-        obj_store = memory_stores["objects"]
-
-        rebuild1_metrics = MetricsCollector()
-        for i in range(5):
-            obj_id = UUID(f"10000000-0000-0000-0000-{i:012d}")
-            obj_store.put(
-                obj_id,
-                kind="note",
-                source_ref=f"vault/note{i}.md",
-                payload={"title": f"Note {i}"},
-            )
-            rebuild1_metrics.object_count += 1
-
-        snap1 = rebuild1_metrics.snapshot()
-
-        rebuild2_metrics = MetricsCollector()
-        for i in range(5):
-            obj_id = UUID(f"10000000-0000-0000-0000-{i:012d}")
-            obj_store.put(
-                obj_id,
-                kind="note",
-                source_ref=f"vault/note{i}.md",
-                payload={"title": f"Note {i}"},
-            )
-            rebuild2_metrics.object_count += 1
-
-        snap2 = rebuild2_metrics.snapshot()
-
-        assert snap1 == snap2
-        assert obj_store.count_objects() == 5
-
-    def test_rebuild_relations_idempotent(self, memory_stores: dict):
-        """Assert: rebuilding relations twice is idempotent."""
-        from uuid import UUID
-
-        rel_store = memory_stores["relations"]
-
-        src = UUID("10000000-0000-0000-0000-000000000001")
-        dst = UUID("10000000-0000-0000-0000-000000000002")
-
-        rel_store.link(src, dst, rel="links_to")
-        neighbors1 = rel_store.neighbors(src, rel="links_to", k=10)
-
-        rel_store.link(src, dst, rel="links_to")
-        neighbors2 = rel_store.neighbors(src, rel="links_to", k=10)
-
-        assert neighbors1 == neighbors2
-        assert neighbors2.count(dst) == 1
-
-
-@pytest.mark.not_pg
-class TestColdRebuildConcreteWorkflow:
-    """Test concrete cold rebuild workflow."""
-
-    def test_cold_rebuild_workflow_empty_to_full(
-        self, memory_stores: dict, expected_outcomes: Dict[str, Any], metrics: MetricsCollector
-    ):
-        """Concrete cold rebuild workflow."""
-        from uuid import UUID
-
-        obj_store = memory_stores["objects"]
-        vec_store = memory_stores["vectors"]
-        rel_store = memory_stores["relations"]
-
-        assert obj_store.count_objects() == 0
-
-        expected = expected_outcomes["ingest_metrics"]
-        for i in range(expected["objects_created"]):
-            obj_id = UUID(f"10000000-0000-0000-0000-{i:012d}")
-            obj_store.put(
-                obj_id,
-                kind="note",
-                source_ref=f"vault/note{i}.md",
-                payload={
-                    "uuid": str(obj_id),
-                    "title": f"Note {i}",
-                    "origin": "vault",
-                    "trust": "high",
-                },
-            )
-            metrics.object_count += 1
-
-        metrics.embedding_count = metrics.object_count
-
-        assert metrics.object_count == expected["objects_created"]
-        assert metrics.embedding_count == expected["embeddings_created"]
-
-    def test_cold_rebuild_companion_note_scenario(self):
-        """Test realistic scenario where companions exist but DB is empty."""
-        companions = {
-            f"vault/_system/companions/10000000-0000-0000-0000-{i:012d}.md": {
-                "uuid": f"10000000-0000-0000-0000-{i:012d}",
-                "title": f"Note {i}",
-                "origin": "vault",
-            }
-            for i in range(5)
+    def test_full_clear_and_rebuild_matches_first_run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        first_folder, _, _, _, _ = _run_seeded_flow(tmp_path / "first", monkeypatch)
+        first_frontmatter = {
+            note_name: _strip_volatile(_parse_note(first_folder / note_name)[0])
+            for note_name in _seed_names()
         }
 
-        metrics = MetricsCollector()
-        metrics.object_count = len(companions)
-        metrics.embedding_count = len(companions)
+        object_store_module._MEMORY_STORE.clear()
+        reset_promotion_dedup_store()
 
-        assert metrics.object_count == 5
-        assert metrics.embedding_count == 5
+        second_folder, _, _, _, _ = _run_seeded_flow(tmp_path / "second", monkeypatch)
+        second_frontmatter = {
+            note_name: _strip_volatile(_parse_note(second_folder / note_name)[0])
+            for note_name in _seed_names()
+        }
 
-    def test_rebuild_deterministic_given_companions(self):
-        """Assert: cold rebuild from companions is deterministic."""
-        metrics1 = MetricsCollector()
-        metrics1.object_count = 5
-        metrics1.embedding_count = 5
-        snap1 = metrics1.snapshot()
+        assert second_frontmatter == first_frontmatter
 
-        metrics2 = MetricsCollector()
-        metrics2.object_count = 5
-        metrics2.embedding_count = 5
-        snap2 = metrics2.snapshot()
+    def test_rebuild_reuses_existing_companions_after_store_reset(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Verify companion notes are reused across store resets (idempotent recovery)."""
+        _setup_env(monkeypatch, tmp_path, outbox_name="outbox-first.jsonl")
+        vault_root = tmp_path / "vault"
+        vault_root.mkdir(parents=True, exist_ok=True)
+        seed = seed_vault_test_notes(vault_root=vault_root, target_subdir="Test")
+        seed_paths = sorted(seed.destination.glob("*.md"))
 
-        assert snap1 == snap2, "Cold rebuild not deterministic"
+        reset_store_backends()
+        first = run_vault_alpha_ingest_paths(vault_root, seed_paths)
+        first_companions = _mirror_paths(vault_root)
+        assert first_companions, "expected ingest to create companion notes"
+
+        reset_store_backends()
+        object_store_module._MEMORY_STORE.clear()
+        reset_promotion_dedup_store()
+
+        second = run_vault_alpha_ingest_paths(vault_root, seed_paths)
+        captured = capsys.readouterr()
+
+        assert "cold rebuild" in captured.out.lower()
+        assert second.scanned == first.scanned
+        assert second.ingested == first.ingested
+        assert second.processed_notes == first.processed_notes
+        assert _mirror_paths(vault_root) == first_companions
+        assert seed.destination.exists()
+
+
+class TestColdStartCoreFields:
+    def test_objects_have_valid_core6_fields(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _, _, _, _, objects = _run_seeded_flow(tmp_path, monkeypatch)
+        manifest = _load_manifest()
+
+        source_name_to_object = {
+            Path(domain_object.source_ref).name: domain_object for domain_object in objects.values()
+        }
+        assert set(manifest).issubset(source_name_to_object)
+
+        for domain_object in source_name_to_object.values():
+            assert domain_object.uuid
+            assert domain_object.kind == "note"
+            assert domain_object.source_ref
+            core6 = domain_object.payload.get("core6") or {}
+            assert core6.get("id") == domain_object.uuid
+            assert core6.get("origin") == "vault"
+
+        evergreen = source_name_to_object["evergreen-strategy.md"]
+        assert evergreen.payload.get("review_state") == "reviewed"
+        assert evergreen.payload.get("maturity") == "evergreen"
