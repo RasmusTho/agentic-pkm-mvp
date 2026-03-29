@@ -3,68 +3,11 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import AsyncIterator
 
 import pytest
 
 from tests.sync.conftest import FileChange, FileOperation, SyncLayer, SyncResult, SyncStatus
-
-
-class FilesystemTransport(SyncLayer):
-    """Transport layer for filesystem-based change detection.
-
-    Scans vault folder, compares against last-seen state, returns created/modified/deleted.
-    Uses file mtime as timestamp (or inode for reliability).
-    """
-
-    def __init__(
-        self, *, ignore_patterns: list[str] | None = None, use_mtime: bool = True
-    ) -> None:
-        """Initialize FilesystemTransport.
-
-        Args:
-            ignore_patterns: List of glob patterns to ignore (default: _system, .git, .obsidian)
-            use_mtime: Use mtime for timestamps (True) or inode (False)
-        """
-        self.ignore_patterns = ignore_patterns or ["_system/*", ".git/*", ".obsidian/*"]
-        self.use_mtime = use_mtime
-        self.state: dict[str, tuple[float, str]] = {}  # path -> (mtime, hash)
-
-    async def detect_changes(self, path: Path, since_timestamp: float) -> list[FileChange]:
-        """Scan vault folder, return changes since timestamp.
-
-        Returns:
-            list[FileChange]: Created, modified, deleted files since timestamp
-        """
-        pass  # Implementation required in TDD
-
-    async def pull_changes(self, path: Path, paths: list[str] | None = None) -> dict[str, str]:
-        """Read full content of specified or all recent files.
-
-        Args:
-            path: Vault root
-            paths: Specific files to pull (None = all)
-
-        Returns:
-            Dict mapping file path -> content
-        """
-        pass
-
-    async def push_changes(self, path: Path, changes: dict[str, str]) -> SyncResult:
-        """Write files back to filesystem."""
-        pass
-
-    async def status(self) -> SyncStatus:
-        """Return filesystem sync status."""
-        pass
-
-    def _should_ignore(self, file_path: Path) -> bool:
-        """Check if path matches ignore patterns."""
-        pass
-
-    def _compute_hash(self, content: bytes) -> str:
-        """Compute SHA256 hash of file content."""
-        pass
+from app.sync.filesystem import FilesystemTransport
 
 
 class TestFilesystemTransportInitialization:
