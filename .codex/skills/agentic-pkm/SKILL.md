@@ -7,14 +7,14 @@ description: "Dev-time work in the agentic-pkm-mvp repo (Agentic PKM / Yggdrasil
 
 ## First context to load
 
-- Always read `agentic-pkm-mvp/.codex/AGENTS.md` first. It is the repo dev policy and overrides generic behavior.
+- Always read `agentic-pkm-mvp/AGENTS.md` first. It is the canonical repo builder-agent policy.
 - Prefer SoT docs over README. The README may be stale.
 - Use `docs/DOCS_INDEX.md` and `docs/PROJECT_KERNEL.md` as the entry points for current documentation.
 
 ## SoT hierarchy (summary)
 
-1. Current SoT docs (see `.codex/AGENTS.md` list)
-2. Dev policy and workflow: `docs/AI_DEVELOPMENT.md`, `docs/DEV_WORKFLOW.md`
+1. Current SoT docs (identified via `docs/DOCS_INDEX.md` after reading `AGENTS.md`)
+2. Dev policy and workflow: `AGENTS.md`, `docs/development/DEV_WORKFLOW.md`
 3. Domain chapters: `docs/DATA_MODEL.md`, `docs/FRONTMATTER.md`, etc.
 4. Historical or archived docs: `docs/archive/*`, `docs/legacy/*`
 
@@ -30,7 +30,7 @@ description: "Dev-time work in the agentic-pkm-mvp repo (Agentic PKM / Yggdrasil
 ## Common entry points
 
 - Code: `app/`, `api/`, `scripts/`, `run_agent.py`
-- Docs: `docs/`, `.codex/AGENTS.md`
+- Docs: `docs/`, `AGENTS.md`
 - Ops: `Makefile`, `docker-compose.yaml`
 - Tests: `tests/`
 

@@ -135,7 +135,7 @@ Important:
   - runtime component,
   - and role in a workflow.
 - Development-time terms such as `coding agent`, `Codex`, or repo assistant do not belong to this
-  runtime ontology layer; read those from `docs/DEV_WORKFLOW.md` and `.codex/AGENTS.md`.
+  runtime ontology layer; read those from the root `AGENTS.md` and `docs/development/DEV_WORKFLOW.md`.
 
 ## Runtime seam notes
 

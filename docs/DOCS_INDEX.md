@@ -121,6 +121,7 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | docs/PRIVACY.md | Privacy | Aligned (forward line v5.x) | 2026-02-05 | Local-first, outbound only on optional remote LLMs. |
 | docs/DEPENDENCIES.md | Dependencies | Aligned (forward line v5.x) | 2026-02-05 | External deps aligned to current modules (transcribe, llm, watcher). |
 | docs/LANGGRAPH_AGENT_ARCHITECTURE.md | LangGraph agent architecture reference | Aligned (forward line v5.x) | 2026-03-28 | Reference pattern for LangGraph agent layering, graph structure, and reusable runtime shape. |
+| AGENTS.md | Builder-agent instructions | Aligned (forward line v5.x) | 2026-03-29 | Canonical root instruction file for development-time builder agents and repo automation; explicitly separate from runtime/system-agent docs. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-03-27 | Runtime observability contract for heartbeats, counters, spans, and status interpretation; now explicitly keeps runtime monitoring separate from higher-level architecture ownership. |
 | docs/OPERATIONS.md | Operations playbook | Aligned (forward line v5.x) | 2026-03-14 | Top-level operator entrypoint focused on current runtime checks, watcher operations, and escalation to HEALTH, OBSERVABILITY, INFRASTRUCTURE, and runbooks. |
 | docs/INFRASTRUCTURE.md | Infrastructure notes | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Compose stack (db/api/worker) for Reality-MVP. |
@@ -133,7 +134,9 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | docs/DATA_MODEL.md | Data model | Aligned (forward line v5.x) | 2026-03-21 | DB mirror of the Core-6 contract; now explicitly reminds readers that meaning-bearing artifacts, commitment structures, and system/receipt artifacts are different semantic classes even when runtime persistence sits nearby. |
 | docs/DB_SCHEMA.md | DB schema | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Snapshot of current tables/views + DB outbox bootstrap; notes multiple historical Alembic heads. |
 | docs/SETTINGS.md | Settings | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Settings compiler + registries documented; some areas are forward-looking. |
-| docs/DEV_WORKFLOW.md | Developer workflow | Aligned (forward line v5.x) | 2026-03-21 | Primary development workflow and dev-layer AI policy; separates development-time coding agents from runtime system agents and consolidates change order, constraints, and required validation. |
+| docs/DEV_WORKFLOW.md | Developer workflow | Aligned (forward line v5.x) | 2026-03-29 | Compatibility pointer to `docs/development/DEV_WORKFLOW.md`; kept so older links still resolve without remaining canonical. |
+| docs/development/DEV_WORKFLOW.md | Development workflow | Aligned (forward line v5.x) | 2026-03-29 | Development reference for builder-agent working loop and validation expectations; not an auto-loaded instruction file. |
+| docs/development/AGENT_INSTRUCTION_GOVERNANCE.md | Builder-agent instruction governance | Aligned (forward line v5.x) | 2026-03-29 | Development reference covering canonical entrypoints, instruction-vs-recordkeeping separation, and maintenance rules for builder-agent guidance. |
 | docs/templates/DOC_TEMPLATE.md | Document template | Aligned (forward line v5.x) | 2026-03-14 | Standard template for new docs; defines metadata, scope, authority, and writing structure. |
 | docs/INVENTORY.md | Runtime inventory | Aligned (forward line v5.x) | 2026-02-05 | Reference inventory (no file:line); update alongside code. |
 | docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-02-05 | Definitions updated to match v5.5 baseline (outbox/JSONL audit, rerank hooks). |
@@ -204,8 +207,8 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/agents/AGENT_SPEC.md | Agent spec | Legacy (archived) | 2026-02-05 | Historical reference; prefer AGENTS + EVENTS for current contracts. |
-| .codex/AGENTS.md | Coding agent guidance | Aligned (forward line v5.x, with known debt) | 2026-03-27 | Dev-layer system prompt and repo-specific docs workflow for development-time coding agents; now explicitly includes the design-principles / architecture / roadmap / status split. |
-| CLAUDE.md | Claude Code entrypoint | Aligned (forward line v5.x) | 2026-03-27 | Short compatibility entrypoint for Claude Code; defers to `.codex/AGENTS.md` and points contributors to the canonical reading order. |
+| .codex/AGENTS.md | Codex compatibility pointer | Aligned (forward line v5.x) | 2026-03-29 | Non-canonical compatibility entrypoint that redirects Codex-style discovery to the root `AGENTS.md` and development reference docs. |
+| CLAUDE.md | Claude Code entrypoint | Aligned (forward line v5.x) | 2026-03-29 | Minimal Claude compatibility entrypoint that defers to the root `AGENTS.md`. |
 | docs/codex/GUIDELINES.md | Codex guidelines | Legacy (archived) | 2026-02-05 | Historical guidelines; prefer DEV_WORKFLOW/AI_DEVELOPMENT and repo contracts. |
 
 ## ADRs

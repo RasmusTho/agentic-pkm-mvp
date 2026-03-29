@@ -1,4 +1,4 @@
-State: Dev-layer guidelines (historical). This file may lag the current architecture; prefer `docs/DEV_WORKFLOW.md` and the repo tests/contracts.
+State: Dev-layer guidelines (historical). This file may lag the current architecture; prefer `AGENTS.md`, `docs/development/DEV_WORKFLOW.md`, and the repo tests/contracts.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.

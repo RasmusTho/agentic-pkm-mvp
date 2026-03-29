@@ -24,8 +24,8 @@ For the canonical ontology of `System Agent`, `Agent Role`, `Delegation`, `Autho
 `Receipt`, see `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md`.
 
 This document is about agents that exist inside the PKM system/runtime.
-It is not the instruction set for development-time coding agents or repo automation.
-Development-time guidance lives in `docs/DEV_WORKFLOW.md`, `.codex/AGENTS.md`, and
+It is not the instruction set for development-time builder agents or repo automation.
+Development-time guidance lives in the root `AGENTS.md`, `docs/development/DEV_WORKFLOW.md`, and
 `docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md`.
 System-level design rules for modularity, capability composition, and documentation layering live in `docs/DESIGN_PRINCIPLES.md`.
 

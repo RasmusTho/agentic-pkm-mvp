@@ -15,7 +15,7 @@ versioned contracts for how the system behaves (agents, flows, panel wiring, pro
 
 Related docs:
 - `docs/ARCHITECTURE.md` for current authority boundaries and runtime baseline
-- `docs/DEV_WORKFLOW.md` for required validation/update order when changing settings artifacts
+- `docs/development/DEV_WORKFLOW.md` for required validation/update order when changing settings artifacts
 - `docs/LLM_ROUTING.md` for the LLM-specific routing/fabric contract
 
 ## Runtime settings (compiled)
