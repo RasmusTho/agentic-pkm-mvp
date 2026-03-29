@@ -7,22 +7,137 @@ place.  The facade adds:
 
 * Consistent telemetry (trace-id, latency, token estimate) as structured
   log-dicts that fitness gates can consume downstream.
-* A thin typed API (``chat``, ``structured``, ``tool_use``) that hides
-  the pack/name ceremony from callers.
+* A thin typed API (``chat``, ``structured``, ``tool_use``, ``reason``) that
+  hides the pack/name ceremony from callers.
+* ``ReasoningTaskKind`` enum so all agents declare intent uniformly.
+* Audit logging consistent with ``app/agents/base/audit.py``.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Sequence
 from uuid import uuid4
+
+from pydantic import BaseModel, Field
 
 from app.components.llm.fabric import ChatClient
 from app.components.llm.router import LLMRouter, LLMTaskIntent
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Task-kind taxonomy
+# ---------------------------------------------------------------------------
+
+
+class ReasoningTaskKind(str, Enum):
+    """Canonical task kinds for all LangGraph agent reasoning calls.
+
+    Each kind maps to a specific ``LLMTaskIntent.task_kind`` string so that
+    the router can apply per-task model/provider policies.
+    """
+
+    CLAIMS = "claims"
+    REVIEW = "review"
+    RANKING = "ranking"
+    PLANNING = "planning"
+    ASK_ANSWER = "ask_answer"
+    DECIDE = "decide"
+    CLASSIFY = "classify"
+
+    @property
+    def llm_task_kind(self) -> str:
+        """Return the string passed to ``LLMTaskIntent`` for routing."""
+        # decide and plan already used by existing routing policies
+        if self == ReasoningTaskKind.DECIDE:
+            return "decide"
+        if self == ReasoningTaskKind.PLANNING:
+            return "plan"
+        if self == ReasoningTaskKind.CLASSIFY:
+            return "classify"
+        # reasoning/*  tasks route through the default_reasoning policy
+        return "reasoning"
+
+
+# ---------------------------------------------------------------------------
+# Structured output types
+# ---------------------------------------------------------------------------
+
+
+class ClaimOutput(BaseModel):
+    id: str
+    object_uuid: str = ""
+    text: str
+    modality: str = "assertion"
+    confidence: float = Field(ge=0.0, le=1.0, default=0.7)
+
+
+class ReasoningClaimsResult(BaseModel):
+    claims: list[ClaimOutput] = Field(default_factory=list)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    inferences: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ReviewResult(BaseModel):
+    summary: str = ""
+    issues: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+
+
+class RankingEntry(BaseModel):
+    object_uuid: str
+    score: float = Field(ge=0.0, le=1.0)
+    reason: str = ""
+
+
+class RankingResult(BaseModel):
+    ranking: list[RankingEntry] = Field(default_factory=list)
+
+
+class PlanningResult(BaseModel):
+    plan: str = ""
+    steps: list[str] = Field(default_factory=list)
+
+
+class AskAnswerResult(BaseModel):
+    answer: str = ""
+
+
+class DecideResult(BaseModel):
+    decision: str = ""
+    reason: str = ""
+    confidence: float = Field(ge=0.0, le=1.0, default=0.7)
+
+
+class ClassifyResult(BaseModel):
+    type: str = "note"
+    tags: list[str] = Field(default_factory=list)
+    trust: str = "provisional"
+    confidence: float = Field(ge=0.0, le=1.0, default=0.66)
+
+
+# Union type for the reason() return value
+ReasoningResult = (
+    ReasoningClaimsResult
+    | ReviewResult
+    | RankingResult
+    | PlanningResult
+    | AskAnswerResult
+    | DecideResult
+    | ClassifyResult
+)
+
+
+# ---------------------------------------------------------------------------
+# Telemetry / tool-use helpers (unchanged from original)
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -49,6 +164,11 @@ class TelemetryRecord:
     error: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# ReasoningFacade
+# ---------------------------------------------------------------------------
+
+
 @dataclass
 class ReasoningFacade:
     """Wraps the LLM router with a clean per-method API and telemetry."""
@@ -63,7 +183,50 @@ class ReasoningFacade:
         """Read-only view of captured telemetry records."""
         return list(self._telemetry)
 
-    # -- public API -----------------------------------------------------------
+    # -- unified reason() API -------------------------------------------------
+
+    def reason(
+        self,
+        task_kind: ReasoningTaskKind,
+        input: dict[str, Any],  # noqa: A002  (shadow builtin intentional)
+        trace_id: str | None = None,
+    ) -> ReasoningResult:
+        """Route a reasoning task through the unified facade.
+
+        Parameters
+        ----------
+        task_kind:
+            One of the ``ReasoningTaskKind`` enum values.  Determines both the
+            LLM routing policy and the structured output type.
+        input:
+            Task-specific payload.  Keys depend on ``task_kind``:
+            - CLAIMS / REVIEW / RANKING: ``text`` (str), optional ``object_uuid``
+            - PLANNING / DECIDE: ``system`` (str), ``user`` (str)
+            - ASK_ANSWER: ``question`` (str), optional ``context`` (str)
+            - CLASSIFY: ``text`` (str), optional ``object_uuid``
+        trace_id:
+            Optional distributed trace identifier.
+        """
+        trace_id = trace_id or uuid4().hex
+
+        if task_kind == ReasoningTaskKind.CLAIMS:
+            return self._reason_claims(input, trace_id)
+        if task_kind == ReasoningTaskKind.REVIEW:
+            return self._reason_review(input, trace_id)
+        if task_kind == ReasoningTaskKind.RANKING:
+            return self._reason_ranking(input, trace_id)
+        if task_kind == ReasoningTaskKind.PLANNING:
+            return self._reason_planning(input, trace_id)
+        if task_kind == ReasoningTaskKind.ASK_ANSWER:
+            return self._reason_ask_answer(input, trace_id)
+        if task_kind == ReasoningTaskKind.DECIDE:
+            return self._reason_decide(input, trace_id)
+        if task_kind == ReasoningTaskKind.CLASSIFY:
+            return self._reason_classify(input, trace_id)
+        # Should be unreachable with the enum, but safe fallback
+        raise ValueError(f"Unknown ReasoningTaskKind: {task_kind}")
+
+    # -- public low-level API (chat / structured / tool_use) ------------------
 
     def chat(
         self,
@@ -120,8 +283,6 @@ class ReasoningFacade:
         that any provider can attempt structured output.  Parsing is best-
         effort (``json.loads``); callers should validate.
         """
-        import json
-
         trace_id = trace_id or uuid4().hex
         intent = LLMTaskIntent(task_kind=task_kind, json_schema_required=True)
         client = self._resolve_client(intent)
@@ -176,8 +337,6 @@ class ReasoningFacade:
         tool descriptions into the system prompt and parse a JSON tool-call
         from the response.
         """
-        import json
-
         trace_id = trace_id or uuid4().hex
         intent = LLMTaskIntent(task_kind=task_kind, json_schema_required=True)
         client = self._resolve_client(intent)
@@ -225,7 +384,155 @@ class ReasoningFacade:
                 error=error,
             )
 
+    # -- reason() sub-handlers ------------------------------------------------
+
+    def _reason_claims(self, input: dict[str, Any], trace_id: str) -> ReasoningClaimsResult:
+        from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
+
+        text = input.get("text") or input.get("content") or ""
+        relations = input.get("relations") or []
+        object_uuid = input.get("object_uuid") or ""
+        prompt = build_user_prompt(text, [r if isinstance(r, dict) else r.model_dump() for r in relations])
+        pack = {"system": SYSTEM_PROMPT, "user": prompt}
+        raw = self._call_pack(pack, task_kind=ReasoningTaskKind.CLAIMS, trace_id=trace_id, agent="reasoning_facade", kind="reasoning.claims")
+        try:
+            data = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            data = {}
+        self._audit(trace_id=trace_id, agent="reasoning_facade", action="reason.claims", object_id=object_uuid or None, details={"text_len": len(text)})
+        return ReasoningClaimsResult.model_validate(data)
+
+    def _reason_review(self, input: dict[str, Any], trace_id: str) -> ReviewResult:
+        text = input.get("text") or input.get("content") or ""
+        object_uuid = input.get("object_uuid") or ""
+        prompt = f"NOTE:\n{text}\n\nReturn JSON with summary, issues (list), suggestions (list)."
+        pack = {"system": "You are a reviewer that summarizes and critiques notes. Respond with JSON.", "user": prompt}
+        raw = self._call_pack(pack, task_kind=ReasoningTaskKind.REVIEW, trace_id=trace_id, agent="reasoning_facade", kind="reasoning.review")
+        try:
+            data = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            data = {}
+        self._audit(trace_id=trace_id, agent="reasoning_facade", action="reason.review", object_id=object_uuid or None, details={"text_len": len(text)})
+        return ReviewResult.model_validate(data)
+
+    def _reason_ranking(self, input: dict[str, Any], trace_id: str) -> RankingResult:
+        candidates = input.get("candidates") or []
+        question = input.get("question") or ""
+        prompt_lines = ["You rank candidate notes for the given question. Return JSON {\"ranking\": [{\"object_uuid\":\"...\",\"score\":0-1,\"reason\":\"...\"}]}."]
+        if question:
+            prompt_lines.append(f"Question: {question}")
+        prompt_lines.append("Candidates:")
+        for c in candidates:
+            oid = c.get("object_uuid") or c.get("id") or ""
+            text = (c.get("text") or "")[:180]
+            prompt_lines.append(f"- {oid}: {text}")
+        pack = {"system": "You are a ranking agent. Respond with JSON ranking.", "user": "\n".join(prompt_lines)}
+        raw = self._call_pack(pack, task_kind=ReasoningTaskKind.RANKING, trace_id=trace_id, agent="reasoning_facade", kind="reasoning.ranking")
+        try:
+            data = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            data = {}
+        self._audit(trace_id=trace_id, agent="reasoning_facade", action="reason.ranking", object_id=None, details={"candidate_count": len(candidates)})
+        return RankingResult.model_validate(data)
+
+    def _reason_planning(self, input: dict[str, Any], trace_id: str) -> PlanningResult:
+        system = input.get("system") or "You are a planning assistant. Return JSON with plan (str) and steps (list of str)."
+        user = input.get("user") or input.get("text") or ""
+        pack = {"system": system, "user": user}
+        raw = self._call_pack(pack, task_kind=ReasoningTaskKind.PLANNING, trace_id=trace_id, agent="reasoning_facade", kind="reasoning.planning")
+        try:
+            data = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            data = {"plan": raw or "", "steps": []}
+        self._audit(trace_id=trace_id, agent="reasoning_facade", action="reason.planning", object_id=None, details={})
+        return PlanningResult.model_validate(data)
+
+    def _reason_ask_answer(self, input: dict[str, Any], trace_id: str) -> AskAnswerResult:
+        question = input.get("question") or input.get("user") or ""
+        context = input.get("context") or ""
+        system = input.get("system") or "You answer questions using only the provided sources."
+        user_lines = [f"Question: {question}"]
+        if context:
+            user_lines += ["", "Sources:", context]
+        pack = {"system": system, "user": "\n".join(user_lines)}
+        raw = self._call_pack(pack, task_kind=ReasoningTaskKind.ASK_ANSWER, trace_id=trace_id, agent="reasoning_facade", kind="ask.answer")
+        self._audit(trace_id=trace_id, agent="reasoning_facade", action="reason.ask_answer", object_id=None, details={"question_len": len(question)})
+        return AskAnswerResult(answer=(raw or "").strip())
+
+    def _reason_decide(self, input: dict[str, Any], trace_id: str) -> DecideResult:
+        system = input.get("system") or (
+            "You are a decision agent. Return JSON with decision (str), reason (str), confidence (float 0-1)."
+        )
+        user = input.get("user") or input.get("text") or ""
+        pack = {"system": system, "user": user}
+        raw = self._call_pack(pack, task_kind=ReasoningTaskKind.DECIDE, trace_id=trace_id, agent="reasoning_facade", kind="agent.decide")
+        try:
+            data = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            data = {"decision": raw or "", "reason": "", "confidence": 0.7}
+        self._audit(trace_id=trace_id, agent="reasoning_facade", action="reason.decide", object_id=None, details={})
+        return DecideResult.model_validate(data)
+
+    def _reason_classify(self, input: dict[str, Any], trace_id: str) -> ClassifyResult:
+        text = input.get("text") or input.get("content") or ""
+        object_uuid = input.get("object_uuid") or ""
+        pack = {
+            "system": (
+                "Returnera JSON {type, tags, trust, confidence}. "
+                "type∈{note,seed,idea,doc}. trust∈{own,provisional,external,conflict}. "
+                "tags=[topic/*]. Svara enbart JSON."
+            ),
+            "user": text[:4000],
+        }
+        raw = self._call_pack(pack, task_kind=ReasoningTaskKind.CLASSIFY, trace_id=trace_id, agent="reasoning_facade", kind="classification")
+        data = _parse_json_block(raw or "") or {}
+        confidence = _as_float(data.get("confidence") if isinstance(data, dict) else None, default=0.66)
+        if not data or not isinstance(data, dict) or confidence < 0.7:
+            # Heuristic fallback
+            data = _heuristic_classify(text)
+            confidence = _as_float(data.get("confidence"), default=0.66)
+        self._audit(trace_id=trace_id, agent="reasoning_facade", action="reason.classify", object_id=object_uuid or None, details={"confidence": confidence})
+        return ClassifyResult.model_validate(data)
+
     # -- internals ------------------------------------------------------------
+
+    def _call_pack(
+        self,
+        pack: dict[str, str],
+        *,
+        task_kind: ReasoningTaskKind,
+        trace_id: str,
+        agent: str,
+        kind: str,
+    ) -> str:
+        intent = LLMTaskIntent(task_kind=task_kind.llm_task_kind)
+        client = self._resolve_client(intent)
+        t0 = time.monotonic()
+        error: str | None = None
+        result = ""
+        try:
+            result = client.chat(
+                f"reasoning.{task_kind.value}",
+                pack,
+                agent=agent,
+                kind=kind,
+                trace_id=trace_id,
+            )
+        except Exception as exc:
+            error = str(exc)
+            raise
+        finally:
+            self._record(
+                trace_id=trace_id,
+                method=f"reason.{task_kind.value}",
+                task_kind=task_kind.llm_task_kind,
+                client=client,
+                t0=t0,
+                pack=pack,
+                result=result,
+                error=error,
+            )
+        return result
 
     def _resolve_client(self, intent: LLMTaskIntent) -> ChatClient:
         route = self.router.route(intent)
@@ -292,5 +599,90 @@ class ReasoningFacade:
             f" error={error}" if error else "",
         )
 
+    @staticmethod
+    def _audit(
+        *,
+        trace_id: str | None,
+        agent: str,
+        action: str,
+        object_id: str | None,
+        details: dict[str, Any],
+    ) -> None:
+        """Best-effort audit log — never raises."""
+        try:
+            from app.agents.base.audit import audit_log
 
-__all__ = ["ReasoningFacade", "TelemetryRecord", "ToolResult"]
+            audit_log(
+                object_id=object_id,
+                agent=agent,
+                action=action,
+                trace_id=trace_id,
+                details=details,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Module-level factory
+# ---------------------------------------------------------------------------
+
+
+def get_reasoning_facade() -> ReasoningFacade:
+    """Return a ``ReasoningFacade`` backed by the default ``LLMRouter``."""
+    return ReasoningFacade(router=LLMRouter())
+
+
+# ---------------------------------------------------------------------------
+# Private helpers (shared with classifier fallback)
+# ---------------------------------------------------------------------------
+
+
+def _parse_json_block(s: str) -> dict[str, Any] | None:
+    m = re.search(r"\{.*\}", s, re.S)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+        return data if isinstance(data, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _as_float(value: Any, default: float = 0.66) -> float:
+    try:
+        if value is None:
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _heuristic_classify(text: str) -> dict[str, Any]:
+    """Lightweight rule-based classifier fallback — no LLM call."""
+    import re as _re
+
+    tags = []
+    if "TODO" in text.upper():
+        tags.append("topic/todo")
+    if "http" in text:
+        tags.append("topic/links")
+    if _re.search(r"^#\s+", text, _re.M):
+        tags.append("topic/has_title")
+    return {"type": "note", "trust": "provisional", "tags": sorted(set(tags)), "confidence": 0.55}
+
+
+__all__ = [
+    "ReasoningFacade",
+    "ReasoningTaskKind",
+    "TelemetryRecord",
+    "ToolResult",
+    "ReasoningClaimsResult",
+    "ReviewResult",
+    "RankingResult",
+    "PlanningResult",
+    "AskAnswerResult",
+    "DecideResult",
+    "ClassifyResult",
+    "get_reasoning_facade",
+]
