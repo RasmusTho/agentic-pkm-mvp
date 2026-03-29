@@ -62,7 +62,7 @@ Every benchmark sample must carry a scenario triple. This enables filtering and 
 |---|---|---|
 | `storage_profile` | `ssd`, `external`, `memory`, `pg` | Storage backend or device class |
 | `runtime_placement` | `local`, `docker`, `colima` | Where the runtime processes execute |
-| `model_profile` | `mock`, `local-ollama`, `cloud-anthropic` | LLM/embedding provider class |
+| `model_profile` | `mock`, `local`, `cloud` | LLM/embedding provider class |
 
 The `memory` and `pg` storage profile values are used in the benchmark runner (in-process). The `ssd` and `external` values are reserved for future runtime instrumentation where the physical storage device matters for latency analysis.
 
@@ -137,7 +137,7 @@ description: <human-readable description>
 seed_dir: <path relative to repo root>
 storage_profile: <memory|pg|ssd|external>
 runtime_placement: <local|docker|colima>
-model_profile: <mock|local-ollama|cloud-anthropic>
+model_profile: <mock|local|cloud>
 notes: <optional free text>
 ```
 
@@ -151,8 +151,8 @@ notes: <optional free text>
 - Seed vault files present at `docs/examples/vault_test_seed/`.
 - For `memory` profile: no external services needed.
 - For `pg` profile: PostgreSQL accessible via `DATABASE_URL`.
-- For `local-ollama` model profile: Ollama running locally.
-- For `cloud-anthropic` model profile: `ANTHROPIC_API_KEY` configured.
+- For `local` model profile: Ollama running locally.
+- For `cloud` model profile: `ANTHROPIC_API_KEY` configured.
 
 ### Running a benchmark scenario
 
