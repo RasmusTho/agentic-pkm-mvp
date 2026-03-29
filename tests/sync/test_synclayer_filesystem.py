@@ -1,12 +1,11 @@
 """Test FilesystemTransport: scanning, mtime tracking, ignore patterns, edge cases."""
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 import pytest
 
-from tests.sync.conftest import FileChange, FileOperation, SyncLayer, SyncResult, SyncStatus
+from tests.sync.conftest import FileOperation
 from app.sync.filesystem import FilesystemTransport
 
 
