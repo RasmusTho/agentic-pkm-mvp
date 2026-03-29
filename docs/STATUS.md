@@ -47,7 +47,7 @@ Validation posture note:
 - Harden the PanelAgent LangGraph pilot (panel action catalog + planner pipeline + promotion consumer) so its telemetry, provenance, and gating sensors stay deterministic while remaining opt-in.
 ### Next
 - Sequence the ReasoningFacade + LangGraph rollout for one additional agent pool, ensuring instrumentation feeds into the fitness gates and the orchestrator V2 experiment flag remains gated until stability signals arrive.
-- Keep the companion note + Note Context track honest in docs and rollout planning: current runtime still uses VaultMirror, `note_log`, and `note_mirror`; the companion-note migration remains forward work rather than shipped baseline behavior.
+- Keep the companion note + Note Context track honest in docs and rollout planning: the core companion-note and Note Context implementation is now present, PanelAgent uses Note Context with a retained compatibility fallback, and the remaining work is rollout verification plus doc cleanup rather than first implementation.
 - Expand the vault-as-GUI settings compiler and operator surfaces so the forward line can describe runtime topology with complete provenance and precedence in both `settings-explain` and `status`.
 - Align CLI/docs runbooks with the v5.6 narrative: update `docs/ROADMAP.md`, status snapshots, and the runbooks so operators know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe.
 ### Later

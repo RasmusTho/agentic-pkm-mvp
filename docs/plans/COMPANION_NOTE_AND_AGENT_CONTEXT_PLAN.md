@@ -14,17 +14,15 @@ remove the legacy VaultMirror implementation, introduce an attachment manifest, 
 with rich per-artifact context through a Note Context abstraction.
 
 It is based on an architecture investigation that analyzed all relevant docs, code, tests, and
-runtime behavior. The investigation found:
+runtime behavior. The current repository shows a mixed state:
 
-1. Docs define companion note at `vault/_system/companions/<uuid>.md` with a specific field set.
-   Code implements none of this — it writes to `System/Metadata/VaultMirror/<dir>/<uuid>.md` with
-   a different field set. The word "companion" appears zero times in `app/`.
-2. VaultMirror duplicates human-owned metadata (`review_state`, `maturity`) that belongs in vault
-   note frontmatter, not in the system-surface artifact.
-3. No agent reads mirror/companion files. Every agent operates with severely limited context
-   (Panel Agent: 800 chars, Classifier: 4000 chars raw text, ASK: snippets only).
-4. Attachments and images referenced via `![[...]]` are invisible to the system — only `.md` text
-   is ingested.
+1. Companion note is now implemented at `vault/_system/companions/<uuid>.md`, and active ingest /
+   worker / CLI paths use it rather than `System/Metadata/VaultMirror/...`.
+2. Note Context is implemented, and PanelAgent now uses it as the primary prompt context path.
+3. A compatibility fallback still exists in PanelAgent: if Note Context assembly fails, the runtime
+   falls back to the legacy truncated snippet rather than hard-failing.
+4. Active docs still contain rollout-language drift in some places, which is why this plan remains
+   necessary as an implementation/status tracker.
 
 ## Current implementation status
 
@@ -33,38 +31,39 @@ codebase rather than older plan text.
 
 ### Shipped
 
-- The current runtime still uses the legacy metadata mirror path
-  `System/Metadata/VaultMirror/<vault-relative path>/<uuid>.md`.
-- Active ingest and related flows still depend on `app/services/note_log.py`,
-  `app/services/note_mirror.py`, `app/ingest/vault_alpha.py`, `app/ingest/config.py`, and
+- `app/services/companion_note.py` exists and includes the main companion-note read/write,
+  content-hash lookup, attachment scanning, and healing helpers.
+- `app/services/note_context.py` exists and assembles runtime note context from companion note,
+  vault note content, and optional runtime-store data.
+- Active ingest/runtime paths now use companion-note wiring, including
+  `app/ingest/vault_alpha.py`, `app/ingest/config.py`, `app/workers/outbox_worker.py`, and
   `app/cli/alpha_human_flows.py`.
-- Existing tests still verify VaultMirror-backed behavior (`tests/services/test_note_log.py`,
-  `tests/services/test_note_mirror.py`, ingest/runtime/CLI coverage).
+- PanelAgent now uses Note Context as its primary path, and focused tests cover the integration.
 
 ### Shipped but compatibility fallback retained
 
-- None for this track yet. The current repository does not ship a companion-note primary path with
-  a retained compatibility fallback; VaultMirror remains the active implementation.
+- PanelAgent retains the legacy truncated snippet fallback when Note Context assembly fails. This is
+  compatibility/safety behavior, not the primary path.
 
 ### Remaining verification and doc-sync items
 
-- `app/services/companion_note.py` does not exist in the current codebase.
-- `app/services/note_context.py` does not exist in the current codebase.
-- `app/agents/panel_agent/graph.py` has not been migrated to a Note Context service in the current
-  codebase.
-- Active SoT and plan docs must continue to describe VaultMirror as current runtime reality until
-  the implementation actually migrates.
+- Active SoT and roadmap docs still need to separate "implemented/integrated" from "remaining
+  cleanup/doc-sync" precisely.
+- Legacy/VaultMirror references still need a final audit so active docs do not describe the removed
+  mirror path as current runtime behavior.
+- Companion note + Note Context should still be treated as forward-line work for broader rollout
+  hardening and doc cleanup, even though the core implementation is now present.
 
 ## Repo re-baseline (2026-03-29)
 
-The current repository disproves the earlier "parts already implemented" assumption for this plan.
+The current repository disproves the earlier "nothing is implemented yet" assumption for this plan.
 As of this re-baseline:
 
-- companion note service is not implemented,
-- Note Context is not implemented,
-- ingest still writes VaultMirror via `note_log` / `note_mirror`,
-- ignore-glob defaults still exclude `System/Metadata/VaultMirror/**`,
-- and active code/tests still treat VaultMirror as load-bearing behavior.
+- companion note service is implemented,
+- Note Context is implemented,
+- ingest ignore-glob defaults exclude `_system/companions/**`,
+- PanelAgent uses Note Context first and retains a legacy fallback,
+- and the remaining work is now rollout verification plus doc sync, not first implementation.
 
 The historical implementation sequence below is retained as the intended migration order, but it
 should now be read as forward work rather than partially shipped work.
