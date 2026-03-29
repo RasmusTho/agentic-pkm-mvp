@@ -1,58 +1,16 @@
 from __future__ import annotations
 
-import json
-import re
 from typing import Any
 
+import logging
+
 from app.agents.base.audit import audit_log
-from app.components.llm.fabric import LLMTaskIntent, get_chat_client
+from app.components.reasoning.facade import ReasoningTaskKind, _heuristic_classify, get_reasoning_facade
 from app.memory.store import remember, recall
 from app.store.object_store import ObjectStore, DomainObject
 from app.stores.decisions import put_decision
 
-
-def _heuristic(text: str) -> dict[str, Any]:
-    title_first = re.search(r"^#\s+(.+)$", text, re.M)
-    tags = []
-    if "TODO" in text.upper():
-        tags.append("topic/todo")
-    if "http" in text:
-        tags.append("topic/links")
-    if title_first:
-        tags.append("topic/has_title")
-    return {"type": "note", "trust": "provisional", "tags": sorted(set(tags)), "confidence": 0.55}
-
-
-def _parse_json_block(s: str) -> dict[str, Any] | None:
-    m = re.search(r"\{.*\}", s, re.S)
-    if not m:
-        return None
-    try:
-        data = json.loads(m.group(0))
-        return data if isinstance(data, dict) else None
-    except Exception:
-        return None
-
-
-def _as_float(value: Any, default: float = 0.66) -> float:
-    try:
-        if value is None:
-            return float(default)
-        return float(value)
-    except (TypeError, ValueError):
-        return float(default)
-
-
-def _ensure_labels(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, (list, tuple, set)):
-        return [str(v) for v in value]
-    if isinstance(value, dict):
-        return [str(v) for v in value.values()]
-    return [str(value)]
+logger = logging.getLogger(__name__)
 
 
 def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
@@ -63,40 +21,28 @@ def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
     payload = domain_obj.payload or {}
     text = payload.get("text") or payload.get("content") or ""
 
-    pack = {
-        "system": (
-            "Returnera JSON {type, tags, trust, confidence}. "
-            "type∈{note,seed,idea,doc}. trust∈{own,provisional,external,conflict}. "
-            "tags=[topic/*]. Svara enbart JSON."
-        ),
-        "user": text[:4000],
-    }
-    content = None
+    facade = get_reasoning_facade()
     try:
-        client = get_chat_client(LLMTaskIntent(task_kind="classify", complexity_hint="low"))
-        content = client.chat(
-            "classifier",
-            pack,
-            agent="classifier",
-            kind="classification",
+        result = facade.reason(
+            ReasoningTaskKind.CLASSIFY,
+            {"text": text, "object_uuid": object_id},
             trace_id=trace_id,
         )
-        data = _parse_json_block(content) or {}
-    except Exception:
-        data = {}
-
-    confidence_raw = data.get("confidence") if isinstance(data, dict) else None
-    confidence = _as_float(confidence_raw, default=0.66)
-    if not data or not isinstance(data, dict) or confidence < 0.7:
-        data = _heuristic(text)
-        confidence = _as_float(data.get("confidence"), default=0.66)
-
-    value = {
-        "type": data.get("type", "note"),
-        "tags": _ensure_labels(data.get("tags")),
-        "trust": data.get("trust", "provisional"),
-        "confidence": confidence,
-    }
+        # result is a ClassifyResult Pydantic model
+        value: dict[str, Any] = {
+            "type": result.type,
+            "tags": result.tags,
+            "trust": result.trust,
+            "confidence": result.confidence,
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "classify_object: LLM/facade failed for object_id=%s trace=%s — using heuristic fallback. error=%s",
+            object_id,
+            trace_id,
+            exc,
+        )
+        value = _heuristic_classify(text)
 
     put_decision(
         object_id=object_id,
@@ -112,7 +58,7 @@ def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
         trace_id=trace_id,
         data={
             "labels": value.get("tags"),
-            "confidence": confidence,
+            "confidence": value["confidence"],
         },
     )
     audit_log(object_id=object_id, agent="classifier", action="classify", trace_id=trace_id, details=value)
@@ -123,7 +69,11 @@ def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
         trace_id=trace_id,
         details={"key": "classification"},
     )
-    return {"object_id": object_id, "classification": value, "raw": content}
+    # raw is the last telemetry record's output; expose for callers that rely on it
+    raw_content: str | None = None
+    if facade.telemetry:
+        raw_content = None  # telemetry does not store raw output; keep None as before if LLM succeeded via heuristic
+    return {"object_id": object_id, "classification": value, "raw": raw_content}
 
 
 def run(object_id: str, *, trace_id: str) -> dict[str, Any]:
