@@ -1,5 +1,4 @@
 State: Locked baseline SoT v5.5 (Reality-MVP + watchers/panel policy) with forward line now moving into v5.6 LangGraph/Reasoning rollouts.
-Last reviewed: 2026-03-26
 # Roadmap — Strategic Control
 
 This roadmap is forward-looking and skimmable. History lives in `docs/history/SOT_4X_HISTORY.md`; deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
@@ -16,22 +15,19 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 
 ## Now / Next / Later
 - **Now**
-  - **v5.5 baseline lock + safety guard** — watcher auto-run stays off by default while the DedupTaskQueue, EventDedupStore, and optimistic writes keep the vault deterministic; panel action provenance and watcher/panel settings are compiled with provenance metadata before letting the LangGraph forward line take over.
-  - PanelAgent LangGraph decider opt-in, watcher policy auto-exec plumbing (v5.5C delivered).
+  - **v5.5 baseline lock + safety guard** — runtime/startup defaults `WATCHER_AUTO_EXEC=1`, but operators can force emit-only mode with `WATCHER_AUTO_EXEC=0`; allowlists, dedup/idempotency, optimistic writes, and write-guard/status signals remain the real enablement gates for safe rollout.
+  - PanelAgent LangGraph decider opt-in, watcher policy auto-exec plumbing (v5.5C in progress).
   - Watcher → panel → planner/orchestrator automation with safety limits now includes dedup reports, promotion consumer visibility, and explicit skipped receipts.
   - Vault-first config validation (panel wiring, watcher, outbox) with schema enforcement and `python -m app.cli.settings_explain`.
 - **Next**
-  - **Artifact identity + companion note contract** — lock the artifact model, companion-note contract, and identity-healing order so vault note + companion note remain sufficient to rebuild runtime DB/index state. Near-term implementation work includes companion-note creation/update, conservative healing logs, and bounded identity-metadata history.
-  - **SyncLayer abstraction** — make the file-change/reactive sync abstraction explicit so the runtime stays transport-agnostic across iCloud/Git driven change propagation.
-  - **EmbeddingProvider tagging hardening** — ensure every embedding remains explicitly tagged with provider/model identity and is treated as a derived runtime artifact rather than an identity anchor.
-  - **Quality Wave: Registry Watcher Evaluation Stack** — Prerequisite: v5.5C decider (delivered). Sequencing: A → B (parallel with C) → D → E → F (gate). A: contract tests for watcher→panel→promotion event chain; B: golden vault + seeded snapshots; C: metamorphic runs (interval/max-ticks/scope overrides); D: cold rebuild coverage (empty store + existing mirrors); E: fitness gates (status/outbox counters, idempotence, no dup intents on rerun); F: scripted UAT harness (CLI-first) — F gates the Quality Wave as done. **Done means** idempotence proven (first run vs rerun stable), event chain proven (registry watcher → `ingest.vault.changed` → worker → `panel.intent.*` → `promote.*`), deterministic diffs on golden vault, and gates enforced in CI/UAT. **Modules & Files to be touched during implementation**: `app/watcher/registry.py`, `configs/watchers.yaml`, `app/agents/panel_agent/*`, `app/components/settings/panel_actions_loader.py`, `app/promotion/consumer.py`, outbox writer/reader + status command modules, CLI `watcher run`/status modules, `app/fitness/*` and `ops/quality/baselines.yaml`, `docs/examples/vault_test_seed/*`.
-  - **PKM runtime/storage + model benchmark track (docs-first backlog)** — define a light benchmark/observability protocol for the real PKM runtime before any storage migration. Scope: continuous drift metrics for watcher → DB outbox → worker → index → ASK/panel/promote, plus scenario-based benchmark runs tagged by storage profile, runtime placement, and model profile (local vs cloud). Initial phase is measurement only: no latency thresholds, no storage move decision, and no forced CI gates until enough baseline data exists. **Done means** metric names are standardized, a repeatable test protocol exists, continuous runtime samples can be compared across storage/model profiles, and backlog decisions about moving Colima/runtime data off the internal SSD are evidence-led rather than speculative.
-  - **ReasoningFacade + basic graph builder** (BLOCKER for LangGraph rollout; unblocked after Quality Wave done).
-    - Rationale: prevents pattern fragmentation; all LangGraph agents route reasoning/tool calls through the facade.
+  - **Companion note + Note Context migration** — still unshipped in the current codebase. Active ingest/runtime paths continue to use VaultMirror (`note_log`, `note_mirror`, `vault_alpha`), so this remains forward work plus doc-sync rather than baseline functionality.
+  - **Quality Wave: Registry Watcher Evaluation Stack** — A: contract tests for watcher→panel→promotion event chain; B: golden vault + seeded snapshots; C: metamorphic runs (interval/max-ticks/scope overrides); D: cold rebuild coverage (empty store + existing mirrors); E: fitness gates (status/outbox counters, idempotence, no dup intents on rerun); F: scripted UAT harness (CLI-first). **Done means** idempotence proven (first run vs rerun stable), event chain proven (registry watcher → `ingest.vault.changed` → worker → `panel.intent.*` → `promote.*`), deterministic diffs on golden vault, and gates enforced in CI/UAT. **Modules & Files to be touched during implementation**: `app/watcher/registry.py`, `configs/watchers.yaml`, `app/agents/panel_agent/*`, `app/components/settings/panel_actions_loader.py`, `app/promotion/consumer.py`, outbox writer/reader + status command modules, CLI `watcher run`/status modules, `app/fitness/*` and `ops/quality/baselines.yaml`, `docs/examples/vault_test_seed/*`.
+  - **ReasoningFacade + basic graph scaffolding** (still missing; blocker for broader LangGraph rollout).
+    - Rationale: prevents pattern fragmentation; broader agent adoption should route reasoning/tool calls through a shared facade once that seam exists.
   - Orchestrator V2 (LangGraph): parallel execution, compensation/rollback, checkpointing, retries.
     - Back-compat: `ORCHESTRATOR_VERSION=v1|v2`.
   - PanelAgent 2.0 timeline:
-    - v5.5C: decider (delivered).
+    - v5.5C: decider (in progress).
     - v5.6: PanelAgent 2.0 full migration (freeform interpretation, multi-step workflows, uncertainty→suggested checkboxes, catalog-driven discovery).
     - v5.7: advanced (panel versioning, cross-note coordination).
   - Vault-as-GUI settings compiler (`@Settings` / System/Config) now covers panel-action catalogs, watcher settings, and outbox paths with CI schema checks (v5.6 track).
@@ -43,8 +39,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 - **Later**
   - Watcher auto-exec of panel plans with guardrails and rollback; richer panel actions (summary/reply) via tool/MCP boundary.
   - Reasoning/reflective layers with eval gates; expanded observability counters for orchestration/A2A.
-  - Satellite Sync (multi-instance / master–satellite topology) — plan in `docs/plans/PROTOCOL_SATELLITE_SYNC.md`; enters active track after single-instance LangGraph rollout stabilizes.
-  - Collaboration/multi-user: enters planning only after single-user flows are operationally accepted (watcher auto-exec + LangGraph phases stable + Satellite Sync baseline proven).
+  - Collaboration/multi-user after single-user flows are stable.
   - `v6.0` architecture target: semantics-aligned runtime architecture where context layering,
     overlap relations, primary-human-artifact boundaries, and local-first multi-device assumptions
     are expressed more cleanly than in the current v5.x transitional runtime.
@@ -205,11 +200,6 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 4) Observability backend + interim GUI surfacing object counts, ingest runs/errors, ASK usage.
 5) Orchestrator runtime V1 available via CLI/plan path for external ingest; future LangGraph/MCP remains additive.
 
-## Operational topology note
-
-Current operational topology is documented as operational reality, not as a roadmap deliverable or
-locked architecture law. See `docs/HUMAN-FLOWS.md` for the authoritative user-facing description.
-
 ## Version ladder (summary)
 | Version | Intent | State |
 | --- | --- | --- |
@@ -217,34 +207,13 @@ locked architecture law. See `docs/HUMAN-FLOWS.md` for the authoritative user-fa
 | v5.0 | PanelAgent Runtime V1 | Shipped |
 | v5.1–v5.4 | Watcher track (ingest/panel CLI, policy, ergonomics) | Operationally accepted |
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
-| v5.5C | Panel LangGraph decider hardening | Delivered |
-| v5.5D | Watcher auto-exec; watcher→planner/orchestrator automation | Planned |
-| v5.6 | ReasoningFacade + LangGraph rollout + Orchestrator V2 (flagged) + Vault-as-GUI settings compiler; docs-first kickoff plan in `docs/plans/V56_FORWARD_LINE.md` | Docs-first kickoff (status/roadmap updates) |
+| v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
+| v5.6 | Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), and Vault-as-GUI settings compiler; see `docs/plans/V56_FORWARD_LINE.md` | Docs-first kickoff / selective forward work |
 | v6.0 | Wanted-state architecture pass to align runtime boundaries with the newer human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
-
-## Forward-line dependency chain
-
-```
-v5.5C done ✓
-  → Quality Wave A (event chain contracts) ✓
-  → Quality Wave B/C (golden vault + metamorphic runs) ✓
-  → Quality Wave D (cold rebuild + watcher registry contracts) ✓
-  → Quality Wave E (fitness gates) ✓
-  → Quality Wave F (scripted UAT — gates entire wave) ✓  ← 99 tests, 7 files
-    → ReasoningFacade + basic graph builder  ← UNBLOCKED
-      → Orchestrator V2 flag (preview)
-      → LangGraph rollout Phase 1 (pilot agent)
-        → Phase 2 (two agents + planner/orchestrator stable)
-          → Phase 3 (broader adoption + metrics + rollback plan)
-            → Satellite Sync planning
-              → Multi-user planning
-```
 
 ## Tracks (details moved)
 - Watcher track details: `docs/tracks/TRACK_WATCHER.md`
 - PanelAgent LangGraph track: `docs/tracks/TRACK_PANELAGENT_LANGGRAPH.md`
 - AgentOps/A2A/MCP hardening: `docs/tracks/TRACK_AGENTOPS_A2A_MCP.md`
 - Fitness/CI contract: `docs/tracks/TRACK_FITNESS_CI_CONTRACT.md`
-- v5.6 forward-line kickoff plan: `docs/plans/V56_FORWARD_LINE.md`
-- Satellite Sync protocol: `docs/plans/PROTOCOL_SATELLITE_SYNC.md`
 - Historical ladder: `docs/history/SOT_4X_HISTORY.md`

@@ -24,7 +24,7 @@ Validation posture note:
 
 ## Baseline Definition (SoT v5.5)
 - Runtime watcher: registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`) is the default; legacy snapshot watchers are dev-only and require `PKM_SETTINGS_PROFILE=lab`.
-- Runtime default: `scripts/start_full_system.sh` sets `WATCHER_AUTO_EXEC=1` unless explicitly set by the operator; set `WATCHER_AUTO_EXEC=0` to run watchers in emit-only mode. Once armed, any note with an AI panel fence is treated as a candidate and actions are filtered through the allowlisted `watcher_settings.allowed_actions`, while the only per-note opt-out is `ai_panel_auto_run: never` (nested form accepted) and manual CLI panel runs remain available.
+- Runtime default: `scripts/start_full_system.sh` and `config/runtime.defaults.env` set `WATCHER_AUTO_EXEC=1` unless the operator already set a value; set `WATCHER_AUTO_EXEC=0` to run watchers in emit-only mode. Default-on does not bypass rollout discipline: once armed, any note with an AI panel fence is only a candidate, actions are still filtered through the allowlisted `watcher_settings.allowed_actions`, the only per-note opt-out is `ai_panel_auto_run: never` (nested form accepted), and manual CLI panel runs remain available.
 - Settings tiering (watcher controls): runtime defaults to `PKM_SETTINGS_PROFILE=operator`; dev/lab-only watcher tuning env vars are applied only when `PKM_SETTINGS_PROFILE=lab`.
 - Storage baseline: `store_objects` is the canonical object table; legacy `objects` rows are best-effort migrated when needed so runtime avoids dual-table selection. Legacy `app/store/object_store.py` now delegates to canonical `app/stores` providers (compat mirror retained for tests), and `index rebuild` reads via `ObjectStore` rather than separate memory/DB query branches.
 - ASK warm-load boundary: `/api/ask` hydrates HybridStore through the canonical store interface (`list_objects`) instead of backend-specific `_objects`/raw SQL introspection.
@@ -44,12 +44,10 @@ Validation posture note:
 ### Now
 - Ground the v5.6 objectives in a docs-first kickoff: the detailed plan in `docs/plans/V56_FORWARD_LINE.md` captures the pillars, acceptance criteria, and immediate signal checks the forward line needs to ship.
 - Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, skipped receipts, and write-guard state are surfaced in status, events, and the new CLI `settings-explain` output before any runtime gate opens.
-- The artifact-model and companion-note contract docs are part of this v5.6 forward-line kickoff
-  rather than a change to the locked v5.5 baseline.
 - Harden the PanelAgent LangGraph pilot (panel action catalog + planner pipeline + promotion consumer) so its telemetry, provenance, and gating sensors stay deterministic while remaining opt-in.
 ### Next
-- **Companion Note + Note Context** — replace VaultMirror with flat companion files at `vault/_system/companions/<uuid>.md`; introduce `NoteContext` assembler for agent-facing rich context. 8-part plan: `docs/plans/COMPANION_NOTE_AND_NOTE_CONTEXT.md`. Parts 1–5 deliver portable identity; Parts 6–7 wire Note Context into Panel Agent (eliminating the 800-char snippet). Event contracts unchanged. Blocks agent quality improvements in v5.6+.
 - Sequence the ReasoningFacade + LangGraph rollout for one additional agent pool, ensuring instrumentation feeds into the fitness gates and the orchestrator V2 experiment flag remains gated until stability signals arrive.
+- Keep the companion note + Note Context track honest in docs and rollout planning: current runtime still uses VaultMirror, `note_log`, and `note_mirror`; the companion-note migration remains forward work rather than shipped baseline behavior.
 - Expand the vault-as-GUI settings compiler and operator surfaces so the forward line can describe runtime topology with complete provenance and precedence in both `settings-explain` and `status`.
 - Align CLI/docs runbooks with the v5.6 narrative: update `docs/ROADMAP.md`, status snapshots, and the runbooks so operators know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe.
 ### Later
@@ -94,9 +92,8 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 | Area | Current baseline posture | Forward-line direction |
 | --- | --- | --- |
 | Watcher auto-exec | Guarded by dedup + optimistic writes + idempotency | Safe enablement only after gates and receipts prove stable behavior |
-| LangGraph rollout | Active for ASK and PanelAgent-related flows only | Expand in phases after ReasoningFacade/basic graph builder land |
+| LangGraph rollout | Active for ASK and PanelAgent-related flows only | Expand in phases after the planned shared ReasoningFacade/common graph scaffolding land |
 | Orchestrator V2 | Not baseline | Flagged preview only |
-| Companion Note + Note Context | VaultMirror (`System/Metadata/VaultMirror`) is active but planned for replacement | Flat `_system/companions/<uuid>.md` + NoteContext assembler; 8-part plan in `docs/plans/COMPANION_NOTE_AND_NOTE_CONTEXT.md` |
 
 For detailed sequencing, version history, and roadmap ladder, use:
 - `docs/ROADMAP.md`

@@ -25,7 +25,7 @@ Prereqs:
 - **CI fitness gates** parse `CI SUMMARY …` lines and fail merges when `GATES.ok != true`.
 
 ## Core Invariants
-- **Explicit watcher mode:** runtime defaults to `WATCHER_AUTO_EXEC=1`; set `WATCHER_AUTO_EXEC=0` for emit-only mode.
+- **Explicit watcher mode:** runtime startup defaults to `WATCHER_AUTO_EXEC=1`; set `WATCHER_AUTO_EXEC=0` for emit-only mode. Default-on still runs through allowlist, per-note opt-out, and write-safety gates.
 - **Compatibility:** `index.embedding.created` is the current index completion event (legacy alias: `index.object.embedded`).
 - **No hidden state:** events/logs include trace/provenance; outbox is the only canonical queue for side-effects.
 
@@ -72,7 +72,7 @@ curl -sS http://127.0.0.1:18000/api/status
 ```
 
 Common safety switches:
-- `WATCHER_AUTO_EXEC=0` switches watcher to emit-only mode (default is `1`).
+- `WATCHER_AUTO_EXEC=0` switches watcher to emit-only mode. Runtime/startup defaults to `WATCHER_AUTO_EXEC=1` when unset.
 - `WATCHER_SCOPE_GLOB="<inbox>/**"` restricts watcher scanning (default derives from vault layout/inbox).
 
 ## Golden Path (Alpha E2E)
