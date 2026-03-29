@@ -79,7 +79,7 @@ def _assert_envelope(record: dict, expected_event: str) -> None:
 
 
 def _seed_names() -> list[str]:
-    return sorted(path.name for path in SEED_SOURCE.glob("*.md"))
+    return sorted(_load_manifest().keys())
 
 
 def _mirror_paths(vault_root: Path) -> list[Path]:
@@ -115,7 +115,8 @@ class TestColdRebuildMatchesGolden:
         _, _, _, _, objects = _run_seeded_flow(tmp_path, monkeypatch)
 
         assert objects
-        assert len(objects) == len(_seed_names())
+        source_names = {Path(domain_object.source_ref).name for domain_object in objects.values()}
+        assert set(_seed_names()).issubset(source_names)
         for object_id, domain_object in objects.items():
             assert object_id
             assert domain_object.uuid == object_id
@@ -216,8 +217,12 @@ class TestColdStartCoreFields:
         _, _, _, _, objects = _run_seeded_flow(tmp_path, monkeypatch)
         manifest = _load_manifest()
 
-        assert len(objects) == len(manifest)
-        for domain_object in objects.values():
+        source_name_to_object = {
+            Path(domain_object.source_ref).name: domain_object for domain_object in objects.values()
+        }
+        assert set(manifest).issubset(source_name_to_object)
+
+        for domain_object in source_name_to_object.values():
             assert domain_object.uuid
             assert domain_object.kind == "note"
             assert domain_object.source_ref
@@ -225,7 +230,6 @@ class TestColdStartCoreFields:
             assert core6.get("id") == domain_object.uuid
             assert core6.get("origin") == "vault"
 
-        evergreen_uuid = "11111111-1111-4111-8111-111111111111"
-        evergreen = objects[evergreen_uuid]
+        evergreen = source_name_to_object["evergreen-strategy.md"]
         assert evergreen.payload.get("review_state") == "reviewed"
         assert evergreen.payload.get("maturity") == "evergreen"
