@@ -491,7 +491,11 @@ class ReasoningFacade:
             # Heuristic fallback
             data = _heuristic_classify(text)
             confidence = _as_float(data.get("confidence"), default=0.66)
-        self._audit(trace_id=trace_id, agent="reasoning_facade", action="reason.classify", object_id=object_uuid or None, details={"confidence": confidence})
+        # Normalize raw dict fields before model_validate so that non-strict
+        # LLM payloads (scalar tags, out-of-range confidence, missing fields)
+        # do not cause a ValidationError.
+        data = _normalize_classify_payload(data)
+        self._audit(trace_id=trace_id, agent="reasoning_facade", action="reason.classify", object_id=object_uuid or None, details={"confidence": data.get("confidence", 0.66)})
         return ClassifyResult.model_validate(data)
 
     # -- internals ------------------------------------------------------------
@@ -656,6 +660,52 @@ def _as_float(value: Any, default: float = 0.66) -> float:
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _ensure_labels(value: Any) -> list[str]:
+    """Coerce a raw LLM tags/labels value to a list of strings.
+
+    LLMs sometimes return a single string, a comma-separated string, a dict,
+    or a list that contains non-string items.  This normaliser handles all of
+    those cases so that ``ClassifyResult.model_validate`` never receives an
+    unexpected type for the ``tags`` field.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        # Handle comma-separated strings like "topic/foo, topic/bar"
+        return [v.strip() for v in value.split(",") if v.strip()]
+    if isinstance(value, dict):
+        return [str(v) for v in value.values() if v]
+    if isinstance(value, list):
+        return [str(item) for item in value if item is not None]
+    # Fallback: stringify whatever we got
+    return [str(value)]
+
+
+def _normalize_classify_payload(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a raw classify dict so that ``ClassifyResult.model_validate``
+    never fails on common non-strict LLM outputs.
+
+    Handles:
+    - ``tags`` as scalar string, dict, or mixed list → always a list[str]
+    - ``confidence`` outside [0, 1] or non-numeric → clamped float
+    - ``trust`` missing or non-string → defaults to "provisional"
+    - ``type`` missing or non-string → defaults to "note"
+    """
+    normalized: dict[str, Any] = dict(data)
+    # tags: always a list of strings
+    normalized["tags"] = _ensure_labels(data.get("tags"))
+    # confidence: clamp to [0.0, 1.0]
+    raw_conf = _as_float(data.get("confidence"), default=0.66)
+    normalized["confidence"] = max(0.0, min(1.0, raw_conf))
+    # trust: must be a non-empty string
+    trust = data.get("trust")
+    normalized["trust"] = trust if isinstance(trust, str) and trust.strip() else "provisional"
+    # type: must be a non-empty string
+    obj_type = data.get("type")
+    normalized["type"] = obj_type if isinstance(obj_type, str) and obj_type.strip() else "note"
+    return normalized
 
 
 def _heuristic_classify(text: str) -> dict[str, Any]:

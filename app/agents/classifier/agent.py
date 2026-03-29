@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
+import logging
+
 from app.agents.base.audit import audit_log
-from app.components.reasoning.facade import ReasoningTaskKind, get_reasoning_facade
+from app.components.reasoning.facade import ReasoningTaskKind, _heuristic_classify, get_reasoning_facade
 from app.memory.store import remember, recall
 from app.store.object_store import ObjectStore, DomainObject
 from app.stores.decisions import put_decision
+
+logger = logging.getLogger(__name__)
 
 
 def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
@@ -18,18 +22,27 @@ def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
     text = payload.get("text") or payload.get("content") or ""
 
     facade = get_reasoning_facade()
-    result = facade.reason(
-        ReasoningTaskKind.CLASSIFY,
-        {"text": text, "object_uuid": object_id},
-        trace_id=trace_id,
-    )
-    # result is a ClassifyResult Pydantic model
-    value: dict[str, Any] = {
-        "type": result.type,
-        "tags": result.tags,
-        "trust": result.trust,
-        "confidence": result.confidence,
-    }
+    try:
+        result = facade.reason(
+            ReasoningTaskKind.CLASSIFY,
+            {"text": text, "object_uuid": object_id},
+            trace_id=trace_id,
+        )
+        # result is a ClassifyResult Pydantic model
+        value: dict[str, Any] = {
+            "type": result.type,
+            "tags": result.tags,
+            "trust": result.trust,
+            "confidence": result.confidence,
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "classify_object: LLM/facade failed for object_id=%s trace=%s — using heuristic fallback. error=%s",
+            object_id,
+            trace_id,
+            exc,
+        )
+        value = _heuristic_classify(text)
 
     put_decision(
         object_id=object_id,
