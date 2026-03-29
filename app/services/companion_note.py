@@ -7,10 +7,15 @@ Plan: docs/plans/COMPANION_NOTE_AND_NOTE_CONTEXT.md
 
 Bounded field set (must NOT include review_state, maturity, kind, origin):
   uuid, source_ref, title, content_hash, ingest_state,
-  last_ingested, created_by_instance, attachments[]
+  last_ingested, created_by_instance, attachments[],
+  identity_history[] (bounded to IDENTITY_HISTORY_MAX entries)
+
+Healing log: vault/_system/heal_log.jsonl — append-only, conservative,
+  one line per healing event with before/after and reason.
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -19,9 +24,13 @@ from pathlib import Path
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 _COMPANIONS_DIR = Path("_system/companions")
+_HEAL_LOG_PATH = Path("_system/heal_log.jsonl")
 
 # Matches ![[...]] embed syntax only — NOT plain [[note]] wiki-links.
 _EMBED_RE = re.compile(r"!\[\[([^\]]+)\]\]")
+
+# Maximum number of identity-history entries kept per companion note.
+IDENTITY_HISTORY_MAX = 10
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +44,16 @@ class AttachmentRef:
 
 
 @dataclass
+class IdentityHistoryEntry:
+    """One entry in a companion note's bounded identity-change history."""
+    timestamp: str       # ISO 8601
+    event: str           # "path_change" | "uuid_conflict" | "repair" | "cold_start" | "rebuild"
+    before: dict         # snapshot of key identity fields before the event
+    after: dict          # snapshot of key identity fields after the event
+    reason: str          # human-readable explanation
+
+
+@dataclass
 class CompanionNote:
     uuid: str
     source_ref: str
@@ -44,6 +63,7 @@ class CompanionNote:
     last_ingested: str  # ISO 8601
     created_by_instance: str
     attachments: list[AttachmentRef] = field(default_factory=list)
+    identity_history: list[IdentityHistoryEntry] = field(default_factory=list)
 
 
 @dataclass
@@ -53,6 +73,27 @@ class ConflictLog:
     companion_uuid: str
     winner: str
     reason: str
+
+
+# ---------------------------------------------------------------------------
+# Artifact identity triple (locked contract)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ArtifactIdentity:
+    """
+    The locked identity triple for a vault artifact.
+
+    These three fields together are sufficient to establish continuity
+    and rebuild runtime DB/index state from the file-based surfaces.
+
+    - uuid:         canonical identity anchor (from frontmatter or companion)
+    - vault_path:   vault-relative path (source_ref in companion)
+    - content_hash: sha256 of stripped note body (tracks content version)
+    """
+    uuid: str
+    vault_path: str
+    content_hash: str
 
 
 # ---------------------------------------------------------------------------
