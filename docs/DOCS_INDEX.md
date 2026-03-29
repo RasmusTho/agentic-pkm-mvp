@@ -209,7 +209,7 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | docs/agents/AGENT_SPEC.md | Agent spec | Legacy (archived) | 2026-02-05 | Historical reference; prefer AGENTS + EVENTS for current contracts. |
 | .codex/AGENTS.md | Codex compatibility pointer | Aligned (forward line v5.x) | 2026-03-29 | Non-canonical compatibility entrypoint that redirects Codex-style discovery to the root `AGENTS.md` and development reference docs. |
 | CLAUDE.md | Claude Code entrypoint | Aligned (forward line v5.x) | 2026-03-29 | Minimal Claude compatibility entrypoint that defers to the root `AGENTS.md`. |
-| docs/codex/GUIDELINES.md | Codex guidelines | Legacy (archived) | 2026-02-05 | Historical guidelines; prefer DEV_WORKFLOW/AI_DEVELOPMENT and repo contracts. |
+| docs/codex/GUIDELINES.md | Codex guidelines | Legacy (archived) | 2026-03-29 | Historical guidance only; use the root `AGENTS.md` plus `docs/development/*` for current builder-agent policy and workflow. |
 
 ## ADRs
 | Path | Scope | Review status | Last reviewed | Notes |
