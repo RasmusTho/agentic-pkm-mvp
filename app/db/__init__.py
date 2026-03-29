@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
-
-import psycopg
-from psycopg import sql
+from typing import Any, Dict, Tuple, Union
 
 
-ExceptionRow = tuple | dict[str, Any]
+ExceptionRow = Union[Tuple[Any, ...], Dict[str, Any]]
 
 
 def _extract_single_value(row: ExceptionRow) -> Any | None:
@@ -31,6 +28,8 @@ def table_exists(conn: psycopg.Connection, table_name: str) -> bool:
 
 def table_count(conn: psycopg.Connection, table_name: str) -> int:
     try:
+        from psycopg import sql  # noqa: PLC0415
+
         with conn.cursor() as cur:
             stmt = sql.SQL("SELECT count(*) FROM {}")
             stmt = stmt.format(sql.Identifier(table_name))

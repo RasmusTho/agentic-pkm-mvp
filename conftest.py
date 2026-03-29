@@ -3,17 +3,6 @@ from __future__ import annotations
 import pytest
 
 
-def pytest_addoption(parser) -> None:
-    parser.addoption(
-        "--faulthandler-timeout",
-        action="store",
-        type=float,
-        dest="faulthandler_timeout",
-        default=None,
-        help="Alias for faulthandler_timeout (seconds) when faulthandler is enabled.",
-    )
-
-
 def pytest_configure(config) -> None:
     # Provide marker definitions for pytest when pyproject/pytest.ini is ignored.
     markers = {

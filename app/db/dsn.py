@@ -1,6 +1,5 @@
 import os
 import typing as t
-import psycopg
 
 
 def resolve_dsn(conninfo: t.Optional[str] = None) -> str:
@@ -15,10 +14,14 @@ def dsn() -> str:
 
 
 def connect(conninfo: t.Optional[str] = None, **kwargs):
+    import psycopg  # noqa: PLC0415
+
     return psycopg.connect(resolve_dsn(conninfo), **kwargs)
 
 
 def ping_postgres(*, timeout: float = 1.0, conninfo: t.Optional[str] = None) -> tuple[bool, str]:
+    import psycopg  # noqa: PLC0415
+
     dsn_value = resolve_dsn(conninfo)
     if not dsn_value:
         return False, "missing dsn"
