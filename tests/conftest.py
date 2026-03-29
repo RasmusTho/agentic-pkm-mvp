@@ -214,6 +214,17 @@ def pytest_addoption(parser) -> None:
         )
     except ValueError:
         pass
+    try:
+        group.addoption(
+            "--faulthandler-timeout",
+            action="store",
+            type=float,
+            dest="faulthandler_timeout",
+            default=None,
+            help="No-op stub for pytest-faulthandler's --faulthandler-timeout option.",
+        )
+    except ValueError:
+        pass
 
 
 def pytest_configure(config) -> None:
