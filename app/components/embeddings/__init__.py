@@ -20,6 +20,8 @@ from app.components.embeddings.base import EmbeddingProvider
 from app.components.embeddings.validation import (
     validate_embedding_tags,
     validate_single_embedding,
+    assert_compatible_tags,
+    assert_compatible_tag_with_index,
 )
 from app.components.embeddings.audit import (
     count_by_provider,
@@ -65,6 +67,8 @@ __all__ = [
     "EmbeddingProvider",
     "validate_embedding_tags",
     "validate_single_embedding",
+    "assert_compatible_tags",
+    "assert_compatible_tag_with_index",
     "count_by_provider",
     "count_by_provider_model",
     "find_untagged",

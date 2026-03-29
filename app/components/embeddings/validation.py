@@ -131,3 +131,76 @@ def validate_tag_structure(tag: Any) -> None:
         raise ValueError(
             f"provider {tag.provider!r} is not in known providers: {sorted(KNOWN_PROVIDERS)}"
         )
+
+
+def assert_compatible_tags(a: TaggedEmbedding, b: TaggedEmbedding) -> None:
+    """Assert that two embeddings come from the same provider and model.
+
+    Embeddings from different providers/models live in incompatible vector
+    spaces and must never be compared directly.  Call this guard before any
+    cosine-similarity or dot-product comparison to catch cross-provider
+    contamination early.
+
+    Args:
+        a: First TaggedEmbedding
+        b: Second TaggedEmbedding
+
+    Raises:
+        TypeError: if either argument is not a TaggedEmbedding
+        ValueError: if the provider or model of the two embeddings differ
+    """
+    if not isinstance(a, TaggedEmbedding):
+        raise TypeError(f"Expected TaggedEmbedding, got {type(a).__name__}")
+    if not isinstance(b, TaggedEmbedding):
+        raise TypeError(f"Expected TaggedEmbedding, got {type(b).__name__}")
+
+    if a.tag.provider != b.tag.provider:
+        raise ValueError(
+            f"Cross-provider embedding comparison rejected: "
+            f"a={a.tag.provider!r} vs b={b.tag.provider!r}. "
+            "Embeddings from different providers live in incompatible vector spaces. "
+            "Re-embed both texts with the same provider before comparing."
+        )
+    if a.tag.model != b.tag.model:
+        raise ValueError(
+            f"Cross-model embedding comparison rejected: "
+            f"a={a.tag.provider}/{a.tag.model!r} vs b={b.tag.provider}/{b.tag.model!r}. "
+            "Embeddings from different models live in incompatible vector spaces. "
+            "Re-embed both texts with the same model before comparing."
+        )
+
+
+def assert_compatible_tag_with_index(
+    embedding: TaggedEmbedding,
+    index_provider: str,
+    index_model: str,
+) -> None:
+    """Assert that an embedding is compatible with a stored index identity.
+
+    Use this when inserting or querying a vector index that was built with a
+    specific provider/model, to prevent silent cross-provider contamination.
+
+    Args:
+        embedding: The TaggedEmbedding to check
+        index_provider: Provider string stored in the index
+        index_model: Model string stored in the index
+
+    Raises:
+        TypeError: if embedding is not a TaggedEmbedding
+        ValueError: if provider or model do not match the index identity
+    """
+    if not isinstance(embedding, TaggedEmbedding):
+        raise TypeError(f"Expected TaggedEmbedding, got {type(embedding).__name__}")
+
+    if embedding.tag.provider != index_provider:
+        raise ValueError(
+            f"Embedding provider {embedding.tag.provider!r} does not match "
+            f"index provider {index_provider!r}. "
+            "Run index rebuild to realign, or use a provider-matched embedding."
+        )
+    if embedding.tag.model != index_model:
+        raise ValueError(
+            f"Embedding model {embedding.tag.model!r} does not match "
+            f"index model {index_model!r}. "
+            "Run index rebuild to realign, or use a model-matched embedding."
+        )
