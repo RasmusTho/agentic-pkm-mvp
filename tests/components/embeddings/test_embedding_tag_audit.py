@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import (
+from tests.components.embeddings.conftest import (
     InMemoryVectorIndex,
     EmbeddingFactory,
     ProviderEnum,

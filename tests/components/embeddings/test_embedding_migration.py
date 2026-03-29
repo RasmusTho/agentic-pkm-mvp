@@ -12,7 +12,7 @@ from dataclasses import replace
 
 import pytest
 
-from conftest import (
+from tests.components.embeddings.conftest import (
     TaggedEmbedding,
     InMemoryVectorIndex,
     EmbeddingFactory,
