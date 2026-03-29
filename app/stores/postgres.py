@@ -40,13 +40,21 @@ class PgObjects:
             with conn:
                 with conn.cursor() as cur:
                     str_id = id or str(uuid4())
+                    effective_source_ref = source_ref or path
                     cur.execute(
-                        "INSERT INTO objects (id, uuid, kind, source_ref, payload, created_at, path) "
-                        "VALUES (%s,%s,%s,%s,%s::jsonb, now(), %s) "
+                        "INSERT INTO objects (id, uuid, kind, payload, created_at, updated_at) "
+                        "VALUES (%s,%s,%s,%s::jsonb, now(), now()) "
                         "ON CONFLICT (id) DO UPDATE SET "
-                        "kind=EXCLUDED.kind, source_ref=EXCLUDED.source_ref, payload=EXCLUDED.payload, path=EXCLUDED.path "
-                        "RETURNING id",
-                        (str_id, str_id, kind, source_ref, json.dumps(payload), path),
+                        "uuid=EXCLUDED.uuid, kind=EXCLUDED.kind, payload=EXCLUDED.payload, updated_at=now()",
+                        (str_id, str_id, kind, json.dumps(payload)),
+                    )
+                    cur.execute(
+                        "INSERT INTO store_objects (object_id, kind, source_ref, payload, created_at, updated_at) "
+                        "VALUES (%s,%s,%s,%s::jsonb, now(), now()) "
+                        "ON CONFLICT (object_id) DO UPDATE SET "
+                        "kind=EXCLUDED.kind, source_ref=EXCLUDED.source_ref, payload=EXCLUDED.payload, updated_at=now() "
+                        "RETURNING object_id",
+                        (str_id, kind, effective_source_ref, json.dumps(payload)),
                     )
                     row = cur.fetchone()
             return {"id": (row[0] if isinstance(row, (list, tuple)) else row.get("id"))}

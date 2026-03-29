@@ -64,7 +64,7 @@ def test_ingest_vault_root_persists_objects_before_classification(tmp_path: Path
     with psycopg.connect(dsn) as conn:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("DROP TABLE IF EXISTS decisions")
+                cur.execute("TRUNCATE TABLE decisions RESTART IDENTITY CASCADE")
                 cur.execute("TRUNCATE TABLE objects, store_objects RESTART IDENTITY CASCADE")
 
     ingested = ingest_vault_root(vault_root, limit=1)

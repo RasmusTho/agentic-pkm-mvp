@@ -42,6 +42,8 @@ services:
       VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
       VAULT_DESK_DIR_REL: ${VAULT_DESK_DIR_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "18000:8000"
     depends_on:
@@ -72,6 +74,8 @@ services:
       VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
       VAULT_DESK_DIR_REL: ${VAULT_DESK_DIR_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - db
     restart: unless-stopped
@@ -103,6 +107,8 @@ services:
       - WATCHER_AUTO_EXEC=${WATCHER_AUTO_EXEC-1}
       - WATCHER_STATE_DIR=${WATCHER_STATE_DIR:-}
       - WATCHER_MAX_SCANNED_FILES_PER_TICK=${WATCHER_MAX_SCANNED_FILES_PER_TICK:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - db
     restart: unless-stopped

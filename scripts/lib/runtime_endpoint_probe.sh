@@ -120,7 +120,7 @@ for raw in os.environ.get("OLLAMA_CANDIDATES", "").splitlines():
 model = (os.environ.get("OLLAMA_PROBE_MODEL") or "").strip() or "nomic-embed-text:latest"
 results: list[dict[str, Any]] = []
 
-with httpx.Client(timeout=3.0) as client:
+with httpx.Client(timeout=10.0) as client:
     for candidate in candidates:
         result: dict[str, Any] = {"candidate": candidate, "ok": False}
         try:
