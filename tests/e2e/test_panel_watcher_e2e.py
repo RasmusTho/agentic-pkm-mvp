@@ -12,11 +12,11 @@ from app.cli import cli
 pytestmark = pytest.mark.not_pg
 
 
-class _StubChatClient:
-    def __init__(self, response: str) -> None:
+class _StubReasoningFacade:
+    def __init__(self, response: dict) -> None:
         self._response = response
 
-    def chat(self, *args, **kwargs) -> str:
+    def structured(self, messages, schema, *, task_kind: str, trace_id: str | None = None) -> dict:
         return self._response
 
 
@@ -146,8 +146,8 @@ def test_watcher_llm_mode_promotes_without_exact_label(tmp_path: Path, monkeypat
     snapshot_path = tmp_path / "snapshot.json"
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_chat_client",
-        lambda intent: _StubChatClient(json.dumps({"actions": [{"id": "promote.evergreen", "reason": "panel intent"}]})),
+        "app.agents.panel_agent.graph.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": [{"id": "promote.evergreen", "reason": "panel intent"}]}),
     )
 
     env = {
