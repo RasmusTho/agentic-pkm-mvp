@@ -417,3 +417,56 @@ Historical topology, older runtime surfaces, and superseded architecture detail 
 - `docs/history/SOT_4X_HISTORY.md`
 
 This document deliberately does not inline those older sections. For current-state questions, the active sections above are authoritative.
+
+## GitHub Delivery Control Plane (development governance)
+
+This section governs development-time delivery control in GitHub. It does not define runtime/system-agent behavior.
+Runtime/system semantics remain owned by the existing architecture, agent, concept, and settings documents.
+
+Development control model:
+
+- Docs define intent, contracts, and owner boundaries.
+- GitHub Issues are the canonical task contract for implementation work.
+- GitHub Project v2 is the delivery state machine.
+- Coding agents are the execution layer that implement bounded Issues.
+- Pull requests are the implementation artifact.
+- CI/test workflows are the validation loop.
+- Outcomes feed back into docs, Issues, and Project state.
+
+Canonical delivery sequence:
+
+`Docs -> Issue -> Project -> Agent -> PR -> CI -> Feedback`
+
+Required Issue contract:
+
+- `Context`
+- `Scope`
+- `Constraints`
+- `Acceptance Criteria`
+- `Out of Scope`
+
+Required label ontology:
+
+- type: `type:task`, `type:bug`, `type:refactor`
+- priority: `prio:high`, `prio:med`, `prio:low`
+- agent state: `agent:ready`, `agent:blocked`, `agent:needs-human`
+
+Required Project state machine:
+
+- `Backlog -> Ready -> In Progress -> Review -> Done`
+
+Optional Project field:
+
+- `Agent State`: `Idle`, `Running`, `Waiting`
+
+Guardrails for builder agents:
+
+- Agents only pick Issues labeled `agent:ready`.
+- Agents must stay within the linked Issue scope.
+- Agents must respect the linked Issue constraints.
+- Agents must satisfy the linked Issue acceptance criteria before claiming completion.
+- No architecture-breaking or boundary-breaking work proceeds without an Issue.
+- No free-form tasks are canonical; GitHub Issues are the source of truth for delivery tasks.
+
+This GitHub control plane is a development governance layer around the repo-first/docs-as-code workflow.
+It must not be confused with the runtime agent architecture described elsewhere in this document.

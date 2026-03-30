@@ -99,3 +99,36 @@ For detailed sequencing, version history, and roadmap ladder, use:
 - `docs/ROADMAP.md`
 - `docs/plans/V56_FORWARD_LINE.md`
 - `docs/history/SOT_4X_HISTORY.md`
+
+## GitHub delivery governance snapshot
+
+Repo-side governance added:
+- task Issue form
+- blank Issue disablement
+- PR template requiring Issue linkage
+- governance workflow checking Issue shape and PR Issue linkage
+- machine-readable GitHub governance contract in `.github/github-governance.yml`
+
+Platform-side governance applied:
+- the exact delivery-control-plane labels now exist in the repository
+- GitHub Project v2 `Agent Delivery Control Plane` now exists and is linked to `RasmusTho/agentic-pkm-mvp`
+- Project field `Status` now uses `Backlog`, `Ready`, `In Progress`, `Review`, `Done`
+- Project field `Agent State` now exists with `Idle`, `Running`, `Waiting`
+- required views `Kanban` and `Agent Queue` are now present in the Project
+- built-in Project lifecycle automation is now configured for issue/PR status transitions
+- the active governance issues/PR were seeded into the project with initial state values
+
+Observed before this change:
+- existing Issues were present but not normalized to a strict machine-readable task contract
+- recent PR practice showed inconsistent Issue-linking and branch naming conventions
+- no dedicated repo workflow enforced the Issue/PR contract
+
+Known remaining gap:
+- branch protection/rules were not adopted in this change
+
+Target delivery model:
+- Issues = canonical task contract
+- Project = state machine
+- agents = execution layer
+- PR = implementation artifact
+- CI = validation gate

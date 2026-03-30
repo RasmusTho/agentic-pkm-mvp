@@ -1,7 +1,7 @@
 State: Development reference. Not an auto-loaded instruction file.
-# Exact Governance Doc Patches
+# Applied Governance Doc Patches (historical reference)
 
-These patches are ready to apply to the named files. They were captured here because the available GitHub connector in this run could create new files but did not expose a direct update path for existing files.
+These patches were captured as an intermediate migration artifact because the available GitHub connector in the earlier run could create new files but did not expose a direct update path for existing files. They are no longer the primary source of truth now that the owner-doc migration has been applied.
 
 ## Patch 1 — `docs/ARCHITECTURE.md`
 
@@ -166,3 +166,18 @@ Execution rule:
 - prefer Issues labeled `agent:ready`
 - use the linked Issue as the bounded source of truth for scope and acceptance
 ```
+
+## Migration receipt
+
+Backlog receipt:
+- Follow-up work captured in GitHub Issue `#224`.
+
+Delivery receipt:
+- On 2026-03-30, the governance content in this document was migrated into the owning docs:
+  - `docs/ARCHITECTURE.md`
+  - `docs/ROADMAP.md`
+  - `docs/STATUS.md`
+  - `AGENTS.md`
+  - `docs/development/DEV_WORKFLOW.md`
+- These owner docs are now the authoritative locations for the applied governance wording.
+- Keep this document only as a historical reference for the migration record.

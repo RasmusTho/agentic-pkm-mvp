@@ -36,3 +36,16 @@ Before editing, classify the change:
 - Keep builder-agent guidance separate from runtime/system-agent documentation.
 
 For longer explanations, maintenance rules, and compatibility-file policy, use the docs under `docs/development/`.
+
+## GitHub delivery governance
+
+For implementation work, GitHub Issues are the canonical task contract.
+
+Builder-agent rules:
+
+- Only pick work from a GitHub Issue labeled `agent:ready`.
+- Read the full Issue before editing.
+- Treat `Context`, `Scope`, `Constraints`, `Acceptance Criteria`, and `Out of Scope` as binding.
+- Link the PR back to the governing Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
+- Do not treat chat-only requests as canonical implementation tasks when an Issue is expected.
+- Do not expand scope beyond the Issue without updating the task contract first.

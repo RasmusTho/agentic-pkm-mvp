@@ -217,3 +217,29 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 - AgentOps/A2A/MCP hardening: `docs/tracks/TRACK_AGENTOPS_A2A_MCP.md`
 - Fitness/CI contract: `docs/tracks/TRACK_FITNESS_CI_CONTRACT.md`
 - Historical ladder: `docs/history/SOT_4X_HISTORY.md`
+
+## Delivery Control Plane (GitHub)
+
+The repo now adopts a GitHub-based delivery control plane for implementation work:
+
+- Docs/ADRs/owner docs define intent and architecture.
+- GitHub Issues are the canonical task contract.
+- GitHub Project v2 is the delivery state machine.
+- Coding agents execute only bounded Issues.
+- PR + CI are the validation loop.
+
+Delivery lifecycle:
+
+`Backlog -> Ready -> agent:ready -> In Progress -> Review -> Done`
+
+Builder-agent rule:
+
+- agents only pick Issues labeled `agent:ready`
+- agents must follow `Constraints`
+- agents must satisfy `Acceptance Criteria`
+- PRs must link the governing Issue
+
+Platform-state note:
+
+- repo-side enforcement lives in `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/issue-pr-governance.yml`, and `.github/github-governance.yml`
+- GitHub labels, Project fields/views, and Project automation must match that contract
