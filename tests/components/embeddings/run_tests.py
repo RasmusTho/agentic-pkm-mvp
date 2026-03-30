@@ -1,7 +1,6 @@
 """Standalone test runner for embedding tests (bypasses pytest conftest issues)."""
 
 import sys
-import traceback
 from pathlib import Path
 
 # Add project root to path

@@ -1,4 +1,4 @@
-"""ReasoningFacade — single entry point for all LLM reasoning calls.
+"""ReasoningFacade - single entry point for all LLM reasoning calls.
 
 Every future LangGraph agent routes reasoning and tool calls through this
 facade.  It delegates to the existing ``LLMRouter`` / ``ChatClient`` pipeline
@@ -236,7 +236,7 @@ class ReasoningFacade:
         task_kind: str = "chat",
         trace_id: str | None = None,
     ) -> str:
-        """Plain chat completion — returns the assistant text."""
+        """Plain chat completion - returns the assistant text."""
         trace_id = trace_id or uuid4().hex
         intent = LLMTaskIntent(task_kind=task_kind)
         client = self._resolve_client(intent)
@@ -480,7 +480,7 @@ class ReasoningFacade:
         pack = {
             "system": (
                 "Returnera JSON {type, tags, trust, confidence}. "
-                "type∈{note,seed,idea,doc}. trust∈{own,provisional,external,conflict}. "
+                "type in {note,seed,idea,doc}. trust in {own,provisional,external,conflict}. "
                 "tags=[topic/*]. Svara enbart JSON."
             ),
             "user": text[:4000],
@@ -613,7 +613,7 @@ class ReasoningFacade:
         object_id: str | None,
         details: dict[str, Any],
     ) -> None:
-        """Best-effort audit log — never raises."""
+        """Best-effort audit log - never raises."""
         try:
             from app.agents.base.audit import audit_log
 
@@ -689,28 +689,34 @@ def _normalize_classify_payload(data: dict[str, Any]) -> dict[str, Any]:
     never fails on common non-strict LLM outputs.
 
     Handles:
-    - ``tags`` as scalar string, dict, or mixed list → always a list[str]
-    - ``confidence`` outside [0, 1] or non-numeric → clamped float
-    - ``trust`` missing or non-string → defaults to "provisional"
-    - ``type`` missing or non-string → defaults to "note"
+    - ``tags`` as scalar string, dict, or mixed list -> always a list[str]
+    - ``confidence`` outside [0, 1] or non-numeric -> clamped float
+    - ``trust`` missing or non-string -> defaults to "provisional"
+    - ``type`` missing or non-string -> defaults to "note"
     """
     normalized: dict[str, Any] = dict(data)
-    # tags: always a list of strings
     normalized["tags"] = _ensure_labels(data.get("tags"))
-    # confidence: clamp to [0.0, 1.0]
+
     raw_conf = _as_float(data.get("confidence"), default=0.66)
     normalized["confidence"] = max(0.0, min(1.0, raw_conf))
-    # trust: must be a non-empty string
+
     trust = data.get("trust")
-    normalized["trust"] = trust if isinstance(trust, str) and trust.strip() else "provisional"
-    # type: must be a non-empty string
-    obj_type = data.get("type")
-    normalized["type"] = obj_type if isinstance(obj_type, str) and obj_type.strip() else "note"
+    if isinstance(trust, str) and trust.strip():
+        normalized["trust"] = trust
+    else:
+        normalized["trust"] = "provisional"
+
+    object_type = data.get("type")
+    if isinstance(object_type, str) and object_type.strip():
+        normalized["type"] = object_type
+    else:
+        normalized["type"] = "note"
+
     return normalized
 
 
 def _heuristic_classify(text: str) -> dict[str, Any]:
-    """Lightweight rule-based classifier fallback — no LLM call."""
+    """Lightweight rule-based classifier fallback - no LLM call."""
     import re as _re
 
     tags = []

@@ -234,14 +234,14 @@ class TestGoldenVaultMetricsCapture:
         metrics1.ingest_runs = 1
         metrics1.object_count = expected["objects_created"]
         metrics1.embedding_count = expected["embeddings_created"]
-        snap1 = metrics1.snapshot()
+        metrics1.snapshot()
 
         # Second run (same vault)
         metrics2 = MetricsCollector()
         metrics2.ingest_runs = 1
         metrics2.object_count = expected["objects_created"]
         metrics2.embedding_count = expected["embeddings_created"]
-        snap2 = metrics2.snapshot()
+        metrics2.snapshot()
 
         metrics1.assert_idempotent(metrics2)
 

@@ -7,9 +7,7 @@ use ReasoningFacade, and handle errors gracefully.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call, patch
 
-import pytest
 
 from tests.agents.pilot_agent.conftest import PilotAgentState
 
@@ -240,7 +238,7 @@ class TestNodePurity:
         def pure_node(input_state: PilotAgentState) -> PilotAgentState:
             return input_state
 
-        result = pure_node(state)
+        pure_node(state)
         assert state.uuid == original_uuid
 
     def test_multiple_node_invocations_independent(self, state_factory):

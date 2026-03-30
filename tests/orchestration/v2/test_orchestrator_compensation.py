@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
 
-import pytest
 
 from .conftest import (
-    MockAgentExecutor,
-    MockCheckpoint,
     MockOutbox,
     MockPlanState,
     MockStepState,
@@ -58,7 +54,7 @@ class TestCompensationContract:
                 depends_on=["step-2"],
             ),
         ]
-        plan = plan_factory(steps=steps)
+        plan_factory(steps=steps)
 
         # If step-3 fails, compensation should run: cleanup_c, cleanup_b, cleanup_a (reverse order)
         assert steps[0]["metadata"]["compensate_fn"] == "cleanup_a"
@@ -135,7 +131,7 @@ class TestCompensationContract:
                 depends_on=["step-2"],
             ),
         ]
-        plan = plan_factory(steps=steps)
+        plan_factory(steps=steps)
 
         # Execution order: step-1, step-2, step-3
         # If step-3 fails, compensation order must be: step-3, step-2, step-1
@@ -157,7 +153,7 @@ class TestCompensationContract:
                 compensate_fn="revert",
             ),
         ]
-        plan = plan_factory(steps=steps)
+        plan_factory(steps=steps)
 
         # If step-2 fails, only step-2's compensation runs (step-1 has no compensate_fn)
         assert "compensate_fn" not in steps[0]["metadata"]
@@ -194,7 +190,7 @@ class TestCompensationContract:
             step_factory("branch-a", "agent_call", "Task A", depends_on=["init"]),
             step_factory("branch-b", "agent_call", "Task B", depends_on=["init"]),
         ]
-        plan = plan_factory(steps=steps)
+        plan_factory(steps=steps)
 
         # If branch-a fails, branch-b's compensation is independent
         assert steps[1]["depends_on"] == ["init"]

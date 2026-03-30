@@ -6,12 +6,9 @@ Enforces correct integration with outbox events, telemetry, and vault.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-import pytest
 
-from app.events.schema import OutboxEvent
 from tests.agents.pilot_agent.conftest import PilotAgentState
 
 
@@ -239,7 +236,7 @@ class TestAgentDoesNotMutateVault:
 
     def test_agent_does_not_call_write_operations(self, mock_store):
         # Agent should not call save_object or similar mutations
-        state = PilotAgentState(
+        PilotAgentState(
             uuid="n1",
             trace_id="t1",
             budget=100,

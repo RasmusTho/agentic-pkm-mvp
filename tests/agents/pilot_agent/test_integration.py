@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from app.agents.pilot_agent.state import PilotAgentState
 from app.agents.pilot_agent.graph import run_promotion_graph
@@ -235,7 +234,6 @@ class TestWorkflowTelemetry:
         )
 
         state = PilotAgentState.from_event(event)
-        initial_steps = state.step_count
 
         final_state = run_promotion_graph(state)
         output_event = state_to_event(final_state)
@@ -282,7 +280,6 @@ class TestEventRoundtrip:
 
     def test_event_serializable(self):
         """Output event is serializable."""
-        import json
 
         event = make_outbox_event(
             "promotion.intent.created",

@@ -59,7 +59,7 @@ class TestGitDetectModified:
         # Initialize git repo with file
         (mock_git_repo / "note.md").write_text("Original", encoding="utf-8")
 
-        transport = GitTransport()
+        GitTransport()
         # Contract: implement git diff detection
         pass
 
@@ -108,14 +108,14 @@ class TestGitPullChanges:
     @pytest.mark.asyncio
     async def test_pull_from_configured_remote(self, mock_git_repo: Path) -> None:
         """Pull changes from configured remote and branch."""
-        transport = GitTransport(branch="main", remote="origin")
+        GitTransport(branch="main", remote="origin")
         # Contract: git pull origin main
         pass
 
     @pytest.mark.asyncio
     async def test_pull_custom_remote(self, mock_git_repo: Path) -> None:
         """Pull from custom remote."""
-        transport = GitTransport(remote="upstream")
+        GitTransport(remote="upstream")
         # Contract: git pull upstream <branch>
         pass
 
@@ -146,7 +146,7 @@ class TestGitPushChanges:
     @pytest.mark.asyncio
     async def test_push_to_configured_remote(self, mock_git_repo: Path) -> None:
         """Push sends to configured remote and branch."""
-        transport = GitTransport(branch="main", remote="origin")
+        GitTransport(branch="main", remote="origin")
         # Contract: git push origin main
         pass
 

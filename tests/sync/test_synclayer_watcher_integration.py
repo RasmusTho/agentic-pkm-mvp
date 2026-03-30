@@ -1,9 +1,8 @@
 """Test Watcher integration: using SyncLayer instead of direct filesystem."""
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 
@@ -324,7 +323,7 @@ class TestWatcherTimestampOrdering:
 
         sync = MockSyncLayer()
         watcher = Watcher(sync, temp_vault)
-        events = await watcher.tick()
+        await watcher.tick()
 
         # Events should be in timestamp order
         # (implementation detail, but important for determinism)
