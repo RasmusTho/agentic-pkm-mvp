@@ -2,7 +2,6 @@ from app.events.types import PROMOTION_EVALUATE_DONE
 
 import os
 from pathlib import Path
-
 import pytest
 
 from app.agents.normalizer.agent import run as normalize_run
@@ -91,6 +90,10 @@ def test_run_set_evaluator_uses_reasoning_facade(monkeypatch: pytest.MonkeyPatch
                 ]
             )
 
+        @property
+        def telemetry(self):
+            return []
+
     first_oid = _ingest_note(tmp_path / "first.md", "First candidate text.", "t-rank-first")
     second_oid = _ingest_note(tmp_path / "second.md", "Second candidate text.", "t-rank-second")
     stub = StubFacade()
@@ -111,3 +114,26 @@ def test_run_set_evaluator_uses_reasoning_facade(monkeypatch: pytest.MonkeyPatch
     assert result.ranking[0].object_id == second_oid
     assert result.ranking[0].reasons == ["Best match"]
     assert result.ranking[1].object_id == first_oid
+
+
+def test_run_set_evaluator_falls_back_when_facade_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class StubFacade:
+        def reason(self, task_kind, input, trace_id=None):
+            raise RuntimeError("llm timeout")
+
+        @property
+        def telemetry(self):
+            return []
+
+    first_oid = _ingest_note(tmp_path / "first.md", "First candidate text.", "t-rank-first")
+    second_oid = _ingest_note(tmp_path / "second.md", "Second candidate text.", "t-rank-second")
+    monkeypatch.setattr("app.agents.set_evaluator.agent.get_reasoning_facade", lambda: StubFacade())
+
+    result = run_set_evaluator(
+        [first_oid, second_oid],
+        question="Which note best answers the question?",
+        trace_id="t-rank-fallback",
+    )
+
+    assert [item.object_id for item in result.ranking] == [first_oid, second_oid]
+    assert all(item.reasons for item in result.ranking)

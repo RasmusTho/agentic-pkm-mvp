@@ -2,7 +2,6 @@ from app.events.types import CURATION_REVIEW_DONE
 
 import os
 from pathlib import Path
-
 import pytest
 
 from app.agents.normalizer.agent import run as normalize_run
@@ -70,6 +69,7 @@ def test_reviewer_uses_reasoning_facade(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert str(call["task_kind"]).endswith("REVIEW")
     assert call["trace_id"] == "t-review-facade"
     assert call["input"]["object_uuid"] == oid
+    assert call["input"]["_agent"] == "reviewer"
     assert "Reviewer facade body text." in call["input"]["text"]
     assert result["analysis"] == "Facade summary"
     assert result["suggestions"] == ["Facade suggestion"]

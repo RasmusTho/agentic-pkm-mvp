@@ -19,18 +19,10 @@ AGENT = "set_evaluator"
 
 
 def _payload_text(payload: dict[str, Any]) -> str:
-    return str(
-        payload.get("text")
-        or payload.get("content")
-        or payload.get("raw_text")
-        or ""
-    )
+    return str(payload.get("text") or payload.get("content") or payload.get("raw_text") or "")
 
 
 def _latest_review(object_id: str) -> dict[str, Any] | None:
-    """
-    Hämta senaste review-beslutet från in-memory decisions fallback.
-    """
     dec = latest_decision(object_id, "review")
     if not dec:
         return None
@@ -38,14 +30,9 @@ def _latest_review(object_id: str) -> dict[str, Any] | None:
 
 
 def _score_object(review_val: dict[str, Any]) -> dict[str, Any]:
-    """
-    Bygg en deterministisk poäng för objektet utifrån review-resultatet.
-    Vi använder samma data vi redan har, ingen LLM, bara enkel logik.
-    """
     allow = bool(review_val.get("allow", False))
     base_score = float(review_val.get("score", 0.0))
 
-    # bump score lite om allow var True bara för determinism
     if allow and base_score < 0.8:
         base_score = 0.8
 
@@ -68,11 +55,7 @@ def evaluate_object(object_id: str, *, trace_id: str, threshold: float = 0.8) ->
         raise ValueError("missing review decision")
 
     scored = _score_object(review_val)
-
-    # allow = "this is good enough to promote"
     allow = scored["score"] >= threshold and scored["review_allow"]
-
-    # promote flag for the test
     promote = allow
 
     out = {
@@ -86,7 +69,6 @@ def evaluate_object(object_id: str, *, trace_id: str, threshold: float = 0.8) ->
         "ts": datetime.now(timezone.utc).isoformat(),
     }
 
-    # audit best-effort
     audit_event(
         event=PROMOTION_EVALUATE_DONE,
         object_id=object_id,
@@ -99,7 +81,6 @@ def evaluate_object(object_id: str, *, trace_id: str, threshold: float = 0.8) ->
         },
     )
 
-    # save evaluate decision (best effort, tolerate no-DB mode)
     try:
         insert_decision(
             object_id,
@@ -144,9 +125,7 @@ def _candidate_payload(object_id: str, *, store: ObjectStore, fallback_store: An
             alt = None
         if alt and isinstance(alt, dict):
             payload = alt.get("payload") or {}
-    text = ""
-    if isinstance(payload, dict):
-        text = _payload_text(payload)
+    text = _payload_text(payload) if isinstance(payload, dict) else ""
     return {"object_uuid": str(object_id), "text": text}
 
 
@@ -161,10 +140,6 @@ def _ranking_messages(question: str, candidates: list[dict[str, Any]]) -> list[d
 
 
 def run_set_evaluator(object_ids: Sequence[str], *, question: str, trace_id: str | None = None) -> SetEvaluationResult:
-    """
-    Rank a set of candidate objects for a question, attaching lightweight reasons.
-    Uses the Reasoning provider to keep behavior consistent with single-note tests.
-    """
     store = ObjectStore()
     fallback_store = get_object_store()
     ranking: list[RankedCandidate] = []
@@ -173,12 +148,17 @@ def run_set_evaluator(object_ids: Sequence[str], *, question: str, trace_id: str
         for object_id in object_ids
     ]
     facade = get_reasoning_facade()
-    result = facade.reason(
-        ReasoningTaskKind.RANKING,
-        {"question": question, "candidates": candidates},
-        trace_id=trace_id,
-    )
-    result_data = result.model_dump(mode="json") if hasattr(result, "model_dump") else {}
+    result_data: dict[str, Any] = {}
+    try:
+        result = facade.reason(
+            ReasoningTaskKind.RANKING,
+            {"question": question, "candidates": candidates},
+            trace_id=trace_id,
+        )
+        result_data = result.model_dump(mode="json") if hasattr(result, "model_dump") else {}
+    except Exception:
+        result_data = {}
+
     items = result_data.get("ranking") or []
     candidate_ids = {str(object_id) for object_id in object_ids}
     if isinstance(items, list):
@@ -192,6 +172,7 @@ def run_set_evaluator(object_ids: Sequence[str], *, question: str, trace_id: str
             if not reasons:
                 reasons.append("No reasoning available")
             ranking.append(RankedCandidate(object_id=oid, score=score, reasons=reasons))
+
     telemetry = list(getattr(facade, "telemetry", []))
     if telemetry:
         last = telemetry[-1]
@@ -206,16 +187,12 @@ def run_set_evaluator(object_ids: Sequence[str], *, question: str, trace_id: str
             trace_id=trace_id,
             status="ok" if ranking else "failed",
         )
+
     if not ranking:
-        # fallback deterministic path (existing behavior)
         for idx, object_id in enumerate(object_ids):
             text = _candidate_payload(str(object_id), store=store, fallback_store=fallback_store).get("text") or ""
-            reasons = []
             snippet = text.strip()
-            if snippet:
-                reasons.append(snippet[:160])
-            if not reasons:
-                reasons.append("No reasoning available")
+            reasons = [snippet[:160]] if snippet else ["No reasoning available"]
             score = max(0.0, 1.0 - 0.05 * idx)
             ranking.append(RankedCandidate(object_id=str(object_id), score=score, reasons=reasons))
     elif len(ranking) < len(object_ids):
@@ -229,4 +206,5 @@ def run_set_evaluator(object_ids: Sequence[str], *, question: str, trace_id: str
             reasons = [snippet[:160]] if snippet else ["No reasoning available"]
             score = max(0.0, 1.0 - 0.05 * (len(ranking) + idx))
             ranking.append(RankedCandidate(object_id=object_id, score=score, reasons=reasons))
+
     return SetEvaluationResult(question=question, ranking=ranking)

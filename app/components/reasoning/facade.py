@@ -405,14 +405,15 @@ class ReasoningFacade:
     def _reason_review(self, input: dict[str, Any], trace_id: str) -> ReviewResult:
         text = input.get("text") or input.get("content") or ""
         object_uuid = input.get("object_uuid") or ""
+        owner_agent = str(input.get("_agent") or "reasoning_facade")
         prompt = f"NOTE:\n{text}\n\nReturn JSON with summary, issues (list), suggestions (list)."
         pack = {"system": "You are a reviewer that summarizes and critiques notes. Respond with JSON.", "user": prompt}
-        raw = self._call_pack(pack, task_kind=ReasoningTaskKind.REVIEW, trace_id=trace_id, agent="reasoning_facade", kind="reasoning.review")
+        raw = self._call_pack(pack, task_kind=ReasoningTaskKind.REVIEW, trace_id=trace_id, agent=owner_agent, kind="reasoning.review")
         try:
             data = json.loads(raw or "{}")
         except json.JSONDecodeError:
             data = {}
-        self._audit(trace_id=trace_id, agent="reasoning_facade", action="reason.review", object_id=object_uuid or None, details={"text_len": len(text)})
+        self._audit(trace_id=trace_id, agent=owner_agent, action="reason.review", object_id=object_uuid or None, details={"text_len": len(text)})
         return ReviewResult.model_validate(data)
 
     def _reason_ranking(self, input: dict[str, Any], trace_id: str) -> RankingResult:
