@@ -3,13 +3,16 @@ from app.events.types import PROMOTION_EVALUATE_DONE
 import os
 from pathlib import Path
 
+import pytest
+
 from app.agents.normalizer.agent import run as normalize_run
 from app.agents.classifier.agent import run as classify_run
 from app.agents.chunker.agent import run as chunk_run
 from app.agents.indexer.agent import run as index_run
 from app.agents.citation_checker.agent import run as citation_run
 from app.agents.reviewer.agent import run as review_run
-from app.agents.set_evaluator.agent import run as evaluate_run
+from app.agents.set_evaluator.agent import run as evaluate_run, run_set_evaluator
+from app.components.reasoning.facade import RankingEntry, RankingResult
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://app:app@127.0.0.1:15432/app")
 
@@ -63,3 +66,48 @@ def test_set_evaluator_scores_and_gates(tmp_path: Path) -> None:
     assert "promote" in clean_eval
     assert "score" in clean_eval
     assert "allow" in clean_eval
+
+
+def test_run_set_evaluator_uses_reasoning_facade(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class StubFacade:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def reason(self, task_kind, input, trace_id=None):
+            self.calls.append({"task_kind": task_kind, "input": input, "trace_id": trace_id})
+            candidates = input["candidates"]
+            return RankingResult(
+                ranking=[
+                    RankingEntry(
+                        object_uuid=candidates[1]["object_uuid"],
+                        score=0.91,
+                        reason="Best match",
+                    ),
+                    RankingEntry(
+                        object_uuid=candidates[0]["object_uuid"],
+                        score=0.52,
+                        reason="Secondary",
+                    ),
+                ]
+            )
+
+    first_oid = _ingest_note(tmp_path / "first.md", "First candidate text.", "t-rank-first")
+    second_oid = _ingest_note(tmp_path / "second.md", "Second candidate text.", "t-rank-second")
+    stub = StubFacade()
+    monkeypatch.setattr("app.agents.set_evaluator.agent.get_reasoning_facade", lambda: stub)
+
+    result = run_set_evaluator(
+        [first_oid, second_oid],
+        question="Which note best answers the question?",
+        trace_id="t-rank-facade",
+    )
+
+    assert len(stub.calls) == 1
+    call = stub.calls[0]
+    assert str(call["task_kind"]).endswith("RANKING")
+    assert call["trace_id"] == "t-rank-facade"
+    assert call["input"]["question"] == "Which note best answers the question?"
+    assert [candidate["object_uuid"] for candidate in call["input"]["candidates"]] == [first_oid, second_oid]
+    assert result.ranking[0].object_id == second_oid
+    assert result.ranking[0].reasons == ["Best match"]
+    assert result.ranking[1].object_id == first_oid
