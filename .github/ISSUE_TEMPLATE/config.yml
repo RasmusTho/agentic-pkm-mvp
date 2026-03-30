@@ -1,5 +1,0 @@
-blank_issues_enabled: false
-contact_links:
-  - name: Architecture and workflow reference
-    url: https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/AGENTS.md
-    about: Read the builder-agent instructions and owning docs before opening work items.
