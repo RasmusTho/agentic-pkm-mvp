@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 from pathlib import Path
@@ -28,12 +27,32 @@ from app.events.panel import (
     PanelRuntimeActionResult,
 )
 from app.events.schema import OutboxEvent
-from app.components.llm.fabric import get_chat_client
-from app.components.llm.router import LLMTaskIntent
+from app.components.reasoning import ReasoningTaskKind, get_reasoning_facade
 
 _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 
 logger = logging.getLogger(__name__)
+
+_PANEL_DECIDER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "actions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "message": {"type": "string"},
+                },
+                "required": ["id"],
+                "additionalProperties": True,
+            },
+        }
+    },
+    "required": ["actions"],
+    "additionalProperties": True,
+}
 
 PANEL_BUDGET = ContextBudget(
     max_body_chars=2000,
@@ -426,11 +445,18 @@ def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str
         *action_lines,
         "Return JSON like: {\"actions\": [{\"id\": \"promote.evergreen\", \"reason\": \"...\"}]}",
     ]
-    pack = {"system": system, "user": "\n".join(user_parts)}
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "\n".join(user_parts)},
+    ]
     try:
-        client = get_chat_client(LLMTaskIntent(task_kind="decide", risk="high"))
-        raw = client.chat("panel_agent.decider", pack, agent="panel_agent", kind="panel.decider", trace_id=state.trace_id)
-        parsed = json.loads(raw or "{}")
+        facade = get_reasoning_facade()
+        parsed = facade.structured(
+            messages,
+            schema=_PANEL_DECIDER_SCHEMA,
+            task_kind=ReasoningTaskKind.DECIDE.llm_task_kind,
+            trace_id=state.trace_id,
+        )
         candidates = parsed.get("actions") if isinstance(parsed, dict) else parsed
         if candidates is None:
             candidates = parsed.get("chosen_actions") if isinstance(parsed, dict) else []

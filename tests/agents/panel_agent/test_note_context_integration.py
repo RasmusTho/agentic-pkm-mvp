@@ -7,7 +7,6 @@ Verifies that:
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -244,14 +243,20 @@ def test_build_note_context_receives_panel_budget() -> None:
 # ---- Integration: LLM decider path receives NoteContext ----
 
 
-class _StubChatClient:
-    def __init__(self, response: str) -> None:
+class _StubReasoningFacade:
+    def __init__(self, response: dict[str, Any]) -> None:
         self._response = response
-        self.last_pack: dict[str, str] | None = None
+        self.last_messages: list[dict[str, str]] | None = None
 
-    def chat(self, *args: Any, **kwargs: Any) -> str:
-        if args and len(args) >= 2:
-            self.last_pack = args[1]
+    def structured(
+        self,
+        messages: list[dict[str, str]],
+        schema: dict[str, Any],
+        *,
+        task_kind: str,
+        trace_id: str | None = None,
+    ) -> dict[str, Any]:
+        self.last_messages = messages
         return self._response
 
 
@@ -265,9 +270,9 @@ def test_llm_decider_uses_note_context_in_prompt(monkeypatch: pytest.MonkeyPatch
         "app.agents.panel_agent.graph.build_note_context", lambda **kw: ctx
     )
 
-    stub = _StubChatClient(json.dumps({"actions": ["promote.evergreen"]}))
+    stub = _StubReasoningFacade({"actions": ["promote.evergreen"]})
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_chat_client", lambda intent: stub
+        "app.agents.panel_agent.graph.get_reasoning_facade", lambda: stub
     )
 
     mapping = PanelActionMapping(
@@ -309,8 +314,8 @@ def test_llm_decider_uses_note_context_in_prompt(monkeypatch: pytest.MonkeyPatch
     result = run_panel_graph(state, decider_mode="llm")
 
     # The LLM was called and the prompt contained NoteContext data
-    assert stub.last_pack is not None
-    user_prompt = stub.last_pack.get("user", "")
+    assert stub.last_messages is not None
+    user_prompt = next(msg["content"] for msg in stub.last_messages if msg["role"] == "user")
     assert "Integration Test" in user_prompt
     assert "full body from NoteContext" in user_prompt
     # The old snippet should NOT appear

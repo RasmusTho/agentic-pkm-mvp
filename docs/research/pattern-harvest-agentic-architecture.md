@@ -139,9 +139,9 @@ flowchart LR
 
 ## 5) Backlog Candidates (Prioritized)
 1) Event schema & versioning doc (Docs, Offline now): Publish naming/version/idempotency guidance with DLQ/retry expectations; AC: doc with examples, CI lint validating required fields, trace_id/idempotency mention.
-2) A2A contract & trace example (Docs, Offline now): Document routing/timeout/error taxonomy plus sample trace; AC: doc page, example payload chain, correlation_id/trace_id lint.
-3) Tool policy & MCP adapter spec (Docs/CI, Offline now): Define allow/deny/timeout/audit rules; AC: policy doc, descriptor completeness check in CI, adapter contract note.
-4) Observability runbooks (Docs, Offline now): Add runbooks for panel/watcher/orchestrator failures; AC: runbook sections, trace_id requirement callout, audit path references.
+2) A2A contract & trace example (Docs, Offline now): Document routing/timeout/error taxonomy plus sample trace; AC: doc page, example payload chain, correlation_id/trace_id lint. Backlog: #233
+3) Tool policy & MCP adapter spec (Docs/CI, Offline now): Define allow/deny/timeout/audit rules; AC: policy doc, descriptor completeness check in CI, adapter contract note. Backlog: #234
+4) Observability runbooks (Docs, Offline now): Add runbooks for panel/watcher/orchestrator failures; AC: runbook sections, trace_id requirement callout, audit path references. Backlog: #235
 5) Config validation for panel-actions/watcher (Docs/CI, Offline now): Describe schema validation and add test/lint to reject invalid mappings; AC: doc, schema file, CI check.
 6) CLI-is-tooling statement (Docs, Offline now): Update architecture/human-flows to assert CLI is agent/automation surface, not human UI; AC: statement in docs, cross-link from CLI reference.
 7) Docker friction log (Docs, Offline now): Capture container runtime gaps (state paths, permissions, observability) as explicit backlog; AC: backlog list in ops/research, with acceptance test ideas.

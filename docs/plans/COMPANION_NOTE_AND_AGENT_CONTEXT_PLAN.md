@@ -48,7 +48,7 @@ codebase rather than older plan text.
 ### Remaining verification and doc-sync items
 
 - Active SoT and roadmap docs still need to separate "implemented/integrated" from "remaining
-  cleanup/doc-sync" precisely.
+  cleanup/doc-sync" precisely. Tracked by: #229
 - Legacy/VaultMirror references still need a final audit so active docs do not describe the removed
   mirror path as current runtime behavior.
 - Companion note + Note Context should still be treated as forward-line work for broader rollout

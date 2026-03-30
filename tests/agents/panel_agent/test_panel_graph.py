@@ -34,11 +34,13 @@ def _reset_idempotency_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.agents.panel_agent.graph._IDEMPOTENCY_GUARD", IdempotencyGuard(ttl_seconds=86400.0))
 
 
-class _StubChatClient:
-    def __init__(self, response: str) -> None:
+class _StubReasoningFacade:
+    def __init__(self, response: object | Exception) -> None:
         self._response = response
 
-    def chat(self, *args, **kwargs) -> str:
+    def structured(self, messages, schema, *, task_kind: str, trace_id: str | None = None) -> object:
+        if isinstance(self._response, Exception):
+            raise self._response
         return self._response
 
 
@@ -231,8 +233,8 @@ def test_panel_graph_llm_selects_subset(monkeypatch) -> None:
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_chat_client",
-        lambda intent: _StubChatClient(json.dumps({"actions": ["promote.evergreen"]})),
+        "app.agents.panel_agent.graph.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": ["promote.evergreen"]}),
     )
 
     result = run_panel_graph(state, decider_mode="llm")
@@ -270,8 +272,8 @@ def test_panel_graph_llm_falls_back_on_malformed(monkeypatch) -> None:
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_chat_client",
-        lambda intent: _StubChatClient("not-json"),
+        "app.agents.panel_agent.graph.get_reasoning_facade",
+        lambda: _StubReasoningFacade(json.JSONDecodeError("Expecting value", "not-json", 0)),
     )
 
     result = run_panel_graph(state, decider_mode="llm")
@@ -303,9 +305,9 @@ def test_panel_graph_llm_can_select_unchecked(monkeypatch) -> None:
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_chat_client",
-        lambda intent: _StubChatClient(
-            json.dumps({"actions": [{"id": "promote.evergreen", "reason": "panel instruction"}]})
+        "app.agents.panel_agent.graph.get_reasoning_facade",
+        lambda: _StubReasoningFacade(
+            {"actions": [{"id": "promote.evergreen", "reason": "panel instruction"}]}
         ),
     )
 
@@ -345,8 +347,8 @@ def test_panel_graph_llm_empty_selection_uses_instruction_hint_for_single_promot
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_chat_client",
-        lambda intent: _StubChatClient(json.dumps({"actions": []})),
+        "app.agents.panel_agent.graph.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": []}),
     )
 
     result = run_panel_graph(state, decider_mode="llm")
@@ -376,8 +378,8 @@ def test_panel_graph_llm_empty_selection_does_not_force_non_promotion(monkeypatc
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_chat_client",
-        lambda intent: _StubChatClient(json.dumps({"actions": []})),
+        "app.agents.panel_agent.graph.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": []}),
     )
 
     result = run_panel_graph(state, decider_mode="llm")
@@ -418,8 +420,8 @@ def test_panel_graph_llm_empty_selection_honors_negated_promotion_instruction(mo
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_chat_client",
-        lambda intent: _StubChatClient(json.dumps({"actions": []})),
+        "app.agents.panel_agent.graph.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": []}),
     )
 
     result = run_panel_graph(state, decider_mode="llm")

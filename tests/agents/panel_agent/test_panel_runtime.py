@@ -15,11 +15,11 @@ from app.store import object_store as object_store_module
 from app.store.object_store import DomainObject, ObjectStore
 
 
-class _StubChatClient:
-    def __init__(self, response: str) -> None:
+class _StubReasoningFacade:
+    def __init__(self, response: dict) -> None:
         self._response = response
 
-    def chat(self, *args, **kwargs) -> str:
+    def structured(self, messages, schema, *, task_kind: str, trace_id: str | None = None) -> dict:
         return self._response
 
 
@@ -191,8 +191,8 @@ def test_runtime_llm_filters_executed_actions(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setenv("PANEL_AGENT_DECIDER", "llm")
     monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_chat_client",
-        lambda intent: _StubChatClient(json.dumps({"actions": [{"id": "promote.evergreen"}]})),
+        "app.agents.panel_agent.graph.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": [{"id": "promote.evergreen"}]}),
     )
 
     events = run_panel_intent_for_note(note_uuid, trace_id="trace-panel-executed")
@@ -260,8 +260,8 @@ def test_runtime_restart_does_not_reemit_executed_actions(tmp_path: Path, monkey
     monkeypatch.setattr("app.agents.panel_agent.graph._IDEMPOTENCY_GUARD", IdempotencyGuard(ttl_seconds=86400.0))
     monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_chat_client",
-        lambda intent: _StubChatClient(json.dumps({"actions": [{"id": "promote.evergreen"}]})),
+        "app.agents.panel_agent.graph.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": [{"id": "promote.evergreen"}]}),
     )
 
     events = run_panel_intent_for_note(note_uuid, trace_id="trace-panel-restart")

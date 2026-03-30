@@ -44,12 +44,12 @@ Validation posture note:
 ### Now
 - Ground the v5.6 objectives in a docs-first kickoff: the detailed plan in `docs/plans/V56_FORWARD_LINE.md` captures the pillars, acceptance criteria, and immediate signal checks the forward line needs to ship.
 - Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, skipped receipts, and write-guard state are surfaced in status, events, and the new CLI `settings-explain` output before any runtime gate opens.
-- Harden the PanelAgent LangGraph pilot (panel action catalog + planner pipeline + promotion consumer) so its telemetry, provenance, and gating sensors stay deterministic while remaining opt-in.
+- Harden the PanelAgent LangGraph pilot (panel action catalog + planner pipeline + promotion consumer) so its telemetry, provenance, and gating sensors stay deterministic while remaining opt-in. Tracked by: #230
 ### Next
-- Sequence the ReasoningFacade + LangGraph rollout for one additional agent pool, ensuring instrumentation feeds into the fitness gates and the orchestrator V2 experiment flag remains gated until stability signals arrive.
-- Keep the companion note + Note Context track honest in docs and rollout planning: the core companion-note and Note Context implementation is now present, PanelAgent uses Note Context with a retained compatibility fallback, and the remaining work is rollout verification plus doc cleanup rather than first implementation.
+- Sequence the ReasoningFacade + LangGraph rollout for one additional agent pool, ensuring instrumentation feeds into the fitness gates and the orchestrator V2 experiment flag remains gated until stability signals arrive. Tracked by: #231
+- Keep the companion note + Note Context track honest in docs and rollout planning: the core companion-note and Note Context implementation is now present, PanelAgent uses Note Context with a retained compatibility fallback, and the remaining work is rollout verification plus doc cleanup rather than first implementation. Tracked by: #229
 - Expand the vault-as-GUI settings compiler and operator surfaces so the forward line can describe runtime topology with complete provenance and precedence in both `settings-explain` and `status`.
-- Align CLI/docs runbooks with the v5.6 narrative: update `docs/ROADMAP.md`, status snapshots, and the runbooks so operators know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe.
+- Align CLI/docs runbooks with the v5.6 narrative: update `docs/ROADMAP.md`, status snapshots, and the runbooks so operators know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe. Tracked by: #232
 ### Later
 - Extend LangGraph adoption across more agents (Promotion, Reviewer, Hygiene) and the orchestrator V2 control plane once the v5.6A pilot stabilizes.
 - Surface LangGraph/Reasoning rollouts in the evaluation stack (golden vault, metamorphic runs, cold rebuild, fitness gates) so the forward line has measurable acceptance per contract.
@@ -92,7 +92,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 | Area | Current baseline posture | Forward-line direction |
 | --- | --- | --- |
 | Watcher auto-exec | Guarded by dedup + optimistic writes + idempotency | Safe enablement only after gates and receipts prove stable behavior |
-| LangGraph rollout | Active for ASK and PanelAgent-related flows only | Expand in phases after the planned shared ReasoningFacade/common graph scaffolding land |
+| LangGraph rollout | Active for ASK and PanelAgent-related flows only; the shared `ReasoningFacade` seam is present but not yet adopted across all targeted agents | Expand in phases as additional agent pools migrate onto the shared `ReasoningFacade` and common graph scaffolding |
 | Orchestrator V2 | Not baseline | Flagged preview only |
 
 For detailed sequencing, version history, and roadmap ladder, use:

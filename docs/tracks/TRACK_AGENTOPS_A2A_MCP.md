@@ -5,9 +5,9 @@ Scope: outer agent coordination, event/A2A contracts, tool/MCP boundaries, and o
 
 ## Architecture hardening themes
 - Event schema discipline: naming/versioning/idempotency/trace_id; DLQ/retry thinking captured in `docs/research/pattern-harvest-agentic-architecture.md`.
-- A2A contracts: envelope schema (`agent.request.created` / `agent.response.created` / `agent.error`) with traceability; orchestration-managed routing planned.
-- Tool boundary: MCP descriptor registry with allowed_args + mock_result; deterministic adapters; permission/timeouts documented.
-- Observability & agent-ops: audit events/metrics/runbooks for panel/watcher/orchestrator; CLI is tooling (not UI).
+- A2A contracts: envelope schema (`agent.request.created` / `agent.response.created` / `agent.error`) with traceability; orchestration-managed routing planned. Tracked by: #233
+- Tool boundary: MCP descriptor registry with allowed_args + mock_result; deterministic adapters; permission/timeouts documented. Tracked by: #234
+- Observability & agent-ops: audit events/metrics/runbooks for panel/watcher/orchestrator; CLI is tooling (not UI). Tracked by: #235
 - Config validation: vault-first, schema-validated wiring for panel actions/watcher policies.
 
 ## Delivered scaffolding
