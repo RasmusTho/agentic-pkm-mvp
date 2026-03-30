@@ -1,4 +1,4 @@
-State: v5.5 baseline — PanelAgent runtime V1 (v5.0) with planner pipeline opt-in. This document defines the PanelAgent-specific runtime contract.
+State: v5.6 — PanelAgent runtime V1 baseline (v5.0) + freeform catalog-driven proposal path shipped (PA2-FREEFORM). This document defines the PanelAgent-specific runtime contract.
 # PanelAgent / NoteInteractionAgent (Runtime v5.0)
 
 Purpose: translate human-driven AI panels in vault notes into structured intents/events while keeping the panel simple, optional, and human-first.
@@ -30,16 +30,16 @@ Interpretation note:
 - Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
 - The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
 
-## PanelAgent 2.0 (planned v5.6)
-Backlog: #244, #241, #242, #243, #240.
+## PanelAgent 2.0 (v5.6, in progress)
+Backlog: #244, #242, #243, #240. Shipped: #241.
 - Extract Panel cognition behind an engine-neutral seam so the runtime can swap LangGraph-era internals for a future Deep Agents implementation without changing panel contracts, receipts, or planner boundaries. Source Anchor: PA2-ENGINE-SEAM. Tracked by: #244
-- Add freeform panel action proposals from note instruction plus the action catalog rather than relying only on fixed checkbox mappings. Source Anchor: PA2-FREEFORM. Tracked by: #241
+- **Freeform catalog-driven proposal path — shipped (PR #248).** Source Anchor: PA2-FREEFORM. When a panel has an instruction but no checkbox actions, the LLM decider (`PANEL_AGENT_DECIDER=llm`) consults the full active catalog and proposes canonical action IDs from instruction text + catalog metadata (`llm_hint`, `labels`, `description`) alone, without requiring any checkbox-label match. Proposals are restricted to the active catalog; out-of-catalog IDs are dropped. Selected actions flow through the same execution gates (policy, idempotency, mutation guards) as checkbox-derived actions. Fallback to rule mode on LLM error or empty catalog. Tracked by: #241
 - Surface uncertain or partial interpretations as suggested checkboxes instead of direct execution so panel ambiguity stays human-reviewable. Source Anchor: PA2-SUGGESTED-CHECKBOXES. Tracked by: #242
 - Emit ordered multi-step panel plans through the planner/orchestration contract rather than investing in richer LangGraph-only node choreography. Source Anchor: PA2-MULTISTEP-PLANS. Tracked by: #243
 - Prove the PanelAgent 2.0 path operationally on a real vault with soak, receipts, and owner-doc writeback before it is treated as operationally accepted. Source Anchor: PA2-REAL-VAULT-ACCEPTANCE. Tracked by: #240
-- PanelAgent Runtime V1 remains the baseline until the PanelAgent 2.0 path is implemented and operationally accepted.
+- PanelAgent Runtime V1 remains the baseline until the PanelAgent 2.0 path is fully implemented and operationally accepted.
 - LangGraph control flow now supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `rule` remains the default to preserve current behaviour, while `llm` is an opt-in, experimental action selector routed through the shared `ReasoningFacade` with the canonical `decide` task kind.
-- LLM-driven contract tests live under `tests/e2e/test_panel_llm_e2e.py` (gated by `@pytest.mark.panel_llm_e2e` and `PANEL_AGENT_LLM_E2E=1`) to validate end-to-end promotion/non-promotion scenarios using the real decider.
+- LLM-driven contract tests live under `tests/e2e/test_panel_llm_e2e.py` (gated by `@pytest.mark.panel_llm_e2e` and `PANEL_AGENT_LLM_E2E=1`) to validate end-to-end promotion/non-promotion scenarios (including the freeform no-checkbox path) using the real decider.
 
 Direction note:
 - the forward direction is richer cognition in support of Panel,

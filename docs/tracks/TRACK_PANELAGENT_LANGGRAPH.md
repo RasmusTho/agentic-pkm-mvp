@@ -1,4 +1,4 @@
-State: v5.5C delivered (LangGraph decider hardening: rule default + opt-in LLM mode with fallback + telemetry).
+State: v5.6 — freeform catalog-driven proposal path delivered (instruction text → catalog discovery, no checkbox required).
 # Track — PanelAgent LangGraph (v5.5)
 
 Scope: PanelAgent evolution toward LangGraph inner loops with catalog-driven decider, planner/orchestrator integration, and watcher automation.
@@ -13,9 +13,13 @@ Scope: PanelAgent evolution toward LangGraph inner loops with catalog-driven dec
 ## Delivered (v5.5C)
 - LangGraph decider hardening: rule mode is default and deterministic; LLM mode (`PANEL_AGENT_DECIDER=llm`) is opt-in with automatic fallback to rule on error; telemetry surfaces action selections and reasons in status counters; no external event-contract changes.
 
+## Delivered (v5.6)
+- Freeform catalog-driven proposal path: when a panel has an instruction but no checkbox actions, the LLM decider (`PANEL_AGENT_DECIDER=llm`) queries the full active catalog and selects canonical action IDs from instruction text alone. Proposals are validated against the catalog (out-of-catalog IDs dropped). Selected actions flow through the same execution gates as checkbox-derived actions. Fallback to rule mode on LLM error. Catalog entries now carry `llm_hint` for richer discovery prompts.
+
 ## Planned (forward line)
 - Watcher auto-exec path for panel plans with safety limits (gated by concurrency/idempotency guards).
 - Richer panel actions (summary/reply) with MCP/tool boundaries; A2A envelopes for planner/orchestrator integration.
+- Multi-step workflows, uncertainty→suggested checkboxes (remaining PA2 items).
 
 ## Notes
 - External contract unchanged: panel CLI and watcher flows remain policy-gated; decider defaults to rule; planner/orchestrator path opt-in.

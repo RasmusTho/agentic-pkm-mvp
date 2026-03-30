@@ -398,12 +398,130 @@ def _format_note_context(ctx: NoteContext) -> str:
     return "\n\n".join(parts) if parts else ""
 
 
+def _select_actions_from_catalog(
+    state: PanelAgentState,
+    catalog: PanelActionCatalog,
+) -> tuple[set[str], dict[str, str]] | None:
+    """Freeform proposal path: derive candidate actions from instruction text + full catalog.
+
+    Used when the panel has no checkbox actions. The LLM selects from the active catalog
+    based on instruction text and catalog metadata (labels, llm_hint, description).
+    Only canonical catalog IDs may be returned; out-of-catalog proposals are silently dropped.
+    Returns None on LLM error so the caller can fall back to rule mode.
+    """
+    available = catalog.actions
+    if not available:
+        return set(), {}
+
+    action_lines = []
+    for descriptor in available:
+        hint = descriptor.llm_hint or descriptor.description or descriptor.kind or descriptor.intent_type
+        labels = ", ".join(descriptor.labels or [])
+        action_lines.append(
+            f"- id: {descriptor.id} | kind: {descriptor.kind or descriptor.intent_type} | labels: {labels} | hint: {hint}"
+        )
+
+    system = " ".join(
+        [
+            "You are PanelAgent.",
+            "Given the note context, panel instruction, and available canonical actions,",
+            "choose which actions to execute by returning JSON with an 'actions' array of objects",
+            "with fields {id, reason?, message?}. Only use the provided action IDs. Do not invent new IDs.",
+            "If no action fits the instruction, return an empty array.",
+        ]
+    )
+    user_parts = [
+        f"Instruction: {state.panel.instruction}",
+        f"Note context:\n{_build_note_snippet(state)}",
+        "Available actions (canonical):",
+        *action_lines,
+        'Return JSON like: {"actions": [{"id": "promote.evergreen", "reason": "..."}]}',
+    ]
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "\n".join(user_parts)},
+    ]
+
+    valid_ids = {d.id for d in available}
+    try:
+        facade = get_reasoning_facade()
+        parsed = facade.structured(
+            messages,
+            schema=_PANEL_DECIDER_SCHEMA,
+            task_kind=ReasoningTaskKind.DECIDE.llm_task_kind,
+            trace_id=state.trace_id,
+        )
+        candidates: list[object] = []
+        if isinstance(parsed, dict):
+            raw = parsed.get("actions")
+            if raw is None:
+                raw = parsed.get("chosen_actions")
+            if isinstance(raw, list):
+                candidates = raw
+
+        selected: set[str] = set()
+        reasons: dict[str, str] = {}
+        for item in candidates:
+            action_id: str | None = None
+            reason: str | None = None
+            if isinstance(item, str):
+                action_id = item
+            elif isinstance(item, dict):
+                action_id = item.get("id") or item.get("action_id")
+                reason = item.get("reason") or item.get("why")
+            if not action_id:
+                continue
+            action_id = str(action_id).strip()
+            if action_id not in valid_ids:
+                logger.debug("Freeform proposal %r rejected: not in active catalog", action_id)
+                continue
+            selected.add(action_id)
+            if reason:
+                reasons[action_id] = reason
+        return selected, reasons
+    except Exception:
+        return None
+
+
+def _inject_catalog_proposals(state: PanelAgentState, proposed_ids: set[str]) -> PanelAgentState:
+    """Inject catalog-derived PanelIntentAction objects for freeform proposals.
+
+    Only injects actions that are not already present in state.actions.
+    The injected actions carry the full mapping from the catalog descriptor so
+    they flow through the same execution gates as checkbox-derived actions.
+    """
+    catalog = state.action_catalog or PanelActionCatalog.from_descriptors([])
+    existing_ids = {action.id for action in state.actions}
+    new_actions: list[PanelIntentAction] = []
+    for action_id in proposed_ids:
+        if action_id in existing_ids:
+            continue
+        descriptor = catalog.get(action_id)
+        if descriptor is None:
+            continue
+        label = (descriptor.labels or [descriptor.id])[0]
+        new_actions.append(
+            PanelIntentAction(
+                id=descriptor.id,
+                label=label,
+                checked=True,
+                mapping=descriptor.to_mapping(),
+            )
+        )
+    if not new_actions:
+        return state
+    return state.model_copy(update={"actions": list(state.actions) + new_actions})
+
+
 def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str]] | None:
     assert state.intent_event is not None, "PanelAgentState must include intent_event"
     actions = list(state.actions)
-    if not actions:
-        return set(), {}
     catalog = state.action_catalog or PanelActionCatalog.from_descriptors([])
+
+    # Freeform path: no checkbox actions — discover candidates from instruction + full catalog.
+    if not actions:
+        return _select_actions_from_catalog(state, catalog)
+
     allowed_ids = {a.id for a in actions}
     available = [
         descriptor
@@ -543,6 +661,10 @@ def _decide_actions_llm_with_fallback(state: PanelAgentState) -> PanelAgentState
     if selection is None:
         return _decide_actions_rule(state)
     chosen, reasons = selection
+    # Freeform: inject catalog-derived PanelIntentAction objects for proposed IDs
+    # that have no corresponding entry in state.actions (e.g., no-checkbox panels).
+    if chosen:
+        state = _inject_catalog_proposals(state, chosen)
     return _apply_actions(state, selected_ids=chosen, reasons=reasons)
 
 

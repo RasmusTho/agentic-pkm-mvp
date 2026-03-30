@@ -1,5 +1,5 @@
 ---
-State: v5.5 – PanelAgent catalog (LLM decider opt-in; rule-mode default).
+State: v5.6 – PanelAgent catalog (LLM decider opt-in; rule-mode default; freeform discovery via llm_hint).
 mappings:
   - id: "promote.evergreen"
     kind: "promotion"
@@ -7,6 +7,7 @@ mappings:
       - "Gör denna anteckning evergreen"
       - "Make this note evergreen"
     description: "Promote the note to evergreen maturity."
+    llm_hint: "Choose this when the instruction asks to promote, make evergreen, or mature the note."
     intent_type: "promotion"
     downstream_event: "review.promote.evergreen"
     params:
@@ -17,6 +18,7 @@ mappings:
       - "Arkivera den här anteckningen"
       - "Archive this note"
     description: "Archive the note without promotion."
+    llm_hint: "Choose this when the instruction asks to archive or retire the note."
     intent_type: "archival"
     downstream_event: "note.archive"
   - id: "ingest.summary.create"
@@ -25,6 +27,7 @@ mappings:
       - "Skapa en separat sammanfattningsanteckning"
       - "Create a separate summary note"
     description: "Create a sibling summary note for this content."
+    llm_hint: "Choose this when the instruction asks to summarize the note into a separate document."
     intent_type: "ingest"
     downstream_event: "ingest.summary.create"
 ---

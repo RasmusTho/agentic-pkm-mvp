@@ -124,6 +124,15 @@ def _note_markdown(instruction: str, action_label: str) -> str:
 """
 
 
+def _freeform_note_markdown(instruction: str) -> str:
+    """Panel with instruction only — no checkbox actions (freeform discovery path)."""
+    return f"""%% AI:Start %%
+## AI-instruktion
+{instruction}
+%% AI:End %%
+"""
+
+
 def _read_outbox(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -210,6 +219,61 @@ mp.undo()
     return str(payload["note_uuid"]), list(payload["topics"]), list(payload["outbox_events"])
 
 
+def _run_live_panel_freeform_subprocess(
+    tmp_path: Path,
+    *,
+    instruction: str,
+    actions_variant: str,
+) -> tuple[str, list[str], list[dict]]:
+    """Run a freeform panel (no checkboxes) via live LLM in an isolated subprocess."""
+    outbox_path = tmp_path / f"index-outbox-freeform-{uuid4()}.jsonl"
+    actions_path = _panel_actions_file(tmp_path, variant=actions_variant)
+    script = f"""
+import json
+import os
+from pathlib import Path
+from uuid import uuid4
+
+from _pytest.monkeypatch import MonkeyPatch
+
+from tests.e2e.test_panel_llm_e2e import _enable_live_llm, _freeform_note_markdown, _read_outbox, _seed_note
+from app.agents.panel_agent.agent import run_panel_intent_for_note
+from app.agents.panel_agent.runtime import execute_panel_intent
+
+mp = MonkeyPatch()
+_enable_live_llm(mp)
+reset_store_backends()
+note_uuid = str(uuid4())
+mp.setenv("INDEX_OUTBOX_PATH", {str(outbox_path)!r})
+mp.setenv("PANEL_AGENT_DECIDER", "llm")
+mp.setenv("PANEL_ACTIONS_PATH", {str(actions_path)!r})
+mp.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", Path({str(outbox_path)!r}), raising=False)
+_seed_note(note_uuid, _freeform_note_markdown({instruction!r}))
+events = run_panel_intent_for_note(note_uuid, trace_id="panel-llm-freeform-e2e")
+assert len(events) == 1
+result = execute_panel_intent(events[0])
+payload = {{
+    "note_uuid": note_uuid,
+    "topics": [getattr(event, "event", None) or event.get("event") for event in result.emitted_events],
+    "outbox_events": _read_outbox(Path({str(outbox_path)!r})),
+}}
+print(json.dumps(payload))
+mp.undo()
+"""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("PYTEST_")}
+    env["STORE_BACKEND"] = "memory"
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    payload = json.loads(completed.stdout.strip().splitlines()[-1])
+    return str(payload["note_uuid"]), list(payload["topics"]), list(payload["outbox_events"])
+
+
 def test_panel_llm_promotes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _skip_if_no_llm()
     _skip_if_live_llm_unavailable()
@@ -253,3 +317,32 @@ def test_panel_llm_no_promotion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert "promote.intent.created" not in topics
     assert any(ev.get("event") == "panel.intent.created" for ev in outbox_events)
     assert not any(ev.get("event") == "promote.intent.created" for ev in outbox_events)
+
+
+def test_panel_llm_freeform_promotes_without_checkboxes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Freeform path: instruction alone (no checkboxes) drives catalog discovery via live LLM."""
+    _skip_if_no_llm()
+    _skip_if_live_llm_unavailable()
+    last_topics: list[str] = []
+    last_outbox_events: list[dict] = []
+    for _ in range(3):
+        note_uuid, topics, outbox_events = _run_live_panel_freeform_subprocess(
+            tmp_path,
+            instruction="Make this note evergreen. No summary needed, just promote it.",
+            actions_variant="promote_only",
+        )
+        assert "panel.intent.executed" in topics
+        assert "panel.log.created" in topics
+        assert any(ev.get("event") == "panel.intent.created" for ev in outbox_events)
+        if "promote.intent.created" in topics and any(
+            ev.get("event") == "promote.intent.created" and ev.get("payload", {}).get("note", {}).get("uuid") == note_uuid
+            for ev in outbox_events
+        ):
+            break
+        last_topics = topics
+        last_outbox_events = outbox_events
+    else:
+        pytest.fail(
+            "expected promote.intent.created from freeform panel LLM run (no checkboxes) after 3 attempts; "
+            f"last topics={last_topics} outbox_events={[ev.get('event') for ev in last_outbox_events]}"
+        )
