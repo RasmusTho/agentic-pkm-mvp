@@ -25,6 +25,8 @@ It governs development-time instruction surfaces only. It does not define runtim
 - If a longer explanation is needed, extend a development reference doc instead of expanding the root instruction files.
 - When canonical entrypoints, reading order, or doc roles change, update `docs/DOCS_INDEX.md` in the same change.
 - When compatibility pointers remain, label them explicitly as non-canonical.
+- Keep backlog-discipline rules in `AGENTS.md` when agents must follow them during normal execution; do not leave required task-contract behavior only in reference docs.
+- Keep the source-anchor naming convention and GitHub-first receipt rationale in development reference docs, but keep the "must use Source Anchors" rule in the root instruction file.
 
 ## Review checklist
 
@@ -35,3 +37,4 @@ When changing builder-agent guidance, confirm:
 - runtime/system-agent docs are still clearly separate from builder-agent instruction files.
 - long rationale or recordkeeping lives outside the auto-loaded instruction files.
 - duplicated normative policy has not been introduced across `AGENTS.md`, `CLAUDE.md`, and development docs.
+- builder-agent backlog rules are explicit enough that a new agent can create, pick up, and close delivery work without relying on chat-only context.

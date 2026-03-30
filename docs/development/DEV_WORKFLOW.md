@@ -59,3 +59,42 @@ Execution rule:
 - do not start non-trivial implementation without a governing Issue
 - prefer Issues labeled `agent:ready`
 - use the linked Issue as the bounded source of truth for scope and acceptance
+
+## Source-anchor rule for backlog creation
+
+For new backlog work, GitHub is the live tracking surface and docs provide the semantic source.
+
+Use this split:
+
+- owner docs, SoT docs, roadmap docs, and active plans define intent, constraints, and sequencing
+- GitHub Issues and the GitHub Project define backlog state
+- owner-doc updates are required when work is delivered and the shipped reality changes
+
+When converting a doc item into a GitHub Issue:
+
+1. Add a stable `Source Anchors` section to the Issue.
+2. Reference the most local actionable doc item, not only a broad document path.
+3. Prefer stable item IDs such as `PA2-FREEFORM` or `ORCHV2-TDD-PILOT` over prose fragments.
+4. Keep the anchor stable even if the surrounding paragraph is reworded.
+
+Recommended anchor format:
+
+- uppercase kebab-case or compact uppercase tokens
+- short family prefix tied to the track or owning doc
+- examples:
+  - `docs/PANEL_AGENT.md :: PA2-FREEFORM`
+  - `docs/ROADMAP.md :: ORCHV2-PILOT`
+  - `docs/STATUS.md :: SETTINGS-PROVENANCE`
+
+Do not rely on inline `Tracked by: #...` or `Backlog: #...` markers as the primary backlog receipt.
+Those markers are now secondary convenience notes because they are not visible to other collaborators until merged.
+
+## Delivery writeback rule
+
+When an Issue is delivered:
+
+- update the owner doc that now holds shipped truth
+- remove or rewrite roadmap/plan wording so it no longer reads as pending work
+- keep the GitHub Issue/Project as the authoritative record of backlog state history
+
+Optional generated receipt pages may summarize Issue state from GitHub, but those pages do not replace the owner doc as the source of shipped reality.
