@@ -28,7 +28,8 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
     - Back-compat: `ORCHESTRATOR_VERSION=v1|v2`.
   - PanelAgent 2.0 timeline:
     - v5.5C: decider (in progress).
-    - v5.6: PanelAgent 2.0 full migration (freeform interpretation, multi-step workflows, uncertainty→suggested checkboxes, catalog-driven discovery).
+    - v5.6 enabling (shipped): engine-neutral cognition seam — `PanelCognitionBackend` Protocol extracted to `app/agents/panel_agent/cognition.py`; `graph.py` dispatches through the seam; `RuleCognitionBackend` and `LLMCognitionBackend` are the current concrete backends.  Parser, execution, receipt, and event contracts unchanged.  <!-- PA2-ROLLUP -->
+    - v5.6 target: PanelAgent 2.0 full migration (freeform interpretation, multi-step workflows, uncertainty→suggested checkboxes, catalog-driven discovery).
     - v5.7: advanced (panel versioning, cross-note coordination).
   - Vault-as-GUI settings compiler (`@Settings` / System/Config) now covers panel-action catalogs, watcher settings, and outbox paths with CI schema checks (v5.6 track).
   - LangGraph rollout to additional agents (Promotion/Reviewer/Hygiene) in phases:

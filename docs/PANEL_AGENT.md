@@ -31,6 +31,15 @@ Interpretation note:
 - The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
 
 ## PanelAgent 2.0 (planned v5.6)
+
+<!-- PA2-ENGINE-SEAM -->
+Engine-neutral cognition seam (v5.6 enabling change, shipped):
+- Panel action selection is now invoked through a dedicated `PanelCognitionBackend` Protocol defined in `app/agents/panel_agent/cognition.py`.
+- `graph.py` no longer owns cognition-selection concerns directly; it receives a backend through `build_panel_graph(cognition_backend=...)` and calls it via `_decide_actions_with_backend`.
+- Current backends: `RuleCognitionBackend` (default, checkbox-driven) and `LLMCognitionBackend` (routes through `ReasoningFacade`).
+- Parser, execution, receipt, and emitted-event contracts remain unchanged.  A future backend (DeepAgents-style or otherwise) implements only `select_actions(state)` without reworking those surfaces.
+
+PanelAgent 2.0 planned direction:
 - Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `app/agents/panel_agent/graph.py`).
 - LLM-based reasoning decides which panel actions to execute (and in what order) rather than relying on fixed mappings.
 - PanelAgent Runtime V1 remains the baseline until this LangGraph-driven 2.0 path is implemented and proven in production.

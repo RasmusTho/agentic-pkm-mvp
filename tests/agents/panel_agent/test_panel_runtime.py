@@ -191,7 +191,7 @@ def test_runtime_llm_filters_executed_actions(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setenv("PANEL_AGENT_DECIDER", "llm")
     monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade",
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
         lambda: _StubReasoningFacade({"actions": [{"id": "promote.evergreen"}]}),
     )
 
@@ -260,7 +260,7 @@ def test_runtime_restart_does_not_reemit_executed_actions(tmp_path: Path, monkey
     monkeypatch.setattr("app.agents.panel_agent.graph._IDEMPOTENCY_GUARD", IdempotencyGuard(ttl_seconds=86400.0))
     monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade",
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
         lambda: _StubReasoningFacade({"actions": [{"id": "promote.evergreen"}]}),
     )
 
