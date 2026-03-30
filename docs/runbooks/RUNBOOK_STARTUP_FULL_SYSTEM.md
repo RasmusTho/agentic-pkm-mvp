@@ -31,6 +31,8 @@ make alpha-up
 - The worker consumes the DB outbox to perform ingest, panel, and promotion side effects, emitting `panel.intent.*`, `promote.intent.created`, and `promote.done` on success.
 - Inbox UUID healing is performed by the worker on `ingest.vault.changed` for notes under the inbox folder (from `vault.layout.md` or `VAULT_INBOX_DIR_REL`) so notes do not linger without `uuid:` after a worker pass.
 - Status/health surfaces should be used for operator gating (`required_ok` is the primary signal).
+- Before widening watcher automation, run `python -m app.cli settings-explain --json` and `python -m app.cli status`; these are the canonical enablement checks for auto-exec posture.
+- Treat `WATCHER_AUTO_EXEC=1` as necessary but not sufficient; corroborate it with allowlist validity, skip counters, and write-guard/provenance context.
 
 Architectural reading note:
 - this describes the current operational runtime loop,
@@ -64,6 +66,13 @@ Tests: `tests/e2e/test_operator_workflows.py::test_operator_can_diagnose_stale_w
 - Optional strict ingest check: set `HEALTH_REQUIRE_INGEST_WORKER=1` (and tune `INGEST_WORKER_STALE_SECONDS`).
 
 ## Recommended next steps
+- Confirm watcher enablement posture after startup:
+```
+python -m app.cli settings-explain --json
+python -m app.cli status
+```
+- Use the safe-to-enable checklist from those commands: effective auto-exec mode, allowlist validity, `dedup/skipped_*`, `panel_skipped_policy`, and `writes_allowed`.
+- When startup verification is part of a merge/release path, also require the enforced CI summary line `CI SUMMARY GATES ok=true`.
 - Run the gap test after startup:
 ```
 scripts/gap_test_alpha.sh

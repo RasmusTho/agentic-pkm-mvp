@@ -16,7 +16,9 @@ Reading note:
   - Runtime entrypoint: `python -m app.cli watcher run`.
 - Runtime DB outbox is available (`DATABASE_URL` or `DB_DSN`); JSONL outbox is audit/diagnostic only.
 - Use a test vault or a clearly marked subset (3–10 notes) in PKM-Alpha.
-- Before any auto-exec enablement, run `python -m app.cli settings-explain` and `python -m app.cli status` and confirm the watcher gate, allowlist validity, write guard, and recent skip reasons are coherent.
+- Before any auto-exec enablement, run `python -m app.cli settings-explain` and `python -m app.cli status`; these are the canonical enablement checks.
+- Confirm the watcher gate, allowlist validity, write guard/provenance context, and recent skip reasons are coherent across both CLI surfaces.
+- Treat `WATCHER_AUTO_EXEC=1` as necessary but not sufficient; do not treat the env var alone as rollout approval.
 
 ## 2) Prepare test notes
 - Pick a handful of notes (3–10) for UAT; keep the rest untouched.
@@ -69,9 +71,10 @@ Reading note:
 
 ## 6) What to observe & rollback posture
 - Status: `python -m app.cli status` (or status API) should reflect ingest counts and runs; ASK should surface the UAT notes with source refs.
-- Enablement signals: `settings-explain` should agree with `status` on auto-exec mode, allowlist, and write-guard context before an operator treats watcher auto-run as safe.
+- Enablement signals: `settings-explain` should agree with `status` on auto-exec mode, allowlist, skip counters, and write-guard/provenance context before an operator treats watcher auto-run as safe.
 - DB outbox: inspect `outbox` table (or `/api/events/tail` if available) for `panel.intent.*` and `promote.intent.created`.
 - JSONL audit: `INDEX_OUTBOX_PATH` lines should mirror watcher emissions but are not consumed by the worker.
+- CI corroboration: when this UAT flow is part of a release or merge gate, require `CI SUMMARY GATES ok=true` in addition to the local operator signals.
 - Safety: watcher does not rewrite note bodies; downstream agents may update frontmatter/mirrors only. UAT is scoped to the selected notes; the rest of the vault is untouched.
 - Scripted UAT report: `uat-run-vault-test --assert` now writes `.agentic-pkm/uat_report.json` inside the seeded folder. Treat that report as the machine-readable release/UAT artifact; it includes first-run results, rerun idempotence, and pass/fail checks.
 
