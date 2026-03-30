@@ -114,6 +114,8 @@ Platform-side governance applied:
 - GitHub Project v2 `Agent Delivery Control Plane` now exists and is linked to `RasmusTho/agentic-pkm-mvp`
 - Project field `Status` now uses `Backlog`, `Ready`, `In Progress`, `Review`, `Done`
 - Project field `Agent State` now exists with `Idle`, `Running`, `Waiting`
+- required views `Kanban` and `Agent Queue` are now present in the Project
+- built-in Project lifecycle automation is now configured for issue/PR status transitions
 - the active governance issues/PR were seeded into the project with initial state values
 
 Observed before this change:
@@ -122,8 +124,6 @@ Observed before this change:
 - no dedicated repo workflow enforced the Issue/PR contract
 
 Known remaining gap:
-- Project views `Kanban` and `Agent Queue` still require manual GitHub UI creation because the exposed CLI/GraphQL surfaces in this session did not provide a supported create/update path for project views
-- built-in Project automation for issue/PR lifecycle transitions still requires manual GitHub UI setup because the exposed schema in this session did not provide a supported creation path for project workflows
 - branch protection/rules were not adopted in this change
 
 Target delivery model:
