@@ -1,0 +1,74 @@
+name: Task
+description: Structured task contract for human and agent execution
+title: "task: "
+labels: ["type:task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for task contracts that can be executed by builders and coding agents.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why this task exists and what repo/runtime/docs context matters.
+      placeholder: Describe the relevant current-state context.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Exact bounded work to perform.
+      placeholder: List the bounded implementation/doc/test changes that are in scope.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: Architectural, runtime, safety, or process constraints that must be respected.
+      placeholder: Include boundaries such as no direct DB imports, preserve event contracts, docs-in-same-change, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: Concrete done conditions.
+      placeholder: |
+        - [ ]
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of Scope
+      description: Explicitly excluded work.
+      placeholder: State what this task must not change.
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - prio:high
+        - prio:med
+        - prio:low
+      default: 1
+    validations:
+      required: true
+  - type: dropdown
+    id: agent_state
+    attributes:
+      label: Agent State
+      options:
+        - agent:needs-human
+        - agent:ready
+        - agent:blocked
+      default: 0
+    validations:
+      required: true
