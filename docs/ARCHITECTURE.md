@@ -195,7 +195,7 @@ See also:
 ## Agent Implementation Pattern (Current Direction)
 - Agents MUST preserve external event contracts and Outbox envelopes during migrations.
 - Agents that already use LangGraph should keep explicit state and deterministic tool/event boundaries.
-- If `ReasoningFacade` or shared LangGraph scaffolding is introduced into the active baseline, this document and the owning agent specs must be updated in the same change.
+- `ReasoningFacade` now exists as the shared reasoning seam; any expansion of that seam's baseline role or additional shared LangGraph scaffolding must update this document and the owning agent specs in the same change.
 - Current agent-specific implementation detail lives in:
   - `docs/AGENTS.md`
   - `docs/PANEL_AGENT.md`

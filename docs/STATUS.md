@@ -92,7 +92,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 | Area | Current baseline posture | Forward-line direction |
 | --- | --- | --- |
 | Watcher auto-exec | Guarded by dedup + optimistic writes + idempotency | Safe enablement only after gates and receipts prove stable behavior |
-| LangGraph rollout | Active for ASK and PanelAgent-related flows only | Expand in phases after the planned shared ReasoningFacade/common graph scaffolding land |
+| LangGraph rollout | Active for ASK and PanelAgent-related flows only; the shared `ReasoningFacade` seam is present but not yet adopted across all targeted agents | Expand in phases as additional agent pools migrate onto the shared `ReasoningFacade` and common graph scaffolding |
 | Orchestrator V2 | Not baseline | Flagged preview only |
 
 For detailed sequencing, version history, and roadmap ladder, use:
