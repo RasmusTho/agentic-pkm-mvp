@@ -8,7 +8,6 @@ from __future__ import annotations
 import uuid as _uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
 
 
 @dataclass(frozen=True)

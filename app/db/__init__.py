@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Tuple, Union
+
+if TYPE_CHECKING:
+    import psycopg
 
 
 ExceptionRow = Union[Tuple[Any, ...], Dict[str, Any]]

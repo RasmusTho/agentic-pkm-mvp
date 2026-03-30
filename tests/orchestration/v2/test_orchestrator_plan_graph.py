@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
 
-import pytest
 
-from .conftest import MockAgentExecutor, MockOutbox
+from .conftest import MockAgentExecutor
 
 
 class TestPlanGraphContract:

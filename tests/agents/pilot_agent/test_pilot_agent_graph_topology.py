@@ -5,10 +5,8 @@ Enforces correct graph structure: entry/terminal nodes, reachability, and teleme
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
 
 import pytest
-from langgraph.graph import END, START, StateGraph
 
 from app.components.reasoning.graph_builder import build_agent_graph, GraphTopologyError
 from tests.agents.pilot_agent.conftest import PilotAgentState
@@ -162,7 +160,7 @@ class TestTelemetryWrapper:
         graph = build_agent_graph("test_agent", nodes=nodes, edges=edges, state_cls=PilotAgentState)
         compiled = graph.compile()
 
-        state_input = PilotAgentState(
+        PilotAgentState(
             uuid="test-uuid",
             trace_id="trace-123",
             budget=100,

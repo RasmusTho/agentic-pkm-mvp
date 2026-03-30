@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import pytest
-from typing import Dict, Any, Set
-from uuid import uuid4
+from typing import Dict, Set
 from tests.quality_wave.conftest import MetricsCollector, EventChain
-from app.events.schema import OutboxEvent, make_outbox_event
+from app.events.schema import make_outbox_event
 
 
 @pytest.mark.not_pg
@@ -65,7 +64,7 @@ class TestFitnessGateCounters:
 
     def test_counter_atomicity(self, metrics: MetricsCollector):
         """Assert counters update atomically."""
-        initial = metrics.snapshot()
+        metrics.snapshot()
 
         metrics.ingest_runs = 1
         metrics.object_count = 5
@@ -88,7 +87,7 @@ class TestNoOrphanIntents:
 
         for i in range(5):
             event = make_outbox_event(
-                f"promote.intent.created",
+                "promote.intent.created",
                 source="promotion.consumer",
                 trace_id=trace_id,
                 payload={"uuid": f"obj-{i}"},

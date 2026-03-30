@@ -47,17 +47,9 @@ def __getattr__(name: str):
         "resolve_embedding_identity",
         "EMBED_MODEL",
     }:
-        from app.components.embeddings.legacy import (
-            EmbeddingClientProtocol,
-            EmbeddingIdentity,
-            get_embedding_client,
-            get_embedding_identity,
-            describe_embedding,
-            resolve_embedding_identity,
-            EMBED_MODEL,
-        )
-        locals()[name] = locals()[name]
-        return locals()[name]
+        from app.components.embeddings import legacy
+
+        return getattr(legacy, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [

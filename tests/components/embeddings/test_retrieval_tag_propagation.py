@@ -7,9 +7,7 @@ Reranking preserves original tags. Citation/source includes embedding provenance
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
-import pytest
 
 from tests.components.embeddings.conftest import (
     TaggedEmbedding,
