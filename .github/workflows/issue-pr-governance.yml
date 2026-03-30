@@ -1,0 +1,51 @@
+name: Issue and PR Governance
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  pull_request:
+    types: [opened, edited, reopened, synchronize, review_requested]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  issue-shape:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue.body || "";
+            const required = [
+              "### Context",
+              "### Scope",
+              "### Constraints",
+              "### Acceptance Criteria",
+              "### Out of Scope"
+            ];
+            const missing = required.filter(section => !body.includes(section));
+            if (missing.length) {
+              core.setFailed(`Issue is missing required sections: ${missing.join(', ')}`);
+            }
+
+  pr-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+            const body = pullRequest.body || "";
+            const issueLinkPattern = /(Fixes|Closes|Resolves)\s+#\d+/i;
+            if (!issueLinkPattern.test(body)) {
+              core.setFailed("PR body must link a GitHub Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.");
+            }

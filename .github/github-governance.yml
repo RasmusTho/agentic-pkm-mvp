@@ -1,0 +1,57 @@
+version: 1
+issues:
+  source_of_truth: GitHub Issues
+  required_template: .github/ISSUE_TEMPLATE/task.yml
+  required_sections:
+    - Context
+    - Scope
+    - Constraints
+    - Acceptance Criteria
+    - Out of Scope
+labels:
+  type:
+    - type:task
+    - type:bug
+    - type:refactor
+  priority:
+    - prio:high
+    - prio:med
+    - prio:low
+  agent:
+    - agent:ready
+    - agent:blocked
+    - agent:needs-human
+project:
+  name: Agent Delivery Control Plane
+  type: github-project-v2
+  fields:
+    Status:
+      - Backlog
+      - Ready
+      - In Progress
+      - Review
+      - Done
+    Agent State:
+      - Idle
+      - Running
+      - Waiting
+  views:
+    - name: Kanban
+      group_by: Status
+    - name: Agent Queue
+      filter: "label:agent:ready status:Ready"
+  automation:
+    - event: issue_opened
+      set_status: Backlog
+    - event: pr_opened
+      set_status: In Progress
+    - event: pr_review_requested
+      set_status: Review
+    - event: pr_merged
+      set_status: Done
+rules:
+  pr_must_reference_issue: true
+  agents_only_pick: label:agent:ready
+  agents_must_follow_issue_constraints: true
+  agents_must_satisfy_acceptance: true
+  no_free_form_tasks: true
