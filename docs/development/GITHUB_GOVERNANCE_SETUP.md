@@ -68,3 +68,14 @@ Required automation:
 2. Create/update the Project v2 board and fields.
 3. Wire Project automation to the stated lifecycle.
 4. Optionally add branch protection or repository rules that require the governance workflow to pass before merge.
+
+## Governance receipts
+
+Backlog receipt:
+- Repo-side governance rollout was captured as GitHub Issue `#226`.
+- Owner-doc migration was captured as GitHub Issue `#224`.
+- Platform-side GitHub setup remains tracked as GitHub Issue `#225`.
+
+Delivery receipt:
+- On 2026-03-30, the owner-doc migration from `docs/development/GITHUB_GOVERNANCE_PATCHES.md` was applied, so builder/runtime governance wording now lives in the owning docs instead of only in the staging patch document.
+- This setup document remains the reference for the still-pending platform-side label/Project/application work.

@@ -42,3 +42,20 @@ Run narrower or broader suites when the touched area requires it.
 - Builder-agent instruction lives in `AGENTS.md` and the development reference docs.
 - Runtime/system-agent architecture lives in `docs/AGENTS.md` and related runtime/concept docs.
 - Do not treat runtime semantics as builder-agent instructions, and do not write builder-agent workflow into runtime docs.
+
+## GitHub issue-first execution loop
+
+For implementation work, the delivery loop is:
+
+1. Docs/owner docs define the intended contract.
+2. GitHub Issue defines the bounded task contract.
+3. GitHub Project tracks lifecycle state.
+4. Builder agent implements the Issue in a PR.
+5. CI/test workflows validate the change.
+6. Human review closes the loop and updates docs/status/roadmap as needed.
+
+Execution rule:
+
+- do not start non-trivial implementation without a governing Issue
+- prefer Issues labeled `agent:ready`
+- use the linked Issue as the bounded source of truth for scope and acceptance
