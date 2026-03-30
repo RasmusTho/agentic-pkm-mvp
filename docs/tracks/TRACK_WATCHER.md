@@ -23,7 +23,7 @@ Scope: snapshot-based vault watcher CLI/daemon, policy-gated panel auto-runs, er
 - `python -m app.cli settings-explain` is the canonical pre-enable check for watcher gate state, allowlist validity, provenance, and path resolution.
 - `python -m app.cli status` is the runtime snapshot for watcher automation counters, last tick skips, write-guard state, and last-run skip reasons.
 - Safe-to-enable now means the effective auto-exec mode, allowlist, skip counters, and provenance/write-guard context are coherent.
-- `WATCHER_AUTO_EXEC=1` is necessary but not sufficient on its own; operators should use the CLI surfaces and the runbook together. Tracked by: #232
+- `WATCHER_AUTO_EXEC=1` is necessary but not sufficient on its own; operators should use the CLI surfaces and the runbook together. Tracked by: #232. Source Anchor: WATCHER-ENABLEMENT-SIGNALS
 
 ## Operational notes
 - Watcher remains polling/snapshot-based (no OS file events).

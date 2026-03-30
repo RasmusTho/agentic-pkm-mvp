@@ -10,6 +10,7 @@ Fixes #
 - [ ] Constraints from the linked Issue were followed.
 - [ ] Acceptance Criteria from the linked Issue are satisfied.
 - [ ] Docs were updated in the same change when behavior/contracts changed.
+- [ ] Owner docs and roadmap/plan wording were updated when this PR turns a tracked backlog item into shipped reality.
 
 ## Validation
 - [ ] `ruff check app tests`

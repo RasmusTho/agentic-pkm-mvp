@@ -21,13 +21,20 @@ jobs:
           script: |
             const body = context.payload.issue.body || "";
             const required = [
-              "### Context",
-              "### Scope",
-              "### Constraints",
-              "### Acceptance Criteria",
-              "### Out of Scope"
+              "Context",
+              "Scope",
+              "Source Anchors",
+              "Constraints",
+              "Acceptance Criteria",
+              "Out of Scope",
+              "Suggested Validation",
+              "Source Docs"
             ];
-            const missing = required.filter(section => !body.includes(section));
+            const missing = required.filter(section => {
+              const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const pattern = new RegExp(`^#{2,6}\\s+${escaped}\\s*$`, "m");
+              return !pattern.test(body);
+            });
             if (missing.length) {
               core.setFailed(`Issue is missing required sections: ${missing.join(', ')}`);
             }

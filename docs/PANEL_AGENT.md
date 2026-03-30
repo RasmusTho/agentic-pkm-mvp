@@ -31,9 +31,13 @@ Interpretation note:
 - The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
 
 ## PanelAgent 2.0 (planned v5.6)
-- Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `app/agents/panel_agent/graph.py`).
-- LLM-based reasoning decides which panel actions to execute (and in what order) rather than relying on fixed mappings.
-- PanelAgent Runtime V1 remains the baseline until this LangGraph-driven 2.0 path is implemented and proven in production.
+Backlog: #244, #241, #242, #243, #240.
+- Extract Panel cognition behind an engine-neutral seam so the runtime can swap LangGraph-era internals for a future Deep Agents implementation without changing panel contracts, receipts, or planner boundaries. Source Anchor: PA2-ENGINE-SEAM. Tracked by: #244
+- Add freeform panel action proposals from note instruction plus the action catalog rather than relying only on fixed checkbox mappings. Source Anchor: PA2-FREEFORM. Tracked by: #241
+- Surface uncertain or partial interpretations as suggested checkboxes instead of direct execution so panel ambiguity stays human-reviewable. Source Anchor: PA2-SUGGESTED-CHECKBOXES. Tracked by: #242
+- Emit ordered multi-step panel plans through the planner/orchestration contract rather than investing in richer LangGraph-only node choreography. Source Anchor: PA2-MULTISTEP-PLANS. Tracked by: #243
+- Prove the PanelAgent 2.0 path operationally on a real vault with soak, receipts, and owner-doc writeback before it is treated as operationally accepted. Source Anchor: PA2-REAL-VAULT-ACCEPTANCE. Tracked by: #240
+- PanelAgent Runtime V1 remains the baseline until the PanelAgent 2.0 path is implemented and operationally accepted.
 - LangGraph control flow now supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `rule` remains the default to preserve current behaviour, while `llm` is an opt-in, experimental action selector routed through the shared `ReasoningFacade` with the canonical `decide` task kind.
 - LLM-driven contract tests live under `tests/e2e/test_panel_llm_e2e.py` (gated by `@pytest.mark.panel_llm_e2e` and `PANEL_AGENT_LLM_E2E=1`) to validate end-to-end promotion/non-promotion scenarios using the real decider.
 

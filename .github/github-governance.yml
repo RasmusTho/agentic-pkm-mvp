@@ -5,9 +5,12 @@ issues:
   required_sections:
     - Context
     - Scope
+    - Source Anchors
     - Constraints
     - Acceptance Criteria
     - Out of Scope
+    - Suggested Validation
+    - Source Docs
 labels:
   type:
     - type:task
@@ -55,3 +58,6 @@ rules:
   agents_must_follow_issue_constraints: true
   agents_must_satisfy_acceptance: true
   no_free_form_tasks: true
+  backlog_state_lives_in_github: true
+  source_anchor_required_for_new_backlog_work: true
+  inline_doc_receipts_are_secondary: true
