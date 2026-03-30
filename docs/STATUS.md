@@ -109,14 +109,22 @@ Repo-side governance added:
 - governance workflow checking Issue shape and PR Issue linkage
 - machine-readable GitHub governance contract in `.github/github-governance.yml`
 
+Platform-side governance applied:
+- the exact delivery-control-plane labels now exist in the repository
+- GitHub Project v2 `Agent Delivery Control Plane` now exists and is linked to `RasmusTho/agentic-pkm-mvp`
+- Project field `Status` now uses `Backlog`, `Ready`, `In Progress`, `Review`, `Done`
+- Project field `Agent State` now exists with `Idle`, `Running`, `Waiting`
+- the active governance issues/PR were seeded into the project with initial state values
+
 Observed before this change:
 - existing Issues were present but not normalized to a strict machine-readable task contract
 - recent PR practice showed inconsistent Issue-linking and branch naming conventions
 - no dedicated repo workflow enforced the Issue/PR contract
 
 Known remaining gap:
-- the available GitHub connector for this change did not expose label/Project-v2 write operations
-- therefore labels, Project fields/views, and Project automation still require platform-side application to match the repo contract
+- Project views `Kanban` and `Agent Queue` still require manual GitHub UI creation because the exposed CLI/GraphQL surfaces in this session did not provide a supported create/update path for project views
+- built-in Project automation for issue/PR lifecycle transitions still requires manual GitHub UI setup because the exposed schema in this session did not provide a supported creation path for project workflows
+- branch protection/rules were not adopted in this change
 
 Target delivery model:
 - Issues = canonical task contract
