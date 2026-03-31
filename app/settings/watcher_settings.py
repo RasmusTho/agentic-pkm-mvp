@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Literal, Mapping
 
 import yaml
 
+from app.config.environment import active_environment
+from app.config.paths import resolve_runtime_artifact_path
 from app.settings.source import SettingsSource, build_source
 
 DEFAULT_INDEX_OUTBOX = Path("tmp/index-outbox.jsonl")
@@ -49,13 +51,31 @@ def _read_frontmatter(path: Path) -> dict[str, Any]:
     return data
 
 
-def _resolve_path_setting(candidate: Any, env_key: str, default: Path) -> Path:
+def _resolve_path_setting(
+    candidate: Any, env_key: str, default: Path, *, environment: Literal["dev", "prod"] | None = None
+) -> Path:
+    """Resolve a path setting with optional environment scoping.
+
+    Args:
+        candidate: Explicit path from config
+        env_key: Environment variable name
+        default: Default path
+        environment: Environment for scoping artifact paths
+
+    Returns:
+        Resolved path, scoped to environment if applicable
+    """
     if isinstance(candidate, str) and candidate.strip():
-        return Path(candidate.strip()).expanduser()
-    env_value = os.getenv(env_key, "").strip()
-    if env_value:
-        return Path(env_value).expanduser()
-    return default
+        resolved = Path(candidate.strip()).expanduser()
+    else:
+        env_value = os.getenv(env_key, "").strip()
+        resolved = Path(env_value).expanduser() if env_value else default
+
+    # Apply environment scoping to tmp-based artifact paths
+    if environment and str(resolved).startswith("tmp"):
+        resolved = resolve_runtime_artifact_path(resolved, environment=environment)
+
+    return resolved
 
 
 @dataclass(frozen=True)
@@ -87,7 +107,16 @@ class AutoExecResolution:
     raw_value: str | None
 
 
-def load_watcher_settings(vault_root: Path | None = None) -> WatcherSettings:
+def load_watcher_settings(vault_root: Path | None = None, *, environment: Literal["dev", "prod"] | None = None) -> WatcherSettings:
+    """Load watcher settings with optional environment scoping.
+
+    Args:
+        vault_root: Override vault root path
+        environment: Environment for artifact path scoping
+
+    Returns:
+        WatcherSettings with environment-scoped paths if applicable
+    """
     path = _settings_file(vault_root)
     data = _read_frontmatter(path)
     auto_run = data.get("auto_run") or {}
@@ -110,36 +139,45 @@ def load_watcher_settings(vault_root: Path | None = None) -> WatcherSettings:
         auto_exec_env = DEFAULT_AUTO_EXEC_ENV
     auto_exec_default = bool(auto_run.get("auto_exec_default", DEFAULT_AUTO_EXEC_DEFAULT))
 
-    index_outbox = _resolve_path_setting(paths_cfg.get("index_outbox"), "INDEX_OUTBOX_PATH", DEFAULT_INDEX_OUTBOX)
+    # Use provided environment or detect from runtime
+    env = environment or active_environment()
+
+    index_outbox = _resolve_path_setting(paths_cfg.get("index_outbox"), "INDEX_OUTBOX_PATH", DEFAULT_INDEX_OUTBOX, environment=env)
     watcher_tick_log = _resolve_path_setting(
         paths_cfg.get("watcher_tick_log"),
         "WATCHER_TICK_LOG_PATH",
         DEFAULT_WATCHER_TICK_LOG,
+        environment=env,
     )
     watcher_heartbeat = _resolve_path_setting(
         paths_cfg.get("watcher_heartbeat"),
         "WATCHER_HEARTBEAT_PATH",
         Path("tmp/watcher_heartbeat.json"),
+        environment=env,
     )
     worker_heartbeat = _resolve_path_setting(
         paths_cfg.get("worker_heartbeat"),
         "WORKER_HEARTBEAT_PATH",
         Path("tmp/worker_heartbeat.json"),
+        environment=env,
     )
     watcher_state = _resolve_path_setting(
         paths_cfg.get("watcher_state"),
         "WATCHER_STATE_PATH",
         Path("tmp/watcher_state.json"),
+        environment=env,
     )
     watcher_stop_file = _resolve_path_setting(
         paths_cfg.get("watcher_stop_file"),
         "WATCHER_STOP_FILE",
         Path("tmp/WATCHER_STOP"),
+        environment=env,
     )
     panel_event_log = _resolve_path_setting(
         paths_cfg.get("panel_event_log"),
         "INDEX_OUTBOX_PATH",
         index_outbox,
+        environment=env,
     )
 
     return WatcherSettings(
