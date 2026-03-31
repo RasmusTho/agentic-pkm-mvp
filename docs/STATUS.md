@@ -23,9 +23,10 @@ Validation posture note:
 - failures in those broader scenarios indicate target-state gaps unless and until this status document promotes the capability into the claimed baseline
 
 ## Baseline Definition (SoT v5.5)
+- Environment posture: `dev` and `prod` are now explicit first-class environments in the SoT. The governing contract lives in `docs/ENVIRONMENTS.md`. Current baseline/runtime docs remain production-facing unless they explicitly say lab/dev-only.
 - Runtime watcher: registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`) is the default; legacy snapshot watchers are dev-only and require `PKM_SETTINGS_PROFILE=lab`.
 - Runtime default: `scripts/start_full_system.sh` and `config/runtime.defaults.env` set `WATCHER_AUTO_EXEC=1` unless the operator already set a value; set `WATCHER_AUTO_EXEC=0` to run watchers in emit-only mode. Default-on does not bypass rollout discipline: once armed, any note with an AI panel fence is only a candidate, actions are still filtered through the allowlisted `watcher_settings.allowed_actions`, the only per-note opt-out is `ai_panel_auto_run: never` (nested form accepted), and manual CLI panel runs remain available.
-- Settings tiering (watcher controls): runtime defaults to `PKM_SETTINGS_PROFILE=operator`; dev/lab-only watcher tuning env vars are applied only when `PKM_SETTINGS_PROFILE=lab`.
+- Settings tiering (watcher controls): runtime defaults to `PKM_SETTINGS_PROFILE=operator`; dev/lab-only watcher tuning env vars are applied only when `PKM_SETTINGS_PROFILE=lab`. This is current shipped control behavior, not the whole environment model.
 - Storage baseline: `store_objects` is the canonical object table; legacy `objects` rows are best-effort migrated when needed so runtime avoids dual-table selection. Legacy `app/store/object_store.py` now delegates to canonical `app/stores` providers (compat mirror retained for tests), and `index rebuild` reads via `ObjectStore` rather than separate memory/DB query branches.
 - ASK warm-load boundary: `/api/ask` hydrates HybridStore through the canonical store interface (`list_objects`) instead of backend-specific `_objects`/raw SQL introspection.
 - DB outbox is canonical in runtime; JSONL (`INDEX_OUTBOX_PATH`) is audit only and should not be used as the worker queue.
@@ -83,6 +84,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 ## Current Snapshot
 
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
+- Production-facing path is the active current-state default; lab/dev-only flows remain explicitly non-production.
 - PanelAgent runtime V1 is part of the active baseline; planner pipeline and LangGraph expansion remain opt-in.
 - Legacy snapshot watchers remain available only for lab/dev workflows and are not part of the runtime default.
 - Eval suites remain opt-in diagnostics; they do not define baseline health by themselves.
