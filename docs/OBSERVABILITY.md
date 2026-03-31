@@ -9,6 +9,7 @@ Reading note:
 
 For adjacent operational surfaces:
 - use `docs/OPERATIONS.md` as the top-level operations playbook
+- use `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md` for incident triage with specific commands and signal interpretation
 - use `docs/HEALTH.md` for health CLI behavior and contract details
 - use `docs/INFRASTRUCTURE.md` for local Prometheus/Grafana setup
 - use `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md` for the current incident-triage workflow across watcher, panel, and CLI-first orchestrator surfaces
