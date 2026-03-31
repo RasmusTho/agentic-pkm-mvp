@@ -93,7 +93,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 | --- | --- | --- |
 | Watcher auto-exec | Guarded by dedup + optimistic writes + idempotency | Safe enablement only after gates and receipts prove stable behavior |
 | LangGraph rollout | Active for ASK and PanelAgent-related flows only; the shared `ReasoningFacade` seam is present but not yet adopted across all targeted agents | Expand in phases as additional agent pools migrate onto the shared `ReasoningFacade` and common graph scaffolding |
-| Orchestrator V2 pilot | Shipped: parallel execution + dependency-aware scheduling with `ORCHESTRATOR_VERSION=v2` flag. V1 is default. Coverage: flag contract, plan-graph scheduling, event/trace compat. Delivery receipt: Issue #250. | Future slices: compensation/rollback, checkpointing, retry/timeout policy. Adopt in broader rollout after stability signals. |
+| Orchestrator V2 pilot | Shipped: parallel execution + dependency-aware scheduling with `ORCHESTRATOR_VERSION=v2` flag. V1 is default. Coverage: flag contract, plan-graph scheduling, event/trace compat, compensation/rollback. Delivery receipt: Issue #250 (pilot), Issue #251 (compensation). | Future slices: checkpointing, retry/timeout policy. Adopt in broader rollout after stability signals. |
 
 For detailed sequencing, version history, and roadmap ladder, use:
 - `docs/ROADMAP.md`
