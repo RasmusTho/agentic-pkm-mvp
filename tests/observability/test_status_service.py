@@ -227,3 +227,39 @@ def test_get_system_status_includes_watcher_automation_details(monkeypatch, tmp_
     assert status.watcher_automation.last_tick_panel_skipped_auto_exec == 0
     assert status.watcher_automation.last_run_skipped_dedup == 3
     assert status.watcher_automation.last_run_skipped_allowed_actions == 1
+
+
+def test_get_system_status_includes_panel_actions_provenance(monkeypatch, tmp_path):
+    reset_store_backends()
+    reset_ingest_meta()
+    reset_ask_metrics()
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    panel_actions = tmp_path / "panel-actions.md"
+    panel_actions.write_text(
+        "---\n"
+        "mappings:\n"
+        "  - id: promote.evergreen\n"
+        "    label: Promote\n"
+        "    intent_type: promotion\n"
+        "    downstream_event: promote.intent.created\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(panel_actions))
+
+    status = get_system_status()
+
+    assert status.panel_diagnostics is not None
+    # Should have provenance fields
+    assert isinstance(status.panel_diagnostics.source_paths, list)
+    assert isinstance(status.panel_diagnostics.source_mtimes, list)
+    # combined_sha256 should be populated when panel actions settings load successfully
+    assert status.panel_diagnostics.combined_sha256 is not None
+    # When sources exist, mtimes should match
+    if status.panel_diagnostics.source_paths:
+        assert len(status.panel_diagnostics.source_mtimes) == len(status.panel_diagnostics.source_paths)
+        # At least one path should be the panel_actions file we created
+        assert str(panel_actions) in status.panel_diagnostics.source_paths

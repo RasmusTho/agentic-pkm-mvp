@@ -28,7 +28,7 @@ Primary source folder:
 Compiler:
 - `python -m app.cli settings compile`
 
-Runtime settings cover the panel action catalog and watcher policy; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli settings-validate` / `python -m app.cli settings-explain`.
+Runtime settings cover the panel action catalog and watcher policy; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli settings-validate` / `python -m app.cli settings-explain` and are also surfaced in `python -m app.cli status --json` under `panel_diagnostics` and `watcher_automation`.
 They also include task-specific LLM routing policy via `vault/@Settings/llm_routing.md` -> `runtime/settings/llm_routing.yaml`.
 
 Settings tiering guidance (operator-facing vs dev/lab-only), inventory, and migration targets are described below.

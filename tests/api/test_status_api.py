@@ -41,6 +41,9 @@ def test_status_endpoint_returns_snapshot():
     assert "panel_actions_ids_sample" in panel_diag
     assert "has_promote_evergreen_mapping" in panel_diag
     assert "last_panel_mapping_load_error" in panel_diag
+    assert "source_paths" in panel_diag
+    assert "source_mtimes" in panel_diag
+    assert "combined_sha256" in panel_diag
 
 
 def test_status_counts_watcher_runs(tmp_path: Path, monkeypatch) -> None:
@@ -98,3 +101,25 @@ def test_status_counts_align_with_events(tmp_path: Path, monkeypatch) -> None:
 
     events_log = data.get("events_log") or {}
     assert events_log.get("total_lines") == len(events)
+
+
+def test_status_exposes_panel_provenance():
+    """Verify status snapshot exposes panel actions compiler provenance."""
+    client = TestClient(app)
+    resp = client.get("/api/status")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    panel_diag = body.get("panel_diagnostics") or {}
+    # Provenance fields should always be present in the response
+    assert isinstance(panel_diag.get("source_paths"), list)
+    assert isinstance(panel_diag.get("source_mtimes"), list)
+    # combined_sha256 may be None if panel actions settings cannot be loaded
+    # but the field should exist in the response
+    assert "combined_sha256" in panel_diag
+
+    # If source_paths is not empty, source_mtimes should have the same length
+    source_paths = panel_diag.get("source_paths", [])
+    source_mtimes = panel_diag.get("source_mtimes", [])
+    if source_paths:
+        assert len(source_mtimes) == len(source_paths)

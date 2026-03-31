@@ -66,7 +66,7 @@ Required rule for new backlog work:
 Recommended syntax in the Issue body:
 
 - `docs/PANEL_AGENT.md :: PA2-FREEFORM`
-- `docs/ROADMAP.md :: ORCHV2-PILOT`
+- `docs/ROADMAP.md :: ORCHV2-TDD`
 - `docs/STATUS.md :: SETTINGS-PROVENANCE`
 
 Recommended source-anchor style in docs when a stable item ID is warranted:
@@ -124,7 +124,7 @@ If the repo later adopts generated backlog receipts, keep the output as a derive
 
 ## Open
 - `PA2-FREEFORM` -> Issue #241 (`Ready`)
-- `ORCHV2-PILOT` -> Issue #___ (`Backlog`)
+- `ORCHV2-TDD` -> Issue #250 (`Ready`)
 
 ## Delivered
 - `SETTINGS-PROVENANCE` -> Issue #238 / PR #___ / commit <sha>
@@ -140,7 +140,6 @@ Use this migration posture from March 30, 2026 onward:
 - new backlog extraction should prefer `Source Anchors` in GitHub Issues
 - delivered work must still be written back into owner docs in the merge that ships the behavior
 - roadmap and plan docs should not keep delivered items phrased as pending
-
 ## Existing-state findings from the March 30, 2026 audit
 
 - Existing Issues are present, but titles/bodies are free-form and not normalized to a machine-readable task contract.
