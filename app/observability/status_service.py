@@ -424,7 +424,26 @@ def _get_panel_diagnostics() -> PanelDiagnostics:
         diag = get_panel_actions_diagnostics()
     except Exception:
         return PanelDiagnostics()
-    return PanelDiagnostics(**diag)
+
+    # Populate provenance fields from panel actions settings
+    source_paths: list[str] = []
+    source_mtimes: list[str | None] = []
+    combined_sha256: str | None = None
+    try:
+        panel_settings = load_panel_actions_settings()
+        for src in panel_settings.sources:
+            source_paths.append(src.path)
+            source_mtimes.append(src.mtime)
+        combined_sha256 = panel_settings.combined_sha
+    except Exception:
+        pass
+
+    return PanelDiagnostics(
+        **diag,
+        source_paths=source_paths,
+        source_mtimes=source_mtimes,
+        combined_sha256=combined_sha256,
+    )
 
 
 def _events_log_status() -> EventsLogStatus:
