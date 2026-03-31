@@ -1,257 +1,130 @@
-# Incident Triage Runbook — Watcher, Panel, and CLI-first Orchestrator
+State: SoT v5.5 Reality-MVP baseline locked with v5.6 forward-line observability hardening. Current-state incident triage only.
+# AgentOps Incident Triage
 
-State: SoT v5.5 Reality-MVP baseline. This runbook documents operator-visible incident triage for the current runtime path: registry watcher, panel runtime, CLI-first orchestrator, and associated health/status surfaces.
+Use this runbook when an operator has already identified an incident on one of the current shipped runtime surfaces and needs a current-state triage path.
 
-Purpose: Provide operators with a single, coherent triage entry point for diagnosing failures on the shipped, operator-visible surfaces. Each section describes where to look first, which signals to inspect, and when to escalate or file follow-up issues.
+Reading note:
+- this runbook covers only the shipped/operator-visible watcher, panel, and CLI-first orchestrator paths
+- it does not define future A2A routing, planned multi-agent orchestration, or target-state alerting design
+- `docs/OPERATIONS.md` remains the top-level entrypoint; start there when the failing surface is still unclear
 
-## Triage Order (All Surfaces)
-
-**Start here for any runtime incident:**
-
-1. Run `make verify-runtime` to check container health + in-container runtime health/status.
-2. Run `docker compose exec -T api python -m app.cli health --json` for readiness/dependency checks.
-3. Run `docker compose exec -T api python -m app.cli status` for watcher/worker/outbox snapshot.
-4. Run `docker compose exec -T api python -m app.cli settings-explain --json` for watcher gate, allowlist, and provenance state.
-5. Check heartbeat freshness:
-   - Watcher: `cat tmp/watcher_heartbeat.json` (or `WATCHER_HEARTBEAT_PATH` override).
-   - Worker: `cat tmp/worker_heartbeat.json` (or `WORKER_HEARTBEAT_PATH` override).
-6. Check DB outbox freshness:
-   - `docker compose exec -T db psql -U postgres agentic_pkm -c "SELECT event_type, COUNT(*), MAX(created_at) FROM outbox WHERE created_at > NOW() - INTERVAL '5 minutes' GROUP BY event_type ORDER BY event_type;"`
-7. Inspect relevant logs for errors or unusual patterns:
-   - `docker compose logs -f watcher` or `docker compose logs -f worker` or `docker compose logs -f api`
-8. If the issue is surface-specific (watcher, panel, orchestrator), follow the section below.
-9. For topology/startup issues, refer to `docs/INFRASTRUCTURE.md` and `docs/HEALTH.md`.
-
-## Watcher Incidents
-
-### Where to look first
-
-1. **Heartbeat file**:
+## Shared first checks
+1. Confirm the runtime surface and whether the issue is watcher, panel execution, or orchestrator plan execution.
+2. Run the canonical operator checks:
    ```bash
-   cat tmp/watcher_heartbeat.json
+   make verify-runtime
+   docker compose exec -T api python -m app.cli health --json
+   docker compose exec -T api python -m app.cli settings-explain --json
+   docker compose exec -T api python -m app.cli status
    ```
-   - Expected fields: `last_tick_at`, `last_tick_duration_ms`, `tick_count`, `status`, `health.pass_fail`.
-   - If missing or stale (> 60 seconds old): watcher process crashed or is stuck.
-   - If `status` is not `ok`: watcher reported a problem in the last tick.
+3. Check shared liveness and queue surfaces:
+   - watcher heartbeat: `tmp/watcher_heartbeat.json` or `WATCHER_HEARTBEAT_PATH`
+   - worker heartbeat: `tmp/worker_heartbeat.json` or `WORKER_HEARTBEAT_PATH`
+   - DB outbox freshness and `delivered_at`
+   - JSONL audit log at `INDEX_OUTBOX_PATH`
+4. Use `trace_id` when it is already present in logs, outbox events, status output, or audit rows to correlate a single failing run across watcher, panel, and orchestrator surfaces.
+5. Escalate to `docs/INFRASTRUCTURE.md` if the issue is compose wiring, startup failure, missing mounts, or dependency reachability rather than runtime behavior.
 
-2. **Tick log**:
-   ```bash
-   tail -50 tmp/watcher_tick_log.jsonl
-   ```
-   - Each line is one watcher tick; shows changed counts, ingest attempts, skip reasons, errors.
-   - High `ingest_attempted` but low `ingested`: ingest errors; check details in full logs.
-   - `panel_candidates > 0` but `panel_runs = 0` and `WATCHER_AUTO_EXEC=1`: panel auto-exec blocked; check `panel_skipped_policy` and `panel_skipped_limit`.
+## Watcher failures
 
-3. **Settings gate**:
-   ```bash
-   python -m app.cli settings-explain --json | jq '.watcher_auto_exec, .allowlist, .writes_allowed, .panel_skipped_policy'
-   ```
-   - Verify `watcher_auto_exec` is armed and allowlist is valid before treating auto-run as live.
-   - If `writes_allowed = false`: writes are blocked; check safe-mode/write-guard state in the output.
+Where to look first:
+- `python -m app.cli status`
+- `python -m app.cli health --json`
+- watcher heartbeat file
+- watcher tick log referenced by `WATCHER_TICK_LOG_PATH`
 
-4. **Status snapshot**:
-   ```bash
-   python -m app.cli status | grep -A 20 "Watcher automation"
-   ```
-   - Look for `mode` (emit-only vs auto-exec), skip counters, and last-run error summary.
+Commands and signals to inspect:
+```bash
+docker compose exec -T api python -m app.cli health --json
+docker compose exec -T api python -m app.cli settings-explain --json
+docker compose exec -T api python -m app.cli status
+docker compose logs --tail=200 watcher
+tail -n 20 tmp/watcher_heartbeat.json
+tail -n 20 "$(cat tmp/latest_watcher_tick_log 2>/dev/null)"
+```
 
-### Commands and signals to inspect
+What to interpret:
+- stale or malformed watcher heartbeat means the registry watcher is not reporting healthy ticks
+- `settings-explain` is the canonical source for auto-exec gate state, allowlist validity, provenance, and write-guard context
+- `status` should confirm watcher automation mode, skip counters, and recent skip reasons
+- DB outbox should receive fresh watcher-originated rows such as `ingest.vault.changed` or `panel.scan.requested`; JSONL is audit-only
 
-| Signal | Command | What it shows |
-| --- | --- | --- |
-| Liveness | `tail -1 tmp/watcher_heartbeat.json \| jq '.last_tick_at'` | Last watcher tick timestamp; if > 60s old, process is stale or stuck. |
-| Vault paths scanned | `python -m app.cli status \| grep "vault_notes\|vault_path"` | Confirmed vault location and object count; mismatch suggests vault path or permission issue. |
-| Ingest errors | `docker compose logs watcher \| grep -i "ingest\|error" \| tail -20` | Errors during note parsing or DB writes; check vault formatting or permissions. |
-| Dedup queue | `python -m app.cli status \| grep "dedup"` | `skipped_dedup` counter; high values mean the same note is changing too fast. |
-| Trace propagation | `jq 'select(.node=="watcher.*") \| {trace_id, node, status, latency_ms}' logs/trace.jsonl` | Span traces for this tick; correlate by `trace_id` to see ingest/panel timeline. |
-| Outbox enqueue | `docker compose exec -T db psql -U postgres agentic_pkm -c "SELECT event_type, COUNT(*) FROM outbox WHERE source_component = 'watcher' AND created_at > NOW() - INTERVAL '10 minutes' GROUP BY event_type;"` | Verify `ingest.vault.changed` and `panel.scan.requested` events are enqueued. |
+`trace_id` usage:
+- registry watcher runtime health is primarily heartbeat + tick-log driven, not `watcher.run`
+- when watcher-emitted outbox/audit events include a `trace_id`, use it to correlate the downstream worker or panel path
+- if no `trace_id` is surfaced for the failing watcher tick, rely on timestamp, note path, and event topic correlation instead of inventing one
 
-### Common watcher issues
+Escalate when:
+- heartbeat stays stale after a controlled restart
+- tick logs show repeated scan/backoff/stop-file conditions that require environment or vault-scope intervention
+- the failure is really a startup/runtime-topology problem covered by `docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md`
 
-**Issue: Heartbeat stale or missing**
-- Watcher process crashed or is blocked.
-- Check: `docker compose ps` (ensure `watcher` is running), `docker compose logs watcher | tail -50` (look for crash/exception).
-- Recovery: Restart watcher: `docker compose restart watcher`.
+## Panel runtime and panel intent failures
 
-**Issue: `changed > 0` but `ingested = 0`**
-- Ingest pipeline errored (vault formatting, embed provider unreachable, DB permission issue).
-- Check: `docker compose logs watcher | grep -i "ingest\|error"`, `python -m app.cli health --json` (confirm DB/LLM health).
-- Recovery: Fix the underlying issue (vault path, DB connection, LLM reachability), then re-run: `python -m app.cli watcher run --max-ticks 1`.
+Where to look first:
+- `python -m app.cli status`
+- `python -m app.cli settings-explain --json`
+- DB outbox topics for `panel.intent.*`, `panel.action.*`, and `promote.intent.created`
+- worker logs and JSONL audit tail
 
-**Issue: `panel_candidates > 0` but `WATCHER_AUTO_EXEC=1` and `panel_runs = 0`**
-- Panel auto-exec is blocked by policy or rate limit.
-- Check: `python -m app.cli status | grep -A 5 "panel_skipped"` to see skip reasons (policy vs limit).
-- Check: `python -m app.cli settings-explain | jq '.panel_skipped_policy, .panel_skipped_limit'` to verify settings.
-- Recovery: Confirm settings are correct, then either adjust policy or re-run with `PANEL_PROACTIVE_ASSIST=1` if safe.
+Commands and signals to inspect:
+```bash
+docker compose exec -T api python -m app.cli settings-explain --json
+docker compose exec -T api python -m app.cli status --json
+docker compose logs --tail=200 worker
+curl -sS "http://127.0.0.1:18000/api/events/tail?topic=panel.scan.requested&limit=50"
+curl -sS "http://127.0.0.1:18000/api/events/tail?topic=panel.intent.executed&limit=50"
+tail -n 50 tmp/index-outbox.jsonl
+```
 
-**Issue: High dedup skip count**
-- Same note is being updated too frequently; watcher dedup guard is preventing duplicate panel runs.
-- Check: `python -m app.cli status | jq '.dedup'` for skip counts by reason.
-- Investigation: Is the note being edited externally or is iCloud/sync causing re-triggers? Check vault sync behavior.
-- Recovery: If spurious, run `watcher run` again; true duplicates are expected behavior.
+What to interpret:
+- `settings-explain` plus `status` should agree on auto-exec posture, allowlist validity, `writes_allowed`, and skip counters
+- if watcher signals exist but `panel.intent.executed` does not appear, check policy gating, dedup skips, per-note opt-out, and worker-side processing
+- `promote.intent.created` proves the panel produced a mutation intent; it does not by itself prove the promotion consumer applied it
+- JSONL and `/api/events/tail` are trace/audit aids; runtime processing is still driven by the DB outbox
 
-## Panel Runtime / Intent Incidents
+`trace_id` usage:
+- panel and downstream runtime events may carry a shared `trace_id`; use that to group `panel.scan.requested`, `panel.intent.*`, and follow-on promotion/audit records
+- if the failure started from a CLI-triggered panel flow, the CLI-generated `trace_id` should be used as the primary correlation key
 
-### Where to look first
+Escalate when:
+- the panel path is blocked by write-guard or settings provenance that does not match operator intent
+- the event chain is present but resulting note changes or frontmatter state contradict `docs/HUMAN-FLOWS.md` or `docs/PANEL_AGENT.md`
+- promotion/application behavior, rather than panel intent emission, is the real failing surface
 
-1. **Status intent counters**:
-   ```bash
-   python -m app.cli status | grep -A 5 "Intent counters"
-   ```
-   - `promote.intent.created` (24h): panel emitted intents to be applied.
-   - `panel.intent.executed` (24h): panel runtime actually ran.
-   - If created > executed: intents are queued but not yet applied; check worker.
+## CLI-first orchestrator failures
 
-2. **Panel logs**:
-   ```bash
-   docker compose logs -f panel 2>&1 | grep -i "error\|exception" | head -20
-   ```
-   - If panel is not a separate container, check `docker compose logs api` and filter for `panel.*` spans.
+Where to look first:
+- the failing CLI command output
+- orchestrator audit records for `orchestrator.step.*` and `mcp.tool.call.*`
+- JSON logs carrying the same `trace_id`
 
-3. **Outbox events**:
-   ```bash
-   docker compose exec -T db psql -U postgres agentic_pkm -c "SELECT event_type, COUNT(*), MAX(created_at) FROM outbox WHERE event_type LIKE 'panel.%' AND created_at > NOW() - INTERVAL '30 minutes' GROUP BY event_type ORDER BY MAX(created_at) DESC;"
-   ```
-   - Expected event chain: `panel.intent.created` → (worker consumes) → `panel.intent.executed` → (consumer emits) → `promote.intent.created` (if mapped).
+Commands and signals to inspect:
+```bash
+python -m app.cli status --json
+tail -n 50 tmp/index-outbox.jsonl
+rg -n "orchestrator.step|mcp.tool.call|trace_id" logs tmp
+```
 
-4. **Trace propagation for a specific panel run**:
-   ```bash
-   # Find a panel run by tracing its event_id
-   docker compose exec -T db psql -U postgres agentic_pkm -c "SELECT event_id, trace_id, created_at FROM outbox WHERE event_type = 'panel.intent.created' ORDER BY created_at DESC LIMIT 5;"
-   # Then correlate logs by trace_id
-   jq "select(.trace_id == \"<trace_id>\") | {node, status, latency_ms, extra}" logs/trace.jsonl
-   ```
+What to interpret:
+- current orchestrator runtime is CLI-first and audit-oriented; `app/orchestrator/events.py` emits `orchestrator.step.started`, `orchestrator.step.finished`, `orchestrator.step.error`, `mcp.tool.call.started`, and `mcp.tool.call.finished`
+- `ORCHESTRATOR_VERSION=v1|v2` selects the implementation; unrecognized values fall back to `v1`
+- a step-level error with a stable `plan_id`, `step_id`, and `trace_id` is the primary current-state failure receipt for plan execution
+- these audit records are operational traces, not proof of future A2A routing or multi-agent orchestration
 
-### Commands and signals to inspect
+`trace_id` usage:
+- the orchestrator carries `plan.meta.trace_id` through step start/finish/error audit events
+- use that `trace_id` to gather the full plan execution sequence across audit rows and JSON logs
+- when MCP-backed tool calls are involved, correlate `mcp.tool.call.*` entries under the same `trace_id` before treating the failure as an orchestrator core bug
 
-| Signal | Command | What it shows |
-| --- | --- | --- |
-| Intent creation rate | `python -m app.cli status \| jq '.promote.intent.created'` | Promotion intents created in the last 24h; zero means no panel runs or all were non-promotion. |
-| Panel execution rate | `python -m app.cli status \| jq '.panel_runs'` | Panel runtime executions in the last 24h; compare to intent count. |
-| Action catalog validity | `python -m app.cli settings-explain --json \| jq '.panel_actions'` | Loaded action catalog (source path, hash, validity); empty or error means invalid catalog. |
-| Panel log entries | `docker compose exec -T db psql -U postgres agentic_pkm -c "SELECT COUNT(*), MAX(created_at) FROM outbox WHERE event_type = 'panel.log.created' AND created_at > NOW() - INTERVAL '1 hour';"` | Panel log emissions; high counts suggest verbose/debug logging. |
-| Promotion intent skips | `docker compose exec -T db psql -U postgres agentic_pkm -c "SELECT COUNT(*), MAX(created_at) FROM outbox WHERE event_type = 'promote.intent.created' AND created_at > NOW() - INTERVAL '1 hour';"` | Promotion intents enqueued for the worker; compare to panel runs. |
+Escalate when:
+- the plan itself is structurally invalid and needs a planner or contract fix rather than operator recovery
+- audit records are missing entirely for a reproducible CLI plan run
+- the failure depends on planned V2/A2A behavior that is not part of current shipped reality
 
-### Common panel issues
-
-**Issue: Panel intent created but not executed**
-- Worker may be stalled, crashed, or not consuming the DB outbox.
-- Check: `python -m app.cli status | jq '.worker_queue'` (is the worker alive?), `docker compose logs worker | tail -50` (check for errors).
-- Recovery: Restart worker: `docker compose restart worker`, then check outbox again.
-
-**Issue: Panel intent created but promote intent never emitted**
-- Panel ran but did not emit a promotion action (or action was not in the allowlist).
-- Check: `python -m app.cli settings-explain | jq '.allowed_actions'` to verify the action is allowlisted.
-- Check: `docker compose logs api | grep -i "panel\|promote" | tail -20` to see if the action ran.
-- Recovery: Verify the note has the correct AI panel fence and action is allowlisted. Re-run panel: `python -m app.cli panel run-many <uuid>`.
-
-**Issue: Panel action catalog invalid**
-- `docs/settings/panel-actions.md` or vault `@Settings/watchers.md` has syntax errors or is unreachable.
-- Check: `python -m app.cli settings-validate --json` for parse errors.
-- Check: `python -m app.cli settings-explain | jq '.panel_actions.error'` for details.
-- Recovery: Fix the YAML/frontmatter syntax in the source, then re-run: `python -m app.cli settings-validate` to confirm.
-
-**Issue: Panel run is very slow**
-- Latency spike in embedding, reasoning, or action execution.
-- Check: `jq "select(.node | contains(\"panel\")) | {node, latency_ms, status}" logs/trace.jsonl | jq -s 'sort_by(.latency_ms) | reverse | .[0:5]'` for slowest spans.
-- Investigation: Is LLM provider slow? Is embedding index hot? Are there resource constraints?
-- Recovery: Profile the slow component (LLM, embedding, DB) and address bottleneck.
-
-## CLI-first Orchestrator (Planner → Plan Execution)
-
-### Where to look first
-
-1. **Planner execution status**:
-   ```bash
-   python -m app.cli status | grep -A 10 "Planner\|Orchestrator" || echo "Not directly surfaced in status; check logs."
-   ```
-   - Planner and orchestrator emit events to the outbox but may not have a dedicated status line yet.
-
-2. **Orchestrator events**:
-   ```bash
-   docker compose exec -T db psql -U postgres agentic_pkm -c "SELECT event_type, COUNT(*), MAX(created_at) FROM outbox WHERE event_type LIKE 'orchestrator.%' OR event_type LIKE 'planner.%' OR event_type LIKE 'plan.%' AND created_at > NOW() - INTERVAL '1 hour' GROUP BY event_type ORDER BY MAX(created_at) DESC;"
-   ```
-   - Expected events: `plan.created`, `plan.execution.started`, `plan.step.executed`, `plan.execution.completed` (or error variants).
-
-3. **Plan trace ID**:
-   ```bash
-   # Find a recent plan execution by trace_id
-   jq "select(.node | contains(\"plan\")) | {trace_id, node, status, latency_ms}" logs/trace.jsonl | jq -s 'unique_by(.trace_id) | .[-1]'
-   ```
-   - Correlate all plan-related spans by this trace_id to see the full orchestrator lifecycle.
-
-4. **CLI command logs**:
-   ```bash
-   docker compose logs api | grep -i "plan\|orchestrate" | tail -50
-   ```
-   - CLI-driven plan runs emit logs with plan ID, step count, and execution status.
-
-### Commands and signals to inspect
-
-| Signal | Command | What it shows |
-| --- | --- | --- |
-| Plan creation rate | `docker compose exec -T db psql -U postgres agentic_pkm -c "SELECT COUNT(*), MAX(created_at) FROM outbox WHERE event_type = 'plan.created' AND created_at > NOW() - INTERVAL '24 hours';"` | Plans created in the last 24h (via planner or operator CLI). |
-| Plan execution status | `docker compose exec -T db psql -U postgres agentic_pkm -c "SELECT event_type, COUNT(*) FROM outbox WHERE event_type LIKE 'plan.execution.%' AND created_at > NOW() - INTERVAL '1 hour' GROUP BY event_type;"` | Breakdown of plan starts, step executions, and completions. |
-| Orchestrator version | `python -m app.cli settings-explain --json \| jq '.orchestrator_version'` | Active orchestrator version (v1 or v2); v2 includes parallel scheduling. |
-| Step errors | `docker compose exec -T db psql -U postgres agentic_pkm -c "SELECT COUNT(*), MAX(created_at) FROM outbox WHERE event_type LIKE 'plan.step.%error%' AND created_at > NOW() - INTERVAL '1 hour';"` | Failed plan steps; high counts suggest action/dependency failures. |
-| Trace correlation | `jq "select(.trace_id == \"<plan_trace_id>\") | {node, status, extra}" logs/trace.jsonl \| jq 'select(.status == "error")'` | All error spans for a plan execution; helps identify which step failed. |
-
-### Common orchestrator issues
-
-**Issue: Plan created but never executed**
-- Planner may have stalled or the plan was never dispatched to the orchestrator.
-- Check: `docker compose logs api | grep -i "plan" | tail -30` for planner errors or execution start logs.
-- Check: `docker compose exec -T db psql -U postgres agentic_pkm -c "SELECT * FROM outbox WHERE event_type = 'plan.created' ORDER BY created_at DESC LIMIT 3\G"` to see if the plan was created.
-- Recovery: If the plan exists but wasn't executed, manually trigger it via CLI: `python -m app.cli ask --plan-id <id>` (exact command depends on current CLI surface).
-
-**Issue: Plan step failed**
-- A step within the plan errored; the orchestrator may or may not have continued.
-- Check: `docker compose exec -T db psql -U postgres agentic_pkm -c "SELECT * FROM outbox WHERE event_type LIKE 'plan.step.%' AND created_at > NOW() - INTERVAL '30 minutes' ORDER BY created_at DESC LIMIT 10\G"` to see step status.
-- Check: `jq "select(.node | contains(\"plan\")) | select(.status == \"error\") | {node, extra}" logs/trace.jsonl | head -5` to see the error details.
-- Investigation: Is the step's action allowlisted? Does the action's dependency exist? Is the embedding/retrieval step returning results?
-- Recovery: Fix the underlying action or dependency, then replan or resubmit the failing step.
-
-**Issue: Orchestrator V2 slowness or unexpected behavior**
-- Orchestrator V2 (parallel scheduling, dependency-aware execution) is active but behaves unexpectedly.
-- Check: `python -m app.cli settings-explain | jq '.orchestrator_version'` to confirm v2 is active.
-- Check: `docker compose logs api | grep -i "orchestrator\|v2" | tail -30` for v2-specific logs.
-- Investigation: Are dependencies correctly specified in the plan? Is parallelism causing resource contention? Does the trace show unexpected step ordering?
-- Recovery: If v2 is causing issues, fall back to v1 with `ORCHESTRATOR_VERSION=v1`, then file a follow-up issue with the trace ID and plan details.
-
-## Escalation and Follow-ups
-
-### Escalation paths
-
-| Issue type | Next step | Document |
-| --- | --- | --- |
-| Watcher stuck or crashing | Restart container; if persistent, check INFRASTRUCTURE.md for DB/vault permissions. | `docs/INFRASTRUCTURE.md`, `docs/HEALTH.md` |
-| Panel action not working | Verify action is in allowlist and vault settings are valid. | `docs/settings/panel-actions.md`, `docs/PANEL_AGENT.md` |
-| Worker not consuming outbox | Restart worker; if persistent, check DB outbox health and worker permissions. | `docs/INFRASTRUCTURE.md` |
-| LLM/embedding provider unreachable | Check reachability from container; verify endpoint config and network routing. | `docs/INFRASTRUCTURE.md`, `docs/LLM.md` |
-| Plan execution dependency broken | Check that source artifacts exist and are accessible; replan if needed. | `docs/ARCHITECTURE.md` |
-| Trace ID not found in logs | Ensure `trace_id` propagates from CLI entry point; check observability setup. | `docs/OBSERVABILITY.md` |
-
-### When to file an issue
-
-File a follow-up GitHub Issue if:
-- A component fails after restart and the error is not covered above.
-- Incident is related to a forward-line feature (e.g., Orchestrator V2, LangGraph adoption) and is tagged as `agent:needs-human`.
-- A security or data integrity incident occurs (e.g., note corruption, unintended mutation).
-- Incident suggests a race condition or concurrency bug that cannot be reproduced locally.
-
-Include in the issue:
-- Trace ID(s) from the incident.
-- Relevant heartbeat/status snapshots.
-- Error logs from `docker compose logs <component>`.
-- Whether the issue is reproducible or one-off.
-- Whether the component is part of the active baseline or a forward-line feature.
-
-## Related Documents
-
-- **Operator playbook**: `docs/OPERATIONS.md` (top-level triage order, component overview).
-- **Observability contract**: `docs/OBSERVABILITY.md` (signal interpretation, span schema, jq recipes).
-- **Health semantics**: `docs/HEALTH.md` (readiness checks, degraded-state rules).
-- **Infrastructure & startup**: `docs/INFRASTRUCTURE.md` (local stack, Docker Compose, startup troubleshooting).
-- **Panel runtime details**: `docs/PANEL_AGENT.md` (panel fence syntax, action semantics).
-- **Watcher & registry configuration**: `docs/OPERATIONS.md#watcher-operations` and `configs/watchers.yaml`.
-- **UAT walkthrough**: `docs/runbooks/UAT_PANEL_WATCHER.md` (end-to-end validation flow).
+## Escalation map
+- startup, compose, mounts, dependency reachability: `docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md`
+- go-live posture and rollout gating: `docs/runbooks/RUNBOOK_GO_LIVE.md`
+- watcher/panel manual walkthrough on a bounded note set: `docs/runbooks/UAT_PANEL_WATCHER.md`
+- signal definitions and interpretation: `docs/OBSERVABILITY.md`
+- top-level operator routing and incident handling order: `docs/OPERATIONS.md`

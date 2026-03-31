@@ -6,6 +6,10 @@ from app.agents.base.audit import audit_log
 from app.events.types import (
     MCP_TOOL_CALL_FINISHED,
     MCP_TOOL_CALL_STARTED,
+    ORCHESTRATOR_COMPENSATION_STARTED,
+    ORCHESTRATOR_COMPENSATION_STEP_COMPLETED,
+    ORCHESTRATOR_COMPENSATION_STEP_FAILED,
+    ORCHESTRATOR_ROLLED_BACK,
     ORCHESTRATOR_STEP_ERROR,
     ORCHESTRATOR_STEP_FINISHED,
     ORCHESTRATOR_STEP_STARTED,
@@ -58,6 +62,65 @@ def emit_step_error(
     _emit(ORCHESTRATOR_STEP_ERROR, object_id=object_id, trace_id=trace_id, details=details)
 
 
+def emit_compensation_started(
+    *,
+    plan_id: str,
+    failed_step_id: str,
+    steps_to_compensate: list[str],
+    object_id: str | None,
+    trace_id: str | None,
+) -> None:
+    details = {
+        "plan_id": plan_id,
+        "failed_step_id": failed_step_id,
+        "steps_to_compensate": steps_to_compensate,
+    }
+    _emit(ORCHESTRATOR_COMPENSATION_STARTED, object_id=object_id, trace_id=trace_id, details=details)
+
+
+def emit_compensation_step_completed(
+    *,
+    plan_id: str,
+    step_id: str,
+    compensate_fn: str,
+    object_id: str | None,
+    trace_id: str | None,
+) -> None:
+    details = {"plan_id": plan_id, "step_id": step_id, "compensate_fn": compensate_fn}
+    _emit(ORCHESTRATOR_COMPENSATION_STEP_COMPLETED, object_id=object_id, trace_id=trace_id, details=details)
+
+
+def emit_compensation_step_failed(
+    *,
+    plan_id: str,
+    step_id: str,
+    compensate_fn: str,
+    error: str,
+    object_id: str | None,
+    trace_id: str | None,
+) -> None:
+    details = {"plan_id": plan_id, "step_id": step_id, "compensate_fn": compensate_fn, "error": error}
+    _emit(ORCHESTRATOR_COMPENSATION_STEP_FAILED, object_id=object_id, trace_id=trace_id, details=details)
+
+
+def emit_orchestration_rolled_back(
+    *,
+    plan_id: str,
+    failed_step: str,
+    compensated_steps: list[str],
+    compensation_failures: list[str],
+    object_id: str | None,
+    trace_id: str | None,
+) -> None:
+    details = {
+        "plan_id": plan_id,
+        "failed_step": failed_step,
+        "compensated_steps": compensated_steps,
+        "compensation_failures": compensation_failures,
+    }
+    _emit(ORCHESTRATOR_ROLLED_BACK, object_id=object_id, trace_id=trace_id, details=details)
+
+
 def emit_mcp_tool_call_started(
     *, plan_id: str, step_id: str, tool_name: str, object_id: str | None, trace_id: str | None
 ) -> None:
@@ -76,6 +139,10 @@ __all__ = [
     "emit_step_started",
     "emit_step_finished",
     "emit_step_error",
+    "emit_compensation_started",
+    "emit_compensation_step_completed",
+    "emit_compensation_step_failed",
+    "emit_orchestration_rolled_back",
     "emit_mcp_tool_call_started",
     "emit_mcp_tool_call_finished",
     "ORCHESTRATOR_AGENT",

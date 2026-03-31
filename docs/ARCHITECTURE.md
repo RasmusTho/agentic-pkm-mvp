@@ -13,6 +13,7 @@ This architecture focuses on the runtime and data model for the Mimer module (th
 Related documents and authority boundaries:
 - `docs/DESIGN_PRINCIPLES.md` defines the stable design rules for modularity, flexibility, authority separation, and documentation layering. Use it before changing architecture wording or roadmap framing.
 - `docs/HUMAN-FLOWS.md` is the user-facing behavior contract. Any architecture change that alters user-visible behavior should be validated against it before shipping.
+- `docs/ENVIRONMENTS.md` defines `dev` and `prod` as first-class environments, including environment invariants, allowed variance, persistence/runtime separation, and production safety expectations.
 - `docs/ONTOLOGY_RUNTIME_BRIDGE.md` is the cross-layer reading guide connecting human functions, semantic classes, persistence surfaces, and runtime contracts. It does not replace the owning SoT docs, but it should be used when architecture wording risks collapsing those layers.
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` defines the broader human-first second-brain ontology. This document uses narrower runtime and storage language where needed and should not be read as the full domain ontology.
 - `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` defines the normalized vocabulary and explains where repo terms such as `note`, `object`, `agent`, `source`, and `promotion` drift across layers.
@@ -160,9 +161,11 @@ document records only the architectural consequence:
 - the runtime reacts to changed files rather than treating iCloud or Git as semantically primary
 - file-based eventual consistency matters more than any one transport
 - device asymmetry is an operational condition, not a different ontology of artifacts
+- environment (`dev` vs `prod`) is an operational/runtime distinction, not a different ontology of artifacts or a different semantic model
 
 See also:
 - `docs/HUMAN-FLOWS.md`
+- `docs/ENVIRONMENTS.md`
 - `docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md`
 
 ## Reading Rules
@@ -179,11 +182,17 @@ See also:
 
 ### Runtime watcher choice
 - Registry watcher is the runtime default; start-system flows and Docker compose use `python -m app.cli watcher run` with `configs/watchers.yaml`.
-- Settings tiering enforcement: watcher dev/lab tuning env vars are ignored in normal runtime (`PKM_SETTINGS_PROFILE=operator`) and require explicit `PKM_SETTINGS_PROFILE=lab`.
-- Legacy snapshot watchers (`vault-watcher-run`, `vault-watcher-daemon`, runtime-loop) are dev-only, require `PKM_SETTINGS_PROFILE=lab`, and are not used in runtime start-system flows.
+- Settings tiering enforcement: watcher dev/lab tuning env vars are ignored in normal runtime (`PKM_SETTINGS_PROFILE=operator`) and require explicit `PKM_SETTINGS_PROFILE=lab`. See `docs/ENVIRONMENTS.md`; this current settings-profile split is a partial control mechanism, not the full environment contract.
+- Legacy snapshot watchers (`vault-watcher-run`, `vault-watcher-daemon`, runtime-loop) are dev-only, require `PKM_SETTINGS_PROFILE=lab`, and are not used in runtime start-system flows or as production surfaces.
 - Store object table is canonicalized to `store_objects`; legacy `objects` rows are best-effort backfilled when `store_objects` is empty so runtime reads/writes stay on one table.
 - Legacy `scripts/fs_watcher.py` note lifecycle operations route through `VaultPort` (`FilesystemVaultAdapter`) rather than direct sink/pass-through writes.
 - DB outbox is canonical in runtime; JSONL outbox is audit/diagnostic only.
+
+### Environment contract (current architecture reading)
+- `dev` and `prod` are first-class environments in the SoT. Their purpose, invariants, and allowed variance are defined in `docs/ENVIRONMENTS.md`.
+- Environment changes may affect runtime topology, provider choice, diagnostics, fixture data, and tuning, but they MUST NOT change artifact semantics, event contracts, provenance rules, or write-safety boundaries.
+- Vault surface, companion/system surface, runtime stores, and operational artifacts must remain separable by environment even when the underlying architecture is otherwise shared.
+- Production runtime must prefer conservative behavior, explicit gating, and recoverable failure over convenience.
 
 ### Architecture Statement: Bounded Agents on Shared Foundations
 - The architecture is expected to include multiple bounded agents with narrow responsibilities rather than one central general agent.

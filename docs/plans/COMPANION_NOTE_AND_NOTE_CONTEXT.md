@@ -1,7 +1,7 @@
-State: Planned — Parts 1–3 implemented (contract docs + companion_note.py service). Parts 4–8 pending.
+State: Delivered — Parts 1–8 implemented. Ingest migration, VaultMirror cleanup, NoteContext service, Panel Agent wiring, and active doc sync are all shipped.
 # Plan: Companion Note + Note Context
 
-**Status**: In progress (Parts 1–3 done)
+**Status**: Delivered (Parts 1–8 done)
 **Source**: Consolidated architecture review (2026-03-27)
 **Supersedes**: VaultMirror / `note_log.py` pattern
 

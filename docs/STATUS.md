@@ -23,9 +23,10 @@ Validation posture note:
 - failures in those broader scenarios indicate target-state gaps unless and until this status document promotes the capability into the claimed baseline
 
 ## Baseline Definition (SoT v5.5)
+- Environment posture: `dev` and `prod` are now explicit first-class environments in the SoT. The governing contract lives in `docs/ENVIRONMENTS.md`. Current baseline/runtime docs remain production-facing unless they explicitly say lab/dev-only.
 - Runtime watcher: registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`) is the default; legacy snapshot watchers are dev-only and require `PKM_SETTINGS_PROFILE=lab`.
 - Runtime default: `scripts/start_full_system.sh` and `config/runtime.defaults.env` set `WATCHER_AUTO_EXEC=1` unless the operator already set a value; set `WATCHER_AUTO_EXEC=0` to run watchers in emit-only mode. Default-on does not bypass rollout discipline: once armed, any note with an AI panel fence is only a candidate, actions are still filtered through the allowlisted `watcher_settings.allowed_actions`, the only per-note opt-out is `ai_panel_auto_run: never` (nested form accepted), and manual CLI panel runs remain available.
-- Settings tiering (watcher controls): runtime defaults to `PKM_SETTINGS_PROFILE=operator`; dev/lab-only watcher tuning env vars are applied only when `PKM_SETTINGS_PROFILE=lab`.
+- Settings tiering (watcher controls): runtime defaults to `PKM_SETTINGS_PROFILE=operator`; dev/lab-only watcher tuning env vars are applied only when `PKM_SETTINGS_PROFILE=lab`. This is current shipped control behavior, not the whole environment model.
 - Storage baseline: `store_objects` is the canonical object table; legacy `objects` rows are best-effort migrated when needed so runtime avoids dual-table selection. Legacy `app/store/object_store.py` now delegates to canonical `app/stores` providers (compat mirror retained for tests), and `index rebuild` reads via `ObjectStore` rather than separate memory/DB query branches.
 - ASK warm-load boundary: `/api/ask` hydrates HybridStore through the canonical store interface (`list_objects`) instead of backend-specific `_objects`/raw SQL introspection.
 - DB outbox is canonical in runtime; JSONL (`INDEX_OUTBOX_PATH`) is audit only and should not be used as the worker queue.
@@ -46,10 +47,10 @@ Validation posture note:
 - Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, skipped receipts, and write-guard state are surfaced in status, events, and the new CLI `settings-explain` output before any runtime gate opens.
 - PanelAgent decider hardening through the shared `ReasoningFacade` seam is shipped for the current pilot path. Delivery receipt: Issue #230, PR #236.
 ### Next
-- Sequence the ReasoningFacade + LangGraph rollout for one additional agent pool, ensuring instrumentation feeds into the fitness gates and the orchestrator V2 experiment flag remains gated until stability signals arrive. Tracked by: #231. Source Anchor: RF-ADOPTION
+- ReasoningFacade + LangGraph rollout for the PanelAgent pilot agent pool is delivered. Delivery receipt: Issue #231 (closed COMPLETED). The remaining phased rollout to Promotion/Reviewer/Hygiene is gated on v5.6A pilot stabilization (see Later). Source Anchor: RF-ADOPTION
 - The companion note + Note Context doc-sync correction is shipped. Delivery receipt: Issue #229, PR #237. Any remaining rollout verification or cleanup should be captured as new bounded follow-up issues rather than treated as missing implementation.
-- Expand the vault-as-GUI settings compiler and operator surfaces so the forward line can describe runtime topology with complete provenance and precedence in both `settings-explain` and `status`. Shipped: panel-action/compiler provenance (source paths, mtimes, combined sha256) is now surfaced in the `/api/status` endpoint and `python -m app.cli status --json` via `panel_diagnostics` fields. Delivery receipt: Issue #238. Source Anchor: SETTINGS-PROVENANCE
-- Align CLI/docs runbooks with the v5.6 narrative: update `docs/ROADMAP.md`, status snapshots, and the runbooks so operators know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe. Tracked by: #232. Source Anchor: ROLLOUT-RUNBOOKS
+- Vault-as-GUI settings compiler and operator surfaces: panel-action/compiler provenance (source paths, mtimes, combined sha256) is now surfaced in the `/api/status` endpoint and `python -m app.cli status --json` via `panel_diagnostics` fields. Delivery receipt: Issue #238 (closed COMPLETED), PR #254. Source Anchor: SETTINGS-PROVENANCE
+- CLI/docs runbook alignment with v5.6 narrative: operators now know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe. Delivery receipt: Issue #232 (closed COMPLETED). Source Anchor: ROLLOUT-RUNBOOKS
 ### Later
 - Extend LangGraph adoption across more agents (Promotion, Reviewer, Hygiene) and the orchestrator V2 control plane once the v5.6A pilot stabilizes.
 - Surface LangGraph/Reasoning rollouts in the evaluation stack (golden vault, metamorphic runs, cold rebuild, fitness gates) so the forward line has measurable acceptance per contract.
@@ -83,6 +84,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 ## Current Snapshot
 
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
+- Production-facing path is the active current-state default; lab/dev-only flows remain explicitly non-production.
 - PanelAgent runtime V1 is part of the active baseline; planner pipeline and LangGraph expansion remain opt-in.
 - Legacy snapshot watchers remain available only for lab/dev workflows and are not part of the runtime default.
 - Eval suites remain opt-in diagnostics; they do not define baseline health by themselves.
@@ -92,8 +94,8 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 | Area | Current baseline posture | Forward-line direction |
 | --- | --- | --- |
 | Watcher auto-exec | Guarded by dedup + optimistic writes + idempotency | Safe enablement only after gates and receipts prove stable behavior |
-| LangGraph rollout | Active for ASK and PanelAgent-related flows only; the shared `ReasoningFacade` seam is present but not yet adopted across all targeted agents | Expand in phases as additional agent pools migrate onto the shared `ReasoningFacade` and common graph scaffolding |
-| Orchestrator V2 pilot | Shipped: parallel execution + dependency-aware scheduling with `ORCHESTRATOR_VERSION=v2` flag. V1 is default. Coverage: flag contract, plan-graph scheduling, event/trace compat. Delivery receipt: Issue #250. | Future slices: compensation/rollback, checkpointing, retry/timeout policy. Adopt in broader rollout after stability signals. |
+| LangGraph rollout | Active for ASK and PanelAgent-related flows; the shared `ReasoningFacade` seam is adopted for the PanelAgent pilot (Issue #231 delivered) | Expand in phases as additional agent pools (Promotion/Reviewer/Hygiene) migrate onto the shared `ReasoningFacade`; gated on v5.6A pilot stabilization |
+| Orchestrator V2 pilot | Shipped: parallel execution + dependency-aware scheduling with `ORCHESTRATOR_VERSION=v2` flag. V1 is default. Coverage: flag contract, plan-graph scheduling, event/trace compat, compensation/rollback. Delivery receipt: Issue #250 (pilot), Issue #251 (compensation). | Future slices: checkpointing, retry/timeout policy. Adopt in broader rollout after stability signals. |
 
 For detailed sequencing, version history, and roadmap ladder, use:
 - `docs/ROADMAP.md`
