@@ -92,9 +92,10 @@ At minimum, the following must stay true:
 - docs and tests continue to enforce the same current-state boundaries.
 
 ### Instance model (internal master/satellite plumbing)
-- SettingsBundle includes `instance` with `id` (e.g., `home`, `work`, `laptop`) and `role` (`master` or `satellite`).
-- Default when nothing is configured: `id="home"` and `role="master"`, matching the Reality-MVP single-runtime focus.
-- Scope: internal plumbing that informs events/logs and future sync topology; no change to the Obsidian surface or frontmatter.
+- SettingsBundle includes `instance` with `id` (e.g., `home`, `work`, `laptop`), `role` (`master` or `satellite`), and `environment` (`dev` or `prod`).
+- Defaults when nothing is configured: `id="home"`, `role="master"`, `environment="prod"`, matching the Reality-MVP single-runtime focus and production-safe baseline.
+- Environment selection: resolved from `PKM_ENVIRONMENT` (explicit), `PKM_SETTINGS_PROFILE` mapping (lab→dev, operator→prod), or default (prod). See `docs/ENVIRONMENTS.md`.
+- Scope: internal plumbing that informs events/logs, feature gates, and future sync topology; no change to the Obsidian surface or frontmatter.
 
 ## Contracts (concept anchors)
 

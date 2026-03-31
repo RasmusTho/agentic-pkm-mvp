@@ -21,6 +21,7 @@ from .models import (
     EmbeddingProfiles,
     YggdrasilPaths,
 )
+from app.config.environment import active_environment
 from .hotreload import init_hot_reload
 
 _LOCK = threading.RLock()
@@ -81,6 +82,12 @@ def _build_bundle() -> SettingsBundle:
             instance_settings = InstanceSettings(**instance_yaml)
         except Exception:
             instance_settings = InstanceSettings()
+
+    # Resolve and apply runtime environment (dev/prod) from explicit override
+    # or settings profile mapping, unless already set in instance.yaml
+    if "environment" not in instance_yaml:
+        instance_settings.environment = active_environment()  # type: ignore
+
     bundle = SettingsBundle(
         global_=GlobalSettings(**global_yaml),
         providers=Providers(**providers_yaml),
