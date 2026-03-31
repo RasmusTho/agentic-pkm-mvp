@@ -1,9 +1,7 @@
 """Test FileChange contract: operation types, hashing, metadata, and ordering."""
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime, timezone
-from typing import Any
 
 import pytest
 

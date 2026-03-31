@@ -7,7 +7,6 @@ Provider changes: new embeddings tagged differently, old kept original tags.
 """
 from __future__ import annotations
 
-import pytest
 
 from tests.components.embeddings.conftest import (
     _MockOpenAIProvider,

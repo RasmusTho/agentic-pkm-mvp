@@ -7,13 +7,11 @@ Part 3: healing scenarios (rebuild_from_db, repair_companion, resolve_uuid_confl
 """
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 
 from app.services.companion_note import (
     AttachmentRef,
     CompanionNote,
-    ConflictLog,
     companion_path,
     find_companion_by_content_hash,
     read_companion,

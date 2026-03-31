@@ -5,9 +5,9 @@ Scope: outer agent coordination, event/A2A contracts, tool/MCP boundaries, and o
 
 ## Architecture hardening themes
 - Event schema discipline: naming/versioning/idempotency/trace_id; DLQ/retry thinking captured in `docs/research/pattern-harvest-agentic-architecture.md`.
-- A2A contracts: envelope schema (`agent.request.created` / `agent.response.created` / `agent.error`) with traceability; orchestration-managed routing planned. Tracked by: #233
-- Tool boundary: MCP descriptor registry with allowed_args + mock_result; deterministic adapters; permission/timeouts documented. Tracked by: #234
-- Observability & agent-ops: audit events/metrics/runbooks for panel/watcher/orchestrator; CLI is tooling (not UI). Tracked by: #235
+- A2A contracts: current-state envelope schema and emitted audit actions are documented in `docs/contracts/A2A_CONTRACT_AND_TRACE.md`; orchestration-managed routing remains planned. Tracked by: #233. Source Anchor: A2A-ROUTING
+- Tool boundary: MCP descriptor registry with allowed_args + mock_result; deterministic adapters; permission/timeouts documented. Tracked by: #234. Source Anchor: MCP-TOOL-BOUNDARY
+- Observability & agent-ops: audit events/metrics/runbooks for panel/watcher/orchestrator; CLI is tooling (not UI). Tracked by: #235. Source Anchor: AGENTOPS-OBSERVABILITY
 - Config validation: vault-first, schema-validated wiring for panel actions/watcher policies.
 
 ## Delivered scaffolding
@@ -22,3 +22,4 @@ Scope: outer agent coordination, event/A2A contracts, tool/MCP boundaries, and o
 ## Links
 - Forward plan: `docs/ROADMAP.md` (tracks section).
 - Fitness/CI contracts: `docs/tracks/TRACK_FITNESS_CI_CONTRACT.md`.
+- Current A2A contract: `docs/contracts/A2A_CONTRACT_AND_TRACE.md`.

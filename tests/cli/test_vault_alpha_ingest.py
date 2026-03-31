@@ -20,7 +20,7 @@ from app.ingest.vault_alpha import _compute_ingest_fingerprint, run_vault_alpha_
 from app.retrieval.hybrid import get_store
 from app.services.companion_note import companion_path, read_companion, write_companion, CompanionNote
 from app.stores import get_object_store, reset_store_backends
-from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
+from scripts.yaml_roundtrip import load_frontmatter
 
 
 def _base_env(tmp_path: Path) -> dict[str, str]:
@@ -289,7 +289,7 @@ def test_vault_alpha_ingest_warns_on_companion_uuid_conflict(tmp_path: Path) -> 
         encoding="utf-8",
     )
     # Write a companion at the frontmatter-uuid path but with a DIFFERENT uuid inside
-    corrupt_companion = CompanionNote(
+    CompanionNote(
         uuid=corrupt_companion_uuid,  # intentionally wrong
         source_ref="Concepts/CompanionConflict.md",
         title="CompanionConflict",

@@ -12,6 +12,8 @@ Use this checklist to validate a deployment before enabling full ingest + panel 
 - Run `python -m app.cli go-live-check` (defaults to dry-run) to verify vault root resolution, settings load, and watcher readiness.
 - If you want to target a specific profile, pass explicit paths: `python -m app.cli go-live-check --vault-root <path> --settings-path <path> --outbox-path <file>`.
 - Review the watcher summary; address any errors before proceeding.
+- Run `python -m app.cli settings-explain --json` and `python -m app.cli status`; these are the canonical watcher enablement checks.
+- Confirm auto-exec mode, allowlist validity, write-guard/provenance context, and recent skip counters are coherent before any rollout decision.
 
 ## 3) Small-scope UAT
 - Run a single registry watcher tick with panel auto-exec disabled:
@@ -19,14 +21,18 @@ Use this checklist to validate a deployment before enabling full ingest + panel 
   WATCHER_ENABLE=1 WATCHER_VAULT_PATH=<vault> WATCHER_AUTO_EXEC=0 python -m app.cli watcher run --max-ticks 1
   ```
 - Inspect emitted messages and ensure classification/panel policies match expectations. (DB outbox is canonical; JSONL is audit only.)
+- Treat `WATCHER_AUTO_EXEC=0` and `WATCHER_AUTO_EXEC=1` as mode switches, not as the full safety contract; operator approval still depends on the CLI surfaces and observed skip/policy signals.
 
 ## 4) Gradual rollout
 - Start runtime with a conservative scope (`WATCHER_SCOPE_GLOB`) and `WATCHER_AUTO_EXEC=0` until you confirm the ingest path is clean.
-- Enable `WATCHER_AUTO_EXEC=1` only after observing clean runs (no errors, no limit-exceeded).
+- Enable `WATCHER_AUTO_EXEC=1` only after `settings-explain` and `status` both show coherent watcher state and the observed run is clean.
+- Required corroborating signals: allowlist validity, `dedup/skipped_*`, `panel_skipped_policy`, and `writes_allowed` / write-guard provenance.
+- When go-live is coupled to a merge or release decision, also require `CI SUMMARY GATES ok=true`.
 
 ## 5) Rollback posture
 - If ingest produces incorrect outputs, pause watcher runs and restore from the vault/DB backups.
 - Re-run `go-live-check` after any rollback to ensure settings and paths are still valid.
+- Re-run `settings-explain` and `status` after rollback to confirm the gate, allowlist, and skip counters returned to a coherent state.
 
 ## 6) Post-go-live hygiene
 - Keep `LLM_TRACE_ENABLE=1` only when troubleshooting; traces are now hashed (no raw prompts/responses).

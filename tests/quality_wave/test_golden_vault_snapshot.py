@@ -14,7 +14,6 @@ Validates:
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -173,7 +172,7 @@ class TestGoldenVaultSnapshot:
         actual_clean = _strip_volatile(actual_fm)
         golden_clean = _strip_volatile(golden_fm)
         diffs = _diff_frontmatter(actual_clean, golden_clean)
-        assert not diffs, f"evergreen-strategy.md frontmatter mismatch:\n" + "\n".join(diffs)
+        assert not diffs, "evergreen-strategy.md frontmatter mismatch:\n" + "\n".join(diffs)
         assert actual_body == golden_body, "evergreen-strategy.md body changed"
 
     def test_manual_policy_unchanged(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,7 +189,7 @@ class TestGoldenVaultSnapshot:
     def test_golden_match_all_notes(self, note_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         seeded_folder, _ = _run_seeded_flow(tmp_path, monkeypatch)
         manifest = _load_manifest()
-        spec = manifest[note_name]
+        manifest[note_name]
 
         actual_fm, actual_body = _parse_note(seeded_folder / note_name)
         golden_fm, golden_body = _parse_note(GOLDEN_DIR / note_name.replace(".md", ".golden.md"))

@@ -13,8 +13,7 @@ Ensures:
 from __future__ import annotations
 
 import pytest
-from typing import Dict, List
-from uuid import uuid4
+from typing import Dict
 
 from app.events.schema import OutboxEvent, make_outbox_event
 from tests.quality_wave.conftest import MetricsCollector, EventChain

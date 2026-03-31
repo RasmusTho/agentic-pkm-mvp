@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
-from uuid import UUID, uuid4
+from uuid import UUID
 from datetime import datetime, timezone
 
 import pytest

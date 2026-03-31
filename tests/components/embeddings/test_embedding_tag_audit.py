@@ -7,7 +7,6 @@ Untagged embeddings can be detected (migration helper).
 """
 from __future__ import annotations
 
-import pytest
 
 from tests.components.embeddings.conftest import (
     InMemoryVectorIndex,

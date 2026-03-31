@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from app.components.embeddings.schema import EmbeddingTag, TaggedEmbedding
 from app.components.embeddings.providers.mock import MockEmbeddings

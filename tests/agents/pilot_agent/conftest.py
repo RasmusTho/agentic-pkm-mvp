@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 from unittest.mock import MagicMock
 
-from app.components.reasoning.facade import ReasoningFacade, TelemetryRecord, ToolResult
+from app.components.reasoning.facade import ReasoningFacade, ToolResult
 from app.components.llm.router import LLMRouter
 
 

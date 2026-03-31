@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 import pytest
 
@@ -221,8 +220,8 @@ class TestTaggedEmbedding:
 
     def test_embedding_equality(self, sample_text, sample_vector, mock_tag) -> None:
         """Should compare by value."""
-        emb1 = TaggedEmbedding(uuid="id1", text=sample_text, vector=sample_vector, tag=mock_tag)
-        emb2 = TaggedEmbedding(uuid="id1", text=sample_text, vector=sample_vector, tag=mock_tag)
+        TaggedEmbedding(uuid="id1", text=sample_text, vector=sample_vector, tag=mock_tag)
+        TaggedEmbedding(uuid="id1", text=sample_text, vector=sample_vector, tag=mock_tag)
         # Note: Different id or created_at will cause inequality
         # This is expected for immutable data objects
 

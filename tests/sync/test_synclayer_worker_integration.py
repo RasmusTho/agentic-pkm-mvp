@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from tests.sync.conftest import FileChange, FileOperation, ChangeFactory, SyncResult
+from tests.sync.conftest import FileChange, ChangeFactory, SyncResult
 
 
 class VaultEvent:
@@ -283,7 +283,7 @@ class TestWorkerConflictHandling:
     @pytest.mark.asyncio
     async def test_emit_conflict_event_on_conflict(self, temp_vault: Path, change_factory: ChangeFactory) -> None:
         """Worker emits vault.ingest.conflict on merge conflict."""
-        change = change_factory.created("conflict.md", "# Content", metadata={"conflict": True})
+        change_factory.created("conflict.md", "# Content", metadata={"conflict": True})
 
         class MockSyncLayer:
             async def detect_changes(self, path: Path, since_timestamp: float) -> list[FileChange]:

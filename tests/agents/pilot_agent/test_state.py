@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents.pilot_agent.state import PilotAgentState
-from app.events.schema import OutboxEvent, make_outbox_event
+from app.events.schema import make_outbox_event
 
 
 class TestStateCreation:

@@ -91,9 +91,11 @@ Those markers are now secondary convenience notes because they are not visible t
 
 ## Delivery writeback rule
 
-When implementation delivers shipped reality that changes the SoT or roadmap:
+When an Issue is delivered:
 
 1. Update the owner document to reflect the new shipped state.
 2. Move the truth from the Issue into the owner doc (e.g., `STATUS.md`, roadmap sections, etc.).
-3. Update any roadmap/plan wording so it no longer reads as pending when work is delivered.
-4. Keep the Issue closed but its canonical reference (including `Source Anchors`) preserved in the merged PR.
+3. Remove or rewrite roadmap/plan wording so it no longer reads as pending when work is delivered.
+4. Keep the GitHub Issue/Project as the authoritative record of backlog state history.
+
+Owner docs are the source of shipped reality. Generated receipt pages (if adopted) may summarize Issue state from GitHub, but they do not replace the owner doc as the canonical truth for shipped behavior.

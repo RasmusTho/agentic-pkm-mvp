@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.events.schema import OutboxEvent, make_outbox_event
+from app.events.schema import OutboxEvent
 from app.agents.pilot_agent.state import PilotAgentState
 
 

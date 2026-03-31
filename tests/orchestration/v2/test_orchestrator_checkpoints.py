@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import time
-from typing import Dict, List
 
-import pytest
 
 from .conftest import (
-    MockCheckpoint,
     MockObjectStore,
     MockOutbox,
-    MockPlanState,
-    MockStepState,
 )
 
 
@@ -50,7 +45,7 @@ class TestCheckpointingContract:
         """Checkpoint after every N steps (default N=3)."""
         # Create 5 steps
         steps = [step_factory(f"step-{i}") for i in range(1, 6)]
-        plan = plan_factory(steps=steps)
+        plan_factory(steps=steps)
 
         # With interval=3, checkpoints at: step-3, step-6, etc.
         checkpoint_interval = 3
@@ -106,7 +101,7 @@ class TestCheckpointingContract:
             step_factory("step-3"),
             step_factory("step-4"),
         ]
-        plan = plan_factory(steps=steps)
+        plan_factory(steps=steps)
 
         # Checkpoint at step-2: completed [step-1, step-2]
         checkpoint_data = {

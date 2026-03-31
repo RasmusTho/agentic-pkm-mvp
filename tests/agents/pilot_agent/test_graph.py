@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from app.agents.pilot_agent.state import PilotAgentState
 from app.agents.pilot_agent.graph import build_promotion_graph, run_promotion_graph

@@ -12,13 +12,11 @@ If this test file is green, the Quality Wave "Done means" criteria are met:
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
 from app.cli.uat import (
-    UATAssertionError,
     UATSummary,
     run_vault_test_flow,
     seed_vault_test_notes,

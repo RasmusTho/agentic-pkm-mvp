@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 import logging
-import os
-from pathlib import Path
 from typing import Any, Tuple
 
 from langgraph.graph import END, START, StateGraph
 
 from app.domain.state_axes import build_promotion_transition
 from app.components.concurrency import IdempotencyGuard
-from app.components.settings.panel_actions_loader import PanelActionCatalog, PanelActionDescriptor, normalize_label
+from app.components.settings.panel_actions_loader import PanelActionCatalog
+from app.agents.panel_agent.cognition import PanelCognitionBackend, get_cognition_backend, _inject_catalog_proposals
 from app.agents.panel_agent.settings import DeciderMode
 from app.agents.panel_agent.state import PanelAgentState
 from app.agents.panel_agent.wiring import get_default_action_wiring
-from app.services.note_context import ContextBudget, NoteContext, NoteContextError, build_note_context
 from app.events.panel import (
     PanelActionLoggedEvent,
     PanelEventSource,
@@ -27,39 +25,10 @@ from app.events.panel import (
     PanelRuntimeActionResult,
 )
 from app.events.schema import OutboxEvent
-from app.components.reasoning import ReasoningTaskKind, get_reasoning_facade
 
 _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 
 logger = logging.getLogger(__name__)
-
-_PANEL_DECIDER_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "actions": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string"},
-                    "reason": {"type": "string"},
-                    "message": {"type": "string"},
-                },
-                "required": ["id"],
-                "additionalProperties": True,
-            },
-        }
-    },
-    "required": ["actions"],
-    "additionalProperties": True,
-}
-
-PANEL_BUDGET = ContextBudget(
-    max_body_chars=2000,
-    include_relations=True,
-    include_attachments=True,
-    include_history=False,
-)
 
 
 def _build_panel_source() -> PanelEventSource:
@@ -277,226 +246,6 @@ def _load_context(state: PanelAgentState) -> PanelAgentState:
     if not state.action_wiring:
         state.action_wiring = dict(get_default_action_wiring())
     return state
-
-
-def _available_actions_for_prompt(catalog: PanelActionCatalog) -> list[PanelActionDescriptor]:
-    if catalog.actions:
-        return catalog.actions
-    return []
-
-
-def _select_actions_from_instruction_hint(
-    *,
-    actions: list[PanelIntentAction],
-    available: list[PanelActionDescriptor],
-    instruction: str,
-) -> tuple[set[str], dict[str, str]] | None:
-    text = normalize_label(instruction)
-    if not text:
-        return None
-    if any(
-        phrase in text
-        for phrase in (
-            "do not promote",
-            "don't promote",
-            "dont promote",
-            "not promote",
-            "no promotion",
-            "without promotion",
-            "do not make this note evergreen",
-            "don't make this note evergreen",
-            "dont make this note evergreen",
-            "do not make evergreen",
-            "don't make evergreen",
-            "dont make evergreen",
-        )
-    ):
-        return None
-
-    promotion_actions = [
-        action
-        for action in actions
-        if action.mapping is not None and (action.mapping.intent_type or "").lower() == "promotion"
-    ]
-    if len(actions) != 1 or len(promotion_actions) != 1:
-        return None
-
-    action = promotion_actions[0]
-    descriptor = next((item for item in available if item.id == action.id), None)
-    labels = []
-    if descriptor is not None:
-        labels.extend(descriptor.labels or [])
-        labels.extend(descriptor.aliases or [])
-        if descriptor.description:
-            labels.append(descriptor.description)
-        if descriptor.llm_hint:
-            labels.append(descriptor.llm_hint)
-    labels.append(action.label)
-
-    normalized_labels = [normalize_label(value) for value in labels if value]
-    keyword_hit = any(keyword in text for keyword in ("promote", "promotion", "evergreen"))
-    label_hit = any(label and (label in text or text in label) for label in normalized_labels)
-    if not keyword_hit and not label_hit:
-        return None
-    return {action.id}, {action.id: "instruction_hint_fallback"}
-
-
-def _resolve_vault_root(state: PanelAgentState) -> Path | None:
-    """Return the vault root from state or VAULT_ROOT env var."""
-    if state.vault_root is not None:
-        return state.vault_root
-    env = os.getenv("VAULT_ROOT")
-    if env:
-        return Path(env).expanduser()
-    return None
-
-
-def _build_note_snippet(state: PanelAgentState) -> str:
-    """Build the note snippet for the LLM prompt.
-
-    Tries NoteContext for a rich, structured view. Falls back to the legacy
-    truncated ``note_content`` when NoteContext cannot be assembled.
-    """
-    vault_root = _resolve_vault_root(state)
-    if vault_root is not None:
-        try:
-            ctx = build_note_context(
-                uuid=state.note.uuid,
-                vault_root=vault_root,
-                budget=PANEL_BUDGET,
-            )
-            return _format_note_context(ctx)
-        except (NoteContextError, Exception) as exc:  # noqa: BLE001
-            logger.debug("NoteContext unavailable for %s, using snippet fallback: %s", state.note.uuid, exc)
-
-    # Fallback: legacy truncated snippet
-    return (state.note_content or "")[:800]
-
-
-def _format_note_context(ctx: NoteContext) -> str:
-    """Format a NoteContext into a prompt-friendly string."""
-    parts: list[str] = []
-
-    if ctx.frontmatter:
-        fm_lines = [f"  {k}: {v}" for k, v in ctx.frontmatter.items()]
-        parts.append("Frontmatter:\n" + "\n".join(fm_lines))
-
-    if ctx.body:
-        label = "Body (truncated):" if ctx.body_truncated else "Body:"
-        parts.append(f"{label}\n{ctx.body}")
-
-    if ctx.backlinks:
-        parts.append("Backlinks:\n" + "\n".join(f"  - {bl}" for bl in ctx.backlinks))
-
-    if ctx.attachments:
-        att_lines = [f"  - {a.ref}" for a in ctx.attachments]
-        parts.append("Attachments:\n" + "\n".join(att_lines))
-
-    if ctx.outgoing_links:
-        parts.append("Outgoing links:\n" + "\n".join(f"  - {ol}" for ol in ctx.outgoing_links))
-
-    return "\n\n".join(parts) if parts else ""
-
-
-def _select_actions_llm(state: PanelAgentState) -> tuple[set[str], dict[str, str]] | None:
-    assert state.intent_event is not None, "PanelAgentState must include intent_event"
-    actions = list(state.actions)
-    if not actions:
-        return set(), {}
-    catalog = state.action_catalog or PanelActionCatalog.from_descriptors([])
-    allowed_ids = {a.id for a in actions}
-    available = [
-        descriptor
-        for descriptor in _available_actions_for_prompt(catalog)
-        if descriptor.id in allowed_ids
-    ]
-    if not available:
-        available = [
-            PanelActionDescriptor(
-                id=a.id,
-                intent_type=a.mapping.intent_type if a.mapping else "",
-                downstream_event="",
-                labels=[a.label],
-            )  # type: ignore[arg-type]
-            for a in actions
-        ]
-    action_lines = []
-    for descriptor in available:
-        hint = descriptor.llm_hint or descriptor.description or descriptor.kind or descriptor.intent_type
-        labels = ", ".join(descriptor.labels or [])
-        action_lines.append(
-            f"- id: {descriptor.id} | kind: {descriptor.kind or descriptor.intent_type} | labels: {labels} | hint: {hint}"
-        )
-    hint_lines = [f"- {a.label} (checked={a.checked})" for a in actions]
-    system = " ".join(
-        [
-            "You are PanelAgent.",
-            "Given the note context, panel instruction, checkbox hints, and available canonical actions,",
-            "choose which actions to execute by returning JSON with an 'actions' array of objects",
-            "with fields {id, reason?, message?}. Only use the provided action IDs. Do not invent new IDs.",
-        ]
-    )
-    user_parts = [
-        f"Instruction: {state.panel.instruction}",
-        f"Note context:\n{_build_note_snippet(state)}",
-        "Checkbox hints:",
-        *hint_lines,
-        "Available actions (canonical):",
-        *action_lines,
-        "Return JSON like: {\"actions\": [{\"id\": \"promote.evergreen\", \"reason\": \"...\"}]}",
-    ]
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": "\n".join(user_parts)},
-    ]
-    try:
-        facade = get_reasoning_facade()
-        parsed = facade.structured(
-            messages,
-            schema=_PANEL_DECIDER_SCHEMA,
-            task_kind=ReasoningTaskKind.DECIDE.llm_task_kind,
-            trace_id=state.trace_id,
-        )
-        candidates = parsed.get("actions") if isinstance(parsed, dict) else parsed
-        if candidates is None:
-            candidates = parsed.get("chosen_actions") if isinstance(parsed, dict) else []
-        if candidates is None:
-            candidates = []
-        selected: set[str] = set()
-        reasons: dict[str, str] = {}
-        valid_ids = {a.id for a in actions}
-
-        if isinstance(candidates, list):
-            for item in candidates:
-                action_id: str | None = None
-                reason: str | None = None
-                if isinstance(item, str):
-                    action_id = item
-                elif isinstance(item, dict):
-                    action_id = item.get("id") or item.get("action_id")
-                    reason = item.get("reason") or item.get("why")
-                if not action_id:
-                    continue
-                action_id = str(action_id).strip()
-                if action_id not in valid_ids:
-                    continue
-                selected.add(action_id)
-                if reason:
-                    reasons[action_id] = reason
-        if not selected:
-            hinted = _select_actions_from_instruction_hint(
-                actions=actions,
-                available=available,
-                instruction=state.panel.instruction or "",
-            )
-            if hinted is not None:
-                return hinted
-        # Empty set is a valid decision (LLM chose to run nothing).
-        return selected, reasons
-    except Exception:
-        return None
-
-
 def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, reasons: dict[str, str] | None = None) -> PanelAgentState:
     assert state.intent_event is not None, "PanelAgentState must include intent_event"
     actions: list[PanelRuntimeActionResult] = []
@@ -538,16 +287,17 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
     return state
 
 
-def _decide_actions_llm_with_fallback(state: PanelAgentState) -> PanelAgentState:
-    selection = _select_actions_llm(state)
+def _decide_actions_with_backend(state: PanelAgentState, backend: PanelCognitionBackend) -> PanelAgentState:
+    """Dispatch action selection through the engine-neutral cognition seam."""
+    selection = backend.select_actions(state)
     if selection is None:
-        return _decide_actions_rule(state)
+        return _apply_actions(state, selected_ids=None)
     chosen, reasons = selection
+    # Freeform: inject catalog-derived PanelIntentAction objects for proposed IDs
+    # that have no corresponding entry in state.actions (e.g., no-checkbox panels).
+    if chosen:
+        state = _inject_catalog_proposals(state, chosen)
     return _apply_actions(state, selected_ids=chosen, reasons=reasons)
-
-
-def _decide_actions_rule(state: PanelAgentState) -> PanelAgentState:
-    return _apply_actions(state, selected_ids=None)
 
 
 def _emit_events(state: PanelAgentState) -> PanelAgentState:
@@ -578,13 +328,29 @@ def _emit_events(state: PanelAgentState) -> PanelAgentState:
     return state
 
 
-def build_panel_graph(decider_mode: DeciderMode = "rule"):
+def build_panel_graph(
+    decider_mode: DeciderMode = "rule",
+    cognition_backend: PanelCognitionBackend | None = None,
+):
+    """Build the PanelAgent LangGraph.
+
+    Args:
+        decider_mode: ``"rule"`` (default) or ``"llm"``.  Ignored when
+            ``cognition_backend`` is provided explicitly.
+        cognition_backend: Optional engine-neutral backend.  When supplied,
+            ``decider_mode`` is ignored and the provided backend drives action
+            selection.  Pass a stub or fake here in tests to exercise the
+            execution path without depending on a concrete cognition
+            implementation.
+    """
+    resolved_backend = cognition_backend if cognition_backend is not None else get_cognition_backend(decider_mode)
+
+    def _decide_actions(state: PanelAgentState) -> PanelAgentState:
+        return _decide_actions_with_backend(state, resolved_backend)
+
     graph = StateGraph(PanelAgentState)
     graph.add_node("load_context", _load_context)
-    if decider_mode == "llm":
-        graph.add_node("decide_actions", _decide_actions_llm_with_fallback)
-    else:
-        graph.add_node("decide_actions", _decide_actions_rule)
+    graph.add_node("decide_actions", _decide_actions)
     graph.add_node("emit_events", _emit_events)
 
     graph.add_edge(START, "load_context")
@@ -594,8 +360,22 @@ def build_panel_graph(decider_mode: DeciderMode = "rule"):
     return graph.compile()
 
 
-def run_panel_graph(state: PanelAgentState, decider_mode: DeciderMode = "rule"):
-    compiled = build_panel_graph(decider_mode=decider_mode)
+def run_panel_graph(
+    state: PanelAgentState,
+    decider_mode: DeciderMode = "rule",
+    cognition_backend: PanelCognitionBackend | None = None,
+):
+    """Run the PanelAgent graph and return the resulting state.
+
+    Args:
+        state: Initial ``PanelAgentState``.
+        decider_mode: ``"rule"`` or ``"llm"``.  Ignored when
+            ``cognition_backend`` is provided.
+        cognition_backend: Optional engine-neutral backend for action
+            selection.  Useful for tests that need a deterministic or
+            instrumented selection path.
+    """
+    compiled = build_panel_graph(decider_mode=decider_mode, cognition_backend=cognition_backend)
     result = compiled.invoke(state)
     if isinstance(result, PanelAgentState):
         return result
