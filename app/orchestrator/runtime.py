@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Mapping, MutableMapping, Set
 
 from app.planner.schema import Plan, PlanStep
@@ -22,6 +23,14 @@ def _default_agent_id_for_flow(flow_id: str | None) -> str | None:
     if normalized in {"ask", "qa", "ask.graph.v1"}:
         return "ask.v1"
     return None
+
+
+def _get_orchestrator_version() -> str:
+    """Get orchestrator version from environment, defaulting to v1."""
+    version = os.environ.get("ORCHESTRATOR_VERSION", "v1").lower()
+    if version not in ("v1", "v2"):
+        return "v1"
+    return version
 
 
 def _resolve_step_agent_id(step: PlanStep, flow_id: str | None, plan_context: Mapping[str, Any] | None) -> str | None:
@@ -55,8 +64,13 @@ class Orchestrator:
     def __init__(self, executor: PlanExecutor | None = None, *, tool_settings: Mapping[str, Any] | None = None) -> None:
         self._executor = executor or MockPlanExecutor()
         self._tool_settings = dict(tool_settings) if tool_settings else None
+        self._run_plan_impl = None  # Can be set by factory to use alternate implementation
 
     def run_plan(self, plan: Plan) -> List[Dict[str, Any]]:
+        # If using alternate implementation (e.g., V2), delegate to it
+        if self._run_plan_impl is not None:
+            return self._run_plan_impl(plan)
+
         self._validate_plan(plan)
         results: List[Dict[str, Any]] = []
         plan_results: Dict[str, Dict[str, Any]] = {}
@@ -171,4 +185,24 @@ class Orchestrator:
             raise PlanValidationError(f"tool_call step '{step.id}' missing tool name")
 
 
-__all__ = ["Orchestrator", "OrchestratorError", "PlanValidationError"]
+def create_orchestrator(executor: PlanExecutor | None = None, *, tool_settings: Mapping[str, Any] | None = None) -> Orchestrator:
+    """Factory function to create the appropriate orchestrator version.
+
+    Checks ORCHESTRATOR_VERSION environment variable:
+    - "v2" -> returns Orchestrator wrapping V2 implementation
+    - "v1" or unset/unrecognized -> returns standard V1 Orchestrator
+    """
+    version = _get_orchestrator_version()
+    if version == "v2":
+        from .v2_runtime import OrchestratorV2
+        # Wrap V2 in the standard Orchestrator interface
+        v2_impl = OrchestratorV2(executor=executor, tool_settings=tool_settings)
+        # Return an Orchestrator that delegates to V2
+        orch = Orchestrator(executor=executor, tool_settings=tool_settings)
+        orch._run_plan_impl = v2_impl.run_plan
+        return orch
+    else:
+        return Orchestrator(executor=executor, tool_settings=tool_settings)
+
+
+__all__ = ["Orchestrator", "OrchestratorError", "PlanValidationError", "create_orchestrator"]
