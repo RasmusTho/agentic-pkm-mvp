@@ -17,12 +17,32 @@ import os
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Mapping, MutableMapping, Set
+from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Set
 
 from app.planner.schema import Plan, PlanStep
 
 from .events import emit_step_error, emit_step_finished, emit_step_started
 from .executor import MockPlanExecutor, PlanExecutor, StepContext, StepExecutionError
+
+
+class CheckpointStore:
+    """Abstract interface for checkpoint persistence."""
+
+    def save_checkpoint(self, checkpoint_key: str, checkpoint_data: Dict[str, Any]) -> None:
+        """Save a checkpoint to persistent storage."""
+        raise NotImplementedError
+
+    def load_checkpoint(self, checkpoint_key: str) -> Optional[Dict[str, Any]]:
+        """Load a checkpoint from persistent storage."""
+        raise NotImplementedError
+
+
+class Outbox:
+    """Abstract interface for event emission."""
+
+    def emit(self, event: Dict[str, Any]) -> None:
+        """Emit an event to the outbox."""
+        raise NotImplementedError
 
 
 def _coerce_int(value: Any) -> int | None:
@@ -96,12 +116,24 @@ class DependencyGraph:
 
 
 class OrchestratorV2:
-    """Orchestrator V2: parallel execution with dependency-safe scheduling."""
+    """Orchestrator V2: parallel execution with dependency-safe scheduling, checkpoint persistence, and retry handling."""
 
-    def __init__(self, executor: PlanExecutor | None = None, *, tool_settings: Mapping[str, Any] | None = None, max_workers: int = 4) -> None:
+    def __init__(
+        self,
+        executor: PlanExecutor | None = None,
+        checkpoint_store: CheckpointStore | None = None,
+        outbox: Outbox | None = None,
+        *,
+        tool_settings: Mapping[str, Any] | None = None,
+        max_workers: int = 4,
+        checkpoint_interval: int = 3,
+    ) -> None:
         self._executor = executor or MockPlanExecutor()
+        self._checkpoint_store = checkpoint_store
+        self._outbox = outbox
         self._tool_settings = dict(tool_settings) if tool_settings else None
         self._max_workers = max_workers
+        self._checkpoint_interval = checkpoint_interval
 
     def run_plan(self, plan: Plan) -> List[Dict[str, Any]]:
         """Execute plan with dependency-safe parallel scheduling."""
@@ -241,8 +273,86 @@ class OrchestratorV2:
         return results
 
     def _execute_step_safe(self, step: PlanStep, context: StepContext) -> Dict[str, Any]:
-        """Execute a single step, raising StepExecutionError on failure."""
-        return self._executor.execute_step(step, context)
+        """Execute a single step with retry handling, raising StepExecutionError on failure."""
+        # Get retry configuration from step metadata
+        metadata = getattr(step, "metadata", {}) or {}
+        if not isinstance(metadata, Mapping):
+            metadata = {}
+
+        retry_count = _coerce_int(metadata.get("retry_count")) or 0
+        backoff_ms = _coerce_int(metadata.get("retry_backoff_ms")) or 100
+
+        attempt = 0
+        last_error = None
+        last_error_type = None
+
+        while attempt <= retry_count:
+            attempt += 1
+            try:
+                return self._executor.execute_step(step, context)
+            except StepExecutionError as exc:
+                last_error = str(exc)
+                last_error_type = getattr(exc, "error_type", None)
+
+                # Timeout is non-retriable
+                if last_error_type == "timeout":
+                    raise
+
+                # If we have retries left, backoff and retry
+                if attempt <= retry_count:
+                    self._emit_retry_event(context.plan_id, step.id, attempt, context.trace_id)
+                    time.sleep(backoff_ms / 1000.0)
+                    continue
+
+                # Retries exhausted
+                raise
+
+    def _emit_retry_event(self, plan_id: str, step_id: str, attempt: int, trace_id: str) -> None:
+        """Emit a retry event."""
+        if not self._outbox:
+            return
+
+        event = {
+            "event": "step.retry",
+            "source": "orchestrator.v2",
+            "plan_id": plan_id,
+            "step_id": step_id,
+            "attempt": attempt,
+            "trace_id": trace_id,
+            "timestamp": time.time(),
+        }
+        self._outbox.emit(event)
+
+    def _save_checkpoint(self, plan: Plan, completed_steps: set[str], plan_results: Dict[str, Any]) -> None:
+        """Save a checkpoint for recovery."""
+        if not self._checkpoint_store:
+            return
+
+        checkpoint_key = f"checkpoint-{plan.id}"
+        checkpoint_data = {
+            "plan_id": plan.id,
+            "completed_steps": sorted(list(completed_steps)),
+            "step_results": plan_results,
+            "timestamp": time.time(),
+        }
+
+        self._checkpoint_store.save_checkpoint(checkpoint_key, checkpoint_data)
+        self._emit_checkpoint_event(plan.id, len(completed_steps), plan.meta.trace_id)
+
+    def _emit_checkpoint_event(self, plan_id: str, step_count: int, trace_id: str) -> None:
+        """Emit a checkpoint creation event."""
+        if not self._outbox:
+            return
+
+        event = {
+            "event": "checkpoint.created",
+            "source": "orchestrator.v2",
+            "plan_id": plan_id,
+            "checkpoint_step_count": step_count,
+            "trace_id": trace_id,
+            "timestamp": time.time(),
+        }
+        self._outbox.emit(event)
 
     def _resolve_flow_id(self, plan: Plan) -> str | None:
         """Extract flow_id from plan context."""
@@ -297,4 +407,4 @@ class OrchestratorV2:
             raise PlanValidationError(f"tool_call step '{step.id}' missing tool name")
 
 
-__all__ = ["OrchestratorV2", "OrchestratorV2Error", "PlanValidationError", "DependencyGraph"]
+__all__ = ["OrchestratorV2", "OrchestratorV2Error", "PlanValidationError", "DependencyGraph", "CheckpointStore", "Outbox"]

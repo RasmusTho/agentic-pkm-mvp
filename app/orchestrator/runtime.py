@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Mapping, MutableMapping, Set
+from typing import Any, Dict, List, Mapping, MutableMapping, Set, Union
 
 from app.planner.schema import Plan, PlanStep
 
@@ -16,6 +16,14 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
+def _get_orchestrator_version() -> str:
+    """Get orchestrator version from environment, defaulting to v1."""
+    version = os.environ.get("ORCHESTRATOR_VERSION", "v1").lower()
+    if version not in ("v1", "v2"):
+        return "v1"
+    return version
+
+
 def _default_agent_id_for_flow(flow_id: str | None) -> str | None:
     if not flow_id:
         return None
@@ -23,14 +31,6 @@ def _default_agent_id_for_flow(flow_id: str | None) -> str | None:
     if normalized in {"ask", "qa", "ask.graph.v1"}:
         return "ask.v1"
     return None
-
-
-def _get_orchestrator_version() -> str:
-    """Get orchestrator version from environment, defaulting to v1."""
-    version = os.environ.get("ORCHESTRATOR_VERSION", "v1").lower()
-    if version not in ("v1", "v2"):
-        return "v1"
-    return version
 
 
 def _resolve_step_agent_id(step: PlanStep, flow_id: str | None, plan_context: Mapping[str, Any] | None) -> str | None:
@@ -70,7 +70,6 @@ class Orchestrator:
         # If using alternate implementation (e.g., V2), delegate to it
         if self._run_plan_impl is not None:
             return self._run_plan_impl(plan)
-
         self._validate_plan(plan)
         results: List[Dict[str, Any]] = []
         plan_results: Dict[str, Dict[str, Any]] = {}
