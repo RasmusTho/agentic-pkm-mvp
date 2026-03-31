@@ -4,7 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
 
 from tests.sync.conftest import SyncLayer
 
@@ -284,7 +283,7 @@ class TestFactoryExtensibility:
             async def status(self):
                 pass
 
-        factory = SyncLayerFactory()
+        SyncLayerFactory()
         # factory.register("custom", CustomTransport)
         # layer = factory.create("custom")
         # assert isinstance(layer, CustomTransport)

@@ -17,7 +17,6 @@ import pytest
 from app.services.companion_note import AttachmentRef, CompanionNote, write_companion
 from app.services.note_context import (
     ContextBudget,
-    NoteContext,
     NoteContextError,
     build_note_context,
 )

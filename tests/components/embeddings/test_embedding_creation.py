@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-import pytest
 
 from tests.components.embeddings.conftest import (
     _MockOpenAIProvider,
@@ -82,9 +81,9 @@ class TestEmbeddingCreationTimestamps:
         mock_test_provider: _MockTestProvider,
     ) -> None:
         """Timestamp should be recent (within last minute)."""
-        before = datetime.now(datetime.now().astimezone().tzinfo)
+        datetime.now(datetime.now().astimezone().tzinfo)
         emb = mock_test_provider.embed("test")
-        after = datetime.now(datetime.now().astimezone().tzinfo)
+        datetime.now(datetime.now().astimezone().tzinfo)
 
         # Parse the embedding timestamp
         ts = datetime.fromisoformat(emb.created_at.replace("Z", "+00:00"))

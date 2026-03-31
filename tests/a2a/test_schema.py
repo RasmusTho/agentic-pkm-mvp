@@ -45,3 +45,34 @@ def test_agent_error_factory_populates_fields() -> None:
     )
     assert err.kind == "error"
     assert err.payload["stage"] == "chunk"
+
+
+def test_factories_preserve_correlation_and_trace_ids() -> None:
+    request = new_request(
+        sender="Classifier",
+        recipient="Reviewer",
+        intent="review",
+        correlation_id="corr-1",
+        trace_id="trace-1",
+    )
+    response = new_response(
+        sender="Reviewer",
+        recipient="Classifier",
+        correlation_id="corr-1",
+        trace_id="trace-1",
+    )
+    err = new_error(
+        sender="Reviewer",
+        recipient="Classifier",
+        error_type="not_implemented",
+        error_message="not wired",
+        correlation_id="corr-1",
+        trace_id="trace-1",
+    )
+
+    assert request.correlation_id == "corr-1"
+    assert request.trace_id == "trace-1"
+    assert response.correlation_id == "corr-1"
+    assert response.trace_id == "trace-1"
+    assert err.correlation_id == "corr-1"
+    assert err.trace_id == "trace-1"

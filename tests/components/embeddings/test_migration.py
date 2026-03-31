@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from app.components.embeddings.migration import (
     detect_untagged_embeddings,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from app.agents.pilot_agent.state import PilotAgentState
 from app.agents.pilot_agent.events import (
@@ -12,7 +11,6 @@ from app.agents.pilot_agent.events import (
     PROMOTION_ARCHIVED,
     PROMOTION_SKIPPED,
 )
-from app.events.schema import OutboxEvent
 
 
 class TestStateToEvent:

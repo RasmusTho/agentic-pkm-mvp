@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from app.components.embeddings.audit import (
     count_by_provider,

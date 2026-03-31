@@ -6,10 +6,8 @@ Tags are never stripped. Untagged embeddings are rejected.
 """
 from __future__ import annotations
 
-import pytest
 
 from tests.components.embeddings.conftest import (
-    TaggedEmbedding,
     InMemoryVectorIndex,
     EmbeddingFactory,
     ProviderEnum,

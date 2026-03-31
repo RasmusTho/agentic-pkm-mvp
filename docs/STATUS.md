@@ -44,12 +44,12 @@ Validation posture note:
 ### Now
 - Ground the v5.6 objectives in a docs-first kickoff: the detailed plan in `docs/plans/V56_FORWARD_LINE.md` captures the pillars, acceptance criteria, and immediate signal checks the forward line needs to ship.
 - Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, skipped receipts, and write-guard state are surfaced in status, events, and the new CLI `settings-explain` output before any runtime gate opens.
-- Harden the PanelAgent LangGraph pilot (panel action catalog + planner pipeline + promotion consumer) so its telemetry, provenance, and gating sensors stay deterministic while remaining opt-in. Tracked by: #230
+- PanelAgent decider hardening through the shared `ReasoningFacade` seam is shipped for the current pilot path. Delivery receipt: Issue #230, PR #236.
 ### Next
-- Sequence the ReasoningFacade + LangGraph rollout for one additional agent pool, ensuring instrumentation feeds into the fitness gates and the orchestrator V2 experiment flag remains gated until stability signals arrive. Tracked by: #231
-- Keep the companion note + Note Context track honest in docs and rollout planning: the core companion-note and Note Context implementation is now present, PanelAgent uses Note Context with a retained compatibility fallback, and the remaining work is rollout verification plus doc cleanup rather than first implementation. Tracked by: #229
-- Expand the vault-as-GUI settings compiler and operator surfaces so the forward line can describe runtime topology with complete provenance and precedence in both `settings-explain` and `status`.
-- Align CLI/docs runbooks with the v5.6 narrative: update `docs/ROADMAP.md`, status snapshots, and the runbooks so operators know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe. Tracked by: #232
+- Sequence the ReasoningFacade + LangGraph rollout for one additional agent pool, ensuring instrumentation feeds into the fitness gates and the orchestrator V2 experiment flag remains gated until stability signals arrive. Tracked by: #231. Source Anchor: RF-ADOPTION
+- The companion note + Note Context doc-sync correction is shipped. Delivery receipt: Issue #229, PR #237. Any remaining rollout verification or cleanup should be captured as new bounded follow-up issues rather than treated as missing implementation.
+- Expand the vault-as-GUI settings compiler and operator surfaces so the forward line can describe runtime topology with complete provenance and precedence in both `settings-explain` and `status`. Tracked by: #238. Source Anchor: SETTINGS-PROVENANCE
+- Align CLI/docs runbooks with the v5.6 narrative: update `docs/ROADMAP.md`, status snapshots, and the runbooks so operators know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe. Tracked by: #232. Source Anchor: ROLLOUT-RUNBOOKS
 ### Later
 - Extend LangGraph adoption across more agents (Promotion, Reviewer, Hygiene) and the orchestrator V2 control plane once the v5.6A pilot stabilizes.
 - Surface LangGraph/Reasoning rollouts in the evaluation stack (golden vault, metamorphic runs, cold rebuild, fitness gates) so the forward line has measurable acceptance per contract.

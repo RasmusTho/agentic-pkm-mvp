@@ -53,6 +53,94 @@ Required automation:
 - Agents must stay within Issue scope, constraints, and acceptance criteria.
 - Blank/free-form Issues are disabled at repo level.
 
+## Source-anchor contract
+
+Backlog state must live in GitHub, not only in inline doc edits.
+
+Required rule for new backlog work:
+
+- every new implementation Issue must include a `Source Anchors` section
+- `Source Anchors` must identify the most local backlog-worthy doc item that justified the Issue
+- the anchor should be stable across wording cleanups so duplicate extraction is easy to detect later
+
+Recommended syntax in the Issue body:
+
+- `docs/PANEL_AGENT.md :: PA2-FREEFORM`
+- `docs/ROADMAP.md :: ORCHV2-PILOT`
+- `docs/STATUS.md :: SETTINGS-PROVENANCE`
+
+Recommended source-anchor style in docs when a stable item ID is warranted:
+
+- use a short, deterministic identifier on roadmap/plan/checklist items that are likely to be converted into Issues
+- keep the identifier semantically narrow and track-scoped
+- avoid renumbering or date-based IDs
+
+This contract is intentionally GitHub-first:
+
+- docs define intent and architecture
+- Issues/Project define backlog lifecycle state
+- PRs and merge history define delivery state
+- owner docs define lasting shipped truth
+
+Inline markers such as `Tracked by: #123` and `Backlog: #123` are now secondary convenience notes.
+They may still be used sparingly where helpful, but they are not the primary deduplication or backlog-state mechanism.
+
+## Issue contract additions
+
+New Issue contracts must include these sections in addition to the original bounded-task fields:
+
+- `Source Anchors`
+- `Suggested Validation`
+- `Source Docs`
+
+Why:
+
+- `Source Anchors` makes the doc-to-issue mapping deterministic
+- `Suggested Validation` keeps the task executable by humans and agents
+- `Source Docs` keeps the governing authority explicit when multiple docs are involved
+
+## Receipt model
+
+Preferred tracking split:
+
+- backlog receipt: GitHub Issue created, labeled, and placed in the Project
+- delivery receipt: merged PR plus owner-doc update
+
+Preferred write locations:
+
+- backlog state: GitHub Issue + Project
+- delivery state: PR + merge commit + CI + owner doc
+- optional scan surface: generated receipt page derived from GitHub data
+
+Do not require a source doc edit just to make backlog creation visible to collaborators.
+If a source doc is not being otherwise updated, it is acceptable for the initial backlog receipt to exist only in GitHub as long as the Issue carries stable `Source Anchors`.
+
+## Generated receipt page shape
+
+If the repo later adopts generated backlog receipts, keep the output as a derived summary, for example:
+
+```md
+# Backlog Receipts
+
+## Open
+- `PA2-FREEFORM` -> Issue #241 (`Ready`)
+- `ORCHV2-PILOT` -> Issue #___ (`Backlog`)
+
+## Delivered
+- `SETTINGS-PROVENANCE` -> Issue #238 / PR #___ / commit <sha>
+```
+
+This page should be treated as a convenience projection from GitHub, not as the canonical task state store.
+
+## Migration rule
+
+Use this migration posture from March 30, 2026 onward:
+
+- existing inline `Tracked by` / `Backlog` markers may remain until the surrounding docs are naturally edited
+- new backlog extraction should prefer `Source Anchors` in GitHub Issues
+- delivered work must still be written back into owner docs in the merge that ships the behavior
+- roadmap and plan docs should not keep delivered items phrased as pending
+
 ## Existing-state findings from the March 30, 2026 audit
 
 - Existing Issues are present, but titles/bodies are free-form and not normalized to a machine-readable task contract.

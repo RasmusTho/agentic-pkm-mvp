@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import time
-from typing import Dict, List
 
-import pytest
 
 from .conftest import MockAgentExecutor, MockOutbox
 
@@ -62,7 +59,7 @@ class TestRetryContract:
         mock_agent_executor: MockAgentExecutor,
     ) -> None:
         """On transient failure, retry up to retry_count times."""
-        step = step_factory(
+        step_factory(
             "step-1",
             "agent_call",
             "Flaky task",
@@ -82,7 +79,7 @@ class TestRetryContract:
         step_factory,
     ) -> None:
         """Retry state tracks attempt #1, #2, etc."""
-        step = step_factory(
+        step_factory(
             "step-1",
             "agent_call",
             "Retry task",
@@ -114,7 +111,7 @@ class TestRetryContract:
                 depends_on=["step-1"],
             ),
         ]
-        plan = plan_factory(steps=steps)
+        plan_factory(steps=steps)
 
         # step-2 fails and exhausts retries
         outbox = mock_outbox
@@ -141,7 +138,7 @@ class TestRetryContract:
         step_factory,
     ) -> None:
         """Retry backoff increases exponentially (or linearly) between attempts."""
-        step = step_factory(
+        step_factory(
             "step-1",
             "agent_call",
             "Task",

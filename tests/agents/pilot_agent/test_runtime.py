@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from app.agents.pilot_agent.runtime import run_promotion_agent
 from app.events.schema import make_outbox_event

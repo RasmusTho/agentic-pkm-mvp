@@ -79,6 +79,7 @@ Expected CI posture:
 | Retrieval/ASK behavior | unit + e2e + opt-in eval when relevance/quality changes materially |
 
 ## Evaluation Stack (Registry Watcher / Panel / Promotion)
+Delivery receipt: Quality Wave phases A-F landed across PRs #197, #198, #199, #200, #201, #202, and #210; this section is the lasting validation contract for the shipped stack.
 - **A. Contract tests** — assert watcher→panel→promotion event envelopes and payload invariants; run via `pytest -q tests/e2e/test_watcher_registry_e2e.py -m "not pg"` (exact command may move to `tests/fitness`).
 - **B. Golden vault** — seeded vault + snapshots under `docs/examples/vault_test_seed/`; deterministic diff harness to prove no unintended note mutations.
 - **C. Metamorphic runs** — vary `WATCHER_AUTO_EXEC`, `WATCHER_SCOPE_GLOB`, `WATCHER_TICK_SLEEP_SECONDS`, and `--max-ticks`; expect identical receipts/intents where applicable.

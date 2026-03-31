@@ -431,6 +431,121 @@ def test_panel_graph_llm_empty_selection_honors_negated_promotion_instruction(mo
     assert statuses["promote.evergreen"] == "skipped"
 
 
+def _state_no_actions(instruction: str, catalog: PanelActionCatalog | None = None) -> PanelAgentState:
+    """Build a PanelAgentState with no checkbox actions (freeform-only panel)."""
+    note = NoteRef(uuid=TEST_NOTE_UUID, path=TEST_NOTE_PATH, origin=TEST_NOTE_ORIGIN)
+    panel = PanelInfo(panel_id="panel-1", instruction=instruction, raw_block=None)
+    payload = PanelIntentPayload(note=note, panel=panel, actions=[])
+    intent = PanelIntentEvent(payload=payload, trace_id="trace-freeform")
+    return PanelAgentState(
+        trace_id=intent.trace_id,
+        note=intent.payload.note,
+        panel=intent.payload.panel,
+        actions=[],
+        intent_event=intent,
+        action_catalog=catalog,
+    )
+
+
+def test_panel_graph_freeform_proposes_catalog_action_without_checkboxes(monkeypatch) -> None:
+    """Freeform path: instruction alone drives catalog discovery when no checkboxes are present."""
+    catalog = PanelActionCatalog.from_descriptors(
+        [
+            PanelActionDescriptor(
+                id="promote.evergreen",
+                intent_type="promotion",
+                downstream_event="review.promote.evergreen",
+                labels=["Make this note evergreen"],
+                description="Promote note to evergreen",
+                llm_hint="Choose this when the instruction asks to promote or make the note evergreen.",
+                params={"maturity": "evergreen"},
+            )
+        ]
+    )
+    state = _state_no_actions("Make this note evergreen.", catalog=catalog)
+
+    monkeypatch.setattr(
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": [{"id": "promote.evergreen", "reason": "instruction match"}]}),
+    )
+
+    result = run_panel_graph(state, decider_mode="llm")
+    event_names = {getattr(evt, "event", None) for evt in result.emitted_events}
+    assert "promote.intent.created" in event_names
+    assert "panel.action.triggered" in event_names
+    statuses = {r.id: r.status for r in result.action_results}
+    assert statuses["promote.evergreen"] == "triggered"
+    assert result.selected_action_ids == ["promote.evergreen"]
+
+
+def test_panel_graph_freeform_rejects_out_of_catalog_id(monkeypatch) -> None:
+    """Freeform path: LLM proposals not in the active catalog are silently dropped."""
+    catalog = PanelActionCatalog.from_descriptors(
+        [
+            PanelActionDescriptor(
+                id="promote.evergreen",
+                intent_type="promotion",
+                downstream_event="review.promote.evergreen",
+                labels=["Make this note evergreen"],
+                description="Promote note to evergreen",
+            )
+        ]
+    )
+    state = _state_no_actions("Make this note evergreen.", catalog=catalog)
+
+    monkeypatch.setattr(
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": [{"id": "invented.action"}]}),
+    )
+
+    result = run_panel_graph(state, decider_mode="llm")
+    event_names = {getattr(evt, "event", None) for evt in result.emitted_events}
+    assert "promote.intent.created" not in event_names
+    assert result.action_results == []
+
+
+def test_panel_graph_freeform_empty_catalog_no_actions(monkeypatch) -> None:
+    """Freeform path: empty catalog gracefully produces no proposals."""
+    catalog = PanelActionCatalog.from_descriptors([])
+    state = _state_no_actions("Make this note evergreen.", catalog=catalog)
+
+    monkeypatch.setattr(
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": [{"id": "promote.evergreen"}]}),
+    )
+
+    result = run_panel_graph(state, decider_mode="llm")
+    event_names = {getattr(evt, "event", None) for evt in result.emitted_events}
+    assert "promote.intent.created" not in event_names
+    assert result.action_results == []
+
+
+def test_panel_graph_freeform_falls_back_to_rule_on_llm_error(monkeypatch) -> None:
+    """Freeform path: LLM failure falls back to rule mode (which is a no-op for no-checkbox panels)."""
+    catalog = PanelActionCatalog.from_descriptors(
+        [
+            PanelActionDescriptor(
+                id="promote.evergreen",
+                intent_type="promotion",
+                downstream_event="review.promote.evergreen",
+                labels=["Make this note evergreen"],
+                description="Promote note to evergreen",
+            )
+        ]
+    )
+    state = _state_no_actions("Make this note evergreen.", catalog=catalog)
+
+    monkeypatch.setattr(
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
+        lambda: _StubReasoningFacade(RuntimeError("LLM unavailable")),
+    )
+
+    result = run_panel_graph(state, decider_mode="llm")
+    event_names = {getattr(evt, "event", None) for evt in result.emitted_events}
+    assert "promote.intent.created" not in event_names
+    assert result.action_results == []
+
+
 def test_panel_graph_skips_idempotent_duplicate() -> None:
     mapping = PanelActionMapping(
         id="promote.evergreen",

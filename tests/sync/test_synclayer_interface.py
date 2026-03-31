@@ -3,11 +3,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from tests.sync.conftest import FileChange, FileOperation, SyncResult, SyncStatus
+from tests.sync.conftest import FileChange, SyncResult, SyncStatus
 
 
 class SyncLayer(ABC):

@@ -45,6 +45,12 @@ When the issue is health semantics or degraded-state rules, switch to `docs/HEAL
 
 Use this section only when the issue is specifically about watcher deployment, config, or execution mode.
 
+Watcher auto-exec enablement rule:
+- Treat `python -m app.cli settings-explain` plus `python -m app.cli status` as the canonical enablement check.
+- `WATCHER_AUTO_EXEC=1` is necessary to arm panel auto-exec, but it is not sufficient on its own to prove rollout safety.
+- Before enabling auto-exec for a wider runtime scope, confirm the effective allowlist, recent skip counters, and write-guard/provenance context are coherent across both CLI surfaces.
+- When the question is release or merge readiness rather than a live local diagnosis, corroborate the operator view with the enforced CI summary line (`CI SUMMARY GATES ok=<bool>`).
+
 ### Docker-first deployment
 1. Set `VAULT_ROOT` to your local vault path:
    `export VAULT_ROOT="/Users/you/PKM - Alpha"`
@@ -138,15 +144,18 @@ Task-specific operator walkthroughs live in `docs/runbooks/`.
 - DB outbox: check the `outbox` table for recent `ingest.vault.changed` and `panel.*` events; the worker should mark `delivered_at`.
 - JSONL audit: `INDEX_OUTBOX_PATH` should append lines, but it is not the worker queue.
 - Status: `python -m app.cli status` reports `worker_queue` vs `events_log` to distinguish DB vs JSONL.
+- Settings gate view: `python -m app.cli settings-explain --json` is the canonical provenance and gate-resolution surface for watcher auto-exec, allowlist validity, and write guard context.
 - Health command semantics and degradation rules live in `docs/HEALTH.md`.
 
 Operator triage order:
 1. Run `make verify-runtime`.
 2. If you need extra detail, run `docker compose exec -T api python -m app.cli health --json`.
-3. Run `docker compose exec -T api python -m app.cli status`.
-3. Check watcher and worker heartbeat files.
-4. Inspect DB outbox freshness and `delivered_at`.
-5. Escalate to `docs/INFRASTRUCTURE.md` or a task-specific runbook if the issue is startup/runtime-topology specific.
+3. Run `docker compose exec -T api python -m app.cli settings-explain --json` to confirm watcher gate state, allowlist validity, provenance, and write-guard context.
+4. Run `docker compose exec -T api python -m app.cli status` to confirm watcher automation counters, last tick skips, and last-run skip reasons.
+5. Check watcher and worker heartbeat files.
+6. Inspect DB outbox freshness and `delivered_at`.
+7. For enablement decisions, treat `WATCHER_AUTO_EXEC` as necessary but not sufficient; corroborate with `allowlist`, `dedup/skipped_*`, `panel_skipped_policy`, and `writes_allowed`.
+8. Escalate to `docs/INFRASTRUCTURE.md` or a task-specific runbook if the issue is startup/runtime-topology specific.
 
 ## Common operator CLI commands
 
@@ -201,10 +210,11 @@ Startup/runtime verification now treats task routes and embeddings explicitly:
 - What to paste into an issue/PR comment: `timestamp`, `phase`, `last_ok_phase`, `exit_code`, `exit_reason`, `compose_up_*`, `db_probe_*`, `llm_probe_*`.
 
 ## Incident handling
-1. Identify the failing surface with `health`, `status`, and heartbeat/outbox checks.
+1. Identify the failing surface with `health`, `settings-explain`, `status`, and heartbeat/outbox checks.
 2. Stabilize the runtime by reducing optional integrations only if needed for diagnosis.
-3. Record the incident in the active ticket or PR, and update `docs/STATUS.md` if current operational reality changed.
-4. Use the relevant companion document or runbook for recovery details.
+3. If the incident concerns watcher auto-exec safety, record the observed allowlist, skip counters, write-guard/provenance state, and whether `CI SUMMARY GATES ok=<bool>` is green where CI is part of the rollout path.
+4. Record the incident in the active ticket or PR, and update `docs/STATUS.md` if current operational reality changed.
+5. Use the relevant companion document or runbook for recovery details.
 
 Quick issue routing:
 - Missing dependency or local runtime startup issue -> `docs/INFRASTRUCTURE.md` and `docs/DEPENDENCIES.md`

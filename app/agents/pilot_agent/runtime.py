@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Any
 
 from app.events.schema import OutboxEvent
 from app.agents.pilot_agent.state import PilotAgentState

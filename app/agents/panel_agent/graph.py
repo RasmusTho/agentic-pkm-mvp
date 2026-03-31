@@ -8,7 +8,7 @@ from langgraph.graph import END, START, StateGraph
 from app.domain.state_axes import build_promotion_transition
 from app.components.concurrency import IdempotencyGuard
 from app.components.settings.panel_actions_loader import PanelActionCatalog
-from app.agents.panel_agent.cognition import PanelCognitionBackend, get_cognition_backend
+from app.agents.panel_agent.cognition import PanelCognitionBackend, get_cognition_backend, _inject_catalog_proposals
 from app.agents.panel_agent.settings import DeciderMode
 from app.agents.panel_agent.state import PanelAgentState
 from app.agents.panel_agent.wiring import get_default_action_wiring
@@ -246,8 +246,6 @@ def _load_context(state: PanelAgentState) -> PanelAgentState:
     if not state.action_wiring:
         state.action_wiring = dict(get_default_action_wiring())
     return state
-
-
 def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, reasons: dict[str, str] | None = None) -> PanelAgentState:
     assert state.intent_event is not None, "PanelAgentState must include intent_event"
     actions: list[PanelRuntimeActionResult] = []
@@ -295,6 +293,10 @@ def _decide_actions_with_backend(state: PanelAgentState, backend: PanelCognition
     if selection is None:
         return _apply_actions(state, selected_ids=None)
     chosen, reasons = selection
+    # Freeform: inject catalog-derived PanelIntentAction objects for proposed IDs
+    # that have no corresponding entry in state.actions (e.g., no-checkbox panels).
+    if chosen:
+        state = _inject_catalog_proposals(state, chosen)
     return _apply_actions(state, selected_ids=chosen, reasons=reasons)
 
 
