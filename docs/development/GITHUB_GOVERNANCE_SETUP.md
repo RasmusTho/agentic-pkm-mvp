@@ -53,6 +53,38 @@ Required automation:
 - Agents must stay within Issue scope, constraints, and acceptance criteria.
 - Blank/free-form Issues are disabled at repo level.
 
+## Source-anchor contract
+
+Backlog state must live in GitHub, not only in inline doc edits.
+
+Required rule for new backlog work:
+
+- every new implementation Issue must include a `Source Anchors` section
+- `Source Anchors` must identify the most local backlog-worthy doc item that justified the Issue
+- the anchor should be stable across wording cleanups so duplicate extraction is easy to detect later
+
+Recommended syntax in the Issue body:
+
+- `docs/PANEL_AGENT.md :: PA2-FREEFORM`
+- `docs/ROADMAP.md :: ORCHV2-TDD`
+- `docs/STATUS.md :: SETTINGS-PROVENANCE`
+
+Recommended source-anchor style in docs when a stable item ID is warranted:
+
+- use a short, deterministic identifier on roadmap/plan/checklist items that are likely to be converted into Issues
+- keep the identifier semantically narrow and track-scoped
+- avoid renumbering or date-based IDs
+
+This contract is intentionally GitHub-first:
+
+- docs define intent and architecture
+- Issues/Project define backlog lifecycle state
+- PRs and merge history define delivery state
+- owner docs define lasting shipped truth
+
+Inline markers such as `Tracked by: #123` and `Backlog: #123` are now secondary convenience notes.
+They may still be used sparingly where helpful, but they are not the primary deduplication or backlog-state mechanism.
+
 ## Existing-state findings from the March 30, 2026 audit
 
 - Existing Issues are present, but titles/bodies are free-form and not normalized to a machine-readable task contract.
