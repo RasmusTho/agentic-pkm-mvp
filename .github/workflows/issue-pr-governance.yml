@@ -39,6 +39,15 @@ jobs:
               core.setFailed(`Issue is missing required sections: ${missing.join(', ')}`);
             }
 
+  issue-source-anchors:
+    if: github.event_name == 'issues' && (contains(github.event.issue.labels.*.name, 'agent:ready') || contains(github.event.issue.labels.*.name, 'agent:blocked'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Source Anchors
+        run: |
+          python3 scripts/validate_source_anchors.py "${{ github.event.issue.body }}"
+
   pr-contract:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
