@@ -2,13 +2,69 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
 
+from app.orchestrator.v2_runtime import OrchestratorV2
+from app.orchestrator.executor import StepContext, StepExecutionError
+from app.planner.schema import Plan, PlanMetadata, PlanStep, PlanTrigger
 
 from .conftest import (
     MockOutbox,
     MockPlanState,
     MockStepState,
 )
+
+
+def _make_plan(steps: list[PlanStep], plan_id: str = "plan-1") -> Plan:
+    """Build a Plan model from PlanStep objects."""
+    return Plan(
+        id=plan_id,
+        meta=PlanMetadata(
+            goal="test",
+            source_object_uuid="obj-1",
+            created_by="test",
+            trace_id="trace-1",
+        ),
+        steps=steps,
+        context={},
+    )
+
+
+class _FailingExecutor:
+    """Executor that fails on a specific step, succeeds on others."""
+
+    def __init__(self, fail_step_id: str, fail_message: str = "step failed") -> None:
+        self._fail_step_id = fail_step_id
+        self._fail_message = fail_message
+        self.executed: list[str] = []
+
+    def execute_step(self, step: PlanStep, context: StepContext) -> dict:
+        self.executed.append(step.id)
+        if step.id == self._fail_step_id:
+            raise StepExecutionError(self._fail_message, error_type="test_failure")
+        return {"status": "ok", "step_id": step.id}
+
+
+class _CompensationTrackingExecutor:
+    """Executor that tracks compensation calls and can optionally fail them."""
+
+    def __init__(self, fail_step_id: str, fail_compensation_ids: list[str] | None = None) -> None:
+        self._fail_step_id = fail_step_id
+        self._fail_compensation_ids = set(fail_compensation_ids or [])
+        self.executed: list[str] = []
+        self.compensated: list[str] = []
+
+    def execute_step(self, step: PlanStep, context: StepContext) -> dict:
+        if step.metadata.get("compensation"):
+            original_id = step.metadata.get("original_step_id", step.id)
+            self.compensated.append(original_id)
+            if original_id in self._fail_compensation_ids:
+                raise StepExecutionError(f"compensation failed for {original_id}")
+            return {"status": "compensated", "original_step_id": original_id}
+        self.executed.append(step.id)
+        if step.id == self._fail_step_id:
+            raise StepExecutionError("step failed", error_type="test_failure")
+        return {"status": "ok", "step_id": step.id}
 
 
 class TestCompensationContract:
@@ -196,3 +252,300 @@ class TestCompensationContract:
         assert steps[1]["depends_on"] == ["init"]
         assert steps[2]["depends_on"] == ["init"]
         # Each branch has its own compensation
+
+
+class TestCompensationRuntime:
+    """Runtime tests for V2 compensation and rollback behavior."""
+
+    @patch("app.orchestrator.v2_runtime.emit_step_started")
+    @patch("app.orchestrator.v2_runtime.emit_step_finished")
+    @patch("app.orchestrator.v2_runtime.emit_step_error")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_started")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_completed")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_failed")
+    @patch("app.orchestrator.v2_runtime.emit_orchestration_rolled_back")
+    def test_failed_step_triggers_reverse_compensation(
+        self,
+        mock_rolled_back,
+        mock_comp_failed,
+        mock_comp_completed,
+        mock_comp_started,
+        mock_step_error,
+        mock_step_finished,
+        mock_step_started,
+    ) -> None:
+        """When step-3 fails, compensation runs for step-2 then step-1 (reverse order)."""
+        executor = _CompensationTrackingExecutor(fail_step_id="step-3")
+        orch = OrchestratorV2(executor=executor, max_workers=1)
+
+        steps = [
+            PlanStep(id="step-1", kind="agent_call", description="A", agent="test",
+                     metadata={"compensate_fn": "cleanup_a"}),
+            PlanStep(id="step-2", kind="agent_call", description="B", agent="test",
+                     depends_on=["step-1"], metadata={"compensate_fn": "cleanup_b"}),
+            PlanStep(id="step-3", kind="agent_call", description="C", agent="test",
+                     depends_on=["step-2"], metadata={"compensate_fn": "cleanup_c"}),
+        ]
+        plan = _make_plan(steps)
+        results = orch.run_plan(plan)
+
+        # step-1 and step-2 succeeded, step-3 failed
+        assert executor.executed == ["step-1", "step-2", "step-3"]
+
+        # Compensation ran in reverse order: step-2 then step-1 (step-3 was the failed step, not in execution_order)
+        assert executor.compensated == ["step-2", "step-1"]
+
+        # Results include rolled_back entries
+        comp_entry = next(r for r in results if r["step_id"] == "__compensation__")
+        assert comp_entry["status"] == "rolled_back"
+        assert comp_entry["failed_step"] == "step-3"
+        assert comp_entry["compensated_steps"] == ["step-2", "step-1"]
+        assert comp_entry["compensation_failures"] == []
+
+        # Completed steps marked as rolled_back
+        step1_result = next(r for r in results if r["step_id"] == "step-1")
+        step2_result = next(r for r in results if r["step_id"] == "step-2")
+        assert step1_result["status"] == "rolled_back"
+        assert step2_result["status"] == "rolled_back"
+
+        # Events emitted
+        mock_comp_started.assert_called_once()
+        mock_rolled_back.assert_called_once()
+
+    @patch("app.orchestrator.v2_runtime.emit_step_started")
+    @patch("app.orchestrator.v2_runtime.emit_step_finished")
+    @patch("app.orchestrator.v2_runtime.emit_step_error")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_started")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_completed")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_failed")
+    @patch("app.orchestrator.v2_runtime.emit_orchestration_rolled_back")
+    def test_compensation_failure_does_not_stop_chain(
+        self,
+        mock_rolled_back,
+        mock_comp_failed,
+        mock_comp_completed,
+        mock_comp_started,
+        mock_step_error,
+        mock_step_finished,
+        mock_step_started,
+    ) -> None:
+        """If compensation for step-2 fails, step-1 compensation still runs."""
+        executor = _CompensationTrackingExecutor(
+            fail_step_id="step-3",
+            fail_compensation_ids=["step-2"],
+        )
+        orch = OrchestratorV2(executor=executor, max_workers=1)
+
+        steps = [
+            PlanStep(id="step-1", kind="agent_call", description="A", agent="test",
+                     metadata={"compensate_fn": "cleanup_a"}),
+            PlanStep(id="step-2", kind="agent_call", description="B", agent="test",
+                     depends_on=["step-1"], metadata={"compensate_fn": "cleanup_b"}),
+            PlanStep(id="step-3", kind="agent_call", description="C", agent="test",
+                     depends_on=["step-2"]),
+        ]
+        plan = _make_plan(steps)
+        results = orch.run_plan(plan)
+
+        # Both compensations attempted, step-2 failed, step-1 succeeded
+        assert executor.compensated == ["step-2", "step-1"]
+
+        comp_entry = next(r for r in results if r["step_id"] == "__compensation__")
+        assert comp_entry["compensated_steps"] == ["step-1"]
+        assert comp_entry["compensation_failures"] == ["step-2"]
+
+        # Compensation failure event emitted
+        mock_comp_failed.assert_called_once()
+        # Compensation success event also emitted for step-1
+        mock_comp_completed.assert_called_once()
+
+    @patch("app.orchestrator.v2_runtime.emit_step_started")
+    @patch("app.orchestrator.v2_runtime.emit_step_finished")
+    @patch("app.orchestrator.v2_runtime.emit_step_error")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_started")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_completed")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_failed")
+    @patch("app.orchestrator.v2_runtime.emit_orchestration_rolled_back")
+    def test_steps_without_compensate_fn_skipped(
+        self,
+        mock_rolled_back,
+        mock_comp_failed,
+        mock_comp_completed,
+        mock_comp_started,
+        mock_step_error,
+        mock_step_finished,
+        mock_step_started,
+    ) -> None:
+        """Steps without compensate_fn in metadata are skipped during compensation."""
+        executor = _CompensationTrackingExecutor(fail_step_id="step-3")
+        orch = OrchestratorV2(executor=executor, max_workers=1)
+
+        steps = [
+            PlanStep(id="step-1", kind="agent_call", description="Read", agent="test",
+                     metadata={}),  # no compensate_fn
+            PlanStep(id="step-2", kind="agent_call", description="Write", agent="test",
+                     depends_on=["step-1"], metadata={"compensate_fn": "revert_write"}),
+            PlanStep(id="step-3", kind="agent_call", description="Finalize", agent="test",
+                     depends_on=["step-2"]),
+        ]
+        plan = _make_plan(steps)
+        results = orch.run_plan(plan)
+
+        # Only step-2 has compensate_fn, so only step-2 compensated
+        assert executor.compensated == ["step-2"]
+
+        comp_entry = next(r for r in results if r["step_id"] == "__compensation__")
+        assert comp_entry["compensated_steps"] == ["step-2"]
+
+        # step-1 status stays ok (not rolled_back, no compensation ran for it)
+        step1_result = next(r for r in results if r["step_id"] == "step-1")
+        assert step1_result["status"] == "ok"
+
+    @patch("app.orchestrator.v2_runtime.emit_step_started")
+    @patch("app.orchestrator.v2_runtime.emit_step_finished")
+    @patch("app.orchestrator.v2_runtime.emit_step_error")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_started")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_completed")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_failed")
+    @patch("app.orchestrator.v2_runtime.emit_orchestration_rolled_back")
+    def test_no_compensation_when_no_predecessors(
+        self,
+        mock_rolled_back,
+        mock_comp_failed,
+        mock_comp_completed,
+        mock_comp_started,
+        mock_step_error,
+        mock_step_finished,
+        mock_step_started,
+    ) -> None:
+        """When the first step fails, no compensation runs (no completed predecessors)."""
+        executor = _FailingExecutor(fail_step_id="step-1")
+        orch = OrchestratorV2(executor=executor, max_workers=1)
+
+        steps = [
+            PlanStep(id="step-1", kind="agent_call", description="A", agent="test",
+                     metadata={"compensate_fn": "cleanup_a"}),
+            PlanStep(id="step-2", kind="agent_call", description="B", agent="test",
+                     depends_on=["step-1"]),
+        ]
+        plan = _make_plan(steps)
+        results = orch.run_plan(plan)
+
+        # step-1 failed, no predecessors completed -> no compensation entry
+        assert not any(r["step_id"] == "__compensation__" for r in results)
+        mock_comp_started.assert_not_called()
+
+    @patch("app.orchestrator.v2_runtime.emit_step_started")
+    @patch("app.orchestrator.v2_runtime.emit_step_finished")
+    @patch("app.orchestrator.v2_runtime.emit_step_error")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_started")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_completed")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_failed")
+    @patch("app.orchestrator.v2_runtime.emit_orchestration_rolled_back")
+    def test_no_compensation_when_plan_succeeds(
+        self,
+        mock_rolled_back,
+        mock_comp_failed,
+        mock_comp_completed,
+        mock_comp_started,
+        mock_step_error,
+        mock_step_finished,
+        mock_step_started,
+    ) -> None:
+        """No compensation when all steps succeed."""
+        executor = _FailingExecutor(fail_step_id="nonexistent")
+        orch = OrchestratorV2(executor=executor, max_workers=1)
+
+        steps = [
+            PlanStep(id="step-1", kind="agent_call", description="A", agent="test",
+                     metadata={"compensate_fn": "cleanup_a"}),
+            PlanStep(id="step-2", kind="agent_call", description="B", agent="test",
+                     depends_on=["step-1"]),
+        ]
+        plan = _make_plan(steps)
+        results = orch.run_plan(plan)
+
+        assert all(r["status"] == "ok" for r in results)
+        assert not any(r["step_id"] == "__compensation__" for r in results)
+        mock_comp_started.assert_not_called()
+
+    @patch("app.orchestrator.v2_runtime.emit_step_started")
+    @patch("app.orchestrator.v2_runtime.emit_step_finished")
+    @patch("app.orchestrator.v2_runtime.emit_step_error")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_started")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_completed")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_failed")
+    @patch("app.orchestrator.v2_runtime.emit_orchestration_rolled_back")
+    def test_rolled_back_event_emitted_with_correct_payload(
+        self,
+        mock_rolled_back,
+        mock_comp_failed,
+        mock_comp_completed,
+        mock_comp_started,
+        mock_step_error,
+        mock_step_finished,
+        mock_step_started,
+    ) -> None:
+        """orchestration.rolled_back event includes failed_step and compensated_steps."""
+        executor = _CompensationTrackingExecutor(fail_step_id="step-2")
+        orch = OrchestratorV2(executor=executor, max_workers=1)
+
+        steps = [
+            PlanStep(id="step-1", kind="agent_call", description="A", agent="test",
+                     metadata={"compensate_fn": "cleanup_a"}),
+            PlanStep(id="step-2", kind="agent_call", description="B", agent="test",
+                     depends_on=["step-1"]),
+        ]
+        plan = _make_plan(steps)
+        orch.run_plan(plan)
+
+        mock_rolled_back.assert_called_once()
+        call_kwargs = mock_rolled_back.call_args[1]
+        assert call_kwargs["plan_id"] == "plan-1"
+        assert call_kwargs["failed_step"] == "step-2"
+        assert call_kwargs["compensated_steps"] == ["step-1"]
+        assert call_kwargs["compensation_failures"] == []
+
+    @patch("app.orchestrator.v2_runtime.emit_step_started")
+    @patch("app.orchestrator.v2_runtime.emit_step_finished")
+    @patch("app.orchestrator.v2_runtime.emit_step_error")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_started")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_completed")
+    @patch("app.orchestrator.v2_runtime.emit_compensation_step_failed")
+    @patch("app.orchestrator.v2_runtime.emit_orchestration_rolled_back")
+    def test_compensation_receives_output_snapshot(
+        self,
+        mock_rolled_back,
+        mock_comp_failed,
+        mock_comp_completed,
+        mock_comp_started,
+        mock_step_error,
+        mock_step_finished,
+        mock_step_started,
+    ) -> None:
+        """Compensation step receives original step output as output_snapshot."""
+        received_snapshots = []
+
+        class SnapshotTracker:
+            def execute_step(self, step: PlanStep, context: StepContext) -> dict:
+                if step.metadata.get("compensation"):
+                    received_snapshots.append(step.metadata.get("output_snapshot"))
+                    return {"status": "compensated"}
+                if step.id == "step-2":
+                    raise StepExecutionError("fail", error_type="test")
+                return {"resource_id": "res-123", "status": "ok"}
+
+        orch = OrchestratorV2(executor=SnapshotTracker(), max_workers=1)
+
+        steps = [
+            PlanStep(id="step-1", kind="agent_call", description="Create", agent="test",
+                     metadata={"compensate_fn": "cleanup"}),
+            PlanStep(id="step-2", kind="agent_call", description="Fail", agent="test",
+                     depends_on=["step-1"]),
+        ]
+        plan = _make_plan(steps)
+        orch.run_plan(plan)
+
+        # Compensation received the output of step-1
+        assert len(received_snapshots) == 1
+        assert received_snapshots[0] == {"resource_id": "res-123", "status": "ok"}

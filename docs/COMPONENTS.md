@@ -23,6 +23,10 @@ Use one label consistently:
 
 ## Stores
 
+Environment note:
+- `docs/ENVIRONMENTS.md` defines how `dev` and `prod` relate to vaults, stores, persistence, and runtime surfaces.
+- The component list below describes shared architecture building blocks; it does not imply that `dev` and `prod` should share the same writable vault, store state, or operational artifacts when environment isolation is required.
+
 | Store abstraction | Backend (current) | Notes |
 | --- | --- | --- |
 | ObjectStore | Postgres / in-memory | Durable runtime object records + payloads (runtime mirror over tracked artifacts; rebuildable from file-based continuity artifacts) |
@@ -101,7 +105,7 @@ Direction note:
 - **SyncLayer** — Operational abstraction that reacts to file changes and sync consequences without
   making iCloud or Git architecturally primary. In current reality this is implemented through
   watcher/worker flows over local files and replicas. Maturity: Active direction.
-- **HealthContract + WriteGuard + incident snapshots** — Health state machine + write guard ensures safe transitions, emits `state/reason/since` snapshots, and logs incident JSONL entries (`tmp/health-incidents.jsonl` or vault overrides). Sidecar CLI surface: `python -m app.cli health --json` and `python -m app.cli health status --json`, plus the index/events doctor commands (baseline readiness checks). Maturity: Baseline.
+- **HealthContract + WriteGuard + incident snapshots** — Health state machine + write guard ensures safe transitions, emits `state/reason/since` snapshots, and logs incident JSONL entries (`tmp/health-incidents.jsonl` or vault overrides). These are shared safety mechanisms across `dev` and `prod`, with stricter operational expectations in `prod` per `docs/ENVIRONMENTS.md`. Sidecar CLI surface: `python -m app.cli health --json` and `python -m app.cli health status --json`, plus the index/events doctor commands (baseline readiness checks). Maturity: Baseline.
 
 ## Concurrency & safety
 

@@ -1,85 +1,93 @@
-"""Runtime environment selection for dev and prod.
+"""Runtime environment selection and resolution.
 
-This module provides explicit environment selection semantics that map current
-PKM_SETTINGS_PROFILE tiering (operator/lab) into a unified dev/prod model without
-breaking existing behavior.
+This module provides explicit first-class environment selection for `dev` and `prod`,
+mapping existing partial controls such as PKM_SETTINGS_PROFILE into the environment model.
 
-Current mapping:
-- PKM_SETTINGS_PROFILE=operator (default) -> environment='prod'
-- PKM_SETTINGS_PROFILE=lab -> environment='dev'
-- Explicit PKM_ENVIRONMENT overrides both
+Environment selection hierarchy:
+1. Explicit PKM_ENVIRONMENT env var (if set to 'dev' or 'prod')
+2. Implicit from PKM_SETTINGS_PROFILE (lab → dev, operator → prod)
+3. Default to prod
 
-Authority: SoT v5.5 Baseline Definition + forward-line environment modeling
+The environment model is canonical; settings profile (operator/lab) is a narrower control
+that lives beneath it for backward compatibility.
+
+Authority: SoT v5.5 Baseline Definition + forward-line environment modeling (Issue #263)
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from typing import Literal
 
-ENV_VARIABLE = "PKM_ENVIRONMENT"
-PROFILE_ENV = "PKM_SETTINGS_PROFILE"
-
+# Environment values
 ENV_DEV = "dev"
 ENV_PROD = "prod"
 
-Environment = Literal["dev", "prod"]
+# Environment variable for explicit selection
+ENVIRONMENT_ENV = "PKM_ENVIRONMENT"
+
+# Legacy settings profile variable (for mapping and compatibility)
+PROFILE_ENV = "PKM_SETTINGS_PROFILE"
+OPERATOR_PROFILE = "operator"
+LAB_PROFILE = "lab"
 
 
-def resolve_environment(env: dict[str, str] | None = None) -> Environment:
-    """Resolve the runtime environment.
+def active_environment(env: Mapping[str, str] | None = None) -> Literal["dev", "prod"]:
+    """Resolve the active runtime environment.
 
-    Resolution order:
-    1. Explicit PKM_ENVIRONMENT (dev or prod)
-    2. PKM_SETTINGS_PROFILE mapping: lab -> dev, operator -> prod
-    3. Default: prod (production-safe default)
+    Priority:
+    1. Explicit PKM_ENVIRONMENT (if set to 'dev' or 'prod')
+    2. Implicit from PKM_SETTINGS_PROFILE ('lab' → dev, 'operator' → prod)
+    3. Default to 'prod'
 
     Args:
-        env: Optional environment dict for testing; defaults to os.environ
+        env: Optional environment mapping (defaults to os.environ)
 
     Returns:
-        'dev' or 'prod'
+        Either 'dev' or 'prod'
 
     Raises:
         ValueError: If PKM_ENVIRONMENT has an invalid value
     """
     env_map = os.environ if env is None else env
 
-    # Check explicit environment override
-    explicit = env_map.get(ENV_VARIABLE, "").strip().lower()
+    # Check explicit environment selection
+    explicit = str(env_map.get(ENVIRONMENT_ENV, "") or "").strip().lower()
     if explicit:
-        if explicit in (ENV_DEV, ENV_PROD):
-            return explicit  # type: ignore
+        if explicit == ENV_DEV:
+            return ENV_DEV
+        if explicit == ENV_PROD:
+            return ENV_PROD
         raise ValueError(
-            f"Invalid {ENV_VARIABLE}={explicit}; must be 'dev' or 'prod'"
+            f"Invalid {ENVIRONMENT_ENV}={explicit}; must be 'dev' or 'prod'"
         )
 
-    # Fall back to settings profile mapping
-    profile = env_map.get(PROFILE_ENV, "").strip().lower()
-    if profile == "lab":
+    # Fall back to settings profile-based inference
+    profile = str(env_map.get(PROFILE_ENV, "") or "").strip().lower()
+    if profile == LAB_PROFILE:
         return ENV_DEV
-
-    # Default to prod (operator profile or no profile set)
     return ENV_PROD
 
 
-def is_dev_environment(env: dict[str, str] | None = None) -> bool:
-    """Check if running in dev environment."""
-    return resolve_environment(env) == ENV_DEV
+def is_dev_environment(env: Mapping[str, str] | None = None) -> bool:
+    """Check if the active environment is 'dev'."""
+    return active_environment(env) == ENV_DEV
 
 
-def is_prod_environment(env: dict[str, str] | None = None) -> bool:
-    """Check if running in prod environment."""
-    return resolve_environment(env) == ENV_PROD
+def is_prod_environment(env: Mapping[str, str] | None = None) -> bool:
+    """Check if the active environment is 'prod'."""
+    return active_environment(env) == ENV_PROD
 
 
 __all__ = [
-    "ENV_VARIABLE",
-    "PROFILE_ENV",
     "ENV_DEV",
     "ENV_PROD",
-    "Environment",
-    "resolve_environment",
+    "ENVIRONMENT_ENV",
+    "PROFILE_ENV",
+    "OPERATOR_PROFILE",
+    "LAB_PROFILE",
+    "active_environment",
     "is_dev_environment",
     "is_prod_environment",
 ]
