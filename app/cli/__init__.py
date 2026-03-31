@@ -673,8 +673,8 @@ def panel_orchestrate_plan(plan_id: str | None, note_uuid: str | None) -> None:
 @cli.command(
     name="alpha-human-flows",
     help=(
-        "Run alpha human flows end-to-end (sample ingest, test note, panel, promotion, ASK) "
-        "against a vault root."
+        "Dev-only: run alpha human flows end-to-end (sample ingest, test note, panel, promotion, ASK) "
+        "against a vault root for testing."
     ),
 )
 @click.option(
@@ -1331,8 +1331,8 @@ def uat_run_vault_test(
 @cli.command(
     name="runtime-loop",
     help=(
-        "Legacy/dev-only watcher→panel→promotion loop (requires PKM_SETTINGS_PROFILE=lab). "
-        "Use `watcher run` for operator runtime."
+        "Dev-only watcher→panel→promotion loop (requires PKM_ENVIRONMENT=dev or PKM_SETTINGS_PROFILE=lab). "
+        "Use `watcher run` for production operation."
     ),
 )
 @click.option("--vault-root", type=click.Path(path_type=Path), required=True, help="Vault root path.")

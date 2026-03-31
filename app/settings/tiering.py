@@ -68,11 +68,18 @@ def resolve_dev_lab_env_typed(
 
 
 def require_lab_profile(*, command_name: str) -> None:
+    # Check both legacy profile (lab) and new environment model (dev)
     if is_lab_profile():
         return
+
+    # Also check the explicit environment model
+    from app.config.environment import is_dev_environment
+    if is_dev_environment():
+        return
+
     raise RuntimeError(
-        f"{command_name} is legacy/dev-only and requires {PROFILE_ENV}={LAB_PROFILE}. "
-        "Use `python -m app.cli watcher run` for operator runtime."
+        f"{command_name} is dev-only and requires {PROFILE_ENV}={LAB_PROFILE} or PKM_ENVIRONMENT=dev. "
+        "Use `python -m app.cli watcher run` for production operation."
     )
 
 

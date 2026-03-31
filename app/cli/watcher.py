@@ -74,7 +74,7 @@ def watcher_once() -> None:
 
 @watcher_group.command(
     name="run",
-    help="Run the watcher registry loop continuously with operator summaries.",
+    help="Production-facing registry watcher: run the canonical watcher loop continuously with operator summaries (prod/dev environments).",
 )
 @click.option(
     "--config",
@@ -121,8 +121,9 @@ def watcher_run(config: Path, max_ticks: int | None) -> None:
 @click.command(
     name="vault-watcher-run",
     help=(
-        "Legacy/dev-only single-shot snapshot watcher (requires PKM_SETTINGS_PROFILE=lab): "
-        "detects changed notes via snapshot, ingests them, and optionally runs PanelAgent runtime."
+        "Dev-only single-shot snapshot watcher (requires PKM_ENVIRONMENT=dev or PKM_SETTINGS_PROFILE=lab): "
+        "detects changed notes via snapshot, ingests them, and optionally runs PanelAgent runtime. "
+        "Use `watcher run` for production operation."
     ),
 )
 @click.option(
@@ -221,8 +222,9 @@ def vault_watcher_run(
 @click.command(
     name="vault-watcher-daemon",
     help=(
-        "Legacy/dev-only snapshot daemon (requires PKM_SETTINGS_PROFILE=lab): "
-        "polls for changed notes and runs ingest/panel."
+        "Dev-only snapshot daemon (requires PKM_ENVIRONMENT=dev or PKM_SETTINGS_PROFILE=lab): "
+        "polls for changed notes and runs ingest/panel. "
+        "Use `watcher run` for production operation."
     ),
 )
 @click.option(

@@ -59,6 +59,23 @@ When the issue is health semantics or degraded-state rules, switch to `docs/HEAL
 
 Use this section only when the issue is specifically about watcher deployment, config, or execution mode.
 
+### Watcher entrypoint classification
+
+Entrypoints are explicitly classified by environment per `docs/ENVIRONMENTS.md`:
+
+**Production-facing entrypoint:**
+- `python -m app.cli watcher run` — canonical production registry watcher (prod/dev)
+  - Multi-spec watcher registry loop, artifact path and state separation by environment
+  - Supports both `prod` and `dev` environments via `PKM_ENVIRONMENT` or profile-based inference
+  - This is the entrypoint for the current production baseline
+
+**Dev-only legacy entrypoints (require `PKM_ENVIRONMENT=dev` or `PKM_SETTINGS_PROFILE=lab`):**
+- `python -m app.cli vault-watcher-run` — single-shot snapshot watcher (historical implementation)
+- `python -m app.cli vault-watcher-daemon` — snapshot daemon (historical implementation)
+- `python -m app.cli runtime-loop` — watcher → panel → promotion loop (historical test path)
+
+The legacy entrypoints are retained for lab/dev workflows but should not be used for production operation. Use `watcher run` for all production-facing and standard dev runtimes.
+
 Watcher auto-exec enablement rule:
 - Treat `python -m app.cli settings-explain` plus `python -m app.cli status` as the canonical enablement check.
 - `WATCHER_AUTO_EXEC=1` is necessary to arm panel auto-exec, but it is not sufficient on its own to prove rollout safety.
