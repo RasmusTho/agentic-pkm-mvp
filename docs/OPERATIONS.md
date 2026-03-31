@@ -215,10 +215,12 @@ Startup/runtime verification now treats task routes and embeddings explicitly:
 3. If the incident concerns watcher auto-exec safety, record the observed allowlist, skip counters, write-guard/provenance state, and whether `CI SUMMARY GATES ok=<bool>` is green where CI is part of the rollout path.
 4. Record the incident in the active ticket or PR, and update `docs/STATUS.md` if current operational reality changed.
 5. Use the relevant companion document or runbook for recovery details.
+6. For watcher, panel, or CLI-first orchestrator incidents on shipped current-state surfaces, use `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md`.
 
 Quick issue routing:
 - Missing dependency or local runtime startup issue -> `docs/INFRASTRUCTURE.md` and `docs/DEPENDENCIES.md`
 - Health contract or degraded-state interpretation -> `docs/HEALTH.md`
 - Metrics/logging interpretation -> `docs/OBSERVABILITY.md`
+- Watcher/panel/orchestrator incident triage -> `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md`
 - Watcher/panel manual walkthrough -> `docs/runbooks/UAT_PANEL_WATCHER.md`
 - Go-live/startup diagnostics -> `docs/runbooks/RUNBOOK_GO_LIVE.md`

@@ -179,6 +179,7 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/runbooks/ingest.md | Runbook: ingest | Legacy (archived) | 2026-02-05 | Historical reference; prefer OPERATIONS + STARTUP_FULL_SYSTEM runbook. |
+| docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md | Runbook: agentops incident triage | Aligned (forward line v5.x) | 2026-03-31 | Canonical current-state incident workflow for watcher, panel runtime, and CLI-first orchestrator surfaces; routes trace/heartbeat/outbox/audit interpretation without implying planned A2A behavior. |
 | docs/runbooks/RUNBOOK_GO_LIVE.md | Runbook: go-live checklist | Aligned (forward line v5.x) | 2026-03-30 | Go-live preflight updated for registry watcher + DB outbox + Ollama embeddings defaults, with explicit watcher enablement checks and CI corroboration guidance for v5.6 rollout decisions. |
 | docs/runbooks/RUNBOOK_STARTUP.md | Runbook: startup checklist | Legacy (archived) | 2026-03-08 | Historical SoT v4.10 checklist; updated with Obsidian contract notes, but current runtime source remains RUNBOOK_STARTUP_FULL_SYSTEM + scripts/start_full_system.sh. |
 | docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md | Runbook: full-system startup | Aligned (forward line v5.x) | 2026-03-30 | Canonical v5.x startup; includes strict Obsidian gate (`STARTUP_ENFORCE_OBSIDIAN`), health boundary checks, startup-status telemetry fields, and explicit watcher enablement checks before widening auto-exec. |

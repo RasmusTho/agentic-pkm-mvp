@@ -11,6 +11,7 @@ For adjacent operational surfaces:
 - use `docs/OPERATIONS.md` as the top-level operations playbook
 - use `docs/HEALTH.md` for health CLI behavior and contract details
 - use `docs/INFRASTRUCTURE.md` for local Prometheus/Grafana setup
+- use `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md` for the current incident-triage workflow across watcher, panel, and CLI-first orchestrator surfaces
 
 ## Shared heartbeat/outbox paths
 - The health CLI and API rely on `tmp/watcher_heartbeat.json` and `tmp/worker_heartbeat.json` for liveness, plus `INDEX_OUTBOX_PATH` as the audit log.
@@ -27,6 +28,11 @@ Tests: `tests/api/test_health_failures.py::test_health_handles_malformed_heartbe
 
 
 Logs are the primary tracing surface; no external APM is required for the current MVP.
+
+## Incident-triage contract
+- `docs/OPERATIONS.md` remains the top-level operator routing surface.
+- `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md` is the canonical current-state incident workflow for watcher failures, panel runtime / panel intent failures, and CLI-first orchestrator failures.
+- Use `trace_id` only where the current runtime actually emits it in logs, events, or audit rows; do not infer planned A2A routing from the presence of trace-oriented fields.
 
 ## Alpha Compose Runtime
 - Canonical compose stack: `db`, `api`, `watcher`, `worker` (registry watcher).
