@@ -16,6 +16,7 @@ Reading order:
 3. Follow `docs/OBSERVABILITY.md` for interpreting telemetry and counters.
 4. Use `docs/INFRASTRUCTURE.md` when you need Docker/runtime topology, local startup flow, or the local monitoring stack.
 5. Use `docs/runbooks/` only for task-specific walkthroughs after you have identified the affected runtime surface.
+6. Use `docs/ENVIRONMENTS.md` when the question is whether behavior belongs to `dev`, `prod`, or both.
 
 CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
@@ -31,6 +32,19 @@ CLI note:
 - DB outbox is canonical in runtime; the worker consumes the DB outbox.
 - JSONL outbox (`INDEX_OUTBOX_PATH`) is audit/diagnostic only and must not be used as the worker queue.
 - Registry watcher is the single runtime watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`). Legacy snapshot watchers are dev-only.
+
+## Environment posture
+
+This document is primarily the `prod` operator entrypoint.
+
+Environment contract:
+- `dev` and `prod` are defined in `docs/ENVIRONMENTS.md`.
+- Production operation means the runtime is acting against the operator's real vault and its production-facing runtime surfaces.
+- Lab/dev-only flows, fixture vaults, legacy watcher paths, and reset-heavy workflows are not production operation even when they use the same codebase.
+
+Operator rule:
+- if a task depends on looser safety assumptions, mock providers, fixture stores, or lab-only tuning, treat it as `dev`
+- if a task touches the real vault, production stores, or normal runtime startup/verification surfaces, treat it as `prod`
 
 Current runtime path:
 1. The registry watcher scans the vault and emits DB outbox events.
@@ -94,6 +108,7 @@ Watcher auto-exec enablement rule:
 - Paths with spaces are supported; wrap vault paths in quotes.
 - When using iCloud/Obsidian sync, keep scopes conservative and rely on debounce/backoff guardrails.
 - Do not use the legacy snapshot watcher for runtime start-system flows.
+- Do not treat lab/dev-only watcher paths as production equivalents.
 
 ## Obsidian sync runtime
 
@@ -213,12 +228,14 @@ Startup/runtime verification now treats task routes and embeddings explicitly:
 1. Identify the failing surface with `health`, `settings-explain`, `status`, and heartbeat/outbox checks.
 2. Stabilize the runtime by reducing optional integrations only if needed for diagnosis.
 3. If the incident concerns watcher auto-exec safety, record the observed allowlist, skip counters, write-guard/provenance state, and whether `CI SUMMARY GATES ok=<bool>` is green where CI is part of the rollout path.
-4. Record the incident in the active ticket or PR, and update `docs/STATUS.md` if current operational reality changed.
+4. Record whether the incident was observed in `dev` or `prod`, then update `docs/STATUS.md` if current operational reality changed.
 5. Use the relevant companion document or runbook for recovery details.
+6. For watcher, panel, or CLI-first orchestrator incidents on shipped current-state surfaces, use `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md`.
 
 Quick issue routing:
 - Missing dependency or local runtime startup issue -> `docs/INFRASTRUCTURE.md` and `docs/DEPENDENCIES.md`
 - Health contract or degraded-state interpretation -> `docs/HEALTH.md`
 - Metrics/logging interpretation -> `docs/OBSERVABILITY.md`
+- Watcher/panel/orchestrator incident triage -> `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md`
 - Watcher/panel manual walkthrough -> `docs/runbooks/UAT_PANEL_WATCHER.md`
 - Go-live/startup diagnostics -> `docs/runbooks/RUNBOOK_GO_LIVE.md`
