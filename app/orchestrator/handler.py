@@ -9,7 +9,7 @@ from app.planner.events import plan_for_event
 from app.planner.schema import Plan
 from app.stores.plan_store import get_plan_store
 
-from .runtime import Orchestrator
+from .runtime import create_orchestrator
 
 
 def _truthy(value: Any) -> bool:
@@ -25,7 +25,7 @@ def _truthy(value: Any) -> bool:
 @dataclass
 class OrchestratorContext:
     settings: Dict[str, Any] = field(default_factory=dict)
-    orchestrator: Orchestrator | None = None
+    orchestrator: Any | None = None  # Orchestrator or compatible implementation
 
 
 def _feature_flag_enabled(ctx: OrchestratorContext) -> bool:
@@ -44,7 +44,7 @@ def handle_event(event: Event, ctx: OrchestratorContext | Dict[str, Any] | None 
     if not _feature_flag_enabled(context):
         raise RuntimeError("Event orchestrator is disabled; set EVENT_ORCHESTRATOR_ENABLE=1 to enable.")
     plan = plan_for_event(event, ctx=context.settings)
-    orchestrator = context.orchestrator or Orchestrator()
+    orchestrator = context.orchestrator or create_orchestrator()
     orchestrator.run_plan(plan)
     get_plan_store().save(plan)
     return plan

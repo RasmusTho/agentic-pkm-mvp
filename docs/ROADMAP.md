@@ -24,8 +24,9 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - **Quality Wave: Registry Watcher Evaluation Stack** — shipped and now serves as the v5.6 rollout gate via `docs/TESTING.md`, `docs/QUALITY_WAVE_IMPLEMENTATION.md`, and `docs/quality_wave/README.md`. Delivery receipt: PRs #197, #198, #199, #200, #201, #202, #210.
   - **ReasoningFacade + broader graph adoption** — the shared `ReasoningFacade` seam is present; the PanelAgent decider migration is shipped via Issue #230 / PR #236, and the remaining additional-agent rollout is tracked by: #231. Source Anchor: RF-ADOPTION
     - Rationale: prevents pattern fragmentation; broader agent adoption should route reasoning/tool calls through the existing shared facade instead of introducing new direct call paths.
-  - Orchestrator V2 (LangGraph): parallel execution, compensation/rollback, checkpointing, retries. Source Anchor: ORCHV2-TDD
-    - Back-compat: `ORCHESTRATOR_VERSION=v1|v2`.
+  - **Orchestrator V2 pilot slice** — initial V2 runtime with flagged parallel execution and plan-graph scheduling shipped. Implements: `ORCHESTRATOR_VERSION=v1|v2` flag, dependency-aware step scheduling, parallel execution with ThreadPoolExecutor, event/trace compatibility with V1. Out of scope in pilot: compensation, rollback, checkpointing, retry policy (deferred to follow-up slices). Delivery receipt: Issue #250. Source Anchor: ORCHV2-TDD
+    - Back-compat preserved: `ORCHESTRATOR_VERSION=v1` (default) uses existing sequential V1; `v2` selects parallel pilot.
+    - Next slices: compensation/rollback behavior, checkpoint persistence, retry/timeout policy.
   - PanelAgent 2.0 timeline: <!-- PA2-ROLLUP -->
     - v5.5C: decider — shipped (rule default + opt-in LLM mode + fallback + telemetry).
     - v5.6 shipped/in progress: engine-neutral cognition seam (#244, PR #249), freeform catalog-driven proposal path (#241, PR #248). Remaining: suggested checkboxes (#242), multi-step plans (#243), real-vault acceptance (#240).
