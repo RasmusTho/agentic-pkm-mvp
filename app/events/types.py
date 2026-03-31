@@ -27,6 +27,10 @@ ORCHESTRATOR_PLAN_ERROR = "orchestrator.plan.error"
 ORCHESTRATOR_STEP_STARTED = "orchestrator.step.started"
 ORCHESTRATOR_STEP_FINISHED = "orchestrator.step.finished"
 ORCHESTRATOR_STEP_ERROR = "orchestrator.step.error"
+ORCHESTRATOR_COMPENSATION_STARTED = "orchestrator.compensation.started"
+ORCHESTRATOR_COMPENSATION_STEP_COMPLETED = "orchestrator.compensation.step.completed"
+ORCHESTRATOR_COMPENSATION_STEP_FAILED = "orchestrator.compensation.step.failed"
+ORCHESTRATOR_ROLLED_BACK = "orchestration.rolled_back"
 MCP_TOOL_CALL_STARTED = "mcp.tool.call.started"
 MCP_TOOL_CALL_FINISHED = "mcp.tool.call.finished"
 
@@ -97,6 +101,10 @@ __all__ = [
     "ORCHESTRATOR_STEP_STARTED",
     "ORCHESTRATOR_STEP_FINISHED",
     "ORCHESTRATOR_STEP_ERROR",
+    "ORCHESTRATOR_COMPENSATION_STARTED",
+    "ORCHESTRATOR_COMPENSATION_STEP_COMPLETED",
+    "ORCHESTRATOR_COMPENSATION_STEP_FAILED",
+    "ORCHESTRATOR_ROLLED_BACK",
     "MCP_TOOL_CALL_STARTED",
     "MCP_TOOL_CALL_FINISHED",
     "AGENT_REQUEST_CREATED",

@@ -1,19 +1,95 @@
-# Runtime Environments
+# Environments
 
-State: SoT v5.5 baseline
-Authority: Canonical definition of runtime environment selection semantics and control surfaces
-Role: Core SoT for environment model; subordinate to `docs/STATUS.md` for operational baselines and `docs/OPERATIONS.md` for operator runbooks.
+State: SoT v5.5 Reality-MVP baseline locked with explicit dev/prod environment contract and runtime implementation.
+Doc role: Core SoT
+Authority: Canonical environment contract and implementation for the current baseline and forward-line work; defines what dev and prod mean, what must remain invariant, and what may vary. Architecture, operations, status, and component docs should reference this document instead of restating environment policy.
+
+## Overview
+
+This document defines `dev` and `prod` as first-class environments in the active SoT, specifies the control surfaces for runtime environment selection, and documents the cross-environment invariants that must hold.
+
+The purpose of this document is to make environment boundaries explicit before more environment-aware implementation work is taken on. It is governing documentation and implementation reference.
+
+Reading rule:
+- Use this document when a change touches environment-specific behavior, storage boundaries, runtime topology, write safety, or rollout posture.
+- Use `docs/ARCHITECTURE.md` for system structure, `docs/OPERATIONS.md` for operator procedure, `docs/STATUS.md` for current rollout posture, and `docs/guardrails.md` for safety rules.
 
 ## Environment Definitions
 
-The runtime supports two first-class environments:
+### `dev`
+- **Purpose**: development, experimentation, debugging, local validation, and bounded forward-line exploration.
+- **Typical users**: builders, developers, and operators validating changes before wider runtime use.
+- **Allowed posture**: narrower safety assumptions, mock or local providers, test fixtures, selective resets, and lab-only runtime tuning.
+- **Typical expectation**: failures are acceptable if they are observable, bounded, and do not threaten production continuity artifacts.
 
-- **prod**: Production-like environment where all dev/lab-only features are disabled. This is the canonical baseline for standard operations. Default if no environment selection is made.
-- **dev**: Development/lab environment where dev-only tuning knobs, diagnostic modes, and experimental features are enabled. Intended for operator diagnostics, testing, and feature development.
+### `prod`
+- **Purpose**: the operator-facing runtime used against a real vault and its associated runtime surfaces.
+- **Typical users**: the human operator and the runtime processes that act on the operator's real knowledge environment.
+- **Required posture**: conservative, receipt-bearing, recoverable, and safe by default.
+- **Typical expectation**: the system must prefer blocking, degrading, or emitting diagnostics over silent corruption, silent drift, or unbounded mutation.
 
-## Control Surface
+## Cross-Environment Invariants
 
-Environment selection has a documented, test-covered control surface with a clear priority hierarchy.
+The following are SoT invariants and MUST remain true in both `dev` and `prod`:
+- The same architecture contracts apply: vault-first human surface, companion/system surface, and rebuildable runtime surface.
+- The event envelope and outbox semantics remain stable; DB outbox is canonical runtime queue semantics.
+- Writes to tracked notes remain deterministic and guarded by write-safety and idempotency rules.
+- Artifact identity, provenance, and receipt semantics do not change by environment.
+- Settings and policy remain the control surface for runtime behavior; environment selection must not bypass policy, allowlists, or write guards.
+- A real environment split must not redefine the human-facing contract in `docs/HUMAN-FLOWS.md`.
+
+Environment is therefore an operational/runtime distinction, not a different ontology of artifacts or a different semantic model of the product.
+
+## Allowed Variation by Environment
+
+The following may vary between `dev` and `prod` without breaking SoT, as long as the invariants above remain intact:
+- runtime scale, process topology, and startup wrappers
+- provider choice and model profile
+- diagnostic verbosity, mocks, and test fixtures
+- watcher cadence, tuning, and other explicit lab-only controls
+- local fixture vaults, test stores, and rebuild/reset workflows
+- operator gating and rollout posture for mutation-capable automation
+
+**Variation rule**: environment-specific defaults may vary; environment-specific contract semantics may not.
+
+## Separation Requirements
+
+Environment separation MUST be explicit across the following surfaces.
+
+### Vaults and Human-Facing Files
+- `prod` must operate on the operator's real vault and its associated continuity artifacts.
+- `dev` must use a separate fixture, test, or otherwise intentionally non-production vault when environment-specific experimentation or validation is being performed.
+- `dev` and `prod` must not implicitly share the same writable vault surface when the purpose is environment isolation.
+
+### Stores and Persistence
+- `prod` runtime persistence must be treated as production data even when it is rebuildable from the file-based continuity set.
+- `dev` stores, indexes, and outbox state may be reset, rebuilt, or replaced for testing.
+- Rebuildable does not mean disposable in `prod`; recovery and audit expectations still apply.
+
+### Runtime State and Process Surfaces
+- Watcher state, heartbeats, tick logs, incident logs, and similar runtime artifacts must be interpreted as environment-scoped operational surfaces.
+- `dev` may expose extra diagnostics and lab-only controls.
+- `prod` must keep these surfaces stable enough to support operator verification and incident triage.
+
+### Settings and Policy Surfaces
+- Environment selection must resolve through explicit settings/runtime configuration, not through undocumented convention.
+- Lab/dev-only tuning must remain excluded from normal production runtime unless explicitly enabled by the documented control surface.
+
+## Production Safety Expectations
+
+`prod` carries the following additional expectations:
+- safety beats convenience when the two conflict
+- bounded writes only; no silent broad note mutation
+- degraded or blocked mode is preferable to unsafe mutation
+- health, status, and operator verification surfaces must remain meaningful
+- rollout of mutation-capable automation must remain explicitly gated
+- recovery paths must preserve the continuity set: vault notes plus companion notes
+
+**Operational consequence**: production incidents, unsafe drift, or blocked write conditions should route through health/write-guard/operator workflows rather than ad hoc override behavior.
+
+## Runtime Control Surface
+
+The runtime provides explicit environment selection through a documented control surface with a clear priority hierarchy.
 
 ### Environment Variables
 
@@ -29,6 +105,7 @@ Environment resolution follows this priority:
 1. **Explicit environment selection via `PKM_ENVIRONMENT`** (if set to `dev` or `prod`)
    - The canonical modern control surface for environment selection
    - Takes priority over settings profile
+   - Case-insensitive; whitespace is stripped
 
 2. **Implicit environment from settings profile** (if `PKM_ENVIRONMENT` not set)
    - `PKM_SETTINGS_PROFILE=lab` → `dev` environment
@@ -41,7 +118,7 @@ Environment resolution follows this priority:
 
 ### Backward Compatibility
 
-The existing `PKM_SETTINGS_PROFILE` control mechanism continues to work:
+The existing `PKM_SETTINGS_PROFILE` control mechanism continues to work without changes:
 
 - Operator runbooks and scripts using `PKM_SETTINGS_PROFILE=operator` are mapped to the `prod` environment
 - Dev/lab workflows using `PKM_SETTINGS_PROFILE=lab` are mapped to the `dev` environment
@@ -103,7 +180,7 @@ The existing `app.settings.tiering` module continues to work and is now understo
 
 ## Constraints and Out of Scope
 
-- Environment selection does not control vault/store/runtime artifact separation
+- Environment selection does not control vault/store/runtime artifact separation beyond the separation requirements above
 - Deployment automation, secrets handling, and CI/CD remain out of scope
 - Health/status/operator diagnostics changes are independent of environment selection
 - Multi-user/multi-instance coordination remains orthogonal to environment selection

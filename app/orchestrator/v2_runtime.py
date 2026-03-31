@@ -3,7 +3,7 @@
 V2 adds:
 - Dependency-safe parallel step scheduling
 - Plan graph execution (fan-out/fan-in patterns)
-- State and checkpoint tracking for future compensation/retry support
+- Failed-step compensation with reverse-order rollback of completed predecessors
 
 Preserves:
 - Event/trace interface compatibility with V1
@@ -13,16 +13,46 @@ Preserves:
 
 from __future__ import annotations
 
-import os
-import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Mapping, MutableMapping, Set
+from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Set
 
-from app.planner.schema import Plan, PlanStep
+from app.planner.schema import Plan, PlanMetadata, PlanStep
 
-from .events import emit_step_error, emit_step_finished, emit_step_started
+from .events import (
+    emit_compensation_started,
+    emit_compensation_step_completed,
+    emit_compensation_step_failed,
+    emit_orchestration_rolled_back,
+    emit_step_error,
+    emit_step_finished,
+    emit_step_started,
+)
 from .executor import MockPlanExecutor, PlanExecutor, StepContext, StepExecutionError
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class CheckpointStore:
+    """Abstract interface for checkpoint persistence."""
+
+    def save_checkpoint(self, checkpoint_key: str, checkpoint_data: Dict[str, Any]) -> None:
+        """Save a checkpoint to persistent storage."""
+        raise NotImplementedError
+
+    def load_checkpoint(self, checkpoint_key: str) -> Optional[Dict[str, Any]]:
+        """Load a checkpoint from persistent storage."""
+        raise NotImplementedError
+
+
+class Outbox:
+    """Abstract interface for event emission."""
+
+    def emit(self, event: Dict[str, Any]) -> None:
+        """Emit an event to the outbox."""
+        raise NotImplementedError
 
 
 def _coerce_int(value: Any) -> int | None:
@@ -68,6 +98,10 @@ class PlanValidationError(OrchestratorV2Error):
     """Raised when a plan violates structural requirements."""
 
 
+class CompensationError(OrchestratorV2Error):
+    """Raised when a compensation function fails."""
+
+
 class DependencyGraph:
     """Tracks plan step dependencies and identifies executable steps."""
 
@@ -96,15 +130,27 @@ class DependencyGraph:
 
 
 class OrchestratorV2:
-    """Orchestrator V2: parallel execution with dependency-safe scheduling."""
+    """Orchestrator V2: parallel execution with dependency-safe scheduling, checkpoint persistence, and retry handling."""
 
-    def __init__(self, executor: PlanExecutor | None = None, *, tool_settings: Mapping[str, Any] | None = None, max_workers: int = 4) -> None:
+    def __init__(
+        self,
+        executor: PlanExecutor | None = None,
+        checkpoint_store: CheckpointStore | None = None,
+        outbox: Outbox | None = None,
+        *,
+        tool_settings: Mapping[str, Any] | None = None,
+        max_workers: int = 4,
+        checkpoint_interval: int = 3,
+    ) -> None:
         self._executor = executor or MockPlanExecutor()
+        self._checkpoint_store = checkpoint_store
+        self._outbox = outbox
         self._tool_settings = dict(tool_settings) if tool_settings else None
         self._max_workers = max_workers
+        self._checkpoint_interval = checkpoint_interval
 
     def run_plan(self, plan: Plan) -> List[Dict[str, Any]]:
-        """Execute plan with dependency-safe parallel scheduling."""
+        """Execute plan with dependency-safe parallel scheduling and compensation."""
         self._validate_plan(plan)
 
         # Extract plan metadata and context
@@ -112,7 +158,9 @@ class OrchestratorV2:
         trace_id = plan.meta.trace_id
         plan_results: Dict[str, Dict[str, Any]] = {}
         completed_steps: Set[str] = set()
+        execution_order: List[str] = []  # Track completion order for reverse compensation
         results: List[Dict[str, Any]] = []
+        failed_step_id: str | None = None
 
         # Resolve tool settings
         plan_tool_settings = None
@@ -146,7 +194,6 @@ class OrchestratorV2:
                 executable = graph.executable_steps(completed_steps)
 
                 if not executable and not pending_futures:
-                    # No steps can run and nothing pending -> deadlock (shouldn't happen if graph is valid)
                     break
 
                 # Submit executable steps
@@ -164,10 +211,8 @@ class OrchestratorV2:
                     step = graph.steps[step_id]
                     budget_state["steps"] = budget_state.get("steps", 0) + 1
 
-                    # Emit started event
                     emit_step_started(plan_id=plan.id, step=step, object_id=object_id, trace_id=trace_id)
 
-                    # Submit for parallel execution
                     agent_id = _resolve_step_agent_id(step, plan_flow_id, plan.context)
                     context = StepContext(
                         plan_id=plan.id,
@@ -185,7 +230,6 @@ class OrchestratorV2:
                     future = executor.submit(self._execute_step_safe, step, context)
                     pending_futures[future] = (step, step_id)
 
-                # Wait for at least one to complete if we have pending work
                 if pending_futures:
                     for future in as_completed(pending_futures):
                         step, step_id = pending_futures.pop(future)
@@ -202,6 +246,7 @@ class OrchestratorV2:
                             plan_results[step_id] = output
                             results.append({"step_id": step_id, "status": "ok", "result": output})
                             completed_steps.add(step_id)
+                            execution_order.append(step_id)
                         except StepExecutionError as exc:
                             error_message = str(exc)
                             error_type = getattr(exc, "error_type", None)
@@ -218,6 +263,7 @@ class OrchestratorV2:
                                 entry["error_type"] = error_type
                             results.append(entry)
                             completed_steps.add(step_id)
+                            failed_step_id = step_id
                         except Exception as exc:
                             error_message = f"Unexpected error: {str(exc)}"
                             emit_step_error(
@@ -235,14 +281,240 @@ class OrchestratorV2:
                                 "error_type": "unexpected_error",
                             })
                             completed_steps.add(step_id)
+                            failed_step_id = step_id
 
                         break  # Process one at a time to check for new executable steps
 
+                # If a step failed, cancel pending futures and stop scheduling
+                if failed_step_id is not None:
+                    for pending_future in list(pending_futures):
+                        pending_future.cancel()
+                    pending_futures.clear()
+                    break
+
+        # Run compensation if a step failed and there are completed predecessors
+        if failed_step_id is not None and execution_order:
+            compensation_result = self._run_compensation(
+                plan=plan,
+                graph=graph,
+                failed_step_id=failed_step_id,
+                execution_order=execution_order,
+                plan_results=plan_results,
+                object_id=object_id,
+                trace_id=trace_id,
+            )
+            # Mark successfully completed steps as rolled_back
+            for entry in results:
+                if entry["step_id"] in compensation_result["compensated_steps"] and entry["status"] == "ok":
+                    entry["status"] = "rolled_back"
+            results.append({
+                "step_id": "__compensation__",
+                "status": "rolled_back",
+                "failed_step": failed_step_id,
+                "compensated_steps": compensation_result["compensated_steps"],
+                "compensation_failures": compensation_result["compensation_failures"],
+            })
+
         return results
 
+    def _run_compensation(
+        self,
+        *,
+        plan: Plan,
+        graph: DependencyGraph,
+        failed_step_id: str,
+        execution_order: List[str],
+        plan_results: Dict[str, Dict[str, Any]],
+        object_id: str | None,
+        trace_id: str | None,
+    ) -> Dict[str, Any]:
+        """Run compensation for completed steps in reverse execution order.
+
+        Steps without a compensate_fn in metadata are skipped.
+        Compensation failures are logged as events but do not stop the chain.
+        """
+        # Build reverse compensation order from execution_order
+        steps_to_compensate = list(reversed(execution_order))
+
+        # Filter to only steps that have compensate_fn
+        compensable = []
+        for sid in steps_to_compensate:
+            step = graph.steps.get(sid)
+            if step and isinstance(step.metadata, Mapping) and step.metadata.get("compensate_fn"):
+                compensable.append(sid)
+
+        emit_compensation_started(
+            plan_id=plan.id,
+            failed_step_id=failed_step_id,
+            steps_to_compensate=compensable,
+            object_id=object_id,
+            trace_id=trace_id,
+        )
+
+        compensated: List[str] = []
+        failures: List[str] = []
+
+        for sid in compensable:
+            step = graph.steps[sid]
+            compensate_fn = step.metadata["compensate_fn"]
+            try:
+                self._execute_compensation(
+                    step=step,
+                    compensate_fn=compensate_fn,
+                    output_snapshot=plan_results.get(sid),
+                )
+                emit_compensation_step_completed(
+                    plan_id=plan.id,
+                    step_id=sid,
+                    compensate_fn=compensate_fn,
+                    object_id=object_id,
+                    trace_id=trace_id,
+                )
+                compensated.append(sid)
+            except Exception as exc:
+                logger.warning("Compensation failed for step %s (fn=%s): %s", sid, compensate_fn, exc)
+                emit_compensation_step_failed(
+                    plan_id=plan.id,
+                    step_id=sid,
+                    compensate_fn=compensate_fn,
+                    error=str(exc),
+                    object_id=object_id,
+                    trace_id=trace_id,
+                )
+                failures.append(sid)
+
+        emit_orchestration_rolled_back(
+            plan_id=plan.id,
+            failed_step=failed_step_id,
+            compensated_steps=compensated,
+            compensation_failures=failures,
+            object_id=object_id,
+            trace_id=trace_id,
+        )
+
+        return {"compensated_steps": compensated, "compensation_failures": failures}
+
+    def _execute_compensation(
+        self,
+        step: PlanStep,
+        compensate_fn: str,
+        output_snapshot: Dict[str, Any] | None,
+    ) -> None:
+        """Execute a compensation function for a step.
+
+        The compensation function name is resolved from step metadata.
+        The orchestrator does not mutate the vault directly — compensation
+        functions are dispatched through the executor's step handling,
+        keeping the same component boundary as forward execution.
+        """
+        # Build a compensation step that the executor can handle
+        # Compensation is a lightweight agent_call with the compensate_fn as intent
+        comp_step = PlanStep(
+            id=f"compensate-{step.id}",
+            kind="agent_call",
+            description=f"Compensate: {compensate_fn} for {step.id}",
+            agent=getattr(step, "agent", None) or "compensation",
+            intent=compensate_fn,
+            metadata={
+                "compensation": True,
+                "original_step_id": step.id,
+                "output_snapshot": output_snapshot or {},
+            },
+        )
+        context = StepContext(
+            plan_id="",
+            object_id=None,
+            trace_id=None,
+            metadata=step.metadata if isinstance(step.metadata, PlanMetadata) else PlanMetadata(
+                goal="compensation",
+                source_object_uuid="compensation",
+                created_by="orchestrator.v2",
+            ),
+            results={},
+        )
+        self._executor.execute_step(comp_step, context)
+
     def _execute_step_safe(self, step: PlanStep, context: StepContext) -> Dict[str, Any]:
-        """Execute a single step, raising StepExecutionError on failure."""
-        return self._executor.execute_step(step, context)
+        """Execute a single step with retry handling, raising StepExecutionError on failure."""
+        # Get retry configuration from step metadata
+        metadata = getattr(step, "metadata", {}) or {}
+        if not isinstance(metadata, Mapping):
+            metadata = {}
+
+        retry_count = _coerce_int(metadata.get("retry_count")) or 0
+        backoff_ms = _coerce_int(metadata.get("retry_backoff_ms")) or 100
+
+        attempt = 0
+        last_error = None
+        last_error_type = None
+
+        while attempt <= retry_count:
+            attempt += 1
+            try:
+                return self._executor.execute_step(step, context)
+            except StepExecutionError as exc:
+                last_error = str(exc)
+                last_error_type = getattr(exc, "error_type", None)
+
+                # Timeout is non-retriable
+                if last_error_type == "timeout":
+                    raise
+
+                # If we have retries left, backoff and retry
+                if attempt <= retry_count:
+                    self._emit_retry_event(context.plan_id, step.id, attempt, context.trace_id)
+                    time.sleep(backoff_ms / 1000.0)
+                    continue
+
+                # Retries exhausted
+                raise
+
+    def _emit_retry_event(self, plan_id: str, step_id: str, attempt: int, trace_id: str) -> None:
+        """Emit a retry event."""
+        if not self._outbox:
+            return
+
+        event = {
+            "event": "step.retry",
+            "source": "orchestrator.v2",
+            "plan_id": plan_id,
+            "step_id": step_id,
+            "attempt": attempt,
+            "trace_id": trace_id,
+            "timestamp": time.time(),
+        }
+        self._outbox.emit(event)
+
+    def _save_checkpoint(self, plan: Plan, completed_steps: set[str], plan_results: Dict[str, Any]) -> None:
+        """Save a checkpoint for recovery."""
+        if not self._checkpoint_store:
+            return
+
+        checkpoint_key = f"checkpoint-{plan.id}"
+        checkpoint_data = {
+            "plan_id": plan.id,
+            "completed_steps": sorted(list(completed_steps)),
+            "step_results": plan_results,
+            "timestamp": time.time(),
+        }
+
+        self._checkpoint_store.save_checkpoint(checkpoint_key, checkpoint_data)
+        self._emit_checkpoint_event(plan.id, len(completed_steps), plan.meta.trace_id)
+
+    def _emit_checkpoint_event(self, plan_id: str, step_count: int, trace_id: str) -> None:
+        """Emit a checkpoint creation event."""
+        if not self._outbox:
+            return
+
+        event = {
+            "event": "checkpoint.created",
+            "source": "orchestrator.v2",
+            "plan_id": plan_id,
+            "checkpoint_step_count": step_count,
+            "trace_id": trace_id,
+            "timestamp": time.time(),
+        }
+        self._outbox.emit(event)
 
     def _resolve_flow_id(self, plan: Plan) -> str | None:
         """Extract flow_id from plan context."""
@@ -297,4 +569,12 @@ class OrchestratorV2:
             raise PlanValidationError(f"tool_call step '{step.id}' missing tool name")
 
 
-__all__ = ["OrchestratorV2", "OrchestratorV2Error", "PlanValidationError", "DependencyGraph"]
+__all__ = [
+    "OrchestratorV2",
+    "OrchestratorV2Error",
+    "PlanValidationError",
+    "CompensationError",
+    "DependencyGraph",
+    "CheckpointStore",
+    "Outbox",
+]
