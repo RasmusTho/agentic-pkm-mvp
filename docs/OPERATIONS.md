@@ -151,7 +151,7 @@ Operator triage order:
 1. Run `make verify-runtime`.
 2. If you need extra detail, run `docker compose exec -T api python -m app.cli health --json`.
 3. Run `docker compose exec -T api python -m app.cli settings-explain --json` to confirm watcher gate state, allowlist validity, provenance, and write-guard context.
-4. Run `docker compose exec -T api python -m app.cli status` to confirm watcher automation counters, last tick skips, and last-run skip reasons.
+4. Run `docker compose exec -T api python -m app.cli status` to confirm watcher automation counters, last tick skips, last-run skip reasons, and panel-action/compiler provenance (source paths and combined digest).
 5. Check watcher and worker heartbeat files.
 6. Inspect DB outbox freshness and `delivered_at`.
 7. For enablement decisions, treat `WATCHER_AUTO_EXEC` as necessary but not sufficient; corroborate with `allowlist`, `dedup/skipped_*`, `panel_skipped_policy`, and `writes_allowed`.

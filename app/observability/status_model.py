@@ -75,6 +75,9 @@ class PanelDiagnostics(BaseModel):
     panel_actions_ids_sample: list[str] = Field(default_factory=list)
     has_promote_evergreen_mapping: bool = False
     last_panel_mapping_load_error: str | None = None
+    source_paths: list[str] = Field(default_factory=list)
+    source_mtimes: list[str | None] = Field(default_factory=list)
+    combined_sha256: str | None = None
 
 
 class WriteGuardStatus(BaseModel):
