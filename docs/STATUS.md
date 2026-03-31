@@ -46,10 +46,10 @@ Validation posture note:
 - Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, skipped receipts, and write-guard state are surfaced in status, events, and the new CLI `settings-explain` output before any runtime gate opens.
 - PanelAgent decider hardening through the shared `ReasoningFacade` seam is shipped for the current pilot path. Delivery receipt: Issue #230, PR #236.
 ### Next
-- Sequence the ReasoningFacade + LangGraph rollout for one additional agent pool, ensuring instrumentation feeds into the fitness gates and the orchestrator V2 experiment flag remains gated until stability signals arrive. Tracked by: #231. Source Anchor: RF-ADOPTION
+- ReasoningFacade + LangGraph rollout for the PanelAgent pilot agent pool is delivered. Delivery receipt: Issue #231 (closed COMPLETED). The remaining phased rollout to Promotion/Reviewer/Hygiene is gated on v5.6A pilot stabilization (see Later). Source Anchor: RF-ADOPTION
 - The companion note + Note Context doc-sync correction is shipped. Delivery receipt: Issue #229, PR #237. Any remaining rollout verification or cleanup should be captured as new bounded follow-up issues rather than treated as missing implementation.
-- Expand the vault-as-GUI settings compiler and operator surfaces so the forward line can describe runtime topology with complete provenance and precedence in both `settings-explain` and `status`. Shipped: panel-action/compiler provenance (source paths, mtimes, combined sha256) is now surfaced in the `/api/status` endpoint and `python -m app.cli status --json` via `panel_diagnostics` fields. Delivery receipt: Issue #238. Source Anchor: SETTINGS-PROVENANCE
-- Align CLI/docs runbooks with the v5.6 narrative: update `docs/ROADMAP.md`, status snapshots, and the runbooks so operators know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe. Tracked by: #232. Source Anchor: ROLLOUT-RUNBOOKS
+- Vault-as-GUI settings compiler and operator surfaces: panel-action/compiler provenance (source paths, mtimes, combined sha256) is now surfaced in the `/api/status` endpoint and `python -m app.cli status --json` via `panel_diagnostics` fields. Delivery receipt: Issue #238 (closed COMPLETED), PR #254. Source Anchor: SETTINGS-PROVENANCE
+- CLI/docs runbook alignment with v5.6 narrative: operators now know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe. Delivery receipt: Issue #232 (closed COMPLETED). Source Anchor: ROLLOUT-RUNBOOKS
 ### Later
 - Extend LangGraph adoption across more agents (Promotion, Reviewer, Hygiene) and the orchestrator V2 control plane once the v5.6A pilot stabilizes.
 - Surface LangGraph/Reasoning rollouts in the evaluation stack (golden vault, metamorphic runs, cold rebuild, fitness gates) so the forward line has measurable acceptance per contract.
@@ -92,7 +92,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 | Area | Current baseline posture | Forward-line direction |
 | --- | --- | --- |
 | Watcher auto-exec | Guarded by dedup + optimistic writes + idempotency | Safe enablement only after gates and receipts prove stable behavior |
-| LangGraph rollout | Active for ASK and PanelAgent-related flows only; the shared `ReasoningFacade` seam is present but not yet adopted across all targeted agents | Expand in phases as additional agent pools migrate onto the shared `ReasoningFacade` and common graph scaffolding |
+| LangGraph rollout | Active for ASK and PanelAgent-related flows; the shared `ReasoningFacade` seam is adopted for the PanelAgent pilot (Issue #231 delivered) | Expand in phases as additional agent pools (Promotion/Reviewer/Hygiene) migrate onto the shared `ReasoningFacade`; gated on v5.6A pilot stabilization |
 | Orchestrator V2 pilot | Shipped: parallel execution + dependency-aware scheduling with `ORCHESTRATOR_VERSION=v2` flag. V1 is default. Coverage: flag contract, plan-graph scheduling, event/trace compat, compensation/rollback. Delivery receipt: Issue #250 (pilot), Issue #251 (compensation). | Future slices: checkpointing, retry/timeout policy. Adopt in broader rollout after stability signals. |
 
 For detailed sequencing, version history, and roadmap ladder, use:
