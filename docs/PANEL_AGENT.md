@@ -31,12 +31,21 @@ Interpretation note:
 - The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
 
 ## PanelAgent 2.0 (v5.6, in progress)
-Backlog: #244, #242, #243, #240. Shipped: #241.
-- Extract Panel cognition behind an engine-neutral seam so the runtime can swap LangGraph-era internals for a future Deep Agents implementation without changing panel contracts, receipts, or planner boundaries. Source Anchor: PA2-ENGINE-SEAM. Tracked by: #244
-- **Freeform catalog-driven proposal path — shipped (PR #248).** Source Anchor: PA2-FREEFORM. When a panel has an instruction but no checkbox actions, the LLM decider (`PANEL_AGENT_DECIDER=llm`) consults the full active catalog and proposes canonical action IDs from instruction text + catalog metadata (`llm_hint`, `labels`, `description`) alone, without requiring any checkbox-label match. Proposals are restricted to the active catalog; out-of-catalog IDs are dropped. Selected actions flow through the same execution gates (policy, idempotency, mutation guards) as checkbox-derived actions. Fallback to rule mode on LLM error or empty catalog. Tracked by: #241
+
+<!-- PA2-ENGINE-SEAM -->
+**Engine-neutral cognition seam (shipped, v5.6 enabling).** Panel action selection is now invoked through a dedicated `PanelCognitionBackend` Protocol defined in `app/agents/panel_agent/cognition.py`. `graph.py` no longer owns cognition-selection concerns directly; it receives a backend through `build_panel_graph(cognition_backend=...)` and calls it via `_decide_actions_with_backend`. Current backends: `RuleCognitionBackend` (default, checkbox-driven) and `LLMCognitionBackend` (routes through `ReasoningFacade`). Parser, execution, receipt, and emitted-event contracts remain unchanged. A future backend (DeepAgents-style or otherwise) implements only `select_actions(state)` without reworking those surfaces. Tracked by: #244.
+
+<!-- PA2-FREEFORM -->
+**Freeform catalog-driven proposal path (shipped).** When a panel has an instruction but no checkbox actions, the LLM decider (`PANEL_AGENT_DECIDER=llm`) consults the full active catalog and proposes canonical action IDs from instruction text + catalog metadata (`llm_hint`, `labels`, `description`) alone, without requiring any checkbox-label match. Proposals are restricted to the active catalog; out-of-catalog IDs are dropped. Selected actions flow through the same execution gates (policy, idempotency, mutation guards) as checkbox-derived actions. Fallback to rule mode on LLM error or empty catalog. Tracked by: #241.
+
+Remaining backlog: #242 (suggested checkboxes), #243 (multi-step plans), #240 (real-vault acceptance).
 - Surface uncertain or partial interpretations as suggested checkboxes instead of direct execution so panel ambiguity stays human-reviewable. Source Anchor: PA2-SUGGESTED-CHECKBOXES. Tracked by: #242
 - Emit ordered multi-step panel plans through the planner/orchestration contract rather than investing in richer LangGraph-only node choreography. Source Anchor: PA2-MULTISTEP-PLANS. Tracked by: #243
 - Prove the PanelAgent 2.0 path operationally on a real vault with soak, receipts, and owner-doc writeback before it is treated as operationally accepted. Source Anchor: PA2-REAL-VAULT-ACCEPTANCE. Tracked by: #240
+
+Other implementation notes:
+- Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `app/agents/panel_agent/graph.py`).
+- LLM-based reasoning decides which panel actions to execute (and in what order) rather than relying on fixed mappings.
 - PanelAgent Runtime V1 remains the baseline until the PanelAgent 2.0 path is fully implemented and operationally accepted.
 - LangGraph control flow now supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `rule` remains the default to preserve current behaviour, while `llm` is an opt-in, experimental action selector routed through the shared `ReasoningFacade` with the canonical `decide` task kind.
 - LLM-driven contract tests live under `tests/e2e/test_panel_llm_e2e.py` (gated by `@pytest.mark.panel_llm_e2e` and `PANEL_AGENT_LLM_E2E=1`) to validate end-to-end promotion/non-promotion scenarios (including the freeform no-checkbox path) using the real decider.

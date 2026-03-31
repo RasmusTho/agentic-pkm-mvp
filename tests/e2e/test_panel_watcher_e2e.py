@@ -146,7 +146,7 @@ def test_watcher_llm_mode_promotes_without_exact_label(tmp_path: Path, monkeypat
     snapshot_path = tmp_path / "snapshot.json"
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade",
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
         lambda: _StubReasoningFacade({"actions": [{"id": "promote.evergreen", "reason": "panel intent"}]}),
     )
 

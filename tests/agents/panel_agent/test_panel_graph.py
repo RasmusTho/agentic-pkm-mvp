@@ -233,7 +233,7 @@ def test_panel_graph_llm_selects_subset(monkeypatch) -> None:
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade",
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
         lambda: _StubReasoningFacade({"actions": ["promote.evergreen"]}),
     )
 
@@ -272,7 +272,7 @@ def test_panel_graph_llm_falls_back_on_malformed(monkeypatch) -> None:
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade",
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
         lambda: _StubReasoningFacade(json.JSONDecodeError("Expecting value", "not-json", 0)),
     )
 
@@ -305,7 +305,7 @@ def test_panel_graph_llm_can_select_unchecked(monkeypatch) -> None:
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade",
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
         lambda: _StubReasoningFacade(
             {"actions": [{"id": "promote.evergreen", "reason": "panel instruction"}]}
         ),
@@ -347,7 +347,7 @@ def test_panel_graph_llm_empty_selection_uses_instruction_hint_for_single_promot
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade",
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
         lambda: _StubReasoningFacade({"actions": []}),
     )
 
@@ -378,7 +378,7 @@ def test_panel_graph_llm_empty_selection_does_not_force_non_promotion(monkeypatc
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade",
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
         lambda: _StubReasoningFacade({"actions": []}),
     )
 
@@ -420,7 +420,7 @@ def test_panel_graph_llm_empty_selection_honors_negated_promotion_instruction(mo
     state = _state_from_intent(intent, catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade",
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
         lambda: _StubReasoningFacade({"actions": []}),
     )
 
@@ -465,7 +465,7 @@ def test_panel_graph_freeform_proposes_catalog_action_without_checkboxes(monkeyp
     state = _state_no_actions("Make this note evergreen.", catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade",
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
         lambda: _StubReasoningFacade({"actions": [{"id": "promote.evergreen", "reason": "instruction match"}]}),
     )
 
@@ -494,7 +494,7 @@ def test_panel_graph_freeform_rejects_out_of_catalog_id(monkeypatch) -> None:
     state = _state_no_actions("Make this note evergreen.", catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade",
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
         lambda: _StubReasoningFacade({"actions": [{"id": "invented.action"}]}),
     )
 
@@ -510,7 +510,7 @@ def test_panel_graph_freeform_empty_catalog_no_actions(monkeypatch) -> None:
     state = _state_no_actions("Make this note evergreen.", catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade",
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
         lambda: _StubReasoningFacade({"actions": [{"id": "promote.evergreen"}]}),
     )
 
@@ -536,7 +536,7 @@ def test_panel_graph_freeform_falls_back_to_rule_on_llm_error(monkeypatch) -> No
     state = _state_no_actions("Make this note evergreen.", catalog=catalog)
 
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade",
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
         lambda: _StubReasoningFacade(RuntimeError("LLM unavailable")),
     )
 

@@ -13,12 +13,12 @@ from unittest.mock import patch
 
 import pytest
 
-from app.agents.panel_agent.graph import (
+from app.agents.panel_agent.cognition import (
     PANEL_BUDGET,
     _build_note_snippet,
     _format_note_context,
-    run_panel_graph,
 )
+from app.agents.panel_agent.graph import run_panel_graph
 from app.agents.panel_agent.state import PanelAgentState
 from app.components.concurrency import IdempotencyGuard
 from app.components.settings.panel_actions_loader import (
@@ -163,7 +163,7 @@ def test_build_note_snippet_uses_note_context_when_available() -> None:
     state = _make_state(vault_root=Path("/tmp/vault"))
 
     with patch(
-        "app.agents.panel_agent.graph.build_note_context", return_value=ctx
+        "app.agents.panel_agent.cognition.build_note_context", return_value=ctx
     ) as mock_build:
         result = _build_note_snippet(state)
 
@@ -183,7 +183,7 @@ def test_build_note_snippet_falls_back_on_note_context_error() -> None:
     state = _make_state(vault_root=Path("/tmp/vault"), note_content="legacy snippet")
 
     with patch(
-        "app.agents.panel_agent.graph.build_note_context",
+        "app.agents.panel_agent.cognition.build_note_context",
         side_effect=NoteContextError("companion missing"),
     ):
         result = _build_note_snippet(state)
@@ -195,7 +195,7 @@ def test_build_note_snippet_falls_back_on_unexpected_exception() -> None:
     state = _make_state(vault_root=Path("/tmp/vault"), note_content="legacy snippet")
 
     with patch(
-        "app.agents.panel_agent.graph.build_note_context",
+        "app.agents.panel_agent.cognition.build_note_context",
         side_effect=RuntimeError("unexpected"),
     ):
         result = _build_note_snippet(state)
@@ -232,7 +232,7 @@ def test_build_note_context_receives_panel_budget() -> None:
     state = _make_state(vault_root=Path("/tmp/vault"))
 
     with patch(
-        "app.agents.panel_agent.graph.build_note_context", return_value=ctx
+        "app.agents.panel_agent.cognition.build_note_context", return_value=ctx
     ) as mock_build:
         _build_note_snippet(state)
 
@@ -267,12 +267,12 @@ def test_llm_decider_uses_note_context_in_prompt(monkeypatch: pytest.MonkeyPatch
         body="This is the full body from NoteContext.",
     )
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.build_note_context", lambda **kw: ctx
+        "app.agents.panel_agent.cognition.build_note_context", lambda **kw: ctx
     )
 
     stub = _StubReasoningFacade({"actions": ["promote.evergreen"]})
     monkeypatch.setattr(
-        "app.agents.panel_agent.graph.get_reasoning_facade", lambda: stub
+        "app.agents.panel_agent.cognition.get_reasoning_facade", lambda: stub
     )
 
     mapping = PanelActionMapping(
