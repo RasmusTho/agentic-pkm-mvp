@@ -210,15 +210,29 @@ Startup/runtime verification now treats task routes and embeddings explicitly:
 - What to paste into an issue/PR comment: `timestamp`, `phase`, `last_ok_phase`, `exit_code`, `exit_reason`, `compose_up_*`, `db_probe_*`, `llm_probe_*`.
 
 ## Incident handling
-1. Identify the failing surface with `health`, `settings-explain`, `status`, and heartbeat/outbox checks.
-2. Stabilize the runtime by reducing optional integrations only if needed for diagnosis.
-3. If the incident concerns watcher auto-exec safety, record the observed allowlist, skip counters, write-guard/provenance state, and whether `CI SUMMARY GATES ok=<bool>` is green where CI is part of the rollout path.
-4. Record the incident in the active ticket or PR, and update `docs/STATUS.md` if current operational reality changed.
-5. Use the relevant companion document or runbook for recovery details.
 
-Quick issue routing:
-- Missing dependency or local runtime startup issue -> `docs/INFRASTRUCTURE.md` and `docs/DEPENDENCIES.md`
-- Health contract or degraded-state interpretation -> `docs/HEALTH.md`
-- Metrics/logging interpretation -> `docs/OBSERVABILITY.md`
-- Watcher/panel manual walkthrough -> `docs/runbooks/UAT_PANEL_WATCHER.md`
-- Go-live/startup diagnostics -> `docs/runbooks/RUNBOOK_GO_LIVE.md`
+**For any operator-visible incident (watcher, panel, orchestrator), start with the incident triage runbook:**
+
+Use `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md` as the canonical triage entry point. It covers:
+- Where to look first for each surface (heartbeat, tick log, settings, status).
+- Which commands and signals to inspect (outbox events, trace IDs, span latency).
+- How to correlate logs by trace_id for a single execution.
+- Common issues and recovery paths for each surface.
+- When to escalate to adjacent docs or file a follow-up issue.
+
+**General incident workflow:**
+
+1. Run `make verify-runtime` to check container health + in-container runtime health.
+2. Follow the triage runbook section for the failing surface (watcher, panel, or orchestrator).
+3. Stabilize the runtime by reducing optional integrations only if needed for diagnosis.
+4. If the incident concerns watcher auto-exec safety, record the observed allowlist, skip counters, write-guard/provenance state, and whether `CI SUMMARY GATES ok=<bool>` is green where CI is part of the rollout path.
+5. Record the incident in the active ticket or PR, and update `docs/STATUS.md` if current operational reality changed.
+6. Use the relevant companion document or runbook for recovery details.
+
+**Quick issue routing:**
+- Watcher/panel/orchestrator incident triage → `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md`
+- Missing dependency or local runtime startup issue → `docs/INFRASTRUCTURE.md` and `docs/DEPENDENCIES.md`
+- Health contract or degraded-state interpretation → `docs/HEALTH.md`
+- Metrics/logging interpretation → `docs/OBSERVABILITY.md`
+- Watcher/panel manual UAT walkthrough → `docs/runbooks/UAT_PANEL_WATCHER.md`
+- Go-live/startup diagnostics → `docs/runbooks/RUNBOOK_GO_LIVE.md`
