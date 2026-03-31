@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
+
+from app.config.environment import active_environment
 
 
 @dataclass(frozen=True)
@@ -11,6 +13,7 @@ class ResolvedPaths:
     vault_root: Path
     yggdrasil_root: Optional[Path]
     system_settings_path: Optional[Path]
+    environment: Literal["dev", "prod"] = "prod"
 
 
 _DEFAULT_VAULT = Path("vault")
@@ -25,13 +28,35 @@ def _clean_path(value: str | Path | None) -> Optional[Path]:
     return Path(value) if value else None
 
 
-def resolve_vault_root(cli_override: Path | None = None) -> Path:
+def resolve_vault_root(cli_override: Path | None = None, *, environment: Literal["dev", "prod"] | None = None) -> Path:
+    """Resolve vault root path, optionally scoped to environment.
+
+    Args:
+        cli_override: Explicit override (takes precedence)
+        environment: If 'dev', appends '-dev' suffix; if 'prod' or None, uses base path
+
+    Returns:
+        Vault root path, environment-scoped if requested
+    """
     if cli_override is not None:
         return Path(cli_override)
+
     env_root = _clean_path(os.getenv("VAULT_ROOT"))
+    env_specific = _clean_path(os.getenv("VAULT_ROOT_DEV") if environment == "dev" else None)
+
+    if env_specific is not None:
+        return env_specific
+
     if env_root is not None:
-        return env_root if env_root.exists() else _DEFAULT_VAULT
-    return _DEFAULT_VAULT
+        base = env_root if env_root.exists() else _DEFAULT_VAULT
+    else:
+        base = _DEFAULT_VAULT
+
+    # If dev environment and no explicit env-specific path, append -dev suffix
+    if environment == "dev":
+        return base.parent / f"{base.name}-dev"
+
+    return base
 
 
 def resolve_yggdrasil_root() -> Optional[Path]:
@@ -91,16 +116,51 @@ def resolve_flow_settings_path(path: Path | None = None, vault_root: Path | None
     return default_path
 
 
+def resolve_runtime_artifact_path(
+    artifact_path: Path | str,
+    *,
+    environment: Literal["dev", "prod"] | None = None,
+) -> Path:
+    """Resolve a runtime artifact path, optionally scoped to environment.
+
+    For dev environment, artifacts go into 'tmp-dev/' subdirectories.
+    For prod or unspecified, uses the base path.
+
+    Args:
+        artifact_path: Base artifact path (e.g., Path('tmp/index-outbox.jsonl'))
+        environment: If 'dev', paths resolve to environment-scoped location
+
+    Returns:
+        Environment-scoped artifact path
+    """
+    base = Path(artifact_path)
+
+    if environment == "dev":
+        # For dev, redirect to -dev suffixed directories
+        parent = base.parent
+        name = base.name
+        # Replace 'tmp' with 'tmp-dev', or append '-dev' to parent dir name
+        if parent == Path("tmp"):
+            return Path("tmp-dev") / name
+        # For nested paths, append -dev to the immediate parent if it exists
+        dev_parent_name = f"{parent.name}-dev" if parent.name else "tmp-dev"
+        return parent.parent / dev_parent_name / name if parent.parent != Path(".") else Path(dev_parent_name) / name
+
+    return base
+
+
 def resolve_paths(
     *,
     vault_root: Path | None = None,
     settings_path: Path | None = None,
     yggdrasil_root: Path | None = None,
+    environment: Literal["dev", "prod"] | None = None,
 ) -> ResolvedPaths:
-    vault = resolve_vault_root(vault_root)
+    env = environment or active_environment()
+    vault = resolve_vault_root(vault_root, environment=env)
     ygg = yggdrasil_root or resolve_yggdrasil_root()
     system_settings = resolve_system_settings_path(explicit=settings_path, vault_root=vault, yggdrasil_root=ygg)
-    return ResolvedPaths(vault_root=vault, yggdrasil_root=ygg, system_settings_path=system_settings)
+    return ResolvedPaths(vault_root=vault, yggdrasil_root=ygg, system_settings_path=system_settings, environment=env)
 
 
 __all__ = [
@@ -109,5 +169,6 @@ __all__ = [
     "resolve_yggdrasil_root",
     "resolve_system_settings_path",
     "resolve_flow_settings_path",
+    "resolve_runtime_artifact_path",
     "resolve_paths",
 ]
