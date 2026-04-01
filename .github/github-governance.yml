@@ -82,10 +82,26 @@ pull_requests:
       - .github/ISSUE_TEMPLATE/*.yml
       - .github/pull_request_template.md
       - .github/workflows/issue-pr-governance.yml
+  governance_lane:
+    issue_reference_required: false
+    explicit_classification_required: true
+    allowed_paths:
+      - docs/**
+      - AGENTS.md
+      - CLAUDE.md
+      - .codex/AGENTS.md
+      - .codex/skills/**
+      - .github/github-governance.yml
+      - .github/ISSUE_TEMPLATE/*.yml
+      - .github/pull_request_template.md
+      - .github/workflows/issue-pr-governance.yml
+      - scripts/docs_guard.py
 rules:
   pr_must_reference_issue_for_implementation: true
   docs_authoring_prs_may_skip_issue_reference: true
   docs_authoring_prs_must_be_docs_only: true
+  governance_lane_prs_may_skip_issue_reference: true
+  governance_lane_prs_must_be_limited_to_repo_governance_surfaces: true
   agents_only_pick: label:agent:ready + status:Ready
   agents_must_follow_issue_constraints: true
   agents_must_satisfy_acceptance: true

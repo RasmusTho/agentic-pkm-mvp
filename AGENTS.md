@@ -47,6 +47,24 @@ Rules:
 
 For longer explanations, maintenance rules, and compatibility-file policy, use the docs under `docs/development/`.
 
+## Governance lane
+
+Bounded repository-governance changes may use the explicit governance PR lane without a governing GitHub Issue.
+
+Use this lane for:
+
+- repo-local skills under `.codex/skills/**`
+- pull request / issue governance surfaces under `.github/**`
+- lightweight enforcement for docs/governance workflows such as `scripts/docs_guard.py`
+- companion governance docs under `docs/**`
+
+Rules:
+
+- Use governance lane only when the change is limited to repository governance, agent workflow, or lightweight enforcement.
+- Do not use governance lane for product/runtime implementation or shipped feature behavior.
+- Keep the change inside approved governance surfaces.
+- If the change starts affecting product behavior, contracts, or delivered runtime capability, use the Issue-first implementation lane instead.
+
 ## GitHub delivery governance
 
 For implementation work, GitHub Issues are the canonical task contract.
@@ -61,6 +79,7 @@ Builder-agent rules:
 - Do not expand scope beyond the Issue without updating the task contract first.
 - Do not create new backlog work in GitHub without stable `Source Anchors` that point to the most local governing doc items.
 - Prefer stable anchor IDs over prose fragments when the source doc is likely to produce multiple Issues over time.
-- Treat GitHub Issue + Project state as the canonical backlog receipt; inline doc markers such as `Tracked by: #...` are secondary convenience notes only.
-- Treat Project `Status` as the primary lifecycle signal. `agent:ready` is only the pickup qualifier for `Status=Ready`; blocked labels belong on non-active work, and closed issues must not retain `agent:*` labels.
+- Treat GitHub Issues as the canonical backlog receipt. GitHub Project is the shared operating board when available; inline doc markers such as `Tracked by: #...` are secondary convenience notes only.
+- Prefer Issues plus truthful agent labels and linked PR state as harder authority than Project state if they drift.
+- Use Project `Status` as the pickup and coordination projection. `agent:ready` is only the pickup qualifier for `Status=Ready`; blocked labels belong on non-active work, and closed issues must not retain `agent:*` labels.
 - When a PR delivers a tracked backlog item, update the owner doc to describe shipped reality and rewrite roadmap/plan wording so it no longer reads as pending work.

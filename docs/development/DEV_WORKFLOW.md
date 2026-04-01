@@ -62,6 +62,33 @@ Docs-authoring rules:
 - use `docs-to-issue` later when the authored docs are ready to become bounded implementation tasks
 - if the change starts affecting implementation or delivered behavior, switch back to the Issue-first implementation lane
 
+## Governance lane
+
+Governance lane is the separate PR path for bounded repository-governance changes that are not product/runtime implementation but are broader than docs-only authoring.
+
+Use this lane only when:
+
+- changed files stay inside approved governance surfaces:
+  - `docs/**`
+  - `AGENTS.md`
+  - `CLAUDE.md`
+  - `.codex/AGENTS.md`
+  - `.codex/skills/**`
+  - `.github/github-governance.yml`
+  - `.github/ISSUE_TEMPLATE/*.yml`
+  - `.github/pull_request_template.md`
+  - `.github/workflows/issue-pr-governance.yml`
+  - `scripts/docs_guard.py`
+- the PR is limited to repo governance, agent workflow, or lightweight enforcement
+- the PR does not change product/runtime implementation or shipped feature behavior
+
+Governance-lane rules:
+
+- a governing GitHub Issue is not required
+- the PR must be explicitly classified as governance lane
+- governance lane is for repository policy and workflow maintenance, not backlog delivery
+- if the change starts affecting implementation or delivered behavior, switch back to the Issue-first implementation lane
+
 ## Runtime separation
 
 - Builder-agent instruction lives in `AGENTS.md` and the development reference docs.
@@ -74,7 +101,7 @@ For implementation work, the delivery loop is:
 
 1. Docs/owner docs define the intended contract.
 2. GitHub Issue defines the bounded task contract.
-3. GitHub Project tracks lifecycle state.
+3. GitHub Project reflects lifecycle state as the shared operating board when available.
 4. Builder agent implements the Issue in a PR.
 5. CI/test workflows validate the change.
 6. Human review closes the loop and updates docs/status/roadmap as needed.
@@ -86,17 +113,19 @@ Execution rule:
 - use the linked Issue as the bounded source of truth for scope and acceptance
 - implementation PRs must link the governing Issue
 
-Docs-authoring PRs are a separate lane and do not replace this implementation contract.
+Docs-authoring and governance-lane PRs are separate lanes and do not replace this implementation contract.
 
 Optional repo-local Codex skills may assist with either lane from `.codex/skills/`, but they do not replace the governing repo policy. Implementation-facing skills must still route work through the same `Docs -> Issue -> Project -> Agent -> PR -> CI -> Feedback` sequence and keep `AGENTS.md` as the canonical builder-agent policy surface.
 
 Lifecycle truth rule:
 
-- `Status` is the primary lifecycle state machine.
+- GitHub Issue state and linked PR/merge state are the harder lifecycle authority.
+- Project `Status` is the preferred projection of that lifecycle for pickup and board visibility.
 - `agent:ready` qualifies an Issue for pickup only when `Status=Ready`.
 - `In Progress` covers active implementation, including draft PRs and open PRs before explicit review handoff.
 - `Review` begins only when the PR becomes the explicit review handoff artifact, normally after review is requested.
 - closed or delivered work must not retain `agent:*` labels.
+- if Project state drifts because automation cannot update the board, correct it opportunistically without treating the drift itself as a delivery blocker
 
 ## Source-anchor rule for backlog creation
 
@@ -105,7 +134,7 @@ For new backlog work, GitHub is the live tracking surface and docs provide the s
 Use this split:
 
 - owner docs, SoT docs, roadmap docs, and active plans define intent, constraints, and sequencing
-- GitHub Issues and the GitHub Project define backlog state
+- GitHub Issues define backlog task truth; GitHub Project provides the shared board projection
 - owner-doc updates are required when work is delivered and the shipped reality changes
 
 When converting a doc item into a GitHub Issue:

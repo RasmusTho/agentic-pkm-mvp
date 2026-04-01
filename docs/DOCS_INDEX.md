@@ -16,6 +16,45 @@ For cross-cutting semantic, architecture, or planning work, use
 `docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md` to connect the active human/ontology chain to
 parallel execution work.
 
+## Temporal governance
+
+Some docs are structurally correct but still drift because time, delivery state, runtime posture,
+or external dependencies move.
+
+For docs with a strong temporal component, treat the following metadata as mandatory either in the
+document itself or through an explicit owner/index mapping:
+
+- `Temporal class` — `timeless`, `operational`, `strategic`, or `snapshot`
+- `Review cadence` — `event-driven`, `weekly`, `biweekly`, `monthly`, `per-release`, or `ad hoc`
+- `Source of truth` — `code`, `runtime surface`, `issue/project`, `external source`, or `mixed`
+- `Last reviewed`
+- `Last verified against`
+
+Interpretation:
+
+- `timeless` docs usually change because semantics change, not because time passes.
+- `operational` docs describe current runtime or operator truth and should be reviewed most often.
+- `strategic` docs are allowed to look ahead, but shipped items must stop reading as pending.
+- `snapshot` docs are point-in-time records and should either be refreshed or explicitly treated as
+  historical.
+
+High-risk temporal docs in the active set:
+
+| Path | Temporal class | Review cadence | Primary verification anchor |
+| --- | --- | --- | --- |
+| docs/STATUS.md | operational | weekly | runtime surfaces + shipped owner docs |
+| docs/ROADMAP.md | strategic | biweekly | owner docs + GitHub delivery state |
+| docs/ARCHITECTURE.md | operational | event-driven | current baseline/runtime changes |
+| docs/OPERATIONS.md | operational | event-driven | current runbooks + runtime commands |
+| docs/HUMAN-FLOWS.md | strategic | event-driven | current product/kernel + shipped interaction behavior |
+| docs/tracks/*.md | snapshot | per-release | shipped PRs/issues and current owner docs |
+
+Recommended agent workflow:
+
+1. Audit high-risk temporal docs before treating them as active decision input.
+2. Update owner/current-state docs before editing roadmap wording.
+3. Reclassify stale point-in-time docs as historical instead of letting them masquerade as current.
+
 Review status values:
 - `Unreviewed` — not yet aligned in this total-review pass.
 - `Aligned (forward line v5.x)` — matches the active SoT forward line (currently v5.6) on top of the locked v5.5 baseline.

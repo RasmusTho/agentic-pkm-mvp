@@ -70,11 +70,19 @@ Interpretation note:
 - These automation targets describe the intended Project projection.
 - They should be treated as best-effort synchronization, not as a repository-local hard guarantee when the Project lives on a personal account or another platform surface with limited automation credentials.
 
+Interpretation note:
+- These automation targets describe the intended Project projection.
+- They should be treated as best-effort synchronization, not as a repository-local hard guarantee when the Project lives on a personal account or another platform surface with limited automation credentials.
+
 Lifecycle guardrails:
 - active implementation must not remain `Ready`
 - `Review` must not be used only because a PR exists; use it when review handoff is explicit
 - closed issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`
 - merged PR items must not remain unset or non-terminal in the Project; they should reconcile to `Done`
+
+Projection rule:
+- When Project state disagrees with Issue state, PR state, or merged delivery reality, treat the Issue/PR state as authoritative and correct the Project opportunistically.
+- Do not block delivery solely because a personal Project v2 card could not be updated by repo automation.
 
 Projection rule:
 - When Project state disagrees with Issue state, PR state, or merged delivery reality, treat the Issue/PR state as authoritative and correct the Project opportunistically.
@@ -86,6 +94,7 @@ Projection rule:
 - GitHub Project is an operating view over Issue and PR truth, not a stronger authority than them.
 - Implementation PRs must reference an Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
 - Docs-authoring PRs may omit an Issue reference only when they are explicitly classified as docs authoring and remain limited to approved docs-authoring surfaces.
+- Governance-lane PRs may omit an Issue reference only when they are explicitly classified as governance lane and remain limited to approved governance surfaces.
 - Agents only pick Issues labeled `agent:ready`.
 - Agents only pick Issues when `Status=Ready` and the Issue is labeled `agent:ready`.
 - Agents must stay within Issue scope, constraints, and acceptance criteria.
@@ -113,6 +122,31 @@ Rules:
 - docs-authoring PRs do not automatically create backlog items or Project state
 - once authored docs become implementation work, the repo returns to the normal Issue-first lane
 
+## Governance PR lane
+
+Governance lane is the separate PR path for bounded repository-governance changes that are not product/runtime implementation but are broader than docs-only authoring.
+
+Approved governance surfaces:
+
+- `docs/**`
+- `AGENTS.md`
+- `CLAUDE.md`
+- `.codex/AGENTS.md`
+- `.codex/skills/**`
+- `.github/github-governance.yml`
+- `.github/ISSUE_TEMPLATE/*.yml`
+- `.github/pull_request_template.md`
+- `.github/workflows/issue-pr-governance.yml`
+- `scripts/docs_guard.py`
+
+Rules:
+
+- governance-lane PRs may change repo-local skills and lightweight governance enforcement
+- governance-lane PRs must be explicitly classified in the PR body
+- governance-lane PRs may omit an Issue reference when they stay within the approved governance surfaces
+- governance-lane PRs must not change product/runtime implementation or shipped feature behavior
+- once a governance change becomes implementation work, the repo returns to the normal Issue-first lane
+
 ## Source-anchor contract
 
 Backlog state must live in GitHub, not only in inline doc edits.
@@ -138,7 +172,8 @@ Recommended source-anchor style in docs when a stable item ID is warranted:
 This contract is intentionally GitHub-first:
 
 - docs define intent and architecture
-- Issues/Project define backlog lifecycle state
+- Issues define bounded backlog task truth
+- Project reflects lifecycle as an operational projection when available
 - PRs and merge history define delivery state
 - owner docs define lasting shipped truth
 
@@ -168,7 +203,7 @@ Preferred tracking split:
 
 Preferred write locations:
 
-- backlog state: GitHub Issue + Project
+- backlog state: GitHub Issue first; Project when available as the shared operational board
 - delivery state: PR + merge commit + CI + owner doc
 - optional scan surface: generated receipt page derived from GitHub data
 
@@ -227,6 +262,7 @@ Applied successfully:
 
 GitHub platform limitations observed in this session:
 - Project views and built-in Project workflows were completed manually in the GitHub UI because the exposed CLI/GraphQL surface did not provide a supported creation path for those resources
+- repo-local automation may not have durable write authority to a personal Project v2 board, so Project reconciliation should be treated as best effort unless stronger credentials or an org-owned Project surface are adopted
 - branch protection was not adopted in this change; if enabled later, the required checks should be documented together with that rollout
 
 ## Required follow-up outside the repo
