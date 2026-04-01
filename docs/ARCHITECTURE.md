@@ -459,7 +459,7 @@ Required label ontology:
 
 - type: `type:task`, `type:bug`, `type:refactor`
 - priority: `prio:high`, `prio:med`, `prio:low`
-- agent state: `agent:ready`, `agent:blocked`, `agent:needs-human`
+- agent qualifiers: `agent:ready`, `agent:blocked`, `agent:needs-human`
 
 Required Project state machine:
 
@@ -471,7 +471,12 @@ Optional Project field:
 
 Guardrails for builder agents:
 
-- Agents only pick Issues labeled `agent:ready`.
+- Project `Status` is the primary lifecycle signal.
+- `agent:ready` qualifies an Issue for pickup only when `Status=Ready`.
+- `In Progress` covers active implementation and open PR work before explicit review handoff.
+- `Review` begins only when review handoff is explicit, normally after review is requested.
+- Closed or delivered work must not retain `agent:*` labels.
+- Agents only pick Issues with `Status=Ready` and label `agent:ready`.
 - Agents must stay within the linked Issue scope.
 - Agents must respect the linked Issue constraints.
 - Agents must satisfy the linked Issue acceptance criteria before claiming completion.

@@ -32,7 +32,7 @@ Treat these Issue sections as binding:
 - The agent is responsible for keeping Project status truthful while it works.
 - Do not leave actively worked Issues in `Ready`.
 - Do not leave blocked Issues in `In Progress`.
-- Do not leave PR-backed work outside `Review`.
+- Do not use `Review` only because a PR exists; keep work `In Progress` until review handoff is explicit.
 
 Allowed labels:
 
@@ -56,7 +56,7 @@ Allowed Project statuses:
 
 ## Issue selection rule before implementation
 
-- Work only from GitHub Issues labeled `agent:ready`.
+- Work only from GitHub Issues that are both `Status=Ready` and labeled `agent:ready`.
 - Among ready issues, pick one of the highest available priority:
   - `prio:high` before `prio:med` before `prio:low`
 - If several candidate issues share the same priority, use engineering judgment and prefer:
@@ -72,14 +72,15 @@ Allowed Project statuses:
 
 - Before starting implementation, ensure the selected Issue is present in Project `Agent Delivery Control Plane`.
 - If the Issue is missing from the Project, add it first.
-- When you begin active work on an Issue, set Project Status to `In Progress`.
+- When you begin active work on an Issue, set Project Status to `In Progress` and remove `agent:ready`.
 - If you determine the Issue is blocked before or during implementation:
   - do not continue coding
   - update labels and Project state truthfully
   - use `agent:blocked` when the work is blocked by dependency or setup
   - use `agent:needs-human` when the work requires a human decision or missing authority
   - move Project Status out of active execution if appropriate, normally back to `Backlog`
-- When you open a PR for the Issue, ensure Project Status is `Review`.
+- If you open a draft PR or keep implementing after opening a PR, keep Project Status at `In Progress`.
+- Move Project Status to `Review` only when the PR becomes the explicit review handoff artifact, normally after review is requested.
 - Do not leave actively worked Issues in `Ready`.
 - Do not leave blocked Issues in `In Progress` without an explicit blocker note and corrected labels.
 
@@ -117,7 +118,7 @@ When continuing through anchor drift:
 ## Implementation workflow
 
 1. Select the Issue according to priority and readiness rules.
-2. Ensure the Issue is in the Project and set Status to `In Progress`.
+2. Ensure the Issue is in the Project, set Status to `In Progress`, and remove `agent:ready`.
 3. Restate the bounded outcome from the Issue.
 4. Read source-anchored docs and owning code paths.
 5. If anchor drift exists, resolve it using the rules above before coding.
@@ -127,7 +128,7 @@ When continuing through anchor drift:
 9. Rewrite roadmap/plan wording if the delivered work was previously listed as pending.
 10. Run `Suggested Validation` plus any obviously necessary focused checks.
 11. Open or update a PR linked to the governing Issue.
-12. Ensure Project Status is `Review` once the PR is the active handoff artifact.
+12. Ensure Project Status is `Review` only once the PR is the active review handoff artifact.
 
 ## PR requirements
 

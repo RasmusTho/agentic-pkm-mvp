@@ -232,11 +232,12 @@ The repo now adopts a GitHub-based delivery control plane for implementation wor
 
 Delivery lifecycle:
 
-`Backlog -> Ready -> agent:ready -> In Progress -> Review -> Done`
+`Backlog -> Ready -> In Progress -> Review -> Done`
 
 Builder-agent rule:
 
-- agents only pick Issues labeled `agent:ready`
+- agents only pick Issues with `Status=Ready` and label `agent:ready`
+- `agent:ready` is the pickup qualifier for `Ready`, not a separate lifecycle state
 - agents must follow `Constraints`
 - agents must satisfy `Acceptance Criteria`
 - PRs must link the governing Issue

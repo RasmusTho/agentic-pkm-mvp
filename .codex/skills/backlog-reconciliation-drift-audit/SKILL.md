@@ -26,7 +26,10 @@ You must detect:
 - duplicate Issues covering the same anchored source item
 - Issues in false Project status
 - issues missing required contract sections
+- open implementation Issues missing a truthful agent-state label
 - stale `agent:ready` labels on work that is blocked or already done
+- draft PR work or open PR work that was moved to `Review` before explicit review handoff
+- active work that still presents as `Ready`
 
 ## Authority order
 
@@ -76,6 +79,8 @@ For each drift case, recommend one concrete corrective action only:
 - Roadmap should remain forward-looking.
 - Status may note delivery, but lasting truth belongs in the owner doc.
 - GitHub remains the canonical backlog-state surface.
+- Treat Project `Status` as the primary lifecycle signal.
+- Treat `agent:ready` as the pickup qualifier for `Status=Ready`, not as a substitute for `In Progress`, `Review`, or `Done`.
 
 ## Output format
 

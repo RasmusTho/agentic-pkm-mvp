@@ -35,6 +35,23 @@ Required fields:
 - `Status`: `Backlog`, `Ready`, `In Progress`, `Review`, `Done`
 - `Agent State`: `Idle`, `Running`, `Waiting`
 
+Status meanings:
+- `Backlog`: tracked work that is not yet ready for agent execution or has been moved out of active execution
+- `Ready`: bounded, testable, unblocked work that is eligible for pickup and labeled `agent:ready`
+- `In Progress`: active implementation, including draft PRs and open PRs before explicit review handoff
+- `Review`: explicit review handoff, normally after review is requested on the active PR
+- `Done`: merged or otherwise fully delivered work; the Issue is closed and no `agent:*` labels remain
+
+Agent-label meanings:
+- `agent:ready`: queue-eligible work; use only with `Status=Ready`
+- `agent:blocked`: blocked by dependency or setup; normally pair with a non-active status such as `Backlog`
+- `agent:needs-human`: blocked on human decision or missing authority; normally pair with a non-active status such as `Backlog`
+- open implementation Issues should normally carry exactly one truthful agent-state label
+
+Interpretation rule:
+- `Status` is the primary lifecycle signal.
+- Agent labels qualify pickup or blocker state; they do not replace `Status`.
+
 Required views:
 - `Kanban` grouped by `Status`
 - `Agent Queue` filtered to `label:agent:ready` and `Status = Ready`
@@ -45,12 +62,18 @@ Required automation:
 - PR review requested -> `Status=Review`
 - PR merged -> `Status=Done`
 
+Lifecycle guardrails:
+- active implementation must not remain `Ready`
+- `Review` must not be used only because a PR exists; use it when review handoff is explicit
+- closed issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`
+
 ## Enforcement intent
 
 - Issues are the canonical delivery task contract for implementation work.
 - Implementation PRs must reference an Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
 - Docs-authoring PRs may omit an Issue reference only when they are explicitly classified as docs authoring and remain limited to approved docs-authoring surfaces.
 - Agents only pick Issues labeled `agent:ready`.
+- Agents only pick Issues when `Status=Ready` and the Issue is labeled `agent:ready`.
 - Agents must stay within Issue scope, constraints, and acceptance criteria.
 - Blank/free-form Issues are disabled at repo level.
 

@@ -2,7 +2,7 @@ name: Issue and PR Governance
 
 on:
   issues:
-    types: [opened, edited, reopened]
+    types: [opened, edited, reopened, labeled, unlabeled, closed]
   pull_request:
     types: [opened, edited, reopened, synchronize, review_requested]
 
@@ -12,6 +12,31 @@ permissions:
   pull-requests: read
 
 jobs:
+  issue-agent-labels:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const labels = (issue.labels || []).map(label => label.name);
+            const agentLabels = labels.filter(name => name.startsWith("agent:"));
+            if (agentLabels.length > 1) {
+              core.setFailed(`Issue must not carry more than one agent label at once: ${agentLabels.join(", ")}`);
+              return;
+            }
+            if (issue.state === "closed" && agentLabels.length) {
+              for (const name of agentLabels) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  name,
+                });
+              }
+            }
+
   issue-shape:
     if: github.event_name == 'issues'
     runs-on: ubuntu-latest
