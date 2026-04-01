@@ -69,6 +69,21 @@ def _recall_in_memory(agent: str, kind: str, object_id: Optional[str], limit: in
     return [dict(entry[1]) for entry in entries[:limit]]
 
 
+def _decay_in_memory(agent: str, kind: str, before_ts: datetime) -> int:
+    total_deleted = 0
+    for key, entries in list(_IN_MEMORY_STORE.items()):
+        key_agent, key_kind, _ = key
+        if key_agent != agent or key_kind != kind:
+            continue
+        kept = [entry for entry in entries if entry[0] >= before_ts]
+        total_deleted += len(entries) - len(kept)
+        if kept:
+            _IN_MEMORY_STORE[key] = kept
+        else:
+            _IN_MEMORY_STORE.pop(key, None)
+    return total_deleted
+
+
 def remember(agent: str, kind: str, object_id: Optional[str], trace_id: str, data: dict) -> None:
     if not _enabled():
         return
@@ -154,18 +169,7 @@ def decay(agent: str, kind: str, *, before_ts: Optional[datetime] = None) -> int
 
     conn = _safe_connect(rowed=False)
     if conn is None:
-        total_deleted = 0
-        for key, entries in list(_IN_MEMORY_STORE.items()):
-            key_agent, key_kind, _ = key
-            if key_agent != agent or key_kind != kind:
-                continue
-            kept = [entry for entry in entries if entry[0] >= before_ts]
-            total_deleted += len(entries) - len(kept)
-            if kept:
-                _IN_MEMORY_STORE[key] = kept
-            else:
-                _IN_MEMORY_STORE.pop(key, None)
-        return total_deleted
+        return _decay_in_memory(agent, kind, before_ts)
 
     try:
         with conn:
@@ -182,6 +186,6 @@ def decay(agent: str, kind: str, *, before_ts: Optional[datetime] = None) -> int
                 )
                 return cur.rowcount or 0
     except psycopg.errors.UndefinedTable:
-        return 0
+        return _decay_in_memory(agent, kind, before_ts)
     finally:
         conn.close()

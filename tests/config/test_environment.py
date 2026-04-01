@@ -55,9 +55,10 @@ class TestEnvironmentResolution:
         assert active_environment({ENVIRONMENT_ENV: "  dev  "}) == ENV_DEV
         assert active_environment({ENVIRONMENT_ENV: "  prod  "}) == ENV_PROD
 
-    def test_invalid_explicit_environment_defaults_to_prod(self) -> None:
-        """Invalid PKM_ENVIRONMENT values should default to prod."""
-        assert active_environment({ENVIRONMENT_ENV: "invalid"}) == ENV_PROD
+    def test_invalid_explicit_environment_raises_value_error(self) -> None:
+        """Invalid PKM_ENVIRONMENT values should raise so operators fix their input."""
+        with pytest.raises(ValueError):
+            active_environment({ENVIRONMENT_ENV: "invalid"})
         assert active_environment({ENVIRONMENT_ENV: ""}) == ENV_PROD
         assert active_environment({ENVIRONMENT_ENV: "   "}) == ENV_PROD
 
