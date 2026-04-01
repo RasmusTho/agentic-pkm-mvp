@@ -17,6 +17,7 @@ It governs development-time instruction surfaces only. It does not define runtim
 - Repo-local skills are not canonical policy surfaces; they must defer to `AGENTS.md` and the owning development docs.
 - Repo-local skills may summarize or sequence existing workflow steps, but they must not override Issue scope, acceptance criteria, PR linkage, or CI/validation requirements.
 - Keep repo-local skills narrowly scoped, reversible, and aligned with the existing GitHub issue-first delivery model.
+- Temporal-doc maintenance skills should prefer audit-first behavior, refresh owner/current-state docs before roadmap wording, and use explicit verification anchors rather than implied freshness.
 
 ## Separation rules
 

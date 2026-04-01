@@ -1,4 +1,12 @@
 State: Locked baseline SoT v5.5 (Reality-MVP + watchers/panel policy) with forward line now moving into v5.6 LangGraph/Reasoning rollouts.
+Doc role: Plan
+Authority: Strategic sequencing and forward-looking delivery framing for the active line; owner/current-state docs win on shipped reality and present-tense behavior.
+Owner: Product / architecture forward line
+Temporal class: strategic
+Review cadence: biweekly
+Source of truth: mixed
+Last reviewed: 2026-04-01
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, current repo state on 2026-04-01
 # Roadmap — Strategic Control
 
 This roadmap is forward-looking and skimmable. History lives in `docs/history/SOT_4X_HISTORY.md`; deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.

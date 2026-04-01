@@ -14,4 +14,35 @@ if code_changed and not docs_touched:
     print("Docs guard: app/** changed but no docs/contracts/settings updated.")
     print(json.dumps({"changed": changed}, indent=2))
     sys.exit(1)
+
+temporal_docs = {
+    "docs/STATUS.md",
+    "docs/ROADMAP.md",
+    "docs/ARCHITECTURE.md",
+    "docs/OPERATIONS.md",
+    "docs/HUMAN-FLOWS.md",
+}
+temporal_doc_touched = any(c in temporal_docs for c in changed)
+temporal_code_prefixes = (
+    "app/",
+    "scripts/",
+    "config/",
+    "docs/settings/",
+)
+temporal_code_changed = any(c.startswith(prefix) for prefix in temporal_code_prefixes for c in changed)
+skip_temporal_guard = os.environ.get("DOCS_GUARD_ALLOW_TEMPORAL_SKIP") == "1"
+
+if temporal_code_changed and not temporal_doc_touched and not skip_temporal_guard:
+    print("Docs guard: temporal code/config changed but no high-risk temporal docs were touched.")
+    print(
+        json.dumps(
+            {
+                "changed": changed,
+                "expected_one_of": sorted(temporal_docs),
+                "override_env": "DOCS_GUARD_ALLOW_TEMPORAL_SKIP=1",
+            },
+            indent=2,
+        )
+    )
+    sys.exit(1)
 print("Docs guard: OK")

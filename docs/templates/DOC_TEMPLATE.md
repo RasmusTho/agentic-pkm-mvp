@@ -2,7 +2,11 @@ State: <state summary>
 Doc role: Core SoT | Reference | Plan | Historical
 Authority: <what this document is authoritative for, and what it does not override>
 Owner: <team, module, or parent document that owns this topic>
+Temporal class: timeless | operational | strategic | snapshot
+Review cadence: event-driven | weekly | biweekly | monthly | per-release | ad hoc
+Source of truth: code | runtime surface | issue/project | external source | mixed
 Last reviewed: YYYY-MM-DD
+Last verified against: <commit, tag, issue set, runtime command, or external snapshot>
 
 # <Document Title>
 
