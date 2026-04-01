@@ -27,6 +27,10 @@ make alpha-up
 
 ## Alpha Compose Runtime (canonical)
 - Services: `db`, `api`, `watcher`, `worker`.
+- The watcher runs the production-facing registry loop (`python -m app.cli watcher run`) and is environment-aware:
+  - In `prod` (default), artifact paths and state are scoped to base directories (`tmp/`, `vault/`)
+  - In `dev` (via `PKM_ENVIRONMENT=dev` or `PKM_SETTINGS_PROFILE=lab`), artifact paths are scoped to `-dev` subdirectories (`tmp-dev/`, `vault-dev/`)
+  - For the Compose runtime, watcher is deployed in a container and auto-selects environment based on inherited settings
 - The watcher writes audit JSONL events and enqueues DB outbox events (`ingest.vault.changed`, `panel.scan.requested`).
 - The worker consumes the DB outbox to perform ingest, panel, and promotion side effects, emitting `panel.intent.*`, `promote.intent.created`, and `promote.done` on success.
 - Inbox UUID healing is performed by the worker on `ingest.vault.changed` for notes under the inbox folder (from `vault.layout.md` or `VAULT_INBOX_DIR_REL`) so notes do not linger without `uuid:` after a worker pass.
