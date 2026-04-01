@@ -10,6 +10,7 @@ Owner contract:
   - `.github/ISSUE_TEMPLATE/config.yml`
   - `.github/pull_request_template.md`
   - `.github/workflows/issue-pr-governance.yml`
+  - `.github/workflows/project-status-reconcile.yml`
 - Platform-side pieces are now applied for labels, Project fields, required views, and lifecycle automation. Branch protection remains an optional follow-up because it is a separate repository policy decision.
 
 ## Exact label set
@@ -58,14 +59,17 @@ Required views:
 
 Required automation:
 - new issue -> `Status=Backlog`
+- issue reopened or agent-label changed -> reconcile `Status` from the current Issue state and truthful agent label
 - PR opened -> `Status=In Progress`
 - PR review requested -> `Status=Review`
 - PR merged -> `Status=Done`
+- issue and PR Project items are reconciled by repo-side workflow so merged PR cards and closed Issue cards do not drift
 
 Lifecycle guardrails:
 - active implementation must not remain `Ready`
 - `Review` must not be used only because a PR exists; use it when review handoff is explicit
 - closed issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`
+- merged PR items must not remain unset or non-terminal in the Project; they should reconcile to `Done`
 
 ## Enforcement intent
 
