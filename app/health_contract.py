@@ -7,6 +7,7 @@ from datetime import timezone, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from app.config.environment import active_environment
 from app.config.paths import resolve_vault_root
 from app.events.outbox import event_name, latest_trace_story, normalize_timestamp, read_outbox
 from app.index.doctor import diagnose_index
@@ -168,6 +169,7 @@ class HealthContract:
                     )
 
         result = {
+            "environment": active_environment(),
             "state": state,
             "reason": reason,
             "since_ts": since_ts,
@@ -306,6 +308,7 @@ class HealthContract:
     ) -> dict[str, Any]:
         entry: dict[str, Any] = {
             "ts": now.isoformat(),
+            "environment": active_environment(),
             "state": state,
             "reason": reason,
             "since_ts": since_ts,

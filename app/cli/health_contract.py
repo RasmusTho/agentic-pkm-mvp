@@ -12,6 +12,7 @@ def emit_health_contract_status(as_json: bool) -> None:
     if as_json:
         click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         return
+    click.echo(f"environment: {payload['environment']}")
     click.echo(f"state: {payload['state']}")
     click.echo(f"reason: {payload['reason']}")
     click.echo(f"since: {payload['since_ts']}")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Sequence
 
+from app.config.environment import active_environment
 from app.health_contract import DEFAULT_CONTRACT
 from app.settings.panel_actions_settings import load_panel_actions_settings, panel_action_ids
 from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_settings, resolve_auto_exec_state
@@ -16,6 +17,7 @@ def build_settings_explain_payload() -> dict[str, Any]:
     invalid_actions = invalid_allowed_actions(watcher_settings, allowed_action_ids)
     write_guard = DEFAULT_CONTRACT.evaluate()
     return {
+        "environment": active_environment(),
         "panel_actions": {
             "action_count": len(panel_settings.catalog.actions),
             "action_ids": sorted(panel_settings.catalog.ids()),
