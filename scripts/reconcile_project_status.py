@@ -43,6 +43,17 @@ def discover_project(owner: str, title: str) -> dict[str, Any]:
     raise RuntimeError(f'Project "{title}" not found for owner "{owner}"')
 
 
+def warn_and_exit_if_project_unavailable(args: argparse.Namespace, exc: Exception) -> int:
+    target = f"issue #{args.issue}" if args.issue else f"pr #{args.pr}" if args.pr else "project scan"
+    print(
+        "skip project reconciliation for"
+        f" {target}: project board is unavailable to current credentials; "
+        "issue/PR truth remains authoritative"
+    )
+    print(f"detail: {exc}")
+    return 0
+
+
 def get_status_field(owner: str, project_number: int) -> tuple[str, dict[str, str]]:
     payload = json.loads(
         run_gh("project", "field-list", str(project_number), "--owner", owner, "--format", "json")
@@ -289,8 +300,11 @@ def main() -> int:
 
     owner = args.owner or args.repo.split("/", 1)[0]
     project_name = load_governance_project_name()
-    project = discover_project(owner, project_name)
-    status_field_id, status_options = get_status_field(owner, project["number"])
+    try:
+        project = discover_project(owner, project_name)
+        status_field_id, status_options = get_status_field(owner, project["number"])
+    except (RuntimeError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        return warn_and_exit_if_project_unavailable(args, exc)
 
     if args.scan:
         return reconcile_scan(args, owner, project, status_field_id, status_options)
