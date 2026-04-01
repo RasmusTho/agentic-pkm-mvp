@@ -50,18 +50,23 @@ project:
   automation:
     - event: issue_opened
       set_status: Backlog
+    - event: issue_reopened_or_relabeled
+      reconcile_status_from_issue_state_and_agent_label: true
     - event: pr_opened
       set_status: In Progress
     - event: pr_review_requested
       set_status: Review
     - event: pr_merged
       set_status: Done
+    - event: issue_or_pr_project_drift_detected
+      reconcile_project_item_status: true
   interpretation:
-    status_is_primary_lifecycle_signal: true
+    status_is_projection_of_issue_and_pr_truth: true
     ready_requires_agent_ready: true
     in_progress_covers_open_pr_before_review_handoff: true
     review_requires_explicit_review_handoff: true
     done_requires_closed_issue_or_merged_delivery: true
+    project_may_drift_when_platform_access_is_limited: true
 pull_requests:
   implementation:
     issue_reference_required: true
@@ -89,3 +94,4 @@ rules:
   source_anchor_required_for_new_backlog_work: true
   inline_doc_receipts_are_secondary: true
   closed_issues_must_not_keep_agent_labels: true
+  issue_and_merge_state_are_harder_authority_than_project_projection: true

@@ -10,6 +10,7 @@ Owner contract:
   - `.github/ISSUE_TEMPLATE/config.yml`
   - `.github/pull_request_template.md`
   - `.github/workflows/issue-pr-governance.yml`
+  - `.github/workflows/project-status-reconcile.yml`
 - Platform-side pieces are now applied for labels, Project fields, required views, and lifecycle automation. Branch protection remains an optional follow-up because it is a separate repository policy decision.
 
 ## Exact label set
@@ -49,8 +50,9 @@ Agent-label meanings:
 - open implementation Issues should normally carry exactly one truthful agent-state label
 
 Interpretation rule:
-- `Status` is the primary lifecycle signal.
-- Agent labels qualify pickup or blocker state; they do not replace `Status`.
+- GitHub Project `Status` is the preferred operational projection of lifecycle state, not the hardest source of truth.
+- GitHub Issue state, agent labels, linked PR state, and merge/delivery reality outrank Project state when they disagree.
+- Agent labels qualify pickup or blocker state; they do not replace Issue/PR lifecycle truth.
 
 Required views:
 - `Kanban` grouped by `Status`
@@ -58,18 +60,30 @@ Required views:
 
 Required automation:
 - new issue -> `Status=Backlog`
+- issue reopened or agent-label changed -> reconcile `Status` from the current Issue state and truthful agent label
 - PR opened -> `Status=In Progress`
 - PR review requested -> `Status=Review`
 - PR merged -> `Status=Done`
+- issue and PR Project items are reconciled by repo-side workflow so merged PR cards and closed Issue cards do not drift
+
+Interpretation note:
+- These automation targets describe the intended Project projection.
+- They should be treated as best-effort synchronization, not as a repository-local hard guarantee when the Project lives on a personal account or another platform surface with limited automation credentials.
 
 Lifecycle guardrails:
 - active implementation must not remain `Ready`
 - `Review` must not be used only because a PR exists; use it when review handoff is explicit
 - closed issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`
+- merged PR items must not remain unset or non-terminal in the Project; they should reconcile to `Done`
+
+Projection rule:
+- When Project state disagrees with Issue state, PR state, or merged delivery reality, treat the Issue/PR state as authoritative and correct the Project opportunistically.
+- Do not block delivery solely because a personal Project v2 card could not be updated by repo automation.
 
 ## Enforcement intent
 
 - Issues are the canonical delivery task contract for implementation work.
+- GitHub Project is an operating view over Issue and PR truth, not a stronger authority than them.
 - Implementation PRs must reference an Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
 - Docs-authoring PRs may omit an Issue reference only when they are explicitly classified as docs authoring and remain limited to approved docs-authoring surfaces.
 - Agents only pick Issues labeled `agent:ready`.
