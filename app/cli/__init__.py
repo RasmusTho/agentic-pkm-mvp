@@ -1024,7 +1024,7 @@ def status() -> None:
     intents = getattr(status, "intents", None)
     events = getattr(status, "events", None)
 
-    click.echo(f"Environment: {active_environment()}")
+    click.echo(f"Environment: {status.environment}")
     click.echo(f"SoT baseline: {baseline} (Reality-MVP, locked)")
     if forward_line:
         click.echo(f"SoT forward line: {forward_line} (PanelAgent + Watchers)")
