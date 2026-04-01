@@ -60,6 +60,8 @@ Execution rule:
 - prefer Issues labeled `agent:ready`
 - use the linked Issue as the bounded source of truth for scope and acceptance
 
+Optional repo-local Codex skills may assist with this loop from `.codex/skills/`, but they do not replace the Issue-first contract. Any such skill must route work through the same `Docs -> Issue -> Project -> Agent -> PR -> CI -> Feedback` sequence and keep `AGENTS.md` as the canonical builder-agent policy surface.
+
 ## Source-anchor rule for backlog creation
 
 For new backlog work, GitHub is the live tracking surface and docs provide the semantic source.
