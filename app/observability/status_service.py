@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
+from app.config.environment import active_environment
 from app.events.types import PROMOTE_INTENT_CREATED, PROMOTE_DONE
 from app.observability.ingest_meta import get_ingest_status
 from app.observability.status_model import (
@@ -643,6 +644,7 @@ def get_system_status() -> SystemStatus:
     intent_status = _get_intent_status(counters)
     return SystemStatus(
         timestamp=datetime.now(timezone.utc),
+        environment=active_environment(),
         sot_version=get_sot_version(),
         sot_baseline_version=sot_meta["baseline"],
         sot_forward_line_version=sot_meta["forward_line"],

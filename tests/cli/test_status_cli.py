@@ -18,6 +18,7 @@ from app.observability.status_model import (
 def test_status_cli_prints_snapshot(monkeypatch):
     snapshot = SystemStatus(
         timestamp=datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        environment="prod",
         sot_version="vX",
         sot_baseline_version="v5.5",
         sot_forward_line_version="v5.6",
@@ -101,6 +102,7 @@ def test_status_cli_prints_snapshot(monkeypatch):
     result = runner.invoke(cli, ["status"])
 
     assert result.exit_code == 0, result.output
+    assert "Environment: prod" in result.output
     assert "SoT baseline: v5.5" in result.output
     assert "SoT forward line: v5.6" in result.output
     assert "Active features:" in result.output

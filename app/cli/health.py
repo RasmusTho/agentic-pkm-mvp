@@ -12,6 +12,7 @@ from typing import Any, Dict
 import httpx
 
 from app.components.llm.fabric import describe_default_route_policies, describe_default_routes
+from app.config.environment import active_environment
 from app.eval.llm_client import DEFAULT_MODE as DEFAULT_EVAL_MODE
 from app.knowledge.errors import KnowledgeConfigError
 from app.knowledge.health import obsidian_dependency_status
@@ -604,5 +605,5 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     ok = bool(checks_ok and runtime_ok)
     required_ok = bool(_required_checks_ok(checks) and runtime_ok)
     suggested_actions = _suggested_actions(checks, runtime)
-    return {"ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions}
+    return {"environment": active_environment(), "ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions}
 __all__ = ["run_health"]

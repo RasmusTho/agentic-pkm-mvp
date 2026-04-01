@@ -131,6 +131,7 @@ class WatcherAutomationStatus(BaseModel):
 
 class SystemStatus(BaseModel):
     timestamp: datetime
+    environment: str
     sot_version: str  # legacy alias for baseline SoT
     sot_baseline_version: str
     sot_forward_line_version: str

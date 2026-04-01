@@ -11,6 +11,7 @@ import click
 import httpx
 from watchfiles import watch
 
+from app.config.environment import active_environment
 from app.observability.status_service import get_system_status
 from app.promotion.consumer import consume_promotion_intents
 from app.ingest.config import DEFAULT_VAULT_ROOT
@@ -1023,6 +1024,7 @@ def status() -> None:
     intents = getattr(status, "intents", None)
     events = getattr(status, "events", None)
 
+    click.echo(f"Environment: {active_environment()}")
     click.echo(f"SoT baseline: {baseline} (Reality-MVP, locked)")
     if forward_line:
         click.echo(f"SoT forward line: {forward_line} (PanelAgent + Watchers)")
