@@ -35,6 +35,16 @@ Before editing, classify the change:
 - Do not turn `AGENTS.md` or `CLAUDE.md` into architecture, index, roadmap, or historical recordkeeping files.
 - Keep builder-agent guidance separate from runtime/system-agent documentation.
 
+## Docs authoring lane
+
+Docs-only changes that evolve authoritative specification, roadmap, ADR, plan, human-flow, or governance surfaces may use the explicit docs-authoring PR lane without a governing GitHub Issue.
+
+Rules:
+
+- Use docs authoring only when the change is limited to approved docs-authoring surfaces and does not change code, runtime behavior, contracts, or shipped reality.
+- Docs authoring prepares or clarifies authoritative repo docs; it does not replace later `docs-to-issue` backlog extraction.
+- If the change affects implementation or delivered behavior, use the Issue-first implementation lane instead.
+
 For longer explanations, maintenance rules, and compatibility-file policy, use the docs under `docs/development/`.
 
 ## GitHub delivery governance

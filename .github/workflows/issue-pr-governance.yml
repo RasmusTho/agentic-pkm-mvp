@@ -62,6 +62,42 @@ jobs:
             });
             const body = pullRequest.body || "";
             const issueLinkPattern = /(Fixes|Closes|Resolves)\s+#\d+/i;
-            if (!issueLinkPattern.test(body)) {
-              core.setFailed("PR body must link a GitHub Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.");
+            if (issueLinkPattern.test(body)) {
+              return;
+            }
+            const docsAuthoringPattern = /^\-\s+\[x\]\s+Docs authoring lane\b/im;
+            if (!docsAuthoringPattern.test(body)) {
+              core.setFailed("PRs must link a GitHub Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>` unless the PR is explicitly classified as `Docs authoring lane`.");
+              return;
+            }
+            const allowedExact = new Set([
+              "AGENTS.md",
+              "CLAUDE.md",
+              ".codex/AGENTS.md",
+              ".github/github-governance.yml",
+              ".github/pull_request_template.md",
+              ".github/workflows/issue-pr-governance.yml",
+            ]);
+            const allowedPrefixes = [
+              "docs/",
+              ".github/ISSUE_TEMPLATE/",
+            ];
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const changedFiles = files.map(file => file.filename);
+            const disallowed = changedFiles.filter(filename => {
+              if (allowedExact.has(filename)) {
+                return false;
+              }
+              return !allowedPrefixes.some(prefix => filename.startsWith(prefix));
+            });
+            if (disallowed.length) {
+              core.setFailed(
+                "Docs-authoring PRs may only change approved docs-authoring surfaces. Disallowed files: " +
+                disallowed.join(", ")
+              );
             }

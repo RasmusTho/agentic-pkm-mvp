@@ -37,6 +37,31 @@ Run narrower or broader suites when the touched area requires it.
 - Put future-state intent in roadmap/plan docs instead of current-state owner docs.
 - Replace duplicated policy with links or short boundary notes.
 
+## Docs-authoring lane
+
+Docs authoring is the docs-only path for evolving or clarifying authoritative repo docs before backlog extraction.
+
+Use this lane only when:
+
+- changed files stay inside approved docs-authoring surfaces:
+  - `docs/**`
+  - `AGENTS.md`
+  - `CLAUDE.md`
+  - `.codex/AGENTS.md`
+  - `.github/github-governance.yml`
+  - `.github/ISSUE_TEMPLATE/*.yml`
+  - `.github/pull_request_template.md`
+  - `.github/workflows/issue-pr-governance.yml`
+- the PR does not change code, runtime behavior, contracts, or shipped reality
+
+Docs-authoring rules:
+
+- a governing GitHub Issue is not required
+- the PR must be explicitly classified as docs authoring
+- docs authoring does not automatically create backlog work or Project state
+- use `docs-to-issue` later when the authored docs are ready to become bounded implementation tasks
+- if the change starts affecting implementation or delivered behavior, switch back to the Issue-first implementation lane
+
 ## Runtime separation
 
 - Builder-agent instruction lives in `AGENTS.md` and the development reference docs.
@@ -59,6 +84,11 @@ Execution rule:
 - do not start non-trivial implementation without a governing Issue
 - prefer Issues labeled `agent:ready`
 - use the linked Issue as the bounded source of truth for scope and acceptance
+- implementation PRs must link the governing Issue
+
+Docs-authoring PRs are a separate lane and do not replace this implementation contract.
+
+Optional repo-local Codex skills may assist with either lane from `.codex/skills/`, but they do not replace the governing repo policy. Implementation-facing skills must still route work through the same `Docs -> Issue -> Project -> Agent -> PR -> CI -> Feedback` sequence and keep `AGENTS.md` as the canonical builder-agent policy surface.
 
 ## Source-anchor rule for backlog creation
 

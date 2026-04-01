@@ -6,7 +6,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Use this form for task contracts that can be executed by builders and coding agents.
+        Use this form for implementation/delivery task contracts that can be executed by builders and coding agents.
+        Docs-authoring PRs that remain docs-only do not need this form unless they are intentionally extracting backlog work.
         New backlog work must include stable source anchors so doc intent can be traced in GitHub
         without relying on unmerged inline `Tracked by` markers.
   - type: textarea
