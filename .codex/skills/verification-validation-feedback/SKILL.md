@@ -65,10 +65,11 @@ Prioritize findings first:
 ## Lifecycle rules during verification
 
 - Verification owns terminal delivery-state correction.
+- An open or draft PR without explicit review handoff remains `In Progress`; `Review` is reserved for the review handoff state.
 - If the Issue is fully delivered and acceptance criteria are satisfied:
   - ensure the Issue is closed or recommended for closure
   - ensure Project Status is `Done`
-  - remove stale active-work labels such as `agent:ready`
+  - remove stale active-work labels such as `agent:ready`, `agent:blocked`, and `agent:needs-human`
 - If the PR is merged and the linked Issue is satisfied, the default expected state is:
   - Issue: closed
   - Project Status: `Done`
@@ -87,6 +88,7 @@ Prioritize findings first:
   - roadmap/plan text still reads as pending after delivery
   - owner doc not updated even though behavior shipped
   - issue still marked `agent:ready` or `Backlog` even though a merged PR already satisfies acceptance criteria
+  - issue or PR moved to `Review` even though explicit review handoff has not happened
 - If work is truly delivered:
   - confirm or recommend Issue closure and Project Status=`Done`
   - require owner-doc writeback

@@ -24,6 +24,10 @@ labels:
     - agent:ready
     - agent:blocked
     - agent:needs-human
+  interpretation:
+    agent:ready: queue-eligible work when Status=Ready
+    agent:blocked: blocked by dependency or setup; normally non-active backlog work
+    agent:needs-human: blocked on human decision or missing authority; normally non-active backlog work
 project:
   name: Agent Delivery Control Plane
   type: github-project-v2
@@ -52,6 +56,12 @@ project:
       set_status: Review
     - event: pr_merged
       set_status: Done
+  interpretation:
+    status_is_primary_lifecycle_signal: true
+    ready_requires_agent_ready: true
+    in_progress_covers_open_pr_before_review_handoff: true
+    review_requires_explicit_review_handoff: true
+    done_requires_closed_issue_or_merged_delivery: true
 pull_requests:
   implementation:
     issue_reference_required: true
@@ -71,10 +81,11 @@ rules:
   pr_must_reference_issue_for_implementation: true
   docs_authoring_prs_may_skip_issue_reference: true
   docs_authoring_prs_must_be_docs_only: true
-  agents_only_pick: label:agent:ready
+  agents_only_pick: label:agent:ready + status:Ready
   agents_must_follow_issue_constraints: true
   agents_must_satisfy_acceptance: true
   no_free_form_tasks: true
   backlog_state_lives_in_github: true
   source_anchor_required_for_new_backlog_work: true
   inline_doc_receipts_are_secondary: true
+  closed_issues_must_not_keep_agent_labels: true

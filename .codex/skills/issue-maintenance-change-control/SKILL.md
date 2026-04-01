@@ -35,10 +35,14 @@ You operate between:
 ## Canonical lifecycle expectations
 
 - Open backlog work should be present in the Project.
+- Open implementation Issues should normally carry exactly one truthful agent-state label.
 - Active implementation work should not remain `Ready`.
-- Open PR work should normally be `Review`.
+- Draft PRs and open PRs without explicit review handoff should normally remain `In Progress`.
+- `Review` starts only when the PR is the explicit review handoff artifact, normally after review is requested.
 - Delivered and merged work should normally be `Done`.
-- Closed Issues must not retain `agent:ready`.
+- `agent:ready` should only pair with `Status=Ready`.
+- `agent:blocked` and `agent:needs-human` should pair with non-active work, normally `Backlog`.
+- Closed Issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`.
 - If repo reality satisfies the Issue, the Issue and Project state should reflect that.
 
 ## Checks to perform
@@ -72,7 +76,8 @@ You operate between:
 
 ## Lifecycle correction rules
 
-- If an Issue is closed, remove `agent:ready`.
+- If an Issue is closed, remove any `agent:*` label.
+- If an open implementation Issue is malformed, stale, or no longer safely executable, do not leave it unlabeled or falsely `agent:ready`; normally use `agent:needs-human` with a non-active Project status.
 - If an Issue is delivered, Project Status should be `Done`.
 - If a PR is merged, Project Status should normally be `Done`.
 - If delivered work is still open because traceability is ambiguous, prefer `agent:needs-human` over false `agent:ready`.

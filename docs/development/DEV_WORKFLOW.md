@@ -82,7 +82,7 @@ For implementation work, the delivery loop is:
 Execution rule:
 
 - do not start non-trivial implementation without a governing Issue
-- prefer Issues labeled `agent:ready`
+- prefer Issues with `Status=Ready` and label `agent:ready`
 - use the linked Issue as the bounded source of truth for scope and acceptance
 - implementation PRs must link the governing Issue
 
@@ -90,7 +90,13 @@ Docs-authoring PRs are a separate lane and do not replace this implementation co
 
 Optional repo-local Codex skills may assist with either lane from `.codex/skills/`, but they do not replace the governing repo policy. Implementation-facing skills must still route work through the same `Docs -> Issue -> Project -> Agent -> PR -> CI -> Feedback` sequence and keep `AGENTS.md` as the canonical builder-agent policy surface.
 
-Optional repo-local Codex skills may assist with this loop from `.codex/skills/`, but they do not replace the Issue-first contract. Any such skill must route work through the same `Docs -> Issue -> Project -> Agent -> PR -> CI -> Feedback` sequence and keep `AGENTS.md` as the canonical builder-agent policy surface.
+Lifecycle truth rule:
+
+- `Status` is the primary lifecycle state machine.
+- `agent:ready` qualifies an Issue for pickup only when `Status=Ready`.
+- `In Progress` covers active implementation, including draft PRs and open PRs before explicit review handoff.
+- `Review` begins only when the PR becomes the explicit review handoff artifact, normally after review is requested.
+- closed or delivered work must not retain `agent:*` labels.
 
 ## Source-anchor rule for backlog creation
 

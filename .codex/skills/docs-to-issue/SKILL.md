@@ -99,7 +99,10 @@ Issue body must contain exactly these sections:
 - Set Status appropriately:
   - `Ready` only if bounded, testable, unblocked, and safe for agent execution
   - otherwise `Backlog`
-- Match `agent:ready`, `agent:blocked`, or `agent:needs-human` honestly.
+- Every new implementation Issue should leave creation with exactly one truthful agent-state label.
+- Use `agent:ready` only with `Status=Ready`.
+- Use `agent:blocked` or `agent:needs-human` only for non-active work, normally with `Status=Backlog`.
+- Do not leave delivered or closed work with any `agent:*` label.
 
 ## Output format
 
