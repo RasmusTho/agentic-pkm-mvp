@@ -17,7 +17,7 @@ Document the first v5.6 forward-line milestone so the team can keep v5.5 baselin
 - Fitness gates (status counters + `CI SUMMARY GATES`) remain the controlling signal for unlocking successive v5.6 stages.
 
 ## Definition of done (v5.6A / v5.6B)
-- **v5.6A (Docs + pilot readiness)**: doc set updated, CLI exposures present, concurrency/dedup instrumentation passes, watcher auto-run instrumentation is traceable, and gates stay green on Pilot CLI run.
+- **v5.6A (Docs + pilot readiness)**: doc set updated, CLI exposures present, concurrency/dedup instrumentation passes, watcher auto-run instrumentation is traceable, the deterministic Quality Wave acceptance harness runs in the trusted nightly lane, the first bounded PG contracts lane is defined with an explicit service/env contract, and gates stay green on Pilot CLI run.
 - **v5.6B (Reasoning + orchestrator)**: LangGraph rollout for the next agent pool passes gating metrics, orchestrator V2 experiment flag is documented, and onboarding runbooks (status, CI, ops) mention the new forward line status.
 
 ## Out of scope for this doc

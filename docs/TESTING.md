@@ -112,7 +112,7 @@ The CI surface should stay small and explicit. The intended steady-state roles a
 | Workflow role | Purpose | Expected posture |
 | --- | --- | --- |
 | `pr-smoke` | Fast merge blocker: lint, settings validation, `not pg` smoke, architecture/contract checks, Quality Wave suite, fitness summary parsing | required on PRs |
-| `integration-nightly` | Full `pytest -m "not pg and not alpha_llm"` suite (736+ tests), runtime contract regressions, fitness gates | nightly / scheduled |
+| `integration-nightly` | Full `pytest -m "not pg and not alpha_llm"` suite, explicit deterministic Quality Wave acceptance harness, first bounded PG contracts lane, runtime contract regressions, fitness gates | nightly / scheduled |
 | `release-uat` | Quality Wave gate (UAT harness + golden vault + full QW suite), fitness gates | release/UAT gate (tags + manual) |
 
 Human-need acceptance scenarios should map onto those roles explicitly instead of silently riding along with smoke:
@@ -124,8 +124,43 @@ Older overlapping workflows may still exist while the surface is being consolida
 
 Current implementation:
 - `.github/workflows/ci-smoke.yaml` — PR smoke including `tests/quality_wave/` (99 QW tests).
-- `.github/workflows/integration-nightly.yaml` — full suite nightly at 02:00 UTC + runtime contract regressions + fitness gates.
+- `.github/workflows/integration-nightly.yaml` — full suite nightly at 02:00 UTC, explicit deterministic acceptance harness coverage via `tests/quality_wave/test_uat_harness.py`, first bounded PG contracts lane (`tests/int/test_pg_backend.py`, `tests/api/test_status_store_pg.py`, `tests/indexer/test_outbox_roundtrip_pg.py`), runtime contract regressions, and fitness gates.
 - `.github/workflows/release-uat.yaml` — UAT harness + golden vault + full QW suite + fitness gates; triggered on version tags and manual dispatch.
+
+### Nightly deterministic acceptance harness
+
+The deterministic Quality Wave acceptance harness belongs in `integration-nightly`, not `release-uat`.
+
+Reason:
+- it is a trusted recurring verification signal for the active memory-backed runtime posture
+- it proves the CLI-first UAT contract continues to pass outside tag/manual release events
+- it should run alongside the broader nightly `not pg and not alpha_llm` surface rather than only as a release gate
+
+Current nightly harness target:
+- `tests/quality_wave/test_uat_harness.py`
+
+### First bounded PG verification lane
+
+The first recurring Postgres lane is intentionally small and contract-focused. It exists to establish a credible recurring PG signal without broadening nightly into all PG coverage at once.
+
+Lane membership:
+- `tests/int/test_pg_backend.py`
+- `tests/api/test_status_store_pg.py`
+- `tests/indexer/test_outbox_roundtrip_pg.py`
+
+Required service/env contract:
+- GitHub Actions service container: `postgres:16`
+- `POSTGRES_USER=app`
+- `POSTGRES_PASSWORD=app`
+- `POSTGRES_DB=app`
+- `DATABASE_URL=postgresql://app:app@localhost:5432/app`
+- `STORE_BACKEND=pg`
+- schema prepared with `alembic upgrade head`
+
+First-green definition:
+- all three PG lane tests pass against the provisioned Postgres service in `integration-nightly`
+- the deterministic acceptance harness step is green in the same nightly workflow run
+- the existing memory-backed nightly suite and runtime contract regressions remain green
 
 ## Required baseline checks
 
