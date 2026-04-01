@@ -49,6 +49,13 @@ jobs:
       - name: Prepare tmp dir
         run: mkdir -p tmp
 
+      - name: Deterministic acceptance coverage
+        run: |
+          pytest -c /dev/null -q \
+            tests/quality_wave/test_uat_harness.py \
+            tests/cli/test_uat_run_cli.py \
+            -m "not pg"
+
       - name: Full test suite (memory, not pg)
         timeout-minutes: 20
         run: |
@@ -98,3 +105,60 @@ jobs:
         with:
           name: nightly-pytest-log-py${{ matrix.python-version }}
           path: tmp/nightly-pytest.log
+
+  pg-first-wave:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      STORE_BACKEND: memory
+      DATABASE_URL: postgresql://app:app@localhost:5432/app
+      DB_DSN: postgresql://app:app@localhost:5432/app
+      LLM_PROVIDER: mock
+      REASONING_PROVIDER: mock
+      PLANNER_PROVIDER: mock
+      REASONING_ENABLE: "1"
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      KNOWLEDGE_PRIMARY_ADAPTER: fs_vault
+      KNOWLEDGE_FALLBACK_ADAPTER: obsidian_cli
+      KNOWLEDGE_STRICT_STARTUP: "0"
+      KNOWLEDGE_ALLOW_FALLBACK: "0"
+      INDEX_PERSIST_PATH: tmp/index.jsonl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: |
+          python -m pip install -U pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
+
+      - name: Upgrade database
+        run: alembic upgrade head
+
+      - name: First bounded PG wave
+        run: |
+          pytest -c /dev/null -q \
+            tests/api/test_status_store_pg.py \
+            tests/runtime/test_panel_outbox_db.py \
+            -m "pg"

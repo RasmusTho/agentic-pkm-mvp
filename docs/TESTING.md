@@ -112,7 +112,7 @@ The CI surface should stay small and explicit. The intended steady-state roles a
 | Workflow role | Purpose | Expected posture |
 | --- | --- | --- |
 | `pr-smoke` | Fast merge blocker: lint, settings validation, `not pg` smoke, architecture/contract checks, Quality Wave suite, fitness summary parsing | required on PRs |
-| `integration-nightly` | Full `pytest -m "not pg and not alpha_llm"` suite (736+ tests), runtime contract regressions, fitness gates | nightly / scheduled |
+| `integration-nightly` | Full `pytest -m "not pg and not alpha_llm"` suite, explicit deterministic acceptance coverage (`tests/quality_wave/test_uat_harness.py`, `tests/cli/test_uat_run_cli.py`), first bounded PG wave, runtime contract regressions, fitness gates | nightly / scheduled |
 | `release-uat` | Quality Wave gate (UAT harness + golden vault + full QW suite), fitness gates | release/UAT gate (tags + manual) |
 
 Human-need acceptance scenarios should map onto those roles explicitly instead of silently riding along with smoke:
@@ -124,8 +124,17 @@ Older overlapping workflows may still exist while the surface is being consolida
 
 Current implementation:
 - `.github/workflows/ci-smoke.yaml` — PR smoke including `tests/quality_wave/` (99 QW tests).
-- `.github/workflows/integration-nightly.yaml` — full suite nightly at 02:00 UTC + runtime contract regressions + fitness gates.
+- `.github/workflows/integration-nightly.yaml` — full `not pg and not alpha_llm` suite nightly at 02:00 UTC, explicit deterministic acceptance coverage (`tests/quality_wave/test_uat_harness.py` + `tests/cli/test_uat_run_cli.py`), runtime contract regressions, a first bounded PG wave, and fitness gates.
 - `.github/workflows/release-uat.yaml` — UAT harness + golden vault + full QW suite + fitness gates; triggered on version tags and manual dispatch.
+
+### First bounded PG wave
+
+The first recurring Postgres lane is intentionally small. It exists to prove that the nightly surface exercises a real Postgres-backed store path before broader PG adoption expands.
+
+- Membership: `tests/api/test_status_store_pg.py`, `tests/runtime/test_panel_outbox_db.py`
+- Service contract: GitHub Actions service container `postgres:16` with `POSTGRES_USER=app`, `POSTGRES_PASSWORD=app`, `POSTGRES_DB=app`
+- Env contract: set both `DATABASE_URL` and `DB_DSN` to `postgresql://app:app@localhost:5432/app`; keep `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`; run `alembic upgrade head` before the PG tests
+- First green PG wave: both tests pass in `integration-nightly` against the service container without falling back to the local developer default DSN (`127.0.0.1:15432`)
 
 ## Required baseline checks
 
