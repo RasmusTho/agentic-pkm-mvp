@@ -1,13 +1,16 @@
 ## Change Lane
 - [ ] Implementation lane
 - [ ] Docs authoring lane
+- [ ] Governance lane
 
 Docs authoring applies only to docs-only changes in approved docs-authoring surfaces. It must not be used for code, runtime behavior, contracts, shipped reality, or implementation writeback.
+Governance lane applies to bounded repository-governance changes such as repo-local skills, PR/issue policy, and lightweight enforcement for docs/governance workflows. It must not be used for product/runtime implementation.
 
 ## Linked Issue
 Fixes #
 
 Required for implementation lane. Leave blank for docs authoring lane.
+Leave blank for governance lane when the PR stays within approved governance surfaces.
 
 ## Summary
 - 
@@ -25,6 +28,11 @@ Required for implementation lane. Leave blank for docs authoring lane.
 - [ ] No code, runtime behavior, contracts, or shipped reality changed.
 - [ ] This PR prepares or clarifies authoritative docs/specification and may later feed `docs-to-issue` extraction.
 
+## Governance Lane Check
+- [ ] This PR only changes approved governance surfaces.
+- [ ] The change is limited to repo governance, agent workflow, or lightweight enforcement.
+- [ ] No product/runtime implementation or shipped feature behavior changed.
+
 ## Validation
 Implementation lane:
 - [ ] `ruff check app tests`
@@ -34,6 +42,10 @@ Implementation lane:
 
 Docs authoring lane:
 - [ ] Docs/governance checks run as appropriate for the touched surfaces
+- [ ] Any validation gaps or tooling limitations are stated explicitly
+
+Governance lane:
+- [ ] Governance checks run as appropriate for the touched surfaces
 - [ ] Any validation gaps or tooling limitations are stated explicitly
 
 ## Notes

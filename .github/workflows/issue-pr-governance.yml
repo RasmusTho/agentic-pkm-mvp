@@ -91,11 +91,14 @@ jobs:
               return;
             }
             const docsAuthoringPattern = /^\-\s+\[x\]\s+Docs authoring lane\b/im;
-            if (!docsAuthoringPattern.test(body)) {
-              core.setFailed("PRs must link a GitHub Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>` unless the PR is explicitly classified as `Docs authoring lane`.");
+            const governanceLanePattern = /^\-\s+\[x\]\s+Governance lane\b/im;
+            const isDocsAuthoring = docsAuthoringPattern.test(body);
+            const isGovernanceLane = governanceLanePattern.test(body);
+            if (!isDocsAuthoring && !isGovernanceLane) {
+              core.setFailed("PRs must link a GitHub Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>` unless the PR is explicitly classified as `Docs authoring lane` or `Governance lane`.");
               return;
             }
-            const allowedExact = new Set([
+            const docsAllowedExact = new Set([
               "AGENTS.md",
               "CLAUDE.md",
               ".codex/AGENTS.md",
@@ -103,9 +106,23 @@ jobs:
               ".github/pull_request_template.md",
               ".github/workflows/issue-pr-governance.yml",
             ]);
-            const allowedPrefixes = [
+            const docsAllowedPrefixes = [
               "docs/",
               ".github/ISSUE_TEMPLATE/",
+            ];
+            const governanceAllowedExact = new Set([
+              "AGENTS.md",
+              "CLAUDE.md",
+              ".codex/AGENTS.md",
+              ".github/github-governance.yml",
+              ".github/pull_request_template.md",
+              ".github/workflows/issue-pr-governance.yml",
+              "scripts/docs_guard.py",
+            ]);
+            const governanceAllowedPrefixes = [
+              "docs/",
+              ".github/ISSUE_TEMPLATE/",
+              ".codex/skills/",
             ];
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner,
@@ -114,6 +131,8 @@ jobs:
               per_page: 100,
             });
             const changedFiles = files.map(file => file.filename);
+            const allowedExact = isGovernanceLane ? governanceAllowedExact : docsAllowedExact;
+            const allowedPrefixes = isGovernanceLane ? governanceAllowedPrefixes : docsAllowedPrefixes;
             const disallowed = changedFiles.filter(filename => {
               if (allowedExact.has(filename)) {
                 return false;
@@ -122,7 +141,7 @@ jobs:
             });
             if (disallowed.length) {
               core.setFailed(
-                "Docs-authoring PRs may only change approved docs-authoring surfaces. Disallowed files: " +
+                `${isGovernanceLane ? "Governance-lane" : "Docs-authoring"} PRs may only change approved surfaces. Disallowed files: ` +
                 disallowed.join(", ")
               );
             }
