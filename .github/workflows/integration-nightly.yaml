@@ -166,7 +166,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://app:app@localhost:5432/app
+      DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/app
       PYTHONPATH: ${{ github.workspace }}
       STORE_BACKEND: pg
       LLM_PROVIDER: mock

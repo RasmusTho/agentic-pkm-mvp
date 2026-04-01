@@ -9,6 +9,17 @@ def resolve_dsn(conninfo: t.Optional[str] = None) -> str:
     return url
 
 
+def resolve_sqlalchemy_url(conninfo: t.Optional[str] = None) -> str:
+    url = (conninfo or os.getenv("DATABASE_URL", "")).strip()
+    if not url:
+        return ""
+    if url.startswith("postgresql+psycopg://"):
+        return url
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url.split("postgresql://", 1)[1]
+    return url
+
+
 def dsn() -> str:
     return resolve_dsn()
 

@@ -1,9 +1,13 @@
-import os
 from alembic import context
 from sqlalchemy import create_engine
 
+from app.db.dsn import resolve_sqlalchemy_url
+
 def get_url() -> str:
-    return os.environ["DATABASE_URL"]
+    url = resolve_sqlalchemy_url()
+    if not url:
+        raise RuntimeError("DATABASE_URL is required for alembic migrations")
+    return url
 
 def run_migrations_offline() -> None:
     context.configure(url=get_url(), literal_binds=True)
