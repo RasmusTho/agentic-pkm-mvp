@@ -11,6 +11,13 @@ It governs development-time instruction surfaces only. It does not define runtim
 - `CLAUDE.md` is a thin Claude adapter that should point to `AGENTS.md` and add only minimal Claude-specific notes when needed.
 - `.codex/AGENTS.md` is a compatibility pointer only. It must not become the canonical policy surface again.
 
+## Repo-local skills
+
+- Repo-local Codex skills may live under `.codex/skills/` as optional workflow helpers for this repository.
+- Repo-local skills are not canonical policy surfaces; they must defer to `AGENTS.md` and the owning development docs.
+- Repo-local skills may summarize or sequence existing workflow steps, but they must not override Issue scope, acceptance criteria, PR linkage, or CI/validation requirements.
+- Keep repo-local skills narrowly scoped, reversible, and aligned with the existing GitHub issue-first delivery model.
+
 ## Separation rules
 
 - Keep auto-loaded instruction files short, normative, and durable.
