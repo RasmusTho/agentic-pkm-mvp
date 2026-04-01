@@ -52,8 +52,25 @@ project:
       set_status: Review
     - event: pr_merged
       set_status: Done
+pull_requests:
+  implementation:
+    issue_reference_required: true
+  docs_authoring:
+    issue_reference_required: false
+    explicit_classification_required: true
+    allowed_paths:
+      - docs/**
+      - AGENTS.md
+      - CLAUDE.md
+      - .codex/AGENTS.md
+      - .github/github-governance.yml
+      - .github/ISSUE_TEMPLATE/*.yml
+      - .github/pull_request_template.md
+      - .github/workflows/issue-pr-governance.yml
 rules:
-  pr_must_reference_issue: true
+  pr_must_reference_issue_for_implementation: true
+  docs_authoring_prs_may_skip_issue_reference: true
+  docs_authoring_prs_must_be_docs_only: true
   agents_only_pick: label:agent:ready
   agents_must_follow_issue_constraints: true
   agents_must_satisfy_acceptance: true

@@ -47,11 +47,34 @@ Required automation:
 
 ## Enforcement intent
 
-- Issues are the canonical delivery task contract.
-- PRs must reference an Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
+- Issues are the canonical delivery task contract for implementation work.
+- Implementation PRs must reference an Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
+- Docs-authoring PRs may omit an Issue reference only when they are explicitly classified as docs authoring and remain limited to approved docs-authoring surfaces.
 - Agents only pick Issues labeled `agent:ready`.
 - Agents must stay within Issue scope, constraints, and acceptance criteria.
 - Blank/free-form Issues are disabled at repo level.
+
+## Docs-authoring PR lane
+
+Docs authoring is the separate PR lane for docs-only changes that evolve or clarify authoritative repo docs before backlog extraction.
+
+Approved docs-authoring surfaces:
+
+- `docs/**`
+- `AGENTS.md`
+- `CLAUDE.md`
+- `.codex/AGENTS.md`
+- `.github/github-governance.yml`
+- `.github/ISSUE_TEMPLATE/*.yml`
+- `.github/pull_request_template.md`
+- `.github/workflows/issue-pr-governance.yml`
+
+Rules:
+
+- docs-authoring PRs are docs-only and must not change code, runtime behavior, contracts, or shipped reality
+- docs-authoring PRs must be explicitly classified in the PR body
+- docs-authoring PRs do not automatically create backlog items or Project state
+- once authored docs become implementation work, the repo returns to the normal Issue-first lane
 
 ## Source-anchor contract
 
