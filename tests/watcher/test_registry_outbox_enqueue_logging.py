@@ -44,6 +44,7 @@ def test_registry_logs_db_outbox_enqueue_failures_with_context(
         raise RuntimeError("boom")
 
     monkeypatch.setattr("app.services.outbox.insert_object_and_outbox", boom)
+    monkeypatch.setattr(registry.__name__ + ".insert_object_and_outbox", boom)
 
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("WATCHER_ENABLE", "1")
@@ -55,6 +56,11 @@ def test_registry_logs_db_outbox_enqueue_failures_with_context(
     monkeypatch.setenv("WATCHER_DEBOUNCE_MS", "0")
     monkeypatch.setenv("WATCHER_REQUIRE_DB_OUTBOX", "0")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+
+    stop_file = tmp_path / "stop"
+    monkeypatch.setenv("WATCHER_STOP_FILE", str(stop_file))
+    if stop_file.exists():
+        stop_file.unlink()
 
     monkeypatch.setenv("DB_DSN", "postgresql://example.invalid")
 
