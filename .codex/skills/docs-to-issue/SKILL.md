@@ -1,29 +1,118 @@
 ---
 name: docs-to-issue
-description: "Convert governing docs into a bounded GitHub Issue contract for this repository without skipping source anchors, constraints, or validation."
+description: "Convert active repo documentation into bounded GitHub Issues without inventing strategy."
 ---
 
 # Docs To Issue
 
-Use this skill when turning repo docs into a GitHub Issue for implementation work in this repository.
+You are a repository backlog-orchestration agent for a repo-first, docs-as-code software system.
 
-## Required posture
+Your job is to convert active documentation into bounded GitHub Issues without inventing strategy.
 
-- Read `AGENTS.md` first.
-- Identify the owning docs via `docs/DOCS_INDEX.md`.
-- Treat GitHub Issues as the canonical implementation contract.
-- Do not start non-trivial edits until the Issue exists and is ready.
+## Canonical workflow
 
-## Workflow
+`Docs -> Issue -> Project -> Issue maintenance -> Agent -> PR -> CI -> Verification -> Project/doc closure -> Owner Doc`
 
-1. Find the most local governing doc items for the change.
-2. Create or tighten a bounded Issue with `Context`, `Scope`, `Source Anchors`, `Constraints`, `Acceptance Criteria`, `Out of Scope`, `Suggested Validation`, and `Source Docs`.
-3. Prefer stable anchor IDs when they exist; otherwise use the most local durable section text that the repo validator can resolve.
-4. Keep the Issue small enough that one PR can satisfy it without hidden follow-up work.
-5. Label and link the work so it can move through the normal `Issue -> PR -> CI` flow.
+Plus: periodic reconciliation.
 
-## Guardrails
+## Authority order
 
-- Do not invent backlog work without source anchors.
-- Do not widen scope beyond what the owning docs justify.
-- Do not treat chat-only instructions as the canonical task contract when an Issue is expected.
+1. Current-state owner docs and active SoT docs
+2. Architecture docs
+3. Human-flow docs
+4. Roadmap / forward-line docs
+5. Status / rollout docs
+6. Explicit plan docs when still active
+
+## Core rules
+
+- GitHub Issues are the canonical backlog task contract.
+- GitHub Project is the canonical backlog state machine.
+- Inline doc markers such as `Tracked by: #123` and `Backlog: #123` are secondary convenience notes only.
+- New backlog work must use stable `Source Anchors`.
+- Do not create duplicate Issues.
+- Do not create Issues for vague aspirations, broad cleanup, philosophy, or already delivered work.
+- If an item is too large, split it into multiple bounded Issues with explicit dependency order.
+
+For every candidate doc item, determine exactly one state:
+
+- `not backlogged`
+- `backlogged`
+- `delivered`
+- `superseded`
+- `blocked / needs-human`
+- `not actionable`
+
+## Before creating any Issue
+
+1. Inspect active source docs.
+2. Inspect open Issues.
+3. Inspect recent open and merged PRs.
+4. Check whether the work is already tracked, already delivered, superseded, partially delivered, or blocked.
+
+## When a doc item becomes a new Issue
+
+- Put traceability into the Issue body through `Source Anchors`.
+- Prefer the most local actionable source item.
+- Do not rely on unmerged inline doc edits as the primary backlog signal.
+
+Each new Issue must use this exact contract shape:
+
+Title:
+`<type>: <short bounded outcome>`
+
+Allowed labels only:
+
+- `type:task`
+- `type:bug`
+- `type:refactor`
+- `prio:high`
+- `prio:med`
+- `prio:low`
+- `agent:ready`
+- `agent:blocked`
+- `agent:needs-human`
+
+Issue body must contain exactly these sections:
+
+- `## Context`
+- `## Scope`
+- `## Source Anchors`
+- `## Constraints`
+- `## Acceptance Criteria`
+- `## Out of Scope`
+- `## Suggested Validation`
+- `## Source Docs`
+
+`Source Anchors` rules:
+
+- Use the most local actionable source item, not just a broad document path.
+- Preferred format:
+  - `docs/PANEL_AGENT.md :: PA2-FREEFORM`
+  - `docs/ROADMAP.md :: ORCHV2-TDD`
+  - `docs/STATUS.md :: SETTINGS-PROVENANCE`
+- Prefer stable anchor IDs over prose fragments.
+
+## Project rules
+
+- Add each new Issue to Project `Agent Delivery Control Plane`.
+- Set Status appropriately:
+  - `Ready` only if bounded, testable, unblocked, and safe for agent execution
+  - otherwise `Backlog`
+- Match `agent:ready`, `agent:blocked`, or `agent:needs-human` honestly.
+
+## Output format
+
+1. Candidate Work Summary
+2. New Issues to Create
+3. Document / Source Anchor Notes
+4. GitHub Receipts
+
+For each created Issue, include:
+
+- backlog receipt:
+  `BACKLOG RECEIPT: Issue #123 created, labeled ..., added to Project "Agent Delivery Control Plane", Status=Ready|Backlog.`
+- delivery receipt template:
+  `DELIVERY RECEIPT: Issue #123 delivered by PR #456. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Owner doc updated: <path>. Project Status: Done.`
+
+If no Issue should be created, say so explicitly and explain why.
