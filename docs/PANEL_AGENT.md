@@ -39,8 +39,8 @@ Interpretation note:
 **Freeform catalog-driven proposal path (shipped).** When a panel has an instruction but no checkbox actions, the LLM decider (`PANEL_AGENT_DECIDER=llm`) consults the full active catalog and proposes canonical action IDs from instruction text + catalog metadata (`llm_hint`, `labels`, `description`) alone, without requiring any checkbox-label match. Proposals are restricted to the active catalog; out-of-catalog IDs are dropped. For this no-checkbox path, the runtime writes proposed actions back as suggested unchecked checkboxes for explicit human confirmation rather than executing them immediately; they do not enter the execution path until the human later confirms them as panel checkboxes. Fallback to rule mode on LLM error or empty catalog. Tracked by: #241.
 
 - Surface uncertain or no-checkbox interpretations as suggested unchecked checkboxes instead of direct execution so panel ambiguity stays human-reviewable until explicit confirmation. Delivery receipt: Issue #242 delivered in current runtime behavior; follow-up wording reconciliation tracked by #291. Source Anchor: PA2-SUGGESTED-CHECKBOXES.
-- Remaining backlog: #243 (multi-step plans), #240 (real-vault acceptance).
-- Emit ordered multi-step panel plans through the planner/orchestration contract rather than investing in richer LangGraph-only node choreography. Source Anchor: PA2-MULTISTEP-PLANS. Tracked by: #243
+- Remaining backlog: #240 (real-vault acceptance).
+- Emit ordered multi-step panel plans through the planner/orchestration contract rather than investing in richer LangGraph-only node choreography. Delivery receipt: Issue #243 delivered via PR #302. Source Anchor: PA2-MULTISTEP-PLANS.
 - Prove the PanelAgent 2.0 path operationally on a real vault with soak, receipts, and owner-doc writeback before it is treated as operationally accepted. Source Anchor: PA2-REAL-VAULT-ACCEPTANCE. Tracked by: #240
 
 Other implementation notes:
