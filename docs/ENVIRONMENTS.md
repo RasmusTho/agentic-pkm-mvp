@@ -1,8 +1,8 @@
 # Environments
 
-State: SoT v5.5 baseline with explicit dev/prod environment model, control surfaces, and artifact separation (Issues #263, #266).
+State: SoT v5.5 baseline with explicit `dev` / `test` / `prod` environment model, control surfaces, and artifact separation (Issues #263, #266), with the local `test` environment now documented as the canonical bootstrap and verification posture.
 Doc role: Core SoT
-Authority: Canonical environment contract and implementation for the current baseline and forward-line work; defines what dev and prod mean, what must remain invariant, and what may vary. Architecture, operations, status, and component docs should reference this document instead of restating environment policy.
+Authority: Canonical environment contract for the current baseline and forward-line work; defines what `dev`, `test`, and `prod` mean, what must remain invariant, and what may vary. Architecture, operations, testing, status, and component docs should reference this document instead of restating environment policy.
 
 ## Overview
 
@@ -11,28 +11,44 @@ This document defines the active environment model for the repo, specifies the c
 The purpose of this document is to make environment boundaries explicit and ensure that supported environments maintain clear vault, store, and runtime boundaries when isolation is required.
 
 Reading rule:
-- Use this document when a change touches environment-specific behavior, storage boundaries, runtime topology, write safety, or rollout posture.
-- Use `docs/ARCHITECTURE.md` for system structure, `docs/OPERATIONS.md` for operator procedure, `docs/STATUS.md` for current rollout posture, and `docs/guardrails.md` for safety rules.
+- Use this document when a change touches environment-specific behavior, storage boundaries, runtime topology, write safety, rollout posture, or local bootstrap expectations.
+- Use `docs/ARCHITECTURE.md` for system structure, `docs/OPERATIONS.md` for operator procedure, `docs/TESTING.md` for verification layers, and `docs/STATUS.md` for current rollout posture.
+
+## Minimal Environment Model
+
+The repo uses a lightweight but explicit environment model:
+
+- `dev` = flexible local development environment
+- `test` = isolated, resettable, reproducible verification environment
+- `prod` = future target contract for the operator-facing runtime
+
+Interpretation rule:
+- environment names describe operational posture, not different product semantics
+- `test` is the first concrete reference environment for the current stabilization wave
+- `prod` is a target contract with important current behavior already present, but it should not be described as a fully completed end-state environment story
 
 ## Environment Definitions
 
 ### `dev`
 - **Purpose**: development, experimentation, debugging, local validation, and bounded forward-line exploration.
-- **Typical users**: builders, developers, and operators validating changes before wider runtime use.
-- **Allowed posture**: narrower safety assumptions, mock or local providers, test fixtures, selective resets, and lab-only runtime tuning.
-- **Typical expectation**: failures are acceptable if they are observable, bounded, and do not threaten production continuity artifacts.
+- **Isolation level**: flexible. Separate vaults and stores are strongly preferred, but the posture is optimized for iteration rather than strict reproducibility.
+- **Vault/state/runtime boundaries**: may use local fixtures, dev-specific vault roots, selective resets, mock providers, and extra diagnostics.
+- **Implemented now**: explicit runtime selection exists today through `PKM_ENVIRONMENT=dev` or `PKM_SETTINGS_PROFILE=lab`.
+- **Not implied**: `dev` is not the canonical proof path for release readiness.
 
 ### `test`
 - **Purpose**: isolated, resettable, reproducible local verification and UAT against a clean vault.
-- **Typical users**: developers and operators validating the repo-supported bootstrap path from scratch.
-- **Required posture**: deterministic setup, no hidden folder hints, no dependence on a live dev vault, and explicit verification via health/status plus the scripted UAT harness.
-- **Implementation note**: `test` is the canonical local bootstrap profile today. It is currently expressed through the repo-supported bootstrap path (`make test-bootstrap`, `make test-vault-init`, `uat-*`, and `scripts/start_full_system.sh`) rather than as a third first-class `PKM_ENVIRONMENT` runtime selector. This keeps the current runtime control surface stable while establishing the `dev` / `test` / `prod` model in docs and repo-supported workflows.
+- **Isolation level**: explicit and strong. `test` must not depend on a live dev vault, hidden folder hints, or leftover runtime state.
+- **Vault/state/runtime boundaries**: separate clean vault, resettable runtime artifacts, and a scripted bootstrap/UAT path that can be rerun from a clean start.
+- **Implemented now**: `test` is the first concrete reference environment for bootstrap and verification. Today it is expressed through the repo-supported bootstrap path (`make test-bootstrap`, `make test-vault-init`, `uat-*`, and `scripts/start_full_system.sh`) rather than as a third first-class `PKM_ENVIRONMENT` selector.
+- **Target contract**: this is the repo-supported local verification environment that should become self-contained end to end.
 
 ### `prod`
 - **Purpose**: the operator-facing runtime used against a real vault and its associated runtime surfaces.
-- **Typical users**: the human operator and the runtime processes that act on the operator's real knowledge environment.
-- **Required posture**: conservative, receipt-bearing, recoverable, and safe by default.
-- **Typical expectation**: the system must prefer blocking, degrading, or emitting diagnostics over silent corruption, silent drift, or unbounded mutation.
+- **Isolation level**: conservative and safety-first.
+- **Vault/state/runtime boundaries**: the real vault and its continuity artifacts must remain clearly separated from development and test surfaces.
+- **Implemented now**: important production-facing contracts already exist, including the operator-safe default posture, health/status surfaces, write-safety expectations, and the current runtime path.
+- **Still a target contract**: `prod` should be treated as the future end-state contract for the full operator environment, not as a claim that every operational detail is complete today.
 
 ## Cross-Environment Invariants
 
@@ -64,13 +80,14 @@ Environment separation MUST be explicit across the following surfaces.
 
 ### Vaults and Human-Facing Files
 - `prod` must operate on the operator's real vault and its associated continuity artifacts.
-- `dev` must use a separate fixture, test, or otherwise intentionally non-production vault when environment-specific experimentation or validation is being performed.
+- `dev` should use a separate fixture, test, or otherwise intentionally non-production vault when environment-specific experimentation or validation is being performed.
 - `test` must use a separate clean vault dedicated to the repo-supported bootstrap/UAT path. The canonical local target is `vault-test/` when following `make test-bootstrap`.
-- `dev` and `prod` must not implicitly share the same writable vault surface when the purpose is environment isolation.
+- `dev`, `test`, and `prod` must not implicitly share the same writable vault surface when the purpose is environment isolation.
 
 **Implementation Status (Issue #266)**:
 - Vault paths are now environment-scoped via `app.config.paths.resolve_vault_root()`.
 - Default behavior: `prod` uses `vault/`, `dev` uses `vault-dev/`.
+- The `test` path currently uses the explicit bootstrap commands and `TEST_VAULT_ROOT`, which intentionally sit beside the runtime selector while the local verification contract is stabilized.
 - Custom overrides via CLI flags bypass environment scoping.
 
 ### Stores and Persistence
@@ -84,6 +101,7 @@ Environment separation MUST be explicit across the following surfaces.
 - Default behavior: `prod` uses `tmp/` subdirectories, `dev` uses `tmp-dev/` subdirectories.
 - Watcher settings automatically apply environment scoping to all artifact paths via `load_watcher_settings(environment=...)`.
 - DB outbox (PostgreSQL) is shared; file-based audit logs respect environment separation.
+- The `test` path currently relies on explicit reset/bootstrap commands and test-specific runtime artifacts rather than a separate runtime selector.
 
 ### Runtime State and Process Surfaces
 - Watcher state, heartbeats, tick logs, incident logs, and similar runtime artifacts must be interpreted as environment-scoped operational surfaces.
@@ -95,10 +113,12 @@ Environment separation MUST be explicit across the following surfaces.
 - Watcher heartbeat, state files, and event logs are now environment-scoped.
 - Default behavior: `prod` uses base artifact paths (`tmp/watcher_state.json`), `dev` uses `-dev` subdirectories (`tmp-dev/watcher_state.json`).
 - Incidents and audit surfaces respect environment separation to prevent cross-environment contamination.
+- The `test` bootstrap path resets runtime state explicitly before startup and verification.
 
 ### Settings and Policy Surfaces
 - Environment selection must resolve through explicit settings/runtime configuration, not through undocumented convention.
 - Lab/dev-only tuning must remain excluded from normal production runtime unless explicitly enabled by the documented control surface.
+- The local `test` path may remain workflow-driven while the runtime selector stays limited to `dev` and `prod`, as long as the supported bootstrap contract remains explicit.
 
 ## Production Safety Expectations
 
@@ -121,21 +141,21 @@ The local `test` profile is currently controlled by the repo-supported bootstrap
 
 | Variable | Values | Purpose | Default |
 | --- | --- | --- | --- |
-| `PKM_ENVIRONMENT` | `dev`, `prod` | **Explicit** first-class environment selection. Takes priority over all other signals. | (not set) |
-| `PKM_SETTINGS_PROFILE` | `operator`, `lab` | **Legacy** settings profile control. Maintained for backward compatibility. `lab` → dev environment, `operator` → prod environment. | `operator` |
+| `PKM_ENVIRONMENT` | `dev`, `prod` | **Explicit** first-class runtime environment selection. Takes priority over all other signals. | (not set) |
+| `PKM_SETTINGS_PROFILE` | `operator`, `lab` | **Legacy** settings profile control. Maintained for backward compatibility. `lab` -> dev environment, `operator` -> prod environment. | `operator` |
 
 ### Resolution Hierarchy
 
 Environment resolution follows this priority:
 
 1. **Explicit environment selection via `PKM_ENVIRONMENT`** (if set to `dev` or `prod`)
-   - The canonical modern control surface for environment selection
+   - The canonical modern control surface for runtime environment selection
    - Takes priority over settings profile
    - Case-insensitive; whitespace is stripped
 
 2. **Implicit environment from settings profile** (if `PKM_ENVIRONMENT` not set)
-   - `PKM_SETTINGS_PROFILE=lab` → `dev` environment
-   - `PKM_SETTINGS_PROFILE=operator` → `prod` environment (default)
+   - `PKM_SETTINGS_PROFILE=lab` -> `dev` environment
+   - `PKM_SETTINGS_PROFILE=operator` -> `prod` environment (default)
    - This mapping allows existing operator/lab workflows to continue working without changes
 
 3. **Default to prod** (if neither explicit nor implicit signals are present)
@@ -154,7 +174,7 @@ The settings profile is now understood as a **narrower control mechanism that li
 
 ## Canonical Local Test Bootstrap
 
-The official local `test` path is:
+The official local `test` golden path is:
 
 ```bash
 make test-bootstrap
@@ -162,6 +182,14 @@ make test-bootstrap
 
 Default target vault:
 - `TEST_VAULT_ROOT=$(pwd)/vault-test`
+
+Expanded path:
+1. reset runtime state
+2. initialize a clean test vault
+3. seed the UAT notes
+4. start the local stack against that vault
+5. verify health/status
+6. run scripted UAT
 
 Contract:
 - resets runtime state
@@ -173,31 +201,33 @@ Contract:
 
 Operator note:
 - `make test-vault-init` is the narrow helper that prepares the clean test vault without starting the stack.
-- The `test` profile is the current golden path for local verification; `dev` remains flexible, and `prod` remains the conservative operator posture.
+- `test` is the current golden path for local verification and stabilization work.
+- `dev` remains the flexible development posture, and `prod` remains the conservative operator posture.
 
 ## Relation to Current Health, Write Guard, and Settings Direction
 
 ### Health and Write Guard
 
-The health contract and write guard remain independent of environment selection. All production safety invariants (deterministic health checks, write guard enforcement, event safety) apply in both `dev` and `prod` environments. Environment selection does not bypass safety constraints.
+The health contract and write guard remain independent of environment selection. All production safety invariants (deterministic health checks, write guard enforcement, event safety) apply in `dev`, `test`, and `prod`. Environment selection does not bypass safety constraints.
 
 ### Settings and Configuration
 
-The environment model provides **one canonical control point for environment-specific behavior across the entire runtime**, replacing the earlier scattered approach where settings profiles and partial environment knobs controlled different aspects independently.
+The environment model provides **one canonical control point for environment-specific behavior across the runtime**, replacing the earlier scattered approach where settings profiles and partial environment knobs controlled different aspects independently.
 
-- **Before**: Operator/lab profiles controlled watcher tuning; other environment-specific features used ad-hoc env vars or configuration files
-- **After**: Environment selection (via `PKM_ENVIRONMENT`) is the canonical signal. Settings profiles are mapped to it for compatibility. New environment-specific behavior should register against the environment model, not add new scattered controls.
+- **Before**: Operator/lab profiles controlled watcher tuning; other environment-specific features used ad-hoc env vars or configuration files.
+- **After**: Environment selection (via `PKM_ENVIRONMENT`) is the canonical signal for `dev` and `prod`. Settings profiles are mapped to it for compatibility. The local `test` path is the explicit workflow-driven verification environment. New environment-specific behavior should register against this model rather than add new scattered controls.
 
 ### Operability and Transparency
 
 Operators can check the active environment and understand the configuration state:
 
-- `python -m app.cli settings-explain` and `python -m app.cli status` surface the resolved environment
-- Logs and diagnostics can report which environment is active
-- Configuration compiler and settings validator understand environment-aware behavior
+- `python -m app.cli settings-explain` and `python -m app.cli status` surface the resolved runtime environment
+- logs and diagnostics can report which runtime environment is active
+- the test bootstrap path remains explicit in `make test-bootstrap`, `docs/OPERATIONS.md`, and `docs/TESTING.md`
+- configuration compiler and settings validator understand environment-aware behavior
 
 Delivery receipt:
-- Issue #265 / PR #272 shipped environment-aware operator diagnostics across health, status, settings-explain, and incident-facing surfaces. Environment reporting is no longer pending future work in this document; remaining environment follow-through should focus on other bounded slices of the environment contract.
+- Issue #265 / PR #272 shipped environment-aware operator diagnostics across health, status, settings-explain, and incident-facing surfaces. Environment reporting is no longer pending future work in this document; remaining follow-through should focus on the bounded local `test` bootstrap contract and other explicit slices of the environment model.
 
 ## Implementation
 
@@ -208,12 +238,9 @@ Environment resolution is provided by `app.config.environment`:
 ```python
 from app.config.environment import active_environment, is_dev_environment, is_prod_environment
 
-# Get the resolved environment ('dev' or 'prod')
 env = active_environment()
 
-# Check environment state
 if is_dev_environment():
-    # Enable dev-only features
     pass
 ```
 
@@ -223,23 +250,24 @@ The resolution follows the documented hierarchy: explicit `PKM_ENVIRONMENT` > im
 
 Settings modules (watcher, agent, etc.) that need environment-specific behavior should:
 
-1. Import and use `active_environment()` to check environment state
-2. Document which settings are dev-only or environment-specific
-3. Respect the same write-safety and health constraints in both environments
-4. Test behavior in both environments
+1. Import and use `active_environment()` to check environment state.
+2. Document which settings are dev-only or environment-specific.
+3. Respect the same write-safety and health constraints in all environments.
+4. Test behavior in both runtime-selected environments and keep the workflow-driven `test` path explicit where relevant.
 
 The existing `app.settings.tiering` module continues to work and is now understood as implementing profile-based (operator/lab) access to the underlying environment model.
 
 ## Constraints and Out of Scope
 
-- Environment selection does not control vault/store/runtime artifact separation beyond the separation requirements above
-- Deployment automation, secrets handling, and CI/CD remain out of scope
-- Health/status/operator diagnostics changes are independent of environment selection
-- Multi-user/multi-instance coordination remains orthogonal to environment selection
+- Environment selection does not redefine product semantics.
+- Deployment automation, secrets handling, and CI/CD remain out of scope.
+- Health/status/operator diagnostics changes are independent of environment selection.
+- Multi-user/multi-instance coordination remains orthogonal to environment selection.
+- The current docs wave does not require promoting `test` into a third runtime selector before the supported bootstrap contract is stabilized.
 
 ## Suggested Validation
 
-- Check environment resolution: `python -c "from app.config.environment import active_environment; print(active_environment())"`
-- Explicit environment: `PKM_ENVIRONMENT=dev python -c ...` and `PKM_ENVIRONMENT=prod python -c ...`
-- Backward compatibility: `PKM_SETTINGS_PROFILE=lab python -c ...` should resolve to dev
-- Tests: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/config/test_environment.py -m "not pg"`in
+- confirm `python -m app.cli settings-explain` reports the resolved runtime environment coherently for `dev` and `prod`
+- confirm `make test-bootstrap` remains the documented local verification golden path for `test`
+- confirm environment-specific runtime artifacts do not leak between `dev`, `test`, and `prod` postures
+- confirm status/operations/testing docs all describe the same `dev` / `test` / `prod` model and the same bootstrap path

@@ -4,11 +4,12 @@ Authority: Canonical testing and validation strategy for the active baseline, in
 # TESTING
 
 ## Layers
-- Unit testing: pure functions and single-agent logic in isolation.
+- Unit / contract testing: pure functions, schemas, adapters, and bounded logic in isolation.
 - Integration testing: component boundaries such as API ↔ stores ↔ services, routing compilation, and outbox/store interactions.
-- System testing: end-to-end runtime flows such as note → ingest → index → ASK or watcher → panel → promotion chains.
+- System / bootstrap testing: end-to-end runtime flows such as note → ingest → index → ASK, watcher → panel → promotion chains, and clean-state local startup/bootstrap verification.
+- Scripted UAT: seeded-vault checks that assert operator-visible outcomes on the canonical local test path.
+- Real-vault acceptance: bounded verification against a real vault or real operator workflow when the capability claims operator-facing support.
 - System integration testing (SIT): opt-in flows that exercise multiple runtime systems or external dependencies together, such as live LLM/provider wiring and full startup/runtime verification.
-- Contract: `.done` event payload shape and DB side-effects per agent.
 - LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`).
 - Property-based ingest invariants: `tests/ingest/test_normalize_properties.py` ensures normalize outputs Core-6 fields robustly.
 
@@ -22,14 +23,15 @@ Authority: Canonical testing and validation strategy for the active baseline, in
 
 ## Execution Model
 
-The active strategy is a four-level pyramid. Each level protects a different class of regression and should remain explicit in both docs and CI.
+The active strategy is a lightweight verification and acceptance spine. It is V-model-inspired in the sense that each capability should define intent, implementation slices, verification, and acceptance, but it is intentionally kept practical and lightweight.
 
 | Level | Purpose | Typical scope | Gate posture |
 | --- | --- | --- | --- |
 | Unit + contract | Catch logic/schema regressions early | pure functions, adapters, event shapes, settings validation | PR-blocking |
 | Integration | Prove backend/runtime seams | pg-backed stores, queue wiring, API/store seams, CLI/service boundaries | PR-blocking for touched seams or nightly |
-| System / E2E | Prove the canonical runtime chain works | watcher/runtime loop, ingest→index→ASK, docker/runtime smoke | PR smoke plus broader nightly |
-| UAT / release | Prove operator-visible behavior on a golden vault pack | seeded vault, receipts/intents, rerun idempotence, status/health assertions | release/UAT gate |
+| System / bootstrap | Prove the canonical runtime and clean-state bootstrap chain works | watcher/runtime loop, ingest→index→ASK, docker/runtime smoke, `make test-bootstrap` slices | PR smoke plus broader nightly |
+| Scripted UAT | Prove the seeded-vault operator path works | seeded vault, receipts/intents, rerun idempotence, status/health assertions | release/UAT gate |
+| Real-vault acceptance | Prove the claimed operator-facing capability works in a realistic bounded environment | real vaults, bounded operator flows, acceptance walkthroughs | explicit acceptance gate for capabilities that claim it |
 
 ## Dual Validation Model
 
@@ -78,6 +80,30 @@ Expected CI posture:
 | Operator flow, watcher automation, panel/promotion UX, local test bootstrap path | system/e2e + UAT harness |
 | Retrieval/ASK behavior | unit + e2e + opt-in eval when relevance/quality changes materially |
 
+## Bootstrap As A Verification Contract
+
+The local test bootstrap path is itself a testable contract. It should not be treated as informal setup glue.
+
+For bootstrap-sensitive capabilities, define all four of the following:
+- design / intent
+- implementation slices
+- verification path
+- acceptance path
+
+Bootstrap-specific rule:
+- a local bootstrap capability is not done when the stack can sometimes be started manually
+- it is done when the supported clean-state path is explicit, repeatable, verified, and acceptable as a repo-supported operator/developer workflow
+
+Current canonical local bootstrap path:
+1. reset runtime state
+2. initialize a clean test vault
+3. seed the UAT notes
+4. start the local stack
+5. verify health/status
+6. run scripted UAT
+
+The canonical command wrapper for that path is `make test-bootstrap`.
+
 ## Evaluation Stack (Registry Watcher / Panel / Promotion)
 Delivery receipt: Quality Wave phases A-F landed across PRs #197, #198, #199, #200, #201, #202, and #210; this section is the lasting validation contract for the shipped stack.
 - **A. Contract tests** — assert watcher→panel→promotion event envelopes and payload invariants; run via `pytest -q tests/e2e/test_watcher_registry_e2e.py -m "not pg"` (exact command may move to `tests/fitness`).
@@ -99,6 +125,8 @@ The scripted UAT harness should behave like a release candidate check, not just 
 - the harness emits a machine-readable report for CI/UAT automation
 
 ### Local test bootstrap contract
+
+This bootstrap contract should be treated as a stabilization and release gate for the local `test` environment. If the repo claims a supported local verification path, the bootstrap path itself must remain observable, resettable, and reproducible.
 
 The repo-supported local test bootstrap path is:
 

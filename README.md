@@ -75,6 +75,8 @@ Common safety switches:
 - `WATCHER_AUTO_EXEC=0` switches watcher to emit-only mode. Runtime/startup defaults to `WATCHER_AUTO_EXEC=1` when unset.
 - `WATCHER_SCOPE_GLOB="<inbox>/**"` restricts watcher scanning (default derives from vault layout/inbox).
 
+For repo-supported local runtime verification, follow the official local `test` bootstrap path rather than assembling ad hoc startup steps. Use `make test-bootstrap` and the guidance in `docs/OPERATIONS.md`, `docs/ENVIRONMENTS.md`, and `docs/TESTING.md`.
+
 ## Golden Path (Alpha E2E)
 The canonical “does the whole chain work?” contract lives in `docs/runbooks/E2E_ALPHA.md`.
 
