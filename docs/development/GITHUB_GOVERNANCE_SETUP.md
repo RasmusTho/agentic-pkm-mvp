@@ -64,6 +64,7 @@ Required automation:
 - PR opened -> `Status=In Progress`
 - PR review requested -> `Status=Review`
 - PR merged -> `Status=Done`
+- PR closed -> `Status=Done` when the PR is terminal and no longer active
 - issue and PR Project items are reconciled by repo-side workflow so merged PR cards and closed Issue cards do not drift
 
 Interpretation note:
@@ -78,7 +79,7 @@ Lifecycle guardrails:
 - active implementation must not remain `Ready`
 - `Review` must not be used only because a PR exists; use it when review handoff is explicit
 - closed issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`
-- merged PR items must not remain unset or non-terminal in the Project; they should reconcile to `Done`
+- merged or otherwise closed terminal PR items must not remain unset or non-terminal in the Project; they should reconcile to `Done`
 
 Projection rule:
 - When Project state disagrees with Issue state, PR state, or merged delivery reality, treat the Issue/PR state as authoritative and correct the Project opportunistically.
