@@ -115,7 +115,7 @@ Execution rule:
 
 Docs-authoring and governance-lane PRs are separate lanes and do not replace this implementation contract.
 
-Optional repo-local Codex skills may assist with either lane from `.codex/skills/`, but they do not replace the governing repo policy. Implementation-facing skills must still route work through the same `Docs -> Issue -> Project -> Agent -> PR -> CI -> Feedback` sequence and keep `AGENTS.md` as the canonical builder-agent policy surface.
+Optional repo-local Codex skills may assist with either lane from `.codex/skills/`, but they do not replace the governing repo policy. Implementation-facing skills must still route work through the same `Docs -> Issue -> Project -> Agent -> PR -> PR integration -> CI -> Feedback` sequence and keep `AGENTS.md` as the canonical builder-agent policy surface.
 
 Lifecycle truth rule:
 

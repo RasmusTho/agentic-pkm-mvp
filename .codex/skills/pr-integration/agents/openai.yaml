@@ -1,0 +1,4 @@
+interface:
+  display_name: "PR Integration"
+  short_description: "Prepare PR state before verification"
+  default_prompt: "Use $pr-integration to make this PR mergeable, policy-compliant, and CI-attached before verification."

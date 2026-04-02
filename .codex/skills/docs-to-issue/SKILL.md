@@ -11,7 +11,7 @@ Your job is to convert active documentation into bounded GitHub Issues without i
 
 ## Canonical workflow
 
-`Docs -> Issue -> Project -> Issue maintenance -> Agent -> PR -> CI -> Verification -> Project/doc closure -> Owner Doc`
+`Docs -> Issue -> Project -> Issue maintenance -> Agent -> PR -> PR integration -> CI -> Verification -> Project/doc closure -> Owner Doc`
 
 Plus: periodic reconciliation.
 
