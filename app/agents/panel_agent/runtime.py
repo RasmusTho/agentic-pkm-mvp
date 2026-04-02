@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from datetime import datetime, timezone
@@ -234,12 +235,42 @@ def _apply_note_writeback(
     # Persist executed IDs so reruns are idempotent.
     upsert_executed_ids(note_uuid, [stable_action_id(label) for label in executed_labels])
 
+    # Refresh companion content_hash so it reflects the post-writeback content.
+    _refresh_companion_hash(note_uuid, updated, vault_root, note_file)
+
     logger.info(
         "panel writeback applied note_path=%s removed=%d receipts=%d",
         note_file,
         len(ids_to_remove),
         len(receipts),
     )
+
+
+def _refresh_companion_hash(
+    note_uuid: str,
+    updated_text: str,
+    vault_root: Path | None,
+    note_file: Path,
+) -> None:
+    """Update the companion note's content_hash after writeback so it stays consistent."""
+    if vault_root is None:
+        return
+    try:
+        from app.services.companion_note import read_companion, write_companion
+        from scripts.yaml_roundtrip import load_frontmatter
+
+        companion = read_companion(vault_root, note_uuid)
+        if companion is None:
+            return
+        _, body = load_frontmatter(updated_text)
+        content = (body or updated_text).strip()
+        new_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if companion.content_hash == new_hash:
+            return
+        companion.content_hash = new_hash
+        write_companion(vault_root, companion)
+    except Exception:
+        logger.debug("companion hash refresh skipped note_uuid=%s", note_uuid, exc_info=True)
 
 
 __all__ = ["execute_panel_intent", "PanelRuntimeResult"]
