@@ -6,9 +6,9 @@ Authority: Canonical environment contract and implementation for the current bas
 
 ## Overview
 
-This document defines `dev` and `prod` as first-class environments in the active SoT, specifies the control surfaces for runtime environment selection and artifact path scoping, and documents the cross-environment invariants that must hold.
+This document defines the active environment model for the repo, specifies the control surfaces for runtime environment selection and artifact path scoping, and documents the cross-environment invariants that must hold.
 
-The purpose of this document is to make environment boundaries explicit and ensure that dev and prod maintain separate vault, store, and runtime artifact surfaces when environment isolation is required.
+The purpose of this document is to make environment boundaries explicit and ensure that supported environments maintain clear vault, store, and runtime boundaries when isolation is required.
 
 Reading rule:
 - Use this document when a change touches environment-specific behavior, storage boundaries, runtime topology, write safety, or rollout posture.
@@ -22,6 +22,12 @@ Reading rule:
 - **Allowed posture**: narrower safety assumptions, mock or local providers, test fixtures, selective resets, and lab-only runtime tuning.
 - **Typical expectation**: failures are acceptable if they are observable, bounded, and do not threaten production continuity artifacts.
 
+### `test`
+- **Purpose**: isolated, resettable, reproducible local verification and UAT against a clean vault.
+- **Typical users**: developers and operators validating the repo-supported bootstrap path from scratch.
+- **Required posture**: deterministic setup, no hidden folder hints, no dependence on a live dev vault, and explicit verification via health/status plus the scripted UAT harness.
+- **Implementation note**: `test` is the canonical local bootstrap profile today. It is currently expressed through the repo-supported bootstrap path (`make test-bootstrap`, `make test-vault-init`, `uat-*`, and `scripts/start_full_system.sh`) rather than as a third first-class `PKM_ENVIRONMENT` runtime selector. This keeps the current runtime control surface stable while establishing the `dev` / `test` / `prod` model in docs and repo-supported workflows.
+
 ### `prod`
 - **Purpose**: the operator-facing runtime used against a real vault and its associated runtime surfaces.
 - **Typical users**: the human operator and the runtime processes that act on the operator's real knowledge environment.
@@ -30,7 +36,7 @@ Reading rule:
 
 ## Cross-Environment Invariants
 
-The following are SoT invariants and MUST remain true in both `dev` and `prod`:
+The following are SoT invariants and MUST remain true in `dev`, `test`, and `prod`:
 - The same architecture contracts apply: vault-first human surface, companion/system surface, and rebuildable runtime surface.
 - The event envelope and outbox semantics remain stable; DB outbox is canonical runtime queue semantics.
 - Writes to tracked notes remain deterministic and guarded by write-safety and idempotency rules.
@@ -42,12 +48,12 @@ Environment is therefore an operational/runtime distinction, not a different ont
 
 ## Allowed Variation by Environment
 
-The following may vary between `dev` and `prod` without breaking SoT, as long as the invariants above remain intact:
+The following may vary between `dev`, `test`, and `prod` without breaking SoT, as long as the invariants above remain intact:
 - runtime scale, process topology, and startup wrappers
 - provider choice and model profile
 - diagnostic verbosity, mocks, and test fixtures
 - watcher cadence, tuning, and other explicit lab-only controls
-- local fixture vaults, test stores, and rebuild/reset workflows
+- local fixture vaults, test stores, reset/reseed workflows, and scripted bootstrap wrappers
 - operator gating and rollout posture for mutation-capable automation
 
 **Variation rule**: environment-specific defaults may vary; environment-specific contract semantics may not.
@@ -59,6 +65,7 @@ Environment separation MUST be explicit across the following surfaces.
 ### Vaults and Human-Facing Files
 - `prod` must operate on the operator's real vault and its associated continuity artifacts.
 - `dev` must use a separate fixture, test, or otherwise intentionally non-production vault when environment-specific experimentation or validation is being performed.
+- `test` must use a separate clean vault dedicated to the repo-supported bootstrap/UAT path. The canonical local target is `vault-test/` when following `make test-bootstrap`.
 - `dev` and `prod` must not implicitly share the same writable vault surface when the purpose is environment isolation.
 
 **Implementation Status (Issue #266)**:
@@ -69,6 +76,7 @@ Environment separation MUST be explicit across the following surfaces.
 ### Stores and Persistence
 - `prod` runtime persistence must be treated as production data even when it is rebuildable from the file-based continuity set.
 - `dev` stores, indexes, and outbox state may be reset, rebuilt, or replaced for testing.
+- `test` runtime state may be reset and rebuilt as part of the supported bootstrap contract; repeatability is more important than persistence.
 - Rebuildable does not mean disposable in `prod`; recovery and audit expectations still apply.
 
 **Implementation Status (Issue #266)**:
@@ -80,6 +88,7 @@ Environment separation MUST be explicit across the following surfaces.
 ### Runtime State and Process Surfaces
 - Watcher state, heartbeats, tick logs, incident logs, and similar runtime artifacts must be interpreted as environment-scoped operational surfaces.
 - `dev` may expose extra diagnostics and lab-only controls.
+- `test` may reuse the standard local runtime topology, but the repo-supported bootstrap path must reset runtime state before verification and must not rely on leftover watcher pause/state files.
 - `prod` must keep these surfaces stable enough to support operator verification and incident triage.
 
 **Implementation Status (Issue #266)**:
@@ -105,7 +114,8 @@ Environment separation MUST be explicit across the following surfaces.
 
 ## Runtime Control Surface
 
-The runtime provides explicit environment selection through a documented control surface with a clear priority hierarchy.
+The runtime provides explicit environment selection through a documented control surface with a clear priority hierarchy for `dev` and `prod`.
+The local `test` profile is currently controlled by the repo-supported bootstrap commands rather than a third `PKM_ENVIRONMENT` selector.
 
 ### Environment Variables
 
@@ -140,7 +150,30 @@ The existing `PKM_SETTINGS_PROFILE` control mechanism continues to work without 
 - Dev/lab workflows using `PKM_SETTINGS_PROFILE=lab` are mapped to the `dev` environment
 - **No existing behavior changes silently.** Operators see the same control semantics; they now route through the explicit environment model internally.
 
-The settings profile is now understood as a **narrower control mechanism that lives beneath the environment model**, rather than the full environment specification. As the runtime evolves, new environment-specific behavior should be controlled via `PKM_ENVIRONMENT` rather than extending the settings profile approach.
+The settings profile is now understood as a **narrower control mechanism that lives beneath the environment model**, rather than the full environment specification. As the runtime evolves, new environment-specific behavior should be controlled via `PKM_ENVIRONMENT` rather than extending the settings profile approach. The exception is the current repo-supported `test` bootstrap profile, which is intentionally implemented as a bounded local workflow first.
+
+## Canonical Local Test Bootstrap
+
+The official local `test` path is:
+
+```bash
+make test-bootstrap
+```
+
+Default target vault:
+- `TEST_VAULT_ROOT=$(pwd)/vault-test`
+
+Contract:
+- resets runtime state
+- bootstraps a clean test vault layout without undocumented folder env vars
+- seeds the repo-supported UAT note pack
+- starts the local stack against that vault
+- verifies health/status
+- runs the scripted UAT flow successfully
+
+Operator note:
+- `make test-vault-init` is the narrow helper that prepares the clean test vault without starting the stack.
+- The `test` profile is the current golden path for local verification; `dev` remains flexible, and `prod` remains the conservative operator posture.
 
 ## Relation to Current Health, Write Guard, and Settings Direction
 

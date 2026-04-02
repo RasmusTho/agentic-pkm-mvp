@@ -75,7 +75,7 @@ Expected CI posture:
 | Pure business logic / parser / helper | unit + nearby contract tests |
 | Event schema, outbox, promotion, watcher policy | unit + contract + targeted integration/e2e |
 | Store/backend/runtime queue changes | unit + pg/integration + system/e2e |
-| Operator flow, watcher automation, panel/promotion UX | system/e2e + UAT harness |
+| Operator flow, watcher automation, panel/promotion UX, local test bootstrap path | system/e2e + UAT harness |
 | Retrieval/ASK behavior | unit + e2e + opt-in eval when relevance/quality changes materially |
 
 ## Evaluation Stack (Registry Watcher / Panel / Promotion)
@@ -97,6 +97,21 @@ The scripted UAT harness should behave like a release candidate check, not just 
 - the seeded evergreen note reaches the expected frontmatter state
 - a second run over the same snapshot produces no new watcher/panel/promotion side effects
 - the harness emits a machine-readable report for CI/UAT automation
+
+### Local test bootstrap contract
+
+The repo-supported local test bootstrap path is:
+
+```bash
+make test-bootstrap
+```
+
+Regression protection for that path must cover:
+- clean-state vault layout bootstrap without undocumented folder hints
+- seeded UAT notes being inside the startup ingest contract
+- scripted UAT running against the real vault root with an explicit scoped folder, not by treating `<vault>/Test` as a standalone vault
+- reset clearing watcher pause/state artifacts that would make the next startup appear healthy while the watcher is paused
+- shell-local bootstrap resilience when `DEBUG` is exported with a non-boolean value
 
 ## CI And Fitness Gates
 

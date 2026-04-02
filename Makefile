@@ -1,6 +1,7 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs test-vault-init test-bootstrap
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
+TEST_VAULT_ROOT ?= $(PWD)/vault-test
 
 fmt:
 	rufflehog --version >/dev/null 2>&1 || true
@@ -58,6 +59,16 @@ reset-zero:
 
 reset-zero-force:
 	@RESET_FORCE=1 bash scripts/reset_to_zero.sh
+
+test-vault-init:
+	@mkdir -p "$(TEST_VAULT_ROOT)"
+	@$(PYTHON) -m app.cli vault-layout-ensure --vault-root "$(TEST_VAULT_ROOT)" --json >/dev/null
+	@$(PYTHON) -m app.cli uat-seed-vault-test --vault-root "$(TEST_VAULT_ROOT)" --overwrite >/dev/null
+
+test-bootstrap: reset-zero-force test-vault-init
+	@VAULT_ROOT="$(TEST_VAULT_ROOT)" scripts/start_full_system.sh
+	@VAULT_ROOT="$(TEST_VAULT_ROOT)" bash scripts/verify_runtime_stack.sh
+	@VAULT_ROOT="$(TEST_VAULT_ROOT)" $(PYTHON) -m app.cli uat-run-vault-test --vault-root "$(TEST_VAULT_ROOT)" --assert
 
 alpha-e2e-smoke:
 	@$(PYTHON) - <<'PY'
