@@ -153,7 +153,7 @@ Required service/env contract:
 - `POSTGRES_USER=app`
 - `POSTGRES_PASSWORD=app`
 - `POSTGRES_DB=app`
-- `DATABASE_URL=postgresql://app:app@localhost:5432/app`
+- `DATABASE_URL` or `DB_DSN` points at the target Postgres endpoint; the repo DB abstraction normalizes psycopg/SQLAlchemy forms
 - `STORE_BACKEND=pg`
 - schema prepared with `alembic upgrade head`
 

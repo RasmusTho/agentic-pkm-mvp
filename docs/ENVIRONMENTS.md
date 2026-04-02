@@ -163,6 +163,9 @@ Operators can check the active environment and understand the configuration stat
 - Logs and diagnostics can report which environment is active
 - Configuration compiler and settings validator understand environment-aware behavior
 
+Delivery receipt:
+- Issue #265 / PR #272 shipped environment-aware operator diagnostics across health, status, settings-explain, and incident-facing surfaces. Environment reporting is no longer pending future work in this document; remaining environment follow-through should focus on other bounded slices of the environment contract.
+
 ## Implementation
 
 ### Runtime Contracts
