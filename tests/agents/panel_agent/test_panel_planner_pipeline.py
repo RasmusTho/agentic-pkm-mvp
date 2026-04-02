@@ -9,9 +9,10 @@ import pytest
 
 from app.agents.panel_agent.agent import run_panel_intent_for_note
 from app.agents.panel_agent.intent import PanelActionIntent
+from app.agents.panel_agent.planning import plan_panel_actions
 from app.agents.panel_agent.runtime import execute_panel_intent
 from app.agents.panel_agent.settings import get_panel_agent_pipeline
-from app.events.panel import NoteRef
+from app.events.panel import NoteRef, PanelActionMapping, PanelIntentAction
 from app.store import object_store as object_store_module
 from app.store.object_store import DomainObject, ObjectStore
 from app.stores.plan_store import get_plan_store, reset_plan_store
@@ -57,6 +58,21 @@ Please process this panel.
 """
 
 
+def _panel_markdown_multi(actions: list[tuple[str, bool]]) -> str:
+    lines = []
+    for label, checked in actions:
+        mark = "x" if checked else " "
+        lines.append(f"- [{mark}] {label}")
+    body = "\n".join(lines)
+    return f"""%% AI:Start %%
+## AI-instruktion
+Please process this panel.
+## AI-åtgärder
+{body}
+%% AI:End %%
+"""
+
+
 def _read_outbox(outbox_path: Path) -> list[dict]:
     if not outbox_path.exists():
         return []
@@ -78,6 +94,43 @@ def test_panel_action_intent_round_trip() -> None:
     assert restored.instruction == "Do things"
     assert restored.actions == ["promote.evergreen"]
     assert restored.source == "panel_agent"
+
+
+def test_plan_panel_actions_creates_ordered_step_chain() -> None:
+    note = NoteRef(uuid="abc-123", path="vault/Test.md", origin="vault")
+    intent = PanelActionIntent(
+        note=note,
+        instruction="Do things in order",
+        actions=["promote.evergreen", "note.archive"],
+        resolved_actions=[
+            PanelIntentAction(
+                id="promote.evergreen",
+                label="Promote",
+                checked=True,
+                mapping=PanelActionMapping(
+                    id="promote.evergreen",
+                    intent_type="promotion",
+                    downstream_event="review.promote.evergreen",
+                    params={"maturity": "evergreen"},
+                ),
+            )
+        ],
+        source="panel_agent",
+    )
+
+    plan = plan_panel_actions(intent, event_id="evt-123", trace_id="trace-123")
+
+    assert [step.id for step in plan.steps] == ["step-1", "step-2"]
+    assert plan.steps[0].depends_on == []
+    assert plan.steps[1].depends_on == ["step-1"]
+    assert plan.steps[0].metadata["sequence_index"] == 1
+    assert plan.steps[1].metadata["sequence_index"] == 2
+    assert plan.steps[1].metadata["sequence_total"] == 2
+    assert plan.context["panel_plan"] == {
+        "contract_version": "panel.ordered.v1",
+        "ordered": True,
+        "action_ids": ["promote.evergreen", "note.archive"],
+    }
 
 
 def test_pipeline_setting_defaults_and_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -139,4 +192,41 @@ def test_execute_panel_intent_planner_creates_plan(tmp_path: Path, monkeypatch: 
     assert plan.meta.source_object_uuid == note_uuid
     assert "panel" in plan.tags
     assert plan.trigger and plan.trigger.event_id == events[0].event_id
+    assert plan.context["panel_plan"]["ordered"] is True
+    assert plan.steps[0].metadata["ordered_contract"] == "panel.ordered.v1"
 
+
+def test_execute_panel_intent_planner_includes_logged_selected_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    note_uuid = str(uuid4())
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    settings_path = _settings_file(tmp_path)
+    markdown = _panel_markdown_multi(
+        [
+            ("Gör denna anteckning evergreen", True),
+            ("Archive this note", True),
+        ]
+    )
+    _seed_note(note_uuid, markdown)
+
+    monkeypatch.setenv("PANEL_AGENT_PIPELINE", "planner")
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-panel-planner-multi")
+    assert len(events) == 1
+    execute_panel_intent(events[0], outbox_path=outbox_path)
+
+    store = get_plan_store()
+    plans = store.list_by_event(events[0].event_id)
+    assert len(plans) == 1
+    plan = plans[0]
+    assert [step.id for step in plan.steps] == ["step-1", "step-2"]
+    assert [step.metadata["action_id"] for step in plan.steps] == [
+        "promote.evergreen",
+        "archive this note",
+    ]
+    assert plan.steps[1].kind == "note"
+    assert plan.steps[1].depends_on == ["step-1"]
