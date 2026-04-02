@@ -40,7 +40,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
     - Next slices: checkpoint persistence, retry/timeout policy.
   - PanelAgent 2.0 timeline: <!-- PA2-ROLLUP -->
     - v5.5C: decider — shipped (rule default + opt-in LLM mode + fallback + telemetry).
-    - v5.6 shipped/in progress: engine-neutral cognition seam (#244, PR #249), freeform catalog-driven proposal path (#241, PR #248), suggested checkbox writeback for uncertain/freeform panel proposals (#242). Remaining: multi-step plans (#243), real-vault acceptance (#240).
+    - v5.6 shipped/in progress: engine-neutral cognition seam (#244, PR #249), freeform catalog-driven proposal path (#241, PR #248), suggested checkbox writeback for uncertain/freeform panel proposals (#242), multi-step plans (#243, PR #302). Remaining: real-vault acceptance (#240).
     - v5.7: advanced (panel versioning, cross-note coordination).
   - Vault-as-GUI settings compiler (`@Settings` / System/Config) now covers panel-action catalogs, watcher settings, and outbox paths with CI schema checks (v5.6 track).
   - LangGraph rollout to additional agents (Promotion/Reviewer/Hygiene) in phases:
@@ -220,7 +220,7 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 | v5.1–v5.4 | Watcher track (ingest/panel CLI, policy, ergonomics) | Operationally accepted |
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
 | v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
-| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler; remaining: multi-step plans, real-vault acceptance | Selective forward work (seam + freeform shipped) |
+| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler; remaining: real-vault acceptance | Selective forward work (seam + freeform + plans shipped) |
 | v6.0 | Wanted-state architecture pass to align runtime boundaries with the newer human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
 
 ## Tracks (details moved)
