@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import Any, List
 
 from app.agents.panel_agent.intent import PanelActionIntent
 from app.events.panel import PanelIntentAction
@@ -11,6 +11,7 @@ from app.events.models import new_event
 
 
 _PANEL_AGENT_ID = "panel_agent.v5"
+_PANEL_PLAN_CONTRACT_VERSION = "panel.ordered.v1"
 
 
 def _is_promotion(action_id: str, action: PanelIntentAction | None) -> bool:
@@ -36,8 +37,16 @@ def _steps_for_actions(
 ) -> List[PlanStep]:
     steps: List[PlanStep] = []
     resolved = resolved or []
+    total = len(actions)
     for idx, action_id in enumerate(actions, start=1):
         action = next((candidate for candidate in resolved if candidate.id == action_id), None)
+        metadata: dict[str, Any] = {
+            "action_id": action_id,
+            "sequence_index": idx,
+            "sequence_total": total,
+            "ordered_contract": _PANEL_PLAN_CONTRACT_VERSION,
+        }
+        depends_on = [f"step-{idx - 1}"] if idx > 1 else []
         if _is_promotion(action_id, action):
             steps.append(
                 PlanStep(
@@ -47,7 +56,8 @@ def _steps_for_actions(
                     tool="promotion.emit_intent",
                     tool_args=_promotion_tool_args(action_id, note_uuid, action, instruction),
                     reason="Panel requested evergreen promotion",
-                    metadata={"action_id": action_id, "intent_type": "promotion"},
+                    depends_on=depends_on,
+                    metadata={**metadata, "intent_type": "promotion"},
                     agent_id=_PANEL_AGENT_ID,
                 )
             )
@@ -58,7 +68,8 @@ def _steps_for_actions(
                     kind="note",
                     description=f"Unhandled panel action: {action_id}",
                     reason="Panel action not yet mapped to a tool",
-                    metadata={"action_id": action_id},
+                    depends_on=depends_on,
+                    metadata=metadata,
                 )
             )
     return steps
@@ -81,6 +92,11 @@ def plan_panel_actions(intent: PanelActionIntent, *, event_id: str | None = None
         context={
             "panel_instruction": intent.instruction,
             "panel_actions": list(intent.actions),
+            "panel_plan": {
+                "contract_version": _PANEL_PLAN_CONTRACT_VERSION,
+                "ordered": True,
+                "action_ids": list(intent.actions),
+            },
             "source": intent.source,
         },
         tags=["panel", "panel_agent", "panel:planner"],

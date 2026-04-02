@@ -99,8 +99,9 @@ Architectural reading note:
 - not as proof that every future cognition or capability boundary should be modeled as a dedicated event-emitting agent.
 
 ### Planner pipeline (opt-in)
-- `PANEL_AGENT_PIPELINE=planner` keeps the external runtime behaviour the same and also builds a `PanelActionIntent` for triggered actions, storing a plan via Planner (`plan_panel_actions`).
+- `PANEL_AGENT_PIPELINE=planner` keeps the external runtime behaviour the same and also builds a `PanelActionIntent` for ordered handled actions (`triggered` and `logged`), storing a plan via Planner (`plan_panel_actions`).
 - Plans include promotion steps mapped to the `promotion.emit_intent` tool. They can be executed via Orchestrator in a CLI-first path: `python -m app.cli panel-orchestrate-plan --plan-id <plan_id>`. Watcher-driven execution remains off for now.
+- Saved panel plans use an explicit ordered contract (`panel.ordered.v1`): plan context records the ordered action ids and each step carries sequence metadata plus a `depends_on` chain so orchestrator-facing execution order does not rely on list position alone.
 - Decider and pipeline are orthogonal toggles:
   - `PANEL_AGENT_DECIDER=rule|llm` selects how actions are chosen (default `rule`).
   - `PANEL_AGENT_PIPELINE=direct|planner` selects whether to emit promotion directly (default) or also create plans (planner mode).
