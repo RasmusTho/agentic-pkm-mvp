@@ -3,5 +3,9 @@ State: Compatibility pointer. Canonical development workflow guidance now lives 
 
 This file is a compatibility entrypoint.
 
-For the active builder-agent workflow and validation rules, use `docs/development/DEV_WORKFLOW.md`.
+Canonical workflow guidance now lives in `docs/development/DEV_WORKFLOW.md`.
+Use that document for the active planning and execution model:
+
+`Docs / SoT / plan -> Capability / Epic -> Slice / Child issue -> Code / PR -> Verification -> Acceptance`
+
 For canonical builder-agent instructions, use the root `AGENTS.md`.

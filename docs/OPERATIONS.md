@@ -16,7 +16,7 @@ Reading order:
 3. Follow `docs/OBSERVABILITY.md` for interpreting telemetry and counters.
 4. Use `docs/INFRASTRUCTURE.md` when you need Docker/runtime topology, local startup flow, or the local monitoring stack.
 5. Use `docs/runbooks/` only for task-specific walkthroughs after you have identified the affected runtime surface.
-6. Use `docs/ENVIRONMENTS.md` when the question is whether behavior belongs to `dev`, `prod`, or both.
+6. Use `docs/ENVIRONMENTS.md` when the question is whether behavior belongs to `dev`, `test`, `prod`, or a boundary between them.
 
 CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
@@ -38,8 +38,9 @@ CLI note:
 This document is primarily the `prod` operator entrypoint.
 
 Environment contract:
-- `dev` and `prod` are defined in `docs/ENVIRONMENTS.md`.
+- `dev`, `test`, and `prod` are defined in `docs/ENVIRONMENTS.md`.
 - Production operation means the runtime is acting against the operator's real vault and its production-facing runtime surfaces.
+- The local `test` bootstrap path is the isolated verification posture, not production operation.
 - Lab/dev-only flows, fixture vaults, legacy watcher paths, and reset-heavy workflows are not production operation even when they use the same codebase.
 
 Operator rule:
@@ -50,6 +51,42 @@ Current runtime path:
 1. The registry watcher scans the vault and emits DB outbox events.
 2. The worker consumes DB outbox rows and performs ingest/index, panel scan, and promotion work.
 3. Health, status, and metrics confirm whether that path is healthy.
+
+## Canonical Local Test Bootstrap
+
+The repo-supported local runtime verification path is the local `test` bootstrap golden path.
+
+Use this path when you need a clean-state, repeatable verification run rather than flexible `dev` exploration:
+
+1. reset runtime state
+2. initialize a clean test vault
+3. seed the UAT notes
+4. start the local stack against that vault
+5. verify health/status
+6. run scripted UAT
+
+Canonical command:
+
+```bash
+make test-bootstrap
+```
+
+Expanded command path:
+
+```bash
+make test-vault-init
+VAULT_ROOT="$(pwd)/vault-test" scripts/start_full_system.sh
+VAULT_ROOT="$(pwd)/vault-test" bash scripts/verify_runtime_stack.sh
+VAULT_ROOT="$(pwd)/vault-test" python -m app.cli uat-run-vault-test --vault-root "$(pwd)/vault-test" --assert
+```
+
+Operational intent:
+- this is the intended repo-supported path for local runtime verification
+- `dev` remains the flexible local environment for exploration and debugging
+- `test` is the isolated verification environment that should be resettable and reproducible
+- the bootstrap path is itself part of the productized verification contract, not just setup glue
+
+Use `docs/runbooks/UAT_PANEL_WATCHER.md` for the detailed walkthrough and `docs/runbooks/RUNBOOK_RESET_TO_ZERO.md` when you need the full reset semantics.
 
 When the issue is startup topology or Compose wiring, switch to `docs/INFRASTRUCTURE.md`.
 When the issue is signal interpretation, switch to `docs/OBSERVABILITY.md`.
