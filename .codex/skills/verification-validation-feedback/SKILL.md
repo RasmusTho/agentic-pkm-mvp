@@ -39,6 +39,7 @@ Prioritize findings first:
 
 - governing GitHub Issue
 - linked PR
+- related closed PRs
 - changed files
 - `Source Anchors`
 - owner docs
@@ -60,6 +61,7 @@ Prioritize findings first:
 - Verify roadmap/plan wording was cleaned up if the item is now delivered.
 - Verify no duplicate `planned` and `shipped` statements remain active at once.
 - Verify Project lifecycle state still makes sense.
+- Verify closed terminal PR cards do not remain blank in the Project.
 - If work is incomplete, do not close the loop falsely. Create a bounded follow-up Issue instead.
 
 ## Lifecycle rules during verification
@@ -73,6 +75,7 @@ Prioritize findings first:
 - If the PR is merged and the linked Issue is satisfied, the default expected state is:
   - Issue: closed
   - Project Status: `Done`
+- If a related PR was closed without merge but represents terminal tracked work, ensure the Project projection is also terminal rather than blank.
 - If the work is partial:
   - keep the Issue open
   - correct labels/status so they reflect reality
@@ -85,6 +88,7 @@ Prioritize findings first:
 - Detect and correct false status where possible:
   - open issue that is already delivered
   - project item not moved to the correct status
+  - closed PR item still blank in the Project
   - roadmap/plan text still reads as pending after delivery
   - owner doc not updated even though behavior shipped
   - issue still marked `agent:ready` or `Backlog` even though a merged PR already satisfies acceptance criteria

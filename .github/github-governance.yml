@@ -58,6 +58,8 @@ project:
       set_status: Review
     - event: pr_merged
       set_status: Done
+    - event: pr_closed
+      set_status: Done
     - event: issue_or_pr_project_drift_detected
       reconcile_project_item_status: true
   interpretation:
@@ -65,7 +67,7 @@ project:
     ready_requires_agent_ready: true
     in_progress_covers_open_pr_before_review_handoff: true
     review_requires_explicit_review_handoff: true
-    done_requires_closed_issue_or_merged_delivery: true
+    done_requires_closed_issue_or_terminal_pr_card: true
     project_may_drift_when_platform_access_is_limited: true
 pull_requests:
   implementation:
