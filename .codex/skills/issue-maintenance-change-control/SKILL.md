@@ -32,7 +32,7 @@ You operate between:
 - Read `AGENTS.md` first (repo builder-agent policy).
 - For boundary moves, treat `docs/CORE_RUNTIME_AGENTIC_LAB_BOUNDARY.md` as the governing change-control contract.
 - Use `docs/DOCS_INDEX.md` to find owner docs for any affected surfaces.
-- If the request is "maintenance run on everything not done" or similar, default to open issues in the repo and do not touch Project state unless explicitly requested.
+- For maintenance runs, also read `docs/development/GITHUB_GOVERNANCE_SETUP.md` or `.github/github-governance.yml` so Issue/PR Project status is reconciled to the repo governance contract rather than left to best-effort automation drift.
 
 ## Core rules
 
@@ -165,7 +165,14 @@ Use this when the user asks for a maintenance run across everything not done.
      - Add `agent:ready` only if Scope/Constraints/Acceptance Criteria are concrete and no ambiguity remains.
      - Keep or set `agent:needs-human` for boundary moves without explicit direction or module paths.
      - Keep or set `agent:blocked` when external dependencies are stated.
+   - Reconcile Project state for each open issue to match label truth:
+     - `agent:ready` -> `Status=Ready`
+     - `agent:blocked` or `agent:needs-human` -> `Status=Backlog`
+     - if the issue is missing from the Project or missing `Status`, add/reconcile it during the same run
 4. Dedupe:
    - If duplicate issues have the same scope/contract, leave a comment pointing to the canonical issue and close the duplicate.
-5. Do not change GitHub Project Status unless explicitly asked.
-6. Output a receipt listing edited issues, labels changed, and any closures.
+5. Reconcile PR Project state for terminal PR cards in the same repo:
+   - list merged/closed PRs that are in the Project with missing `Status` or a non-terminal status
+   - set merged or otherwise closed terminal PR cards to `Done`
+6. Prefer the repo's reconciliation helper when present (for example `scripts/reconcile_project_status.py`) instead of ad hoc Project mutations.
+7. Output a receipt listing edited issues, label changes, issue status changes, and any PR cards moved to `Done`.
