@@ -33,6 +33,22 @@ The active strategy is a lightweight verification and acceptance spine. It is V-
 | Scripted UAT | Prove the seeded-vault operator path works | seeded vault, receipts/intents, rerun idempotence, status/health assertions | release/UAT gate |
 | Real-vault acceptance | Prove the claimed operator-facing capability works in a realistic bounded environment | real vaults, bounded operator flows, acceptance walkthroughs | explicit acceptance gate for capabilities that claim it |
 
+## Testing, Verification, Validation, And Acceptance
+
+Use these terms distinctly in both docs and execution:
+
+- Testing = the commands, suites, and checks that run.
+- Slice verification = proof that one bounded slice / child issue implemented its intended contract correctly.
+- Feature validation = proof that the wider feature / capability works for the intended operator or product outcome, sometimes after merge.
+- Acceptance = the explicit decision that the repo can now claim and support that feature in owner docs.
+
+Real-life evidence rule:
+- PRs should carry slice verification evidence.
+- Parent feature / capability issues should carry post-merge validation evidence and the acceptance checklist, typically through the issue body and validation comments.
+- Owner docs should change when the accepted support claim changes, not for every rerun or post-merge observation.
+
+This keeps docs stable while still allowing truthful post-merge validation.
+
 ## Dual Validation Model
 
 The repo uses two complementary validation tracks and they must not be collapsed into one gate.
