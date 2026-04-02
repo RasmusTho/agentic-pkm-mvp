@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Mapping, MutableMapping, Set, Union
+from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Set
 
 from app.planner.schema import Plan, PlanStep
 
@@ -64,7 +64,7 @@ class Orchestrator:
     def __init__(self, executor: PlanExecutor | None = None, *, tool_settings: Mapping[str, Any] | None = None) -> None:
         self._executor = executor or MockPlanExecutor()
         self._tool_settings = dict(tool_settings) if tool_settings else None
-        self._run_plan_impl = None  # Can be set by factory to use alternate implementation
+        self._run_plan_impl: Callable[[Plan], List[Dict[str, Any]]] | None = None
 
     def run_plan(self, plan: Plan) -> List[Dict[str, Any]]:
         # If using alternate implementation (e.g., V2), delegate to it
