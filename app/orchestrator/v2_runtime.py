@@ -14,7 +14,8 @@ Preserves:
 from __future__ import annotations
 
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+import time
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Set
 
 from app.planner.schema import Plan, PlanMetadata, PlanStep
@@ -187,7 +188,7 @@ class OrchestratorV2:
 
         # Execute with parallel scheduling
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-            pending_futures: Dict[str, Any] = {}
+            pending_futures: Dict[Future[Dict[str, Any]], tuple[PlanStep, str]] = {}
 
             while not graph.all_steps_completed(completed_steps):
                 # Get steps that can run now
@@ -235,7 +236,7 @@ class OrchestratorV2:
                         step, step_id = pending_futures.pop(future)
 
                         try:
-                            output = future.result()
+                            output: Dict[str, Any] = future.result()
                             emit_step_finished(
                                 plan_id=plan.id,
                                 step=step,
@@ -469,7 +470,12 @@ class OrchestratorV2:
                 # Retries exhausted
                 raise
 
-    def _emit_retry_event(self, plan_id: str, step_id: str, attempt: int, trace_id: str) -> None:
+        raise StepExecutionError(
+            last_error or f"step '{step.id}' failed after retry handling",
+            error_type=last_error_type,
+        )
+
+    def _emit_retry_event(self, plan_id: str, step_id: str, attempt: int, trace_id: str | None) -> None:
         """Emit a retry event."""
         if not self._outbox:
             return
@@ -501,7 +507,7 @@ class OrchestratorV2:
         self._checkpoint_store.save_checkpoint(checkpoint_key, checkpoint_data)
         self._emit_checkpoint_event(plan.id, len(completed_steps), plan.meta.trace_id)
 
-    def _emit_checkpoint_event(self, plan_id: str, step_count: int, trace_id: str) -> None:
+    def _emit_checkpoint_event(self, plan_id: str, step_count: int, trace_id: str | None) -> None:
         """Emit a checkpoint creation event."""
         if not self._outbox:
             return

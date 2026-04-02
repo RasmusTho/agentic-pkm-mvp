@@ -12,7 +12,7 @@ Only execute bounded implementation work from a GitHub Issue that is the canonic
 
 ## Canonical workflow
 
-`Docs -> Issue -> Project -> Issue maintenance -> Agent -> PR -> CI -> Verification -> Project/doc closure -> Owner Doc`
+`Docs -> Issue -> Project -> Issue maintenance -> Agent -> PR -> PR integration -> CI -> Verification -> Project/doc closure -> Owner Doc`
 
 Treat these Issue sections as binding:
 
@@ -128,7 +128,8 @@ When continuing through anchor drift:
 9. Rewrite roadmap/plan wording if the delivered work was previously listed as pending.
 10. Run `Suggested Validation` plus any obviously necessary focused checks.
 11. Open or update a PR linked to the governing Issue.
-12. Ensure Project Status is `Review` only once the PR is the active review handoff artifact.
+12. Run `.codex/skills/pr-integration/SKILL.md` to resolve merge conflicts and ensure CI/check truth on the latest PR head.
+13. Ensure Project Status is `Review` only once the PR is the active review handoff artifact.
 
 ## PR requirements
 

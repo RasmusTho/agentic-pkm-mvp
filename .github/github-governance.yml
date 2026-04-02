@@ -1,0 +1,118 @@
+version: 1
+issues:
+  source_of_truth: GitHub Issues
+  required_template: .github/ISSUE_TEMPLATE/task.yml
+  required_sections:
+    - Context
+    - Scope
+    - Source Anchors
+    - Constraints
+    - Acceptance Criteria
+    - Out of Scope
+    - Suggested Validation
+    - Source Docs
+labels:
+  type:
+    - type:task
+    - type:bug
+    - type:refactor
+  priority:
+    - prio:high
+    - prio:med
+    - prio:low
+  agent:
+    - agent:ready
+    - agent:blocked
+    - agent:needs-human
+  interpretation:
+    agent:ready: queue-eligible work when Status=Ready
+    agent:blocked: blocked by dependency or setup; normally non-active backlog work
+    agent:needs-human: blocked on human decision or missing authority; normally non-active backlog work
+project:
+  name: Agent Delivery Control Plane
+  type: github-project-v2
+  fields:
+    Status:
+      - Backlog
+      - Ready
+      - In Progress
+      - Review
+      - Done
+    Agent State:
+      - Idle
+      - Running
+      - Waiting
+  views:
+    - name: Kanban
+      group_by: Status
+    - name: Agent Queue
+      filter: "label:agent:ready status:Ready"
+  automation:
+    - event: issue_opened
+      set_status: Backlog
+    - event: issue_reopened_or_relabeled
+      reconcile_status_from_issue_state_and_agent_label: true
+    - event: pr_opened
+      set_status: In Progress
+    - event: pr_review_requested
+      set_status: Review
+    - event: pr_merged
+      set_status: Done
+    - event: pr_closed
+      set_status: Done
+    - event: issue_or_pr_project_drift_detected
+      reconcile_project_item_status: true
+  interpretation:
+    status_is_projection_of_issue_and_pr_truth: true
+    ready_requires_agent_ready: true
+    in_progress_covers_open_pr_before_review_handoff: true
+    review_requires_explicit_review_handoff: true
+    done_requires_closed_issue_or_terminal_pr_card: true
+    project_may_drift_when_platform_access_is_limited: true
+pull_requests:
+  implementation:
+    issue_reference_required: true
+  docs_authoring:
+    issue_reference_required: false
+    explicit_classification_required: true
+    allowed_paths:
+      - docs/**
+      - AGENTS.md
+      - CLAUDE.md
+      - .codex/AGENTS.md
+      - .github/github-governance.yml
+      - .github/ISSUE_TEMPLATE/*.yml
+      - .github/pull_request_template.md
+      - .github/workflows/issue-pr-governance.yml
+  governance_lane:
+    issue_reference_required: false
+    explicit_classification_required: true
+    allowed_paths:
+      - docs/**
+      - AGENTS.md
+      - CLAUDE.md
+      - .codex/AGENTS.md
+      - .codex/skills/**
+      - .github/github-governance.yml
+      - .github/ISSUE_TEMPLATE/*.yml
+      - .github/pull_request_template.md
+      - .github/workflows/issue-pr-governance.yml
+      - scripts/docs_guard.py
+      - scripts/reconcile_project_status.py
+      - scripts/validate_source_anchors.py
+      - tests/ops/test_project_status_reconcile.py
+rules:
+  pr_must_reference_issue_for_implementation: true
+  docs_authoring_prs_may_skip_issue_reference: true
+  docs_authoring_prs_must_be_docs_only: true
+  governance_lane_prs_may_skip_issue_reference: true
+  governance_lane_prs_must_be_limited_to_repo_governance_surfaces: true
+  agents_only_pick: label:agent:ready + status:Ready
+  agents_must_follow_issue_constraints: true
+  agents_must_satisfy_acceptance: true
+  no_free_form_tasks: true
+  backlog_state_lives_in_github: true
+  source_anchor_required_for_new_backlog_work: true
+  inline_doc_receipts_are_secondary: true
+  closed_issues_must_not_keep_agent_labels: true
+  issue_and_merge_state_are_harder_authority_than_project_projection: true

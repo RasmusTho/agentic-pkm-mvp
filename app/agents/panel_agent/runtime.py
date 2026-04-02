@@ -106,13 +106,18 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
 
     pipeline_mode = get_panel_agent_pipeline()
     if pipeline_mode == "planner":
-        triggered_ids = [a.id for a in state.action_results if a.checked and a.status == "triggered"]
-        if triggered_ids:
-            resolved_actions = [action for action in state.actions if action.id in triggered_ids]
+        planned_action_ids: list[str] = []
+        for result in state.action_results:
+            if not result.checked or result.status not in {"triggered", "logged"}:
+                continue
+            if result.id not in planned_action_ids:
+                planned_action_ids.append(result.id)
+        if planned_action_ids:
+            resolved_actions = [action for action in state.actions if action.id in planned_action_ids]
             state.panel_action_intent = PanelActionIntent(
                 note=intent_event.payload.note,
                 instruction=intent_event.payload.panel.instruction,
-                actions=triggered_ids,
+                actions=planned_action_ids,
                 resolved_actions=resolved_actions,
                 source="panel_agent",
             )
