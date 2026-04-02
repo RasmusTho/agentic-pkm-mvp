@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from typing import Any
 
 
 GOVERNANCE_PATH = Path(".github/github-governance.yml")
+DEFAULT_PROJECT_NAME = "Agent Delivery Control Plane"
 
 
 def run_gh(*args: str) -> str:
@@ -28,6 +30,8 @@ def run_gh(*args: str) -> str:
 
 
 def load_governance_project_name() -> str:
+    if not GOVERNANCE_PATH.exists():
+        return os.environ.get("GOVERNANCE_PROJECT_NAME", DEFAULT_PROJECT_NAME)
     content = GOVERNANCE_PATH.read_text(encoding="utf-8")
     match = re.search(r"(?m)^\s*name:\s*(.+?)\s*$", content)
     if not match:
