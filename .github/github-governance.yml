@@ -98,6 +98,9 @@ pull_requests:
       - .github/pull_request_template.md
       - .github/workflows/issue-pr-governance.yml
       - scripts/docs_guard.py
+      - scripts/reconcile_project_status.py
+      - scripts/validate_source_anchors.py
+      - tests/ops/test_project_status_reconcile.py
 rules:
   pr_must_reference_issue_for_implementation: true
   docs_authoring_prs_may_skip_issue_reference: true

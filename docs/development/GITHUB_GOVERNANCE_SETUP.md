@@ -126,6 +126,7 @@ Rules:
 ## Governance PR lane
 
 Governance lane is the separate PR path for bounded repository-governance changes that are not product/runtime implementation but are broader than docs-only authoring.
+This includes repo-meta enforcement code and focused tests when they change governance behavior rather than shipped system behavior.
 
 Approved governance surfaces:
 
@@ -139,10 +140,14 @@ Approved governance surfaces:
 - `.github/pull_request_template.md`
 - `.github/workflows/issue-pr-governance.yml`
 - `scripts/docs_guard.py`
+- `scripts/reconcile_project_status.py`
+- `scripts/validate_source_anchors.py`
+- `tests/ops/test_project_status_reconcile.py`
 
 Rules:
 
 - governance-lane PRs may change repo-local skills and lightweight governance enforcement
+- governance-lane PRs may include repo-meta enforcement code and focused regression tests for governance behavior
 - governance-lane PRs must be explicitly classified in the PR body
 - governance-lane PRs may omit an Issue reference when they stay within the approved governance surfaces
 - governance-lane PRs must not change product/runtime implementation or shipped feature behavior
