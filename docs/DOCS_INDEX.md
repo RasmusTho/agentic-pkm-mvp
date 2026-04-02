@@ -76,7 +76,7 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 - `docs/EMBEDDINGS.md` — Normative embeddings spec (identity, guardrails, rebuild policy).
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| README.md | Top-level overview | Aligned (forward line v5.x) | 2026-04-02 | v5.5 baseline quickstart + invariants; now also points readers to the official local `test` bootstrap path for runtime verification. |
+| README.md | Top-level overview | Aligned (forward line v5.x) | 2026-04-02 | v5.5 baseline quickstart + invariants; points readers to DOCS_INDEX/STATUS/ARCHITECTURE and the wider active docs set. |
 | docs/archive/docs-refactor/DOCS_REFACTOR_PLAN.md | Documentation simplification plan | Legacy (archived) | 2026-03-14 | Archived planning record for the 2026 docs cleanup effort; no longer an active decision surface. |
 | docs/archive/docs-refactor/DOCS_SECOND_WAVE_CLEANUP.md | Second-wave cleanup matrix | Legacy (archived) | 2026-03-14 | Archived execution matrix for the completed cleanup wave. |
 | docs/archive/docs-refactor/HISTORICAL_EXTRACTION_REVIEW.md | Historical extraction review | Legacy (archived) | 2026-03-14 | Archived extraction review used during the historical-doc cleanup pass. |
