@@ -5,8 +5,8 @@ Owner: Product / architecture forward line
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
-Last reviewed: 2026-04-02
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, current repo state on 2026-04-02
+Last reviewed: 2026-04-01
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, current repo state on 2026-04-01
 # Roadmap — Strategic Control
 
 This roadmap is forward-looking and skimmable. History lives in `docs/history/SOT_4X_HISTORY.md`; deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
@@ -24,13 +24,11 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 ## Now / Next / Later
 - **Now**
   - **v5.5 baseline lock + safety guard** — runtime/startup defaults `WATCHER_AUTO_EXEC=1`, but operators can force emit-only mode with `WATCHER_AUTO_EXEC=0`; allowlists, dedup/idempotency, optimistic writes, and write-guard/status signals remain the real enablement gates for safe rollout.
-  - Completion rule: capability work is not treated as done at implementation alone; verification and acceptance still define the actual end state.
   - PanelAgent LangGraph decider opt-in, watcher policy auto-exec plumbing (v5.5C in progress).
   - Watcher → panel → planner/orchestrator automation with safety limits now includes dedup reports, promotion consumer visibility, and explicit skipped receipts.
   - Vault-first config validation (panel wiring, watcher, outbox) with schema enforcement and `python -m app.cli.settings_explain`.
 - **Next**
   - **Environment contract follow-through** — implement the remaining docs-first environment contract slices from `docs/ENVIRONMENTS.md` in bounded steps: explicit runtime environment selection and environment-scoped vault/store separation are shipped, and environment-aware operator diagnostics are delivered via Issue #265 / PR #272; remaining follow-through should stay bounded and avoid changing the shared architecture contracts.
-  - **Local test environment bootstrap** — docs-first capability to productize the clean-state local verification path around `make test-bootstrap`, the `dev` / `test` / `prod` model, and the verification/acceptance spine for bootstrap work. This capability is enablement work for pilot stabilization and reliable local validation. Source anchor: `docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md`.
   - **Companion note + Note Context rollout hardening** — the core companion-note and Note Context implementation is shipped, and the active doc-sync correction has landed. Delivery receipt: Issue #229, PR #237. Any remaining rollout verification or cleanup should be captured as new bounded follow-up issues rather than treated as missing first implementation.
   - **Quality Wave: Registry Watcher Evaluation Stack** — shipped and now serves as the v5.6 rollout gate via `docs/TESTING.md`, `docs/QUALITY_WAVE_IMPLEMENTATION.md`, and `docs/quality_wave/README.md`. Delivery receipt: PRs #197, #198, #199, #200, #201, #202, #210.
   - **ReasoningFacade + broader graph adoption** — the shared `ReasoningFacade` seam is present; the PanelAgent decider migration is shipped via Issue #230 / PR #236, and the review-flow agent migration is delivered via Issue #231. Delivery receipt: #230 (PR #236), #231 (closed COMPLETED). Source Anchor: RF-ADOPTION
@@ -220,7 +218,7 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 | v5.1–v5.4 | Watcher track (ingest/panel CLI, policy, ergonomics) | Operationally accepted |
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
 | v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
-| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler; remaining: real-vault acceptance | Selective forward work (seam + freeform + plans shipped) |
+| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped, PR #302), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler; remaining: real-vault acceptance | Selective forward work (seam + freeform shipped) |
 | v6.0 | Wanted-state architecture pass to align runtime boundaries with the newer human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
 
 ## Tracks (details moved)
@@ -235,19 +233,14 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 The repo now adopts a GitHub-based delivery control plane for implementation work:
 
 - Docs/ADRs/owner docs define intent and architecture.
-- Capability / epic issues define the target outcome and acceptance path.
-- Slice / child issues define the bounded implementation task contract.
+- GitHub Issues are the canonical task contract.
 - GitHub Project v2 is the delivery state machine.
-- Coding agents execute only bounded slice issues.
-- PR + CI perform verification; capability acceptance closes the loop.
+- Coding agents execute only bounded Issues.
+- PR + CI are the validation loop.
 
 Delivery lifecycle:
 
 `Backlog -> Ready -> In Progress -> Review -> Done`
-
-Recommended planning chain:
-
-`Docs / SoT / plan -> Capability / Epic -> Slice / Child issue -> Code / PR -> Verification -> Acceptance`
 
 Builder-agent rule:
 
