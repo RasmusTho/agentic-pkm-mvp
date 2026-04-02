@@ -84,6 +84,16 @@ Interpretation rule:
 - bootstrap work is not complete when a script merely starts
 - bootstrap work is complete when the intended path is verified and accepted as a repo-supported local flow
 
+## Recommended Execution Mapping
+
+Use this plan as the first practical `feature-breakdown` candidate:
+
+- parent feature issue: local test environment bootstrap stabilization
+- child slices: bounded fixes or hardening steps in reset, vault init, startup, health verification, UAT execution, and acceptance evidence
+- PRs: carry slice verification receipts
+- parent feature issue: carries post-merge validation evidence and the acceptance checklist
+- owner docs: are promoted again only when the bootstrap path is accepted as supported truth
+
 ## Relationship To Existing Blocker Issues
 
 This plan does not replace the already-open bootstrap blocker issues.
