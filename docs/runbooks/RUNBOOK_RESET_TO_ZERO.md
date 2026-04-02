@@ -16,6 +16,7 @@ scripts/reset_to_zero.sh
 ```
 The script stops the stack (same as step 1), lists the runtime files it will delete, and removes:
 - `tmp/index-outbox.jsonl` (append-only audit log for ingest/panel events)
+- `tmp/WATCHER_STOP` (watcher pause flag)
 - Heartbeat files: `tmp/worker_heartbeat.json`, `tmp/watcher_heartbeat.json`, plus watcher state files under `tmp/watcher_state*.json` and `tmp/watcher_states`
 - `tmp/health_incidents.jsonl`
 
@@ -68,3 +69,10 @@ If you point at a live Ollama daemon, make sure `OLLAMA_HOST`/`OLLAMA_URL` is se
 5. Optionally query the API with `curl -sS http://127.0.0.1:18000/api/status` or an `/api/ask` prompt to ensure the embeddings/index bank the event.
 
 This runbook alongside `scripts/reset_to_zero.sh` and the `make` helpers (`reset-zero`, `reset-zero-force`, `alpha-e2e-smoke`) provides a repeatable reset workflow without leaking old health/state breadcrumbs.
+
+Validation note for watcher pause reset:
+```
+touch tmp/WATCHER_STOP
+RESET_FORCE=1 bash scripts/reset_to_zero.sh
+test ! -f tmp/WATCHER_STOP
+```

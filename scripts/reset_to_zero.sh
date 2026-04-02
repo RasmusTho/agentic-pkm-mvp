@@ -10,6 +10,7 @@ shopt -s nullglob
 patterns=(
   "tmp/index-outbox.jsonl"
   "tmp/index-outbox.*.jsonl"
+  "tmp/WATCHER_STOP"
   "tmp/worker_heartbeat.json"
   "tmp/watcher_heartbeat.json"
   "tmp/watcher_state.json"
@@ -63,6 +64,6 @@ fi
 cat <<SUMMARY
 SUMMARY:
   docker compose down -v --remove-orphans
-  cleaned tmp/index-outbox* + heartbeat/health state files
+  cleaned tmp/index-outbox* + WATCHER_STOP + heartbeat/health state files
   use scripts/reset_to_zero.sh RESET_FORCE=1 to repeat non-interactively
 SUMMARY
