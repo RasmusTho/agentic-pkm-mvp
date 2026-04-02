@@ -98,7 +98,7 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
     panel_hints = [
         {"id": action.id, "label": action.label, "checked": action.checked} for action in actions
     ]
-    vault_root_env = os.getenv("VAULT_ROOT")
+    vault_root_env = os.getenv("VAULT_ROOT") or os.getenv("WATCHER_VAULT_PATH")
     vault_root = Path(vault_root_env).expanduser() if vault_root_env else None
     initial_state = PanelAgentState(
         trace_id=intent_event.trace_id,
