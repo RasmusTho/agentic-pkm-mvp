@@ -87,6 +87,7 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
     ]
     vault_root_env = os.getenv("VAULT_ROOT")
     vault_root = Path(vault_root_env).expanduser() if vault_root_env else None
+    decider_mode = get_panel_agent_decider()
     initial_state = PanelAgentState(
         trace_id=intent_event.trace_id,
         note=intent_event.payload.note,
@@ -100,8 +101,8 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
         executed_action_ids=sorted(executed_ids),
         policy_flags=policy_flags,
         vault_root=vault_root,
+        decider_mode=decider_mode,
     )
-    decider_mode = get_panel_agent_decider()
     state = run_panel_graph(initial_state, decider_mode=decider_mode)
 
     pipeline_mode = get_panel_agent_pipeline()

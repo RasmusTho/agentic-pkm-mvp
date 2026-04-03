@@ -329,14 +329,17 @@ def _emit_events(state: PanelAgentState) -> PanelAgentState:
 
 
 def build_panel_graph(
-    decider_mode: DeciderMode = "rule",
+    decider_mode: DeciderMode = "llm",
     cognition_backend: PanelCognitionBackend | None = None,
 ):
     """Build the PanelAgent LangGraph.
 
     Args:
-        decider_mode: ``"rule"`` (default) or ``"llm"``.  Ignored when
-            ``cognition_backend`` is provided explicitly.
+        decider_mode: ``"llm"`` (default) or ``"rule"``.  Ignored when
+            ``cognition_backend`` is provided explicitly. ``"llm"`` is the
+            runtime default for LLM-backed intent interpretation; ``"rule"`` is
+            an explicit opt-out for unit tests, CI, and other bounded
+            deterministic validation lanes.
         cognition_backend: Optional engine-neutral backend.  When supplied,
             ``decider_mode`` is ignored and the provided backend drives action
             selection.  Pass a stub or fake here in tests to exercise the
@@ -362,15 +365,17 @@ def build_panel_graph(
 
 def run_panel_graph(
     state: PanelAgentState,
-    decider_mode: DeciderMode = "rule",
+    decider_mode: DeciderMode = "llm",
     cognition_backend: PanelCognitionBackend | None = None,
 ):
     """Run the PanelAgent graph and return the resulting state.
 
     Args:
         state: Initial ``PanelAgentState``.
-        decider_mode: ``"rule"`` or ``"llm"``.  Ignored when
-            ``cognition_backend`` is provided.
+        decider_mode: ``"llm"`` (default) or ``"rule"``. Ignored when
+            ``cognition_backend`` is provided. ``"llm"`` is the runtime default
+            for LLM-backed intent interpretation; ``"rule"`` is an explicit
+            opt-out for tests and deterministic validation lanes.
         cognition_backend: Optional engine-neutral backend for action
             selection.  Useful for tests that need a deterministic or
             instrumented selection path.
