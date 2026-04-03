@@ -1,4 +1,4 @@
-State: v5.6 — PanelAgent runtime V1 baseline (v5.0) + freeform catalog-driven proposal path shipped (PA2-FREEFORM). This document defines the PanelAgent-specific runtime contract.
+State: v5.6 — PanelAgent runtime V1 baseline (v5.0) + freeform catalog-driven proposal path shipped (PA2-FREEFORM) + LLM-first runtime posture established (decider default changed to llm; cognition_mode in emitted events). This document defines the PanelAgent-specific runtime contract.
 # PanelAgent / NoteInteractionAgent (Runtime v5.0)
 
 Purpose: translate human-driven AI panels in vault notes into structured intents/events while keeping the panel simple, optional, and human-first.
@@ -47,8 +47,9 @@ Other implementation notes:
 - Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `app/agents/panel_agent/graph.py`).
 - LLM-based reasoning decides which panel actions to execute (and in what order) rather than relying on fixed mappings.
 - PanelAgent Runtime V1 remains the baseline until the PanelAgent 2.0 path is fully implemented and operationally accepted.
-- LangGraph control flow now supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `rule` remains the default to preserve current behaviour, while `llm` is an opt-in, experimental action selector routed through the shared `ReasoningFacade` with the canonical `decide` task kind.
-- LLM-driven contract tests live under `tests/e2e/test_panel_llm_e2e.py` (gated by `@pytest.mark.panel_llm_e2e` and `PANEL_AGENT_LLM_E2E=1`) to validate end-to-end promotion/non-promotion scenarios (including the freeform no-checkbox path) using the real decider.
+- LangGraph control flow supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `llm` is the default runtime posture for LLM-backed intent interpretation, while `rule` is an explicit opt-out for unit tests, CI, and other bounded deterministic validation lanes. Both modes route through the shared `ReasoningFacade` with the canonical `decide` task kind.
+- The executed `cognition_mode` is included in the `panel.intent.executed` event payload and in `panel.log.created` entries so external consumers can observe which interpretation path was used.
+- LLM-driven contract tests live under `tests/e2e/test_panel_llm_e2e.py` (gated by `@pytest.mark.panel_llm_e2e` and `PANEL_AGENT_LLM_E2E=1`) to validate end-to-end promotion/non-promotion scenarios (including the freeform no-checkbox path) using the real decider. Tests requiring deterministic rule-mode behavior explicitly set `PANEL_AGENT_DECIDER=rule`.
 
 Direction note:
 - the forward direction is richer cognition in support of Panel,
@@ -103,7 +104,7 @@ Architectural reading note:
 - Plans include promotion steps mapped to the `promotion.emit_intent` tool. They can be executed via Orchestrator in a CLI-first path: `python -m app.cli panel-orchestrate-plan --plan-id <plan_id>`. Watcher-driven execution remains off for now.
 - Saved panel plans use an explicit ordered contract (`panel.ordered.v1`): plan context records the ordered action ids and each step carries sequence metadata plus a `depends_on` chain so orchestrator-facing execution order does not rely on list position alone.
 - Decider and pipeline are orthogonal toggles:
-  - `PANEL_AGENT_DECIDER=rule|llm` selects how actions are chosen (default `rule`).
+  - `PANEL_AGENT_DECIDER=rule|llm` selects how actions are chosen (default `llm` for runtime; explicit `rule` opt-out for tests).
   - `PANEL_AGENT_PIPELINE=direct|planner` selects whether to emit promotion directly (default) or also create plans (planner mode).
 
 ## UAT / Trying it out
