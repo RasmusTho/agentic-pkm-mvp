@@ -190,6 +190,29 @@ def test_ensure_vault_layout_can_bootstrap_from_settings_file(tmp_path: Path, mo
     assert layout.runtime_dir_rel == "⚙️ System/Runtime/Alpha"
     assert layout.root_folders == ["⚙️ System", "📥 Inbox", "🛠️ Workbench"]
     assert layout.include_folders == ["📥 Inbox", "🛠️ Workbench"]
+
+
+def test_ensure_vault_layout_can_bootstrap_from_default_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+
+    monkeypatch.delenv("VAULT_SYSTEM_DIR_REL", raising=False)
+    monkeypatch.delenv("VAULT_INBOX_DIR_REL", raising=False)
+    monkeypatch.delenv("VAULT_DESK_DIR_REL", raising=False)
+    monkeypatch.delenv("VAULT_RUNTIME_DIR_REL", raising=False)
+
+    layout = ensure_vault_layout(vault_root)
+
+    assert layout.system_folder == "⚙️ System"
+    assert layout.inbox_folder == "📥 Inbox"
+    assert layout.desk_folder == "🛠️ Workbench"
+    assert layout.runtime_dir_rel == "⚙️ System/Runtime/Alpha"
+    assert layout.include_folders == ["📥 Inbox", "🛠️ Workbench"]
+    assert (vault_root / "⚙️ System" / LAYOUT_NOTE_NAME).exists()
+    assert (vault_root / "📥 Inbox").is_dir()
+    assert (vault_root / "🛠️ Workbench").is_dir()
 def test_ensure_vault_layout_does_not_fallback_to_other_vault_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -223,8 +246,12 @@ def test_ensure_vault_layout_does_not_fallback_to_other_vault_settings(
     monkeypatch.delenv("VAULT_INBOX_DIR_REL", raising=False)
     monkeypatch.delenv("VAULT_DESK_DIR_REL", raising=False)
 
-    with pytest.raises(ValueError):
-        ensure_vault_layout(target_vault)
+    layout = ensure_vault_layout(target_vault)
+
+    assert layout.system_folder == "⚙️ System"
+    assert layout.inbox_folder == "📥 Inbox"
+    assert layout.desk_folder == "🛠️ Workbench"
+    assert (target_vault / "⚙️ System" / LAYOUT_NOTE_NAME).exists()
 
 
 def test_normalize_md_filename_does_not_double_extension() -> None:

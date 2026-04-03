@@ -1,6 +1,6 @@
 ---
 name: pr-integration
-description: "Prepare an implementation PR for verification by resolving merge conflicts, enforcing PR contract metadata, and ensuring CI is attached to the latest head."
+description: "Prepare a slice-implementation PR for verification by resolving merge conflicts, enforcing PR contract metadata, and ensuring CI is attached to the latest head."
 ---
 
 # PR Integration
@@ -12,7 +12,7 @@ produce a mergeable, policy-compliant PR with CI attached to the latest head SHA
 
 ## Canonical workflow position
 
-`Docs -> Issue -> Project -> Issue maintenance -> Agent -> PR -> PR integration -> CI -> Verification -> Project/doc closure -> Owner Doc`
+`Docs -> Feature issue -> Slice issue -> Agent -> PR -> PR integration -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
 
 ## First context to load
 
@@ -24,7 +24,7 @@ produce a mergeable, policy-compliant PR with CI attached to the latest head SHA
 
 ## Entry conditions
 
-- A bounded governing implementation Issue exists.
+- A bounded governing slice implementation Issue exists.
 - A PR exists (draft or ready) and links the governing branch.
 - Implementation changes are already in place.
 
@@ -42,7 +42,7 @@ produce a mergeable, policy-compliant PR with CI attached to the latest head SHA
 ### 1) Contract and metadata gate
 
 - Confirm PR lane classification is truthful:
-  - implementation lane must include `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`
+  - implementation lane must include `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>` for the governing slice issue
   - docs/governance lanes must follow allowed-surface constraints from workflow policy
 - Ensure PR template checklists are not left in contradictory states.
 - Ensure linked Issue still matches actual scope; if scope drift occurred, stop and route through Issue maintenance.

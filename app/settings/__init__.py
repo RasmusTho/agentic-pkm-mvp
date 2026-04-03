@@ -1,8 +1,24 @@
 from __future__ import annotations
 
+import os
 from importlib import import_module
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+_VALID_BOOL_ENV_VALUES = {"1", "true", "yes", "on", "0", "false", "no", "off"}
+
+
+def _normalize_bool_env(name: str) -> None:
+    raw = os.environ.get(name)
+    if raw is None:
+        return
+    if raw.strip().lower() in _VALID_BOOL_ENV_VALUES:
+        return
+    os.environ[name] = "false"
+
+
+_normalize_bool_env("DEBUG")
 
 
 class Settings(BaseSettings):

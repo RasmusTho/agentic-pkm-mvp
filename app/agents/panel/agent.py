@@ -1,27 +1,30 @@
 from __future__ import annotations
 
-import hashlib
-import re
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, List
 
 from pydantic import BaseModel, Field
 
 from app.agents.panel_agent.policy import contains_ai_panel_fence, proactive_assist_enabled
 from app.events.schema import OutboxEvent
-from app.store.object_store import DomainObject, ObjectStore
+from app.store.object_store import ObjectStore
 from app.settings.panel_actions import PanelActionMapping
 
 from .events import panel_intent_to_event
 from .intents import PanelIntent, enrich_panel_intents
 from .parser import parse_panel
 from .schema import PanelState
-
-_ACTION_PATTERN = re.compile(r"^(\s*-\s*\[( |x|X)\]\s*)(.*?)(\s*<!--\s*ai:id=([A-Za-z0-9_.-]+)\s*-->)?\s*$")
-_AI_STATUS_HEADER = "> [!info]- AI status"
-_MAX_RECEIPTS = 20
-_EXECUTED_FALLBACK: dict[str, set[str]] = {}
+from .writeback import (
+    ACTION_PATTERN as _ACTION_PATTERN,
+    AI_STATUS_HEADER as _AI_STATUS_HEADER,
+    EXECUTED_FALLBACK as _EXECUTED_FALLBACK,
+    MAX_RECEIPTS as _MAX_RECEIPTS,
+    annotate_action_ids as _annotate_action_ids,
+    remove_actions_from_markdown as _remove_actions_from_markdown,
+    stable_action_id as _stable_action_id,
+    upsert_executed_ids as _upsert_executed_ids,
+    write_receipts as _write_receipts,
+)
 
 _SUGGESTED_ACTIONS = [
     "Make this note evergreen",
@@ -46,72 +49,6 @@ class PanelAgentResult(BaseModel):
     updated_markdown: str
     events: list[OutboxEvent] = Field(default_factory=list)
 
-
-def _stable_action_id(text: str) -> str:
-    digest = hashlib.sha1(text.strip().encode("utf-8")).hexdigest()
-    return digest[:8]
-
-
-def _annotate_action_ids(markdown: str) -> str:
-    lines = markdown.splitlines()
-    changed = False
-    for idx, line in enumerate(lines):
-        match = _ACTION_PATTERN.match(line)
-        if not match:
-            continue
-        label = (match.group(3) or "").strip()
-        action_id = match.group(5)
-        if action_id:
-            continue
-        action_id = _stable_action_id(label)
-        prefix = match.group(1)
-        lines[idx] = f"{prefix}{label} <!--ai:id={action_id}-->"
-        changed = True
-    if not changed:
-        return markdown
-    return "\n".join(lines)
-
-
-def _parse_receipts(lines: list[str]) -> tuple[int | None, int | None, list[str]]:
-    start = end = None
-    receipts: list[str] = []
-    for idx, line in enumerate(lines):
-        if line.strip().lower().startswith(_AI_STATUS_HEADER.lower()):
-            start = idx
-            end = idx + 1
-            j = idx + 1
-            while j < len(lines) and lines[j].lstrip().startswith(">"):
-                content = lines[j].lstrip()[1:].lstrip()
-                if content.startswith("- "):
-                    receipts.append(content[2:].strip())
-                j += 1
-                end = j
-            break
-    return start, end, receipts
-
-
-def _write_receipts(markdown: str, new_receipts: list[str], *, clear: bool, preferred_index: int | None) -> str:
-    lines = markdown.splitlines()
-    start, end, receipts = _parse_receipts(lines)
-    if start is None and not new_receipts and not clear:
-        return markdown
-    if start is None:
-        start = end = preferred_index
-    receipts = [] if clear else receipts
-    receipts = receipts + new_receipts
-    if len(receipts) > _MAX_RECEIPTS:
-        receipts = receipts[-_MAX_RECEIPTS:]
-    block = [_AI_STATUS_HEADER]
-    block.extend([f"> - {line}" for line in receipts])
-    if start is None or end is None:
-        insert_at = len(lines)
-        if preferred_index is not None:
-            insert_at = min(max(preferred_index, 0), len(lines))
-        lines.append("")
-        lines[insert_at:insert_at] = block
-    else:
-        lines[start:end] = block
-    return "\n".join(lines)
 
 def _split_frontmatter(markdown: str) -> tuple[list[str], list[str]]:
     lines = markdown.splitlines()
@@ -330,49 +267,6 @@ def _infer_mapping_for_action_text(action_text: str, mappings: Dict[str, PanelAc
             if mapping.action_id == action_id:
                 return mapping
     return None
-
-
-def _remove_actions_from_markdown(markdown: str, action_ids: set[str]) -> str:
-    if not action_ids:
-        return markdown
-    result: list[str] = []
-    for line in markdown.splitlines():
-        match = _ACTION_PATTERN.match(line)
-        if match:
-            candidate_id = match.group(5)
-            if candidate_id and candidate_id in action_ids:
-                continue
-        result.append(line)
-    return "\n".join(result)
-
-
-def _upsert_executed_ids(note_id: str, action_ids: Iterable[str]) -> None:
-    new_ids = {aid for aid in action_ids if aid}
-    if not new_ids:
-        return
-    store = ObjectStore()
-    existing = store.get_object(note_id)
-    payload = dict(existing.payload or {}) if existing else {}
-    executed = set(payload.get("executed_action_ids") or [])
-    executed |= new_ids
-    payload["executed_action_ids"] = sorted(executed)
-    try:
-        if existing is None:
-            obj = DomainObject(
-                uuid=note_id,
-                kind="note",
-                payload=payload,
-                source_ref=None,
-                created_at=datetime.now(timezone.utc),
-            )
-        else:
-            existing.payload = payload
-            obj = existing
-        store.save_object(obj, emit_outbox=False)
-    except Exception:
-        _EXECUTED_FALLBACK[note_id] = set(executed)
-        return
-    _EXECUTED_FALLBACK[note_id] = set(executed)
 
 
 def handle_note_update(

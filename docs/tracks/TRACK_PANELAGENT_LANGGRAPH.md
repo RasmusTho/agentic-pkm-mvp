@@ -23,7 +23,7 @@ Scope: PanelAgent evolution toward LangGraph inner loops with catalog-driven dec
 - Multi-step workflows, uncertainty→suggested checkboxes (remaining PA2 items).
 
 ## Notes
-- External contract updated: panel CLI and watcher flows remain policy-gated; decider now defaults to LLM-backed interpretation in runtime; rule mode available as explicit opt-out for tests; planner/orchestrator path opt-in.
+- External contract updated: panel CLI and watcher flows remain policy-gated; decider now defaults to LLM-backed intent interpretation in runtime; rule mode available as explicit opt-out for tests; planner/orchestrator path opt-in.
 - Promotion intents are intent-only until consumer runs; status counters expose both intents and executions.
 
 ## Links

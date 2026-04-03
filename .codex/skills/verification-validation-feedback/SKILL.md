@@ -1,6 +1,6 @@
 ---
 name: verification-validation-feedback
-description: "Verify delivered work against the governing Issue contract and close the feedback loop truthfully."
+description: "Verify delivered slice work and parent-feature outcomes against their governing contracts and close the feedback loop truthfully."
 ---
 
 # Verification Validation Feedback
@@ -11,7 +11,7 @@ You operate after implementation work has been delivered in a PR or merge candid
 
 ## Your job
 
-- verify the implementation against the governing Issue contract
+- verify the implementation against the governing slice or feature contract
 - validate tests, docs, and writeback quality
 - ensure shipped truth moved to the right owner docs
 - ensure roadmap/plan wording no longer falsely reads as pending
@@ -20,7 +20,7 @@ You operate after implementation work has been delivered in a PR or merge candid
 
 ## Canonical workflow
 
-`Docs -> Issue -> Project -> Issue maintenance -> Agent -> PR -> CI -> Verification -> Project/doc closure -> Owner Doc`
+`Docs -> Feature issue -> Slice issue -> Agent -> PR -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
 
 ## Review mindset
 
@@ -38,6 +38,7 @@ Prioritize findings first:
 ## Inputs to inspect
 
 - governing GitHub Issue
+- parent feature issue when the governing issue is a child slice
 - linked PR
 - related closed PRs
 - changed files
@@ -49,7 +50,7 @@ Prioritize findings first:
 
 ## Validation rules
 
-- Compare code and docs to the Issue’s:
+- Compare code and docs to the governing issue’s:
   - `Scope`
   - `Source Anchors`
   - `Constraints`
@@ -57,24 +58,29 @@ Prioritize findings first:
   - `Suggested Validation`
 - Run the exact `Suggested Validation` commands where possible.
 - Add focused extra checks if the touched surface obviously needs them.
-- Verify owner-doc writeback if shipped behavior/contracts changed.
+- Verify owner-doc writeback if shipped behavior/contracts changed and acceptance is actually complete.
 - Verify roadmap/plan wording was cleaned up if the item is now delivered.
 - Verify no duplicate `planned` and `shipped` statements remain active at once.
 - Verify Project lifecycle state still makes sense.
 - Verify closed terminal PR cards do not remain blank in the Project.
+- If the work is a slice under a larger feature, verify that post-merge validation evidence and acceptance tracking live on the parent feature issue rather than being forced into owner docs immediately.
+- If post-merge validation advanced but acceptance is still pending, verify that the new evidence was captured on the parent feature issue body or comments.
 - If work is incomplete, do not close the loop falsely. Create a bounded follow-up Issue instead.
 
 ## Lifecycle rules during verification
 
 - Verification owns terminal delivery-state correction.
 - An open or draft PR without explicit review handoff remains `In Progress`; `Review` is reserved for the review handoff state.
-- If the Issue is fully delivered and acceptance criteria are satisfied:
-  - ensure the Issue is closed or recommended for closure
-  - ensure Project Status is `Done`
+- If a slice issue is fully delivered and its bounded acceptance criteria are satisfied:
+  - ensure the slice issue is closed or recommended for closure
+  - ensure the slice issue reaches Project Status=`Done`
   - remove stale active-work labels such as `agent:ready`, `agent:blocked`, and `agent:needs-human`
-- If the PR is merged and the linked Issue is satisfied, the default expected state is:
-  - Issue: closed
-  - Project Status: `Done`
+- If the parent feature still needs validation or acceptance:
+  - keep the parent feature issue open
+  - keep owner docs stable until the support claim actually changes
+- If the feature issue is fully delivered and acceptance is satisfied:
+  - ensure the feature issue is closed or recommended for closure
+  - ensure Project Status is `Done`
 - If a related PR was closed without merge but represents terminal tracked work, ensure the Project projection is also terminal rather than blank.
 - If the work is partial:
   - keep the Issue open
@@ -95,7 +101,8 @@ Prioritize findings first:
   - issue or PR moved to `Review` even though explicit review handoff has not happened
 - If work is truly delivered:
   - confirm or recommend Issue closure and Project Status=`Done`
-  - require owner-doc writeback
+  - require owner-doc writeback only when acceptance changed supported truth
+  - state explicitly whether owner-doc promotion is needed now or not yet
   - require roadmap/plan cleanup
   - produce a delivery receipt
 - If work is only partial:
@@ -114,10 +121,12 @@ Prioritize findings first:
 ## Output format
 
 1. Findings
-2. Acceptance Verdict
-3. Validation Performed
-4. Doc and Receipt Check
-5. Feedback Loop Actions
+2. Slice Verification Verdict
+3. Feature Validation / Acceptance Verdict
+4. Owner-Doc Promotion Decision
+5. Validation Performed
+6. Doc and Receipt Check
+7. Feedback Loop Actions
 
 If delivered and valid, produce:
 

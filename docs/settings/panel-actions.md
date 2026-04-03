@@ -1,5 +1,5 @@
 ---
-State: v5.6 – PanelAgent catalog (LLM-backed interpretation default for runtime; rule-mode opt-out for tests; freeform discovery via llm_hint).
+State: v5.6 – PanelAgent catalog (LLM-backed intent interpretation default; rule-mode opt-out for tests; freeform discovery via llm_hint).
 mappings:
   - id: "promote.evergreen"
     kind: "promotion"
