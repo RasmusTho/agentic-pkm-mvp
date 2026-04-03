@@ -21,6 +21,7 @@ Scope: PanelAgent evolution toward LangGraph inner loops with catalog-driven dec
 - Watcher auto-exec path for panel plans with safety limits (gated by concurrency/idempotency guards).
 - Richer panel actions (summary/reply) with MCP/tool boundaries; A2A envelopes for planner/orchestrator integration.
 - Multi-step workflows, uncertainty→suggested checkboxes (remaining PA2 items).
+- PanelAgent expansion beyond the current real-vault acceptance / writeback slices is deferred. Treat new work as separate bounded slices derived from this track rather than widening the current scope inline.
 
 ## Notes
 - External contract updated: panel CLI and watcher flows remain policy-gated; decider now defaults to LLM-backed intent interpretation in runtime; rule mode available as explicit opt-out for tests; planner/orchestrator path opt-in.
