@@ -15,6 +15,7 @@ Scope: PanelAgent evolution toward LangGraph inner loops with catalog-driven dec
 
 ## Delivered (v5.6)
 - Freeform catalog-driven proposal path: when a panel has an instruction but no checkbox actions, the LLM decider (`PANEL_AGENT_DECIDER=llm`) queries the full active catalog and selects canonical action IDs from instruction text alone. Proposals are validated against the catalog (out-of-catalog IDs dropped). Selected actions flow through the same execution gates as checkbox-derived actions. Fallback to rule mode on LLM error. Catalog entries now carry `llm_hint` for richer discovery prompts.
+- LLM-first runtime posture: `PANEL_AGENT_DECIDER` default changed from `rule` to `llm`; rule mode is explicit opt-out for tests/CI. Executed `cognition_mode` surfaced in `panel.intent.executed` and `panel.log.created` events for external traceability.
 
 ## Planned (forward line)
 - Watcher auto-exec path for panel plans with safety limits (gated by concurrency/idempotency guards).
@@ -22,7 +23,7 @@ Scope: PanelAgent evolution toward LangGraph inner loops with catalog-driven dec
 - Multi-step workflows, uncertainty→suggested checkboxes (remaining PA2 items).
 
 ## Notes
-- External contract unchanged: panel CLI and watcher flows remain policy-gated; decider defaults to LLM-backed intent interpretation in runtime; rule mode available as explicit opt-out for tests; planner/orchestrator path opt-in.
+- External contract updated: panel CLI and watcher flows remain policy-gated; decider now defaults to LLM-backed intent interpretation in runtime; rule mode available as explicit opt-out for tests; planner/orchestrator path opt-in.
 - Promotion intents are intent-only until consumer runs; status counters expose both intents and executions.
 
 ## Links

@@ -9,7 +9,7 @@ from app.domain.state_axes import build_promotion_transition
 from app.components.concurrency import IdempotencyGuard
 from app.components.settings.panel_actions_loader import PanelActionCatalog
 from app.agents.panel_agent.cognition import PanelCognitionBackend, get_cognition_backend, _inject_catalog_proposals
-from app.agents.panel_agent.settings import DeciderMode
+from app.agents.panel_agent.settings import DeciderMode, get_panel_agent_decider
 from app.agents.panel_agent.state import PanelAgentState
 from app.agents.panel_agent.wiring import get_default_action_wiring
 from app.events.panel import (
@@ -302,6 +302,7 @@ def _decide_actions_with_backend(state: PanelAgentState, backend: PanelCognition
 
 def _emit_events(state: PanelAgentState) -> PanelAgentState:
     assert state.intent_event is not None, "PanelAgentState must include intent_event"
+    cognition_mode: str | None = state.decider_mode
     executed_event = PanelIntentExecutedEvent(
         trace_id=state.intent_event.trace_id,
         source=_build_panel_source(),
@@ -310,6 +311,7 @@ def _emit_events(state: PanelAgentState) -> PanelAgentState:
             panel=state.panel,
             actions=state.action_results,
             executed_action_ids=list(state.executed_action_ids or []),
+            cognition_mode=cognition_mode,
         ),
     )
 
@@ -319,6 +321,7 @@ def _emit_events(state: PanelAgentState) -> PanelAgentState:
         panel_id=state.panel.panel_id,
         summary=_build_summary(state.action_results),
         actions=state.action_results,
+        cognition_mode=cognition_mode,
     )
     log_event = PanelLogEvent(trace_id=state.intent_event.trace_id, source=_build_panel_source(), payload=log_entry)
 
@@ -329,26 +332,30 @@ def _emit_events(state: PanelAgentState) -> PanelAgentState:
 
 
 def build_panel_graph(
-    decider_mode: DeciderMode = "llm",
+    decider_mode: DeciderMode | None = None,
     cognition_backend: PanelCognitionBackend | None = None,
 ):
     """Build the PanelAgent LangGraph.
 
     Args:
-        decider_mode: ``"llm"`` (default) or ``"rule"``.  Ignored when
-            ``cognition_backend`` is provided explicitly. ``"llm"`` is the
-            runtime default for LLM-backed intent interpretation; ``"rule"`` is
-            an explicit opt-out for unit tests, CI, and other bounded
-            deterministic validation lanes.
+        decider_mode: ``"llm"`` or ``"rule"``.  When ``None`` (default), the
+            value is resolved from ``PANEL_AGENT_DECIDER`` (default ``"llm"``).
+            ``"llm"`` is the runtime default for LLM-backed intent
+            interpretation; ``"rule"`` is an explicit opt-out for unit tests,
+            CI, and other bounded deterministic validation lanes.  Ignored when
+            ``cognition_backend`` is provided explicitly.
         cognition_backend: Optional engine-neutral backend.  When supplied,
             ``decider_mode`` is ignored and the provided backend drives action
             selection.  Pass a stub or fake here in tests to exercise the
             execution path without depending on a concrete cognition
             implementation.
     """
-    resolved_backend = cognition_backend if cognition_backend is not None else get_cognition_backend(decider_mode)
+    resolved_mode: DeciderMode = decider_mode if decider_mode is not None else get_panel_agent_decider()
+    resolved_backend = cognition_backend if cognition_backend is not None else get_cognition_backend(resolved_mode)
 
     def _decide_actions(state: PanelAgentState) -> PanelAgentState:
+        # Stamp the effective decider_mode into state so _emit_events can surface it.
+        state = state.model_copy(update={"decider_mode": resolved_mode})
         return _decide_actions_with_backend(state, resolved_backend)
 
     graph = StateGraph(PanelAgentState)
@@ -365,17 +372,19 @@ def build_panel_graph(
 
 def run_panel_graph(
     state: PanelAgentState,
-    decider_mode: DeciderMode = "llm",
+    decider_mode: DeciderMode | None = None,
     cognition_backend: PanelCognitionBackend | None = None,
 ):
     """Run the PanelAgent graph and return the resulting state.
 
     Args:
         state: Initial ``PanelAgentState``.
-        decider_mode: ``"llm"`` (default) or ``"rule"``. Ignored when
-            ``cognition_backend`` is provided. ``"llm"`` is the runtime default
-            for LLM-backed intent interpretation; ``"rule"`` is an explicit
-            opt-out for tests and deterministic validation lanes.
+        decider_mode: ``"llm"`` or ``"rule"``.  When ``None`` (default), the
+            value is resolved from ``PANEL_AGENT_DECIDER`` (default ``"llm"``).
+            ``"llm"`` is the runtime default for LLM-backed intent
+            interpretation; ``"rule"`` is an explicit opt-out for tests and
+            deterministic validation lanes.  Ignored when
+            ``cognition_backend`` is provided.
         cognition_backend: Optional engine-neutral backend for action
             selection.  Useful for tests that need a deterministic or
             instrumented selection path.
