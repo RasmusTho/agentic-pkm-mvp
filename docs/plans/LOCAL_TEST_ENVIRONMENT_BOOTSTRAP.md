@@ -84,13 +84,24 @@ Interpretation rule:
 - bootstrap work is not complete when a script merely starts
 - bootstrap work is complete when the intended path is verified and accepted as a repo-supported local flow
 
+## Specification
+
+The implementation tasks for this capability are specified in `docs/LOCAL_TEST_BOOTSTRAP/`:
+
+- `RESET_RUNTIME_STATE.md` — clean runtime state
+- `INITIALIZE_TEST_VAULT.md` — create vault structure and seed UAT notes
+- `START_FULL_SYSTEM.md` — boot local stack against test vault
+- `VERIFY_RUNTIME_HEALTH.md` — deterministic readiness checks
+- `RUN_SCRIPTED_UAT.md` — idempotent operator-level assertions
+- `DOCUMENT_WORKFLOW_ALIGNMENT.md` — align workflow and testing docs
+
+Each task specification can map to one or many GitHub issues. The spec directory README contains the execution order, quick reference, and acceptance criteria.
+
 ## Recommended Execution Mapping
 
-Use this plan as the first practical `feature-breakdown` candidate:
-
 - parent feature issue: local test environment bootstrap stabilization
-- child slices: bounded fixes or hardening steps in reset, vault init, startup, health verification, UAT execution, and acceptance evidence
-- PRs: carry slice verification receipts
+- implementation tasks: bounded work described in `docs/LOCAL_TEST_BOOTSTRAP/`
+- PRs: carry task verification receipts
 - parent feature issue: carries post-merge validation evidence and the acceptance checklist
 - owner docs: are promoted again only when the bootstrap path is accepted as supported truth
 
@@ -100,7 +111,7 @@ This plan does not replace the already-open bootstrap blocker issues.
 
 Use this document as the capability-level framing above those blocker issues:
 
-- capability / epic: local test environment bootstrap stabilization
-- slices / child issues: specific blockers in reset, vault init, startup, health verification, and UAT execution
+- capability: local test environment bootstrap stabilization
+- implementation tasks: specific work in reset, vault init, startup, health verification, and UAT execution (see `docs/LOCAL_TEST_BOOTSTRAP/`)
 
-If new issues are opened from this plan, they should reference this document plus the local owning doc section that defines the relevant contract.
+If new issues are opened from this plan, they should reference the relevant task specification plus this document.
