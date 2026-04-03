@@ -24,7 +24,13 @@ class _StubReasoningFacade:
 
 
 
-def _seed_note(note_uuid: str, markdown: str, *, executed_action_ids: list[str] | None = None) -> None:
+def _seed_note(
+    note_uuid: str,
+    markdown: str,
+    *,
+    executed_action_ids: list[str] | None = None,
+    source_ref: str = "vault/Note.md",
+) -> None:
     payload = {"raw_text": markdown, "origin": "vault"}
     if executed_action_ids:
         payload["executed_action_ids"] = list(executed_action_ids)
@@ -32,7 +38,7 @@ def _seed_note(note_uuid: str, markdown: str, *, executed_action_ids: list[str] 
         uuid=note_uuid,
         kind="note",
         payload=payload,
-        source_ref="vault/Note.md",
+        source_ref=source_ref,
         created_at=datetime.now(timezone.utc),
     )
     ObjectStore().save_object(obj, emit_outbox=False, trace_id="trace-runtime-test")
@@ -335,3 +341,122 @@ def test_run_panel_note_execution_runs_full_pipeline(tmp_path: Path, monkeypatch
     records = _read_outbox(outbox_path)
     topics = {rec["event"] for rec in records}
     assert {"panel.intent.created", "panel.intent.executed", "promote.intent.created"} <= topics
+
+
+def test_runtime_writeback_removes_checkbox_and_writes_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Watcher-driven execution must remove executed checkboxes and write AI status receipts."""
+    note_uuid = str(uuid4())
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    settings_path = _settings_file(
+        tmp_path,
+        action_id="promote.evergreen",
+        label="Make this note evergreen",
+        intent_type="promotion",
+        downstream_event="review.promote.evergreen",
+    )
+    markdown = (
+        "---\n"
+        f"uuid: {note_uuid}\n"
+        "---\n"
+        "# Test Note\n"
+        "\n"
+        "%% AI:Start %%\n"
+        "## AI-instruktion\n"
+        "Make this note evergreen\n"
+        "## AI-åtgärder\n"
+        "- [x] Make this note evergreen\n"
+        "%% AI:End %%\n"
+    )
+    # Write the note file on disk so writeback can find it.
+    vault_dir = tmp_path / "vault"
+    vault_dir.mkdir()
+    note_file = vault_dir / "test-note.md"
+    note_file.write_text(markdown, encoding="utf-8")
+
+    _seed_note(note_uuid, markdown, source_ref=str(note_file))
+
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("VAULT_ROOT", str(vault_dir))
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-writeback", trigger="watcher")
+    assert len(events) == 1
+
+    result = execute_panel_intent(events[0], outbox_path=outbox_path)
+    assert isinstance(result, PanelRuntimeResult)
+
+    # Verify the vault file was updated.
+    updated = note_file.read_text(encoding="utf-8")
+
+    # Executed checkbox should be removed.
+    assert "- [x] Make this note evergreen" not in updated
+
+    # AI status receipt block should be present.
+    assert "> [!info]- AI status" in updated
+    assert "Make this note evergreen" in updated  # receipt line references the action
+
+    # Promotion event should still be emitted.
+    records = _read_outbox(outbox_path)
+    topics = {rec["event"] for rec in records}
+    assert "promote.intent.created" in topics
+
+
+def test_runtime_writeback_idempotent_on_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second run on a converged note must not duplicate receipts or re-create checkboxes."""
+    note_uuid = str(uuid4())
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    settings_path = _settings_file(
+        tmp_path,
+        action_id="promote.evergreen",
+        label="Make this note evergreen",
+        intent_type="promotion",
+        downstream_event="review.promote.evergreen",
+    )
+    markdown = (
+        "---\n"
+        f"uuid: {note_uuid}\n"
+        "---\n"
+        "# Test Note\n"
+        "\n"
+        "%% AI:Start %%\n"
+        "## AI-instruktion\n"
+        "Make this note evergreen\n"
+        "## AI-åtgärder\n"
+        "- [x] Make this note evergreen\n"
+        "%% AI:End %%\n"
+    )
+    vault_dir = tmp_path / "vault"
+    vault_dir.mkdir()
+    note_file = vault_dir / "test-note.md"
+    note_file.write_text(markdown, encoding="utf-8")
+
+    _seed_note(note_uuid, markdown, source_ref=str(note_file))
+
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("VAULT_ROOT", str(vault_dir))
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+
+    # First run: should apply writeback.
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-idem-1", trigger="watcher")
+    execute_panel_intent(events[0], outbox_path=outbox_path)
+    after_first = note_file.read_text(encoding="utf-8")
+
+    # Re-seed note in ObjectStore with the updated text (simulating re-ingest).
+    _seed_note(note_uuid, after_first, source_ref=str(note_file))
+
+    # Second run: the checkbox is gone and the action should be filtered as already executed.
+    events2 = run_panel_intent_for_note(note_uuid, trace_id="trace-idem-2", trigger="watcher")
+    assert len(events2) == 1
+    execute_panel_intent(events2[0], outbox_path=outbox_path)
+    after_second = note_file.read_text(encoding="utf-8")
+
+    # File should not change on the second run.
+    assert after_first == after_second
+
+    # No promotion event on second run (action was already executed).
+    second_outbox = _read_outbox(outbox_path)
+    # Count promote events — there should be exactly one from the first run.
+    promote_events = [r for r in second_outbox if r.get("event") == "promote.intent.created"]
+    assert len(promote_events) == 1
