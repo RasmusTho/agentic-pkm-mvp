@@ -45,8 +45,8 @@ Use `docs/TESTING.md` for the canonical test layers, CI roles, and runtime/UAT v
 - Agent structure should follow the system design principles in `docs/DESIGN_PRINCIPLES.md`: boundary-first design, capability-based composition, explicit mutation authority, and governance before autonomy.
 - Non-trivial decision logic should move toward “LangGraph inner, events/A2A outer”: each agent owns an explicit `AgentState` and LangGraph graph for internal choices, while coordination between agents happens via Outbox events/A2A envelopes orchestrated by the Orchestrator/Planner.
 - Agent-per-function decomposition should not be expanded when the same behavior is better modeled as a reusable capability.
-- PanelAgent is the concrete example: LangGraph runtime with an action catalog driving a configurable decider (`PANEL_AGENT_DECIDER=rule|llm`), defaulting to deterministic rule-mode while offering opt-in LLM-based selection.
-- Current adoption is phased: ASK and PanelAgent use LangGraph; most other agents remain deterministic pipelines until v5.6 rollout phases.
+- PanelAgent is the concrete example: LangGraph runtime with an action catalog driving a configurable decider (`PANEL_AGENT_DECIDER=rule|llm`), defaulting to LLM-backed interpretation in runtime while offering explicit rule-mode opt-out for tests and deterministic validation lanes.
+- Current adoption is phased: ASK and PanelAgent use LangGraph with LLM-first defaults; most other agents remain deterministic pipelines until v5.6 rollout phases.
 - When proposing tests or acceptance criteria, start from the human-flow contract first and then classify the scenario as `baseline`, `partial`, or `future` using `docs/TESTING.md` and `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md`.
 - Agents must not treat the current runtime decomposition or active agent matrix as the full product definition; validation should distinguish "baseline regression" from "human-need target not yet reached".
 
