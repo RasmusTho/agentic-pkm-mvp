@@ -5,8 +5,8 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-04-02
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, scripts/start_full_system.sh, current repo state on 2026-04-02
+Last reviewed: 2026-04-04
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/ENVIRONMENTS.md, docs/DOCS_INDEX.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/PANEL_AGENT.md, scripts/start_full_system.sh, app/cli/__init__.py, current repo state on 2026-04-04
 Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, ingest runs by plane). `watcher_runs` refers to legacy snapshot watchers only; registry watcher health is via heartbeat + tick logs.
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.

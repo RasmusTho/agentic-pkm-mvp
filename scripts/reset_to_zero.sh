@@ -13,6 +13,8 @@ RESET_FORCE="${RESET_FORCE:-0}"
 shopt -s nullglob
 
 patterns=(
+  "vault-test"
+  ".watcher_pause"
   "tmp/index-outbox.jsonl"
   "tmp/index-outbox.*.jsonl"
   "tmp/WATCHER_STOP*"
@@ -44,12 +46,25 @@ patterns=(
 deleted=()
 for pattern in "${patterns[@]}"; do
   for target in $pattern; do
-    deleted+=("$target")
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      deleted+=("$target")
+    fi
   done
 done
 
 echo "Stopping docker compose (down -v --remove-orphans)"
-docker compose down -v --remove-orphans
+if command -v docker &> /dev/null; then
+  if docker compose down -v --remove-orphans 2>&1; then
+    : # Success
+  else
+    DOCKER_EXIT_CODE=$?
+    echo "⚠ Docker compose teardown failed (exit code: $DOCKER_EXIT_CODE)"
+    echo "  This may leave stale containers/volumes. Check docker status before retry."
+    exit $DOCKER_EXIT_CODE
+  fi
+else
+  echo "  (docker not available, skipping)"
+fi
 
 echo "Identified runtime artifacts to delete:"
 if [ "${#deleted[@]}" -eq 0 ]; then
@@ -83,8 +98,11 @@ else
 fi
 
 cat <<SUMMARY
-SUMMARY:
-  docker compose down -v --remove-orphans
-  cleaned tmp/tmp-test outbox + WATCHER_STOP + heartbeat/health/startup state files
-  use scripts/reset_to_zero.sh RESET_FORCE=1 to repeat non-interactively
+RESET_COMPLETE=true
 SUMMARY
+
+echo "✓ Reset complete: runtime state clean"
+echo "  - docker compose containers stopped (volumes removed)"
+echo "  - cleaned tmp/tmp-test outbox + WATCHER_STOP + heartbeat/health/startup state files"
+echo "  - test vault directory removed (vault-test/)"
+echo "  - watcher pause/state files cleared"

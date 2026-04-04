@@ -54,16 +54,14 @@ smoke:
 	PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
 	$(PYTHON) -m pytest -q -c /dev/null -k "not slow"
 
+test-vault-init:
+	@PYTHON="$(PYTHON)" bash scripts/init_test_vault.sh
+
 reset-zero:
 	@bash scripts/reset_to_zero.sh
 
 reset-zero-force:
 	@RESET_FORCE=1 bash scripts/reset_to_zero.sh
-
-test-vault-init:
-	@mkdir -p "$(TEST_VAULT_ROOT)"
-	@$(PYTHON) -m app.cli vault-layout-ensure --vault-root "$(TEST_VAULT_ROOT)" --json >/dev/null
-	@$(PYTHON) -m app.cli uat-seed-vault-test --vault-root "$(TEST_VAULT_ROOT)" --overwrite >/dev/null
 
 test-bootstrap: reset-zero-force test-vault-init
 	@VAULT_ROOT="$(TEST_VAULT_ROOT)" scripts/start_full_system.sh
