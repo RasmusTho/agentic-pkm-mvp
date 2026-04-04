@@ -5,8 +5,8 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-04-01
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, scripts/start_full_system.sh, current repo state on 2026-04-01
+Last reviewed: 2026-04-04
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/ENVIRONMENTS.md, docs/DOCS_INDEX.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/PANEL_AGENT.md, scripts/start_full_system.sh, app/cli/__init__.py, current repo state on 2026-04-04
 Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, ingest runs by plane). `watcher_runs` refers to legacy snapshot watchers only; registry watcher health is via heartbeat + tick logs.
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
@@ -18,6 +18,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - `/api/health` reports watcher and worker heartbeat freshness plus the runtime DB/LLM probes so operators see deterministic health signals.
 - `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the registry watcher → DB outbox → worker → index → `/api/ask` chain, emit `index.embedding.created` / `index.embedding.failed` (legacy alias: `index.object.embedded`), and log diagnostics when sources are missing.
 - The interim GUI and Status service consume these heartbeats/events so the dashboard shows ingest health, counts, and incidents in one place.
+- The local `test` bootstrap path is now treated as a first-class verification concern: parts of the path work today, but the repo-supported clean-state path is not yet fully self-contained end to end.
 
 ## CI & Test Markers
 - CI legs assert `docs/ARCHITECTURE.md` contains fitness guard statements, confirm CLI health smoke commands pass, and verify the worker logs show `worker starting`.
@@ -29,7 +30,7 @@ Validation posture note:
 - failures in those broader scenarios indicate target-state gaps unless and until this status document promotes the capability into the claimed baseline
 
 ## Baseline Definition (SoT v5.5)
-- Environment posture: `dev` and `prod` are now explicit first-class environments in the SoT. The governing contract and implementation live in `docs/ENVIRONMENTS.md`. Current baseline/runtime docs remain production-facing unless they explicitly say lab/dev-only.
+- Environment posture: `dev`, `test`, and `prod` are now the explicit minimal environment model in the SoT. The governing contract lives in `docs/ENVIRONMENTS.md`. `dev` and `prod` are runtime-selected environments today; `test` is the current workflow-driven bootstrap and verification environment.
 - Runtime environment selection: explicit environment model for `dev` and `prod` is now canonical in the config layer (`app.config.environment`, Issue #263). The default environment is `prod` (production-safe). Operators can select `PKM_ENVIRONMENT=dev` for development/diagnostic mode, or it defaults from `PKM_SETTINGS_PROFILE`: `lab` → `dev`, `operator` → `prod`. Environment is resolved at startup and stored in `InstanceSettings.environment` within the `SettingsBundle`. This provides one documented control surface for environment-specific behavior across the runtime. See `docs/ENVIRONMENTS.md` for full specification.
 - Runtime watcher: registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`) is the default; legacy snapshot watchers are dev-only and require `PKM_SETTINGS_PROFILE=lab`.
 - Runtime default: `scripts/start_full_system.sh` and `config/runtime.defaults.env` set `WATCHER_AUTO_EXEC=1` unless the operator already set a value; set `WATCHER_AUTO_EXEC=0` to run watchers in emit-only mode. Default-on does not bypass rollout discipline: once armed, any note with an AI panel fence is only a candidate, actions are still filtered through the allowlisted `watcher_settings.allowed_actions`, the only per-note opt-out is `ai_panel_auto_run: never` (nested form accepted), and manual CLI panel runs remain available.
@@ -51,6 +52,7 @@ Validation posture note:
 ## Forward line: SoT v5.6 (Now / Next / Later)
 ### Now
 - Ground the v5.6 objectives in a docs-first kickoff: the detailed plan in `docs/plans/V56_FORWARD_LINE.md` captures the pillars, acceptance criteria, and immediate signal checks the forward line needs to ship.
+- Run the docs-first local test bootstrap stabilization wave: the repo now documents one intended clean-state path, one lightweight planning chain, and one verification/acceptance spine for bootstrap work. Source anchor: `docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md`.
 - Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, skipped receipts, and write-guard state are surfaced in status, events, and the new CLI `settings-explain` output before any runtime gate opens.
 - PanelAgent decider hardening through the shared `ReasoningFacade` seam is shipped for the current pilot path. Delivery receipt: Issue #230, PR #236.
 ### Next
@@ -93,6 +95,10 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
 - Production-facing path is the active current-state default; lab/dev-only flows remain explicitly non-production.
+- The local test stack can be started successfully against a separate test vault, and `uat-seed-vault-test` works.
+- **Bootstrap path status**: The repo-supported local bootstrap/UAT path (`make test-bootstrap`) is fully operational and verified for its documented scope (clean-state local verification). The path is resettable, reproducible, and meets the contract for the canonical local test environment. Known scope limitations and follow-up items (listed in `docs/LOCAL_TEST_BOOTSTRAP/`) are bounded future slices, not blockers to current production verification use.
+- The current docs-first stabilization wave has made the intended supported path explicit; the bootstrap contract is now documented in `docs/TESTING.md`, `docs/ENVIRONMENTS.md`, and `docs/LOCAL_TEST_BOOTSTRAP/`.
+- Operator-facing guidance: operators may depend on `make test-bootstrap` for local verification workflows today; the documented limitations in `docs/LOCAL_TEST_BOOTSTRAP/` are tracked follow-ups, not undocumented surprises.
 - PanelAgent runtime V1 is part of the active baseline; planner pipeline and LangGraph expansion remain opt-in.
 - Legacy snapshot watchers remain available only for lab/dev workflows and are not part of the runtime default.
 - Eval suites remain opt-in diagnostics; they do not define baseline health by themselves.

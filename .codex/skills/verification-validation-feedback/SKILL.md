@@ -1,6 +1,6 @@
 ---
 name: verification-validation-feedback
-description: "Verify delivered work against the governing Issue contract, merge the PR if accepted, and close the feedback loop truthfully."
+description: "Verify delivered slice work and parent-feature outcomes against their governing contracts and close the feedback loop truthfully."
 ---
 
 # Verification Validation Feedback
@@ -11,7 +11,7 @@ You operate after PR integration has produced a mergeable, CI-green PR.
 
 ## Your job
 
-- verify the implementation against the governing Issue contract
+- verify the implementation against the governing slice or feature contract
 - validate tests, docs, and writeback quality
 - ensure shipped truth moved to the right owner docs
 - ensure roadmap/plan wording no longer falsely reads as pending
@@ -23,7 +23,7 @@ You operate after PR integration has produced a mergeable, CI-green PR.
 
 ## Canonical workflow
 
-`Docs -> Issue -> Project -> Issue maintenance -> Agent -> PR -> PR integration -> CI -> **Verification (merges)** -> Project/doc closure -> Owner Doc`
+`Docs -> Feature issue -> Slice issue -> Agent -> PR -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
 
 ## Entry conditions
 
@@ -47,6 +47,7 @@ Prioritize findings first:
 ## Inputs to inspect
 
 - governing GitHub Issue
+- parent feature issue when the governing issue is a child slice
 - linked PR
 - related closed PRs
 - changed files
@@ -58,7 +59,7 @@ Prioritize findings first:
 
 ## Validation rules
 
-- Compare code and docs to the Issue's:
+- Compare code and docs to the governing issue’s:
   - `Scope`
   - `Source Anchors`
   - `Constraints`
@@ -66,11 +67,13 @@ Prioritize findings first:
   - `Suggested Validation`
 - Run the exact `Suggested Validation` commands where possible.
 - Add focused extra checks if the touched surface obviously needs them.
-- Verify owner-doc writeback if shipped behavior/contracts changed.
+- Verify owner-doc writeback if shipped behavior/contracts changed and acceptance is actually complete.
 - Verify roadmap/plan wording was cleaned up if the item is now delivered.
 - Verify no duplicate `planned` and `shipped` statements remain active at once.
 - Verify Project lifecycle state still makes sense.
 - Verify closed terminal PR cards do not remain blank in the Project.
+- If the work is a slice under a larger feature, verify that post-merge validation evidence and acceptance tracking live on the parent feature issue rather than being forced into owner docs immediately.
+- If post-merge validation advanced but acceptance is still pending, verify that the new evidence was captured on the parent feature issue body or comments.
 - If work is incomplete, do not close the loop falsely. Create a bounded follow-up Issue instead.
 
 ## Merge rules
@@ -103,6 +106,16 @@ When NOT to merge:
 
 - Verification owns terminal delivery-state correction.
 - An open or draft PR without explicit review handoff remains `In Progress`; `Review` is reserved for the review handoff state.
+- If a slice issue is fully delivered and its bounded acceptance criteria are satisfied:
+  - ensure the slice issue is closed or recommended for closure
+  - ensure the slice issue reaches Project Status=`Done`
+  - remove stale active-work labels such as `agent:ready`, `agent:blocked`, and `agent:needs-human`
+- If the parent feature still needs validation or acceptance:
+  - keep the parent feature issue open
+  - keep owner docs stable until the support claim actually changes
+- If the feature issue is fully delivered and acceptance is satisfied:
+  - ensure the feature issue is closed or recommended for closure
+  - ensure Project Status is `Done`
 - If the Issue is fully delivered and acceptance criteria are satisfied:
   - merge the PR
   - ensure the Issue is closed
@@ -174,9 +187,9 @@ gh issue edit $ISSUE --remove-label agent:blocked --add-label agent:ready
   - issue still marked `agent:ready` or `Backlog` even though a merged PR already satisfies acceptance criteria
   - issue or PR moved to `Review` even though explicit review handoff has not happened
 - If work is truly delivered:
-  - merge the PR
-  - confirm or execute Issue closure and Project Status=`Done`
-  - require owner-doc writeback
+  - confirm or recommend Issue closure and Project Status=`Done`
+  - require owner-doc writeback only when acceptance changed supported truth
+  - state explicitly whether owner-doc promotion is needed now or not yet
   - require roadmap/plan cleanup
   - produce a delivery receipt
 - If work is only partial:
@@ -195,13 +208,15 @@ gh issue edit $ISSUE --remove-label agent:blocked --add-label agent:ready
 ## Output format
 
 1. Findings
-2. Acceptance Verdict
-3. Merge Action (merged / not merged with reason)
-4. Validation Performed
-5. Doc and Receipt Check
-6. Project State Corrections (delivered issue -> Done, unblocked issues -> Ready)
-7. Dependent Issues Unblocked
-8. Feedback Loop Actions
+2. Slice Verification Verdict
+3. Feature Validation / Acceptance Verdict
+4. Owner-Doc Promotion Decision
+5. Validation Performed
+6. Doc and Receipt Check
+7. Feedback Loop Actions
+8. Project State Corrections (delivered issue -> Done, unblocked issues -> Ready)
+9. Dependent Issues Unblocked
+10. Feedback Loop Actions
 
 If delivered and valid, produce:
 
@@ -215,5 +230,3 @@ If not valid, create bounded follow-up Issue(s) using the exact task-contract sh
 - `## Constraints`
 - `## Acceptance Criteria`
 - `## Out of Scope`
-- `## Suggested Validation`
-- `## Source Docs`

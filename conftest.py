@@ -4,6 +4,15 @@ import pytest
 
 
 def pytest_configure(config) -> None:
+    import os
+
+    # Sanitize vault-related environment variables BEFORE test collection to prevent
+    # modules from accessing real vault paths during import. This protects against hangs
+    # when vault paths are on iCloud sync or other slow filesystems.
+    # See: https://github.com/RasmusTho/agentic-pkm-mvp/issues/316
+    os.environ.pop("VAULT_ROOT", None)
+    os.environ.pop("PANEL_ACTION_WIRING_PATH", None)
+
     # Provide marker definitions for pytest when pyproject/pytest.ini is ignored.
     markers = {
         "not_pg": "marks tests that do not require Postgres",

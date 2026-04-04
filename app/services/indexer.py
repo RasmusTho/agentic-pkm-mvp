@@ -43,6 +43,7 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     payload = {
         "title": obj.get("title"),
         "review_state": obj.get("review_state"),
+        "maturity": obj.get("maturity"),
         "content": content,
         "source_uuid": incoming_uuid,
         "raw_text": obj_payload.get("raw_text"),

@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+if ! command -v docker >/dev/null 2>&1; then
+  echo "ERROR: docker is required for scripts/start_full_system.sh. Install Docker Desktop or make docker available on PATH, then retry." >&2
+  exit 127
+fi
+
 source "scripts/lib/load_env_defaults.sh"
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"

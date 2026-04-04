@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bug to Issue"
+  short_description: "Create a GitHub issue when a bug is found"
+  default_prompt: "Turn a discovered bug into a compliant GitHub Issue with correct labels and status."

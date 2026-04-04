@@ -567,3 +567,58 @@ def test_panel_graph_skips_idempotent_duplicate() -> None:
     assert "promote.intent.created" not in second_events
     assert second.action_results[0].status == "skipped"
     assert second.action_results[0].details.get("reason") == "idempotent_duplicate"
+
+
+def test_panel_graph_cognition_mode_in_emitted_events_rule() -> None:
+    """cognition_mode='rule' is surfaced in panel.intent.executed and panel.log.created."""
+    mapping = PanelActionMapping(
+        id="promote.evergreen",
+        intent_type="promotion",
+        downstream_event="review.promote.evergreen",
+        params={"maturity": "evergreen"},
+    )
+    action = PanelIntentAction(id=mapping.id, label="Promote", checked=True, mapping=mapping)
+    intent = _intent_event_with_action(action, trace_id="trace-cognition-rule")
+    state = _state_from_intent(intent)
+
+    result = run_panel_graph(state, decider_mode="rule")
+
+    executed = next(
+        evt for evt in result.emitted_events if getattr(evt, "event", None) == "panel.intent.executed"
+    )
+    assert executed.payload.cognition_mode == "rule"
+
+    log_evt = next(
+        evt for evt in result.emitted_events if getattr(evt, "event", None) == "panel.log.created"
+    )
+    assert log_evt.payload.cognition_mode == "rule"
+
+
+def test_panel_graph_cognition_mode_in_emitted_events_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """cognition_mode='llm' is surfaced in emitted events when LLM backend is active."""
+    mapping = PanelActionMapping(
+        id="promote.evergreen",
+        intent_type="promotion",
+        downstream_event="review.promote.evergreen",
+        params={"maturity": "evergreen"},
+    )
+    action = PanelIntentAction(id=mapping.id, label="Promote", checked=True, mapping=mapping)
+    intent = _intent_event_with_action(action, trace_id="trace-cognition-llm")
+    state = _state_from_intent(intent)
+
+    monkeypatch.setattr(
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": [{"id": "promote.evergreen", "reason": "llm_selected"}]}),
+    )
+
+    result = run_panel_graph(state, decider_mode="llm")
+
+    executed = next(
+        evt for evt in result.emitted_events if getattr(evt, "event", None) == "panel.intent.executed"
+    )
+    assert executed.payload.cognition_mode == "llm"
+
+    log_evt = next(
+        evt for evt in result.emitted_events if getattr(evt, "event", None) == "panel.log.created"
+    )
+    assert log_evt.payload.cognition_mode == "llm"

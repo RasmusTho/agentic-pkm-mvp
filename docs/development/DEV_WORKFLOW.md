@@ -11,10 +11,49 @@ For non-trivial changes:
 
 1. Identify the owning document via `docs/DOCS_INDEX.md`.
 2. Read the owner doc before changing code or neighboring docs.
-3. Add or update tests for the intended change when the work is not docs-only.
-4. Implement the smallest change that fits the documented architecture.
-5. Update owner docs in the same change when behavior, contracts, or architecture changed.
-6. Run the relevant validation commands and record any gaps.
+3. Confirm the planning chain for the work: docs/SoT/plan -> feature/capability issue -> slice/child issue -> code/PR -> slice verification -> merge -> feature validation -> acceptance -> owner-doc promotion.
+4. Add or update tests for the intended change when the work is not docs-only.
+5. Implement the smallest change that fits the documented architecture.
+6. Update owner docs in the same change when behavior, contracts, or architecture changed.
+7. Run the relevant validation commands and record any gaps.
+
+## Lightweight breakdown model
+
+Use the following practical breakdown model across docs, GitHub, and implementation:
+
+- **Docs / SoT / plan docs** define direction, constraints, and feature intent. Task specifications in plan docs (such as `docs/LOCAL_TEST_BOOTSTRAP/`) function as system-specification documents that capture one feature intent but spawn multiple implementation issues (one-to-many mapping).
+- **Feature / capability issues** define the target outcome, child-slice map, verification path, and validation / acceptance path.
+- **Slice / child issues** define the bounded implementation steps that coding agents should pick up.
+- **PRs** should usually map to one slice / child issue, not to a vague roadmap heading.
+- **Slice verification** proves the implemented slice works at the intended layer.
+- **Feature validation** proves the overall feature works from the operator or product point of view, sometimes after merge.
+- **Acceptance** is the explicit decision to promote that feature into supported owner-doc truth.
+
+Example: The local test bootstrap path is documented as a single system-specification contract in `docs/LOCAL_TEST_BOOTSTRAP/` (one specification), but implementation may span multiple feature and child issues (multiple implementation tasks), each proving one slice of the complete flow.
+
+Interpretation rule:
+- slices may be done at merge while the parent feature remains open
+- larger capabilities should define both a verification path and a validation / acceptance path before they are treated as complete
+- this is a lightweight delivery spine, not a heavyweight process rewrite
+
+Recommended planning chain:
+
+`Docs / SoT / plan -> Feature / capability issue -> Slice / child issues -> Code / PR -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner-doc promotion`
+
+## Evidence surfaces
+
+Use different surfaces for stable intent versus live delivery evidence:
+
+- Docs define the intended verification path and acceptance path up front.
+- Feature / capability issues hold the live validation evidence and acceptance checklist, usually in the issue body and follow-up comments.
+- Slice / child issues hold the bounded implementation contract.
+- PRs hold the slice verification receipt.
+- Owner docs change when accepted/shipped truth changes, not for every post-merge rerun.
+
+Practical rule:
+- do not open a new docs PR just because more post-merge evidence arrived
+- do record that evidence on the parent feature issue so acceptance can be decided from one place
+- do create a docs PR when owner-doc truth changes, for example from planned to accepted or supported
 
 ## Validation baseline
 
@@ -36,6 +75,7 @@ Run narrower or broader suites when the touched area requires it.
 - Keep current-state docs descriptive of shipped reality.
 - Put future-state intent in roadmap/plan docs instead of current-state owner docs.
 - Replace duplicated policy with links or short boundary notes.
+- When a capability is still being stabilized, make the intended verification path and acceptance path explicit instead of implying they will emerge later.
 
 ## Docs-authoring lane
 
@@ -60,6 +100,7 @@ Docs-authoring rules:
 - the PR must be explicitly classified as docs authoring
 - docs authoring does not automatically create backlog work or Project state
 - use `docs-to-issue` later when the authored docs are ready to become bounded implementation tasks
+- use `feature-breakdown` later when one docs-defined feature should become one parent feature issue plus child slices
 - if the change starts affecting implementation or delivered behavior, switch back to the Issue-first implementation lane
 
 ## Governance lane
@@ -100,22 +141,26 @@ Governance-lane rules:
 For implementation work, the delivery loop is:
 
 1. Docs/owner docs define the intended contract.
-2. GitHub Issue defines the bounded task contract.
-3. GitHub Project reflects lifecycle state as the shared operating board when available.
-4. Builder agent implements the Issue in a PR.
-5. CI/test workflows validate the change.
-6. Human review closes the loop and updates docs/status/roadmap as needed.
+2. Feature / capability Issue defines the target outcome plus verification and validation / acceptance path.
+3. Slice / child Issue defines the bounded implementation task.
+4. Builder agent implements the slice in a PR.
+5. CI/test workflows verify the slice and its changed seams.
+6. Merge closes the slice when its bounded contract is satisfied.
+7. Feature validation continues on the parent issue until the operator/product path is proven.
+8. Acceptance closes the feature and triggers owner-doc promotion when the support claim changes.
 
 Execution rule:
 
 - do not start non-trivial implementation without a governing Issue
 - prefer Issues with `Status=Ready` and label `agent:ready`
 - use the linked Issue as the bounded source of truth for scope and acceptance
-- implementation PRs must link the governing Issue
+- implementation PRs should usually link the governing slice / child issue
+- do not implement directly from a feature / capability issue when the work is clearly multi-slice
+- when a capability spans multiple PRs, keep verification and acceptance attached to the capability rather than scattering them across unrelated roadmap bullets
 
 Docs-authoring and governance-lane PRs are separate lanes and do not replace this implementation contract.
 
-Optional repo-local Codex skills may assist with either lane from `.codex/skills/`, but they do not replace the governing repo policy. Implementation-facing skills must still route work through the same `Docs -> Issue -> Project -> Agent -> PR -> PR integration -> CI -> Feedback` sequence and keep `AGENTS.md` as the canonical builder-agent policy surface.
+Optional repo-local Codex skills may assist with either lane from `.codex/skills/`, but they do not replace the governing repo policy. Implementation-facing skills should route larger work through `feature-breakdown`, then execute slices through the same `Docs -> Feature -> Slice -> PR -> Slice verification -> Feature validation -> Acceptance` sequence and keep `AGENTS.md` as the canonical builder-agent policy surface.
 
 Lifecycle truth rule:
 
@@ -133,7 +178,7 @@ For new backlog work, GitHub is the live tracking surface and docs provide the s
 
 Use this split:
 
-- owner docs, SoT docs, roadmap docs, and active plans define intent, constraints, and sequencing
+- owner docs, SoT docs, roadmap docs, and active plans define intent, constraints, sequencing, verification posture, validation posture, and acceptance posture
 - GitHub Issues define backlog task truth; GitHub Project provides the shared board projection
 - owner-doc updates are required when work is delivered and the shipped reality changes
 
@@ -164,5 +209,7 @@ When an Issue is delivered:
 2. Move the truth from the Issue into the owner doc (e.g., `STATUS.md`, roadmap sections, etc.).
 3. Remove or rewrite roadmap/plan wording so it no longer reads as pending when work is delivered.
 4. Keep the GitHub Issue/Project as the authoritative record of backlog state history.
+5. If only a slice was delivered, update the parent feature issue with validation evidence and keep owner docs stable until acceptance.
+6. If the work closed a larger capability, make sure the owner docs also record what verified it and what accepted it.
 
 Owner docs are the source of shipped reality. Generated receipt pages (if adopted) may summarize Issue state from GitHub, but they do not replace the owner doc as the canonical truth for shipped behavior.
