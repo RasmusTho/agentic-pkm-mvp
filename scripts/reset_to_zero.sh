@@ -54,7 +54,14 @@ done
 
 echo "Stopping docker compose (down -v --remove-orphans)"
 if command -v docker &> /dev/null; then
-  docker compose down -v --remove-orphans 2>/dev/null || true
+  if docker compose down -v --remove-orphans 2>&1; then
+    : # Success
+  else
+    DOCKER_EXIT_CODE=$?
+    echo "⚠ Docker compose teardown failed (exit code: $DOCKER_EXIT_CODE)"
+    echo "  This may leave stale containers/volumes. Check docker status before retry."
+    exit $DOCKER_EXIT_CODE
+  fi
 else
   echo "  (docker not available, skipping)"
 fi
