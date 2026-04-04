@@ -96,9 +96,9 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
 - Production-facing path is the active current-state default; lab/dev-only flows remain explicitly non-production.
 - The local test stack can be started successfully against a separate test vault, and `uat-seed-vault-test` works.
-- The repo-supported local bootstrap/UAT path (`make test-bootstrap`) is operational and verified for the canonical clean-state workflow. Remaining gaps (listed in `docs/LOCAL_TEST_BOOTSTRAP/`) are bounded follow-up slices, not blockers to current use.
+- **Bootstrap path status**: The repo-supported local bootstrap/UAT path (`make test-bootstrap`) is fully operational and verified for its documented scope (clean-state local verification). The path is resettable, reproducible, and meets the contract for the canonical local test environment. Known scope limitations and follow-up items (listed in `docs/LOCAL_TEST_BOOTSTRAP/`) are bounded future slices, not blockers to current production verification use.
 - The current docs-first stabilization wave has made the intended supported path explicit; the bootstrap contract is now documented in `docs/TESTING.md`, `docs/ENVIRONMENTS.md`, and `docs/LOCAL_TEST_BOOTSTRAP/`.
-- Status: the local test bootstrap path is resettable, reproducible, and verified as the canonical local verification flow for repo-supported operators.
+- Operator-facing guidance: operators may depend on `make test-bootstrap` for local verification workflows today; the documented limitations in `docs/LOCAL_TEST_BOOTSTRAP/` are tracked follow-ups, not undocumented surprises.
 - PanelAgent runtime V1 is part of the active baseline; planner pipeline and LangGraph expansion remain opt-in.
 - Legacy snapshot watchers remain available only for lab/dev workflows and are not part of the runtime default.
 - Eval suites remain opt-in diagnostics; they do not define baseline health by themselves.
