@@ -98,7 +98,7 @@ Expected CI posture:
 
 ## Bootstrap As A Verification Contract
 
-The local test bootstrap path is itself a testable contract. It should not be treated as informal setup glue.
+The local test bootstrap path is a first-class testable contract. It should not be treated as informal setup glue.
 
 For bootstrap-sensitive capabilities, define all four of the following:
 - design / intent
@@ -119,6 +119,8 @@ Current canonical local bootstrap path:
 6. run scripted UAT
 
 The canonical command wrapper for that path is `make test-bootstrap`.
+
+See `docs/LOCAL_TEST_BOOTSTRAP/` for the complete specification and verification contract for each step.
 
 ## Evaluation Stack (Registry Watcher / Panel / Promotion)
 Delivery receipt: Quality Wave phases A-F landed across PRs #197, #198, #199, #200, #201, #202, and #210; this section is the lasting validation contract for the shipped stack.
