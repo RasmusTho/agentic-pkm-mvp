@@ -8,9 +8,9 @@ PipelineMode = Literal["direct", "planner"]
 
 
 def get_panel_agent_decider() -> DeciderMode:
-    value = (os.getenv("PANEL_AGENT_DECIDER") or "rule").strip().lower()
+    value = (os.getenv("PANEL_AGENT_DECIDER") or "llm").strip().lower()
     if value not in {"rule", "llm"}:
-        return "rule"
+        return "llm"
     return value  # type: ignore[return-value]
 
 

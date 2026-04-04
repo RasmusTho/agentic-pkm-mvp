@@ -11,7 +11,7 @@ Your job is to convert active documentation into bounded GitHub Issues without i
 
 ## Canonical workflow
 
-`Docs -> Issue -> Project -> Issue maintenance -> Agent -> PR -> PR integration -> CI -> Verification -> Project/doc closure -> Owner Doc`
+`Docs -> Feature issue or slice issue -> Project -> Issue maintenance -> Agent -> PR -> PR integration -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
 
 Plus: periodic reconciliation.
 
@@ -31,6 +31,7 @@ Plus: periodic reconciliation.
 - Inline doc markers such as `Tracked by: #123` and `Backlog: #123` are secondary convenience notes only.
 - New backlog work must use stable `Source Anchors`.
 - Do not create duplicate Issues.
+- If a docs item is larger than one bounded implementation issue or clearly needs post-merge validation before owner docs should change, route it through `feature-breakdown` instead of flattening it into one issue.
 - Do not create Issues for vague aspirations, broad cleanup, philosophy, or already delivered work.
 - If an item is too large, split it into multiple bounded Issues with explicit dependency order.
 
@@ -49,6 +50,7 @@ For every candidate doc item, determine exactly one state:
 2. Inspect open Issues.
 3. Inspect recent open and merged PRs.
 4. Check whether the work is already tracked, already delivered, superseded, partially delivered, or blocked.
+5. Decide whether the item should stay as one bounded issue or be turned into one parent feature issue plus child slices via `feature-breakdown`.
 
 ## When a doc item becomes a new Issue
 
@@ -119,3 +121,5 @@ For each created Issue, include:
   `DELIVERY RECEIPT: Issue #123 delivered by PR #456. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Owner doc updated: <path>. Project Status: Done.`
 
 If no Issue should be created, say so explicitly and explain why.
+
+If the item should become a parent feature issue plus child slices, say that explicitly and hand off to `feature-breakdown` instead of creating a flat backlog shape.

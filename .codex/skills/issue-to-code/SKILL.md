@@ -1,6 +1,6 @@
 ---
 name: issue-to-code
-description: "Implement a bounded GitHub Issue as the canonical task contract in this repository."
+description: "Implement a bounded GitHub slice issue as the canonical task contract in this repository."
 ---
 
 # Issue To Code
@@ -12,9 +12,9 @@ Only execute bounded implementation work from a GitHub Issue that is the canonic
 
 ## Canonical workflow
 
-`Docs -> Issue -> Project -> Issue maintenance -> Agent -> PR -> PR integration -> CI -> Verification -> Project/doc closure -> Owner Doc`
+`Docs -> Feature issue -> Slice issue -> Agent -> PR -> PR integration -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
 
-Treat these Issue sections as binding:
+Treat these Issue sections as binding for the governing slice issue:
 
 - `Context`
 - `Scope`
@@ -56,6 +56,7 @@ Allowed Project statuses:
 
 ## Issue selection rule before implementation
 
+- Work from bounded slice issues, not from parent feature issues that still require decomposition or post-merge validation.
 - Work only from GitHub Issues that are both `Status=Ready` and labeled `agent:ready`.
 - Among ready issues, pick one of the highest available priority:
   - `prio:high` before `prio:med` before `prio:low`
@@ -67,6 +68,7 @@ Allowed Project statuses:
   - work that reduces architectural fragmentation or rollout drift
 - Do not pick a lower-priority issue while a clearly ready higher-priority issue is available unless you can justify the exception explicitly.
 - If the chosen issue is stale, malformed, drifted, or too large, stop implementation and hand off to Issue maintenance before coding.
+- If the chosen issue is clearly feature-level, references multiple child slices, or carries the full feature acceptance path, stop implementation and route through `feature-breakdown` or Issue maintenance before coding.
 
 ## Lifecycle rules during execution
 
@@ -93,7 +95,15 @@ Allowed Project statuses:
 - Preserve architecture boundaries and event/outbox compatibility where relevant.
 - Update docs in the same change if behavior, contracts, or architecture change.
 - If the work turns a roadmap/plan item into shipped reality, update the owner doc and rewrite roadmap/plan wording so it no longer reads as pending.
+- Do not collapse parent feature validation and owner-doc promotion into one slice PR by default.
 - Use `Fixes #<issue>` in the PR.
+- Default to creating a PR or updating the existing PR for the working branch in the same turn once implementation and validation are complete.
+- Only skip PR creation/update when there is a concrete reason not to, such as:
+  - the issue is blocked and no implementation artifact should be opened yet
+  - the work is intentionally limited to investigation/triage with no code or doc diff
+  - GitHub auth, repo permissions, or network/tooling failures prevent a truthful PR update
+  - the user explicitly instructs you not to create or update a PR
+- If you do not create or update a PR, say why explicitly in the final report.
 
 ## Source-anchor resolution rules
 
@@ -127,13 +137,15 @@ When continuing through anchor drift:
 8. Update owner docs if shipped behavior/contracts changed.
 9. Rewrite roadmap/plan wording if the delivered work was previously listed as pending.
 10. Run `Suggested Validation` plus any obviously necessary focused checks.
-11. Open or update a PR linked to the governing Issue.
+11. Create or update a PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
 12. Run `.codex/skills/pr-integration/SKILL.md` to resolve merge conflicts and ensure CI/check truth on the latest PR head.
 13. Ensure Project Status is `Review` only once the PR is the active review handoff artifact.
+14. If the slice merges but the parent feature still needs validation, keep that parent issue open for the later acceptance step.
 
 ## PR requirements
 
 - PR body must link the Issue with `Fixes #<id>`.
+- The default end state for implemented work is an updated branch plus a PR or updated existing PR in GitHub, not only local workspace changes.
 - Confirm:
   - change stays within Issue scope
   - constraints were followed
@@ -149,8 +161,9 @@ When continuing through anchor drift:
 4. Implementation Summary
 5. Files and Surfaces Changed
 6. Validation Run
-7. Doc Writeback Performed
-8. Risks / Follow-ups
+7. PR Created / Updated
+8. Doc Writeback Performed
+9. Risks / Follow-ups
 
 If blocked, do not guess. Report the blocker only if one of these is true:
 

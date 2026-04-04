@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from app.components.llm.fabric import get_chat_client, LLMTaskIntent
+from app.components.reasoning import ReasoningTaskKind, get_reasoning_facade
 
 if TYPE_CHECKING:
     from app.agents.pilot_agent.state import PilotAgentState
@@ -15,11 +15,14 @@ logger = logging.getLogger(__name__)
 
 def _build_reasoning_prompt(state: PilotAgentState) -> str:
     """Build a prompt for the LLM to reason about promotion."""
+    note_uuid = getattr(state, "note_uuid", getattr(state, "uuid", ""))
+    confidence = float(getattr(state, "confidence", 0.0) or 0.0)
+    source_ref = getattr(state, "source_ref", "") or "N/A"
     return f"""Analyze the following note promotion request and provide your recommendation.
 
-Note UUID: {state.note_uuid}
-Current Confidence: {state.confidence:.2f}
-Source Reference: {state.source_ref or 'N/A'}
+Note UUID: {note_uuid}
+Current Confidence: {confidence:.2f}
+Source Reference: {source_ref}
 
 Based on typical promotion criteria (relevance, completeness, maturity), should this note be:
 1. promoted - Move to a more permanent/visible location
@@ -56,42 +59,47 @@ def reason_node(state: PilotAgentState) -> PilotAgentState:
                 }
             )
 
-        # Build prompt
         prompt = _build_reasoning_prompt(state)
+        messages = list(state.messages)
+        messages.append({"role": "user", "content": prompt})
 
-        # Call LLM via fabric
-        client = get_chat_client(LLMTaskIntent(task_kind="reason", risk="high"))
-        pack = {
-            "messages": state.messages + [{"role": "user", "content": prompt}],
-            "note_uuid": state.note_uuid,
+        schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "decision": {
+                    "type": "string",
+                    "enum": ["promote", "evergreen", "archive", "skip"],
+                },
+                "reasoning": {"type": "string"},
+                "confidence": {"type": "number"},
+            },
+            "required": ["decision", "reasoning", "confidence"],
+            "additionalProperties": False,
         }
 
-        response = client.chat(
-            "pilot_agent_reason",
-            pack,
-            agent="pilot_agent",
-            kind="reason",
+        facade = get_reasoning_facade()
+        response = facade.structured(
+            messages,
+            schema=schema,
+            task_kind=ReasoningTaskKind.DECIDE.value,
             trace_id=state.trace_id,
         )
 
         # Parse response
-        decision = _parse_decision(response)
-        reasoning = _parse_reasoning(response)
-        confidence = _parse_confidence(response)
+        decision = str(response.get("decision", "skip"))
+        reasoning = str(response.get("reasoning", ""))
+        confidence = _coerce_confidence(response.get("confidence"))
 
-        # Update state
-        messages = list(state.messages)
         messages.append({"role": "assistant", "content": response})
 
-        return state.copy(
-            update={
-                "step_count": state.step_count + 1,
-                "reason": reasoning,
-                "decision": decision,
-                "confidence": confidence,
-                "messages": messages,
-                "executed_actions": state.executed_actions + ["reason"],
-            }
+        return _update_state(
+            state,
+            step_count=state.step_count + 1,
+            reason=reasoning,
+            decision=decision,
+            confidence=confidence,
+            messages=messages,
+            executed_actions=state.executed_actions + ["reason"],
         )
 
     except Exception as e:
@@ -99,17 +107,16 @@ def reason_node(state: PilotAgentState) -> PilotAgentState:
             "Reasoning failed",
             extra={
                 "trace_id": state.trace_id,
-                "note_uuid": state.note_uuid,
+                "note_uuid": getattr(state, "note_uuid", getattr(state, "uuid", "")),
                 "error": str(e),
             },
         )
         # Graceful fallback: mark as skip
-        return state.copy(
-            update={
-                "error": f"Reasoning error: {str(e)}",
-                "decision": "skip",
-                "executed_actions": state.executed_actions + ["reason"],
-            }
+        return _update_state(
+            state,
+            error=f"Reasoning error: {str(e)}",
+            decision="skip",
+            executed_actions=state.executed_actions + ["reason"],
         )
 
 
@@ -146,6 +153,28 @@ def _parse_reasoning(response: str) -> str:
         ):
             return stripped
     return response[:200]  # First 200 chars
+
+
+def _coerce_confidence(value: Any) -> float:
+    """Normalize confidence input to a bounded float."""
+    try:
+        confidence = float(value)
+        return max(0.0, min(1.0, confidence))
+    except (TypeError, ValueError):
+        return 0.5
+
+
+def _update_state(state: PilotAgentState, **updates: Any) -> PilotAgentState:
+    """Update either the app dataclass or the slimmer test harness dataclass."""
+    copy_fn = getattr(state, "copy", None)
+    if callable(copy_fn):
+        try:
+            return copy_fn(update=updates)
+        except TypeError:
+            pass
+    for key, value in updates.items():
+        setattr(state, key, value)
+    return state
 
 
 def _parse_confidence(response: str) -> float:

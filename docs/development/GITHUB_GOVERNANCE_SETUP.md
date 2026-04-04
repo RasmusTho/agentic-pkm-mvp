@@ -71,19 +71,11 @@ Interpretation note:
 - These automation targets describe the intended Project projection.
 - They should be treated as best-effort synchronization, not as a repository-local hard guarantee when the Project lives on a personal account or another platform surface with limited automation credentials.
 
-Interpretation note:
-- These automation targets describe the intended Project projection.
-- They should be treated as best-effort synchronization, not as a repository-local hard guarantee when the Project lives on a personal account or another platform surface with limited automation credentials.
-
 Lifecycle guardrails:
 - active implementation must not remain `Ready`
 - `Review` must not be used only because a PR exists; use it when review handoff is explicit
 - closed issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`
 - merged or otherwise closed terminal PR items must not remain unset or non-terminal in the Project; they should reconcile to `Done`
-
-Projection rule:
-- When Project state disagrees with Issue state, PR state, or merged delivery reality, treat the Issue/PR state as authoritative and correct the Project opportunistically.
-- Do not block delivery solely because a personal Project v2 card could not be updated by repo automation.
 
 Projection rule:
 - When Project state disagrees with Issue state, PR state, or merged delivery reality, treat the Issue/PR state as authoritative and correct the Project opportunistically.

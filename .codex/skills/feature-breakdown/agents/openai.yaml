@@ -1,0 +1,4 @@
+interface:
+  display_name: "Feature Breakdown"
+  short_description: "Turn one feature into a parent issue plus slices"
+  default_prompt: "Use $feature-breakdown to turn this docs-defined feature into one parent feature issue, bounded child slices, and explicit verification, validation, and acceptance paths."
