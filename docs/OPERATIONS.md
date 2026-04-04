@@ -1,6 +1,12 @@
 State: SoT v5.5 Reality-MVP baseline locked. This is the top-level operations entrypoint for the current runtime.
 Doc role: Core SoT
 Authority: Top-level operator guidance for the current runtime; delegates specialized operational detail to linked companion docs but remains the main operational entrypoint.
+Owner: Runtime / operator playbook
+Temporal class: operational
+Review cadence: event-driven
+Source of truth: mixed
+Last reviewed: 2026-04-04
+Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, app/cli/__init__.py, Makefile, current repo state on 2026-04-04
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.

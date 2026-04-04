@@ -5,8 +5,8 @@ Owner: Product / architecture forward line
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
-Last reviewed: 2026-04-01
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, current repo state on 2026-04-01
+Last reviewed: 2026-04-04
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ENVIRONMENTS.md, docs/PANEL_AGENT.md, docs/DOCS_INDEX.md, app/cli/__init__.py, current repo state on 2026-04-04
 # Roadmap — Strategic Control
 
 This roadmap is forward-looking and skimmable. History lives in `docs/history/SOT_4X_HISTORY.md`; deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
@@ -24,9 +24,9 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 ## Now / Next / Later
 - **Now**
   - **v5.5 baseline lock + safety guard** — runtime/startup defaults `WATCHER_AUTO_EXEC=1`, but operators can force emit-only mode with `WATCHER_AUTO_EXEC=0`; allowlists, dedup/idempotency, optimistic writes, and write-guard/status signals remain the real enablement gates for safe rollout.
-  - PanelAgent LangGraph decider opt-in, watcher policy auto-exec plumbing (v5.5C in progress).
+  - PanelAgent LLM-first decider posture is shipped; watcher policy auto-exec plumbing remains under rollout guardrails while rule-mode stays as the explicit deterministic opt-out for tests and bounded validation lanes.
   - Watcher → panel → planner/orchestrator automation with safety limits now includes dedup reports, promotion consumer visibility, and explicit skipped receipts.
-  - Vault-first config validation (panel wiring, watcher, outbox) with schema enforcement and `python -m app.cli.settings_explain`.
+  - Vault-first config validation (panel wiring, watcher, outbox) with schema enforcement and `python -m app.cli settings-explain`.
 - **Next**
   - **Environment contract follow-through** — implement the remaining docs-first environment contract slices from `docs/ENVIRONMENTS.md` in bounded steps: explicit runtime environment selection and environment-scoped vault/store separation are shipped, and environment-aware operator diagnostics are delivered via Issue #265 / PR #272; remaining follow-through should stay bounded and avoid changing the shared architecture contracts.
   - **Companion note + Note Context rollout hardening** — the core companion-note and Note Context implementation is shipped, and the active doc-sync correction has landed. Delivery receipt: Issue #229, PR #237. Any remaining rollout verification or cleanup should be captured as new bounded follow-up issues rather than treated as missing first implementation.
@@ -37,7 +37,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
     - Back-compat preserved: `ORCHESTRATOR_VERSION=v1` (default) uses existing sequential V1; `v2` selects parallel pilot with compensation.
     - Next slices: checkpoint persistence, retry/timeout policy.
   - PanelAgent 2.0 timeline: <!-- PA2-ROLLUP -->
-    - v5.5C: decider — shipped (rule default + opt-in LLM mode + fallback + telemetry).
+    - v5.5C: decider — shipped (LLM-first runtime posture + explicit rule-mode opt-out + fallback + telemetry).
     - v5.6 shipped/in progress: engine-neutral cognition seam (#244, PR #249), freeform catalog-driven proposal path (#241, PR #248), suggested checkbox writeback for uncertain/freeform panel proposals (#242), multi-step plans (#243, PR #302). Remaining: real-vault acceptance (#240).
     - Broader expansion beyond the current PanelAgent 2.0 slices is deferred until the real-vault acceptance slice is closed and the operator story is stable. Keep new work bounded and break it down from the owner docs / tracks before expanding scope.
     - v5.7: advanced (panel versioning, cross-note coordination) remains future-line work and should stay in roadmap form until a governing slice issue exists.
