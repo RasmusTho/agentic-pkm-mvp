@@ -120,4 +120,4 @@ When implementing, create GitHub issue(s) referencing this spec: "Implements LOC
 
 ---
 
-**Status:** Specification ready. Blocked on INITIALIZE_TEST_VAULT.
+**Status:** Shipped. `make start-test-system` delivered by #333. CI contract: `tests/quality_wave/test_bootstrap_start.py`.
