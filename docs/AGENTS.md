@@ -125,7 +125,7 @@ Direction note:
 | PanelAgent | Translate AI panels into intents/events | Panel Interaction | Yes (LangGraph runtime + PanelActionIntent) | Outbox panel intents; planner pipeline opt-in (`PANEL_AGENT_PIPELINE=planner`) with CLI-first orchestration | Active |
 | Planner | Build execution plans from goals/events (including panel action intents) | Multi-agent orchestration | Planned (LLM-backed; panel-mode mapping shipped) | Outbox plan events; feeds Orchestrator | Active |
 | Promotion Agent | Apply promotion/evergreen transitions | Review & Promotion | Planned (LangGraph to encode policy/branching) | Outbox promotion events; Orchestrator integration planned | Active |
-| Reviewer | Human-aligned review of artifacts/transitions | Review & Promotion | Planned (LangGraph critique/approval) | Outbox review events; A2A planned | Active |
+| Reviewer | Human-aligned review of artifacts/transitions | Review & Promotion | Yes (LangGraph critique/approval in the shared ReasoningFacade rollout) | Outbox review events; A2A planned | Active |
 | SetEvaluator | Score/rank candidates for promotion/sets | Review & Promotion / ASK (ranking) | Planned | Outbox/Planner hooks; A2A planned | Active |
 | MergeResolverAgent | Resolve conflicts/merges across sources | Capture & Ingest | Planned | Outbox ingest events; A2A planned | Parked (future) |
 | NoteHygieneAgent | Suggest cleanups and consistency fixes | Capture & Ingest / Panel Interaction | Planned | Outbox panel/update events; A2A planned | Parked (future) |
