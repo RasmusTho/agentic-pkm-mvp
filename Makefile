@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init test-bootstrap
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 TEST_VAULT_ROOT ?= $(PWD)/vault-test
@@ -62,6 +62,9 @@ reset-zero:
 
 reset-zero-force:
 	@RESET_FORCE=1 bash scripts/reset_to_zero.sh
+
+start-test-system:
+	@VAULT_ROOT="$(TEST_VAULT_ROOT)" scripts/start_full_system.sh
 
 test-bootstrap: reset-zero-force test-vault-init
 	@VAULT_ROOT="$(TEST_VAULT_ROOT)" scripts/start_full_system.sh
