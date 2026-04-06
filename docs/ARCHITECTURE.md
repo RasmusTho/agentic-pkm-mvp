@@ -5,8 +5,8 @@ Owner: Runtime / architecture SoT
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-04
-Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, app/cli/__init__.py, current repo state on 2026-04-04
+Last reviewed: 2026-04-06
+Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, app/cli/__init__.py, merged PRs #272/#302, current repo state on 2026-04-06
 # Architecture — SoT v5.5 Reality-MVP baseline (forward line v5.6)
 
 This document is the active architecture source of truth for the SoT v5.5 Reality-MVP baseline and the place where current runtime contracts are defined.

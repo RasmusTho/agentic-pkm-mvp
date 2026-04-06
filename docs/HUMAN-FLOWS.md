@@ -5,8 +5,8 @@ Owner: Product / human contract SoT
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-04
-Last verified against: docs/PROJECT_KERNEL.md, docs/PANEL_AGENT.md, docs/OPERATIONS.md, current repo state on 2026-04-04
+Last reviewed: 2026-04-06
+Last verified against: docs/PROJECT_KERNEL.md, docs/PANEL_AGENT.md, docs/OPERATIONS.md, merged PRs #254/#272/#302, current repo state on 2026-04-06
 
 # Human Flows — Yggdrasil / agentic-pkm-mvp
 
