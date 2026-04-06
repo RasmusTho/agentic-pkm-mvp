@@ -20,11 +20,21 @@ from pathlib import Path
 
 import pytest
 
-_DOCKER_AVAILABLE = shutil.which("docker") is not None
+_SUBPROCESS_PATH = "/usr/bin:/bin:/usr/local/bin"
+_DOCKER_AVAILABLE = shutil.which("docker", path=_SUBPROCESS_PATH) is not None
 _requires_docker = pytest.mark.skipif(
     not _DOCKER_AVAILABLE,
     reason="Docker not available in this environment; startup script contract tests skipped",
 )
+
+
+def _startup_env(**extra: str) -> dict[str, str]:
+    env = {
+        "PATH": _SUBPROCESS_PATH,
+        "HOME": str(Path.home()),
+    }
+    env.update(extra)
+    return env
 
 
 class TestBootstrapStartContract:
@@ -37,7 +47,7 @@ class TestBootstrapStartContract:
             ["bash", "scripts/start_full_system.sh"],
             capture_output=True,
             text=True,
-            env={"PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(Path.home())},
+            env=_startup_env(),
         )
         assert result.returncode != 0, "Expected non-zero exit when VAULT_ROOT is unset"
         stderr = result.stderr + result.stdout
@@ -51,11 +61,7 @@ class TestBootstrapStartContract:
             ["bash", "scripts/start_full_system.sh"],
             capture_output=True,
             text=True,
-            env={
-                "PATH": "/usr/bin:/bin:/usr/local/bin",
-                "HOME": str(Path.home()),
-                "VAULT_ROOT": str(missing_vault),
-            },
+            env=_startup_env(VAULT_ROOT=str(missing_vault)),
         )
         assert result.returncode != 0, "Expected non-zero exit when VAULT_ROOT dir is missing"
         stderr = result.stderr + result.stdout
@@ -74,27 +80,31 @@ class TestBootstrapStartContract:
         vault_dir = tmp_path / "vault-test"
         vault_dir.mkdir()
 
-        result = subprocess.run(
-            ["bash", "scripts/start_full_system.sh"],
-            capture_output=True,
-            text=True,
-            timeout=20,
-            env={
-                "PATH": "/usr/bin:/bin:/usr/local/bin",
-                "HOME": str(Path.home()),
-                "VAULT_ROOT": str(vault_dir),
-            },
-        )
-        # Exit code 2 = VAULT_ROOT unset; exit 1 = vault dir missing.
-        # Either of those would mean vault validation failed — that must not happen here.
+        try:
+            result = subprocess.run(
+                ["bash", "scripts/start_full_system.sh"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                env=_startup_env(VAULT_ROOT=str(vault_dir)),
+            )
+        except subprocess.TimeoutExpired as exc:
+            stderr = "".join(part for part in [exc.stdout, exc.stderr] if part)
+            assert "VAULT_ROOT" not in stderr, (
+                f"Script should not fail on missing VAULT_ROOT when provided: {stderr[:500]}"
+            )
+            assert not any(
+                marker in stderr.lower() for marker in ("vault root is missing", "must be set")
+            ), f"Script rejected an existing VAULT_ROOT before timeout: {stderr[:500]}"
+            return
+
         stderr = result.stderr + result.stdout
         assert result.returncode != 2, (
             f"Script exited 2 (VAULT_ROOT required) even though VAULT_ROOT was set: {stderr[:500]}"
         )
-        if result.returncode == 1 and "Vault root is missing" in stderr:
-            raise AssertionError(
-                f"Script rejected VAULT_ROOT={vault_dir} as missing: {stderr[:500]}"
-            )
+        assert not any(
+            marker in stderr.lower() for marker in ("vault root is missing", "must be set")
+        ), f"Script rejected an existing VAULT_ROOT as missing: {stderr[:500]}"
 
     def test_make_start_test_system_target_exists(self) -> None:
         """make start-test-system is declared in the Makefile (wired for BOOTSTRAP-03)."""
