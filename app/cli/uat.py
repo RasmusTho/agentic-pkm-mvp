@@ -168,6 +168,7 @@ def _build_uat_checks(
     *,
     seeded_folder: Path,
     summary: UATSummary,
+    mode: UATAssertMode,
 ) -> Dict[str, bool]:
     evergreen_path = seeded_folder / "evergreen-strategy.md"
     manual_path = seeded_folder / "manual-policy.md"
@@ -180,21 +181,9 @@ def _build_uat_checks(
     rerun_watcher = (summary.rerun or {}).get("watcher", {})
     rerun_promotion = (summary.rerun or {}).get("promotion", {})
 
-    return {
+    checks = {
         "watcher_errors_zero": int(summary.watcher.get("errors", 0) or 0) == 0,
         "promotion_errors_zero": int(summary.promotion.get("errors", 0) or 0) == 0,
-        "promote_intent_emitted": int(summary.watcher.get("panel_promotions", 0) or 0) >= 1,
-        "promotion_applied": int(summary.promotion.get("applied", 0) or 0) >= 1,
-        "manual_policy_skipped": int(summary.watcher.get("panel_skipped_policy", 0) or 0) >= 1,
-        "evergreen_note_promoted": (
-            str(evergreen_frontmatter.get("review_state") or "") == "reviewed"
-            and str(evergreen_frontmatter.get("maturity") or "") == "evergreen"
-        ),
-        "manual_note_unchanged": (
-            str(manual_frontmatter.get("ai_panel_auto_run") or "") == "never"
-            and "maturity" not in manual_frontmatter
-        ),
-        "mixed_actions_stays_safe": str(mixed_actions_frontmatter.get("review_state") or "") in {"", "reviewed"},
         "rerun_no_changes": int(rerun_watcher.get("changed", 0) or 0) == 0,
         "rerun_no_panel_side_effects": (
             int(rerun_watcher.get("panel_runs", 0) or 0) == 0
@@ -202,6 +191,27 @@ def _build_uat_checks(
             and int(rerun_promotion.get("applied", 0) or 0) == 0
         ),
     }
+    if mode == "bootstrap":
+        checks.update(
+            {
+                "promote_intent_emitted": int(summary.watcher.get("panel_promotions", 0) or 0) >= 1,
+                "promotion_applied": int(summary.promotion.get("applied", 0) or 0) >= 1,
+                "manual_policy_skipped": int(summary.watcher.get("panel_skipped_policy", 0) or 0) >= 1,
+                "evergreen_note_promoted": (
+                    str(evergreen_frontmatter.get("review_state") or "") == "reviewed"
+                    and str(evergreen_frontmatter.get("maturity") or "") == "evergreen"
+                ),
+                "manual_note_unchanged": (
+                    str(manual_frontmatter.get("ai_panel_auto_run") or "") == "never"
+                    and "maturity" not in manual_frontmatter
+                ),
+                "mixed_actions_stays_safe": str(mixed_actions_frontmatter.get("review_state") or "") in {"", "reviewed"},
+            }
+        )
+    elif mode != "converged":
+        checks["unknown_mode"] = False
+
+    return checks
 
 
 def _write_uat_report(path: Path, summary: UATSummary) -> None:
@@ -299,7 +309,7 @@ def run_vault_test_flow(
 
     summary = UATSummary(watcher=watcher_summary, promotion=promotion_summary, rerun=rerun_summary)
     if not dry_run:
-        summary.checks = _build_uat_checks(seeded_folder=seeded_folder, summary=summary)
+        summary.checks = _build_uat_checks(seeded_folder=seeded_folder, summary=summary, mode=assert_mode)
         summary.report_path = _default_report_path(seeded_folder)
         _write_uat_report(summary.report_path, summary)
 
