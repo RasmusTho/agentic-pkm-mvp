@@ -5,8 +5,8 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-04
-Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, app/cli/__init__.py, Makefile, current repo state on 2026-04-04
+Last reviewed: 2026-04-06
+Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, app/cli/__init__.py, Makefile, merged PRs #254/#272, current repo state on 2026-04-06
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.

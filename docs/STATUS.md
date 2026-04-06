@@ -5,8 +5,8 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-04-04
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/ENVIRONMENTS.md, docs/DOCS_INDEX.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/PANEL_AGENT.md, scripts/start_full_system.sh, app/cli/__init__.py, current repo state on 2026-04-04
+Last reviewed: 2026-04-06
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/ENVIRONMENTS.md, docs/DOCS_INDEX.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/PANEL_AGENT.md, Makefile, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, app/cli/__init__.py, merged PRs #254/#272/#302, current repo + GitHub delivery state on 2026-04-06
 Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, ingest runs by plane). `watcher_runs` refers to legacy snapshot watchers only; registry watcher health is via heartbeat + tick logs.
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
@@ -56,13 +56,13 @@ Validation posture note:
 - Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, skipped receipts, and write-guard state are surfaced in status, events, and the new CLI `settings-explain` output before any runtime gate opens.
 - PanelAgent decider hardening through the shared `ReasoningFacade` seam is shipped for the current pilot path. Delivery receipt: Issue #230, PR #236.
 ### Next
-- ReasoningFacade + LangGraph rollout for the PanelAgent pilot agent pool is delivered. Delivery receipt: Issue #231 (closed COMPLETED). The remaining phased rollout to Promotion/Reviewer/Hygiene is gated on v5.6A pilot stabilization (see Later). Source Anchor: RF-ADOPTION
+- ReasoningFacade + LangGraph rollout is delivered for the PanelAgent pilot path and the review-flow agent pool. Delivery receipts: Issue #230 / PR #236 and Issue #231. The remaining phased rollout to Promotion/Hygiene is gated on v5.6A pilot stabilization (see Later). Source Anchor: RF-ADOPTION
 - The companion note + Note Context doc-sync correction is shipped. Delivery receipt: Issue #229, PR #237. Any remaining rollout verification or cleanup should be captured as new bounded follow-up issues rather than treated as missing implementation.
 - Vault-as-GUI settings compiler and operator surfaces: panel-action/compiler provenance (source paths, mtimes, combined sha256) is now surfaced in the `/api/status` endpoint and `python -m app.cli status --json` via `panel_diagnostics` fields. Delivery receipt: Issue #238 (closed COMPLETED), PR #254. Source Anchor: SETTINGS-PROVENANCE
 - CLI/docs runbook alignment with v5.6 narrative: operators now know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe. Delivery receipt: Issue #232 (closed COMPLETED). Source Anchor: ROLLOUT-RUNBOOKS
 - Nightly verification now includes the deterministic Quality Wave acceptance harness (`tests/quality_wave/test_uat_harness.py`) plus a first bounded Postgres contracts lane (`tests/int/test_pg_backend.py`, `tests/api/test_status_store_pg.py`, `tests/indexer/test_outbox_roundtrip_pg.py`) inside `integration-nightly`. The PG lane flows through the repo DB abstraction: `DATABASE_URL`/`DB_DSN` provide the target endpoint, `STORE_BACKEND=pg` selects the backend, and `alembic upgrade head` is the schema/bootstrap contract for the first green recurring PG wave.
 ### Later
-- Extend LangGraph adoption across more agents (Promotion, Reviewer, Hygiene) and the orchestrator V2 control plane once the v5.6A pilot stabilizes.
+- Extend LangGraph adoption across the remaining targeted agent pools (Promotion, Hygiene) and the orchestrator V2 control plane once the v5.6A pilot stabilizes.
 - Surface LangGraph/Reasoning rollouts in the evaluation stack (golden vault, metamorphic runs, cold rebuild, fitness gates) so the forward line has measurable acceptance per contract.
 - Begin planning multi-user and external sync guardrails that rely on the v5.6 safe mode (watcher gating + plan audits) before the next forward milestone.
 **Out of scope for the v5.6 kickoff PR**: orchestrator/langgraph plumbing stays opt-in until the defined gates pass; watcher auto-run is controlled by `WATCHER_AUTO_EXEC` (set `WATCHER_AUTO_EXEC=0` for emit-only/safe mode).
@@ -96,9 +96,9 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
 - Production-facing path is the active current-state default; lab/dev-only flows remain explicitly non-production.
 - The local test stack can be started successfully against a separate test vault, and `uat-seed-vault-test` works.
-- **Bootstrap path status**: The repo-supported local bootstrap/UAT path (`make test-bootstrap`) is fully operational and verified for its documented scope (clean-state local verification). The path is resettable, reproducible, and meets the contract for the canonical local test environment. Known scope limitations and follow-up items (listed in `docs/LOCAL_TEST_BOOTSTRAP/`) are bounded future slices, not blockers to current production verification use.
+- **Bootstrap path status**: The repo-supported local bootstrap/UAT path (`make test-bootstrap`) is documented and partially productized, but it should not yet be treated as fully supported and verified end to end. The owner plan and task specs still track the bootstrap chain's runtime-start, runtime-verify, and scripted-UAT steps as open work (`#333`, `#334`, `#335`), so the canonical clean-state path remains an active stabilization lane rather than a closed acceptance receipt.
 - The current docs-first stabilization wave has made the intended supported path explicit; the bootstrap contract is now documented in `docs/TESTING.md`, `docs/ENVIRONMENTS.md`, and `docs/LOCAL_TEST_BOOTSTRAP/`.
-- Operator-facing guidance: operators may depend on `make test-bootstrap` for local verification workflows today; the documented limitations in `docs/LOCAL_TEST_BOOTSTRAP/` are tracked follow-ups, not undocumented surprises.
+- Operator-facing guidance: treat `make test-bootstrap` as the intended local verification path, but keep the full end-to-end bootstrap acceptance status tied to `docs/LOCAL_TEST_BOOTSTRAP/` and Issues `#333`-`#335` until those slices close.
 - PanelAgent runtime V1 is part of the active baseline; planner pipeline and LangGraph expansion remain opt-in.
 - Legacy snapshot watchers remain available only for lab/dev workflows and are not part of the runtime default.
 - Eval suites remain opt-in diagnostics; they do not define baseline health by themselves.
@@ -108,7 +108,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 | Area | Current baseline posture | Forward-line direction |
 | --- | --- | --- |
 | Watcher auto-exec | Guarded by dedup + optimistic writes + idempotency | Safe enablement only after gates and receipts prove stable behavior |
-| LangGraph rollout | Active for ASK and PanelAgent-related flows; the shared `ReasoningFacade` seam is adopted for the PanelAgent pilot (Issue #231 delivered) | Expand in phases as additional agent pools (Promotion/Reviewer/Hygiene) migrate onto the shared `ReasoningFacade`; gated on v5.6A pilot stabilization |
+| LangGraph rollout | Active for ASK, PanelAgent-related flows, and the review-flow agent pool; the shared `ReasoningFacade` seam is adopted for the delivered panel/reviewer paths | Expand in phases as the remaining targeted agent pools (Promotion/Hygiene) migrate onto the shared `ReasoningFacade`; gated on v5.6A pilot stabilization |
 | Orchestrator V2 pilot | Shipped: parallel execution + dependency-aware scheduling with `ORCHESTRATOR_VERSION=v2` flag. V1 is default. Coverage: flag contract, plan-graph scheduling, event/trace compat, compensation/rollback. Delivery receipt: Issue #250 (pilot), Issue #251 (compensation). | Future slices: checkpointing, retry/timeout policy. Adopt in broader rollout after stability signals. |
 
 For detailed sequencing, version history, and roadmap ladder, use:
