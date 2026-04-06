@@ -53,7 +53,10 @@ class UATSummary:
         if self.checks:
             passed = sum(1 for value in self.checks.values() if value)
             total = len(self.checks)
+            lines.append(f"ASSERTIONS_PASSED={passed}/{total}")
             lines.append(f"Checks: passed={passed}/{total}")
+            if total > 0 and passed == total:
+                lines.append("IDEMPOTENT=true")
         if self.report_path is not None:
             lines.append(f"Report: {self.report_path}")
         return lines
