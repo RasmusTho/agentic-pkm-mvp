@@ -206,7 +206,7 @@ See also:
 - Shared scaffolding such as `AgentState`, LangGraph control patterns, common prompts, policies, and capabilities should provide the reusable foundation for those agents.
 - Tools/MCP: tools are actions an agent chooses from within its LangGraph or equivalent bounded control flow; they should not be hard-wired at the pipeline/Orchestrator level beyond routing envelopes.
 - Foundational capabilities such as ingestion, indexing, retrieval, reasoning support, and execution/governance support remain first-class even when they are not expressed as standalone agents.
-- Current adoption is phased: ASK and PanelAgent use LangGraph; most other agents remain deterministic pipelines until v5.6 rollout phases.
+- Current adoption is phased: ASK, PanelAgent, and Reviewer use LangGraph; most other agents remain deterministic pipelines until later v5.6 rollout phases.
 
 ## Agent Implementation Pattern (Current Direction)
 - Agents MUST preserve external event contracts and Outbox envelopes during migrations.
