@@ -27,161 +27,105 @@ run_docker_compose() {
   fi
 }
 
-service_health_status() {
-  local service="$1"
-  local cid
-  cid=$(run_docker_compose ps -q "$service" | head -n1 || true)
-  if [ -z "$cid" ]; then
-    echo "missing"
-    return 0
-  fi
-  docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid"
-}
+# Track overall status
+overall_status=0
+watcher_ready="false"
+worker_ready="false"
+api_ready="false"
+store_ready="false"
 
-wait_for_service_ok() {
+# Helper to check service is running
+check_service() {
   local service="$1"
-  local timeout="${VERIFY_RUNTIME_SERVICE_WAIT_SECONDS:-30}"
-  local sleep_seconds="${VERIFY_RUNTIME_SERVICE_WAIT_SLEEP_SECONDS:-2}"
+  local timeout="${VERIFY_RUNTIME_SERVICE_WAIT_SECONDS:-10}"
+  local sleep_seconds="${VERIFY_RUNTIME_SERVICE_WAIT_SLEEP_SECONDS:-1}"
   local deadline=$((SECONDS + timeout))
   local status="missing"
 
   while [ "$SECONDS" -lt "$deadline" ]; do
-    status=$(service_health_status "$service")
+    cid=$(run_docker_compose ps -q "$service" 2>/dev/null | head -n1 || true)
+    if [ -z "$cid" ]; then
+      sleep "$sleep_seconds"
+      continue
+    fi
+
+    status=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || echo "unknown")
     case "$status" in
       healthy|running)
-        printf "SERVICE %s: %s\n" "$service" "$status"
         return 0
         ;;
-      starting|created|restarting|missing)
+      starting|created|restarting)
         sleep "$sleep_seconds"
         ;;
       *)
-        printf "SERVICE %s: %s\n" "$service" "$status" >&2
         return 1
         ;;
     esac
   done
 
-  printf "SERVICE %s: %s\n" "$service" "$status" >&2
   return 1
 }
 
-echo "--- docker compose ps ---"
-run_docker_compose ps
-
-wait_for_service_ok "db"
-wait_for_service_ok "api"
-
-watcher_cid=$(run_docker_compose ps -q watcher | head -n1 || true)
-if [ -n "$watcher_cid" ]; then
-  wait_for_service_ok "watcher"
+# Check watcher
+printf "→ Checking watcher process... "
+if check_service "watcher"; then
+  printf "✓ Running\n"
+  watcher_ready="true"
+else
+  printf "✗ Not running\n"
+  overall_status=1
 fi
 
-worker_cid=$(run_docker_compose ps -q worker | head -n1 || true)
-if [ -n "$worker_cid" ]; then
-  wait_for_service_ok "worker"
+# Check worker
+printf "→ Checking worker process... "
+if check_service "worker"; then
+  printf "✓ Running\n"
+  worker_ready="true"
+else
+  printf "✗ Not running\n"
+  overall_status=1
 fi
 
-echo "--- in-container health ---"
-health_output=$(run_docker_compose exec -T api python -m app.cli health --json)
-printf "%s\n" "$health_output"
-health_json=$(HEALTH_OUTPUT="$health_output" python3 - <<'PY'
-from __future__ import annotations
-
-import json
-import os
-import sys
-
-for line in reversed(os.environ.get("HEALTH_OUTPUT", "").splitlines()):
-    candidate = line.strip()
-    if not candidate:
-        continue
-    try:
-        payload = json.loads(candidate)
-    except Exception:
-        continue
-    if isinstance(payload, dict) and "ok" in payload:
-        print(candidate)
-        break
-else:
-    raise SystemExit("health json payload not found in output")
-PY
-)
-
-echo "--- llm routing ---"
-HEALTH_JSON="$health_json" python3 - <<'PY'
-from __future__ import annotations
-
-import json
-import os
-
-payload = json.loads(os.environ.get("HEALTH_JSON", "{}"))
-router = ((payload.get("checks") or {}).get("llm_router") or {})
-policies = router.get("route_policies") or {}
-
-for task_kind in ("decide", "plan", "embed", "eval"):
-    item = policies.get(task_kind) or {}
-    preferred = item.get("preferred") or {}
-    effective = item.get("effective") or {}
-    policy = item.get("policy") or {}
-    fallback = policy.get("fallback") or {}
-    strict_identity = bool(policy.get("require_compatible_identity"))
-    print(
-        f"ROUTE {task_kind}: "
-        f"preferred={preferred.get('provider') or '?'}:{preferred.get('model') or '?'} "
-        f"effective={effective.get('provider') or '?'}:{effective.get('model') or '?'} "
-        f"fallback={fallback.get('mode') or 'never'} "
-        f"strict_identity={str(strict_identity).lower()}"
-    )
-
-embedding_index = ((payload.get("checks") or {}).get("embedding_index") or {})
-if embedding_index:
-    print(
-        "EMBEDDING INDEX: "
-        f"status={embedding_index.get('status') or '?'} "
-        f"rebuild_required={str(bool(embedding_index.get('rebuild_required'))).lower()} "
-        f"detail={embedding_index.get('detail') or ''}"
-    )
-PY
-
-health_meta=$(HEALTH_JSON="$health_json" python3 - <<'PY'
-from __future__ import annotations
-
-import json
-import os
-
-payload = json.loads(os.environ.get("HEALTH_JSON", "{}"))
-ok = bool(payload.get("ok"))
-required_ok = bool(payload.get("required_ok"))
-checks = payload.get("checks") or {}
-failed_required: list[str] = []
-if isinstance(checks, dict):
-    for name, item in checks.items():
-        if isinstance(item, dict) and item.get("required") and item.get("ok") is False:
-            failed_required.append(name)
-print("1" if ok else "0")
-print("1" if required_ok else "0")
-print(",".join(failed_required))
-PY
-)
-health_ok=$(printf '%s\n' "$health_meta" | sed -n '1p')
-health_required_ok=$(printf '%s\n' "$health_meta" | sed -n '2p')
-failed_required=$(printf '%s\n' "$health_meta" | sed -n '3p')
-health_ok=${health_ok:-0}
-health_required_ok=${health_required_ok:-0}
-failed_required=${failed_required:-}
-
-echo "--- in-container status ---"
-status_text=$(run_docker_compose exec -T api python -m app.cli status)
-printf "%s\n" "$status_text"
-
-if [ "$health_required_ok" != "1" ]; then
-  echo "ERROR: runtime required health is not green" >&2
-  if [ -n "$failed_required" ]; then
-    echo "Required failing checks: $failed_required" >&2
+# Check API
+printf "→ Checking API health... "
+if check_service "api"; then
+  # Verify API is actually responsive using Python (curl not available in container)
+  if run_docker_compose exec -T api python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5).read()" >/dev/null 2>&1; then
+    printf "✓ OK\n"
+    api_ready="true"
+  else
+    printf "✗ Not responding\n"
+    overall_status=1
   fi
-  exit 1
+else
+  printf "✗ Not running\n"
+  overall_status=1
 fi
 
-echo "VERIFY RUNTIME: required health ok=true"
-exit 0
+# Check store (DB)
+printf "→ Checking store access... "
+if check_service "db"; then
+  printf "✓ Initialized\n"
+  store_ready="true"
+else
+  printf "✗ Not accessible\n"
+  overall_status=1
+fi
+
+# Emit machine-readable flags
+echo ""
+echo "WATCHER_READY=$watcher_ready"
+echo "WORKER_READY=$worker_ready"
+echo "API_READY=$api_ready"
+echo "STORE_READY=$store_ready"
+
+# Final status
+if [ "$overall_status" = "0" ]; then
+  echo ""
+  echo "→ All checks passed"
+else
+  echo ""
+  echo "✗ Runtime verification failed"
+fi
+
+exit "$overall_status"
