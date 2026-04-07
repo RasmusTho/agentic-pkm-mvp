@@ -5,8 +5,8 @@ Owner: Product / architecture forward line
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
-Last reviewed: 2026-04-07
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ENVIRONMENTS.md, docs/PANEL_AGENT.md, docs/DOCS_INDEX.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, Makefile, app/cli/__init__.py, merged PRs #236/#254/#272/#302/#346/#348/#349, GitHub Issues #334/#335, current repo + GitHub delivery state on 2026-04-07
+Last reviewed: 2026-04-01
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, current repo state on 2026-04-01
 # Roadmap — Strategic Control
 
 This roadmap is forward-looking and skimmable. History lives in `docs/history/SOT_4X_HISTORY.md`; deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
@@ -24,25 +24,26 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 ## Now / Next / Later
 - **Now**
   - **v5.5 baseline lock + safety guard** — runtime/startup defaults `WATCHER_AUTO_EXEC=1`, but operators can force emit-only mode with `WATCHER_AUTO_EXEC=0`; allowlists, dedup/idempotency, optimistic writes, and write-guard/status signals remain the real enablement gates for safe rollout.
-  - PanelAgent LLM-first decider posture is shipped; watcher policy auto-exec plumbing remains under rollout guardrails while rule-mode stays as the explicit deterministic opt-out for tests and bounded validation lanes.
+  - PanelAgent LangGraph decider opt-in, watcher policy auto-exec plumbing (v5.5C in progress).
   - Watcher → panel → planner/orchestrator automation with safety limits now includes dedup reports, promotion consumer visibility, and explicit skipped receipts.
-  - Vault-first config validation (panel wiring, watcher, outbox) with schema enforcement and `python -m app.cli settings-explain`.
+  - Vault-first config validation (panel wiring, watcher, outbox) with schema enforcement and `python -m app.cli.settings_explain`.
 - **Next**
+  - **Low-risk autonomy + automated sync validation** — define and implement the next bounded forward path for autonomous low-risk proposal surfacing and automated multi-device latency verification, using AI-panel proposal writeback as the first interaction surface and a scripted sync-latency harness as the first acceptance path. Source Anchor: AUTO-LOW-RISK-AUTONOMY
   - **Environment contract follow-through** — implement the remaining docs-first environment contract slices from `docs/ENVIRONMENTS.md` in bounded steps: explicit runtime environment selection and environment-scoped vault/store separation are shipped, and environment-aware operator diagnostics are delivered via Issue #265 / PR #272; remaining follow-through should stay bounded and avoid changing the shared architecture contracts.
   - **Companion note + Note Context rollout hardening** — the core companion-note and Note Context implementation is shipped, and the active doc-sync correction has landed. Delivery receipt: Issue #229, PR #237. Any remaining rollout verification or cleanup should be captured as new bounded follow-up issues rather than treated as missing first implementation.
   - **Quality Wave: Registry Watcher Evaluation Stack** — shipped and now serves as the v5.6 rollout gate via `docs/TESTING.md`, `docs/QUALITY_WAVE_IMPLEMENTATION.md`, and `docs/quality_wave/README.md`. Delivery receipt: PRs #197, #198, #199, #200, #201, #202, #210.
   - **ReasoningFacade + broader graph adoption** — the shared `ReasoningFacade` seam is present; the PanelAgent decider migration is shipped via Issue #230 / PR #236, and the review-flow agent migration is delivered via Issue #231. Delivery receipt: #230 (PR #236), #231 (closed COMPLETED). Source Anchor: RF-ADOPTION
-    - Rationale: prevents pattern fragmentation; broader agent adoption should route reasoning/tool calls through the existing shared facade instead of introducing new direct call paths. Remaining phased rollout to Promotion/Hygiene is gated on v5.6A pilot stabilization (see Later).
+    - Rationale: prevents pattern fragmentation; broader agent adoption should route reasoning/tool calls through the existing shared facade instead of introducing new direct call paths. Remaining phased rollout to Promotion/Reviewer/Hygiene is gated on v5.6A pilot stabilization (see Later).
   - **Orchestrator V2 pilot slice** — initial V2 runtime with flagged parallel execution and plan-graph scheduling shipped. Implements: `ORCHESTRATOR_VERSION=v1|v2` flag, dependency-aware step scheduling, parallel execution with ThreadPoolExecutor, event/trace compatibility with V1. Compensation/rollback slice shipped: failed-step triggers reverse-order compensation of completed predecessors via `compensate_fn` metadata, with compensation events and `orchestration.rolled_back` lifecycle event. Out of scope in pilot: checkpointing, retry policy (deferred to follow-up slices). Delivery receipt: Issue #250 (pilot), Issue #251 (compensation). Source Anchor: ORCHV2-TDD
     - Back-compat preserved: `ORCHESTRATOR_VERSION=v1` (default) uses existing sequential V1; `v2` selects parallel pilot with compensation.
     - Next slices: checkpoint persistence, retry/timeout policy.
   - PanelAgent 2.0 timeline: <!-- PA2-ROLLUP -->
-    - v5.5C: decider — shipped (LLM-first runtime posture + explicit rule-mode opt-out + fallback + telemetry).
-    - v5.6 shipped: engine-neutral cognition seam (#244, PR #249), freeform catalog-driven proposal path (#241, PR #248), suggested checkbox writeback for uncertain/freeform panel proposals (#242), multi-step plans (#243, PR #302). Remaining: real-vault acceptance (#240).
+    - v5.5C: decider — shipped (rule default + opt-in LLM mode + fallback + telemetry).
+    - v5.6 shipped/in progress: engine-neutral cognition seam (#244, PR #249), freeform catalog-driven proposal path (#241, PR #248), suggested checkbox writeback for uncertain/freeform panel proposals (#242), multi-step plans (#243, PR #302). Remaining: real-vault acceptance (#240).
     - Broader expansion beyond the current PanelAgent 2.0 slices is deferred until the real-vault acceptance slice is closed and the operator story is stable. Keep new work bounded and break it down from the owner docs / tracks before expanding scope.
     - v5.7: advanced (panel versioning, cross-note coordination) remains future-line work and should stay in roadmap form until a governing slice issue exists.
   - Vault-as-GUI settings compiler (`@Settings` / System/Config) now covers panel-action catalogs, watcher settings, and outbox paths with CI schema checks (v5.6 track).
-  - LangGraph rollout to additional agents (Promotion/Hygiene) in phases:
+  - LangGraph rollout to additional agents (Promotion/Reviewer/Hygiene) in phases:
     - Phase 1: single pilot agent behind a flag; AgentState + graph parity tests green.
     - Phase 2: two agents; planner/orchestrator integration stable; event/A2A contracts unchanged.
     - Phase 3: broader adoption; runtime metrics + rollback plan validated.
@@ -219,8 +220,8 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 | v5.0 | PanelAgent Runtime V1 | Shipped |
 | v5.1–v5.4 | Watcher track (ingest/panel CLI, policy, ergonomics) | Operationally accepted |
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
-| v5.5C/D | Panel LangGraph decider is shipped; watcher auto-exec remains rollout-guarded and watcher→planner/orchestrator automation remains selective | Selective forward work |
-| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped, PR #302), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler; remaining: real-vault acceptance plus broader Promotion/Hygiene rollout | Selective forward work (multiple panel/runtime slices shipped; acceptance still pending) |
+| v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
+| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped, PR #302), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler; remaining: real-vault acceptance | Selective forward work (seam + freeform shipped) |
 | v6.0 | Wanted-state architecture pass to align runtime boundaries with the newer human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
 
 ## Tracks (details moved)
