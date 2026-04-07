@@ -84,6 +84,7 @@ Use this lane for:
 - repo-local skills under `.codex/skills/**`
 - pull request / issue governance surfaces under `.github/**`
 - lightweight enforcement for docs/governance workflows such as `scripts/docs_guard.py`
+- focused governance tests such as `tests/architecture/test_agent_skill_entrypoints.py`
 - companion governance docs under `docs/**`
 
 Rules:
