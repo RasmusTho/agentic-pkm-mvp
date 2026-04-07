@@ -27,6 +27,7 @@ Interpretation note:
 - Planner pipeline (opt-in, `PANEL_AGENT_PIPELINE=planner`): PanelAgent builds a `PanelActionIntent` and asks the Planner to create a plan for the selected actions. Plans can now be executed via the Orchestrator using the CLI (`python -m app.cli panel-orchestrate-plan --plan-id <plan_id>`), while the default direct path remains unchanged.
 - Action catalog (`docs/settings/panel-actions.md`) is the canonical list of actions (id, kind, labels/synonyms, description/llm_hint, downstream event, params). Rule-mode matches checkbox labels deterministically; LLM-mode is opt-in and uses the catalog + panel/note context with checkboxes as hints.
 - Checkboxes are treated as explicit consent; executed items remove their checkbox from the panel working set.
+- The panel can also surface system-generated suggested actions as unchecked checkbox proposals when the runtime has a plausible action but should keep the human-facing approval step visible. That suggestion path is for proposal quality, not a blanket requirement that every low-risk action wait for manual review.
 - Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
 - The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
 
