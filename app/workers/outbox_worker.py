@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
+from app.events.sync import SyncChainCorrelationData, SyncLatencySummaryEvent
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED, PROMOTE_INTENT_CREATED
 from app.observability.tracer import start_span
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
@@ -230,6 +231,10 @@ def handle_panel_scan_requested(
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
 
+    # Capture runtime start timestamp for latency tracking
+    runtime_start_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    trace_id = str(payload.get("trace_id") or "") or None
+
     raw_text = _stabilized_note_text(note_path)
     if raw_text is None:
         logger.info("panel scan deferred (file unstable) note_path=%s", note_path)
@@ -252,10 +257,9 @@ def handle_panel_scan_requested(
         note_uuid=note_uuid,
         note_path=note_path,
         raw_text=raw_text,
-        trace_id=str(payload.get("trace_id") or ""),
+        trace_id=trace_id or "",
     )
 
-    trace_id = str(payload.get("trace_id") or "") or None
     execution = run_panel_note_execution(
         note_uuid,
         trace_id=trace_id,
@@ -263,6 +267,45 @@ def handle_panel_scan_requested(
         persist_created_to_db=_use_db_outbox(),
     )
     emitted = execution.emitted_count
+
+    # Emit latency summary for this sync-chain event
+    try:
+        runtime_complete_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        scan_requested_ts = str(payload.get("timestamp", ""))
+        file_detection_ts = str(payload.get("mtime_iso") or "")
+
+        # If mtime_iso is not available, try to derive from timestamp as fallback
+        if not file_detection_ts:
+            file_detection_ts = scan_requested_ts
+
+        if trace_id and file_detection_ts and scan_requested_ts:
+            correlation = SyncChainCorrelationData(
+                trace_id=trace_id,
+                note_uuid=note_uuid,
+                note_path=str(note_path.relative_to(resolved_root)),
+                file_detection_ts=file_detection_ts,
+                scan_requested_ts=scan_requested_ts,
+                runtime_start_ts=runtime_start_ts,
+            )
+            latency_payload = correlation.complete(completion_ts=runtime_complete_ts)
+            latency_event = SyncLatencySummaryEvent(
+                trace_id=trace_id,
+                payload=latency_payload,
+            )
+            outbox_path_obj = Path(os.getenv("INDEX_OUTBOX_PATH", "/app/tmp/index-outbox.jsonl")).expanduser()
+            outbox_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            with outbox_path_obj.open("a", encoding="utf-8") as f:
+                f.write(latency_event.model_dump_json())
+                f.write("\n")
+            logger.info(
+                "latency summary emitted trace_id=%s note_uuid=%s end_to_end_ms=%s",
+                trace_id,
+                note_uuid,
+                latency_payload.end_to_end_ms,
+            )
+    except Exception as exc:
+        logger.warning("failed to emit latency summary: %s", exc)
+
     if emitted:
         logger.info("panel scan handled note_path=%s note_uuid=%s emitted=%s", note_path, note_uuid, emitted)
     else:

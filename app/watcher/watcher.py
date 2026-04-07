@@ -82,6 +82,7 @@ def _emit_scan_event(*, outbox_path: Path, vault_root: Path, rel_path: Path, mti
             "vault_path": str(vault_root / rel_path),
             "relative_path": str(rel_path),
             "mtime": mtime,
+            "mtime_iso": _now_iso_from_timestamp(mtime),
             "hash": content_hash,
         },
     }
