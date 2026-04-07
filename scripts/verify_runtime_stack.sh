@@ -89,8 +89,8 @@ fi
 # Check API
 printf "→ Checking API health... "
 if check_service "api"; then
-  # Verify API is actually responsive
-  if run_docker_compose exec -T api curl -sf http://localhost:8000/api/health >/dev/null 2>&1; then
+  # Verify API is actually responsive using Python (curl not available in container)
+  if run_docker_compose exec -T api python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5).read()" >/dev/null 2>&1; then
     printf "✓ OK\n"
     api_ready="true"
   else
