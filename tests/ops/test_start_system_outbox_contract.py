@@ -112,8 +112,9 @@ def test_start_full_system_clears_obsidian_gate_fields_in_status_merge() -> None
 def test_start_full_system_strict_gate_checks_installer_version() -> None:
     script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
     assert "STARTUP_CHECK_OBSIDIAN" in script
-    assert "from app.cli.health import _get_obsidian_installer_version" in script
+    assert "from app.cli.health import _get_obsidian_installer_version, _obsidian_required" in script
     assert "obsidian_dependency_status(get_installer_version=_get_obsidian_installer_version)" in script
+    assert '"required": _obsidian_required()' in script
 
 
 def test_start_full_system_has_vault_rw_probe() -> None:

@@ -5,7 +5,7 @@ description: "Prepare a slice-implementation PR for verification by resolving me
 
 # PR Integration
 
-Use this skill after `issue-to-code` implementation work and before the verification stage.
+Use this skill after `publish-pr` and before the verification stage.
 
 Goal:
 produce a mergeable, policy-compliant PR with CI **green** on the latest head SHA so verification can run on truthful state.
@@ -14,7 +14,7 @@ This skill does NOT merge the PR. Merge is owned by the verification skill after
 
 ## Canonical workflow position
 
-`Docs -> Feature issue -> Slice issue -> Agent -> PR -> PR integration -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
+`Docs -> Feature issue -> Slice issue -> Agent -> Publish PR -> PR integration -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
 
 ## First context to load
 
@@ -28,6 +28,7 @@ This skill does NOT merge the PR. Merge is owned by the verification skill after
 
 - A bounded governing slice implementation Issue exists.
 - A PR exists (draft or ready) and links the governing branch.
+- The PR was just created or updated by `.codex/skills/publish-pr/SKILL.md` or equivalent truthful publication flow.
 - Implementation changes are already in place.
 
 ## Exit conditions

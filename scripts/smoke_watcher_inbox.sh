@@ -17,6 +17,12 @@ fi
 print_diagnostics() {
   echo "--- docker compose ps ---"
   docker compose ps || true
+  echo "--- smoke note ---"
+  if [ -n "${SMOKE_NOTE_PATH:-}" ] && [ -f "$SMOKE_NOTE_PATH" ]; then
+    sed -n '1,120p' "$SMOKE_NOTE_PATH" || true
+  else
+    echo "SMOKE_NOTE_PATH missing or file not found: ${SMOKE_NOTE_PATH:-<unset>}"
+  fi
   echo "--- docker compose logs watcher (tail=200) ---"
   docker compose logs --tail=200 watcher || true
   echo "--- docker compose logs worker (tail=200) ---"
@@ -120,8 +126,8 @@ PY
 }
 
 assert_uuid_written() {
-  local container_note_path="$1"
-  docker compose exec -T api env NOTE_PATH="$container_note_path" python - <<'PY'
+  local note_path="$1"
+  NOTE_PATH="$note_path" python - <<'PY'
 import os
 from pathlib import Path
 
@@ -185,13 +191,11 @@ marker_line="SMOKE_MARKER: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 echo "$marker_line" >> "$note_path"
 
 relative_path="$inbox_dir/@Smoke/$note_name"
-container_note_path="/app/vault/$relative_path"
 export SMOKE_NOTE_NAME="$note_name"
+export SMOKE_NOTE_PATH="$note_path"
 
 echo "Smoke note: $note_path"
 echo "Relative path: $relative_path"
-
-echo "Container note: $container_note_path"
 
 before_total="$(query_outbox_total)"
 
@@ -209,9 +213,19 @@ for _ in 1 2 3 4 5 6 7 8; do
   sleep 1
 done
 
-if ! assert_uuid_written "$container_note_path"; then
-  fail "uuid not written to smoke note"
+uuid=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if uuid="$(assert_uuid_written "$note_path" 2>/dev/null)"; then
+    break
+  fi
+  sleep 1
+done
+
+if [ -z "$uuid" ]; then
+  fail "uuid not written to smoke note: $note_path"
 fi
+
+echo "UUID written: $uuid"
 
 if [ "$after_total" -le "$before_total" ]; then
   fail "DB outbox did not enqueue a new event for $note_name (before_total=$before_total after_total=$after_total)"
