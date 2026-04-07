@@ -160,18 +160,31 @@ def _apply_note_writeback(
     original_note_text: str,
     vault_root: Path | None,
 ) -> None:
-    """Remove executed checkboxes, write receipts, and persist to vault file.
+    """Remove executed checkboxes, write proposal suggestions, write receipts, and persist to vault file.
 
     This mirrors the writeback contract that ``handle_note_update`` applies in the
     non-watcher path, ensuring the documented panel contract (checkbox removal +
-    AI status receipt block) is honoured for watcher/worker-driven execution.
+    AI status receipt block + proposal suggestions) is honoured for watcher/worker-driven execution.
     """
     executed_labels: list[str] = []
+    proposed_labels: list[tuple[str, str]] = []  # (id, label) for proposed actions
+    proposed_ids = set(state.proposed_action_ids or [])
+
+    # Collect executed actions and proposed actions for writeback.
+    executed_ids = set(state.executed_action_ids or [])
+    for action in state.actions:
+        if action.id in proposed_ids and not action.checked:
+            # Proposed actions (injected catalog proposals) - write back as unchecked suggestions
+            # Skip if this action was already executed in a previous run
+            action_id_hash = stable_action_id(action.label)
+            if action_id_hash not in executed_ids:
+                proposed_labels.append((action.id, action.label))
+
     for result in state.action_results:
         if result.checked and result.status in {"triggered", "logged"}:
             executed_labels.append(result.label)
 
-    if not executed_labels:
+    if not executed_labels and not proposed_labels:
         return
 
     note_uuid = state.note.uuid
@@ -213,6 +226,25 @@ def _apply_note_writeback(
 
     updated = remove_actions_from_markdown(annotated, ids_to_remove)
 
+    # Write back proposed (unchecked) actions as suggestions for user confirmation.
+    if proposed_labels:
+        proposal_lines = []
+        for action_id, label in proposed_labels:
+            proposal_lines.append(f"- [ ] {label} <!--ai:id={stable_action_id(label)}-->")
+        # Insert proposals into the panel's actions section (before panel end fence).
+        lines = updated.splitlines()
+        # Find the panel end fence and insert proposals before it.
+        insert_idx = None
+        for idx in range(len(lines) - 1, -1, -1):
+            if "%%" in lines[idx] and "ai" in lines[idx].lower():
+                # This is likely the end fence, insert before it
+                insert_idx = idx
+                break
+        if insert_idx is not None:
+            for proposal in reversed(proposal_lines):
+                lines.insert(insert_idx, proposal)
+            updated = "\n".join(lines)
+
     # Build receipt lines.
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     receipts = [f"\u2705 {label} ({now_str})" for label in executed_labels]
@@ -240,10 +272,11 @@ def _apply_note_writeback(
     _refresh_companion_hash(note_uuid, updated, vault_root, note_file)
 
     logger.info(
-        "panel writeback applied note_path=%s removed=%d receipts=%d",
+        "panel writeback applied note_path=%s removed=%d receipts=%d proposals=%d",
         note_file,
         len(ids_to_remove),
         len(receipts),
+        len(proposed_labels),
     )
 
 
