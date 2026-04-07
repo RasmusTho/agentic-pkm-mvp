@@ -8,7 +8,7 @@ These skills are workflow helpers, not replacements for the canonical builder-ag
 
 ## Workflow map
 
-`Docs -> Issue -> Project -> Issue maintenance -> Agent -> Publish PR -> PR integration -> CI -> Verification -> Project/doc closure -> Owner Doc`
+`Docs -> Issue -> Project -> Issue maintenance -> Agent -> Publish PR -> PR integration -> CI -> Verification -> Merge -> Project/doc closure -> Owner Doc`
 
 ## Skill routing
 
@@ -30,7 +30,7 @@ These skills are workflow helpers, not replacements for the canonical builder-ag
 - `pr-integration`
   - run after `publish-pr` and before verification to make the PR mergeable and CI-attached
 - `verification-validation-feedback`
-  - final verification and delivery-state closure after implementation / PR work
+  - final verification, merge, and delivery-state closure after implementation / PR work
 - `backlog-reconciliation-drift-audit`
   - backlog and GitHub-state reconciliation support when doc/backlog drift is the main problem
 
