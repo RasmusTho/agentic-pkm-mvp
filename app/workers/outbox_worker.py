@@ -226,14 +226,14 @@ def _stabilized_note_text(note_path: Path, *, attempts: int = 6, base_sleep: flo
 
 
 def handle_panel_scan_requested(
-    payload: Mapping[str, Any], *, vault_root: Path | None = None
+    payload: Mapping[str, Any], *, vault_root: Path | None = None, trace_id: str | None = None, scan_requested_ts: str | None = None
 ) -> WorkerPanelSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
 
     # Capture runtime start timestamp for latency tracking
     runtime_start_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    trace_id = str(payload.get("trace_id") or "") or None
+    trace_id = trace_id or str(payload.get("trace_id") or "") or None
 
     raw_text = _stabilized_note_text(note_path)
     if raw_text is None:
@@ -271,7 +271,8 @@ def handle_panel_scan_requested(
     # Emit latency summary for this sync-chain event
     try:
         runtime_complete_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        scan_requested_ts = str(payload.get("timestamp", ""))
+        # scan_requested_ts from event envelope, file_detection_ts from payload.mtime_iso
+        scan_requested_ts = scan_requested_ts or str(payload.get("timestamp", ""))
         file_detection_ts = str(payload.get("mtime_iso") or "")
 
         # If mtime_iso is not available, try to derive from timestamp as fallback
@@ -492,7 +493,8 @@ def run(
                         elif topic == INGEST_OBJECT_DELETED:
                             handle_ingest_object_deleted(payload)
                         elif topic == PANEL_SCAN_REQUESTED:
-                            handle_panel_scan_requested(payload)
+                            event_timestamp = message.get("timestamp") or payload.get("timestamp")
+                            handle_panel_scan_requested(payload, trace_id=trace_id, scan_requested_ts=event_timestamp)
                         elif topic == PROMOTE_INTENT_CREATED:
                             from app.promotion.consumer import consume_promotion_intent_payload
 
