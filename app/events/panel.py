@@ -74,6 +74,7 @@ class PanelIntentExecutedPayload(BaseModel):
     panel: PanelInfo
     actions: list[PanelRuntimeActionResult] = Field(default_factory=list)
     executed_action_ids: list[str] = Field(default_factory=list)
+    cognition_mode: str | None = None
 
 
 class PanelIntentExecutedEvent(BaseModel):
@@ -107,6 +108,7 @@ class PanelLogEntry(BaseModel):
     panel_id: str
     summary: str
     actions: list[PanelRuntimeActionResult] = Field(default_factory=list)
+    cognition_mode: str | None = None
 
 
 class PanelLogEvent(BaseModel):

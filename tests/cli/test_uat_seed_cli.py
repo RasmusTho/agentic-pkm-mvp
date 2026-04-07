@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from click.testing import CliRunner
+import yaml
 
 from app.cli import cli
 from app.cli.uat import DEFAULT_FOLDER_NAME, DEFAULT_TARGET_SUBDIR
@@ -56,3 +57,27 @@ def test_uat_seed_cli_copies_notes(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == original
 
     object_store_module._MEMORY_STORE.clear()
+
+
+def test_uat_seed_cli_extends_ingest_scope_with_test_folder(tmp_path: Path) -> None:
+    runner = CliRunner()
+    env = {"STORE_BACKEND": "memory"}
+
+    result = runner.invoke(
+        cli,
+        [
+            "uat-seed-vault-test",
+            "--vault-root",
+            str(tmp_path),
+        ],
+        env=env,
+    )
+    assert result.exit_code == 0, result.output
+
+    override_path = tmp_path / "⚙️ System" / "settings" / "ingest.override.md"
+    assert override_path.exists()
+
+    raw = override_path.read_text(encoding="utf-8")
+    parts = raw.split("---", 2)
+    payload = yaml.safe_load(parts[1])
+    assert payload["include_folders"] == [DEFAULT_TARGET_SUBDIR]

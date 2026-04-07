@@ -384,6 +384,7 @@ def handle_ingest_vault_changed(
         "content": content,
         "title": frontmatter.get("title") or note_path.stem,
         "review_state": frontmatter.get("review_state"),
+        "maturity": frontmatter.get("maturity") or None,
         "trace_id": payload.get("trace_id"),
         "payload": {
             "frontmatter": frontmatter,

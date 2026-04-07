@@ -28,6 +28,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - Watcher → panel → planner/orchestrator automation with safety limits now includes dedup reports, promotion consumer visibility, and explicit skipped receipts.
   - Vault-first config validation (panel wiring, watcher, outbox) with schema enforcement and `python -m app.cli.settings_explain`.
 - **Next**
+  - **Low-risk autonomy + automated sync validation** — define and implement the next bounded forward path for autonomous low-risk proposal surfacing and automated multi-device latency verification, using AI-panel proposal writeback as the first interaction surface and a scripted sync-latency harness as the first acceptance path. Source Anchor: AUTO-LOW-RISK-AUTONOMY
   - **Environment contract follow-through** — implement the remaining docs-first environment contract slices from `docs/ENVIRONMENTS.md` in bounded steps: explicit runtime environment selection and environment-scoped vault/store separation are shipped, and environment-aware operator diagnostics are delivered via Issue #265 / PR #272; remaining follow-through should stay bounded and avoid changing the shared architecture contracts.
   - **Companion note + Note Context rollout hardening** — the core companion-note and Note Context implementation is shipped, and the active doc-sync correction has landed. Delivery receipt: Issue #229, PR #237. Any remaining rollout verification or cleanup should be captured as new bounded follow-up issues rather than treated as missing first implementation.
   - **Quality Wave: Registry Watcher Evaluation Stack** — shipped and now serves as the v5.6 rollout gate via `docs/TESTING.md`, `docs/QUALITY_WAVE_IMPLEMENTATION.md`, and `docs/quality_wave/README.md`. Delivery receipt: PRs #197, #198, #199, #200, #201, #202, #210.
@@ -38,8 +39,9 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
     - Next slices: checkpoint persistence, retry/timeout policy.
   - PanelAgent 2.0 timeline: <!-- PA2-ROLLUP -->
     - v5.5C: decider — shipped (rule default + opt-in LLM mode + fallback + telemetry).
-    - v5.6 shipped/in progress: engine-neutral cognition seam (#244, PR #249), freeform catalog-driven proposal path (#241, PR #248), suggested checkbox writeback for uncertain/freeform panel proposals (#242). Remaining: multi-step plans (#243), real-vault acceptance (#240).
-    - v5.7: advanced (panel versioning, cross-note coordination).
+    - v5.6 shipped/in progress: engine-neutral cognition seam (#244, PR #249), freeform catalog-driven proposal path (#241, PR #248), suggested checkbox writeback for uncertain/freeform panel proposals (#242), multi-step plans (#243, PR #302). Remaining: real-vault acceptance (#240).
+    - Broader expansion beyond the current PanelAgent 2.0 slices is deferred until the real-vault acceptance slice is closed and the operator story is stable. Keep new work bounded and break it down from the owner docs / tracks before expanding scope.
+    - v5.7: advanced (panel versioning, cross-note coordination) remains future-line work and should stay in roadmap form until a governing slice issue exists.
   - Vault-as-GUI settings compiler (`@Settings` / System/Config) now covers panel-action catalogs, watcher settings, and outbox paths with CI schema checks (v5.6 track).
   - LangGraph rollout to additional agents (Promotion/Reviewer/Hygiene) in phases:
     - Phase 1: single pilot agent behind a flag; AgentState + graph parity tests green.
@@ -48,6 +50,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - A2A/MCP orchestration routing with deterministic adapters and audit.
 - **Later**
   - Watcher auto-exec of panel plans with guardrails and rollback; richer panel actions (summary/reply) via tool/MCP boundary.
+  - PanelAgent 2.0 expansion beyond the current slices is deferred until real-vault acceptance is closed; break new behavior into smaller tracked slices first.
   - Reasoning/reflective layers with eval gates; expanded observability counters for orchestration/A2A.
   - Collaboration/multi-user after single-user flows are stable.
   - `v6.0` architecture target: semantics-aligned runtime architecture where context layering,
@@ -218,7 +221,7 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 | v5.1–v5.4 | Watcher track (ingest/panel CLI, policy, ergonomics) | Operationally accepted |
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
 | v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
-| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler; remaining: multi-step plans, real-vault acceptance | Selective forward work (seam + freeform shipped) |
+| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped, PR #302), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler; remaining: real-vault acceptance | Selective forward work (seam + freeform shipped) |
 | v6.0 | Wanted-state architecture pass to align runtime boundaries with the newer human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
 
 ## Tracks (details moved)

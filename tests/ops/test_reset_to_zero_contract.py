@@ -4,7 +4,6 @@ import os
 import subprocess
 from pathlib import Path
 
-
 def test_reset_to_zero_clears_watcher_stop_state(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     scripts_dir = repo_root / "scripts"

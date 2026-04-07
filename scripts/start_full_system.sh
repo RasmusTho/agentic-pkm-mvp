@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+if ! command -v docker >/dev/null 2>&1; then
+  echo "ERROR: docker is required for scripts/start_full_system.sh. Install Docker Desktop or make docker available on PATH, then retry." >&2
+  exit 127
+fi
+
 source "scripts/lib/load_env_defaults.sh"
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"
@@ -286,6 +291,7 @@ preflight_obsidian_check() {
   export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
 
   local check_enabled="${STARTUP_CHECK_OBSIDIAN:-1}"
+  local obsidian_required="0"
   local enforce_enabled="${STARTUP_ENFORCE_OBSIDIAN:-0}"
   if [ "$enforce_enabled" = "1" ]; then
     check_enabled="1"
@@ -294,6 +300,12 @@ preflight_obsidian_check() {
     export KNOWLEDGE_STRICT_STARTUP="${KNOWLEDGE_STRICT_STARTUP:-1}"
     export KNOWLEDGE_ALLOW_FALLBACK="${KNOWLEDGE_ALLOW_FALLBACK:-0}"
   fi
+  obsidian_required=$(python - <<'PY'
+from app.cli.health import _obsidian_required
+
+print("1" if _obsidian_required() else "0")
+PY
+  )
   if [ "$check_enabled" != "1" ]; then
     obsidian_gate_ok="skipped"
     obsidian_gate_detail="STARTUP_CHECK_OBSIDIAN!=1"
@@ -314,10 +326,19 @@ preflight_obsidian_check() {
   obsidian_gate_json=$(python - <<'PY'
 import json
 from app.knowledge.health import obsidian_dependency_status
-from app.cli.health import _get_obsidian_installer_version
+from app.cli.health import _get_obsidian_installer_version, _obsidian_required
 
 status = obsidian_dependency_status(get_installer_version=_get_obsidian_installer_version)
-print(json.dumps({"ok": status.ok, "details": status.details}, ensure_ascii=False))
+print(
+    json.dumps(
+        {
+            "ok": status.ok,
+            "details": status.details,
+            "required": _obsidian_required(),
+        },
+        ensure_ascii=False,
+    )
+)
 PY
 )
   obsidian_gate_detail="$obsidian_gate_json"
@@ -336,7 +357,7 @@ PY
   fi
   export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
   write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
-  if [ "$obsidian_ok" != "1" ] && [ "$enforce_enabled" = "1" ]; then
+  if [ "$obsidian_ok" != "1" ] && [ "$obsidian_required" = "1" ]; then
     obsidian_gate_ok="failed"
     obsidian_gate_detail="$obsidian_gate_json"
     export OBSIDIAN_GATE_OK="$obsidian_gate_ok"

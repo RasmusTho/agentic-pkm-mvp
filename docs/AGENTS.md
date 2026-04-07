@@ -45,8 +45,8 @@ Use `docs/TESTING.md` for the canonical test layers, CI roles, and runtime/UAT v
 - Agent structure should follow the system design principles in `docs/DESIGN_PRINCIPLES.md`: boundary-first design, capability-based composition, explicit mutation authority, and governance before autonomy.
 - Non-trivial decision logic should move toward “LangGraph inner, events/A2A outer”: each agent owns an explicit `AgentState` and LangGraph graph for internal choices, while coordination between agents happens via Outbox events/A2A envelopes orchestrated by the Orchestrator/Planner.
 - Agent-per-function decomposition should not be expanded when the same behavior is better modeled as a reusable capability.
-- PanelAgent is the concrete example: LangGraph runtime with an action catalog driving a configurable decider (`PANEL_AGENT_DECIDER=rule|llm`), defaulting to deterministic rule-mode while offering opt-in LLM-based selection.
-- Current adoption is phased: ASK and PanelAgent use LangGraph; most other agents remain deterministic pipelines until v5.6 rollout phases.
+- PanelAgent is the concrete example: LangGraph runtime with an action catalog driving a configurable decider (`PANEL_AGENT_DECIDER=rule|llm`), defaulting to LLM-backed interpretation in runtime while offering explicit rule-mode opt-out for tests and deterministic validation lanes.
+- Current adoption is phased: ASK and PanelAgent use LangGraph with LLM-first defaults; most other agents remain deterministic pipelines until v5.6 rollout phases.
 - When proposing tests or acceptance criteria, start from the human-flow contract first and then classify the scenario as `baseline`, `partial`, or `future` using `docs/TESTING.md` and `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md`.
 - Agents must not treat the current runtime decomposition or active agent matrix as the full product definition; validation should distinguish "baseline regression" from "human-need target not yet reached".
 
@@ -125,7 +125,7 @@ Direction note:
 | PanelAgent | Translate AI panels into intents/events | Panel Interaction | Yes (LangGraph runtime + PanelActionIntent) | Outbox panel intents; planner pipeline opt-in (`PANEL_AGENT_PIPELINE=planner`) with CLI-first orchestration | Active |
 | Planner | Build execution plans from goals/events (including panel action intents) | Multi-agent orchestration | Planned (LLM-backed; panel-mode mapping shipped) | Outbox plan events; feeds Orchestrator | Active |
 | Promotion Agent | Apply promotion/evergreen transitions | Review & Promotion | Planned (LangGraph to encode policy/branching) | Outbox promotion events; Orchestrator integration planned | Active |
-| Reviewer | Human-aligned review of artifacts/transitions | Review & Promotion | Planned (LangGraph critique/approval) | Outbox review events; A2A planned | Active |
+| Reviewer | Human-aligned review of artifacts/transitions | Review & Promotion | Yes (LangGraph critique/approval in the shared ReasoningFacade rollout) | Outbox review events; A2A planned | Active |
 | SetEvaluator | Score/rank candidates for promotion/sets | Review & Promotion / ASK (ranking) | Planned | Outbox/Planner hooks; A2A planned | Active |
 | MergeResolverAgent | Resolve conflicts/merges across sources | Capture & Ingest | Planned | Outbox ingest events; A2A planned | Parked (future) |
 | NoteHygieneAgent | Suggest cleanups and consistency fixes | Capture & Ingest / Panel Interaction | Planned | Outbox panel/update events; A2A planned | Parked (future) |

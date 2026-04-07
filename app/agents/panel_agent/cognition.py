@@ -433,14 +433,17 @@ def _inject_catalog_proposals(state: PanelAgentState, proposed_ids: set[str]) ->
     """Inject catalog-derived PanelIntentAction objects for freeform proposals.
 
     Only injects actions that are not already present in state.actions.
+    Proposals are created with checked=False to surface as unchecked suggestions
+    for explicit user confirmation, preserving the proposal-vs-execution boundary.
     The injected actions carry the full mapping from the catalog descriptor so
-    they flow through the same execution gates as checkbox-derived actions.
+    they flow through the same validation gates as checkbox-derived actions.
     """
     from app.events.panel import PanelIntentAction
 
     catalog = state.action_catalog or PanelActionCatalog.from_descriptors([])
     existing_ids = {action.id for action in state.actions}
     new_actions: list[PanelIntentAction] = []
+    injected_ids: list[str] = []
     for action_id in proposed_ids:
         if action_id in existing_ids:
             continue
@@ -452,13 +455,17 @@ def _inject_catalog_proposals(state: PanelAgentState, proposed_ids: set[str]) ->
             PanelIntentAction(
                 id=descriptor.id,
                 label=label,
-                checked=True,
+                checked=False,  # Proposals surface as unchecked suggestions for user confirmation
                 mapping=descriptor.to_mapping(),
             )
         )
+        injected_ids.append(action_id)
     if not new_actions:
         return state
-    return state.model_copy(update={"actions": list(state.actions) + new_actions})
+    return state.model_copy(update={
+        "actions": list(state.actions) + new_actions,
+        "proposed_action_ids": list(set(state.proposed_action_ids or []) | set(injected_ids)),
+    })
 
 
 def get_cognition_backend(mode: DeciderMode) -> PanelCognitionBackend:

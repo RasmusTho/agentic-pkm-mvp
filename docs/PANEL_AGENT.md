@@ -1,4 +1,4 @@
-State: v5.6 — PanelAgent runtime V1 baseline (v5.0) + freeform catalog-driven proposal path shipped (PA2-FREEFORM). This document defines the PanelAgent-specific runtime contract.
+State: v5.6 — PanelAgent runtime V1 baseline (v5.0) + freeform catalog-driven proposal path shipped (PA2-FREEFORM) + LLM-first runtime posture established (decider default changed to llm; cognition_mode in emitted events). This document defines the PanelAgent-specific runtime contract.
 # PanelAgent / NoteInteractionAgent (Runtime v5.0)
 
 Purpose: translate human-driven AI panels in vault notes into structured intents/events while keeping the panel simple, optional, and human-first.
@@ -27,6 +27,7 @@ Interpretation note:
 - Planner pipeline (opt-in, `PANEL_AGENT_PIPELINE=planner`): PanelAgent builds a `PanelActionIntent` and asks the Planner to create a plan for the selected actions. Plans can now be executed via the Orchestrator using the CLI (`python -m app.cli panel-orchestrate-plan --plan-id <plan_id>`), while the default direct path remains unchanged.
 - Action catalog (`docs/settings/panel-actions.md`) is the canonical list of actions (id, kind, labels/synonyms, description/llm_hint, downstream event, params). Rule-mode matches checkbox labels deterministically; LLM-mode is opt-in and uses the catalog + panel/note context with checkboxes as hints.
 - Checkboxes are treated as explicit consent; executed items remove their checkbox from the panel working set.
+- The panel can also surface system-generated suggested actions as unchecked checkbox proposals when the runtime has a plausible action but should keep the human-facing approval step visible. That suggestion path is for proposal quality, not a blanket requirement that every low-risk action wait for manual review.
 - Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
 - The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
 
@@ -39,16 +40,19 @@ Interpretation note:
 **Freeform catalog-driven proposal path (shipped).** When a panel has an instruction but no checkbox actions, the LLM decider (`PANEL_AGENT_DECIDER=llm`) consults the full active catalog and proposes canonical action IDs from instruction text + catalog metadata (`llm_hint`, `labels`, `description`) alone, without requiring any checkbox-label match. Proposals are restricted to the active catalog; out-of-catalog IDs are dropped. For this no-checkbox path, the runtime writes proposed actions back as suggested unchecked checkboxes for explicit human confirmation rather than executing them immediately; they do not enter the execution path until the human later confirms them as panel checkboxes. Fallback to rule mode on LLM error or empty catalog. Tracked by: #241.
 
 - Surface uncertain or no-checkbox interpretations as suggested unchecked checkboxes instead of direct execution so panel ambiguity stays human-reviewable until explicit confirmation. Delivery receipt: Issue #242 delivered in current runtime behavior; follow-up wording reconciliation tracked by #291. Source Anchor: PA2-SUGGESTED-CHECKBOXES.
-- Remaining backlog: #243 (multi-step plans), #240 (real-vault acceptance).
-- Emit ordered multi-step panel plans through the planner/orchestration contract rather than investing in richer LangGraph-only node choreography. Source Anchor: PA2-MULTISTEP-PLANS. Tracked by: #243
+- Remaining backlog: #240 (real-vault acceptance).
+- Emit ordered multi-step panel plans through the planner/orchestration contract rather than investing in richer LangGraph-only node choreography. Delivery receipt: Issue #243 delivered via PR #302. Source Anchor: PA2-MULTISTEP-PLANS.
 - Prove the PanelAgent 2.0 path operationally on a real vault with soak, receipts, and owner-doc writeback before it is treated as operationally accepted. Source Anchor: PA2-REAL-VAULT-ACCEPTANCE. Tracked by: #240
+- Broader PanelAgent expansion is deferred until the real-vault acceptance slice closes. Treat any new behavior beyond the current slices as a separately scoped follow-up and break it into smaller issues before implementation.
 
 Other implementation notes:
 - Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `app/agents/panel_agent/graph.py`).
 - LLM-based reasoning decides which panel actions to execute (and in what order) rather than relying on fixed mappings.
 - PanelAgent Runtime V1 remains the baseline until the PanelAgent 2.0 path is fully implemented and operationally accepted.
-- LangGraph control flow now supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `rule` remains the default to preserve current behaviour, while `llm` is an opt-in, experimental action selector routed through the shared `ReasoningFacade` with the canonical `decide` task kind.
-- LLM-driven contract tests live under `tests/e2e/test_panel_llm_e2e.py` (gated by `@pytest.mark.panel_llm_e2e` and `PANEL_AGENT_LLM_E2E=1`) to validate end-to-end promotion/non-promotion scenarios (including the freeform no-checkbox path) using the real decider.
+- LangGraph control flow supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `llm` is the default runtime posture for LLM-backed intent interpretation, while `rule` is an explicit opt-out for unit tests, CI, and other bounded deterministic validation lanes. Both modes route through the shared `ReasoningFacade` with the canonical `decide` task kind.
+- The executed `cognition_mode` is included in the `panel.intent.executed` event payload and in `panel.log.created` entries so external consumers can observe which interpretation path was used.
+- LLM-driven contract tests live under `tests/e2e/test_panel_llm_e2e.py` (gated by `@pytest.mark.panel_llm_e2e` and `PANEL_AGENT_LLM_E2E=1`) to validate end-to-end promotion/non-promotion scenarios (including the freeform no-checkbox path) using the real decider. Tests requiring deterministic rule-mode behavior explicitly set `PANEL_AGENT_DECIDER=rule`.
+- Any future PanelAgent expansion beyond the current shipped slices should be decomposed via the issue/track flow first so the remaining work stays bounded and reviewable.
 
 Direction note:
 - the forward direction is richer cognition in support of Panel,
@@ -103,7 +107,7 @@ Architectural reading note:
 - Plans include promotion steps mapped to the `promotion.emit_intent` tool. They can be executed via Orchestrator in a CLI-first path: `python -m app.cli panel-orchestrate-plan --plan-id <plan_id>`. Watcher-driven execution remains off for now.
 - Saved panel plans use an explicit ordered contract (`panel.ordered.v1`): plan context records the ordered action ids and each step carries sequence metadata plus a `depends_on` chain so orchestrator-facing execution order does not rely on list position alone.
 - Decider and pipeline are orthogonal toggles:
-  - `PANEL_AGENT_DECIDER=rule|llm` selects how actions are chosen (default `rule`).
+  - `PANEL_AGENT_DECIDER=rule|llm` selects how actions are chosen (default `llm` for runtime; explicit `rule` opt-out for tests).
   - `PANEL_AGENT_PIPELINE=direct|planner` selects whether to emit promotion directly (default) or also create plans (planner mode).
 
 ## UAT / Trying it out

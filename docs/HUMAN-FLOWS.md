@@ -104,6 +104,12 @@ Validation note:
 - when implementation lags the human contract, the scenario should still be kept as a non-blocking acceptance target rather than rewritten to fit today's internals
 - use `docs/TESTING.md` and `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md` to classify whether a scenario is a baseline gate, a partial/non-blocking acceptance target, or a future release gate
 
+Scope note:
+- `Intent -> propose -> decide -> execute -> receipt` is a canonical loop for mutation-capable interaction surfaces, especially AI-panel and action-driven flows.
+- It is not a blanket requirement that every runtime interaction must pass through a human approval step before the system can propose or execute low-risk work.
+- The runtime should reduce cognitive load by generating autonomous proposals where the action is low-risk and the artifact value is not threatened, while reserving harder guardrails for writes or transitions that could damage artifact integrity, provenance, or user trust.
+- Suggested actions may surface as proposed checkbox items in an AI panel when the system has enough context to help but not enough certainty or authority to mutate directly.
+
 ### Capture
 
 The system must let the human get material out of fragile working memory and into a durable external

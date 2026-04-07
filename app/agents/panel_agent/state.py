@@ -5,6 +5,7 @@ from typing import Any, List
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agents.panel_agent.settings import DeciderMode
 from app.components.settings.panel_actions_loader import PanelActionCatalog
 from app.agents.panel_agent.intent import PanelActionIntent
 from app.events.panel import (
@@ -32,9 +33,11 @@ class PanelAgentState(BaseModel):
     policy_flags: dict[str, Any] = Field(default_factory=dict)
     selected_action_ids: List[str] = Field(default_factory=list)
     selected_action_reasons: dict[str, str] = Field(default_factory=dict)
+    decider_mode: DeciderMode = "llm"
     note_content: str | None = None
     panel_hints: List[dict[str, Any]] = Field(default_factory=list)
     executed_action_ids: List[str] = Field(default_factory=list)
+    proposed_action_ids: List[str] = Field(default_factory=list)
     vault_root: Path | None = None
 
     # Runtime-populated fields

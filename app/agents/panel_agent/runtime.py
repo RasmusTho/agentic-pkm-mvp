@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import hashlib
+import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agents.panel.writeback import (
+    annotate_action_ids,
+    remove_actions_from_markdown,
+    stable_action_id,
+    upsert_executed_ids,
+    write_receipts,
+)
+from app.agents.panel.parser import parse_panel
 from app.agents.panel_agent.graph import run_panel_graph
 from app.agents.panel_agent.intent import PanelActionIntent
 from app.agents.panel_agent.planning import plan_panel_actions
@@ -17,6 +28,8 @@ from app.events.panel import NoteRef, PanelIntentEvent, PanelLogEntry, PanelRunt
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.outbox import append_jsonl_outbox_event, coerce_outbox_event, write_outbox_event
 from app.store.object_store import ObjectStore
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_outbox_path(path: Path | None = None) -> Path:
@@ -85,8 +98,9 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
     panel_hints = [
         {"id": action.id, "label": action.label, "checked": action.checked} for action in actions
     ]
-    vault_root_env = os.getenv("VAULT_ROOT")
+    vault_root_env = os.getenv("VAULT_ROOT") or os.getenv("WATCHER_VAULT_PATH")
     vault_root = Path(vault_root_env).expanduser() if vault_root_env else None
+    decider_mode = get_panel_agent_decider()
     initial_state = PanelAgentState(
         trace_id=intent_event.trace_id,
         note=intent_event.payload.note,
@@ -100,8 +114,8 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
         executed_action_ids=sorted(executed_ids),
         policy_flags=policy_flags,
         vault_root=vault_root,
+        decider_mode=decider_mode,
     )
-    decider_mode = get_panel_agent_decider()
     state = run_panel_graph(initial_state, decider_mode=decider_mode)
 
     pipeline_mode = get_panel_agent_pipeline()
@@ -130,12 +144,222 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
     if state.log_entry:
         _persist_log(intent_event.payload.note, state.log_entry)
 
+    # --- Panel writeback: remove executed checkboxes and write receipts ---
+    _apply_note_writeback(state, note_text, vault_root)
+
     return PanelRuntimeResult(
         intent=intent_event,
         actions=state.action_results,
         emitted_events=emitted_events,
         log_entry=state.log_entry,
     )
+
+
+def _write_proposals_to_panel(markdown: str, proposed_labels: list[tuple[str, str]]) -> str:
+    """Write proposed (unchecked) actions into the AI-åtgärder section of a panel.
+
+    Finds the correct panel block and inserts proposals after existing checkboxes
+    but before the panel end fence, ensuring they'll be parsed as actions on re-runs.
+    """
+    if not proposed_labels:
+        return markdown
+
+    lines = markdown.splitlines()
+    proposal_lines = []
+    for action_id, label in proposed_labels:
+        proposal_lines.append(f"- [ ] {label} <!--ai:id={stable_action_id(label)}-->")
+
+    # Find the last panel block (by looking for start/end fences from end to start).
+    # This handles multiple panels by choosing the last one.
+    panel_start = None
+    panel_end = None
+    actions_section_start = None
+
+    # Scan backwards to find panel end fence.
+    for idx in range(len(lines) - 1, -1, -1):
+        line = lines[idx].strip().lower()
+        if "%%" in line and "ai" in line:
+            if panel_end is None:
+                panel_end = idx
+            else:
+                panel_start = idx
+                break
+
+    if panel_end is None or panel_start is None:
+        # No clear panel structure found; append at end (fallback).
+        lines.extend(proposal_lines)
+        return "\n".join(lines)
+
+    # Find the AI-åtgärder / AI-actions heading within the panel.
+    # Look for common action section headings (Swedish and English variants).
+    for idx in range(panel_start, panel_end):
+        line = lines[idx].strip().lower()
+        if "åtgärd" in line or "action" in line:
+            # This is likely the actions section heading.
+            # Find the first checkbox line after this heading to insert after them.
+            actions_section_start = idx
+            break
+
+    if actions_section_start is None:
+        # No actions section found; insert before panel end fence.
+        for proposal in reversed(proposal_lines):
+            lines.insert(panel_end, proposal)
+        return "\n".join(lines)
+
+    # Find the position to insert: after the last checkbox in the actions section,
+    # before the next section heading or panel end fence.
+    insert_pos = actions_section_start + 1
+    for idx in range(actions_section_start + 1, panel_end):
+        line = lines[idx].strip()
+        if line.startswith("- ["):
+            # This is a checkbox line; update insert position.
+            insert_pos = idx + 1
+        elif line.startswith("#") or "%%" in line:
+            # Hit another section heading or fence; stop.
+            break
+
+    # Insert proposals at the determined position.
+    for proposal in reversed(proposal_lines):
+        lines.insert(insert_pos, proposal)
+
+    return "\n".join(lines)
+
+
+def _apply_note_writeback(
+    state: PanelAgentState,
+    original_note_text: str,
+    vault_root: Path | None,
+) -> None:
+    """Remove executed checkboxes, write proposal suggestions, write receipts, and persist to vault file.
+
+    This mirrors the writeback contract that ``handle_note_update`` applies in the
+    non-watcher path, ensuring the documented panel contract (checkbox removal +
+    AI status receipt block + proposal suggestions) is honoured for watcher/worker-driven execution.
+    """
+    executed_labels: list[str] = []
+    proposed_labels: list[tuple[str, str]] = []  # (id, label) for proposed actions
+    proposed_ids = set(state.proposed_action_ids or [])
+
+    # Collect executed actions and proposed actions for writeback.
+    executed_ids = set(state.executed_action_ids or [])
+    for action in state.actions:
+        if action.id in proposed_ids and not action.checked:
+            # Proposed actions (injected catalog proposals) - write back as unchecked suggestions
+            # Skip if this action was already executed in a previous run
+            action_id_hash = stable_action_id(action.label)
+            if action_id_hash not in executed_ids:
+                proposed_labels.append((action.id, action.label))
+
+    for result in state.action_results:
+        if result.checked and result.status in {"triggered", "logged"}:
+            executed_labels.append(result.label)
+
+    if not executed_labels and not proposed_labels:
+        return
+
+    note_uuid = state.note.uuid
+    note_path_str = state.note.path
+
+    # Resolve the vault file path for writing.
+    note_file: Path | None = None
+    if note_path_str:
+        candidate = Path(note_path_str)
+        if candidate.is_absolute() and candidate.exists():
+            note_file = candidate
+        elif vault_root:
+            candidate = vault_root / note_path_str
+            if candidate.exists():
+                note_file = candidate
+
+    if note_file is None:
+        logger.warning(
+            "panel writeback skipped (cannot resolve note file) note_uuid=%s note_path=%s",
+            note_uuid,
+            note_path_str,
+        )
+        return
+
+    # Re-read current file content to pick up any concurrent changes (e.g. uuid healing).
+    try:
+        current_text = note_file.read_text(encoding="utf-8")
+    except OSError:
+        logger.warning("panel writeback skipped (cannot read note) note_path=%s", note_file)
+        return
+
+    # Annotate checkbox lines with ai:id so removal works correctly.
+    annotated = annotate_action_ids(current_text)
+
+    # Build the set of ai:id annotation IDs to remove, mapping from label -> stable hash.
+    ids_to_remove: set[str] = set()
+    for label in executed_labels:
+        ids_to_remove.add(stable_action_id(label))
+
+    updated = remove_actions_from_markdown(annotated, ids_to_remove)
+
+    # Write back proposed (unchecked) actions as suggestions for user confirmation.
+    if proposed_labels:
+        updated = _write_proposals_to_panel(updated, proposed_labels)
+
+    # Build receipt lines.
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+    receipts = [f"\u2705 {label} ({now_str})" for label in executed_labels]
+
+    # Find preferred insert position (after last panel fence).
+    parsed = parse_panel(updated)
+    preferred_index = None
+    if parsed.spans:
+        _, end = parsed.spans[-1]
+        preferred_index = end + 1
+
+    updated = write_receipts(updated, receipts, preferred_index=preferred_index)
+
+    # Write to disk.
+    try:
+        note_file.write_text(updated, encoding="utf-8")
+    except OSError:
+        logger.warning("panel writeback failed (write error) note_path=%s", note_file)
+        return
+
+    # Persist executed IDs so reruns are idempotent.
+    upsert_executed_ids(note_uuid, [stable_action_id(label) for label in executed_labels])
+
+    # Refresh companion content_hash so it reflects the post-writeback content.
+    _refresh_companion_hash(note_uuid, updated, vault_root, note_file)
+
+    logger.info(
+        "panel writeback applied note_path=%s removed=%d receipts=%d proposals=%d",
+        note_file,
+        len(ids_to_remove),
+        len(receipts),
+        len(proposed_labels),
+    )
+
+
+def _refresh_companion_hash(
+    note_uuid: str,
+    updated_text: str,
+    vault_root: Path | None,
+    note_file: Path,
+) -> None:
+    """Update the companion note's content_hash after writeback so it stays consistent."""
+    if vault_root is None:
+        return
+    try:
+        from app.services.companion_note import read_companion, write_companion
+        from scripts.yaml_roundtrip import load_frontmatter
+
+        companion = read_companion(vault_root, note_uuid)
+        if companion is None:
+            return
+        _, body = load_frontmatter(updated_text)
+        content = (body or updated_text).strip()
+        new_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if companion.content_hash == new_hash:
+            return
+        companion.content_hash = new_hash
+        write_companion(vault_root, companion)
+    except Exception:
+        logger.debug("companion hash refresh skipped note_uuid=%s", note_uuid, exc_info=True)
 
 
 __all__ = ["execute_panel_intent", "PanelRuntimeResult"]

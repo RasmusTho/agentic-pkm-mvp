@@ -46,4 +46,4 @@ def validate_agent_permissions(
         raise AgentPermissionError(f"agent '{config.agent_id}' not allowed for event '{event_type}'")
 
 
-__all__ = ["AgentPermissionError", "resolve_agent_config", "validate_agent_permissions"]
+__all__ = ["AgentPermissionError", "_normalize_agent_target", "resolve_agent_config", "validate_agent_permissions"]
