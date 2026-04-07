@@ -291,7 +291,7 @@ preflight_obsidian_check() {
   export OBSIDIAN_GATE_DETAIL="$obsidian_gate_detail"
 
   local check_enabled="${STARTUP_CHECK_OBSIDIAN:-1}"
-  local strict_startup="0"
+  local obsidian_required="0"
   local enforce_enabled="${STARTUP_ENFORCE_OBSIDIAN:-0}"
   if [ "$enforce_enabled" = "1" ]; then
     check_enabled="1"
@@ -300,15 +300,10 @@ preflight_obsidian_check() {
     export KNOWLEDGE_STRICT_STARTUP="${KNOWLEDGE_STRICT_STARTUP:-1}"
     export KNOWLEDGE_ALLOW_FALLBACK="${KNOWLEDGE_ALLOW_FALLBACK:-0}"
   fi
-  strict_startup=$(python - <<'PY'
-from app.knowledge.settings import load_knowledge_settings
+  obsidian_required=$(python - <<'PY'
+from app.cli.health import _obsidian_required
 
-try:
-    settings = load_knowledge_settings()
-except Exception:
-    print("1")
-else:
-    print("1" if settings.strict_startup else "0")
+print("1" if _obsidian_required() else "0")
 PY
   )
   if [ "$check_enabled" != "1" ]; then
@@ -331,10 +326,19 @@ PY
   obsidian_gate_json=$(python - <<'PY'
 import json
 from app.knowledge.health import obsidian_dependency_status
-from app.cli.health import _get_obsidian_installer_version
+from app.cli.health import _get_obsidian_installer_version, _obsidian_required
 
 status = obsidian_dependency_status(get_installer_version=_get_obsidian_installer_version)
-print(json.dumps({"ok": status.ok, "details": status.details}, ensure_ascii=False))
+print(
+    json.dumps(
+        {
+            "ok": status.ok,
+            "details": status.details,
+            "required": _obsidian_required(),
+        },
+        ensure_ascii=False,
+    )
+)
 PY
 )
   obsidian_gate_detail="$obsidian_gate_json"
@@ -353,7 +357,7 @@ PY
   fi
   export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
   write_startup_status "${PRE_FLIGHT_PASSED:-0}" "${PRE_FLIGHT_REASON:-}"
-  if [ "$obsidian_ok" != "1" ] && { [ "$strict_startup" = "1" ] || [ "$enforce_enabled" = "1" ]; }; then
+  if [ "$obsidian_ok" != "1" ] && [ "$obsidian_required" = "1" ]; then
     obsidian_gate_ok="failed"
     obsidian_gate_detail="$obsidian_gate_json"
     export OBSIDIAN_GATE_OK="$obsidian_gate_ok"
