@@ -9,6 +9,8 @@ depends_on: []
 can_parallelize_with: [DOCUMENT_WORKFLOW_ALIGNMENT]
 ---
 
+State: BOOTSTRAP-01 shipped; reset-zero-force is the current clean-state entrypoint for local bootstrap runs.
+
 # Reset Runtime State
 
 ## Purpose

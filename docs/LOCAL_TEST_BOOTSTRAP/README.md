@@ -10,6 +10,8 @@ related_docs:
   - docs/development/DEV_WORKFLOW.md
 ---
 
+State: Active bootstrap specification index for the local test environment stabilization lane.
+
 # Local Test Bootstrap Specification
 
 This directory contains the system specification for the local test environment bootstrap capability. Each document describes a discrete implementation task — its purpose, acceptance criteria, verification approach, and how to know when it is complete.

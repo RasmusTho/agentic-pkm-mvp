@@ -9,6 +9,8 @@ depends_on: [VERIFY_RUNTIME_HEALTH.md]
 can_parallelize_with: []
 ---
 
+State: BOOTSTRAP-05 shipped; scripted UAT now emits machine-readable assertion and idempotence receipts.
+
 # Run Scripted UAT
 
 ## Purpose
@@ -143,4 +145,4 @@ When implementing, create GitHub issue(s) referencing this spec: "Implements LOC
 
 ---
 
-**Status:** Specification ready. Blocked on VERIFY_RUNTIME_HEALTH.
+**Status:** Shipped. Machine-readable assertion and idempotence receipts delivered by #335 via PRs #348/#349; broader end-to-end acceptance still depends on VERIFY_RUNTIME_HEALTH (#334).

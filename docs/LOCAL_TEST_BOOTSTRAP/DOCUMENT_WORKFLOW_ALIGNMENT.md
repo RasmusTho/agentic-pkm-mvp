@@ -9,6 +9,8 @@ depends_on: []
 can_parallelize_with: [RESET_RUNTIME_STATE]
 ---
 
+State: BOOTSTRAP-06 docs-alignment slice remains the active owner-doc cleanup lane for the bootstrap workflow.
+
 # Document Workflow Alignment
 
 ## Purpose
