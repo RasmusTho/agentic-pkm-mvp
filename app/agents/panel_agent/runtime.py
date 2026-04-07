@@ -155,6 +155,76 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
     )
 
 
+def _write_proposals_to_panel(markdown: str, proposed_labels: list[tuple[str, str]]) -> str:
+    """Write proposed (unchecked) actions into the AI-åtgärder section of a panel.
+
+    Finds the correct panel block and inserts proposals after existing checkboxes
+    but before the panel end fence, ensuring they'll be parsed as actions on re-runs.
+    """
+    if not proposed_labels:
+        return markdown
+
+    lines = markdown.splitlines()
+    proposal_lines = []
+    for action_id, label in proposed_labels:
+        proposal_lines.append(f"- [ ] {label} <!--ai:id={stable_action_id(label)}-->")
+
+    # Find the last panel block (by looking for start/end fences from end to start).
+    # This handles multiple panels by choosing the last one.
+    panel_start = None
+    panel_end = None
+    actions_section_start = None
+
+    # Scan backwards to find panel end fence.
+    for idx in range(len(lines) - 1, -1, -1):
+        line = lines[idx].strip().lower()
+        if "%%" in line and "ai" in line:
+            if panel_end is None:
+                panel_end = idx
+            else:
+                panel_start = idx
+                break
+
+    if panel_end is None or panel_start is None:
+        # No clear panel structure found; append at end (fallback).
+        lines.extend(proposal_lines)
+        return "\n".join(lines)
+
+    # Find the AI-åtgärder / AI-actions heading within the panel.
+    # Look for common action section headings (Swedish and English variants).
+    for idx in range(panel_start, panel_end):
+        line = lines[idx].strip().lower()
+        if "åtgärd" in line or "action" in line:
+            # This is likely the actions section heading.
+            # Find the first checkbox line after this heading to insert after them.
+            actions_section_start = idx
+            break
+
+    if actions_section_start is None:
+        # No actions section found; insert before panel end fence.
+        for proposal in reversed(proposal_lines):
+            lines.insert(panel_end, proposal)
+        return "\n".join(lines)
+
+    # Find the position to insert: after the last checkbox in the actions section,
+    # before the next section heading or panel end fence.
+    insert_pos = actions_section_start + 1
+    for idx in range(actions_section_start + 1, panel_end):
+        line = lines[idx].strip()
+        if line.startswith("- ["):
+            # This is a checkbox line; update insert position.
+            insert_pos = idx + 1
+        elif line.startswith("#") or "%%" in line:
+            # Hit another section heading or fence; stop.
+            break
+
+    # Insert proposals at the determined position.
+    for proposal in reversed(proposal_lines):
+        lines.insert(insert_pos, proposal)
+
+    return "\n".join(lines)
+
+
 def _apply_note_writeback(
     state: PanelAgentState,
     original_note_text: str,
@@ -228,22 +298,7 @@ def _apply_note_writeback(
 
     # Write back proposed (unchecked) actions as suggestions for user confirmation.
     if proposed_labels:
-        proposal_lines = []
-        for action_id, label in proposed_labels:
-            proposal_lines.append(f"- [ ] {label} <!--ai:id={stable_action_id(label)}-->")
-        # Insert proposals into the panel's actions section (before panel end fence).
-        lines = updated.splitlines()
-        # Find the panel end fence and insert proposals before it.
-        insert_idx = None
-        for idx in range(len(lines) - 1, -1, -1):
-            if "%%" in lines[idx] and "ai" in lines[idx].lower():
-                # This is likely the end fence, insert before it
-                insert_idx = idx
-                break
-        if insert_idx is not None:
-            for proposal in reversed(proposal_lines):
-                lines.insert(insert_idx, proposal)
-            updated = "\n".join(lines)
+        updated = _write_proposals_to_panel(updated, proposed_labels)
 
     # Build receipt lines.
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
