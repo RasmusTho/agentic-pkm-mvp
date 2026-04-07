@@ -9,6 +9,8 @@ depends_on: [START_FULL_SYSTEM.md]
 can_parallelize_with: []
 ---
 
+State: BOOTSTRAP-04 remains ready/open; deterministic runtime verification is the active bootstrap stabilization slice.
+
 # Verify Runtime Health
 
 ## Purpose

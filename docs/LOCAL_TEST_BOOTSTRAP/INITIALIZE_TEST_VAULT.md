@@ -1,3 +1,5 @@
+State: BOOTSTRAP-02 shipped; test vault initialization is the current seeded-vault bootstrap entrypoint.
+
 # BOOTSTRAP-02: Initialize Test Vault
 
 **Anchor ID:** `BOOTSTRAP-02`

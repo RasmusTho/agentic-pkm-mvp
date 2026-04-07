@@ -1,8 +1,18 @@
+State: Local test bootstrap plan with steps 1-3 and 5 shipped; deterministic runtime verification remains open as the active stabilization slice.
+Doc role: Plan
+Authority: Canonical plan for the scripted local test bootstrap chain; step specs and current-state SoT docs win on implementation detail and shipped runtime claims.
+Owner: Runtime / local test bootstrap stabilization
+Temporal class: strategic
+Review cadence: event-driven
+Source of truth: mixed
+Last reviewed: 2026-04-07
+Last verified against: docs/TESTING.md, docs/ENVIRONMENTS.md, Makefile, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, app/cli/uat.py, merged PRs #340/#346/#348/#349, GitHub Issue #334, current repo + GitHub delivery state on 2026-04-07
+
 # Local Test Environment Bootstrap
 
 **Purpose:** Canonical plan for the scripted bootstrap chain that brings up a deterministic local test environment suitable for UAT and CI system-level validation.
 
-**Status:** Steps 1–2 shipped. Steps 3–5 tracked by open issues.
+**Status:** Steps 1-3 and 5 shipped. Step 4 remains tracked by open issue #334.
 
 ---
 
@@ -16,7 +26,7 @@ The full bootstrap sequence, in order:
 | 2 | `make test-vault-init` | `docs/LOCAL_TEST_BOOTSTRAP/INITIALIZE_TEST_VAULT.md :: BOOTSTRAP-02` | #332 | Shipped |
 | 3 | `make start-test-system` | `docs/LOCAL_TEST_BOOTSTRAP/START_FULL_SYSTEM.md :: BOOTSTRAP-03` | #333 | Shipped |
 | 4 | `make verify-runtime` | `docs/LOCAL_TEST_BOOTSTRAP/VERIFY_RUNTIME_HEALTH.md :: BOOTSTRAP-04` | #334 | Ready |
-| 5 | `uat-run-vault-test --assert` | `docs/LOCAL_TEST_BOOTSTRAP/RUN_SCRIPTED_UAT.md :: BOOTSTRAP-05` | #335 | Ready |
+| 5 | `uat-run-vault-test --assert` | `docs/LOCAL_TEST_BOOTSTRAP/RUN_SCRIPTED_UAT.md :: BOOTSTRAP-05` | #335 | Shipped |
 
 ### Full bootstrap (operator)
 
@@ -36,6 +46,7 @@ python -m app.cli uat-run-vault-test --assert  # BOOTSTRAP-05: run UAT, assert p
 - Each step must exit 0 on success, non-zero on failure, with a human-readable summary.
 - The chain must work in a clean checkout without undocumented side-channel files.
 - Steps 3–5 require Docker (steps 1–2 do not).
+- The full path should still be treated as a stabilization lane until step 4 (`make verify-runtime`, Issue #334) is closed.
 
 ---
 

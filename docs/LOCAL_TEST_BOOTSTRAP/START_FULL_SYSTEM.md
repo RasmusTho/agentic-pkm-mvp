@@ -9,6 +9,8 @@ depends_on: [INITIALIZE_TEST_VAULT.md]
 can_parallelize_with: []
 ---
 
+State: BOOTSTRAP-03 shipped; start-test-system is the current startup wrapper for the test-vault runtime slice.
+
 # Start Full System
 
 ## Purpose

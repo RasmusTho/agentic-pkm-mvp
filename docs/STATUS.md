@@ -5,8 +5,8 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-04-06
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/ENVIRONMENTS.md, docs/DOCS_INDEX.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/PANEL_AGENT.md, Makefile, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, app/cli/__init__.py, merged PRs #254/#272/#302, current repo + GitHub delivery state on 2026-04-06
+Last reviewed: 2026-04-07
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/ENVIRONMENTS.md, docs/DOCS_INDEX.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/LOCAL_TEST_BOOTSTRAP/RUN_SCRIPTED_UAT.md, docs/PANEL_AGENT.md, Makefile, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, app/cli/__init__.py, merged PRs #346/#348/#349, GitHub Issues #334/#335, current repo + GitHub delivery state on 2026-04-07
 Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, ingest runs by plane). `watcher_runs` refers to legacy snapshot watchers only; registry watcher health is via heartbeat + tick logs.
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
@@ -96,9 +96,9 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
 - Production-facing path is the active current-state default; lab/dev-only flows remain explicitly non-production.
 - The local test stack can be started successfully against a separate test vault, and `uat-seed-vault-test` works.
-- **Bootstrap path status**: The repo-supported local bootstrap/UAT path (`make test-bootstrap`) is documented and partially productized, but it should not yet be treated as fully supported and verified end to end. The owner plan and task specs still track the bootstrap chain's runtime-start, runtime-verify, and scripted-UAT steps as open work (`#333`, `#334`, `#335`), so the canonical clean-state path remains an active stabilization lane rather than a closed acceptance receipt.
+- **Bootstrap path status**: The repo-supported local bootstrap/UAT path (`make test-bootstrap`) is documented and partially productized. Startup against the test vault (`#333`, PR #346) and scripted UAT/idempotence reporting (`#335`, PRs #348/#349) are shipped, but deterministic runtime verification remains an open stabilization slice (`#334`), so the canonical clean-state path should not yet be treated as fully accepted end to end.
 - The current docs-first stabilization wave has made the intended supported path explicit; the bootstrap contract is now documented in `docs/TESTING.md`, `docs/ENVIRONMENTS.md`, and `docs/LOCAL_TEST_BOOTSTRAP/`.
-- Operator-facing guidance: treat `make test-bootstrap` as the intended local verification path, but keep the full end-to-end bootstrap acceptance status tied to `docs/LOCAL_TEST_BOOTSTRAP/` and Issues `#333`-`#335` until those slices close.
+- Operator-facing guidance: treat `make test-bootstrap` as the intended local verification path, but keep the full end-to-end bootstrap acceptance status tied to `docs/LOCAL_TEST_BOOTSTRAP/` and remaining verification slice `#334` until that deterministic health contract closes.
 - PanelAgent runtime V1 is part of the active baseline; planner pipeline and LangGraph expansion remain opt-in.
 - Legacy snapshot watchers remain available only for lab/dev workflows and are not part of the runtime default.
 - Eval suites remain opt-in diagnostics; they do not define baseline health by themselves.

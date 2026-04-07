@@ -5,8 +5,8 @@ Owner: Product / architecture forward line
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
-Last reviewed: 2026-04-06
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ENVIRONMENTS.md, docs/PANEL_AGENT.md, docs/DOCS_INDEX.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, Makefile, app/cli/__init__.py, merged PRs #236/#254/#272/#302, current repo + GitHub delivery state on 2026-04-06
+Last reviewed: 2026-04-07
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ENVIRONMENTS.md, docs/PANEL_AGENT.md, docs/DOCS_INDEX.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, Makefile, app/cli/__init__.py, merged PRs #236/#254/#272/#302/#346/#348/#349, GitHub Issues #334/#335, current repo + GitHub delivery state on 2026-04-07
 # Roadmap — Strategic Control
 
 This roadmap is forward-looking and skimmable. History lives in `docs/history/SOT_4X_HISTORY.md`; deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
@@ -219,7 +219,7 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 | v5.0 | PanelAgent Runtime V1 | Shipped |
 | v5.1–v5.4 | Watcher track (ingest/panel CLI, policy, ergonomics) | Operationally accepted |
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
-| v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
+| v5.5C/D | Panel LangGraph decider is shipped; watcher auto-exec remains rollout-guarded and watcher→planner/orchestrator automation remains selective | Selective forward work |
 | v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped, PR #302), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler; remaining: real-vault acceptance plus broader Promotion/Hygiene rollout | Selective forward work (multiple panel/runtime slices shipped; acceptance still pending) |
 | v6.0 | Wanted-state architecture pass to align runtime boundaries with the newer human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
 
