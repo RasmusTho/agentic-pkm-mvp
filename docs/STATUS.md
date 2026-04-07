@@ -5,8 +5,8 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-04-07
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/ENVIRONMENTS.md, docs/DOCS_INDEX.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/LOCAL_TEST_BOOTSTRAP/RUN_SCRIPTED_UAT.md, docs/PANEL_AGENT.md, Makefile, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, app/cli/__init__.py, merged PRs #346/#348/#349, GitHub Issues #334/#335, current repo + GitHub delivery state on 2026-04-07
+Last reviewed: 2026-04-02
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, scripts/start_full_system.sh, current repo state on 2026-04-02
 Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, ingest runs by plane). `watcher_runs` refers to legacy snapshot watchers only; registry watcher health is via heartbeat + tick logs.
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
@@ -33,7 +33,7 @@ Validation posture note:
 - Environment posture: `dev`, `test`, and `prod` are now the explicit minimal environment model in the SoT. The governing contract lives in `docs/ENVIRONMENTS.md`. `dev` and `prod` are runtime-selected environments today; `test` is the current workflow-driven bootstrap and verification environment.
 - Runtime environment selection: explicit environment model for `dev` and `prod` is now canonical in the config layer (`app.config.environment`, Issue #263). The default environment is `prod` (production-safe). Operators can select `PKM_ENVIRONMENT=dev` for development/diagnostic mode, or it defaults from `PKM_SETTINGS_PROFILE`: `lab` → `dev`, `operator` → `prod`. Environment is resolved at startup and stored in `InstanceSettings.environment` within the `SettingsBundle`. This provides one documented control surface for environment-specific behavior across the runtime. See `docs/ENVIRONMENTS.md` for full specification.
 - Runtime watcher: registry watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`) is the default; legacy snapshot watchers are dev-only and require `PKM_SETTINGS_PROFILE=lab`.
-- Runtime default: `scripts/start_full_system.sh` and `config/runtime.defaults.env` set `WATCHER_AUTO_EXEC=1` unless the operator already set a value; set `WATCHER_AUTO_EXEC=0` to run watchers in emit-only mode. Default-on does not bypass rollout discipline: once armed, any note with an AI panel fence is only a candidate, actions are still filtered through the allowlisted `watcher_settings.allowed_actions`, the only per-note opt-out is `ai_panel_auto_run: never` (nested form accepted), and manual CLI panel runs remain available.
+- Runtime default: `scripts/start_full_system.sh` and `config/runtime.defaults.env` set `WATCHER_AUTO_EXEC=1` unless the operator already set a value; set `WATCHER_AUTO_EXEC=0` to run watchers in emit-only mode. Default-on does not bypass rollout discipline: once armed, any note with an AI panel fence is only a candidate, actions are still filtered through the allowlisted `watcher_settings.allowed_actions`, the only per-note opt-out is `ai_panel_auto_run: never` (nested form accepted), and manual CLI panel runs remain available. This default-on posture is intended to support autonomous proposals and low-risk action surfacing, not to force human-in-the-loop review for every trivial operation.
 - Settings tiering (watcher controls): runtime defaults to `PKM_SETTINGS_PROFILE=operator` (which maps to `prod` environment); dev/lab-only watcher tuning env vars are applied only when `PKM_SETTINGS_PROFILE=lab` (which maps to `dev` environment).
 - Storage baseline: `store_objects` is the canonical object table; legacy `objects` rows are best-effort migrated when needed so runtime avoids dual-table selection. Legacy `app/store/object_store.py` now delegates to canonical `app/stores` providers (compat mirror retained for tests), and `index rebuild` reads via `ObjectStore` rather than separate memory/DB query branches.
 - ASK warm-load boundary: `/api/ask` hydrates HybridStore through the canonical store interface (`list_objects`) instead of backend-specific `_objects`/raw SQL introspection.
@@ -56,13 +56,13 @@ Validation posture note:
 - Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, skipped receipts, and write-guard state are surfaced in status, events, and the new CLI `settings-explain` output before any runtime gate opens.
 - PanelAgent decider hardening through the shared `ReasoningFacade` seam is shipped for the current pilot path. Delivery receipt: Issue #230, PR #236.
 ### Next
-- ReasoningFacade + LangGraph rollout is delivered for the PanelAgent pilot path and the review-flow agent pool. Delivery receipts: Issue #230 / PR #236 and Issue #231. The remaining phased rollout to Promotion/Hygiene is gated on v5.6A pilot stabilization (see Later). Source Anchor: RF-ADOPTION
+- ReasoningFacade + LangGraph rollout for the PanelAgent pilot agent pool is delivered. Delivery receipt: Issue #231 (closed COMPLETED). The remaining phased rollout to Promotion/Reviewer/Hygiene is gated on v5.6A pilot stabilization (see Later). Source Anchor: RF-ADOPTION
 - The companion note + Note Context doc-sync correction is shipped. Delivery receipt: Issue #229, PR #237. Any remaining rollout verification or cleanup should be captured as new bounded follow-up issues rather than treated as missing implementation.
 - Vault-as-GUI settings compiler and operator surfaces: panel-action/compiler provenance (source paths, mtimes, combined sha256) is now surfaced in the `/api/status` endpoint and `python -m app.cli status --json` via `panel_diagnostics` fields. Delivery receipt: Issue #238 (closed COMPLETED), PR #254. Source Anchor: SETTINGS-PROVENANCE
 - CLI/docs runbook alignment with v5.6 narrative: operators now know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe. Delivery receipt: Issue #232 (closed COMPLETED). Source Anchor: ROLLOUT-RUNBOOKS
 - Nightly verification now includes the deterministic Quality Wave acceptance harness (`tests/quality_wave/test_uat_harness.py`) plus a first bounded Postgres contracts lane (`tests/int/test_pg_backend.py`, `tests/api/test_status_store_pg.py`, `tests/indexer/test_outbox_roundtrip_pg.py`) inside `integration-nightly`. The PG lane flows through the repo DB abstraction: `DATABASE_URL`/`DB_DSN` provide the target endpoint, `STORE_BACKEND=pg` selects the backend, and `alembic upgrade head` is the schema/bootstrap contract for the first green recurring PG wave.
 ### Later
-- Extend LangGraph adoption across the remaining targeted agent pools (Promotion, Hygiene) and the orchestrator V2 control plane once the v5.6A pilot stabilizes.
+- Extend LangGraph adoption across more agents (Promotion, Reviewer, Hygiene) and the orchestrator V2 control plane once the v5.6A pilot stabilizes.
 - Surface LangGraph/Reasoning rollouts in the evaluation stack (golden vault, metamorphic runs, cold rebuild, fitness gates) so the forward line has measurable acceptance per contract.
 - Begin planning multi-user and external sync guardrails that rely on the v5.6 safe mode (watcher gating + plan audits) before the next forward milestone.
 **Out of scope for the v5.6 kickoff PR**: orchestrator/langgraph plumbing stays opt-in until the defined gates pass; watcher auto-run is controlled by `WATCHER_AUTO_EXEC` (set `WATCHER_AUTO_EXEC=0` for emit-only/safe mode).
@@ -96,9 +96,9 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
 - Production-facing path is the active current-state default; lab/dev-only flows remain explicitly non-production.
 - The local test stack can be started successfully against a separate test vault, and `uat-seed-vault-test` works.
-- **Bootstrap path status**: The repo-supported local bootstrap/UAT path (`make test-bootstrap`) is documented and partially productized. Startup against the test vault (`#333`, PR #346) and scripted UAT/idempotence reporting (`#335`, PRs #348/#349) are shipped, but deterministic runtime verification remains an open stabilization slice (`#334`), so the canonical clean-state path should not yet be treated as fully accepted end to end.
-- The current docs-first stabilization wave has made the intended supported path explicit; the bootstrap contract is now documented in `docs/TESTING.md`, `docs/ENVIRONMENTS.md`, and `docs/LOCAL_TEST_BOOTSTRAP/`.
-- Operator-facing guidance: treat `make test-bootstrap` as the intended local verification path, but keep the full end-to-end bootstrap acceptance status tied to `docs/LOCAL_TEST_BOOTSTRAP/` and remaining verification slice `#334` until that deterministic health contract closes.
+- The repo-supported local bootstrap/UAT path is still not fully self-contained end to end; several concrete blocker issues already exist for that work.
+- The current docs-first stabilization wave is making the intended supported path explicit before further implementation continues.
+- Objective: a clean-state, repo-supported local test bootstrap path that is resettable, reproducible, verified, and acceptable as the canonical local verification flow.
 - PanelAgent runtime V1 is part of the active baseline; planner pipeline and LangGraph expansion remain opt-in.
 - Legacy snapshot watchers remain available only for lab/dev workflows and are not part of the runtime default.
 - Eval suites remain opt-in diagnostics; they do not define baseline health by themselves.
@@ -108,7 +108,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 | Area | Current baseline posture | Forward-line direction |
 | --- | --- | --- |
 | Watcher auto-exec | Guarded by dedup + optimistic writes + idempotency | Safe enablement only after gates and receipts prove stable behavior |
-| LangGraph rollout | Active for ASK, PanelAgent-related flows, and the review-flow agent pool; the shared `ReasoningFacade` seam is adopted for the delivered panel/reviewer paths | Expand in phases as the remaining targeted agent pools (Promotion/Hygiene) migrate onto the shared `ReasoningFacade`; gated on v5.6A pilot stabilization |
+| LangGraph rollout | Active for ASK and PanelAgent-related flows; the shared `ReasoningFacade` seam is adopted for the PanelAgent pilot (Issue #231 delivered) | Expand in phases as additional agent pools (Promotion/Reviewer/Hygiene) migrate onto the shared `ReasoningFacade`; gated on v5.6A pilot stabilization |
 | Orchestrator V2 pilot | Shipped: parallel execution + dependency-aware scheduling with `ORCHESTRATOR_VERSION=v2` flag. V1 is default. Coverage: flag contract, plan-graph scheduling, event/trace compat, compensation/rollback. Delivery receipt: Issue #250 (pilot), Issue #251 (compensation). | Future slices: checkpointing, retry/timeout policy. Adopt in broader rollout after stability signals. |
 
 For detailed sequencing, version history, and roadmap ladder, use:
