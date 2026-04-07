@@ -17,6 +17,7 @@ scripts/reset_to_zero.sh
 The script stops the stack (same as step 1), lists the runtime files it will delete, and removes:
 - `tmp/index-outbox.jsonl` (append-only audit log for ingest/panel events)
 - Heartbeat files: `tmp/worker_heartbeat.json`, `tmp/watcher_heartbeat.json`, plus watcher state files under `tmp/watcher_state*.json` and `tmp/watcher_states`
+- `tmp/WATCHER_STOP`, so a fresh startup does not inherit a stale paused-watcher state from the previous run
 - `tmp/health_incidents.jsonl`
 
 It prompts for confirmation unless you run `RESET_FORCE=1 scripts/reset_to_zero.sh`.
