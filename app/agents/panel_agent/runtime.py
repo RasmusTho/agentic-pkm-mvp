@@ -155,23 +155,106 @@ def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | 
     )
 
 
+def _write_proposals_to_panel(markdown: str, proposed_labels: list[tuple[str, str]]) -> str:
+    """Write proposed (unchecked) actions into the AI-åtgärder section of a panel.
+
+    Finds the correct panel block and inserts proposals after existing checkboxes
+    but before the panel end fence, ensuring they'll be parsed as actions on re-runs.
+    """
+    if not proposed_labels:
+        return markdown
+
+    lines = markdown.splitlines()
+    proposal_lines = []
+    for action_id, label in proposed_labels:
+        proposal_lines.append(f"- [ ] {label} <!--ai:id={stable_action_id(label)}-->")
+
+    # Find the last panel block (by looking for start/end fences from end to start).
+    # This handles multiple panels by choosing the last one.
+    panel_start = None
+    panel_end = None
+    actions_section_start = None
+
+    # Scan backwards to find panel end fence.
+    for idx in range(len(lines) - 1, -1, -1):
+        line = lines[idx].strip().lower()
+        if "%%" in line and "ai" in line:
+            if panel_end is None:
+                panel_end = idx
+            else:
+                panel_start = idx
+                break
+
+    if panel_end is None or panel_start is None:
+        # No clear panel structure found; append at end (fallback).
+        lines.extend(proposal_lines)
+        return "\n".join(lines)
+
+    # Find the AI-åtgärder / AI-actions heading within the panel.
+    # Look for common action section headings (Swedish and English variants).
+    for idx in range(panel_start, panel_end):
+        line = lines[idx].strip().lower()
+        if "åtgärd" in line or "action" in line:
+            # This is likely the actions section heading.
+            # Find the first checkbox line after this heading to insert after them.
+            actions_section_start = idx
+            break
+
+    if actions_section_start is None:
+        # No actions section found; insert before panel end fence.
+        for proposal in reversed(proposal_lines):
+            lines.insert(panel_end, proposal)
+        return "\n".join(lines)
+
+    # Find the position to insert: after the last checkbox in the actions section,
+    # before the next section heading or panel end fence.
+    insert_pos = actions_section_start + 1
+    for idx in range(actions_section_start + 1, panel_end):
+        line = lines[idx].strip()
+        if line.startswith("- ["):
+            # This is a checkbox line; update insert position.
+            insert_pos = idx + 1
+        elif line.startswith("#") or "%%" in line:
+            # Hit another section heading or fence; stop.
+            break
+
+    # Insert proposals at the determined position.
+    for proposal in reversed(proposal_lines):
+        lines.insert(insert_pos, proposal)
+
+    return "\n".join(lines)
+
+
 def _apply_note_writeback(
     state: PanelAgentState,
     original_note_text: str,
     vault_root: Path | None,
 ) -> None:
-    """Remove executed checkboxes, write receipts, and persist to vault file.
+    """Remove executed checkboxes, write proposal suggestions, write receipts, and persist to vault file.
 
     This mirrors the writeback contract that ``handle_note_update`` applies in the
     non-watcher path, ensuring the documented panel contract (checkbox removal +
-    AI status receipt block) is honoured for watcher/worker-driven execution.
+    AI status receipt block + proposal suggestions) is honoured for watcher/worker-driven execution.
     """
     executed_labels: list[str] = []
+    proposed_labels: list[tuple[str, str]] = []  # (id, label) for proposed actions
+    proposed_ids = set(state.proposed_action_ids or [])
+
+    # Collect executed actions and proposed actions for writeback.
+    executed_ids = set(state.executed_action_ids or [])
+    for action in state.actions:
+        if action.id in proposed_ids and not action.checked:
+            # Proposed actions (injected catalog proposals) - write back as unchecked suggestions
+            # Skip if this action was already executed in a previous run
+            action_id_hash = stable_action_id(action.label)
+            if action_id_hash not in executed_ids:
+                proposed_labels.append((action.id, action.label))
+
     for result in state.action_results:
         if result.checked and result.status in {"triggered", "logged"}:
             executed_labels.append(result.label)
 
-    if not executed_labels:
+    if not executed_labels and not proposed_labels:
         return
 
     note_uuid = state.note.uuid
@@ -213,6 +296,10 @@ def _apply_note_writeback(
 
     updated = remove_actions_from_markdown(annotated, ids_to_remove)
 
+    # Write back proposed (unchecked) actions as suggestions for user confirmation.
+    if proposed_labels:
+        updated = _write_proposals_to_panel(updated, proposed_labels)
+
     # Build receipt lines.
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     receipts = [f"\u2705 {label} ({now_str})" for label in executed_labels]
@@ -240,10 +327,11 @@ def _apply_note_writeback(
     _refresh_companion_hash(note_uuid, updated, vault_root, note_file)
 
     logger.info(
-        "panel writeback applied note_path=%s removed=%d receipts=%d",
+        "panel writeback applied note_path=%s removed=%d receipts=%d proposals=%d",
         note_file,
         len(ids_to_remove),
         len(receipts),
+        len(proposed_labels),
     )
 
 
