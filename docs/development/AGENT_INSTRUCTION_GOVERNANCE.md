@@ -15,6 +15,7 @@ It governs development-time instruction surfaces only. It does not define runtim
 
 - Repo-local Codex skills may live under `.codex/skills/` as optional workflow helpers for this repository.
 - Repo-local skills are not canonical policy surfaces; they must defer to `AGENTS.md` and the owning development docs.
+- If a repo-local skill carries required workflow behavior such as Issue pickup, lifecycle correction, PR publication, PR integration, or verification handoff, `AGENTS.md` must name that skill explicitly so agents can discover it from the canonical entrypoint.
 - Repo-local skills may summarize or sequence existing workflow steps, but they must not override Issue scope, acceptance criteria, PR linkage, or CI/validation requirements.
 - Keep repo-local skills narrowly scoped, reversible, and aligned with the existing GitHub issue-first delivery model.
 - Temporal-doc maintenance skills should prefer audit-first behavior, refresh owner/current-state docs before roadmap wording, and use explicit verification anchors rather than implied freshness.
