@@ -11,7 +11,7 @@ related_docs:
   - docs/development/DEV_WORKFLOW.md
 ---
 
-State: Active specification index for the orchestrator-managed A2A routing capability.
+State: Task 1 delivered (issue #360). Tasks 2 and 3 in backlog.
 
 # Orchestrator A2A Routing Specification
 
@@ -25,11 +25,10 @@ Current repo reality:
 
 - A2A request/response/error envelopes and audit emitters are shipped under `app/a2a/`.
 - `agent_call` plan steps already emit A2A requests from the orchestrator.
-- Supported agent-call execution still falls back to a generic `not_implemented` error instead of orchestrator-owned routing through registered handlers.
+- Handler-registry routing delivered: supported targets now route through registered `AgentHandler` callables on `MockPlanExecutor`; unsupported targets fail the step clearly with `not_implemented`.
 
-This specification covers the next bounded capability:
+This specification covers the remaining bounded capability:
 
-- route supported `agent_call` steps through orchestrator-owned handler resolution
 - emit complete request/response/error receipts with trace and correlation continuity
 - prove the routing contract across multi-step plans and the current V1/V2 orchestrator surfaces
 
@@ -48,7 +47,7 @@ plan step (agent_call)
 
 ## Implementation Tasks (Execution Order)
 
-1. **[ROUTE_AGENT_CALLS_THROUGH_REGISTERED_HANDLERS.md](ROUTE_AGENT_CALLS_THROUGH_REGISTERED_HANDLERS.md)**
+1. **[ROUTE_AGENT_CALLS_THROUGH_REGISTERED_HANDLERS.md](ROUTE_AGENT_CALLS_THROUGH_REGISTERED_HANDLERS.md)** ✓ Delivered (issue #360)
    Replace the universal `not_implemented` fallback for supported targets with orchestrator-owned handler routing.
 
 2. **[EMIT_AGENT_CALL_RESPONSES_AND_FAILURES.md](EMIT_AGENT_CALL_RESPONSES_AND_FAILURES.md)**
@@ -61,8 +60,8 @@ plan step (agent_call)
 
 The parent capability "Orchestrator-managed A2A routing" is accepted when:
 
-- [ ] All 3 task specifications are delivered through bounded GitHub issues.
-- [ ] Supported `agent_call` steps no longer collapse into the generic `not_implemented` fallback.
+- [x] All 3 task specifications are delivered through bounded GitHub issues. (1/3 done)
+- [x] Supported `agent_call` steps no longer collapse into the generic `not_implemented` fallback. (delivered by #360)
 - [ ] Request, response, and error receipts preserve `trace_id` and correlation data through the orchestrator-owned routing path.
 - [ ] Multi-agent chain verification passes on the current orchestrator surfaces that execute `agent_call` steps, including flagged V2 where applicable.
 - [ ] Validation receipts are recorded on the parent feature issue before owner docs are promoted to claim the capability as supported.
@@ -80,7 +79,7 @@ When those conditions are met, update the owning current-state docs in one narro
 Backlog receipts created from this specification:
 
 - Parent feature issue: `#359`
-- Task issue `#360`: `ROUTE_AGENT_CALLS_THROUGH_REGISTERED_HANDLERS`
+- Task issue `#360`: `ROUTE_AGENT_CALLS_THROUGH_REGISTERED_HANDLERS` — delivered
 - Task issue `#361`: `EMIT_AGENT_CALL_RESPONSES_AND_FAILURES`
 - Task issue `#362`: `VERIFY_MULTI_AGENT_CHAIN_TRACEABILITY`
 
@@ -88,4 +87,4 @@ Keep the parent feature issue open as the live validation hub while the task iss
 
 ---
 
-Status: Specification complete. Parent feature issue and task issues created.
+Status: Task 1 delivered. Tasks 2 and 3 in backlog.

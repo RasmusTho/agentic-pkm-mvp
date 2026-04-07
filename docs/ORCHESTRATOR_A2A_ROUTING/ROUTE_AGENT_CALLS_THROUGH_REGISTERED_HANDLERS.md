@@ -9,9 +9,11 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Specification ready.
+State: Delivered (issue #360, PR #366).
 
 # Route Agent Calls Through Registered Handlers
+
+<!-- A2A-ROUTING-01 -->
 
 ## Purpose
 
@@ -19,10 +21,11 @@ Make `agent_call` steps useful for supported targets by routing them through an 
 
 ## What This Task Does
 
-- Introduces or wires a handler-resolution path for supported `agent_call` recipients.
+- Introduces an `AgentHandler` registry on `MockPlanExecutor` (constructor `handlers` dict + `register_handler()` method).
 - Keeps the current in-process A2A posture; no remote transport is implied.
 - Preserves the existing agent-config permission checks before execution.
-- Returns a structured step result that reflects the handler outcome rather than only the request id.
+- Returns a structured step result that reflects the handler outcome: `agent`, `request_id`, and `response` (full model dump).
+- Unsupported recipients emit `agent.error.created` and raise `StepExecutionError` with `error_type="not_implemented"` — step status becomes `error`.
 
 ## Concretely
 
@@ -31,27 +34,22 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
   tests/orchestrator/test_agent_config_enforcement.py \
   tests/orchestrator/test_orchestrator_a2a_errors.py \
   tests/orchestrator/test_orchestrator_runs_steps.py -m "not pg"
-
-# Example execution target after delivery:
-# plan step kind=agent_call agent=reviewer
-# -> agent.request.created emitted
-# -> registered handler executes
-# -> step result includes routed handler outcome
+# 9 passed
 ```
 
 ## Why This Matters
 
-The repo already models multi-step plans with `agent_call` steps, but supported targets still behave like stubs. Until the orchestrator can resolve and execute registered handlers, the A2A path is not a real implementation surface.
+The repo already models multi-step plans with `agent_call` steps, but supported targets still behaved like stubs. With the handler registry, the A2A path is now a real in-process execution surface.
 
 ## Acceptance Criteria
 
-- [ ] Supported `agent_call` recipients are resolved through an explicit orchestrator-owned handler path.
-- [ ] Unsupported recipients still fail clearly instead of silently succeeding.
-- [ ] Agent-config permission checks continue to gate execution before the handler runs.
-- [ ] Routed calls return a structured step result that downstream orchestration code can inspect.
-- [ ] Focused orchestrator tests cover both supported and unsupported recipients.
+- [x] Supported `agent_call` recipients are resolved through an explicit orchestrator-owned handler path.
+- [x] Unsupported recipients still fail clearly instead of silently succeeding.
+- [x] Agent-config permission checks continue to gate execution before the handler runs.
+- [x] Routed calls return a structured step result that downstream orchestration code can inspect.
+- [x] Focused orchestrator tests cover both supported and unsupported recipients.
 
-## How to Verify (Pre-Merge)
+## How to Verify (Post-Merge)
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
@@ -68,6 +66,12 @@ rg -n "handle_agent_request|send_agent_request|agent_call" app/orchestrator app/
 - Timeout, retry, or SLA policy.
 - Broad planner redesign outside the `agent_call` routing boundary.
 
+## Implementation Surface
+
+- `app/orchestrator/executor.py` — `AgentHandler` type alias, `MockPlanExecutor.register_handler()`, routing in `_execute_agent_call()`
+- `app/orchestrator/agents.py` — `_normalize_agent_target` exported for use by executor
+- Tests: `tests/orchestrator/test_orchestrator_a2a_errors.py`, `tests/orchestrator/test_agent_config_enforcement.py`, `tests/orchestrator/test_orchestrator_runs_steps.py`
+
 ## Related Docs
 
 - `docs/ORCHESTRATOR_A2A_ROUTING/README.md`
@@ -78,4 +82,4 @@ rg -n "handle_agent_request|send_agent_request|agent_call" app/orchestrator app/
 ## Related GitHub Issues
 
 - Feature issue: `#359`
-- Implementation task issue: `#360`
+- Implementation task issue: `#360` (delivered)
