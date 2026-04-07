@@ -8,10 +8,38 @@ It does not apply to runtime/system agents that exist inside the product. Runtim
 ## Reading order
 
 1. Read this file first.
-2. Use `docs/DOCS_INDEX.md` to identify the owner document for the area you are touching.
-3. Read the owner document before editing code or nearby docs.
-4. Use `docs/development/DEV_WORKFLOW.md` for the working loop and validation expectations.
-5. Use `docs/development/AGENT_INSTRUCTION_GOVERNANCE.md` for maintenance rules, rationale, and compatibility-entrypoint policy.
+2. Use `.codex/skills/README.md` to identify the repo-local skill path that matches the task.
+3. Use `docs/DOCS_INDEX.md` to identify the owner document for the area you are touching.
+4. Read the owner document before editing code or nearby docs.
+5. Use `docs/development/DEV_WORKFLOW.md` for the working loop and validation expectations.
+6. Use `docs/development/AGENT_INSTRUCTION_GOVERNANCE.md` for maintenance rules, rationale, and compatibility-entrypoint policy.
+
+## Repo-local skill routing
+
+Repo-local workflow helpers live under `.codex/skills/`. They do not replace this file, but agents should load the matching skill before substantial work when the task fits one of these routes:
+
+- General repo dev work in this repository:
+  `.codex/skills/agentic-pkm/SKILL.md`
+- GitHub implementation work from a bounded Issue:
+  `.codex/skills/issue-to-code/SKILL.md`
+- Issue, PR, label, or Project lifecycle correction:
+  `.codex/skills/issue-maintenance-change-control/SKILL.md`
+- Docs-only authoritative spec work:
+  `.codex/skills/docs-authoring/SKILL.md`
+- Convert active docs into bounded GitHub backlog:
+  `.codex/skills/docs-to-issue/SKILL.md`
+- Temporal current-state doc audit / freshness work:
+  `.codex/skills/temporal-doc-governance/SKILL.md`
+- Branch / commit / push / PR publication after local work is ready:
+  `.codex/skills/publish-pr/SKILL.md`
+- PR mergeability / CI attachment before verification:
+  `.codex/skills/pr-integration/SKILL.md`
+- Delivery verification and feedback-loop closure:
+  `.codex/skills/verification-validation-feedback/SKILL.md`
+
+For GitHub implementation work, loading `.codex/skills/issue-to-code/SKILL.md` is mandatory before coding.
+That skill owns the pickup rule:
+when active work begins, move the governing Issue/Project state to `In Progress` and remove `agent:ready` before local edits so another agent does not pick up the same task.
 
 ## Change classification
 
@@ -56,6 +84,7 @@ Use this lane for:
 - repo-local skills under `.codex/skills/**`
 - pull request / issue governance surfaces under `.github/**`
 - lightweight enforcement for docs/governance workflows such as `scripts/docs_guard.py`
+- focused governance tests such as `tests/architecture/test_agent_skill_entrypoints.py`
 - companion governance docs under `docs/**`
 
 Rules:

@@ -117,9 +117,12 @@ jobs:
               ".github/github-governance.yml",
               ".github/pull_request_template.md",
               ".github/workflows/issue-pr-governance.yml",
+              "Makefile",
               "scripts/docs_guard.py",
+              "scripts/install_skills.sh",
               "scripts/reconcile_project_status.py",
               "scripts/validate_source_anchors.py",
+              "tests/architecture/test_agent_skill_entrypoints.py",
               "tests/ops/test_project_status_reconcile.py",
             ]);
             const governanceAllowedPrefixes = [

@@ -1,6 +1,12 @@
 State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency hardening) with the forward line now entering v5.6 LangGraph/Reasoning rollouts.
 Doc role: Core SoT
 Authority: Active runtime architecture source of truth for the current baseline and runtime contracts; wins over roadmap and historical references on current-state questions.
+Owner: Runtime / architecture SoT
+Temporal class: operational
+Review cadence: event-driven
+Source of truth: mixed
+Last reviewed: 2026-04-07
+Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, app/cli/__init__.py, Makefile, merged PRs #272/#302/#346/#349, current repo state on 2026-04-07
 # Architecture — SoT v5.5 Reality-MVP baseline (forward line v5.6)
 
 This document is the active architecture source of truth for the SoT v5.5 Reality-MVP baseline and the place where current runtime contracts are defined.
@@ -13,7 +19,7 @@ This architecture focuses on the runtime and data model for the Mimer module (th
 Related documents and authority boundaries:
 - `docs/DESIGN_PRINCIPLES.md` defines the stable design rules for modularity, flexibility, authority separation, and documentation layering. Use it before changing architecture wording or roadmap framing.
 - `docs/HUMAN-FLOWS.md` is the user-facing behavior contract. Any architecture change that alters user-visible behavior should be validated against it before shipping.
-- `docs/ENVIRONMENTS.md` defines `dev` and `prod` as first-class environments, including environment invariants, allowed variance, persistence/runtime separation, and production safety expectations.
+- `docs/ENVIRONMENTS.md` defines the active `dev` / `test` / `prod` environment model, including environment invariants, allowed variance, persistence/runtime separation, and production safety expectations.
 - `docs/ONTOLOGY_RUNTIME_BRIDGE.md` is the cross-layer reading guide connecting human functions, semantic classes, persistence surfaces, and runtime contracts. It does not replace the owning SoT docs, but it should be used when architecture wording risks collapsing those layers.
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` defines the broader human-first second-brain ontology. This document uses narrower runtime and storage language where needed and should not be read as the full domain ontology.
 - `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` defines the normalized vocabulary and explains where repo terms such as `note`, `object`, `agent`, `source`, and `promotion` drift across layers.
@@ -190,7 +196,7 @@ See also:
 - DB outbox is canonical in runtime; JSONL outbox is audit/diagnostic only.
 
 ### Environment contract (current architecture reading)
-- `dev` and `prod` are first-class environments in the SoT. Their purpose, invariants, and allowed variance are defined in `docs/ENVIRONMENTS.md`.
+- `dev`, `test`, and `prod` are the active environment model in the SoT. Their purpose, invariants, and allowed variance are defined in `docs/ENVIRONMENTS.md`.
 - Environment changes may affect runtime topology, provider choice, diagnostics, fixture data, and tuning, but they MUST NOT change artifact semantics, event contracts, provenance rules, or write-safety boundaries.
 - Vault surface, companion/system surface, runtime stores, and operational artifacts must remain separable by environment even when the underlying architecture is otherwise shared.
 - Production runtime must prefer conservative behavior, explicit gating, and recoverable failure over convenience.
@@ -200,7 +206,7 @@ See also:
 - Shared scaffolding such as `AgentState`, LangGraph control patterns, common prompts, policies, and capabilities should provide the reusable foundation for those agents.
 - Tools/MCP: tools are actions an agent chooses from within its LangGraph or equivalent bounded control flow; they should not be hard-wired at the pipeline/Orchestrator level beyond routing envelopes.
 - Foundational capabilities such as ingestion, indexing, retrieval, reasoning support, and execution/governance support remain first-class even when they are not expressed as standalone agents.
-- Current adoption is phased: ASK and PanelAgent use LangGraph; most other agents remain deterministic pipelines until v5.6 rollout phases.
+- Current adoption is phased: ASK, PanelAgent, and Reviewer use LangGraph; most other agents remain deterministic pipelines until later v5.6 rollout phases.
 
 ## Agent Implementation Pattern (Current Direction)
 - Agents MUST preserve external event contracts and Outbox envelopes during migrations.

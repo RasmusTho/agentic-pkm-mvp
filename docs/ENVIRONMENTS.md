@@ -199,6 +199,8 @@ Contract:
 - verifies health/status
 - runs the scripted UAT flow successfully
 
+For detailed specification and step-by-step verification contract, see `docs/LOCAL_TEST_BOOTSTRAP/`.
+
 Operator note:
 - `make test-vault-init` is the narrow helper that prepares the clean test vault without starting the stack.
 - `test` is the current golden path for local verification and stabilization work.

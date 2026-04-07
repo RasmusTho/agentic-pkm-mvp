@@ -21,13 +21,15 @@ For non-trivial changes:
 
 Use the following practical breakdown model across docs, GitHub, and implementation:
 
-- Docs / SoT / plan docs define direction, constraints, and feature intent.
-- Feature / capability issues define the target outcome, child-slice map, verification path, and validation / acceptance path.
-- Slice / child issues define the bounded implementation steps that coding agents should pick up.
-- PRs should usually map to one slice / child issue, not to a vague roadmap heading.
-- Slice verification proves the implemented slice works at the intended layer.
-- Feature validation proves the overall feature works from the operator or product point of view, sometimes after merge.
-- Acceptance is the explicit decision to promote that feature into supported owner-doc truth.
+- **Docs / SoT / plan docs** define direction, constraints, and feature intent. Task specifications in plan docs (such as `docs/LOCAL_TEST_BOOTSTRAP/`) function as system-specification documents that capture one feature intent but spawn multiple implementation issues (one-to-many mapping).
+- **Feature / capability issues** define the target outcome, child-slice map, verification path, and validation / acceptance path.
+- **Slice / child issues** define the bounded implementation steps that coding agents should pick up.
+- **PRs** should usually map to one slice / child issue, not to a vague roadmap heading.
+- **Slice verification** proves the implemented slice works at the intended layer.
+- **Feature validation** proves the overall feature works from the operator or product point of view, sometimes after merge.
+- **Acceptance** is the explicit decision to promote that feature into supported owner-doc truth.
+
+Example: The local test bootstrap path is documented as a single system-specification contract in `docs/LOCAL_TEST_BOOTSTRAP/` (one specification), but implementation may span multiple feature and child issues (multiple implementation tasks), each proving one slice of the complete flow.
 
 Interpretation rule:
 - slices may be done at merge while the parent feature remains open
@@ -118,6 +120,7 @@ Use this lane only when:
   - `.github/pull_request_template.md`
   - `.github/workflows/issue-pr-governance.yml`
   - `scripts/docs_guard.py`
+  - `tests/architecture/test_agent_skill_entrypoints.py`
 - the PR is limited to repo governance, agent workflow, or lightweight enforcement
 - the PR does not change product/runtime implementation or shipped feature behavior
 

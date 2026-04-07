@@ -59,6 +59,8 @@ def test_uat_run_cli_end_to_end(tmp_path: Path) -> None:
     assert summary_path.exists()
     report_path = tmp_path / DEFAULT_TARGET_SUBDIR / DEFAULT_FOLDER_NAME / ".agentic-pkm" / "uat_report.json"
     assert report_path.exists()
+    assert "ASSERTIONS_PASSED=" in run_result.output
+    assert "IDEMPOTENT=true" in run_result.output
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
     checks = report.get("checks") or {}
@@ -155,5 +157,7 @@ def test_uat_run_cli_supports_converged_rerun_assertions(tmp_path: Path) -> None
     assert second_run.exit_code == 0, second_run.output
     assert "promote_intents=0" in second_run.output
     assert "applied=0" in second_run.output
+    assert "ASSERTIONS_PASSED=" in second_run.output
+    assert "IDEMPOTENT=true" in second_run.output
 
     object_store_module._MEMORY_STORE.clear()

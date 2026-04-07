@@ -1,6 +1,12 @@
 State: SoT v5.5 Reality-MVP baseline locked. This is the top-level operations entrypoint for the current runtime.
 Doc role: Core SoT
 Authority: Top-level operator guidance for the current runtime; delegates specialized operational detail to linked companion docs but remains the main operational entrypoint.
+Owner: Runtime / operator playbook
+Temporal class: operational
+Review cadence: event-driven
+Source of truth: mixed
+Last reviewed: 2026-04-07
+Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, app/cli/__init__.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #272/#346/#349, GitHub Issue #334, current repo state on 2026-04-07
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -85,6 +91,7 @@ Operational intent:
 - `dev` remains the flexible local environment for exploration and debugging
 - `test` is the isolated verification environment that should be resettable and reproducible
 - the bootstrap path is itself part of the productized verification contract, not just setup glue
+- startup and scripted UAT/idempotence slices are shipped, but the deterministic `make verify-runtime` contract remains tracked by `#334`, so treat the path as a supported stabilization lane rather than a fully closed acceptance receipt
 
 Use `docs/runbooks/UAT_PANEL_WATCHER.md` for the detailed walkthrough and `docs/runbooks/RUNBOOK_RESET_TO_ZERO.md` when you need the full reset semantics.
 
