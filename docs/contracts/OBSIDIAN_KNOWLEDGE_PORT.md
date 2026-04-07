@@ -17,6 +17,7 @@ This contract follows:
 - Production/server posture: Obsidian Desktop + CLI are required.
 - Fallback is not implicit. It is explicitly policy-controlled.
 - Startup must fail fast when strict mode is enabled and Obsidian dependencies are not healthy.
+- The bootstrap script and runtime health gate must agree on strict-vs-nonstrict behavior; a strict startup setting is not a warning-only mode.
 
 ## Interface surface (domain-level)
 - `read_note(locator)`
