@@ -152,7 +152,19 @@ class MockPlanExecutor(PlanExecutor):
                 f"{agent_name} has no registered handler",
                 error_type="not_implemented",
             )
-        response = handler(request)
+        try:
+            response = handler(request)
+        except Exception as exc:
+            error = new_error(
+                sender="orchestrator.runtime",
+                recipient=agent_name,
+                error_type="handler_error",
+                error_message=str(exc),
+                correlation_id=str(request.id),
+                trace_id=context.trace_id,
+            )
+            emit_agent_error_event(error, object_id=context.object_id)
+            raise StepExecutionError(str(exc), error_type="handler_error") from exc
         emit_agent_response_event(response, object_id=context.object_id)
         return {
             "agent": agent_name,
