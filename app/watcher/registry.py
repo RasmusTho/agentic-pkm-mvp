@@ -26,6 +26,7 @@ from app.settings.panel_actions import PanelActionMapping, load_panel_action_map
 from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_value
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
 from app.vault.layout import load_layout
+from app.watcher.events import emit_watcher_run_event
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
 from app.watcher.state import WatcherState
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -243,9 +244,44 @@ def _finalize_spec_tick(
     summary.setdefault("chosen_sleep_seconds", state.dynamic_sleep_seconds or cfg.tick_sleep_seconds)
     try:
         _log_tick_diagnostics_registry(cfg, summary, scan_root, watcher_name)
+        _emit_registry_watcher_run_event(cfg, summary, watcher_name)
     finally:
         state.save(_state_path(cfg.state_dir, watcher_name))
     return summary
+
+
+def _emit_registry_watcher_run_event(
+    cfg: RegistryConfig,
+    summary: dict[str, object],
+    watcher_name: str,
+) -> None:
+    """Emit a watcher.run event to the outbox so `status` can count registry watcher ticks."""
+    try:
+        run_summary = {
+            "changed": summary.get("changed_in_tick", 0),
+            "ingest_attempted": summary.get("ingest_attempted", 0),
+            "ingested": summary.get("ingested", 0),
+            "panel_candidates": summary.get("panel_candidates", 0),
+            "panel_runs": summary.get("panel_runs_in_tick", 0),
+            "panel_promotions": 0,
+            "panel_skipped_policy": summary.get("panel_skipped_policy", 0),
+            "panel_skipped_limit": 0,
+            "panel_skipped_auto_exec": summary.get("panel_skipped_auto_exec", 0),
+            "errors": summary.get("errors_in_tick", 0),
+            "dry_run": False,
+            "limit_exceeded": bool(summary.get("stop_tripped")),
+            "snapshot_path": "",
+            "vault_root": str(cfg.vault_path),
+        }
+        emit_watcher_run_event(
+            run_summary,
+            vault_root=cfg.vault_path,
+            snapshot_path=None,
+            outbox_path=cfg.outbox_path,
+            trigger=f"registry:{watcher_name}",
+        )
+    except Exception:
+        pass
 
 
 def _write_jsonl_event(event: OutboxEvent, outbox_path: Path) -> None:
