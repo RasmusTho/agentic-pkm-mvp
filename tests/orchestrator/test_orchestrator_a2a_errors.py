@@ -90,3 +90,27 @@ def test_permission_check_runs_before_handler(monkeypatch: pytest.MonkeyPatch) -
     results = orchestrator.run_plan(plan)
     assert results[0]["status"] == "error"
     assert results[0].get("error_type") == "agent_permission"
+
+
+def test_handler_exception_emits_error_event_and_fails_step() -> None:
+    """Handler raising an exception must emit agent.error.created and surface as a failed step."""
+    def _raising_handler(request: AgentRequest) -> AgentResponse:
+        raise RuntimeError("handler crashed")
+
+    plan = _plan_with_agent("review-agent")
+    executor = MockPlanExecutor(handlers={"review-agent": _raising_handler})
+    orchestrator = Orchestrator(executor=executor)
+    before = _audit_ring_snapshot()
+    results = orchestrator.run_plan(plan)
+    after = _audit_ring_snapshot()
+    new_events = [evt for evt in after if evt not in before]
+
+    assert results[0]["status"] == "error"
+    assert results[0].get("error_type") == "handler_error"
+    assert any(evt["event_type"] == AGENT_REQUEST_CREATED for evt in new_events)
+    assert any(
+        evt["event_type"] == AGENT_ERROR_CREATED
+        and evt["payload"].get("details", {}).get("error_type") == "handler_error"
+        for evt in new_events
+    )
+    assert not any(evt["event_type"] == AGENT_RESPONSE_CREATED for evt in new_events)
