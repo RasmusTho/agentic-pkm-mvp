@@ -460,3 +460,124 @@ def test_runtime_writeback_idempotent_on_rerun(tmp_path: Path, monkeypatch: pyte
     # Count promote events — there should be exactly one from the first run.
     promote_events = [r for r in second_outbox if r.get("event") == "promote.intent.created"]
     assert len(promote_events) == 1
+
+
+def test_runtime_writeback_proposed_actions_as_unchecked_suggestions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Proposed (unchecked) actions must be written back as unchecked checkbox suggestions."""
+    note_uuid = str(uuid4())
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    settings_path = _settings_file(
+        tmp_path,
+        action_id="promote.evergreen",
+        label="Make this note evergreen",
+        intent_type="promotion",
+        downstream_event="review.promote.evergreen",
+    )
+    # Freeform panel (no checkbox actions) to trigger proposal discovery.
+    markdown = (
+        "---\n"
+        f"uuid: {note_uuid}\n"
+        "---\n"
+        "# Test Note\n"
+        "\n"
+        "%% AI:Start %%\n"
+        "## AI-instruktion\n"
+        "Make this note evergreen\n"
+        "%% AI:End %%\n"
+    )
+    vault_dir = tmp_path / "vault"
+    vault_dir.mkdir()
+    note_file = vault_dir / "test-note.md"
+    note_file.write_text(markdown, encoding="utf-8")
+
+    _seed_note(note_uuid, markdown, source_ref=str(note_file))
+
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("VAULT_ROOT", str(vault_dir))
+    monkeypatch.setenv("PANEL_AGENT_DECIDER", "llm")
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+    monkeypatch.setattr(
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": [{"id": "promote.evergreen"}]}),
+    )
+
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-proposal", trigger="watcher")
+    assert len(events) == 1
+
+    result = execute_panel_intent(events[0], outbox_path=outbox_path)
+    assert isinstance(result, PanelRuntimeResult)
+
+    # Verify the vault file was updated with proposed action as unchecked checkbox.
+    updated = note_file.read_text(encoding="utf-8")
+
+    # Proposed action should appear as unchecked checkbox.
+    assert "- [ ] Make this note evergreen" in updated
+
+    # Promotion event should be emitted (proposal passed validation).
+    records = _read_outbox(outbox_path)
+    topics = {rec["event"] for rec in records}
+    assert "promote.intent.created" in topics
+
+
+def test_runtime_writeback_proposes_idempotent_on_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-running a panel with proposals must not duplicate proposed checkboxes."""
+    note_uuid = str(uuid4())
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    settings_path = _settings_file(
+        tmp_path,
+        action_id="promote.evergreen",
+        label="Make this note evergreen",
+        intent_type="promotion",
+        downstream_event="review.promote.evergreen",
+    )
+    markdown = (
+        "---\n"
+        f"uuid: {note_uuid}\n"
+        "---\n"
+        "# Test Note\n"
+        "\n"
+        "%% AI:Start %%\n"
+        "## AI-instruktion\n"
+        "Make this note evergreen\n"
+        "%% AI:End %%\n"
+    )
+    vault_dir = tmp_path / "vault"
+    vault_dir.mkdir()
+    note_file = vault_dir / "test-note.md"
+    note_file.write_text(markdown, encoding="utf-8")
+
+    _seed_note(note_uuid, markdown, source_ref=str(note_file))
+
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("VAULT_ROOT", str(vault_dir))
+    monkeypatch.setenv("PANEL_AGENT_DECIDER", "llm")
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+    monkeypatch.setattr(
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": [{"id": "promote.evergreen"}]}),
+    )
+
+    # First run: should write proposal.
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-proposal-idem-1", trigger="watcher")
+    execute_panel_intent(events[0], outbox_path=outbox_path)
+    after_first = note_file.read_text(encoding="utf-8")
+
+    # Verify proposal was written.
+    assert "- [ ] Make this note evergreen" in after_first
+
+    # Re-seed note with updated text.
+    _seed_note(note_uuid, after_first, source_ref=str(note_file))
+
+    # Second run: should not duplicate proposal.
+    events2 = run_panel_intent_for_note(note_uuid, trace_id="trace-proposal-idem-2", trigger="watcher")
+    execute_panel_intent(events2[0], outbox_path=outbox_path)
+    after_second = note_file.read_text(encoding="utf-8")
+
+    # File should not change on second run (proposal already written).
+    assert after_first == after_second
+
+    # Count proposals — there should be exactly one.
+    proposal_count = after_second.count("- [ ] Make this note evergreen")
+    assert proposal_count == 1

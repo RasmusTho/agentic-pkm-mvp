@@ -42,7 +42,7 @@ Interpretation note:
 - Surface uncertain or no-checkbox interpretations as suggested unchecked checkboxes instead of direct execution so panel ambiguity stays human-reviewable until explicit confirmation. Delivery receipt: Issue #242 delivered in current runtime behavior; follow-up wording reconciliation tracked by #291. Source Anchor: PA2-SUGGESTED-CHECKBOXES.
 - Delivery receipt: Issue #240 accepted after a real-vault Alpha soak on 2026-04-08. Evidence came from the live server runtime on the Alpha vault: `settings-explain --json`, `status`, `/api/health`, `/api/status`, and `scripts.alpha_e2e` all agreed on the same runtime, and the soak produced a promotion-intent event on the Alpha runtime note. Source Anchor: PA2-REAL-VAULT-ACCEPTANCE. Tracked by: #240
 - Emit ordered multi-step panel plans through the planner/orchestration contract rather than investing in richer LangGraph-only node choreography. Delivery receipt: Issue #243 delivered via PR #302. Source Anchor: PA2-MULTISTEP-PLANS.
-- Broader PanelAgent expansion is deferred until the real-vault acceptance slice closes. Treat any new behavior beyond the current slices as a separately scoped follow-up and break it into smaller issues before implementation.
+- Broader PanelAgent expansion remains bounded beyond the current shipped slices. Treat any new behavior beyond the current slices as a separately scoped follow-up and break it into smaller issues before implementation.
 
 Other implementation notes:
 - Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `app/agents/panel_agent/graph.py`).

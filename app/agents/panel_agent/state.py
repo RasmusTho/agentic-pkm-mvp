@@ -37,6 +37,7 @@ class PanelAgentState(BaseModel):
     note_content: str | None = None
     panel_hints: List[dict[str, Any]] = Field(default_factory=list)
     executed_action_ids: List[str] = Field(default_factory=list)
+    proposed_action_ids: List[str] = Field(default_factory=list)
     vault_root: Path | None = None
 
     # Runtime-populated fields

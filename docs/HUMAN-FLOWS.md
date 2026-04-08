@@ -1,6 +1,12 @@
 State: SoT v5.5 Reality-MVP baseline locked with v5.6 forward line extending PanelAgent runtime and registry watcher behavior.
 Doc role: Core SoT
 Authority: Canonical user-facing function contract for the system; architecture and implementation changes should remain compatible with this document unless it is updated intentionally.
+Owner: Product / human-function SoT
+Temporal class: strategic
+Review cadence: event-driven
+Source of truth: mixed
+Last reviewed: 2026-04-08
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/PANEL_AGENT.md, current repo state on 2026-04-08
 
 # Human Flows — Yggdrasil / agentic-pkm-mvp
 

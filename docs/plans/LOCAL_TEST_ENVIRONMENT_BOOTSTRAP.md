@@ -1,12 +1,12 @@
-State: Local test bootstrap plan with steps 1-3 and 5 shipped; deterministic runtime verification remains open as the active stabilization slice.
+State: Local test bootstrap plan with steps 1-3 and 5 shipped; deterministic runtime verification remains open as the active stabilization slice. Automated latency harness available for multi-device sync validation.
 Doc role: Plan
 Authority: Canonical plan for the scripted local test bootstrap chain; step specs and current-state SoT docs win on implementation detail and shipped runtime claims.
 Owner: Runtime / local test bootstrap stabilization
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-07
-Last verified against: docs/TESTING.md, docs/ENVIRONMENTS.md, Makefile, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, app/cli/uat.py, merged PRs #340/#346/#348/#349, GitHub Issue #334, current repo + GitHub delivery state on 2026-04-07
+Last reviewed: 2026-04-08
+Last verified against: docs/TESTING.md, docs/ENVIRONMENTS.md, Makefile, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, app/cli/uat.py, app/cli/latency_harness.py, tests/cli/test_latency_harness.py, merged PRs #340/#346/#348/#349/#367, GitHub Issues #334/#357/#358, current repo + GitHub delivery state on 2026-04-08
 
 # Local Test Environment Bootstrap
 

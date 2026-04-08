@@ -6,16 +6,17 @@ import time
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, MutableMapping, Protocol
+from typing import Any, Callable, Dict, Iterable, Mapping, MutableMapping, Protocol
 
-from app.a2a.events import emit_agent_error_event, send_agent_request
-from app.a2a.schema import new_error
-from app.agents.base.loop import Agent
+from app.a2a.events import emit_agent_error_event, emit_agent_response_event, send_agent_request
+from app.a2a.schema import AgentRequest, AgentResponse, new_error, new_response
 from app.domain.state_axes import normalize_promotion_payload
 from app.mcp.vault_tools import VaultToolError, append_note
-from app.orchestrator.agents import AgentPermissionError, resolve_agent_config, validate_agent_permissions
+from app.orchestrator.agents import AgentPermissionError, _normalize_agent_target, resolve_agent_config, validate_agent_permissions
 from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
 from app.planner.tools import get_tool_descriptor
+
+AgentHandler = Callable[[AgentRequest], AgentResponse]
 from app.policy.enforce import assert_tool_allowed, is_policy_enforced
 from app.quality import timeout_wrapper
 from app.outbox.events import INDEX_OUTBOX_PATH
@@ -94,8 +95,12 @@ class MockPlanExecutor(PlanExecutor):
         "object": (dict,),
     }
 
-    def __init__(self) -> None:
-        self._default_agent = Agent()
+    def __init__(self, handlers: Dict[str, AgentHandler] | None = None) -> None:
+        self._handlers: Dict[str, AgentHandler] = dict(handlers or {})
+
+    def register_handler(self, agent_name: str, handler: AgentHandler) -> None:
+        """Register an in-process handler for a supported agent recipient."""
+        self._handlers[_normalize_agent_target(agent_name)] = handler
 
     def execute_step(self, step: PlanStep, context: StepContext) -> Dict[str, Any]:
         if step.kind == "agent_call":
@@ -131,18 +136,41 @@ class MockPlanExecutor(PlanExecutor):
             trace_id=context.trace_id,
             object_id=context.object_id,
         )
-        response = self._default_agent.handle_agent_request(request)
-        if response is None:
+        normalized = _normalize_agent_target(agent_name)
+        handler = self._handlers.get(normalized) or self._handlers.get(agent_name)
+        if handler is None:
             error = new_error(
                 sender="orchestrator.runtime",
                 recipient=agent_name,
                 error_type="not_implemented",
-                error_message=f"{agent_name} cannot handle A2A messages.",
+                error_message=f"{agent_name} has no registered handler.",
                 correlation_id=str(request.id),
                 trace_id=context.trace_id,
             )
             emit_agent_error_event(error, object_id=context.object_id)
-        return {"agent": agent_name, "request_id": str(request.id)}
+            raise StepExecutionError(
+                f"{agent_name} has no registered handler",
+                error_type="not_implemented",
+            )
+        try:
+            response = handler(request)
+        except Exception as exc:
+            error = new_error(
+                sender="orchestrator.runtime",
+                recipient=agent_name,
+                error_type="handler_error",
+                error_message=str(exc),
+                correlation_id=str(request.id),
+                trace_id=context.trace_id,
+            )
+            emit_agent_error_event(error, object_id=context.object_id)
+            raise StepExecutionError(str(exc), error_type="handler_error") from exc
+        emit_agent_response_event(response, object_id=context.object_id)
+        return {
+            "agent": agent_name,
+            "request_id": str(request.id),
+            "response": response.model_dump(mode="json"),
+        }
 
     def _execute_tool_call(self, step: PlanStep, context: StepContext) -> Dict[str, Any]:
         if not step.tool:
@@ -332,4 +360,4 @@ def _run_promotion_intent(args: Mapping[str, Any], context: StepContext) -> Dict
     return {"status": "ok", "event": promote_event.model_dump(mode="json")}
 
 
-__all__ = ["PlanExecutor", "StepContext", "StepExecutionError", "MockPlanExecutor"]
+__all__ = ["AgentHandler", "PlanExecutor", "StepContext", "StepExecutionError", "MockPlanExecutor"]

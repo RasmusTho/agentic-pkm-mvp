@@ -72,6 +72,8 @@ PANEL_SCAN_REQUESTED = "panel.scan.requested"
 
 WATCHER_RUN = "watcher.run"
 
+SYNC_LATENCY_SUMMARY = "sync.latency.summary"
+
 ASK_QUERY_RECEIVED = "ask.query.received"
 JOBS_BACKFILL_DONE = "jobs.backfill.done"
 RELATION_MISSING = "relation.missing"
@@ -139,6 +141,7 @@ __all__ = [
     "PANEL_LOG_CREATED",
     "PANEL_SCAN_REQUESTED",
     "WATCHER_RUN",
+    "SYNC_LATENCY_SUMMARY",
     "ASK_QUERY_RECEIVED",
     "JOBS_BACKFILL_DONE",
     "RELATION_MISSING",
