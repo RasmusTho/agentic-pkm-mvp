@@ -39,8 +39,8 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
     - Next slices: checkpoint persistence, retry/timeout policy.
   - PanelAgent 2.0 timeline: <!-- PA2-ROLLUP -->
     - v5.5C: decider — shipped (rule default + opt-in LLM mode + fallback + telemetry).
-    - v5.6 shipped/in progress: engine-neutral cognition seam (#244, PR #249), freeform catalog-driven proposal path (#241, PR #248), suggested checkbox writeback for uncertain/freeform panel proposals (#242), multi-step plans (#243, PR #302). Remaining: real-vault acceptance (#240).
-    - Broader expansion beyond the current PanelAgent 2.0 slices is deferred until the real-vault acceptance slice is closed and the operator story is stable. Keep new work bounded and break it down from the owner docs / tracks before expanding scope.
+    - v5.6 shipped/accepted: engine-neutral cognition seam (#244, PR #249), freeform catalog-driven proposal path (#241, PR #248), suggested checkbox writeback for uncertain/freeform panel proposals (#242), multi-step plans (#243, PR #302), and real-vault acceptance (#240) now have a delivery receipt on the Alpha vault.
+    - Broader expansion beyond the current PanelAgent 2.0 slices remains bounded; keep new work broken down from the owner docs / tracks before widening scope.
     - v5.7: advanced (panel versioning, cross-note coordination) remains future-line work and should stay in roadmap form until a governing slice issue exists.
   - Vault-as-GUI settings compiler (`@Settings` / System/Config) now covers panel-action catalogs, watcher settings, and outbox paths with CI schema checks (v5.6 track).
   - LangGraph rollout to additional agents (Promotion/Reviewer/Hygiene) in phases:
@@ -50,7 +50,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - A2A/MCP orchestration routing with deterministic adapters and audit.
 - **Later**
   - Watcher auto-exec of panel plans with guardrails and rollback; richer panel actions (summary/reply) via tool/MCP boundary.
-  - PanelAgent 2.0 expansion beyond the current slices is deferred until real-vault acceptance is closed; break new behavior into smaller tracked slices first.
+  - PanelAgent 2.0 expansion beyond the current slices remains bounded even after real-vault acceptance; break new behavior into smaller tracked slices first.
   - Reasoning/reflective layers with eval gates; expanded observability counters for orchestration/A2A.
   - Collaboration/multi-user after single-user flows are stable.
   - `v6.0` architecture target: semantics-aligned runtime architecture where context layering,
