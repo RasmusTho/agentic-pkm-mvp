@@ -44,6 +44,7 @@ from app.cli.uat import (
     run_vault_test_flow,
     seed_vault_test_notes,
 )
+from app.cli.latency_harness import run_latency_harness
 from app.stores import get_object_store, get_vector_index, resolve_store_backend
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
@@ -1328,6 +1329,85 @@ def uat_run_vault_test(
     if summary.watcher.get("errors", 0) or summary.promotion.get("errors", 0):
         raise SystemExit(1)
 
+
+@cli.command(
+    name="sync-latency-harness",
+    help="Run automated multi-device sync latency measurements on seeded test vault.",
+)
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Vault root path; watcher scope will be <vault_root>/<target-subdir>.",
+)
+@click.option(
+    "--target-subdir",
+    type=str,
+    default=DEFAULT_TARGET_SUBDIR,
+    show_default=True,
+    help="Subdirectory under vault root to watch (default Test).",
+)
+@click.option(
+    "--folder",
+    type=str,
+    default=DEFAULT_FOLDER_NAME,
+    show_default=True,
+    help="Folder name containing test notes for latency measurement.",
+)
+@click.option(
+    "--scenario",
+    type=str,
+    default="changed-note-default",
+    show_default=True,
+    help="Name of the latency measurement scenario.",
+)
+@click.option(
+    "--report",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional path to write machine-readable JSON report.",
+)
+@click.option("--dry-run", is_flag=True, help="Skip watcher/panel execution, report only.")
+def sync_latency_harness(
+    vault_root: Path,
+    target_subdir: str,
+    folder: str,
+    scenario: str,
+    report: Path | None,
+    dry_run: bool,
+) -> None:
+    """Run automated multi-device sync latency measurements.
+
+    The harness seeds or targets a bounded changed-note scenario, waits for
+    the sync/runtime chain to converge, and collects machine-readable timing
+    outputs. Suitable for repeated trials and latency analysis.
+    """
+    resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=False)
+    if resolved is None:
+        raise click.BadParameter("Vault root could not be resolved.")
+
+    try:
+        summary = run_latency_harness(
+            vault_root=resolved,
+            target_subdir=target_subdir,
+            folder=folder,
+            scenario=scenario,
+            report_path=report,
+            dry_run=dry_run,
+        )
+    except FileNotFoundError as exc:
+        raise click.BadParameter(str(exc))
+
+    for line in summary.to_lines():
+        click.echo(line)
+
+    if report:
+        click.echo(f"Report written to: {report}")
+
+    if not summary.latency_results:
+        click.echo("WARNING: No latency measurements captured. Verify notes were changed and events were emitted.")
+        if not dry_run:
+            raise SystemExit(1)
 
 
 @cli.command(
