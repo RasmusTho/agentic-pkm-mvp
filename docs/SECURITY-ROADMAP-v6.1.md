@@ -1,3 +1,13 @@
+State: Point-in-time security remediation roadmap for the current dependency-alert set captured on 2026-04-07.
+Doc role: Plan
+Authority: Tactical dependency-vulnerability prioritization for the v6.1/v6.2 security follow-up; subordinate to current SoT docs for shipped runtime behavior.
+Owner: Security / dependency maintenance
+Temporal class: snapshot
+Review cadence: ad hoc
+Source of truth: external source
+Last reviewed: 2026-04-08
+Last verified against: Dependabot alert snapshot summarized on 2026-04-07
+
 # Security Vulnerabilities Roadmap - v6.1
 
 **Date:** 2026-04-07  
