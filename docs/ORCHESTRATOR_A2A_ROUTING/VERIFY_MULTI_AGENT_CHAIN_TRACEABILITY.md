@@ -11,7 +11,7 @@ depends_on:
 can_parallelize_with: []
 ---
 
-State: Specification ready.
+State: Delivered.
 
 # Verify Multi-Agent Chain Traceability
 
@@ -31,7 +31,7 @@ Lock the routed A2A capability into the repo with integration coverage that prov
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
   tests/orchestrator/test_orchestrator_runs_steps.py \
-  tests/orchestrator/test_pipeline_executes_plan.py \
+  tests/orchestrator/test_multi_step_chain_traceability.py \
   tests/orchestration/v2/test_orchestrator_integration.py -m "not pg"
 
 # Expected proof after delivery:
@@ -46,18 +46,18 @@ The capability is not actually delivered when only the single-step happy path wo
 
 ## Acceptance Criteria
 
-- [ ] Multi-step plan coverage proves trace continuity across routed `agent_call` execution.
-- [ ] The current V1 orchestrator path is covered by focused integration tests.
-- [ ] Flagged V2 coverage is updated where the shared executor path exercises routed `agent_call` steps.
+- [x] Multi-step plan coverage proves trace continuity across routed `agent_call` execution.
+- [x] The current V1 orchestrator path is covered by focused integration tests.
+- [x] Flagged V2 coverage is updated where the shared executor path exercises routed `agent_call` steps.
 - [ ] The parent feature issue contains one explicit validation receipt summarizing the proven surfaces and remaining limits.
-- [ ] Owner docs are not promoted until this validation evidence exists.
+- [x] Owner docs are not promoted until this validation evidence exists.
 
 ## How to Verify (Pre-Merge)
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
   tests/orchestrator/test_orchestrator_runs_steps.py \
-  tests/orchestrator/test_pipeline_executes_plan.py \
+  tests/orchestrator/test_multi_step_chain_traceability.py \
   tests/orchestration/v2/test_orchestrator_integration.py -m "not pg"
 
 rg -n "trace_id|agent.request.created|agent.response.created|agent.error.created|orchestrator.v2" tests/orchestrator tests/orchestration/v2 app/orchestrator
