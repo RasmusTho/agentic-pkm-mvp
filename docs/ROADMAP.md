@@ -5,8 +5,8 @@ Owner: Product / architecture forward line
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
-Last reviewed: 2026-04-08
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, merged PRs #365/#376, current repo state on 2026-04-08
+Last reviewed: 2026-04-09
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, merged PRs #365/#376, current repo state on 2026-04-09
 # Roadmap — Strategic Control
 
 This roadmap is forward-looking and skimmable. History lives in `docs/history/SOT_4X_HISTORY.md`; deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
