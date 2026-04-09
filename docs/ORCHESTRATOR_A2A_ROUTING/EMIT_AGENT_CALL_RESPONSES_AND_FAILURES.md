@@ -9,9 +9,11 @@ depends_on: [ROUTE_AGENT_CALLS_THROUGH_REGISTERED_HANDLERS.md]
 can_parallelize_with: []
 ---
 
-State: Specification ready.
+State: Delivered (issue #361, PR #377).
 
 # Emit Agent Call Responses And Failures
+
+Delivery receipt: Issue #361, PR #377.
 
 ## Purpose
 
@@ -46,11 +48,11 @@ Without response and failure receipts, the orchestrator cannot prove what happen
 
 ## Acceptance Criteria
 
-- [ ] Successful routed calls emit `agent.response.created` with the expected status/result shape.
-- [ ] Routed failures emit `agent.error.created` with stable `error_type` semantics for the current contract.
-- [ ] `trace_id` and correlation data are preserved across the emitted receipt sequence.
-- [ ] Step outputs or surfaced execution errors stay aligned with the emitted A2A receipt.
-- [ ] Focused tests cover both success and failure receipt paths.
+- [x] Successful routed calls emit `agent.response.created` with the expected status/result shape.
+- [x] Routed failures emit `agent.error.created` with stable `error_type` semantics for the current contract.
+- [x] `trace_id` and correlation data are preserved across the emitted receipt sequence.
+- [x] Step outputs or surfaced execution errors stay aligned with the emitted A2A receipt.
+- [x] Focused tests cover both success and failure receipt paths.
 
 ## How to Verify (Pre-Merge)
 
@@ -78,4 +80,4 @@ rg -n "emit_agent_response_event|emit_agent_error_event|trace_id|correlation_id"
 ## Related GitHub Issues
 
 - Feature issue: `#359`
-- Implementation task issue: `#361`
+- Implementation task issue: `#361` (delivered via PR #377)
