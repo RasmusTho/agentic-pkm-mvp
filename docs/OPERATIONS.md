@@ -5,8 +5,8 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-09
-Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/runbooks/UAT_PANEL_WATCHER.md, app/cli/__init__.py, app/cli/latency_harness.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #272/#346/#349/#365/#376, current repo state on 2026-04-09
+Last reviewed: 2026-04-10
+Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/runbooks/UAT_PANEL_WATCHER.md, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/watcher/registry.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #272/#346/#349/#365/#376/#382, current repo state on 2026-04-10
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -54,7 +54,7 @@ Operator rule:
 - if a task touches the real vault, production stores, or normal runtime startup/verification surfaces, treat it as `prod`
 
 Current runtime path:
-1. The registry watcher scans the vault and emits DB outbox events.
+1. The registry watcher scans the vault, emits DB outbox events, and appends `watcher.run` audit rows so status can count runtime ticks.
 2. The worker consumes DB outbox rows and performs ingest/index, panel scan, and promotion work.
 3. Health, status, and metrics confirm whether that path is healthy.
 
@@ -196,7 +196,7 @@ Companion docs:
 - Postgres data lives in the `postgres-data` volume; `docker compose down -v` wipes it.
 - The API container runs `scripts/start_api.sh` (migrations + `uvicorn`).
 - The worker runs `python -m app.workers.outbox_worker` (consumes DB outbox).
-- The watcher runs `python -m app.cli watcher run` (registry loop; emits `ingest.vault.changed` or `panel.scan.requested` to outbox only).
+- The watcher runs `python -m app.cli watcher run` (registry loop; emits `ingest.vault.changed` / `panel.scan.requested` DB outbox events and appends `watcher.run` audit rows to the JSONL event log).
 - Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.
 - `scripts/start_full_system.sh` is the supported startup wrapper. It now auto-probes Ollama reachability from inside the containerized runtime and persists the selected Docker-reachable endpoint into `tmp/runtime.env` before declaring startup healthy.
 - When `LLM_PROVIDER=ollama`, startup tries the configured endpoint first, then Docker-safe candidates such as `host.docker.internal`, before failing the run.
