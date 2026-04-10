@@ -11,7 +11,7 @@ related_docs:
   - docs/development/DEV_WORKFLOW.md
 ---
 
-State: Task 1 delivered (issue #360). Tasks 2 and 3 in backlog.
+State: Tasks 1 and 2 delivered (issues #360, #361). Task 3 remains in backlog.
 
 # Orchestrator A2A Routing Specification
 
@@ -50,7 +50,7 @@ plan step (agent_call)
 1. **[ROUTE_AGENT_CALLS_THROUGH_REGISTERED_HANDLERS.md](ROUTE_AGENT_CALLS_THROUGH_REGISTERED_HANDLERS.md)** ✓ Delivered (issue #360)
    Replace the universal `not_implemented` fallback for supported targets with orchestrator-owned handler routing.
 
-2. **[EMIT_AGENT_CALL_RESPONSES_AND_FAILURES.md](EMIT_AGENT_CALL_RESPONSES_AND_FAILURES.md)**
+2. **[EMIT_AGENT_CALL_RESPONSES_AND_FAILURES.md](EMIT_AGENT_CALL_RESPONSES_AND_FAILURES.md)** ✓ Delivered (issue #361, PR #377)
    Emit complete success and failure receipts for routed calls, including timeout and handler-error surfaces.
 
 3. **[VERIFY_MULTI_AGENT_CHAIN_TRACEABILITY.md](VERIFY_MULTI_AGENT_CHAIN_TRACEABILITY.md)**
@@ -60,9 +60,9 @@ plan step (agent_call)
 
 The parent capability "Orchestrator-managed A2A routing" is accepted when:
 
-- [x] All 3 task specifications are delivered through bounded GitHub issues. (1/3 done)
+- [x] All 3 task specifications are represented by bounded GitHub issues. (#360 delivered, #361 delivered, #362 open)
 - [x] Supported `agent_call` steps no longer collapse into the generic `not_implemented` fallback. (delivered by #360)
-- [ ] Request, response, and error receipts preserve `trace_id` and correlation data through the orchestrator-owned routing path.
+- [x] Request, response, and error receipts preserve `trace_id` and correlation data through the orchestrator-owned routing path. (delivered by #361 / PR #377)
 - [ ] Multi-agent chain verification passes on the current orchestrator surfaces that execute `agent_call` steps, including flagged V2 where applicable.
 - [ ] Validation receipts are recorded on the parent feature issue before owner docs are promoted to claim the capability as supported.
 
@@ -80,11 +80,11 @@ Backlog receipts created from this specification:
 
 - Parent feature issue: `#359`
 - Task issue `#360`: `ROUTE_AGENT_CALLS_THROUGH_REGISTERED_HANDLERS` — delivered
-- Task issue `#361`: `EMIT_AGENT_CALL_RESPONSES_AND_FAILURES`
+- Task issue `#361`: `EMIT_AGENT_CALL_RESPONSES_AND_FAILURES` — delivered
 - Task issue `#362`: `VERIFY_MULTI_AGENT_CHAIN_TRACEABILITY`
 
 Keep the parent feature issue open as the live validation hub while the task issues are being delivered.
 
 ---
 
-Status: Task 1 delivered. Tasks 2 and 3 in backlog.
+Status: Tasks 1 and 2 delivered. Task 3 remains in backlog.

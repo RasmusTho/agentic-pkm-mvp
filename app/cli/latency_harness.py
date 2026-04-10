@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from queue import Empty
+from time import monotonic
 from typing import Any, Callable, Dict
 
 from app.events.outbox import read_outbox
@@ -225,22 +226,34 @@ def _run_watcher_tick_with_timeout(timeout_seconds: int, **kwargs: Any) -> tuple
     result_queue = ctx.Queue()
     proc = ctx.Process(target=_watcher_tick_worker, args=(result_queue, kwargs))
     proc.start()
-    proc.join(timeout_seconds)
+    deadline = monotonic() + timeout_seconds
+    result: tuple[str, Any] | None = None
 
-    if proc.is_alive():
-        proc.terminate()
-        proc.join(5)
-        raise LatencyHarnessTimeoutError(
-            f"Timed out after {timeout_seconds}s while waiting for watcher/panel convergence."
-        )
+    while monotonic() < deadline:
+        try:
+            result = result_queue.get(timeout=min(0.1, max(deadline - monotonic(), 0.01)))
+            break
+        except Empty:
+            if not proc.is_alive():
+                break
 
-    try:
-        status, payload = result_queue.get_nowait()
-    except Empty as exc:
-        raise RuntimeError(
-            f"Watcher tick exited without returning a result (exitcode={proc.exitcode})."
-        ) from exc
+    if result is None:
+        try:
+            result = result_queue.get_nowait()
+        except Empty:
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(5)
+                raise LatencyHarnessTimeoutError(
+                    f"Timed out after {timeout_seconds}s while waiting for watcher/panel convergence."
+                )
+            raise RuntimeError(
+                f"Watcher tick exited without returning a result (exitcode={proc.exitcode})."
+            ) from None
 
+    proc.join(5)
+
+    status, payload = result
     if status == "error":
         raise RuntimeError(str(payload))
     return payload

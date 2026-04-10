@@ -19,6 +19,7 @@ from app.cli.latency_harness import (
     _extract_sync_latency_events,
     _parse_latency_event,
     _compute_statistics,
+    _run_watcher_tick_with_timeout,
     run_latency_harness,
     LatencyHarnessTimeoutError,
 )
@@ -257,6 +258,61 @@ class TestLatencySummary:
 
 class TestLatencyHarnessExecution:
     """Test bounded execution and provider-free harness mode."""
+
+    def test_run_watcher_tick_with_timeout_drains_result_queue_before_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.exitcode = 0
+                self._alive = True
+
+            def start(self) -> None:
+                return None
+
+            def join(self, timeout: float | None = None) -> None:
+                return None
+
+            def is_alive(self) -> bool:
+                return self._alive
+
+            def terminate(self) -> None:
+                self._alive = False
+
+        class FakeQueue:
+            def __init__(self, proc: FakeProcess) -> None:
+                self.proc = proc
+                self._result = ("ok", ({"changed": 1}, ["watcher ok"]))
+
+            def get(self, timeout: float | None = None) -> tuple[str, tuple[Dict[str, Any], list[str]]]:
+                self.proc._alive = False
+                return self._result
+
+            def get_nowait(self) -> tuple[str, tuple[Dict[str, Any], list[str]]]:
+                return self.get()
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.proc = FakeProcess()
+
+            def Queue(self) -> FakeQueue:
+                return FakeQueue(self.proc)
+
+            def Process(self, target: Any, args: tuple[Any, ...]) -> FakeProcess:
+                return self.proc
+
+        fake_ctx = FakeContext()
+        monkeypatch.setattr("app.cli.latency_harness.mp.get_context", lambda method: fake_ctx)
+
+        watcher_summary, watcher_messages = _run_watcher_tick_with_timeout(
+            1,
+            vault_root=Path("/tmp/vault"),
+            snapshot_path=Path("/tmp/snapshot.json"),
+        )
+
+        assert watcher_summary == {"changed": 1}
+        assert watcher_messages == ["watcher ok"]
+        assert fake_ctx.proc.is_alive() is False
 
     def test_run_latency_harness_uses_provider_free_rule_mode(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
