@@ -13,17 +13,18 @@ The harness:
 from __future__ import annotations
 
 import json
+import multiprocessing as mp
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict
+from queue import Empty
+from typing import Any, Callable, Dict
 
 from app.events.outbox import read_outbox
-from app.events.sync import SyncLatencySummaryEvent
 from app.testing.runtime_contract import write_contract_report
-from app.watcher.vault_watcher import VaultWatcher, run_watcher_tick
 from app.promotion.consumer import consume_promotion_intents
+from app.watcher.vault_watcher import VaultWatcher, run_watcher_tick
 
 
 @dataclass
@@ -52,16 +53,29 @@ class LatencySummary:
     scenario: str
     latency_results: list[LatencyResult]
     transport: str = "test"  # Changed note source transport
+    execution_mode: str = "panel-rule"
+    measured_stages: list[str] | None = None
+    warnings: list[str] | None = None
     statistics: Dict[str, Any] | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to machine-readable JSON-compatible dict."""
         stats = self.statistics or {}
+        measured_stages = self.measured_stages or [
+            "file_detection",
+            "scan_requested",
+            "runtime_start",
+            "runtime_complete",
+        ]
+        warnings = self.warnings or []
         return {
             "run_id": self.run_id,
             "timestamp": self.timestamp,
             "scenario": self.scenario,
             "transport": self.transport,
+            "execution_mode": self.execution_mode,
+            "measured_stages": measured_stages,
+            "warnings": warnings,
             "latency_count": len(self.latency_results),
             "statistics": stats,
             "measurements": [
@@ -93,8 +107,16 @@ class LatencySummary:
             f"Timestamp: {self.timestamp}",
             f"Scenario: {self.scenario}",
             f"Transport: {self.transport}",
+            f"Execution mode: {self.execution_mode}",
             f"Latency measurements captured: {len(self.latency_results)}",
         ]
+
+        if self.measured_stages:
+            lines.append(f"Measured stages: {', '.join(self.measured_stages)}")
+
+        if self.warnings:
+            for warning in self.warnings:
+                lines.append(f"Warning: {warning}")
 
         if self.statistics:
             lines.append("")
@@ -152,6 +174,10 @@ def _parse_latency_event(event: Dict[str, Any]) -> LatencyResult | None:
         return None
 
 
+class LatencyHarnessTimeoutError(RuntimeError):
+    """Raised when the harness exceeds its bounded wall-clock budget."""
+
+
 def _compute_statistics(results: list[LatencyResult]) -> Dict[str, Any]:
     """Compute aggregate latency statistics from a list of results."""
     if not results:
@@ -179,6 +205,47 @@ def _compute_statistics(results: list[LatencyResult]) -> Dict[str, Any]:
     }
 
 
+def _watcher_tick_worker(
+    result_queue: Any,
+    kwargs: Dict[str, Any],
+) -> None:
+    """Execute one watcher tick in a child process so hung providers can be terminated."""
+    try:
+        result_queue.put(("ok", run_watcher_tick(**kwargs)))
+    except Exception as exc:  # pragma: no cover - exercised through parent surface
+        result_queue.put(("error", f"{exc.__class__.__name__}: {exc}"))
+
+
+def _run_watcher_tick_with_timeout(timeout_seconds: int, **kwargs: Any) -> tuple[Dict[str, Any], list[str]]:
+    """Run watcher tick in a subprocess with a bounded timeout."""
+    if timeout_seconds <= 0:
+        return run_watcher_tick(**kwargs)
+
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.Queue()
+    proc = ctx.Process(target=_watcher_tick_worker, args=(result_queue, kwargs))
+    proc.start()
+    proc.join(timeout_seconds)
+
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(5)
+        raise LatencyHarnessTimeoutError(
+            f"Timed out after {timeout_seconds}s while waiting for watcher/panel convergence."
+        )
+
+    try:
+        status, payload = result_queue.get_nowait()
+    except Empty as exc:
+        raise RuntimeError(
+            f"Watcher tick exited without returning a result (exitcode={proc.exitcode})."
+        ) from exc
+
+    if status == "error":
+        raise RuntimeError(str(payload))
+    return payload
+
+
 def run_latency_harness(
     *,
     vault_root: Path,
@@ -188,6 +255,9 @@ def run_latency_harness(
     outbox_path: Path | None = None,
     report_path: Path | None = None,
     dry_run: bool = False,
+    panel_decider: str = "rule",
+    timeout_seconds: int = 180,
+    progress: Callable[[str], None] | None = print,
 ) -> LatencySummary:
     """Run an automated latency harness against a changed-note scenario.
 
@@ -199,10 +269,17 @@ def run_latency_harness(
         outbox_path: Path to the event outbox (defaults to INDEX_OUTBOX_PATH)
         report_path: Optional path to write JSON report
         dry_run: If True, don't run the watcher/panel flow
+        panel_decider: Panel decider mode to use during the run
+        timeout_seconds: Bounded wall-clock timeout for the watcher/panel flow
+        progress: Optional callback for human-readable progress lines
 
     Returns:
         LatencySummary with all captured latency measurements
     """
+    if panel_decider not in {"rule", "llm"}:
+        raise ValueError(f"Unsupported panel decider mode: {panel_decider}")
+
+    emit_progress = progress or (lambda message: print(message, flush=True))
     resolved_root = vault_root.expanduser().resolve()
     scenario_path = resolved_root / target_subdir / folder
 
@@ -213,6 +290,8 @@ def run_latency_harness(
         outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH", "index-outbox.jsonl"))
 
     outbox_path = outbox_path.expanduser().resolve()
+    execution_mode = f"panel-{panel_decider}"
+    warnings: list[str] = []
 
     # Record the initial event count to find new latency events
     initial_events = read_outbox(outbox_path)
@@ -223,39 +302,82 @@ def run_latency_harness(
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
 
     original_scope = os.environ.get("WATCHER_SCOPE_GLOB")
+    original_decider = os.environ.get("PANEL_AGENT_DECIDER")
     os.environ["WATCHER_SCOPE_GLOB"] = f"{target_subdir}/{folder}/*.md,{target_subdir}/{folder}/**/*.md"
+    os.environ["PANEL_AGENT_DECIDER"] = panel_decider
 
     try:
+        emit_progress(f"Harness scenario path: {scenario_path}")
+        emit_progress(
+            f"Harness mode: panel_decider={panel_decider} timeout_seconds={timeout_seconds} dry_run={dry_run}"
+        )
         if not dry_run:
-            # Run watcher with panel execution to generate sync.latency.summary events
-            watcher_summary, watcher_messages = run_watcher_tick(
-                vault_root=resolved_root,
-                snapshot_path=snapshot_path,
-                skip_panel=False,  # Enable panel to generate latency events
-                emit_only=False,
-                dry_run=False,
-                max_notes=50,
-                force=True,  # Force re-evaluation to capture latency
-                outbox_path=outbox_path,
+            emit_progress("Starting watcher tick for latency capture...")
+            try:
+                watcher_summary, watcher_messages = _run_watcher_tick_with_timeout(
+                    timeout_seconds,
+                    vault_root=resolved_root,
+                    snapshot_path=snapshot_path,
+                    skip_panel=False,
+                    emit_only=False,
+                    dry_run=False,
+                    max_notes=50,
+                    force=True,
+                    outbox_path=outbox_path,
+                )
+            except LatencyHarnessTimeoutError:
+                warnings.append(
+                    f"watcher/panel convergence exceeded timeout_seconds={timeout_seconds}"
+                )
+                if report_path:
+                    failure_summary = LatencySummary(
+                        run_id=datetime.now().strftime("%Y%m%d-%H%M%S"),
+                        timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                        scenario=scenario,
+                        latency_results=[],
+                        execution_mode=execution_mode,
+                        measured_stages=[
+                            "file_detection",
+                            "scan_requested",
+                            "runtime_start",
+                            "runtime_complete",
+                        ],
+                        warnings=warnings,
+                    )
+                    report_path = report_path.expanduser().resolve()
+                    report_path.parent.mkdir(parents=True, exist_ok=True)
+                    write_contract_report(report_path, failure_summary.to_dict())
+                raise
+
+            emit_progress(
+                "Watcher tick complete: "
+                f"changed={watcher_summary.get('changed', 0)} "
+                f"panel_runs={watcher_summary.get('panel_runs', 0)} "
+                f"errors={watcher_summary.get('errors', 0)}"
             )
-
             for msg in watcher_messages:
-                print(msg)
+                emit_progress(msg)
 
-            # Consume promotions to ensure full pipeline execution
+            emit_progress("Consuming promotion intents...")
             consume_promotion_intents(outbox_path=outbox_path)
             VaultWatcher(resolved_root, snapshot_path=snapshot_path).refresh_snapshot()
+            emit_progress("Watcher snapshot refreshed.")
     finally:
         if original_scope is None:
             os.environ.pop("WATCHER_SCOPE_GLOB", None)
         else:
             os.environ["WATCHER_SCOPE_GLOB"] = original_scope
+        if original_decider is None:
+            os.environ.pop("PANEL_AGENT_DECIDER", None)
+        else:
+            os.environ["PANEL_AGENT_DECIDER"] = original_decider
 
     # Extract latency events from the outbox
     all_events = read_outbox(outbox_path)
-    new_events = all_events[initial_count:] if initial_count < len(all_events) else all_events
-
-    latency_events = _extract_sync_latency_events(outbox_path)
+    new_events = all_events[initial_count:] if initial_count < len(all_events) else []
+    latency_events = [
+        event for event in new_events if event.get("event") == "sync.latency.summary"
+    ]
     latency_results = [
         result
         for event in latency_events
@@ -264,7 +386,7 @@ def run_latency_harness(
 
     # Create the summary
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
-    timestamp = datetime.utcnow().isoformat() + "Z"
+    timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     statistics = _compute_statistics(latency_results)
 
     summary = LatencySummary(
@@ -272,6 +394,14 @@ def run_latency_harness(
         timestamp=timestamp,
         scenario=scenario,
         latency_results=latency_results,
+        execution_mode=execution_mode,
+        measured_stages=[
+            "file_detection",
+            "scan_requested",
+            "runtime_start",
+            "runtime_complete",
+        ],
+        warnings=warnings if warnings else None,
         statistics=statistics if latency_results else None,
     )
 

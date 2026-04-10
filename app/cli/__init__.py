@@ -44,7 +44,7 @@ from app.cli.uat import (
     run_vault_test_flow,
     seed_vault_test_notes,
 )
-from app.cli.latency_harness import run_latency_harness
+from app.cli.latency_harness import LatencyHarnessTimeoutError, run_latency_harness
 from app.stores import get_object_store, get_vector_index, resolve_store_backend
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.integration import handle_panel_update
@@ -1367,6 +1367,20 @@ def uat_run_vault_test(
     default=None,
     help="Optional path to write machine-readable JSON report.",
 )
+@click.option(
+    "--panel-decider",
+    type=click.Choice(["rule", "llm"], case_sensitive=False),
+    default="rule",
+    show_default=True,
+    help="Panel decider mode during the harness run; use rule mode for provider-free deterministic validation.",
+)
+@click.option(
+    "--timeout-seconds",
+    type=int,
+    default=180,
+    show_default=True,
+    help="Bounded wall-clock timeout for watcher/panel convergence.",
+)
 @click.option("--dry-run", is_flag=True, help="Skip watcher/panel execution, report only.")
 def sync_latency_harness(
     vault_root: Path,
@@ -1374,6 +1388,8 @@ def sync_latency_harness(
     folder: str,
     scenario: str,
     report: Path | None,
+    panel_decider: str,
+    timeout_seconds: int,
     dry_run: bool,
 ) -> None:
     """Run automated multi-device sync latency measurements.
@@ -1394,9 +1410,13 @@ def sync_latency_harness(
             scenario=scenario,
             report_path=report,
             dry_run=dry_run,
+            panel_decider=panel_decider.lower(),
+            timeout_seconds=timeout_seconds,
         )
     except FileNotFoundError as exc:
         raise click.BadParameter(str(exc))
+    except LatencyHarnessTimeoutError as exc:
+        raise click.ClickException(str(exc))
 
     for line in summary.to_lines():
         click.echo(line)

@@ -19,6 +19,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the registry watcher → DB outbox → worker → index → `/api/ask` chain, emit `index.embedding.created` / `index.embedding.failed` (legacy alias: `index.object.embedded`), and log diagnostics when sources are missing.
 - The interim GUI and Status service consume these heartbeats/events so the dashboard shows ingest health, counts, and incidents in one place.
 - The local `test` bootstrap path is now treated as a first-class verification concern: parts of the path work today, but the repo-supported clean-state path is not yet fully self-contained end to end.
+- `python -m app.cli sync-latency-harness` now defaults to provider-free `PANEL_AGENT_DECIDER=rule` for deterministic operator validation, emits progress before long-running watcher work, and fails within a bounded timeout instead of hanging indefinitely when a live LLM provider is unavailable.
 
 ## CI & Test Markers
 - CI legs assert `docs/ARCHITECTURE.md` contains fitness guard statements, confirm CLI health smoke commands pass, and verify the worker logs show `worker starting`.

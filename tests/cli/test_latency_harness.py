@@ -5,6 +5,7 @@ for the sync chain latency measurement harness.
 """
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
@@ -18,6 +19,8 @@ from app.cli.latency_harness import (
     _extract_sync_latency_events,
     _parse_latency_event,
     _compute_statistics,
+    run_latency_harness,
+    LatencyHarnessTimeoutError,
 )
 
 
@@ -250,3 +253,107 @@ class TestLatencySummary:
         assert any("Latency Harness Run" in line for line in lines)
         assert any("test-scenario" in line for line in lines)
         assert any("1" in line for line in lines)  # 1 measurement
+
+
+class TestLatencyHarnessExecution:
+    """Test bounded execution and provider-free harness mode."""
+
+    def test_run_latency_harness_uses_provider_free_rule_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        vault_root = tmp_path / "vault"
+        scenario_path = vault_root / "Test" / "AgenticPKM-UAT-2026-03-19"
+        scenario_path.mkdir(parents=True)
+        outbox_path = tmp_path / "outbox.jsonl"
+        progress_lines: list[str] = []
+
+        event = {
+            "event": "sync.latency.summary",
+            "trace_id": "trace-123",
+            "payload": {
+                "note_uuid": "note-123",
+                "note_path": "Test/AgenticPKM-UAT-2026-03-19/note.md",
+                "file_detection_ts": "2026-04-08T10:30:00Z",
+                "scan_requested_ts": "2026-04-08T10:30:01Z",
+                "runtime_start_ts": "2026-04-08T10:30:02Z",
+                "runtime_complete_ts": "2026-04-08T10:30:04Z",
+                "watcher_to_scan_ms": 1000,
+                "scan_to_runtime_start_ms": 1000,
+                "runtime_execution_ms": 2000,
+                "end_to_end_ms": 4000,
+            },
+        }
+
+        state = {"calls": 0}
+
+        def fake_read_outbox(path: Path) -> list[Dict[str, Any]]:
+            assert path == outbox_path.resolve()
+            state["calls"] += 1
+            return [] if state["calls"] == 1 else [event]
+
+        def fake_run_watcher_tick_with_timeout(timeout_seconds: int, **kwargs: Any) -> tuple[Dict[str, Any], list[str]]:
+            assert timeout_seconds == 30
+            assert os.environ["PANEL_AGENT_DECIDER"] == "rule"
+            return {"changed": 1, "panel_runs": 1, "errors": 0}, ["watcher ok"]
+
+        class DummyWatcher:
+            def __init__(self, vault_root: Path, snapshot_path: Path | None = None) -> None:
+                self.vault_root = vault_root
+                self.snapshot_path = snapshot_path
+
+            def refresh_snapshot(self) -> None:
+                progress_lines.append("snapshot refreshed")
+
+        monkeypatch.setattr("app.cli.latency_harness.read_outbox", fake_read_outbox)
+        monkeypatch.setattr(
+            "app.cli.latency_harness._run_watcher_tick_with_timeout",
+            fake_run_watcher_tick_with_timeout,
+        )
+        monkeypatch.setattr("app.cli.latency_harness.consume_promotion_intents", lambda outbox_path: None)
+        monkeypatch.setattr("app.cli.latency_harness.VaultWatcher", DummyWatcher)
+
+        summary = run_latency_harness(
+            vault_root=vault_root,
+            folder="AgenticPKM-UAT-2026-03-19",
+            outbox_path=outbox_path,
+            panel_decider="rule",
+            timeout_seconds=30,
+            progress=progress_lines.append,
+        )
+
+        assert summary.execution_mode == "panel-rule"
+        assert summary.latency_results
+        assert summary.latency_results[0].note_uuid == "note-123"
+        assert any("panel_decider=rule" in line for line in progress_lines)
+
+    def test_run_latency_harness_timeout_writes_empty_report(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        vault_root = tmp_path / "vault"
+        scenario_path = vault_root / "Test" / "AgenticPKM-UAT-2026-03-19"
+        scenario_path.mkdir(parents=True)
+        outbox_path = tmp_path / "outbox.jsonl"
+        report_path = tmp_path / "report.json"
+
+        monkeypatch.setattr("app.cli.latency_harness.read_outbox", lambda path: [])
+        monkeypatch.setattr(
+            "app.cli.latency_harness._run_watcher_tick_with_timeout",
+            lambda timeout_seconds, **kwargs: (_ for _ in ()).throw(
+                LatencyHarnessTimeoutError("Timed out after 3s while waiting for watcher/panel convergence.")
+            ),
+        )
+
+        with pytest.raises(LatencyHarnessTimeoutError):
+            run_latency_harness(
+                vault_root=vault_root,
+                folder="AgenticPKM-UAT-2026-03-19",
+                outbox_path=outbox_path,
+                report_path=report_path,
+                timeout_seconds=3,
+                progress=lambda _: None,
+            )
+
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        assert report["execution_mode"] == "panel-rule"
+        assert report["latency_count"] == 0
+        assert any("timeout_seconds=3" in warning for warning in report["warnings"])
