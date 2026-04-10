@@ -5,9 +5,9 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-04-09
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/ENVIRONMENTS.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, app/cli/__init__.py, app/cli/latency_harness.py, Makefile, merged PRs #365/#376, current repo state on 2026-04-09
-Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, ingest runs by plane). `watcher_runs` refers to legacy snapshot watchers only; registry watcher health is via heartbeat + tick logs.
+Last reviewed: 2026-04-10
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/runbooks/UAT_PANEL_WATCHER.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/watcher/registry.py, Makefile, merged PRs #365/#376/#382/#383, current repo state on 2026-04-10
+Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
 
@@ -16,7 +16,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 
 ## Runtime verification
 - `/api/health` reports watcher and worker heartbeat freshness plus the runtime DB/LLM probes so operators see deterministic health signals.
-- `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the registry watcher → DB outbox → worker → index → `/api/ask` chain, emit `index.embedding.created` / `index.embedding.failed` (legacy alias: `index.object.embedded`), and log diagnostics when sources are missing.
+- `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the registry watcher → DB outbox → worker → index → `/api/ask` chain, emit `watcher.run` audit rows plus `index.embedding.created` / `index.embedding.failed` (legacy alias: `index.object.embedded`), and log diagnostics when sources are missing.
 - The interim GUI and Status service consume these heartbeats/events so the dashboard shows ingest health, counts, and incidents in one place.
 - The local `test` bootstrap path is now treated as a first-class verification concern: parts of the path work today, but the repo-supported clean-state path is not yet fully self-contained end to end.
 
@@ -84,7 +84,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - `sot_baseline_version`: locked SoT v5.5 Reality-MVP baseline.
 - `sot_forward_line_version` / `feature_line_version`: active forward line (v5.6 features on top of the v5.5 baseline).
 - `active_features`: human-readable list of forward-line capabilities (PanelAgent runtime, watcher track, config-driven wiring).
-- Counters (totals + 24h window): `panel_runs` (`panel.intent.executed`), `promote.intent.created`, `promotion_executed` (`promote.done`), and ingest run counts per plane. `watcher_runs` only increments for legacy snapshot watchers; registry watcher health is via heartbeat + tick logs.
+- Counters (totals + 24h window): `panel_runs` (`panel.intent.executed`), `promote.intent.created`, `promotion_executed` (`promote.done`), `watcher_runs` (`watcher.run` from registry and legacy watcher ticks), and ingest run counts per plane. Registry watcher health is also tracked via heartbeat + tick logs.
 
 ## Concurrency & Safety (v5.5 gate)
 - DedupTaskQueue now guards watcher auto-runs and powers the `skipped_dedup` signal before releasing keys.

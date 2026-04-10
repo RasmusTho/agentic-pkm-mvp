@@ -123,16 +123,21 @@ Current emission note:
 
 ### `watcher.run`
 
-Emitted after a legacy snapshot watcher tick completes.
-The registry watcher does not use `watcher.run`; its health is tracked through heartbeat and tick signals surfaced via health/status.
+Emitted after a watcher tick completes.
+The registry watcher appends `watcher.run` audit events with `source.trigger=registry:<watcher_name>` so status can count runtime ticks; the legacy snapshot watcher still emits the same event with `source.trigger=vault_watcher_run`. Registry watcher health is also tracked through heartbeat and tick signals surfaced via health/status.
 
 Payload (minimum contract):
 - `vault_root` (`string`)
-- `snapshot_path` (`string`)
+- `snapshot_path` (`string`; empty for registry watcher ticks that do not use a snapshot file)
 - `changed` (`int`)
 - `ingest_attempted` (`int`), `ingested` (`int`)
 - `panel_candidates` (`int`), `panel_runs` (`int`), `panel_promotions` (`int`)
 - `panel_skipped_policy` (`int`), `panel_skipped_limit` (`int`)
+- `panel_skipped_auto_exec` (`int`)
+- `panel_skipped_allowed_actions` (`int`)
+- `skipped_dedup` (`int`)
+- `skipped_idempotent` (`int`)
+- `skipped_writes_blocked` (`int`)
 - `errors` (`int`)
 - `dry_run` (`bool`)
 - `limit_exceeded` (`bool`)

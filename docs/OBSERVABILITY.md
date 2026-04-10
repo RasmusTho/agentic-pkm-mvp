@@ -55,15 +55,16 @@ Architectural reading note:
 - **SoT baseline vs forward line**: `sot_baseline_version` is the locked baseline (v5.5). `sot_forward_line_version` / `feature_line_version` represent the active forward line (v5.6: LangGraph/Reasoning rollouts on top of the v5.5 baseline). `active_features` enumerates which forward-line capabilities are present (PanelAgent runtime, watcher snapshot/policy track, config-driven panel wiring).
 - **Counters surfaced** (total + 24h window):
   - `promotion_executed`: `promote.done` events emitted by the promotion consumer (intent applied).
-  - `watcher_runs`: `watcher.run` events emitted by the legacy snapshot watcher (`vault-watcher-run`); the registry watcher does not emit `watcher.run` and instead reports health via heartbeat + tick logs.
+  - `watcher_runs`: `watcher.run` audit events emitted by both the registry watcher (`watcher run`) and the legacy snapshot watcher (`vault-watcher-run`); registry watcher health still also reports through heartbeat + tick logs.
   - `panel_runs`: `panel.intent.executed` events (panel runtime actually ran).
   - `promote.intent.created`: promotion intents emitted by panel runtime or orchestrator/panel plans.
   - `ingest_runs_by_plane`: count of ingest runs per plane (vault/external) based on last-run metadata.
-- **What should increase when running `vault-watcher-run` (legacy snapshot watcher)**:
+- **What should increase when running watcher ticks**:
 - Intent vs Done: `promote.intent.created` shows the panel emitted an intent; `promotion_executed` (promote.done) shows the consumer applied it. Legacy runtime-loop flows run both when enabled.
-  - Dry-run (`--dry-run`): runtime-loop still emits `watcher.run` and increments `watcher_runs`, but ingest/panel/promotion counters should not move because execution short-circuits before side effects.
+  - Registry watcher (`watcher run`): watcher_runs increases; emit-only ticks surface `panel_skipped_auto_exec` against candidate notes; heartbeat/tick logs and `watcher.run` audit rows should agree on recent activity.
+  - Legacy snapshot watcher (`vault-watcher-run` or runtime-loop): watcher_runs increases; dry-run still emits `watcher.run`, but ingest/panel/promotion counters should not move because execution short-circuits before side effects.
   - Real run: watcher_runs increases; ingest plane counts increase when changed notes are ingested; panel_runs increases when policy allows panels to run; `promote.intent.created` increases when mapped promotion actions fire.
-- `watcher.run` payload: `{changed, ingest_attempted, ingested, panel_candidates, panel_runs, panel_promotions, panel_skipped_policy, panel_skipped_limit, errors, dry_run, limit_exceeded, snapshot_path, vault_root}` plus envelope (`event_id`, `trace_id`, `timestamp`, `version`, `source.component=watcher`, `source.trigger=vault_watcher_run`, `source.sot=v5.6`). The registry watcher does not emit `watcher.run`; use heartbeat + tick logs for runtime health. The CLI fails fast if `INDEX_OUTBOX_PATH`/`--outbox-path` is empty or points to a directory.
+- `watcher.run` payload: `{changed, ingest_attempted, ingested, panel_candidates, panel_runs, panel_promotions, panel_skipped_policy, panel_skipped_limit, panel_skipped_auto_exec, panel_skipped_allowed_actions, skipped_dedup, skipped_idempotent, skipped_writes_blocked, errors, dry_run, limit_exceeded, snapshot_path, vault_root}` plus envelope (`event_id`, `trace_id`, `timestamp`, `version`, `source.component=watcher`, `source.trigger=registry:<watcher_name>|vault_watcher_run`, `source.sot=v5.6`). Registry watcher `snapshot_path` is empty because it does not use a snapshot file. The CLI fails fast if `INDEX_OUTBOX_PATH`/`--outbox-path` is empty or points to a directory.
 - **Common interpretations**:
   - Counters increase but the note is unchanged: an intent was emitted (e.g., `promote.intent.created`), but a consumer (Promotion Agent/worker) must run to mutate files.
   - `changed > 0` but `panel_runs = 0`: panel auto-run policy blocked execution or the run was `--dry-run` / max-notes guard triggered.
@@ -72,7 +73,7 @@ Architectural reading note:
 
 ## Observability-as-tests
 - Gates: `watcher_runs`, `panel_runs`, `promote.intent.created`, `promotion_executed`, and status error counts double as fitness gates in CI/UAT; runs fail if expected counters do not move or if re-runs create duplicate intents.
-- Event chain (legacy snapshot watcher): each runtime-loop or `vault-watcher-run` tick emits `watcher.run` with payload fields above; panel runs must emit `panel.intent.executed`; promotion consumer must emit `promote.done` (or `promote.error` with reason) when intents exist. Registry watcher health is reported via heartbeat + tick logs.
+- Event chain (current watcher surfaces): each registry or legacy watcher tick emits `watcher.run` with payload fields above; registry watcher ticks also update heartbeat + tick logs and may emit `panel.scan.requested` / `ingest.vault.changed`; panel runs must emit `panel.intent.executed`; promotion consumer must emit `promote.done` (or `promote.error` with reason) when intents exist.
 - Latency budget (legacy snapshot watcher): runtime-loop tick (watcher→ingest→panel→promotion) should keep p95 end-to-end latency within a few seconds on the memory backend; outliers must be investigated and recorded in spans.
 
 <!-- SECTION:OBS:BEGIN -->
