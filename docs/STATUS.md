@@ -97,6 +97,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - Production-facing path is the active current-state default; lab/dev-only flows remain explicitly non-production.
 - The local test stack can be started successfully against a separate test vault, and `uat-seed-vault-test` works.
 - The repo-supported local bootstrap/UAT path is still not fully self-contained end to end; several concrete blocker issues already exist for that work.
+- Issue #240 has a real-vault Alpha acceptance receipt recorded in `docs/PANEL_AGENT.md` after the 2026-04-08 server-side soak; that specific PanelAgent 2.0 acceptance gate is no longer pending.
 - The current docs-first stabilization wave is making the intended supported path explicit before further implementation continues.
 - Objective: a clean-state, repo-supported local test bootstrap path that is resettable, reproducible, verified, and acceptable as the canonical local verification flow.
 - PanelAgent runtime V1 is part of the active baseline; planner pipeline and LangGraph expansion remain opt-in.

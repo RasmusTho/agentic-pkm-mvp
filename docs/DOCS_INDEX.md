@@ -47,7 +47,7 @@ High-risk temporal docs in the active set:
 | docs/ARCHITECTURE.md | operational | event-driven | current baseline/runtime changes |
 | docs/OPERATIONS.md | operational | event-driven | current runbooks + runtime commands |
 | docs/HUMAN-FLOWS.md | strategic | event-driven | current product/kernel + shipped interaction behavior |
-| docs/tracks/ | snapshot | per-release | shipped PRs/issues and current owner docs |
+| docs/tracks/*.md | snapshot | per-release | shipped PRs/issues and current owner docs |
 
 Recommended agent workflow:
 

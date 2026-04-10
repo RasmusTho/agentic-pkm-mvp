@@ -31,7 +31,7 @@ Interpretation note:
 - Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
 - The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
 
-## PanelAgent 2.0 (v5.6, in progress)
+## PanelAgent 2.0 (v5.6, accepted)
 
 <!-- PA2-ENGINE-SEAM -->
 **Engine-neutral cognition seam (shipped, v5.6 enabling).** Panel action selection is now invoked through a dedicated `PanelCognitionBackend` Protocol defined in `app/agents/panel_agent/cognition.py`. `graph.py` no longer owns cognition-selection concerns directly; it receives a backend through `build_panel_graph(cognition_backend=...)` and calls it via `_decide_actions_with_backend`. Current backends: `RuleCognitionBackend` (default, checkbox-driven) and `LLMCognitionBackend` (routes through `ReasoningFacade`). Parser, execution, receipt, and emitted-event contracts remain unchanged. A future backend (DeepAgents-style or otherwise) implements only `select_actions(state)` without reworking those surfaces. Tracked by: #244.
@@ -40,15 +40,14 @@ Interpretation note:
 **Freeform catalog-driven proposal path (shipped).** When a panel has an instruction but no checkbox actions, the LLM decider (`PANEL_AGENT_DECIDER=llm`) consults the full active catalog and proposes canonical action IDs from instruction text + catalog metadata (`llm_hint`, `labels`, `description`) alone, without requiring any checkbox-label match. Proposals are restricted to the active catalog; out-of-catalog IDs are dropped. For this no-checkbox path, the runtime writes proposed actions back as suggested unchecked checkboxes for explicit human confirmation rather than executing them immediately; they do not enter the execution path until the human later confirms them as panel checkboxes. Fallback to rule mode on LLM error or empty catalog. Tracked by: #241.
 
 - Surface uncertain or no-checkbox interpretations as suggested unchecked checkboxes instead of direct execution so panel ambiguity stays human-reviewable until explicit confirmation. Delivery receipt: Issue #242 delivered in current runtime behavior; follow-up wording reconciliation tracked by #291. Source Anchor: PA2-SUGGESTED-CHECKBOXES.
-- Remaining backlog: #240 (real-vault acceptance).
+- Delivery receipt: Issue #240 accepted after a real-vault Alpha soak on 2026-04-08. Evidence came from the live server runtime on the Alpha vault: `settings-explain --json`, `status`, `/api/health`, `/api/status`, and `scripts.alpha_e2e` all agreed on the same runtime, and the soak produced a promotion-intent event on the Alpha runtime note. Source Anchor: PA2-REAL-VAULT-ACCEPTANCE. Tracked by: #240
 - Emit ordered multi-step panel plans through the planner/orchestration contract rather than investing in richer LangGraph-only node choreography. Delivery receipt: Issue #243 delivered via PR #302. Source Anchor: PA2-MULTISTEP-PLANS.
-- Prove the PanelAgent 2.0 path operationally on a real vault with soak, receipts, and owner-doc writeback before it is treated as operationally accepted. Source Anchor: PA2-REAL-VAULT-ACCEPTANCE. Tracked by: #240
-- Broader PanelAgent expansion is deferred until the real-vault acceptance slice closes. Treat any new behavior beyond the current slices as a separately scoped follow-up and break it into smaller issues before implementation.
+- Broader PanelAgent expansion remains bounded beyond the current shipped slices. Treat any new behavior beyond the current slices as a separately scoped follow-up and break it into smaller issues before implementation.
 
 Other implementation notes:
 - Introduces an explicit `PanelAgentState` (note reference, panel intent, actions, history, policy) and drives behaviour from a LangGraph graph (e.g., `app/agents/panel_agent/graph.py`).
 - LLM-based reasoning decides which panel actions to execute (and in what order) rather than relying on fixed mappings.
-- PanelAgent Runtime V1 remains the baseline until the PanelAgent 2.0 path is fully implemented and operationally accepted.
+- PanelAgent Runtime V1 remains the baseline until the PanelAgent 2.0 path is fully implemented and operationally accepted. The real-vault acceptance receipt for #240 now closes that line for the shipped v5.6 path.
 - LangGraph control flow supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `llm` is the default runtime posture for LLM-backed intent interpretation, while `rule` is an explicit opt-out for unit tests, CI, and other bounded deterministic validation lanes. Both modes route through the shared `ReasoningFacade` with the canonical `decide` task kind.
 - The executed `cognition_mode` is included in the `panel.intent.executed` event payload and in `panel.log.created` entries so external consumers can observe which interpretation path was used.
 - LLM-driven contract tests live under `tests/e2e/test_panel_llm_e2e.py` (gated by `@pytest.mark.panel_llm_e2e` and `PANEL_AGENT_LLM_E2E=1`) to validate end-to-end promotion/non-promotion scenarios (including the freeform no-checkbox path) using the real decider. Tests requiring deterministic rule-mode behavior explicitly set `PANEL_AGENT_DECIDER=rule`.
