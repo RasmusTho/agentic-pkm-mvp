@@ -103,7 +103,7 @@ def test_worker_run_dispatches_panel_scan_requested(
     called: list[dict] = []
     acked: list[str] = []
 
-    def fake_handle(payload, *, vault_root=None):
+    def fake_handle(payload, *, vault_root=None, trace_id=None, scan_requested_ts=None):
         called.append(dict(payload))
         return outbox_worker.WorkerPanelSummary(emitted=0, deferred=False)
 
