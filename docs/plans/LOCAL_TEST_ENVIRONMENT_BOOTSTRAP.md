@@ -1,4 +1,4 @@
-State: Local test bootstrap plan with steps 1-3 and 5 shipped; deterministic runtime verification remains open as the active stabilization slice. Automated latency harness available for multi-device sync validation.
+State: Local test bootstrap plan with steps 1-3 and 5 shipped; deterministic runtime verification remains open as the active stabilization slice. Automated latency harness available for multi-device sync validation, with bounded timeout and provider-free rule-mode default for operator runs.
 Doc role: Plan
 Authority: Canonical plan for the scripted local test bootstrap chain; step specs and current-state SoT docs win on implementation detail and shipped runtime claims.
 Owner: Runtime / local test bootstrap stabilization
