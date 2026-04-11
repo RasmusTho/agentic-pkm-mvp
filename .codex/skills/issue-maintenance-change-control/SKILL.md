@@ -80,7 +80,7 @@ If any of the above is ambiguous, do not code. Keep the Issue `agent:needs-human
 4. Check whether labels and Project state still match reality.
 5. Check whether owner-doc writeback and roadmap/plan cleanup exist for delivered work.
 6. For feature-breakdown issue waves, distinguish parent feature issues from child slice issues before changing labels.
-7. If a child issue delegates its contract to a `Source contract` spec file instead of carrying the standard issue sections, verify whether the spec is already merged and reachable; if the spec only exists in an open PR or the issue body lacks the required local contract sections, do not mark it `agent:ready`.
+7. If a child issue delegates its contract to a `Source contract` spec file instead of carrying the standard issue sections, verify whether the spec is already merged and reachable; if the spec is not merged/reachable and the issue body lacks the required local contract sections, do not mark it `agent:ready`.
 
 ## Allowed corrective actions
 
