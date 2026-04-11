@@ -37,8 +37,10 @@ You operate between:
 ## Core rules
 
 - GitHub Issue is the canonical task contract.
-- GitHub Project is the canonical lifecycle state machine.
+- Issue state, truthful agent labels, linked PR state, and merge/delivery reality are the lifecycle authority.
+- GitHub Project is the shared operating board and lifecycle projection, not a stronger authority than Issue/PR truth.
 - Closed work must not remain in active queue states.
+- Correct Project drift opportunistically, but do not block delivery solely because a personal Project v2 board cannot be updated.
 - Do not invent strategy.
 - Preserve traceability through `Source Anchors`.
 
@@ -51,6 +53,7 @@ You operate between:
 - `Review` starts only when the PR is the explicit review handoff artifact, normally after review is requested.
 - Delivered and merged work should normally be `Done`.
 - Closed terminal PRs should not remain blank in the Project; they should reconcile to `Done`.
+- If Project state disagrees with Issue state, PR state, or merged delivery reality, correct the Project projection to match the harder lifecycle truth.
 - `agent:ready` should only pair with `Status=Ready`.
 - `agent:blocked` and `agent:needs-human` should pair with non-active work, normally `Backlog`.
 - Closed Issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`.
@@ -157,15 +160,20 @@ Use this when the user asks for a maintenance run across everything not done.
    - If user says they are the owner, resolve the username via GitHub app `list_installed_accounts` and use that as owner.
 2. List open issues:
    - Prefer GitHub app for structured data when possible.
-   - For bulk edits, use `gh issue list --state open --json number,title,labels,body` for full bodies.
+   - For bulk edits, use `gh issue list --state open --json number,title,labels,body,comments` for full bodies and blocker context.
 3. For each open issue:
+   - Establish issue/PR truth before deciding labels:
+     - inspect recent comments for acceptance failures, blocker receipts, and follow-up issue links
+     - inspect linked open PRs and closing references
+     - inspect linked blocker or follow-up issues that change executability
    - If body already matches the contract shape exactly, do not rewrite it.
    - If contract shape is missing or malformed, edit the issue to match the required sections.
-   - Set labels:
+   - Correct labels from established issue/PR truth before any Project reconciliation:
      - Add `agent:ready` only if Scope/Constraints/Acceptance Criteria are concrete and no ambiguity remains.
+     - Do not add or preserve `agent:ready` when recent comments, linked PRs, or linked blocker/follow-up issues show the Issue is blocked, already active, or waiting on validation.
      - Keep or set `agent:needs-human` for boundary moves without explicit direction or module paths.
      - Keep or set `agent:blocked` when external dependencies are stated.
-   - Reconcile Project state for each open issue to match label truth:
+   - Reconcile Project state for each open issue only after labels are corrected:
      - `agent:ready` -> `Status=Ready`
      - `agent:blocked` or `agent:needs-human` -> `Status=Backlog`
      - if the issue is missing from the Project or missing `Status`, add/reconcile it during the same run
@@ -175,4 +183,9 @@ Use this when the user asks for a maintenance run across everything not done.
    - list merged/closed PRs that are in the Project with missing `Status` or a non-terminal status
    - set merged or otherwise closed terminal PR cards to `Done`
 6. Prefer the repo's reconciliation helper when present (for example `scripts/reconcile_project_status.py`) instead of ad hoc Project mutations.
-7. Output a receipt listing edited issues, label changes, issue status changes, and any PR cards moved to `Done`.
+7. If Project v2 writes fail because of GraphQL rate limits or credentials, stop Project mutation attempts for that run:
+   - do not retry with ad hoc partial mutations
+   - output the exact pending status changes that were not applied
+   - output the rate-limit reset time when available
+   - state that Issue/PR truth remains authoritative until Project reconciliation can resume
+8. Output a receipt listing edited issues, label changes, issue status changes, and any PR cards moved to `Done`.
