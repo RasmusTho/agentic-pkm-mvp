@@ -14,13 +14,13 @@ depends_on:
 can_parallelize_with: []
 ---
 
-State: Keystone decision task. Its whole job is to surface the Chat mutation contradiction. The reconcile outcome is not inside this spec; this spec creates the frame the decision will land in.
+State: Keystone decision task — RESOLVED. Originally drafted as a framing task to make the Chat mutation contradiction small and owned. The decision owner has now recorded the resolution in the `## Decision` section at the bottom of this file (Candidate A, 2026-04-11). The framing material above the Decision section is preserved as the audit trail of how the decision was reached; the Decision section is the live state.
 
 # Reconcile Chat Mutation Authority
 
 ## Purpose
 
-Name the live contradiction about Chat's mutation boundary, lay out the evaluation criteria, describe two candidate resolutions, identify a decision owner slot, and set an acceptance condition for what "decided" means. This task does not answer the question. Its success criterion is that the question becomes small and owned, not that it becomes closed.
+Name the live contradiction about Chat's mutation boundary, lay out the evaluation criteria, describe two candidate resolutions, and record a decision owner-driven resolution. The framing portion of this task (contradiction, criteria, candidates, decision owner, acceptance condition) succeeded when the question became small and owned. The decision portion succeeded when the recorded resolution in `## Decision` met the acceptance condition. Both are now true: the resolution is recorded as Candidate A. Downstream tasks that previously deferred to this file should now read the `## Decision` section as authoritative, not the framing material above it.
 
 ## The contradiction, stated exactly
 
@@ -81,7 +81,7 @@ Process:
 1. Reviewers of this spec confirm the contradiction is stated accurately and the two candidate resolutions are stated fairly.
 2. Reviewers may add a third candidate resolution before the decision owner takes the decision. A third candidate must pass all evaluation criteria above to be considered.
 3. The decision owner selects a resolution, records the selection as a decision entry in this file's "Decision" section (see acceptance below), and triggers a follow-up owner-doc promotion PR if the selection requires edits to docs outside this directory.
-4. Until the decision owner acts, every other task in this capability treats the Chat mutation boundary as open and defers to this file.
+4. Until the decision owner acts, every other task in this capability treats the Chat mutation boundary as open and defers to this file. *(Resolved 2026-04-11: see `## Decision` section. Other tasks should now read that section as authoritative.)*
 
 ## Acceptance condition
 
@@ -180,6 +180,8 @@ Date: 2026-04-11.
 
 **Candidate A — DESIGN_PRINCIPLES wins.** Chat is a canvas-shaped interaction surface and may carry governed mutation rights through the same gated-execution pipeline used by Panel and Automation. "Chat is read-only" from the V60 working plan is narrowed to apply specifically to the Deep Agent introduction phase, not to Chat's identity. The Deep Agent rollout still begins in a read-only slice of Chat to satisfy Governance Before Autonomy; that constraint applies to *Deep Agents in Chat*, not to *Chat itself*.
 
+**Receipt locality answer (criterion 4).** Chat-originated mutations land their receipts in the same locality as Panel-originated mutations: through the gated execution pipeline owned by `STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md`. This decision does **not** authorize a separate Chat receipt store, a separate accountability surface, or any receipt locality outside the existing pipeline. The concrete shape of canvas-commit receipts (fields, granularity, link-back to the originating Chat thread) is deferred to the canvas-commit capability lane, but the *locality answer required by criterion 4* is given here: receipts live exactly where Panel mutation receipts already live, and the canvas-commit capability inherits that locality rather than introducing a new one.
+
 ### Reasoning
 
 1. **Higher-authority contract.** `docs/DESIGN_PRINCIPLES.md` §Explicit Mutation Authority is the authoritative design contract for mutation surfaces. The V60 working plan §Fixed Decisions is a forward-line working plan that froze a cautious early framing before that contract was fully written down. When the two disagree, the design contract wins by construction.
@@ -197,12 +199,12 @@ Date: 2026-04-11.
 | Governance before autonomy | Pass — Deep Agents still start read-only in Chat | Pass |
 | Gated execution invariant | Pass — Chat mutations inherit the gated pipeline | Pass |
 | Canvas is not ASK | **Pass** — canvas posture preserved | **Fail** — no canvas surface left |
-| Receipt legibility | Deferred to follow-up canvas-commit capability; not blocking | N/A |
+| Receipt legibility | **Pass** — receipts live in the existing gated-execution pipeline locality; concrete shape deferred but locality answered (see "Receipt locality answer" above) | N/A |
 | Parallel-safety for current runtime | Pass — no runtime change required by this decision | Pass |
 | User-needs coverage ("externalize and manipulate" + "trust what the system did") | **Pass** — both served | **Fail** — externalize-and-manipulate has no home |
 | Reversibility at docs layer | Pass — no shipped code depends on this | Pass |
 
-Candidate B fails criteria 3 and 6. Candidate A passes all seven.
+Candidate B fails criteria 3 and 6. Candidate A passes all seven, including criterion 4 once the receipt locality answer above is read as part of the resolution body (not as deferred work).
 
 ### Follow-up owner-doc promotion edits required
 
@@ -218,7 +220,7 @@ These edits are **not** performed by this capability. They are queued as a separ
 
 - The Chat front-end implementation location (inside Obsidian, standalone, web, etc.) remains a separate decision per the user's stable position that "Chat may live outside Obsidian."
 - The first Chat-mutation runtime slice. That requires a separate `feature-breakdown` pass once the owner-doc promotion edits are merged.
-- Receipt locality and shape for canvas-commit actions. Deferred to the canvas-commit capability lane.
+- The concrete receipt shape (fields, granularity, link-back format, UI exposure) for canvas-commit actions. The *locality* is answered by this decision (Panel's gated-execution pipeline; no separate Chat receipt store); the concrete shape is deferred to the canvas-commit capability lane.
 - Any change to Panel, Automation, or Deep Agent behavior beyond the narrowing of "Chat is read-only" to apply only to the Deep Agent introduction phase.
 
 ### Re-evaluation trigger
