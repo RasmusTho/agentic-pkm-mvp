@@ -15,8 +15,8 @@ def test_worker_run_dispatches_ingest_vault_changed(
 ) -> None:
     called: list[dict] = []
 
-    def fake_handle(payload, *, vault_root=None):
-        called.append(dict(payload))
+    def fake_handle(payload, *, vault_root=None, trace_id=None):
+        called.append({"payload": dict(payload), "trace_id": trace_id})
         return outbox_worker.WorkerIngestSummary(ingested=0)
 
     monkeypatch.setattr(outbox_worker, "handle_ingest_vault_changed", fake_handle)
@@ -52,7 +52,17 @@ def test_worker_run_dispatches_ingest_vault_changed(
 
     outbox_worker.run(interval=0.0, heartbeat_interval=9999, log_heartbeat_interval=None, stop_after_ticks=2)
 
-    assert called
+    assert called == [
+        {
+            "payload": {
+                "vault_path": str(note_path),
+                "relative_path": "Inbox/note.md",
+                "event_id": "evt-1",
+                "trace_id": "trace-1",
+            },
+            "trace_id": "trace-1",
+        }
+    ]
 
 
 def test_worker_run_dispatches_ingest_object_deleted(

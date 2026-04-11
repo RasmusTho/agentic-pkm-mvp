@@ -354,15 +354,49 @@ def test_handle_panel_scan_requested_queues_retry_for_unstable_file(
         "mtime": 123.0,
     }
 
-    summary = outbox_worker.handle_panel_scan_requested(payload, vault_root=vault_root)
+    summary = outbox_worker.handle_panel_scan_requested(payload, vault_root=vault_root, trace_id="trace-panel-envelope")
     assert summary.emitted == 0
     assert summary.deferred is True
     assert len(queued) == 1
 
     retry_event = queued[0][1]
     assert retry_event.event_type == PANEL_SCAN_REQUESTED
+    assert retry_event.trace_id == "trace-panel-envelope"
     assert retry_event.payload["_worker_retry_count"] == 1
     assert retry_event.payload["_worker_retry_reason"] == "file_unstable"
+
+
+def test_handle_panel_scan_requested_aborts_when_retry_enqueue_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reset_memory_stores()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+
+    vault_root = tmp_path / "vault"
+    inbox = vault_root / "📥 Inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+
+    note_path = inbox / "panel-note.md"
+    note_path.write_text("stub", encoding="utf-8")
+
+    monkeypatch.setattr(outbox_worker, "_stabilized_note_text", lambda *_args, **_kwargs: None)
+
+    def fail_append(*_args, **_kwargs) -> None:
+        raise OSError("outbox unavailable")
+
+    monkeypatch.setattr(outbox_worker, "append_jsonl_outbox_event", fail_append)
+
+    payload = {
+        "vault_path": str(note_path),
+        "relative_path": "📥 Inbox/panel-note.md",
+        "hash": "test-hash",
+        "mtime": 123.0,
+    }
+
+    with pytest.raises(outbox_worker.TransientRetryEnqueueError):
+        outbox_worker.handle_panel_scan_requested(payload, vault_root=vault_root, trace_id="trace-panel-envelope")
 
 
 def test_handle_ingest_vault_changed_queues_retry_for_missing_note(
@@ -391,11 +425,40 @@ def test_handle_ingest_vault_changed_queues_retry_for_missing_note(
         "mtime": 123.0,
     }
 
-    summary = outbox_worker.handle_ingest_vault_changed(payload, vault_root=vault_root)
+    summary = outbox_worker.handle_ingest_vault_changed(payload, vault_root=vault_root, trace_id="trace-ingest-envelope")
     assert summary.ingested == 0
     assert len(queued) == 1
 
     retry_event = queued[0][1]
     assert retry_event.event_type == INGEST_VAULT_CHANGED
+    assert retry_event.trace_id == "trace-ingest-envelope"
     assert retry_event.payload["_worker_retry_count"] == 1
     assert retry_event.payload["_worker_retry_reason"] == "missing_or_unstable_note"
+
+
+def test_handle_ingest_vault_changed_aborts_when_retry_enqueue_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reset_memory_stores()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+
+    vault_root = tmp_path / "vault"
+    (vault_root / "📥 Inbox").mkdir(parents=True, exist_ok=True)
+    note_path = vault_root / "📥 Inbox" / "missing.md"
+
+    def fail_append(*_args, **_kwargs) -> None:
+        raise OSError("outbox unavailable")
+
+    monkeypatch.setattr(outbox_worker, "append_jsonl_outbox_event", fail_append)
+
+    payload = {
+        "vault_path": str(note_path),
+        "relative_path": "📥 Inbox/missing.md",
+        "hash": "test-hash",
+        "mtime": 123.0,
+    }
+
+    with pytest.raises(outbox_worker.TransientRetryEnqueueError):
+        outbox_worker.handle_ingest_vault_changed(payload, vault_root=vault_root, trace_id="trace-ingest-envelope")

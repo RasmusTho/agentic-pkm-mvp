@@ -31,6 +31,10 @@ _WRITE_GUARD = OptimisticWriteGuard()
 _MAX_TRANSIENT_RETRY_ATTEMPTS = 3
 
 
+class TransientRetryEnqueueError(RuntimeError):
+    """Raised when a transient retry cannot be persisted safely."""
+
+
 @dataclass
 class WorkerIngestSummary:
     ingested: int
@@ -238,7 +242,14 @@ def _payload_retry_count(payload: Mapping[str, Any]) -> int:
         return 0
 
 
-def _queue_transient_retry(topic: str, payload: Mapping[str, Any], *, note_path: Path, reason: str) -> bool:
+def _queue_transient_retry(
+    topic: str,
+    payload: Mapping[str, Any],
+    *,
+    note_path: Path,
+    reason: str,
+    trace_id: str | None = None,
+) -> bool:
     retry_count = _payload_retry_count(payload)
     if retry_count >= _MAX_TRANSIENT_RETRY_ATTEMPTS:
         logger.warning(
@@ -257,7 +268,7 @@ def _queue_transient_retry(topic: str, payload: Mapping[str, Any], *, note_path:
     retry_event = new_event(
         event_type=topic,
         payload=retry_payload,
-        trace_id=str(payload.get("trace_id") or "") or None,
+        trace_id=trace_id or str(payload.get("trace_id") or "") or None,
         source="worker",
     )
 
@@ -299,7 +310,14 @@ def handle_panel_scan_requested(
 
     raw_text = _stabilized_note_text(note_path)
     if raw_text is None:
-        _queue_transient_retry(PANEL_SCAN_REQUESTED, payload, note_path=note_path, reason="file_unstable")
+        if not _queue_transient_retry(
+            PANEL_SCAN_REQUESTED,
+            payload,
+            note_path=note_path,
+            reason="file_unstable",
+            trace_id=trace_id,
+        ):
+            raise TransientRetryEnqueueError(f"failed to queue retry for unstable panel note: {note_path}")
         logger.info("panel scan deferred (file unstable) note_path=%s", note_path)
         return WorkerPanelSummary(emitted=0, deferred=True)
 
@@ -313,7 +331,14 @@ def handle_panel_scan_requested(
         note_uuid = _normalize_uuid_value(frontmatter.get("uuid") if isinstance(frontmatter, dict) else None) or healed_uuid
 
     if not note_uuid:
-        _queue_transient_retry(PANEL_SCAN_REQUESTED, payload, note_path=note_path, reason="missing_uuid")
+        if not _queue_transient_retry(
+            PANEL_SCAN_REQUESTED,
+            payload,
+            note_path=note_path,
+            reason="missing_uuid",
+            trace_id=trace_id,
+        ):
+            raise TransientRetryEnqueueError(f"failed to queue retry for missing panel note uuid: {note_path}")
         logger.info("panel scan skipped (missing uuid) note_path=%s", note_path)
         return WorkerPanelSummary(emitted=0, deferred=True)
 
@@ -383,7 +408,7 @@ def _use_db_outbox() -> bool:
     return backend == "pg" or bool(os.getenv("DATABASE_URL") or os.getenv("DB_DSN"))
 
 def handle_ingest_vault_changed(
-    payload: Mapping[str, Any], *, vault_root: Path | None = None
+    payload: Mapping[str, Any], *, vault_root: Path | None = None, trace_id: str | None = None
 ) -> WorkerIngestSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
@@ -392,7 +417,14 @@ def handle_ingest_vault_changed(
 
     raw_text = _stabilized_note_text(note_path)
     if raw_text is None:
-        _queue_transient_retry(INGEST_VAULT_CHANGED, payload, note_path=note_path, reason="missing_or_unstable_note")
+        if not _queue_transient_retry(
+            INGEST_VAULT_CHANGED,
+            payload,
+            note_path=note_path,
+            reason="missing_or_unstable_note",
+            trace_id=trace_id,
+        ):
+            raise TransientRetryEnqueueError(f"failed to queue retry for missing or unstable note: {note_path}")
         logger.warning("ingest skipped (missing note) note_path=%s", note_path)
         return WorkerIngestSummary(ingested=0)
 
@@ -544,7 +576,7 @@ def run(
                         if topic == INGEST_OBJECT_CREATED:
                             handle_ingest_object_created(payload)
                         elif topic == INGEST_VAULT_CHANGED:
-                            handle_ingest_vault_changed(payload)
+                            handle_ingest_vault_changed(payload, trace_id=trace_id)
                         elif topic == INGEST_OBJECT_DELETED:
                             handle_ingest_object_deleted(payload)
                         elif topic == PANEL_SCAN_REQUESTED:
