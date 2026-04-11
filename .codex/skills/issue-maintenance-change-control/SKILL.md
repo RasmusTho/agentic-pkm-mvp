@@ -79,6 +79,8 @@ If any of the above is ambiguous, do not code. Keep the Issue `agent:needs-human
 3. Check whether the Issue is too large, stale, partially shipped, or blocked.
 4. Check whether labels and Project state still match reality.
 5. Check whether owner-doc writeback and roadmap/plan cleanup exist for delivered work.
+6. For feature-breakdown issue waves, distinguish parent feature issues from child slice issues before changing labels.
+7. If a child issue delegates its contract to a `Source contract` spec file instead of carrying the standard issue sections, verify whether the spec is already merged and reachable; if the spec is not merged/reachable and the issue body lacks the required local contract sections, do not mark it `agent:ready`.
 
 ## Allowed corrective actions
 
@@ -109,6 +111,8 @@ If any of the above is ambiguous, do not code. Keep the Issue `agent:needs-human
 - If an Issue is delivered, Project Status should be `Done`.
 - If a PR is merged or otherwise closed as a terminal PR artifact, Project Status should normally be `Done`.
 - If delivered work is still open because traceability is ambiguous, prefer `agent:needs-human` over false `agent:ready`.
+- Parent feature issues are validation hubs, not direct pickup issues, unless explicitly scoped as a single executable slice; normally keep them non-active with `agent:needs-human` or `agent:blocked`.
+- Child slice issues may become `agent:ready` only when their executable contract is concrete and available. If the contract lives in a spec file in an open PR, keep the child issue non-active until the spec lands or the issue is rewritten with the required local contract sections.
 
 ## When splitting
 
@@ -166,11 +170,15 @@ Use this when the user asks for a maintenance run across everything not done.
      - inspect recent comments for acceptance failures, blocker receipts, and follow-up issue links
      - inspect linked open PRs and closing references
      - inspect linked blocker or follow-up issues that change executability
+     - identify whether the issue is a parent feature validation hub or a child slice
+     - if the issue delegates to a `Source contract` spec file, confirm that the target spec exists on the target branch and is not only present in an open PR
    - If body already matches the contract shape exactly, do not rewrite it.
    - If contract shape is missing or malformed, edit the issue to match the required sections.
+   - If many related issues share the same contract-shape problem, do not bulk-rewrite them blindly; report the pattern, pick a correction policy, and apply it consistently.
    - Correct labels from established issue/PR truth before any Project reconciliation:
      - Add `agent:ready` only if Scope/Constraints/Acceptance Criteria are concrete and no ambiguity remains.
      - Do not add or preserve `agent:ready` when recent comments, linked PRs, or linked blocker/follow-up issues show the Issue is blocked, already active, or waiting on validation.
+     - Do not add or preserve `agent:ready` when a child issue's executable contract exists only in an unmerged spec PR.
      - Keep or set `agent:needs-human` for boundary moves without explicit direction or module paths.
      - Keep or set `agent:blocked` when external dependencies are stated.
    - Reconcile Project state for each open issue only after labels are corrected:
