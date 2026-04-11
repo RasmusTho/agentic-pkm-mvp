@@ -20,13 +20,19 @@ from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_wo
 from app.services.indexer import handle_ingest_object_created
 from app.services.companion_note import CompanionNote, scan_attachments, write_companion
 from app.services.note_uuid import ensure_note_uuid
-from app.services.outbox import ack_outbox, bootstrap, poll_outbox_one
+from app.services.outbox import ack_outbox, append_jsonl_outbox_event, bootstrap, poll_outbox_one, write_outbox_event
 from app.vault.paths import get_vault_inbox_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD
+from app.events.models import new_event
 from scripts.yaml_roundtrip import load_frontmatter
 
 logger = logging.getLogger(__name__)
 _WRITE_GUARD = OptimisticWriteGuard()
+_MAX_TRANSIENT_RETRY_ATTEMPTS = 3
+
+
+class TransientRetryEnqueueError(RuntimeError):
+    """Raised when a transient retry cannot be persisted safely."""
 
 
 @dataclass
@@ -224,6 +230,73 @@ def _stabilized_note_text(note_path: Path, *, attempts: int = 6, base_sleep: flo
     return None
 
 
+def _outbox_audit_path() -> Path:
+    return Path(os.getenv("INDEX_OUTBOX_PATH", "/app/tmp/index-outbox.jsonl")).expanduser()
+
+
+def _payload_retry_count(payload: Mapping[str, Any]) -> int:
+    raw = payload.get("_worker_retry_count")
+    try:
+        return max(int(raw), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _queue_transient_retry(
+    topic: str,
+    payload: Mapping[str, Any],
+    *,
+    note_path: Path,
+    reason: str,
+    trace_id: str | None = None,
+) -> bool:
+    retry_count = _payload_retry_count(payload)
+    if retry_count >= _MAX_TRANSIENT_RETRY_ATTEMPTS:
+        logger.warning(
+            "worker retry exhausted topic=%s note_path=%s reason=%s retry_count=%s",
+            topic,
+            note_path,
+            reason,
+            retry_count,
+        )
+        return False
+
+    retry_payload = dict(payload)
+    retry_payload["_worker_retry_count"] = retry_count + 1
+    retry_payload["_worker_retry_reason"] = reason
+    retry_payload["_worker_retry_enqueued_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    retry_event = new_event(
+        event_type=topic,
+        payload=retry_payload,
+        trace_id=trace_id or str(payload.get("trace_id") or "") or None,
+        source="worker",
+    )
+
+    try:
+        if _use_db_outbox():
+            write_outbox_event(retry_event)
+        else:
+            append_jsonl_outbox_event(_outbox_audit_path(), retry_event, default_source="worker")
+    except Exception:
+        logger.exception(
+            "worker retry enqueue failed topic=%s note_path=%s reason=%s retry_count=%s",
+            topic,
+            note_path,
+            reason,
+            retry_count + 1,
+        )
+        return False
+
+    logger.info(
+        "worker retry queued topic=%s note_path=%s reason=%s retry_count=%s",
+        topic,
+        note_path,
+        reason,
+        retry_count + 1,
+    )
+    return True
+
+
 
 def handle_panel_scan_requested(
     payload: Mapping[str, Any], *, vault_root: Path | None = None, trace_id: str | None = None, scan_requested_ts: str | None = None
@@ -237,6 +310,14 @@ def handle_panel_scan_requested(
 
     raw_text = _stabilized_note_text(note_path)
     if raw_text is None:
+        if not _queue_transient_retry(
+            PANEL_SCAN_REQUESTED,
+            payload,
+            note_path=note_path,
+            reason="file_unstable",
+            trace_id=trace_id,
+        ):
+            raise TransientRetryEnqueueError(f"failed to queue retry for unstable panel note: {note_path}")
         logger.info("panel scan deferred (file unstable) note_path=%s", note_path)
         return WorkerPanelSummary(emitted=0, deferred=True)
 
@@ -250,6 +331,14 @@ def handle_panel_scan_requested(
         note_uuid = _normalize_uuid_value(frontmatter.get("uuid") if isinstance(frontmatter, dict) else None) or healed_uuid
 
     if not note_uuid:
+        if not _queue_transient_retry(
+            PANEL_SCAN_REQUESTED,
+            payload,
+            note_path=note_path,
+            reason="missing_uuid",
+            trace_id=trace_id,
+        ):
+            raise TransientRetryEnqueueError(f"failed to queue retry for missing panel note uuid: {note_path}")
         logger.info("panel scan skipped (missing uuid) note_path=%s", note_path)
         return WorkerPanelSummary(emitted=0, deferred=True)
 
@@ -263,7 +352,7 @@ def handle_panel_scan_requested(
     execution = run_panel_note_execution(
         note_uuid,
         trace_id=trace_id,
-        outbox_path=Path(os.getenv("INDEX_OUTBOX_PATH", "/app/tmp/index-outbox.jsonl")).expanduser(),
+        outbox_path=_outbox_audit_path(),
         persist_created_to_db=_use_db_outbox(),
     )
     emitted = execution.emitted_count
@@ -293,7 +382,7 @@ def handle_panel_scan_requested(
                 trace_id=trace_id,
                 payload=latency_payload,
             )
-            outbox_path_obj = Path(os.getenv("INDEX_OUTBOX_PATH", "/app/tmp/index-outbox.jsonl")).expanduser()
+            outbox_path_obj = _outbox_audit_path()
             outbox_path_obj.parent.mkdir(parents=True, exist_ok=True)
             with outbox_path_obj.open("a", encoding="utf-8") as f:
                 f.write(latency_event.model_dump_json())
@@ -319,28 +408,25 @@ def _use_db_outbox() -> bool:
     return backend == "pg" or bool(os.getenv("DATABASE_URL") or os.getenv("DB_DSN"))
 
 def handle_ingest_vault_changed(
-    payload: Mapping[str, Any], *, vault_root: Path | None = None
+    payload: Mapping[str, Any], *, vault_root: Path | None = None, trace_id: str | None = None
 ) -> WorkerIngestSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
 
     healed_uuid = _maybe_heal_uuid(note_path, resolved_root)
 
-    try:
-        raw_text = note_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        if exc.errno == errno.ENOENT:
-            logger.warning("ingest skipped (missing note) note_path=%s", note_path)
-            return WorkerIngestSummary(ingested=0)
-        if exc.errno in {errno.EPERM, errno.EACCES, errno.EROFS}:
-            _warn_once(
-                f"ingest_read_perm:{note_path}",
-                "ingest skipped (permission) note_path=%s errno=%s",
-                note_path,
-                exc.errno,
-            )
-            return WorkerIngestSummary(ingested=0)
-        raise
+    raw_text = _stabilized_note_text(note_path)
+    if raw_text is None:
+        if not _queue_transient_retry(
+            INGEST_VAULT_CHANGED,
+            payload,
+            note_path=note_path,
+            reason="missing_or_unstable_note",
+            trace_id=trace_id,
+        ):
+            raise TransientRetryEnqueueError(f"failed to queue retry for missing or unstable note: {note_path}")
+        logger.warning("ingest skipped (missing note) note_path=%s", note_path)
+        return WorkerIngestSummary(ingested=0)
 
     frontmatter, body = load_frontmatter(raw_text)
     content = (body or raw_text).strip()
@@ -490,7 +576,7 @@ def run(
                         if topic == INGEST_OBJECT_CREATED:
                             handle_ingest_object_created(payload)
                         elif topic == INGEST_VAULT_CHANGED:
-                            handle_ingest_vault_changed(payload)
+                            handle_ingest_vault_changed(payload, trace_id=trace_id)
                         elif topic == INGEST_OBJECT_DELETED:
                             handle_ingest_object_deleted(payload)
                         elif topic == PANEL_SCAN_REQUESTED:
