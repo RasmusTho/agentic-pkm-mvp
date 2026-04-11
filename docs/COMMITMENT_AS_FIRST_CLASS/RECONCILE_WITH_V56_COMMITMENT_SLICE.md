@@ -18,6 +18,126 @@ State: Specification for the alignment task between this v6 commitment-first-cla
 
 # Reconcile With v5.6 Commitment Runtime Slice
 
+## Position Statement
+
+The v5.6 commitment runtime slice, as defined in `docs/plans/V56_COMMITMENT_RUNTIME_SLICE.md`, is the first bounded runtime enablement move for commitment support in the Agentic PKM family. It is not the target state; it is the bridge.
+
+This v6.0 specification directory describes the semantic target that the v5.6 slice is a bridge toward. The v5.6 slice is the narrowest acceptable first implementation; the v6.0 spec is the broader semantic foundation.
+
+These two documents are complementary, not competing:
+- The v5.6 slice answers "what is the smallest runtime we can ship that avoids collapsing commitments into note state or execution plans?"
+- The v6.0 spec answers "what does commitment semantics look like when we take commitment-first seriously across all interaction surfaces?"
+
+The v5.6 slice is not a reinterpretation of the v6.0 spec, and the v6.0 spec is not a claim that v5.6 already realizes the full target. Neither document authorizes a rewrite of `docs/ARCHITECTURE.md` as if commitment runtime were complete.
+
+## Shared Vocabulary
+
+The following terms carry compatible meaning across both documents and must continue to do so:
+
+1. **Commitment** — a responsibility structure such as an open loop, project, next action, waiting state, or review obligation. A commitment is something the user experiences as requiring attention, maintenance, progress, decision, follow-up, or closure.
+
+2. **Project / Project Commitment** — a commitment that requires multiple steps over time, spanning more than a single next action.
+
+3. **Open Loop** — a commitment that exists but has not yet been clarified into a next action or other legible form. The v5.6 slice names this as a commitment form; the v6.0 spec (via `DEFINE_COMMITMENT_STATE_TRANSITIONS.md`) treats "open" as a state of any commitment.
+
+4. **Next Action** — the next concrete step that can advance a commitment or project. Must be distinct from a planner/orchestrator step or tool-call action.
+
+5. **Waiting / Waiting State** — a commitment form where progress depends on another actor, another event, or a future condition. The user recognizes that they are not blocked; they are waiting on something external.
+
+6. **Review Cycle / Review Return / Revisit Obligation** — a recurring re-orientation practice that restores trust in the commitment landscape. Both docs recognize that commitments must return for re-evaluation without collapsing into content approval or `review_state`.
+
+7. **Execution Artifact** — a generated runtime artifact such as a plan, subplan, or orchestration structure used to sequence system work. May support commitment work, but must not become the authoritative model of the human's commitments.
+
+8. **Artifact vs Commitment Distinction** — an artifact may support, represent, or refer to a commitment, but the artifact is not automatically the commitment itself. This boundary is non-negotiable in both docs.
+
+9. **State Axes Distinction** — commitment state must remain distinct from artifact review posture (`review_state`) and artifact durability (`maturity`). A commitment is not a `review_state` value; a commitment state is not a `maturity` value.
+
+## Known Terminology Drift (Flagged, Not Resolved)
+
+The v5.6 runtime slice and this v6.0 spec use overlapping language in several places where the meaning is related but not identical. These drift points must be named explicitly rather than smoothed over:
+
+### 1. Open Loop vs `open` state
+
+**What v5.6 says:** "Open Loop" is a commitment form — one of the in-scope commitment kinds the first slice may cover.
+
+**What v6.0 spec says:** `open` is a state that any commitment can occupy — the state where a commitment exists and is active but has no clarified next action yet. (See `DEFINE_COMMITMENT_STATE_TRANSITIONS.md`.)
+
+**Why the difference matters:** "Open Loop" in v5.6 describes a commitment *kind* or *form*; `open` in v6.0 describes a commitment *state*. A "project" can also be "open" in the v6.0 sense. These are related but not identical.
+
+**Resolution owner:** The implementation lane where the v5.6 slice lands. This spec does not resolve the drift unilaterally. A future v5.6 runtime may need to clarify whether "Open Loop" becomes "any commitment in `open` state" or a specialized form distinct from projects and other kinds.
+
+### 2. Review Return / Revisit Obligation vs Review Cycle
+
+**What v5.6 says:** Review support should preserve "Review Return" and "Revisit Obligation" as explicit commitment forms — human-facing surfaces where commitments return for re-evaluation.
+
+**What v6.0 spec says:** `Review Cycle` (via `NAME_THE_COMMITMENT_FAMILY.md`) is the authoritative v6.0 name for this capability — a recurring re-orientation practice that restores trust in the commitment landscape.
+
+**Why the difference matters:** Both docs point to the same underlying concept, but use different language. The v5.6 terminology is operational ("return," "revisit"); the v6.0 terminology is semantic ("cycle").
+
+**Resolution owner:** The implementation lane where the v5.6 slice lands. The v6.0 spec adopts `Review Cycle` as the architectural name while acknowledging that v5.6 "Review Return" / "Revisit Obligation" refer to the same runtime behavior.
+
+### 3. Receipt handling and new receipt stores
+
+**What v5.6 says:** Commitment support must not require a new receipt store or event redesign. The first slice must not prescribe a new storage subsystem for commitments.
+
+**What v6.0 spec says:** Commitment transitions must be receipt-bearing (via `DEFINE_COMMITMENT_RECEIPT_REQUIREMENT.md`), but a new receipt store is not required. The spec requires that whatever receipt lane exists eventually carries commitment-transition receipts.
+
+**Why the difference matters:** Both docs forbid a new store, but the v6.0 spec is stricter about what must be auditable. The boundary is subtle: the v5.6 slice asks "no new infrastructure"; the v6.0 spec asks "transitions must be explainable, even if no new store is built."
+
+**Resolution owner:** The implementation lane where the v5.6 slice lands. These constraints are compatible but demand careful design. A future v5.6 runtime may discover that commitment transitions need to be recorded somewhere (existing receipt/trace lanes), even if no new store is created.
+
+### 4. Waiting vs Blocked
+
+**What v5.6 says:** `Waiting State` is one in-scope commitment form. The v5.6 slice explicitly guards that waiting must not collapse into generic inactivity.
+
+**What v6.0 spec says:** `blocked` is a distinct state from `waiting` (via `DEFINE_COMMITMENT_STATE_TRANSITIONS.md`). Both are commitment states, but they mean different things: `waiting` implies expected external dependency; `blocked` implies unresolved impediment.
+
+**Why the difference matters:** The v5.6 slice has `Waiting` in scope; it does not mention `blocked`. The v6.0 spec intentionally extends the state family beyond the first slice. This is not a contradiction; it is a deliberate architectural choice to distinguish two kinds of "not yet done."
+
+**Resolution owner:** The implementation lane where the v5.6 slice lands. The v5.6 runtime implementation does not need to carry `blocked` in its first slice. A future enablement pass can add `blocked` support without rewriting the v5.6 waiting semantics.
+
+### 5. Execution Artifact vs Plan
+
+**What v5.6 says:** Execution artifacts (plans, subplans, orchestration) must not become the authoritative model of the human's commitments. Plans must remain subordinate.
+
+**What v6.0 spec says:** The commitment layer must remain distinct from execution-plan vocabulary. A planner `Plan` must not be treated as the user's authoritative project or next-action structure. (See `DEFINE_COMMITMENT_VS_EXECUTION_PLAN.md`.)
+
+**Why the difference matters:** No drift here. Both docs agree. But this agreement must be preserved explicitly in future edits so neither doc accidentally redefines plans as authoritative.
+
+**Resolution owner:** Both specifications must defend this boundary in every review. Any edit that starts to treat a `Plan` as a commitment source is a drift event.
+
+## Non-Contradictions to Preserve
+
+The following hard invariants are shared by both the v5.6 runtime slice and the v6.0 spec. Any future edit to either doc that violates these invariants is a drift event that must be caught in review:
+
+1. **Commitment state must not be expressed only as `review_state` or `maturity`.** (v5.6 Guardrail 1; v6.0 `DEFINE_COMMITMENT_VS_NOTE_STATE.md`.)
+   A commitment in `open` is not a note in `draft`. A commitment in `done` is not a note with `maturity = evergreen`.
+
+2. **Planner `Plan` objects must not be treated as the user's authoritative project or next-action structure.** (v5.6 Guardrail 3; v6.0 `DEFINE_COMMITMENT_VS_EXECUTION_PLAN.md`.)
+   Plans support human work; they do not replace human commitment structure.
+
+3. **Waiting must not collapse into generic inactivity, absence of action, or stale execution state.** (v5.6 Guardrail 4.)
+   A commitment in `waiting` is an explicit user responsibility, not a background task.
+
+4. **Review Return / Review Cycle must not collapse into content approval or `review_state`.** (v5.6 Guardrail 5; v6.0 `DEFINE_COMMITMENT_VS_NOTE_STATE.md`.)
+   Review return is about commitment re-orientation, not about artifact mutation posture.
+
+5. **Unknown or partial commitment structure must be a legal state.** (v5.6 Guardrail 10; v6.0 `DEFINE_COMMITMENT_STATE_TRANSITIONS.md`.)
+   The system must not fabricate certainty about a commitment's state or form if the user has not clarified it.
+
+6. **Commitment support must not require a new receipt store or event redesign.** (v5.6 Out Of Scope; v6.0 `DEFINE_COMMITMENT_RECEIPT_REQUIREMENT.md`.)
+   Existing trace/receipt lanes may carry commitment-relevant records, but no new infrastructure family is prescribed.
+
+## What This Reconcile Does NOT Do
+
+This reconciliation task has explicit boundaries:
+
+- **Does not edit `docs/plans/V56_COMMITMENT_RUNTIME_SLICE.md` in any way.** The v5.6 slice is read-only in this context.
+- **Does not resolve any flagged drift unilaterally.** Each flagged drift point remains open until the implementation lane that picks up the v5.6 slice makes an intentional decision.
+- **Does not claim the v6.0 semantic target is already realized.** This spec is a specification, not a claim about current runtime capability.
+- **Does not propose runtime changes, schema redesign, or event changes.** This is a reconciliation doc, not an implementation plan.
+- **Does not reopen or redesign the commitment state family.** The v6.0 spec in the sibling files (`NAME_THE_COMMITMENT_FAMILY.md`, `DEFINE_COMMITMENT_STATE_TRANSITIONS.md`, etc.) is not revised by this reconciliation.
+
 ## Purpose
 
 This is the key alignment task in this specification directory. It exists to make sure that (a) this v6.0 semantic spec and the v5.6 runtime-slice plan use compatible vocabulary, (b) the v5.6 slice is treated as the first enablement move and not as the target state, and (c) any disagreement between the two docs is named explicitly rather than quietly smoothed over. Silently resolving drift is not allowed: if the two docs say different things about the same concept, the disagreement is owned in this file until someone with authority decides which way to move.
