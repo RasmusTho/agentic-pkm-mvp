@@ -5,8 +5,8 @@ Owner: Runtime / local test bootstrap stabilization
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-09
-Last verified against: docs/TESTING.md, docs/ENVIRONMENTS.md, Makefile, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, app/cli/uat.py, app/cli/latency_harness.py, tests/cli/test_latency_harness.py, merged PRs #340/#346/#348/#349/#367/#376, GitHub Issues #334/#357/#358, current repo + GitHub delivery state on 2026-04-09
+Last reviewed: 2026-04-11
+Last verified against: docs/TESTING.md, docs/ENVIRONMENTS.md, Makefile, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, app/cli/uat.py, app/cli/latency_harness.py, tests/cli/test_latency_harness.py, merged PRs #340/#346/#348/#349/#367/#376/#386, GitHub Issues #334/#357/#358/#385, current repo + GitHub delivery state on 2026-04-11
 
 # Local Test Environment Bootstrap
 

@@ -5,8 +5,8 @@ Owner: Product / architecture forward line
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
-Last reviewed: 2026-04-10
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, merged PRs #365/#376/#382/#383, current repo state on 2026-04-10
+Last reviewed: 2026-04-11
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, merged PRs #365/#376/#382/#383/#386/#389/#391, current repo state on 2026-04-11
 # Roadmap — Strategic Control
 
 This roadmap is forward-looking and skimmable. History lives in `docs/history/SOT_4X_HISTORY.md`; deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
@@ -76,7 +76,7 @@ Decisions already fixed for this direction:
 - Retrieval is treated as a reusable capability rather than a standalone agent.
 - Interaction is primary on the user-facing side; retrieval, reasoning, ingestion, and indexing remain foundational capabilities used by different interaction surfaces and automation paths.
 - Deep Agents start only after structural separation is in place.
-- Chat precedes Panel for Deep Agent rollout because read-only cognition is the safer entry surface.
+- Deep Agents start in a read-only Chat slice because read-only cognition is the safer first rollout posture; Chat itself is a canvas-shaped interaction surface that may later carry governed mutation rights through the gated execution pipeline.
 - Execution remains governed and mediated; reasoning alone must not trigger mutation.
 - The long-term system spans manual through automated and reactive through proactive behavior under governance.
 
@@ -93,7 +93,7 @@ Introduce explicit system layers:
 
 - Interaction Layer:
   - Panel (primary, mutation-capable)
-  - Chat (planned, read-only)
+  - Chat (planned canvas-shaped interaction surface; early Deep Agent slice is read-only)
 - Orchestration Layer:
   - LangGraph (control plane, deterministic)
 - Capability Layer:
@@ -126,7 +126,7 @@ Introduce Deep Agents under strict constraints.
 Scope:
 
 - Chat surface only.
-- Read-only mode.
+- Read-only Deep Agent mode.
 - No system mutation.
 - No execution access.
 
@@ -141,7 +141,7 @@ Explicit rule: "Deep Agents cannot execute actions or mutate system state."
 
 Deliverables:
 
-- Chat becomes the first safe cognition sandbox.
+- The read-only Chat slice becomes the first safe cognition sandbox for Deep Agents.
 - Deep Agent behavior remains decoupled from execution authority.
 
 ## Phase 3 — Panel Integration (Controlled Cognition)
@@ -181,7 +181,7 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 ## Interaction Model Evolution
 
 - Panel = command surface (`intent -> action`).
-- Chat = exploration surface (`reasoning -> insight`).
+- Chat = canvas-shaped exploration surface (`externalize -> manipulate -> optionally commit through governance`).
 - The broader system spans manual, assisted, reactive automation, and proactive automation under governance.
 - Both share:
   - `AgentState`

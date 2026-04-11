@@ -2,7 +2,8 @@ State: Plan (v6.0 target-state sequencing for capability-based architecture and 
 Doc role: Plan
 Authority: Working plan for the capability-based architecture, dual interaction model, and staged agent evolution. This document expands the roadmap with sequencing and design decisions, but does not override current runtime truth in `docs/ARCHITECTURE.md` or `docs/STATUS.md`.
 Owner: `docs/ROADMAP.md`
-Last reviewed: 2026-03-27
+Last reviewed: 2026-04-11
+Last verified against: docs/DESIGN_PRINCIPLES.md, docs/ROADMAP.md, docs/ARCHITECTURE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, current repo state on 2026-04-11
 
 # v6.0 Capability-Based Architecture and Agent Evolution
 
@@ -72,8 +73,9 @@ It also makes explicit that the v5.6 line should be treated mainly as a stabiliz
 
 ### Deep Agents start in Chat before Panel
 
-- Chat is the safer Deep Agent entry surface because it is read-only.
-- This lets the system validate cognition quality before coupling cognition to mutation paths.
+- The first Deep Agent rollout starts in a read-only Chat slice.
+- This lets the system validate cognition quality before coupling Deep Agent behavior to mutation paths.
+- Per `docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md`, Chat itself is a canvas-shaped interaction surface and may later carry governed mutation rights through the gated execution pipeline; the read-only rule applies to the Deep Agent introduction phase, not to Chat's identity.
 - Panel may later consume richer cognition, but only as planning and proposal support.
 
 ### Deep Agents do not precede v6.0 structural separation
@@ -199,9 +201,9 @@ Expected focus:
 ### Chat
 
 - Exploration-oriented surface.
-- Starts read-only.
-- Used as the safe cognition sandbox for richer reasoning and decomposition.
-- May later participate in governed mutation paths, but that should be a later architecture decision rather than an early assumption.
+- Canvas-shaped surface for externalizing and manipulating thought.
+- The Deep Agent introduction slice starts read-only and remains the safe cognition sandbox for richer reasoning and decomposition.
+- May later participate in governed mutation paths through the gated execution pipeline; this is the recorded Candidate A decision in `docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md`, not a current runtime claim.
 
 ## What Stays Out of the Roadmap
 
