@@ -157,6 +157,17 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | docs/research/pattern-harvest-agentic-architecture.md | Research synthesis (outer/inner agent architecture) | Aligned (analysis, docs-only) | 2026-02-05 | Pattern harvest of events/A2A/tools/observability/config; backlog + Mermaid diagram; no runtime wiring. |
 | docs/research/cognitive-semantics-literature-memo.md | Research synthesis (cognitive semantics, PKM, identity, archives) | Aligned (analysis, docs-only) | 2026-03-20 | Literature memo on relevance axes, context/spheres, role identity, and archive/retention semantics; explicitly distinguishes strong source support from provisional repo language. |
 
+## v6.0 Capability Specifications
+
+These directories are docs-only specification authority for v6.0 capability boundaries. Each is the source of truth for its capability's naming, contracts, and acceptance shape; each maps to a parent feature issue with bounded child slice issues. None of them prescribe runtime, schema, event, or on-disk layout changes — those belong to follow-on implementation lanes opened from the parent feature issues.
+
+| Path | Scope | Review status | Last reviewed | Notes |
+| --- | --- | --- | --- | --- |
+| docs/FINDING_AND_REORIENTING/README.md | v6.0 capability spec — separating retrieval, orientation, and resurfacing | Aligned (v6.0 capability spec, docs-only) | 2026-04-11 | Names retrieval, orientation, and resurfacing as three distinct cognitive moves; documents salience as derived; deprecates ASK as architectural center. Read before any v6.0 retrieval/recall/surfacing work. |
+| docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md | v6.0 capability spec — Panel, Chat, Automation surfaces and authority boundaries | Aligned (v6.0 capability spec, docs-only) | 2026-04-11 | Names the three interaction surfaces and their authority boundaries; resolves the Chat read-only-vs-canvas contradiction in favor of canvas-shaped Chat with governed mutation rights (decision recorded 2026-04-11 in `RECONCILE_CHAT_MUTATION_AUTHORITY.md`). Read before any Panel/Chat/Automation evolution. |
+| docs/SEPARATING_PERSISTENCE_SURFACES/README.md | v6.0 capability spec — writing, retention, system persistence surfaces | Aligned (v6.0 capability spec, docs-only) | 2026-04-11 | Names the three persistence surfaces and the four sub-kinds inside the system surface (mirror, receipt, operational trace, index/projection) with six hard non-equivalences. Cites companion-note migration without prescribing it. Read before any persistence/storage taxonomy work. |
+| docs/COMMITMENT_AS_FIRST_CLASS/README.md | v6.0 capability spec — commitments as a distinct semantic family | Aligned (v6.0 capability spec, docs-only) | 2026-04-11 | Distinguishes commitment from note state and from execution plan; defines commitment state transitions and the receipt requirement. Reconciles with the v5.6 commitment runtime slice without forking semantics. Read before any commitment runtime extension. |
+
 ## Supporting Docs (Quality, Ops, Flows, Data)
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
