@@ -5,8 +5,8 @@ Owner: Runtime / architecture SoT
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-10
-Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, app/cli/__init__.py, app/orchestrator/executor.py, app/watcher/registry.py, Makefile, merged PRs #272/#302/#346/#349/#365/#376/#377/#382/#383, current repo state on 2026-04-10
+Last reviewed: 2026-04-11
+Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, app/cli/__init__.py, app/orchestrator/executor.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #272/#302/#346/#349/#365/#376/#377/#382/#383/#386/#389/#391, current repo state on 2026-04-11
 # Architecture — SoT v5.5 Reality-MVP baseline (forward line v5.6)
 
 This document is the active architecture source of truth for the SoT v5.5 Reality-MVP baseline and the place where current runtime contracts are defined.
@@ -413,8 +413,8 @@ This section describes the intended v6 direction. It does not override the locke
 - External to note.
 - Optimized for exploratory reasoning.
 - May span multi-note context.
-- Starts as a read-only sandbox for early Deep Agent rollout because it isolates cognition from execution risk.
-- May later participate in governed mutation paths, but that should not be assumed in the current baseline.
+- The early Deep Agent rollout starts in a read-only Chat slice because it isolates cognition from execution risk.
+- Chat itself is a canvas-shaped interaction surface, not permanently read-only; future Chat-originated mutations must still pass through the governed policy, validation, and event pipeline.
 - Should be read as an exploratory cognition surface first, not as a settled UI embodiment or unrestricted execution path.
 
 ## Capability Model

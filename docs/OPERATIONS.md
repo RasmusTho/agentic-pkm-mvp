@@ -5,8 +5,8 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-10
-Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/runbooks/UAT_PANEL_WATCHER.md, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/watcher/registry.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #272/#346/#349/#365/#376/#382, current repo state on 2026-04-10
+Last reviewed: 2026-04-11
+Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/runbooks/UAT_PANEL_WATCHER.md, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #272/#346/#349/#365/#376/#382/#386/#389, current repo state on 2026-04-11
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -55,7 +55,7 @@ Operator rule:
 
 Current runtime path:
 1. The registry watcher scans the vault, emits DB outbox events, and appends `watcher.run` audit rows so status can count runtime ticks.
-2. The worker consumes DB outbox rows and performs ingest/index, panel scan, and promotion work.
+2. The worker consumes DB outbox rows and performs ingest/index, panel scan, and promotion work, preserving bounded retries for transient missing or unstable notes before giving up.
 3. Health, status, and metrics confirm whether that path is healthy.
 
 ## Canonical Local Test Bootstrap

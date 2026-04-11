@@ -5,8 +5,8 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-04-10
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/runbooks/UAT_PANEL_WATCHER.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/watcher/registry.py, Makefile, merged PRs #365/#376/#382/#383, current repo state on 2026-04-10
+Last reviewed: 2026-04-11
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/runbooks/UAT_PANEL_WATCHER.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #365/#376/#382/#383/#386/#389/#391, current repo state on 2026-04-11
 Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
@@ -73,7 +73,7 @@ Validation posture note:
 - ASK -> deprecated as the architectural center for the v6 direction; current v5.x runtime/API compatibility remains in place.
 - Retrieval -> being refactored into a reusable capability layer rather than retained as a dedicated agent.
 - PanelAgent -> primary interaction surface for mutation-capable flows.
-- Chat -> planned as a read-only Deep Agent sandbox.
+- Chat -> planned as a canvas-shaped interaction surface whose early Deep Agent introduction slice stays read-only; any future Chat-originated mutation must still pass through governed execution.
 - Deep Agents -> planned only after v6.0 structural separation; not active in production mutation flows.
 - Execution layer expansion -> research only.
 - Governance -> active concern across policy, provenance, admissibility, approval, and auditability.
