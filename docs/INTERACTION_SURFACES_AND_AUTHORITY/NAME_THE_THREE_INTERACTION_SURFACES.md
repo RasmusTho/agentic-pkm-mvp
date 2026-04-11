@@ -54,13 +54,13 @@ This task also protects against a common failure mode in dual-interaction design
 
 ## Acceptance Criteria
 
-- [ ] The task file names exactly three surfaces: Panel, Chat, Automation.
-- [ ] Each surface has a one-sentence cognitive posture statement.
-- [ ] The non-collapsibility argument explicitly covers all three pairwise collisions (Panel/Chat, Chat/Automation, Panel/Automation).
-- [ ] The task file does not describe any Chat implementation detail.
-- [ ] The task file does not answer the Chat mutation question; it defers to `RECONCILE_CHAT_MUTATION_AUTHORITY.md`.
-- [ ] The task file references `docs/plans/V60_ARCHITECTURE_TARGET.md` Pillar 10A as its source anchor.
-- [ ] The vocabulary used here is reused verbatim in `DEFINE_PANEL_AUTHORITY_BOUNDARY.md`, `DEFINE_CHAT_AUTHORITY_BOUNDARY.md`, and `DEFINE_AUTOMATION_SURFACE_AUTHORITY.md`.
+- [x] The task file names exactly three surfaces: Panel, Chat, Automation.
+- [x] Each surface has a one-sentence cognitive posture statement.
+- [x] The non-collapsibility argument explicitly covers all three pairwise collisions (Panel/Chat, Chat/Automation, Panel/Automation).
+- [x] The task file does not describe any Chat implementation detail.
+- [x] The task file does not answer the Chat mutation question; it defers to `RECONCILE_CHAT_MUTATION_AUTHORITY.md`.
+- [x] The task file references `docs/plans/V60_ARCHITECTURE_TARGET.md` Pillar 10A as its source anchor.
+- [x] The vocabulary used here is reused verbatim in `DEFINE_PANEL_AUTHORITY_BOUNDARY.md`, `DEFINE_CHAT_AUTHORITY_BOUNDARY.md`, and `DEFINE_AUTOMATION_SURFACE_AUTHORITY.md`.
 
 ## How to Verify (Pre-Merge)
 
@@ -78,6 +78,71 @@ Docs review only:
 - Recommending or rejecting any future surface beyond these three.
 - Reclassifying any current v5.x runtime behavior.
 
+## The Three Surfaces
+
+The system provides three distinct interaction surfaces — **Panel**, **Chat**, and **Automation** — each serving different user cognitive postures and working within separate authority boundaries.
+
+### Panel: Command-Oriented Surface
+
+**Cognitive posture:** explicit intent, explicit action, explicit receipt.
+
+Panel is the user's direct control surface for making intentional moves on the vault. The user names what they want to do (create, revise, link, or commit a change), the system executes the action, and Panel returns a receipt that shows what changed. This surface assumes the user is present, deliberate, and wants unambiguous evidence of what the system did.
+
+Panel serves the user need for **preserving authorship and control** — the user remains the decision-maker, and every action is traceable and reversible.
+
+### Chat: Exploration-Oriented Surface
+
+**Cognitive posture:** externalize and manipulate thought, reason across context, optionally commit through governance.
+
+Chat is a reasoning and exploration surface where the user can externalize incomplete thoughts, ask questions, develop ideas, and have the system reason with them about the vault. Chat can draw on broader context, offer possibilities, and help the user think through decisions — but Chat is not a commitment surface. If Chat reasoning leads to a durable change, that change must be committed through Panel or an explicit Chat-to-Vault submission gate that enforces governance rules.
+
+Chat serves the user need for **thinking outside the head** and **recovering orientation** — the user gets reasoning support, context synthesis, and idea development without the finality of direct modification.
+
+### Automation: Proactive-or-Scheduled Surface
+
+**Cognitive posture:** proactive or scheduled; the system acts on the user's behalf without a live interactive turn, within a governed and inspectable envelope.
+
+Automation is where the system acts unilaterally on behalf of the user based on rules, schedules, or watcher-driven triggers — but only within a pre-authorized governance envelope. The user does not initiate each action, but the system remains inspectable: what actions happened, why, and with what results remain visible in the system's receipt and trace surfaces.
+
+Automation serves the user need for **managing commitments without mental overload** — the system handles the small stuff automatically while preserving the user's ability to understand and correct what it did.
+
+### Why These Three Cannot Collapse
+
+#### Panel and Chat Cannot Collapse
+
+If Panel and Chat were unified into a single "conversation surface," the user would lose:
+- clarity about which posture applies (am I thinking aloud, or committing a change?),
+- the local receipt mechanism that Panel provides via in-note status callouts,
+- and the ability to reason exploratively without accidentally locking decisions into place.
+
+Semantically, Panel is decision-final and Chat is decision-exploratory. Combining them would force users to either treat all thought as binding or all speech as provisional—neither is correct.
+
+#### Chat and Automation Cannot Collapse
+
+If Chat and Automation shared one interaction lane, the system would blur "something the system reasoned about" and "something the system acted on." This violates the gated-execution invariant (see `STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md`): reasoning and cognition are safe to share widely, but unilateral action must remain authorized and bounded. Automation executes with pre-authorized scope; Chat does not. Merging them would either make Chat dangerously permissive or make Automation unnecessarily interactive.
+
+#### Panel and Automation Cannot Collapse
+
+If Panel and Automation were unified, every scheduled or watcher-driven action would inherit Panel's framing of explicit interactive intent. This makes asynchronous, rule-driven system behavior appear interactive when it is not. The user's cognitive model would be wrong: they would expect the receipt, confirmation, and presence of interaction that Panel promises, but Automation cannot guarantee.
+
+### What This Task Does Not Do
+
+This task:
+- **does not decide the Chat mutation question.** That belongs to `RECONCILE_CHAT_MUTATION_AUTHORITY.md`.
+- **does not describe a Chat implementation.** Implementation details belong to later tasks.
+- **does not change Panel runtime truth.** The current Panel behavior stands; this task only names and formalizes the semantic.
+- **does not reclassify any current runtime behavior.** Current v5.x watcher/automation/agent behavior remains as-is; this task describes the wanted-state semantic framework.
+- **does not recommend whether more than three surfaces should exist.** The architecture commits to these three; future expansion is out of scope.
+
+### Grounding in User Needs
+
+These three surfaces align with distinct user needs:
+- **Panel** supports "make an explicit move on the vault" (user need #8: preserving authorship and control).
+- **Chat** supports "externalize and manipulate thought" (user need #2: thinking outside the head).
+- **Automation** supports "the system does the small stuff without asking" (user need #4: managing commitments without mental overload).
+
+Together, they give the user three different cognitive modes within one coherent system, each with its own authority boundary and accountability surface.
+
 ## Related Docs
 
 - `docs/plans/V60_ARCHITECTURE_TARGET.md` §Pillar 10, §Pillar 10A
@@ -92,4 +157,4 @@ This capability does not create GitHub issues. If this task later maps to an imp
 
 ---
 
-**Status:** Specification draft. No blockers.
+**Status:** Specification draft. Completed. Ready for review.
