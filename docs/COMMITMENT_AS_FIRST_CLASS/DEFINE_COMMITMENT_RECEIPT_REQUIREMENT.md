@@ -48,6 +48,89 @@ When complete, a reader can take a sample commitment transition and describe the
 
 The spec must also state explicitly that receipts for commitment transitions must not be stored on the writing surface (i.e., not as vault notes) and must not be used as a substitute for the commitment itself.
 
+## What a commitment receipt is
+
+A commitment receipt is an accountability artifact that records a single commitment state transition in user-legible terms.
+
+A receipt must be able to answer at least these questions:
+- which commitment is this about?
+- what changed (before → after state)?
+- when did the transition occur?
+- why did the transition happen (user action, review cycle, external trigger, or accepted system suggestion)?
+
+A commitment receipt is a **receipt**, not a log row or internal trace.
+
+Its purpose is to restore the user's trust in the system by making commitment changes inspectable after the fact. A receipt exists so the user can later understand what happened to a commitment, not so the system can debug its own internals.
+
+Examples of receipts:
+- "Marked 'reply to Alice' as done on Wednesday 14:03 (user action)"
+- "Moved 'quarterly planning' to waiting on 2026-04-12 (external trigger: budget decision deferred)"
+- "System suggested closing 'follow up on feedback'; user confirmed on 2026-04-11"
+
+## Where receipts live (cross-reference only)
+
+Commitment receipts belong on the **system surface**, not on the writing surface and not on the retention surface.
+
+This distinction is explained in `docs/plans/V60_ARCHITECTURE_TARGET.md` §Pillar 4 (persistence surfaces). The v6.0 architecture target distinguishes three persistence surfaces:
+- **writing surface** — human-authored editable artifacts (vault notes)
+- **retention surface** — retained source-rich artifacts kept for retrieval and reuse
+- **system surface** — mirrors, indexes, traces, receipts, execution artifacts, and runtime support structures
+
+Commitment receipts are **not vault notes**. They do not live on the writing surface.
+
+The specific design of the receipt storage model, schema, and retrieval path is owned by the persistence-surface receipt lane, documented in:
+- `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md` — the decision that receipts are distinct from mirror artifacts
+- `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md` — the distinction between receipts, traces, and audit records
+
+This spec does not duplicate, replace, or prescribe that design. It simply establishes that commitment state transitions are **receipt-bearing events** that must flow into whatever receipt lane the architecture settles on.
+
+**Importantly:** This spec does not require a new receipt storage system. The v5.6 commitment runtime slice (documented in `docs/plans/V56_COMMITMENT_RUNTIME_SLICE.md` §Out Of Scope, §Guardrail 8) explicitly states that the first commitment slice must not require a new receipt store. Commitment receipts may initially live in whatever receipt-bearing surface the architecture already has. The requirement here is only that commitment transitions are receipt-bearing events, not that a new storage layer must be invented to hold them.
+
+## Trust properties receipts must support
+
+For commitment receipts to restore user trust, they must support all of the following properties:
+
+### Inspectable
+
+The user must be able to find and read the receipt for any commitment state transition.
+
+When a user asks "when did I close the hiring project?", the system can answer by retrieving the receipt. The receipt must be discoverable without requiring the user to reconstruct state from raw logs or traces.
+
+### Attributable
+
+Each receipt must name the cause of the transition. The receipt must make clear whether the transition came from:
+- **user action** — the user explicitly marked the commitment, rescheduled it, or changed it
+- **review cycle** — the transition happened as part of a periodic review
+- **external trigger** — the transition was triggered by an external event (deadline met, dependency resolved, decision arrived)
+- **accepted system suggestion** — the system suggested a change and the user confirmed it
+
+System-originated transitions must be clearly marked as system-originated. If the transition happened automatically under standing policy or delegation, that policy and its basis must be identifiable from the receipt.
+
+### Non-fabricated
+
+If the system does not know the cause of a transition, the receipt must **say so**, not guess.
+
+Example: "User marked 'review hiring results' as waiting; reason not recorded" is a better receipt than the system guessing "user action" when it was actually triggered by an automation the user forgot about.
+
+### Non-displacing
+
+Receipts are not the commitment itself.
+
+A missing receipt is a trust bug. A missing commitment is a different bug. Receipts must not silently become the authoritative model of the commitment. The commitment itself remains the source of truth; receipts are accountability artifacts that document its history.
+
+Corollary: if all receipts for a commitment are lost, the commitment's current state and identity must still be retrievable. The commitment is not dependent on its receipts for existence.
+
+### Trace-compatible but not identical to a trace
+
+Commitment receipts may be derivable from, or correlated with, operational traces. Traces are essential for runtime coordination, debugging, and reconstruction.
+
+However, receipts are **human-legible accountability artifacts**, and traces are **machine-usable operational records**. These are different kinds of things:
+- a trace may be partial, noisy, or optimized for runtime efficiency
+- a receipt must be legible and sufficient for accountability
+- a trace exists for the system to coordinate itself; a receipt exists for the human to understand what happened
+
+Commitment receipts must not be confused with raw event streams or operational logs even when they are derived from them (see `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md` §Receipt vs Trace).
+
 ## Why This Matters
 
 Explainability without receipts is a promise that cannot be kept. The user may trust the system's commitment handling on day one, but trust depends on being able to look back. If a commitment transition leaves no durable trace, the user is effectively being asked to trust the system's memory — which is exactly the cognitive load the second brain was supposed to remove.
@@ -63,21 +146,21 @@ Each of these is a trust violation. The receipt requirement in this file exists 
 
 ## Acceptance Criteria
 
-- [ ] This file contains a "## What a commitment receipt is" section defining the receipt in user-facing terms (what it records, what it is for).
-- [ ] This file contains a "## Where receipts live (cross-reference only)" section that points to `V60_ARCHITECTURE_TARGET.md` §Pillar 4 (persistence surfaces) and to `MIRROR_RECEIPT_DECISION.md` / `RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md` without duplicating or replacing them.
-- [ ] This file explicitly states that commitment receipts belong on the system surface, not on the writing surface, and are not vault notes.
-- [ ] This file contains a "## Trust properties receipts must support" section covering inspectability, attribution, non-fabrication, non-displacement, and trace-compatibility.
-- [ ] This file explicitly states that this spec does NOT prescribe a new receipt store, consistent with `V56_COMMITMENT_RUNTIME_SLICE.md`'s out-of-scope rule.
-- [ ] This file does not design any schema, event, or data format for receipts.
-- [ ] This file does not modify `MIRROR_RECEIPT_DECISION.md`, `RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`, or `COMMITMENT_LAYER_CONTRACT.md`.
+- [x] This file contains a "## What a commitment receipt is" section defining the receipt in user-facing terms (what it records, what it is for).
+- [x] This file contains a "## Where receipts live (cross-reference only)" section that points to `V60_ARCHITECTURE_TARGET.md` §Pillar 4 (persistence surfaces) and to `MIRROR_RECEIPT_DECISION.md` / `RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md` without duplicating or replacing them.
+- [x] This file explicitly states that commitment receipts belong on the system surface, not on the writing surface, and are not vault notes.
+- [x] This file contains a "## Trust properties receipts must support" section covering inspectability, attribution, non-fabrication, non-displacement, and trace-compatibility.
+- [x] This file explicitly states that this spec does NOT prescribe a new receipt store, consistent with `V56_COMMITMENT_RUNTIME_SLICE.md`'s out-of-scope rule.
+- [x] This file does not design any schema, event, or data format for receipts.
+- [x] This file does not modify `MIRROR_RECEIPT_DECISION.md`, `RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`, or `COMMITMENT_LAYER_CONTRACT.md`.
 
 ## How to Verify (Pre-Merge)
 
-- Read this file side-by-side with `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md` and `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`. Confirm the cross-references are accurate and non-duplicative.
-- Read this file side-by-side with `docs/plans/V56_COMMITMENT_RUNTIME_SLICE.md` §Out Of Scope. Confirm this spec does not require a new receipt store.
-- Read this file side-by-side with `docs/plans/V60_ARCHITECTURE_TARGET.md` §Pillar 4 and §Pillar 9. Confirm the surface placement is compatible.
-- Apply the trust-property list to a sample commitment-transition scenario and confirm the properties are sufficient to restore the user's trust.
-- Confirm no files outside `docs/COMMITMENT_AS_FIRST_CLASS/` are touched.
+- [x] Read this file side-by-side with `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md` and `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`. Confirm the cross-references are accurate and non-duplicative.
+- [x] Read this file side-by-side with `docs/plans/V56_COMMITMENT_RUNTIME_SLICE.md` §Out Of Scope. Confirm this spec does not require a new receipt store.
+- [x] Read this file side-by-side with `docs/plans/V60_ARCHITECTURE_TARGET.md` §Pillar 4 and §Pillar 9. Confirm the surface placement is compatible.
+- [x] Apply the trust-property list to a sample commitment-transition scenario and confirm the properties are sufficient to restore the user's trust.
+- [x] Confirm no files outside `docs/COMMITMENT_AS_FIRST_CLASS/` are touched.
 
 ## Out of Scope
 
