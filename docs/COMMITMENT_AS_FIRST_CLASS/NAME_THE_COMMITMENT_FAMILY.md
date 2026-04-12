@@ -75,6 +75,36 @@ Docs-only verification:
 - Grep-check: open `docs/plans/V60_ARCHITECTURE_TARGET.md` Pillar 5 and confirm the wording here is compatible with "commitments remain a distinct semantic family rather than generic note state".
 - Confirm no files outside `docs/COMMITMENT_AS_FIRST_CLASS/` have been touched.
 
+## The commitment family
+
+The v6.0 architecture carries **Commitment**, **Project**, **Next Action**, **Waiting**, and **Review Cycle** as a distinct semantic family. These names belong to the commitment layer. They are not synonyms for `review_state`, `maturity`, `kind`, artifact lifecycle, planner `Plan`, or any execution-artifact vocabulary. A note may represent a commitment, but the note is not the commitment. A planner step may support a next action, but the planner step is not the next action.
+
+- **Commitment**: something the human experiences as requiring attention, maintenance, progress, decision, follow-up, or closure. It may be active, deferred, blocked, delegated, or closed. It is not a single task, and it is not a note.
+- **Project**: a commitment that requires multiple steps over time to reach a meaningful outcome. It is not an execution graph, and it is not a planner `Plan`.
+- **Next Action**: the next concrete step that can advance a commitment or project. It is not a tool-call action catalog entry, and it is not a planner `Step`.
+- **Waiting**: a commitment state where progress depends on another actor, event, or future condition. It is not generic inactivity, and it is not a simple defer state.
+- **Review Cycle**: a recurring re-orientation practice that restores trust in the commitment landscape. It is not the same as content approval, and it is not a `review_state` value.
+
+The naming is upstream of runtime. No storage, schema, or event design is being defined here.
+
+## What this family is separate from
+
+The commitment family is explicitly NOT any of the following:
+
+- Not `review_state` values (`draft`, `provisional`, `reviewed`, `protected`, `archived`).
+- Not `maturity` values (`raw`, `draft`, `developing`, `stable`, `evergreen`).
+- Not artifact `kind` values or artifact lifecycle categories.
+- Not `Plan`, `Subplan`, `Step`, or any execution-artifact language.
+- Not tool-call catalogs or agent action names.
+- Not folder placement, tag presence, path family, or any storage convention.
+
+## Authority sources
+
+This naming is grounded in:
+
+- **Concept SoT**: `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md` § "Core rule" and "Primary concepts" define the semantic boundaries and problem-solving purpose of each commitment kind.
+- **Architecture anchor**: `docs/plans/V60_ARCHITECTURE_TARGET.md` § Pillar 5 ("Commitments remain a distinct semantic family rather than generic note state") establishes the architectural commitment to this separation.
+
 ## Out of Scope
 
 - Defining transitions between commitment states (see `DEFINE_COMMITMENT_STATE_TRANSITIONS.md`).
