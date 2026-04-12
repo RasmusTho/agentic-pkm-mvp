@@ -72,13 +72,18 @@ When a commitment moves from one state to another, the user must be able to ask 
 
 **Non-fabrication rule:**
 
-The system must not auto-close a commitment based solely on:
+The system must not auto-change a commitment state based solely on:
 - runtime execution completion,
 - retrieval signals or query results,
 - salience decay or staleness heuristics,
 - or loss of recent activity.
 
-Such signals may be used to **surface** a commitment for review (bring it to the user's attention), but only a **user-accepted action** may change its state. The user decides closure, not the system's confidence in staleness.
+**However**, automatic state transitions ARE permissible when:
+- an external trigger is observable and deterministic (e.g., the awaited event actually occurred, a scheduled time arrived, a named async dependency resolved),
+- the transition is explainable with the four required fields (commitment, before-state, after-state, cause),
+- and the user retains visibility and agency (can review what changed and why).
+
+The distinction is clear: transitions driven by **observable external facts** (`waiting -> next` because the reply arrived) are trustworthy. Transitions driven by **confidence heuristics** about staleness are not. The user decides when heuristics justify surfacing a commitment for review, but observable triggers justify automatic state changes.
 
 ## Allowed transitions (non-exhaustive)
 
