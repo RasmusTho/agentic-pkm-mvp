@@ -82,7 +82,7 @@ Read in this order on the first pass:
 5. **[DEFINE_COMMITMENT_RECEIPT_REQUIREMENT.md](DEFINE_COMMITMENT_RECEIPT_REQUIREMENT.md)** — the requirement that commitment state transitions leave a receipt the user can trust. Cross-references the persistence-surface receipt lane without prescribing it.
 6. **[RECONCILE_WITH_V56_COMMITMENT_SLICE.md](RECONCILE_WITH_V56_COMMITMENT_SLICE.md)** — the alignment task. Reads the v5.6 slice, states this spec's position relative to it, and flags any terminology drift or disagreement.
 
-Tasks 1–5 can be worked on in parallel if needed, but task 6 must be done after tasks 1–5 because it depends on having something concrete to reconcile against. Task 1 is the strongest anchor and should generally be written first.
+Tasks 1–5 were authored as bounded specification slices, and task 6 reconciles them against the v5.6 commitment runtime slice. Task 1 remains the strongest conceptual anchor for future readers.
 
 ## Parent feature issue
 
@@ -92,11 +92,11 @@ See **[PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)** for the bounded paren
 
 This capability is accepted when all of the following are true:
 
-- [ ] All six task files in this directory are merged and cross-link cleanly.
-- [ ] The v6.0 architecture docs can reference "commitments as a distinct semantic family" and point to this directory for the semantic contract.
-- [ ] The v5.6 commitment runtime slice has been read and reconciled with this spec, with any terminology drift explicitly named in `RECONCILE_WITH_V56_COMMITMENT_SLICE.md`.
-- [ ] Nothing in this spec rewrites `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md`, modifies `review_state` handling, designs schema, or touches the v5.6 slice plan file.
-- [ ] A reader coming in cold can answer: "what is a commitment vs a note vs an execution plan?" by reading only this directory.
+- [x] All six task files in this directory are merged and cross-link cleanly.
+- [x] The v6.0 architecture docs can reference "commitments as a distinct semantic family" and point to this directory for the semantic contract.
+- [x] The v5.6 commitment runtime slice has been read and reconciled with this spec, with any terminology drift explicitly named in `RECONCILE_WITH_V56_COMMITMENT_SLICE.md`.
+- [x] Nothing in this spec rewrites `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md`, modifies `review_state` handling, designs schema, or touches the v5.6 slice plan file.
+- [x] A reader coming in cold can answer: "what is a commitment vs a note vs an execution plan?" by reading only this directory.
 
 ## Relationship to GitHub issues
 
@@ -114,4 +114,4 @@ Each task file may later map to one or more GitHub issues under the `feature-bre
 
 ---
 
-**Status:** Specification directory initialized. Ready for task-level authoring and downstream reconciliation with the v5.6 commitment runtime slice.
+**Status:** Specification active. Task-level authoring and v5.6 reconciliation are complete at the docs layer; runtime commitment implementation remains downstream work.

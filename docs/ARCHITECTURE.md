@@ -5,8 +5,8 @@ Owner: Runtime / architecture SoT
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-11
-Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, app/cli/__init__.py, app/orchestrator/executor.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #272/#302/#346/#349/#365/#376/#377/#382/#383/#386/#389/#391, current repo state on 2026-04-11
+Last reviewed: 2026-04-12
+Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, app/cli/__init__.py, app/orchestrator/executor.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #272/#302/#346/#349/#365/#376/#377/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427, current repo state at 0d37257 on 2026-04-12
 # Architecture — SoT v5.5 Reality-MVP baseline (forward line v5.6)
 
 This document is the active architecture source of truth for the SoT v5.5 Reality-MVP baseline and the place where current runtime contracts are defined.
