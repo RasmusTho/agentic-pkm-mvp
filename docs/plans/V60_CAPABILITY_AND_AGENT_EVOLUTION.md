@@ -2,8 +2,8 @@ State: Plan (v6.0 target-state sequencing for capability-based architecture and 
 Doc role: Plan
 Authority: Working plan for the capability-based architecture, dual interaction model, and staged agent evolution. This document expands the roadmap with sequencing and design decisions, but does not override current runtime truth in `docs/ARCHITECTURE.md` or `docs/STATUS.md`.
 Owner: `docs/ROADMAP.md`
-Last reviewed: 2026-04-11
-Last verified against: docs/DESIGN_PRINCIPLES.md, docs/ROADMAP.md, docs/ARCHITECTURE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, current repo state on 2026-04-11
+Last reviewed: 2026-04-12
+Last verified against: docs/DESIGN_PRINCIPLES.md, docs/ROADMAP.md, docs/ARCHITECTURE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, current repo state at 0d37257 on 2026-04-12
 
 # v6.0 Capability-Based Architecture and Agent Evolution
 

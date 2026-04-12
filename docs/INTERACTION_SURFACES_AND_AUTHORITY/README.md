@@ -43,21 +43,21 @@ This capability specification deliberately excludes several things that would be
 - **Not implementing Deep Agents.** Deep Agent rollout has its own v6.0 lane. This spec only names the authority envelope a Deep Agent would have to fit into.
 - **Not changing Panel runtime.** PanelAgent code, event schemas, intent pipelines, and note-writer paths are untouched. The spec describes Panel's current authority boundary; it does not redesign it.
 - **Not changing automation behavior.** Watcher, scheduled jobs, proactive agents keep their current runtime semantics. The spec names the authority lane they already occupy.
-- **Not deciding the Chat mutation question.** The spec's job is to surface the Chat read-only-vs-canvas contradiction as a bounded, owned, named decision. It must not pre-empt the decision.
+- **Not implementing Chat mutation.** The spec records the Chat read-only-vs-canvas decision, but it does not build Chat, change Panel, or authorize any runtime mutation path outside the governed execution pipeline.
 - **Not editing DOCS_INDEX.md, V60_CAPABILITY_AND_AGENT_EVOLUTION.md, DESIGN_PRINCIPLES.md, or any file outside this directory.** The reconciliation task may recommend edits to other docs; it does not make them.
 
 ## The Chat contradiction this spec must address
 
-There is a live contradiction in the v6.0 doc surface:
+There was a live contradiction in the v6.0 doc surface:
 
 - `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` §Fixed Decisions says Chat is "the safer Deep Agent entry surface because it is read-only."
 - The same document, later in §Interaction Model, softens this: Chat "Starts read-only. ... May later participate in governed mutation paths, but that should be a later architecture decision rather than an early assumption."
 - `docs/DESIGN_PRINCIPLES.md` §Explicit Mutation Authority explicitly permits multiple governed mutation paths: "The architecture may include multiple governed mutation paths; the design goal is governed mutation, not necessarily one exclusive mutation surface."
 - The user's stable intent, carried in long-running design memory, treats Chat as a canvas-like thinking surface — meaning Chat can externalize thought and carry governed mutation rights that are not identical to Panel's command-oriented mutation authority.
 
-The spec's resolution stance is: DESIGN_PRINCIPLES is the higher-authority contract. "Read-only" should be understood as applying to the Deep Agent introduction phase, not to Chat's identity. But this spec does not close the decision. The spec names the decision, gives it an owner, and sets an acceptance condition.
+The recorded resolution is Candidate A: `docs/DESIGN_PRINCIPLES.md` is the higher-authority contract. "Read-only" applies to the Deep Agent introduction phase, not to Chat's identity. Chat is a canvas-shaped surface that may later carry governed mutation rights through the gated execution pipeline.
 
-`RECONCILE_CHAT_MUTATION_AUTHORITY.md` is the task file that carries this decision. Every other task file defers to it on the Chat mutation question and must not pre-empt its outcome.
+`RECONCILE_CHAT_MUTATION_AUTHORITY.md` is the task file that records this decision. Every other task file should read its `## Decision` section as authoritative for the Chat mutation question.
 
 Crucially, "Chat as canvas" is not a revival of the ASK-style question-answering loop. ASK was receive-query / return-answer. Canvas is externalize-thought / manipulate-in-place / optionally commit-through-governance. The spec must keep these two framings distinct so no task accidentally reintroduces ASK semantics under a new name.
 
@@ -66,7 +66,7 @@ Crucially, "Chat as canvas" is not a revival of the ASK-style question-answering
 1. [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md) — capability-level context, scope, constraints, acceptance.
 2. [NAME_THE_THREE_INTERACTION_SURFACES.md](NAME_THE_THREE_INTERACTION_SURFACES.md) — the three surfaces and why they are not collapsible.
 3. [DEFINE_PANEL_AUTHORITY_BOUNDARY.md](DEFINE_PANEL_AUTHORITY_BOUNDARY.md) — Panel's current authority and mutation path.
-4. [DEFINE_CHAT_AUTHORITY_BOUNDARY.md](DEFINE_CHAT_AUTHORITY_BOUNDARY.md) — Chat as canvas-shaped thinking surface, with the mutation decision deferred.
+4. [DEFINE_CHAT_AUTHORITY_BOUNDARY.md](DEFINE_CHAT_AUTHORITY_BOUNDARY.md) — Chat as canvas-shaped thinking surface, with future mutation constrained by the recorded Candidate A decision.
 5. [DEFINE_AUTOMATION_SURFACE_AUTHORITY.md](DEFINE_AUTOMATION_SURFACE_AUTHORITY.md) — Automation as a distinct authority lane.
 6. [RECONCILE_CHAT_MUTATION_AUTHORITY.md](RECONCILE_CHAT_MUTATION_AUTHORITY.md) — the keystone decision task.
 7. [STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md](STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md) — the invariant that no surface mutates durable state without governance.
@@ -81,11 +81,11 @@ The capability "Interaction surfaces and authority boundaries" is accepted when:
 - [ ] The three surfaces are described with consistent vocabulary across all task files in this directory.
 - [ ] The Chat contradiction is explicitly named in `RECONCILE_CHAT_MUTATION_AUTHORITY.md`, with: evaluation criteria, decision owner, two named candidate resolutions (DESIGN_PRINCIPLES wins / V60 plan wins), and an acceptance condition on what "decided" means.
 - [ ] `STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md` states the invariant that no interaction surface (including any canvas-Chat) mutates durable state without passing through policy / validation / event-pipeline governance, and that LLM reasoning alone never triggers execution.
-- [ ] The spec does not presume which Chat mutation resolution wins. A reviewer can read it and still believe either outcome is possible.
+- [ ] The spec reflects the recorded Candidate A resolution without claiming any current Chat runtime implementation.
 - [ ] The spec does not reintroduce ASK-style Q&A semantics under the "canvas" label.
 - [ ] No files outside `docs/INTERACTION_SURFACES_AND_AUTHORITY/` are modified by this capability.
 
-Owner-doc promotion (updates to `docs/DESIGN_PRINCIPLES.md`, `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`, `docs/ROADMAP.md`, or `docs/PANEL_AGENT.md`) is explicitly a follow-up capability, triggered only after the reconcile decision has been made and recorded.
+Owner-doc promotion (updates to `docs/DESIGN_PRINCIPLES.md`, `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`, `docs/ROADMAP.md`, or `docs/PANEL_AGENT.md`) is separate from this specification and must remain truthful about current runtime behavior.
 
 ## Relationship to GitHub issues
 
@@ -102,4 +102,4 @@ This directory is the source of truth. GitHub issues, if later created, referenc
 
 ---
 
-**Status:** Specification in progress. Pending reconcile decision owner assignment and first reviewer pass.
+**Status:** Specification active. Chat mutation reconciliation is resolved as Candidate A; runtime Chat implementation and canvas-commit receipt shape remain future capability work.
