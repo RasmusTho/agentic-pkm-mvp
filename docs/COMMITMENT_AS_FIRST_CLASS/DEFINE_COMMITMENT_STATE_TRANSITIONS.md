@@ -17,40 +17,90 @@ State: Specification for the commitment state family and the explainability requ
 
 This task names the commitment states the v6.0 architecture must carry, and requires every transition between them to be explainable to the user. It exists so the user can offload a commitment with confidence that, later, when the system says "this is done" or "this is waiting", the user can ask "why?" and get a legible answer. Without explainable transitions, the user cannot trust the system's reporting of their commitment landscape, and the cognitive prosthetic fails.
 
-## What This Task Does
+## The commitment state family
 
-Write the following contract sections in this file:
+A commitment can occupy one of five primary states, plus an `unknown` state for commitments still undergoing clarification.
 
-1. "## The commitment state family" — name the states a commitment can occupy:
-   - `open` (the commitment exists and is active but has no clarified next action yet)
-   - `next` (the commitment has a clarified next action that can be taken now)
-   - `waiting` (progress depends on another actor, another event, or a future condition)
-   - `blocked` (progress is stalled by something the user or system has not yet resolved; distinct from `waiting` in that `blocked` implies unresolved impediment rather than expected external dependency)
-   - `done` (the commitment is intentionally closed — either completed, abandoned with intent, or rolled into another commitment)
+**Primary states:**
 
-   Explicitly state that `done` covers both "finished" and "explicitly dropped"; a commitment can become `done` by the user deciding it no longer matters.
+- `open`: the commitment exists and is active but has no clarified next action yet. The user is aware of the responsibility and it matters, but the required next step is not yet clear. A commitment may remain `open` while the user gathers context, refines scope, or waits for more information before determining what should be done.
 
-2. "## What these states are NOT" — explicitly rule out:
-   - These are NOT `review_state` values. A commitment in `open` is NOT the same as a note in `draft`.
-   - These are NOT `maturity` values. A commitment in `done` is NOT the same as a note with `maturity = evergreen`.
-   - These are NOT execution-plan states. A commitment in `waiting` is NOT the same as an orchestrator step awaiting a tool result.
-   - Unknown or partial state is a legal position. A commitment may exist without yet having a clarified state; the system must not fabricate certainty.
+- `next`: the commitment has a clarified next action that can be taken now. The system and the user both know what should happen next, and that next step is available to begin.
 
-3. "## Transition explainability requirement" — the core trust rule:
-   - Every commitment state transition must be explainable after the fact.
-   - An explanation must name: which commitment, which states (before/after), when, and why (user action, review cycle, external trigger, system suggestion accepted by user).
-   - The system must not auto-close a commitment based solely on runtime execution completion, retrieval signals, salience decay, or staleness heuristics. Such signals may SURFACE a commitment for review, but only a user-accepted action may close it.
+- `waiting`: progress depends on another actor, another event, or a future condition that is not currently under direct control. This is distinct from `open` in that the user expects something external to change before the next actionable step can be taken.
 
-4. "## Allowed transitions (non-exhaustive)" — a short, concept-level set of transitions. NOT a state-machine schema. For example:
-   - `open -> next` when a next action is clarified.
-   - `open -> waiting` when the user recognizes an external dependency.
-   - `next -> waiting` when the next action's completion reveals a new dependency.
-   - `waiting -> next` when the awaited condition is satisfied.
-   - `next -> done` when the user marks the commitment complete.
-   - `open -> blocked` when impediment is named; `blocked -> open` when impediment is cleared.
-   - `any -> done` by explicit user decision (including intentional drop).
+- `blocked`: progress is stalled by something the user or system has not yet resolved. This is distinct from `waiting` in a specific way: `blocked` implies an unresolved impediment (something that must be actively removed or clarified), whereas `waiting` implies an expected external dependency (something the user is watching for). A commitment may move from `blocked` to `open` or to `next` once the impediment is addressed.
 
-   State that this list is illustrative; the point is that transitions are finite, nameable, and explainable, not that this exact graph is the schema.
+- `done`: the commitment is intentionally closed. This covers both "finished" (completed successfully) and "explicitly dropped" (the user decided it no longer matters, was rolled into another commitment, or no longer holds the user's attention). A commitment can become `done` by user decision at any time; the user controls closure, not heuristics.
+
+**Unknown or partial state:**
+
+A commitment may exist without yet having a clarified state. `unknown` is a legal position during clarification. The system must not fabricate certainty by assigning a state the user has not endorsed. If the user has not clarified whether a commitment is `open`, `waiting`, or something else, the correct answer is `unknown`, not a guess.
+
+## What these states are NOT
+
+**Commitment states are NOT `review_state` values.**
+
+A commitment in `open` is NOT the same as a note in `draft` (`review_state`). A note can be in `draft` review_state (still open for mutation) while its corresponding commitment is in `next` (ready to act on). Conversely, a note can be in `protected` review_state (guarded against change) while its commitment is `waiting` (expecting an external event).
+
+**Commitment states are NOT `maturity` values.**
+
+A commitment in `done` is NOT the same as a note with `maturity = evergreen`. A note may reach `evergreen` maturity (becoming a durable reference) while the commitment it represents is `done` (closed and off the active responsibility list). A note may be `raw` or `developing` in maturity while the commitment it supports is in `next` and actively being worked.
+
+**Commitment states are NOT execution-plan states.**
+
+A commitment in `waiting` is NOT the same as an orchestrator step awaiting a tool result. An execution plan may have steps in a "pending" or "waiting for input" state while the commitment those steps support is in `next` (the user is actively choosing which next action to take). Conversely, a commitment may be in `waiting` (awaiting an external event) while no active execution plan is running.
+
+Execution plans are generated, transient process structures. Commitment states are part of the human's persistent responsibility model.
+
+## Transition explainability requirement
+
+The core trust rule: **every commitment state transition must be explainable after the fact.**
+
+When a commitment moves from one state to another, the user must be able to ask "what happened to that commitment?" and receive a legible answer. An unexplained transition damages the trust on which the cognitive prosthetic depends.
+
+**What an explanation must include:**
+
+1. **Commitment identity** — which commitment transitioned (by name, ID, or unique reference)
+2. **Before-state and after-state** — the exact states involved in the transition
+3. **Timestamp** — when the transition occurred
+4. **Cause** — why the transition happened: 
+   - a user action (marked complete, clarified a next action, named an impediment)
+   - a review cycle (the user re-examined and updated it)
+   - an external trigger (the awaited event occurred)
+   - a system suggestion accepted by the user (the system proposed a state change and the user endorsed it)
+
+**Non-fabrication rule:**
+
+The system must not auto-change a commitment state based solely on:
+- runtime execution completion,
+- retrieval signals or query results,
+- salience decay or staleness heuristics,
+- or loss of recent activity.
+
+**However**, automatic state transitions ARE permissible when:
+- an external trigger is observable and deterministic (e.g., the awaited event actually occurred, a scheduled time arrived, a named async dependency resolved),
+- the transition is explainable with the four required fields (commitment, before-state, after-state, cause),
+- and the user retains visibility and agency (can review what changed and why).
+
+The distinction is clear: transitions driven by **observable external facts** (`waiting -> next` because the reply arrived) are trustworthy. Transitions driven by **confidence heuristics** about staleness are not. The user decides when heuristics justify surfacing a commitment for review, but observable triggers justify automatic state changes.
+
+## Allowed transitions (non-exhaustive)
+
+The following transitions are illustrative, not exhaustive. The point is that transitions are finite, nameable, and explainable — not that this exact graph is a complete state machine.
+
+**Common transitions:**
+
+- `open -> next` when a next action is clarified (user decides what should be done next)
+- `open -> waiting` when the user recognizes an external dependency (user discovers something else must happen first)
+- `next -> waiting` when the next action's completion reveals a new dependency (user starts the next action and discovers an external blocker)
+- `waiting -> next` when the awaited condition is satisfied (the awaited event occurs, and the next action becomes available)
+- `next -> done` when the user marks the commitment complete (user confirms the work is finished or decides to close it)
+- `open -> blocked` when an impediment is named (user identifies what is in the way)
+- `blocked -> open` when the impediment is cleared (the blocking issue is resolved, and the commitment is open again for clarification)
+- `any -> done` by explicit user decision (at any point, the user may close a commitment, deciding it no longer matters, has been abandoned, or has been merged into another commitment)
+
+This list is illustrative. New transitions are permissible as long as they remain explainable.
 
 ## Concretely
 
