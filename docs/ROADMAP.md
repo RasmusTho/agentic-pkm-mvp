@@ -5,7 +5,7 @@ Owner: Product / architecture forward line
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
-Last reviewed: 2026-04-12
+Last reviewed: 2026-04-13
 Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, merged PRs #365/#376/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427, current repo state at 0d37257 on 2026-04-12
 # Roadmap — Strategic Control
 
@@ -28,7 +28,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - Watcher → panel → planner/orchestrator automation with safety limits now includes dedup reports, promotion consumer visibility, and explicit skipped receipts.
   - Vault-first config validation (panel wiring, watcher, outbox) with schema enforcement and `python -m app.cli settings-explain`.
 - **Next**
-  - **Low-risk autonomy + automated sync validation** — define and implement the next bounded forward path for autonomous low-risk proposal surfacing and automated multi-device latency verification, using AI-panel proposal writeback as the first interaction surface and a scripted sync-latency harness as the first acceptance path. Source Anchor: AUTO-LOW-RISK-AUTONOMY
+  - **Low-risk autonomy + automated sync validation** — iCloud transport chain validated end-to-end (MacBook → Mac mini via CloudDocs, 2026-04-12); `.git.nosync` fix shipped (Issue #421); server-side watcher detection confirmed. Partial receipt posted to #355. Remaining: (1) extend allowlist in `vault/@Settings/watchers.md` to permit the harness action type so the harness captures real numeric latency; (2) stabilize Mac mini headless infrastructure (#432); (3) capture clean timing receipt (#433). Proposal writeback path and broader low-risk autonomy expansion remain as follow-on slices after timing receipt is captured. Source Anchor: AUTO-LOW-RISK-AUTONOMY
   - **Environment contract follow-through** — implement the remaining docs-first environment contract slices from `docs/ENVIRONMENTS.md` in bounded steps: explicit runtime environment selection and environment-scoped vault/store separation are shipped, and environment-aware operator diagnostics are delivered via Issue #265 / PR #272; remaining follow-through should stay bounded and avoid changing the shared architecture contracts.
   - **Companion note + Note Context rollout hardening** — the core companion-note and Note Context implementation is shipped, and the active doc-sync correction has landed. Delivery receipt: Issue #229, PR #237. Any remaining rollout verification or cleanup should be captured as new bounded follow-up issues rather than treated as missing first implementation.
   - **Quality Wave: Registry Watcher Evaluation Stack** — shipped and now serves as the v5.6 rollout gate via `docs/TESTING.md`, `docs/QUALITY_WAVE_IMPLEMENTATION.md`, and `docs/quality_wave/README.md`. Delivery receipt: PRs #197, #198, #199, #200, #201, #202, #210.
@@ -221,7 +221,7 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 | v5.1–v5.4 | Watcher track (ingest/panel CLI, policy, ergonomics) | Operationally accepted |
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
 | v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
-| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped, PR #302), real-vault acceptance (accepted on Alpha vault for #240), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler | Selective forward work (multiple panel/runtime slices shipped; acceptance receipt recorded) |
+| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped, PR #302), real-vault acceptance (accepted on Alpha vault for #240), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler, iCloud transport chain validated + `.git.nosync` fix shipped (#421), sync-latency harness partial receipt posted (#355); clean timing measurement pending (#433) | Selective forward work (multiple panel/runtime slices shipped; acceptance receipt recorded; sync transport validated) |
 | v6.0 | Wanted-state architecture pass to align runtime boundaries with the newer human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
 
 ## Tracks (details moved)
