@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-04-12
+Last reviewed: 2026-04-13
 Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/runbooks/UAT_PANEL_WATCHER.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #365/#376/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427, current repo state at 0d37257 on 2026-04-12
 Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 
@@ -20,6 +20,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - The interim GUI and Status service consume these heartbeats/events so the dashboard shows ingest health, counts, and incidents in one place.
 - The local `test` bootstrap path is now treated as a first-class verification concern: parts of the path work today, but the repo-supported clean-state path is not yet fully self-contained end to end.
 - `python -m app.cli sync-latency-harness` now defaults to provider-free `PANEL_AGENT_DECIDER=rule` for deterministic operator validation, emits progress before long-running watcher work, and fails within a bounded timeout instead of hanging indefinitely when a live LLM provider is unavailable.
+- **Sync-latency harness — partial acceptance (2026-04-12):** iCloud transport chain validated end-to-end (MacBook → Mac mini via CloudDocs); server-side watcher detection confirmed; clean numeric latency measurement not yet captured. Blocking gaps: (1) allowlist gate in `vault/@Settings/watchers.md` only permits `promote.evergreen` — `ingest.summary.create` is known but not allowlisted, so the harness exits with 0 measurements on summary-type test notes; (2) Mac mini headless infrastructure gaps (Screen Sharing, auto-login recovery) tracked in #432. Follow-up timing receipt tracked in #433. Root cause of iCloud upload-queue blockage (`.git` dir inside vault) fixed by `.git.nosync` + symlink (Issue #421 closed).
 
 ## CI & Test Markers
 - CI legs assert `docs/ARCHITECTURE.md` contains fitness guard statements, confirm CLI health smoke commands pass, and verify the worker logs show `worker starting`.
@@ -99,6 +100,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - The local test stack can be started successfully against a separate test vault, and `uat-seed-vault-test` works.
 - The repo-supported local bootstrap/UAT path is still not fully self-contained end to end; several concrete blocker issues already exist for that work.
 - Issue #240 has a real-vault Alpha acceptance receipt recorded in `docs/PANEL_AGENT.md` after the 2026-04-08 server-side soak; that specific PanelAgent 2.0 acceptance gate is no longer pending.
+- iCloud sync transport chain is validated end-to-end (MacBook → Mac mini via CloudDocs, 2026-04-12); the `.git.nosync` + symlink fix (Issue #421) removed the root-cause CloudDocs upload-queue blocker. Sync-latency harness partial receipt posted to parent feature #355. Clean timing measurement (numeric MacBook→Mac mini latency) is pending until allowlist is extended and Mac mini headless infrastructure is stable (#432, #433).
 - The current docs-first stabilization wave is making the intended supported path explicit before further implementation continues.
 - Objective: a clean-state, repo-supported local test bootstrap path that is resettable, reproducible, verified, and acceptable as the canonical local verification flow.
 - PanelAgent runtime V1 is part of the active baseline; planner pipeline and LangGraph expansion remain opt-in.
