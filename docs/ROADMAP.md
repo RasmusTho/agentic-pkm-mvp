@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
 Last reviewed: 2026-04-13
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, merged PRs #365/#376/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427, current repo state at 0d37257 on 2026-04-12
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, merged PRs #365/#376/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431/#434, current repo state at 73310f0 on 2026-04-13, backlog issues #435/#436/#437
 # Roadmap — Strategic Control
 
 This roadmap is forward-looking and skimmable. History lives in `docs/history/SOT_4X_HISTORY.md`; deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
