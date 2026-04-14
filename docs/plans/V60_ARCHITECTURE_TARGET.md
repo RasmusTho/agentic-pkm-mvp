@@ -14,45 +14,42 @@ This document is not authoritative for the current runtime.
 For current-state questions, `docs/ARCHITECTURE.md` still wins.
 `docs/STATUS.md` remains the current operational baseline posture.
 
-This document should be read as a target-state consolidation of semantic directions that already
-exist elsewhere in the repo.
-It is not a license to rewrite the current runtime as if the target were already implemented.
+This document should be read together with:
+- `docs/ARCHITECTURE.md` for current runtime truth,
+- `docs/DESIGN_PRINCIPLES.md` for stable design rules,
+- `docs/ROADMAP.md` for sequencing,
+- `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` for capability and bounded-agent evolution.
 
-Read this together with:
-- `docs/DESIGN_PRINCIPLES.md` for the stable design rules,
-- `docs/ROADMAP.md` for the condensed phase sequence,
-- `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` for the working plan on capability-based composition, interaction surfaces, and staged agent evolution.
+## Why this document must be baseline-aware
 
-## Why a separate target-state doc is needed
+The current repo does not lack architecture.
+It already has a concrete runtime shape:
+- the Obsidian vault is the canonical human writing and reading surface,
+- the current runtime boundary includes watcher, ingest, panel, ASK, promotion, worker, and store-facing code,
+- Postgres/pgvector provides canonical store persistence and DB outbox,
+- registry watcher is the runtime default,
+- the DB outbox is the canonical queue for runtime side effects,
+- vault note + companion note are the portable file-based continuity set,
+- runtime DB/index state is rebuildable from that set.
 
-The current repo is in a transitional position:
-- the human-function and ontology layers are now sharper,
-- the current runtime still carries older flattened assumptions,
-- and some meaningful architecture changes would be too large to describe as if they were merely
-  small v5.x refactors.
+That means `v6.0` should not be read as a greenfield replacement.
+It should be read as a controlled re-architecture of an existing vault-first, outbox-driven, local runtime.
 
-If we mix those layers carelessly, two bad things happen:
-- `docs/ARCHITECTURE.md` stops being trustworthy as current-state SoT,
-- or the desired architecture never gets a clear home because it always looks "too future" for
-  current docs.
-
-`v6.0` is therefore the right place for architecture changes that are:
-- semantically meaningful,
-- structurally non-trivial,
-- and not yet reflected in the actual baseline.
+The practical question for `v6.0` is therefore not "what components should exist?"
+It is "where should semantic authority live, and which current seams must stop carrying more meaning than they should?"
 
 ## Usage rule
 
-Architecture review findings should be classified into exactly one of these buckets:
+Architecture review findings must be classified into exactly one of these buckets.
 
 ### 1. Current-state mismatch or bug
 
 Meaning:
-- the current runtime or architecture doc violates an already accepted contract.
+- the current runtime or current architecture doc violates an already accepted contract.
 
 Action:
 - fix in current runtime or current docs,
-- and keep the fix in the v5.x line if it is small enough and low-risk enough.
+- keep the fix in the `v5.x` line if it is small enough and low-risk enough.
 
 ### 2. Enabling change
 
@@ -61,13 +58,13 @@ Meaning:
 - but reduces coupling or prepares the path toward it.
 
 Action:
-- may land in v5.x,
+- may land in `v5.x`,
 - but should be described as enablement, not as target state achieved.
 
 ### 3. v6.0 target-state change
 
 Meaning:
-- a larger architecture move that changes the intended shape of the runtime,
+- a larger architectural move that changes the intended shape of the runtime,
 - depends on broader semantic alignment,
 - or would be misleading to present as current-state architecture today.
 
@@ -75,555 +72,633 @@ Action:
 - describe it here first,
 - then sequence implementation under explicit rollout steps.
 
+## Baseline inherited from v5.5
+
+`v6.0` inherits the following baseline assumptions from the active current-state architecture.
+
+### What stays true
+
+- The vault remains the canonical human writing and reading surface.
+- The current runtime remains vault-first rather than DB-first.
+- Postgres/pgvector and the DB outbox remain core runtime infrastructure.
+- Registry watcher remains the default runtime ingress until replaced by an explicitly adopted successor.
+- Companion note + vault note remain the portable continuity set.
+- Runtime DB/index state remains rebuildable and therefore secondary rather than semantically primary.
+- Local-first multi-device operation remains a first-class concern.
+- Bounded observability, receipts, explainability, and idempotency remain architecture-level requirements.
+
+### What v6.0 changes
+
+`v6.0` is meant to change the *authority model* of the runtime more than the mere component list.
+
+The intended deltas are:
+
+- from watcher-near execution coupling to explicit execution contracts,
+- from path/flat-scope/metadata seams carrying meaning to layered context and bounded operational scope,
+- from projection-heavy semantics to artifact- and contract-aware semantics,
+- from interaction surfaces that remain too close to mutation authority to clearer interaction/cognition/execution/governance separation,
+- from loosely named surfaces to explicit surface authority rules,
+- from conservative-but-flat retrieval to conservative relation/provenance-aware retrieval.
+
+## Preconditions for v6.0
+
+The following items are not themselves "the v6 architecture".
+They are prerequisites or blocker-clearing corrections that should be treated as `v5.x` work unless sequencing forces otherwise.
+
+### Current-state bug fixes that should not be deferred behind v6 branding
+
+- `domain` must not be inferred from path when payload metadata is absent.
+- `zone` must not be read as if it were a stored artifact field.
+- `domain` must be validated or conservatively marked `unscoped` at the write boundary.
+- missing boundary metadata must become explainable at ingest/store time rather than silently tolerated.
+
+### Enabling changes that should prepare the path
+
+- split mirror/projection concerns from receipt/audit concerns,
+- introduce explicit promotion transition records rather than state mutation alone,
+- keep machine-owned artifacts in clear write zones,
+- reduce accidental semantic dependence on path family or legacy metadata labels.
+
+`v6.0` should assume these are either already fixed, explicitly gated, or deliberately carried as temporary compatibility seams.
+
 ## Core architectural intention for v6.0
 
-The `v6.0` wanted state should move the runtime toward a cleaner match with the human-first model
-that now exists in the concept documents.
-
-The high-level direction is:
-- richer human semantics above runtime storage boundaries,
-- narrower operational scope in runtime,
-- relation-first handling of overlap,
-- clearer separation between interaction, cognition, execution, memory, and governance,
-- cleaner distinction between primary human artifacts and projections,
-- explicit separation between writing, retention, and system surfaces,
-- clearer treatment of commitments as their own semantic family,
-- clearer separation between retrieval, orientation, and resurfacing,
-- and less accidental meaning carried by path, one-field scope, or old runtime terminology.
-
-## Wanted-state pillars
-
-### 1. Context model is layered in runtime, not flattened into one `domain` field
-
-Wanted state:
-- runtime treats `operational scope` as the narrow working boundary,
-- while broader belonging and overlap can be represented through relations rather than being forced
-  into one exclusive classification.
-
-Implication:
-- architecture should stop assuming that one scope field fully explains human context.
-
-### 2. Overlap is represented as relation-first, not permission-first
-
-Wanted state:
-- shared participation is treated as the primary semantic reality,
-- explicit cross-scope allowances are only used when repeated runtime crossing needs bounded
-  authorization.
-
-Implication:
-- retrieval, path, and event design should not make `bridge`-like permission objects carry all
-  overlap semantics.
-
-### 3. Primary human artifacts remain central; projections stay secondary
-
-Wanted state:
-- runtime keeps primary human artifacts clearly distinct from mirrors, receipts, execution artifacts,
-  indexes, and other projections,
-- and architecture surfaces preserve that difference explicitly.
-
-Implication:
-- machine-side structures may assist, but they should not become the hidden center of meaning.
-
-### 4. Persistence surfaces stay explicit rather than collapsing into one vague storage model
-
-Wanted state:
-- the architecture names and preserves three persistence surfaces:
-  - a writing surface for human-authored editable artifacts,
-  - a retention surface for retained source-rich artifacts kept for retrieval, citation, and later
-    reuse,
-  - and a system surface for mirrors, indexes, traces, receipts, execution artifacts, and runtime
-    support structures,
-- these surfaces may interact, but they should not be treated as one undifferentiated
-  `notes/storage` layer.
-
-Implication:
-- future runtime design should make it easier to see which surface is carrying human-authored
-  meaning, which surface is carrying retained material, and which surface exists for execution or
-  accountability support.
-- the system surface must not silently become the only real source of meaning simply because it is
-  structurally convenient.
-
-### 5. Commitments remain a distinct semantic family rather than generic note state
-
-Wanted state:
-- commitments are modeled as a distinct concern within the architecture,
-- open loops, projects, next actions, waiting states, and execution accountability remain legible
-  as commitment-oriented structures,
-- and they are not flattened into generic artifact lifecycle labels, generic note state, or runtime
-  execution-plan language.
-
-Implication:
-- future runtime design should distinguish commitments from:
-  - artifacts and retained material,
-  - execution plans and orchestration artifacts,
-  - generic review or lifecycle labels used for notes or projections.
-- this is a target-state semantic direction, not a claim that a full commitment runtime already
-  exists.
-
-### 6. Retrieval should combine scope, relations, and provenance rather than overloading one boundary
-
-Wanted state:
-- retrieval defaults remain conservative,
-- but can draw on explicit relations, provenance, retained artifacts, and overlap structures
-  without pretending the path tree or one domain field is the full truth.
-
-Implication:
-- retrieval architecture should be reviewed for places where it is too flat, too scope-only, or too
-  path-derived.
-
-### 7. Retrieval, orientation, and resurfacing stay related but distinct
-
-Wanted state:
-- retrieval, orientation, and resurfacing are treated as related but separate capabilities,
-- retrieval is not treated as the whole solution to human re-orientation,
-- resurfacing is not reduced to ranking or query-answer relevance,
-- and salience may influence runtime behavior without becoming hidden semantic authority.
-
-Implication:
-- future architecture should expose these distinctions clearly enough that:
-  - findability does not masquerade as orientation,
-  - resurfacing does not masquerade as retrieval,
-  - and derived overlays such as `zone` remain bounded runtime aids rather than the ontology of what
-    matters.
-
-### 7A. Capability-based composition replaces agent-per-function expansion
-
-Wanted state:
-- reusable capabilities become the preferred building blocks for retrieval, orientation support,
-  resurfacing support, reasoning support, and transformation support,
-- while agents and orchestrators focus on bounded decision-making and coordination,
-- and interaction surfaces are kept distinct from cognition mechanisms and execution authority.
-
-Implication:
-- the architecture should avoid treating each reusable function as a new architectural agent,
-- and should prefer explicit contracts between interaction, cognition, execution, memory, and
-  governance over monolithic agent identities.
-
-### 8. Filesystem and path stay projections, not master ontology
-
-Wanted state:
-- one primary stored location remains compatible with richer context relations,
-- and path/layout choices remain pragmatically useful without deciding too much of the domain model.
-
-Implication:
-- architecture should not force path family, vault root, or folder placement to become the main
-  semantic engine.
-
-### 9. Accountability and explainability remain architecture-level invariants
-
-Wanted state:
-- cross-scope allowances, retrieval context, agent actions, and durable changes remain inspectable
-  and receipt-bearing.
-
-Implication:
-- richer semantics must not come at the cost of legibility or trust.
-
-### 10. Surface, authority, and accountability distinctions stay explicit
-
-Wanted state:
-- the architecture keeps the distinctions between:
-  - human-facing artifacts,
-  - retained artifacts,
-  - mirror artifacts,
-  - receipt artifacts,
-  - and execution/runtime traces,
-  explicit enough that adjacent surfaces do not collapse into each other.
-
-Implication:
-- mirror artifacts should continue to mean projection/portability support rather than generic action
-  history,
-- receipt artifacts should continue to mean accountability surfaces rather than generic logs,
-- and traces, audit rows, or event streams should remain supporting execution records rather than
-  being treated as the full human-legible accountability model.
-
-### 10A. Interaction surfaces stay separate from cognition and execution
-
-Wanted state:
-- Panel and Chat are distinct interaction systems with different authority boundaries,
-- richer cognition can be shared across them without erasing their different roles,
-- and execution remains downstream of governance rather than bundled into the interaction surface itself.
-
-Implication:
-- future architecture should not treat read-only cognition and mutation-capable interaction as one
-  generic conversation surface,
-- and should keep the safe introduction path for richer cognition separate from execution expansion.
-
-### 11. Local-first multi-device operation is designed as an architecture property, not an afterthought
-
-Wanted state:
-- architecture tolerates heterogeneous device roles,
-- eventual consistency across devices and replicas rather than assuming one always-current global
-  runtime view,
-- eventual sync,
-- partial replicas,
-- and rebuildable derived layers.
-
-Implication:
-- central artifacts must stay durable and understandable even when relation layers or derived views
-  are incomplete on a given device.
-- sync, ingestion, and derived-state rebuild flows should be safe under lag, partial visibility, and
-  delayed convergence rather than requiring strict immediate consistency.
-- instance provenance and replica state should remain distinguishable from artifact identity.
-
-### 12. Creative-process support is preserved as a first-class architecture concern
-
-Wanted state:
-- runtime surfaces can preserve fragments, alternatives, revision, world continuity, and selective
-  stabilization without forcing everything into settled knowledge or task structures,
-- and hobby/RPG use remains a legitimate validating case rather than an afterthought.
-
-Implication:
-- future retrieval, writing, mirror, and support surfaces should not erase exploratory ambiguity or
-  partial canon-like stabilization merely because those are harder to model.
-
-## Likely v6.0 architecture themes
-
-These are not yet commitments, but they are the most plausible themes the review should test
-against the current runtime:
-
-- a more explicit separation between artifact identity, context relations, and runtime scope
-- cleaner runtime handling of shared participation vs cross-scope allowance
-- clearer architectural treatment of writing, retention, and system persistence surfaces
-- commitment-first modeling that does not collapse projects, open loops, waiting states, and next
-  actions into generic note lifecycle labels
-- retrieval that can reason over relation-bearing context instead of a single flattened scope model
-- explicit separation between retrieval, orientation, and resurfacing, with salience kept derived
-  and inspectable
-- a reduced tendency for watcher/path/layout assumptions to act as domain truth
-- clearer seams between human-facing artifacts, mirror surfaces, receipt surfaces, and execution
-  surfaces
-- architecture that treats local-first multi-device use and eventual consistency as part of normal
-  operation rather than a later bolt-on
-- architecture that preserves creative-process semantics rather than flattening them into knowledge
-  maturity or commitments
-
-## Architectural delta from v5.5 to v6.0
-
-This section summarizes the most important intended architectural shift from the current `v5.5`
-baseline to the wanted `v6.0` line.
-
-It does not mean every delta must land in one release-sized rewrite.
-It exists so review, planning, and implementation can distinguish:
-- what the current runtime still does,
-- what direction the concept work now implies,
-- and which changes are merely enabling steps versus true target-state moves.
-
-### 1. From flattened context to layered context
-
-Current tendency:
-- runtime still carries significant meaning through one active scope field, path placement, and
-  related filtering assumptions,
-- and older terminology still encourages reading those boundaries as if they were the whole context
-  model.
-
-Wanted delta:
-- runtime keeps `operational scope` as a narrow working boundary,
-- while broader human meaning is carried through `sphere`, `context`, `situated role identity`, and
-  `shared participation`,
-- without assuming one runtime boundary fully explains human belonging.
-
-Architectural consequence:
-- context must be modeled in layers rather than collapsed into one field or one folder location.
-
-### 2. From permission-first overlap to relation-first overlap
-
-Current tendency:
-- cross-context reuse is easy to read through bridge-like or allowance-like mechanics,
-- especially where runtime needs explicit bounded crossing.
-
-Wanted delta:
-- overlap is first understood as shared participation in more than one sphere or context,
-- while explicit cross-scope allowance is a narrower authorization mechanism for repeated runtime
-  crossing.
-
-Architectural consequence:
-- relation-bearing context should become more primary than permission objects in retrieval,
-  indexing, and future schema design.
-
-### 3. From projection-centric runtime semantics to artifact-centric semantics
-
-Current tendency:
-- store projections, frontmatter projections, mirrors, indexes, and runtime overlays carry a large
-  share of effective meaning in day-to-day architecture.
-
-Wanted delta:
-- primary human artifacts and retained artifacts remain the meaning-bearing center,
-- while mirrors, receipts, execution artifacts, indexes, and overlays are treated as clearly
-  secondary support structures.
-
-Architectural consequence:
-- runtime seams should make it harder for machine-side projections to silently become the real
-  source of truth.
-
-### 4. From vague storage language to explicit persistence surfaces
-
-Current tendency:
-- notes, storage, mirrors, retained material, and system metadata are still easy to read as one
-  loosely unified persistence model.
-
-Wanted delta:
-- the architecture explicitly distinguishes:
-  - writing surface,
-  - retention surface,
-  - system surface,
-  without implying that all runtime hard-routing is already implemented.
-
-Architectural consequence:
-- future runtime contracts should make it harder for human-authored artifacts, retained artifacts,
-  and system-plane execution/accountability records to collapse into one vague storage abstraction.
-- the system surface may hold durable support structures, but it must not silently become the only
-  real semantic center.
-
-### 5. From flattened commitment handling to commitment-first semantics
-
-Current tendency:
-- open loops, projects, next actions, waiting states, and accountability-bearing execution concerns
-  are still easy to flatten into generic note state, generic review labels, or execution-plan
-  vocabulary.
-
-Wanted delta:
-- commitments are treated as a distinct semantic family,
-- and architecture keeps them separate from:
-  - human-facing artifacts,
-  - retained artifacts,
-  - execution plans,
-  - and generic lifecycle labels.
-
-Architectural consequence:
-- future runtime design should preserve commitment semantics without pretending that the target-state
-  commitment model is already implemented.
-
-### 6. From scope-only retrieval to relation-aware retrieval
-
-Current tendency:
-- retrieval remains largely governed by scope filters, path hints, and flattened runtime metadata,
-  even when richer context and provenance semantics exist elsewhere in the repo.
-
-Wanted delta:
-- retrieval remains conservative by default,
-- but can reason over scope, explicit relations, provenance, retained artifacts, and overlap
-  structures together,
-- without pretending that path or one scope field is the whole semantic model.
-
-Architectural consequence:
-- retrieval architecture should evolve toward combining multiple bounded signals rather than
-  overloading one boundary mechanism.
-
-### 7. From retrieval-as-orientation to explicit retrieval/orientation/resurfacing separation
-
-Current tendency:
-- retrieval, orientation, resurfacing, ranking, recency, and `zone` overlays are easy to read as
-  one blended concern.
-
-Wanted delta:
-- retrieval remains the find/return capability,
-- orientation remains the help-the-human-regain-situational-understanding capability,
-- resurfacing remains the bring-back-into-attention capability,
-- and salience remains a derived influence rather than hidden semantic authority.
-
-Architectural consequence:
-- future runtime design should expose why something was found, why something was surfaced again, and
-  why those are not always the same explanation.
-
-### 8. From filesystem as semantic engine to filesystem as projection
-
-Current tendency:
-- path, folder family, and storage location still risk carrying too much semantic weight in runtime
-  interpretation.
-
-Wanted delta:
-- filesystem layout remains useful, pragmatic, portable, and human-scannable,
-- but acts as a projection of primary placement rather than as the full ontology.
-
-Architectural consequence:
-- one primary stored location must remain compatible with richer relations, overlapping spheres, and
-  later schema evolution.
-
-### 9. From collapsed support surfaces to explicit authority and accountability seams
-
-Current tendency:
-- mirrors, receipt-like note status, runtime traces, and execution artifacts are still easy to read
-  as one blended family of support surfaces.
-
-Wanted delta:
-- architecture keeps human-facing artifacts, retained artifacts, mirror artifacts, receipt
-  artifacts, and execution/runtime traces distinct enough that each can carry the right authority.
-
-Architectural consequence:
-- future runtime design should preserve projection/portability semantics for mirrors,
-  accountability semantics for receipts, and trace semantics for runtime records without forcing
-  them into one store-shaped meaning.
-
-### 10. From single-runtime assumptions to distributed local-first continuity
-
-Current tendency:
-- parts of the architecture still implicitly assume one main runtime view with secondary sync or
-  satellite behavior added later.
-
-Wanted delta:
-- local-first multi-device use is normal architecture,
-- devices may have different roles and different partial views,
-- and eventual consistency is expected across devices and replicas rather than strong immediate
-  consistency.
-
-Architectural consequence:
-- sync, ingest, receipts, rebuild flows, and retrieval must tolerate lag, partial replicas, and
-  delayed convergence without making central artifacts unintelligible or unsafe,
-- while keeping instance provenance and replica-local state distinct from the underlying artifact's
-  identity.
-
-### 11. From architecture-by-implementation-seam to architecture-by-human invariant
-
-Current tendency:
-- runtime seams such as watcher logic, path assumptions, metadata projections, or legacy labels can
-  still end up carrying more semantic authority than intended.
-
-Wanted delta:
-- the architecture should be led by stable human invariants:
-  - central artifacts remain intelligible,
-  - accountability remains inspectable,
-  - context integrity remains protected,
-  - and retained material remains usable without being collapsed into note semantics.
-
-Architectural consequence:
-- implementation seams remain important, but they should be judged by whether they preserve these
-  invariants rather than by whether they are convenient internal boundaries.
-
-### 12. From generic artifact handling to creative-process-aware runtime support
-
-Current tendency:
-- runtime design language is still strongest around knowledge, retrieval, commitments, and scope.
-
-Wanted delta:
-- runtime surfaces preserve creative fragments, threads, iteration, revision, world continuity, and
-  selective stabilization,
-- without forcing exploratory material into settled-note or task semantics too early.
-
-Architectural consequence:
-- future writing, retrieval, mirroring, and support surfaces should preserve exploratory ambiguity,
-  alternatives, and partial stabilization as normal runtime realities.
-
-## How to use this delta
-
-When evaluating architecture findings or proposed changes:
-- classify small contract-corrections as current-state fixes,
-- classify coupling-reduction or seam-cleanup work as enablement,
-- and classify changes that materially realize the deltas above as `v6.0` target-state work.
-
-If a proposal makes runtime terminology, path placement, or store projection more semantically
-authoritative than the human-first contracts allow, it is probably moving in the wrong direction
-even if it simplifies implementation locally.
-
-## Non-goals for this target doc
-
-This document does not yet define:
-- a concrete DB schema,
-- a concrete graph schema,
-- exact event payload redesigns,
-- or a complete service decomposition.
-
-Those should stay downstream of the review.
+The `v6.0` target state is a baseline-aware operating model with four central moves:
+
+1. **files remain the human canonical layer**
+2. **contracts/events become the execution canonical layer**
+3. **runtime stores remain derived and rebuildable**
+4. **replication stays transport, not semantic authority**
+
+Stated more operationally:
+
+- primary human artifacts remain the meaning-bearing center,
+- observation of a file change is not enough to authorize side effects,
+- only explicit, versioned, replay-safe contracts may authorize execution,
+- interaction surfaces may propose or declare intent but do not own execution authority,
+- runtime projections, mirrors, indexes, and overlays support the system but do not silently become the semantic center.
+
+## Target operating model
+
+The intended operating model for `v6.0` should be read through six layers.
+
+### A. Human canonical layer
+
+This layer contains:
+- vault notes,
+- frontmatter and human-authored structure,
+- human-editable continuity artifacts where explicitly intended.
+
+Authority:
+- human meaning,
+- human reviewability,
+- human diffability,
+- human ownership of what was written.
+
+Non-goal:
+- direct execution authority merely because a file became visible to runtime.
+
+### B. Replication layer
+
+This layer contains:
+- iCloud and equivalent authoring replication channels,
+- Git-based promotion/export/recovery channels,
+- replica-local transport and convergence behavior.
+
+Authority:
+- transport,
+- replication,
+- delayed availability,
+- provenance of where an observation arrived from.
+
+Non-goal:
+- defining when the runtime is authorized to act.
+
+### C. Observation layer
+
+This layer contains:
+- watcher signals,
+- changed-file candidates,
+- ingress observations,
+- bounded runtime sensing of possibly changed material.
+
+Authority:
+- "something may have changed".
+
+Non-goals:
+- deciding full business meaning,
+- deciding execution readiness,
+- deciding that a single file event equals a complete human action.
+
+### D. Normalization and contract layer
+
+This is the critical new boundary in `v6.0`.
+
+This layer contains:
+- stable snapshot formation,
+- identity reconciliation,
+- schema/policy validation,
+- context reconciliation,
+- contract emission,
+- dedupe/idempotency keys,
+- causation/correlation data,
+- policy verdicts,
+- execution admission decisions.
+
+Authority:
+- deciding when observed change becomes a valid runtime contract.
+
+This is where raw observations become:
+- `NoteChangeObserved`,
+- `NoteSnapshotNormalized`,
+- `AutomationIntentDeclared`,
+- `ExecutionRequestAdmitted`,
+- `ExecutionApplied`,
+or equivalent versioned contract families.
+
+### E. Execution layer
+
+This layer contains:
+- side-effect-capable runtime actions,
+- workers/executors,
+- retries,
+- concurrency checks,
+- policy enforcement,
+- execution receipts and traces.
+
+Authority:
+- carrying out only already-admitted execution requests.
+
+Non-goal:
+- reading watcher or path events as implicit permission to act.
+
+### F. Derived machine layer
+
+This layer contains:
+- DB objects,
+- vector index entries,
+- relation/index projections,
+- mirrors,
+- ranking overlays,
+- salience/zone-like derived aids,
+- runtime summaries and other support structures.
+
+Authority:
+- operational support,
+- retrieval support,
+- ranking/orientation/resurfacing support,
+- continuity and rebuild assistance.
+
+Non-goal:
+- replacing primary human artifacts or execution contracts as the real source of meaning.
+
+## Execution boundary for v6.0
+
+The most important architectural change in `v6.0` is an explicit execution boundary.
+
+### Current baseline problem statement
+
+The current runtime already improved beyond a naive "watcher directly executes" model.
+However, too much semantic weight can still leak through these seams:
+
+- watcher ingress,
+- path/layout,
+- flat `domain`,
+- interaction-surface-near mutation flow,
+- projection metadata that is convenient to read as authority.
+
+### v6.0 execution rule
+
+No side effect is authorized merely because:
+- a file changed,
+- a watcher saw the change,
+- a panel parsed successfully,
+- a projection row exists,
+- a path implies a likely scope,
+- or a replica delivered a file.
+
+A side effect becomes eligible only when a versioned execution contract has passed normalization and admission.
+
+### Admission gate
+
+Between normalization and execution there should be an explicit admission gate.
+
+The gate should be able to decide:
+- whether the artifact is in an execution-relevant class,
+- whether the snapshot is stable enough,
+- whether the operational scope is valid,
+- whether required provenance is present,
+- whether policy allows execution,
+- whether the request is duplicate/replay/stale,
+- whether optimistic concurrency still holds,
+- whether execution is direct, proposal-only, or blocked.
+
+## Capability graph, not agent sprawl
+
+`v6.0` should be written and implemented as a capability-centered architecture.
+
+### Architectural roles
+
+#### 1. Capabilities
+
+Reusable functions such as:
+- retrieval,
+- reranking,
+- orientation support,
+- resurfacing support,
+- reasoning support,
+- mutation planning,
+- promotion assessment,
+- receipt writing,
+- relation lookup,
+- context assembly,
+- contract normalization.
+
+#### 2. Orchestrators / bounded agents
+
+Decision-making components that:
+- choose among capabilities,
+- sequence bounded work,
+- remain subject to governance and authority limits,
+- do not become catch-all identities for every function.
+
+#### 3. Pipelines
+
+Deterministic or semi-deterministic flows that:
+- transform one bounded input into one bounded output,
+- remain preferable where they are safer and clearer than richer agent behavior.
+
+#### 4. Execution substrate
+
+The runtime machinery that:
+- carries contracts/events,
+- sequences work,
+- invokes execution,
+- records receipts and traces,
+- maintains derived stores.
+
+This distinction matters because the current repo already has a real substrate.
+`v6.0` should refine authority placement on top of it, not describe every useful function as a new architectural agent.
+
+## Surface authority matrix
+
+The target architecture should preserve explicit authority boundaries across persistence and support surfaces.
+
+### 1. Writing surface
+
+Examples:
+- vault notes,
+- human-authored editable artifacts.
+
+Authority:
+- canonical human authorship,
+- human review and revision,
+- primary human-readable meaning.
+
+### 2. Retention surface
+
+Examples:
+- retained external material,
+- source-rich captured artifacts,
+- archive/reference material kept for later retrieval and citation.
+
+Authority:
+- durable retained material and provenance.
+
+Non-goal:
+- implicit execution authority.
+
+### 3. System surface
+
+Examples:
+- companion notes,
+- receipts,
+- mirrors,
+- continuity/repair artifacts,
+- bounded support artifacts.
+
+Authority:
+- continuity, explainability, portability support, accountability support.
+
+Non-goal:
+- silently becoming the only real semantic center.
+
+### 4. Runtime surface
+
+Examples:
+- DB rows,
+- chunks,
+- embeddings,
+- relation tables,
+- execution queues,
+- ephemeral operational projections.
+
+Authority:
+- local runtime support and rebuildable machine state.
+
+Non-goal:
+- human truth.
+
+### 5. Execution records
+
+Examples:
+- admitted execution contracts,
+- execution receipts,
+- traces,
+- audit rows,
+- retry/replay evidence.
+
+Authority:
+- what the runtime was authorized to do,
+- what it attempted,
+- what it completed,
+- why it did or did not proceed.
+
+Non-goal:
+- replacing human-authored artifacts as the full meaning model.
+
+## Context model target
+
+### Layered context, not one-field context
+
+`v6.0` should stop pretending that one `domain` field fully represents human context.
+
+The target model should separate at least:
+
+- operational scope,
+- broader sphere/context belonging,
+- situated role or participation identity,
+- explicit cross-scope allowance where bounded authorization is truly needed,
+- provenance of where and how an artifact became visible to runtime.
+
+`domain` may survive as a compatibility field only insofar as it means `operational_scope`.
+It should not remain the whole context model.
+
+### Relation-first overlap
+
+When an artifact matters in more than one area of life or work, the primary interpretation should be shared participation or relation-bearing context.
+Permission-like crossing remains important, but as bounded authorization, not as the main ontology of overlap.
+
+## Retrieval migration path
+
+`v6.0` should not replace conservative retrieval with uncontrolled semantic richness.
+It should stage retrieval evolution carefully.
+
+### Stage A — conservative baseline preserved
+
+- operational scope remains the default boundary,
+- retrieval continues to be conservative by default,
+- missing context should fail closed rather than become permissive.
+
+### Stage B — relations and provenance become additive signals
+
+- explicit relations,
+- retained-material provenance,
+- broader belonging metadata,
+- continuity artifacts,
+can extend retrieval and ranking without replacing bounded operational scope.
+
+### Stage C — retrieval/orientation/resurfacing are made explicit
+
+The architecture should distinguish:
+- retrieval: find and return bounded results,
+- orientation: help the human regain situational understanding,
+- resurfacing: bring things back into attention.
+
+These are related but not identical capabilities.
+
+### Stage D — operational scope remains narrow even when context grows richer
+
+The richer context model should not erase the need for bounded runtime scope.
+Instead it should prevent a narrow scope marker from pretending to be the whole human model.
+
+## Multi-device and replication posture
+
+`v6.0` must treat local-first multi-device operation as a normal runtime condition.
+
+### Default posture
+
+- multi-device authoring is normal,
+- devices may have heterogeneous roles,
+- replicas may be partial,
+- sync may lag,
+- convergence may be delayed,
+- derived layers may be incomplete on a given node.
+
+### Architectural rule
+
+Replication does not define execution semantics.
+
+That means:
+- replica visibility does not equal execution authority,
+- delayed arrival does not corrupt artifact identity,
+- instance provenance remains distinct from artifact identity,
+- duplicate observation and replay are expected realities rather than exceptions.
+
+### Recommended default runtime posture
+
+Unless a later architecture decision explicitly changes it, `v6.0` should continue to assume a single execution authority posture even in a multi-device authoring world.
+
+This means:
+- one runtime authority may admit and execute side effects,
+- many devices may author, review, or query,
+- replication remains asynchronous,
+- execution contracts and receipts must tolerate lag, duplicate observation, and replay.
+
+## Watcher posture in v6.0
+
+Watchers should remain necessary but semantically narrower.
+
+### Watcher responsibilities
+
+- detect possible change,
+- stabilize enough to form a candidate,
+- emit observation data,
+- preserve provenance,
+- remain observable.
+
+### Watcher non-responsibilities
+
+- deciding complete human intent,
+- deciding cross-scope meaning,
+- deciding that an execution should happen,
+- directly carrying business semantics that belong in normalization or governance.
+
+The architecture should therefore treat watcher as sensor/ingress infrastructure, not the place where runtime meaning hardens.
+
+## Interaction, cognition, governance, execution
+
+The target architecture should separate these concerns more explicitly than the current baseline.
+
+### Interaction
+
+Examples:
+- Panel,
+- Chat,
+- other future human-facing control surfaces.
+
+Authority:
+- gather human input,
+- present proposals and results,
+- request action,
+- declare or surface intent.
+
+### Cognition
+
+Examples:
+- reasoning,
+- interpretation,
+- summarization,
+- context assembly,
+- planning support.
+
+Authority:
+- produce bounded cognitive outputs,
+- support human understanding or downstream contract formation.
+
+### Governance
+
+Examples:
+- policy checks,
+- allowlists,
+- write/mutation authority,
+- confidence/risk checks,
+- execution admission,
+- approval gates.
+
+Authority:
+- decide what may proceed.
+
+### Execution
+
+Examples:
+- writes,
+- promotions,
+- external side effects,
+- workflow transitions,
+- other mutation-bearing acts.
+
+Authority:
+- carry out what governance has admitted.
+
+The design point is simple:
+interaction may surface or declare intent;
+cognition may interpret;
+governance decides;
+execution acts.
+
+## Commitments remain distinct
+
+`v6.0` should preserve commitments as a distinct semantic family.
+
+This means:
+- projects,
+- open loops,
+- next actions,
+- waiting states,
+- execution accountability,
+must not collapse into generic note lifecycle labels or generic execution-plan language.
+
+This remains a target-state direction.
+It does not require pretending that the full commitment runtime already exists in current runtime truth.
+
+## Rollout model
+
+`v6.0` should be sequenced as a migration, not as a one-shot rewrite.
+
+### Phase 0 — blocker clearing in v5.x
+
+- current-state bugs around domain/zone/boundary validation fixed,
+- mirror/receipt split prepared,
+- promotion transition receipt added,
+- watcher/path semantic leakage reduced where possible.
+
+### Phase 1 — explicit contracts and admission boundary
+
+- introduce versioned normalization/execution contracts,
+- make execution admission explicit,
+- route mutation-capable flows through the contract boundary,
+- preserve current substrate where possible.
+
+### Phase 2 — surface authority hardening
+
+- formalize writing/retention/system/runtime/execution-record authority rules,
+- keep companion/receipt/mirror semantics distinct,
+- reduce store/projection semantic drift.
+
+### Phase 3 — retrieval broadening under conservative control
+
+- additive relation/provenance-aware retrieval,
+- explicit orientation/resurfacing distinction,
+- operational scope stays bounded.
+
+### Phase 4 — richer context and bounded capability graph
+
+- operational scope separated from broader context model,
+- capability graph clarified,
+- bounded orchestrators introduced where useful,
+- interaction/cognition/governance/execution seams become explicit in runtime.
 
 ## Exit condition
 
-This target-state doc becomes actionable when:
-- the architecture review has identified which current assumptions conflict with the concept
-  contracts,
-- those findings have been classified into current bug, enablement, or `v6.0` target-state change,
-- and the repo can sequence changes without corrupting `docs/ARCHITECTURE.md` as current-state SoT.
+This target-state document becomes actionable when:
+- the baseline it inherits is kept explicit,
+- current-state bugs and enabling changes are not mislabeled as v6 accomplishments,
+- execution boundary changes are specified in runtime-contract terms rather than only semantic aspirations,
+- rollout work can be sequenced without corrupting `docs/ARCHITECTURE.md` as the current-state SoT.
 
 ## Architecture review findings (2026-03-25)
 
-This section records the first pass of concrete runtime findings classified against the accepted
-concept contracts. The exit condition in this document has been triggered: findings are now
-classified, and sequencing can begin.
+This section records the first pass of concrete runtime findings classified against accepted concept contracts.
 
-### Current-state bugs (violate already accepted contracts — fix in v5.x)
+### Current-state bugs (fix in v5.x)
 
 **Finding 1: Domain inferred from path as fallback**
 - Location: `app/retrieval/hybrid.py` lines 135-145, `_extract_domain()`
-- Contract violated: `LAYERING_MODEL.md` §Missing or unknown domain — unclassified content must
-  not be assumed to belong to the active domain. `CONTEXT_REPRESENTATION_POSTURE.md` — domain is
-  a durable marker the runtime depends on, not a silent derivation.
-- Current behavior: if `payload["domain"]` is absent, falls back to `path.parts[0]` — making
-  moving a note between folders silently change its domain.
-- Fix: treat missing domain as `unscoped`; remove path-based inference.
+- Problem: moving a note between folders can silently change its runtime domain.
+- Fix direction: remove path-based inference; treat missing domain as `unscoped`.
 
 **Finding 2: Zone read from artifact payload as if stored**
 - Location: `app/agents/ask/graph.py:22`, `app/agents/ask/utils.py:38,70`, `app/api/routes/ask.py:91-92`
-- Contract violated: `LAYERING_MODEL.md` §Zone is derived, not a gate — zone affects
-  prioritization, not permission; it is not a stored artifact field.
-- Current behavior: zone is read from payload at retrieval time but is never written during ingest
-  (`app/ingest/vault_alpha.py` has no zone assignment). All reads will silently return `None`.
-- Fix: remove zone reads from artifact payloads; compute zone dynamically at retrieval time from
-  recency/relations/usage signals.
+- Problem: `zone` is treated as stored artifact data even though it is a derived overlay.
+- Fix direction: compute dynamically at retrieval time from bounded signals.
 
 **Finding 3: Domain not validated or recorded at write boundary**
-- Location: `app/ingest/vault_alpha.py:501-544` (ingest never sets domain), `app/store/object_store.py`
-  (accepts any payload without domain validation), `app/retrieval/hybrid.py:158-164`
-- Contract violated: `LAYERING_MODEL.md` §Contract rules — "Every boundary crossing is
-  explainable." and "Domain is the primary boundary."
-- Current behavior: artifacts without domain are neither rejected nor marked `unscoped`; no audit
-  trail of domain assignment exists.
-- Fix: validate domain at `store.put()` time; mark missing as `unscoped`; emit ingest event
-  recording assigned domain; update `_doc_in_scope()` to treat missing domain as `False`
-  (conservative, not permissive).
+- Location: `app/ingest/vault_alpha.py:501-544`, `app/store/object_store.py`, `app/retrieval/hybrid.py:158-164`
+- Problem: missing boundary metadata is neither rejected nor explicitly explained.
+- Fix direction: validate at write boundary; conservatively mark missing metadata; emit assignment/audit evidence.
 
-### Enabling changes (reduce coupling, prepare path — may land in v5.x)
+### Enabling changes (may land in v5.x)
 
 **Finding 4: Mirror conflates artifact identity with audit log**
-- Location: `app/ingest/vault_alpha.py:331-363` (`_write_mirror()`), `app/services/note_log.py:6-19`
-- Context: mirror at `System/Metadata/VaultMirror/<path>/<uuid>.md` mixes frontmatter (identity
-  fields: uuid, title, review_state, maturity) with audit markers (ingest_fingerprint).
-- `ARCHITECTURE.md` acknowledges this is provisional: "It should not be interpreted as the full
-  canonical receipt model."
-- Enablement: separate mirror writing into (a) minimal projection (identity fields only) and (b)
-  receipt/audit log written separately. Ensure mirror path is in ingest ignore list.
+- Location: `app/ingest/vault_alpha.py:331-363`, `app/services/note_log.py:6-19`
+- Enablement direction: separate minimal projection from receipt/audit records and keep mirror paths in ignore/protection lists.
 
 **Finding 5: Promotion mutates artifact state without a clear transition record**
 - Location: `app/promotion/consumer.py:66-91`, `app/services/note_update.py:36-88`
-- Context: promotion writes `review_state` and `maturity` into both ObjectStore payload and vault
-  frontmatter. No durable receipt records who authorized the promotion or when.
-- `ONTOLOGY_VOCABULARY.md` flags this as an open seam: "promotion currently resolves into
-  review_state mutation in both vault frontmatter and store payload."
-- Enablement: emit a distinct promotion event (not just a state mutation); record a human-legible
-  receipt artifact per promotion. The dual-write (store + vault) can remain for now; the receipt
-  is the prep work.
+- Enablement direction: emit explicit promotion transition records and human-legible receipts in addition to state mutation.
 
-### v6.0 target-state changes (larger semantic moves — describe here, sequence later)
+### v6.0 target-state changes
 
-**Finding 6: Single `domain` field represents all of human context**
-- Directly maps to V60 pillar §1 (context model is layered, not flattened).
-- Current runtime uses one flat string `domain` and `bridge_domains` list where the terminology
-  contracts call for `sphere`, `situated role identity`, `context`, and `shared participation`
-  as distinct semantic dimensions.
-- Runtime locations: `app/retrieval/hybrid.py:148-155, 158-164`, `app/promotion/consumer.py:66-91`
-- v6.0 action: introduce richer context relation model with explicit fields and relations.
-  `domain` field becomes strictly `operational_scope`.
+**Finding 6: Single `domain` field represents too much of human context**
+- Target direction: layered context model where `domain` survives, if at all, only as `operational_scope`.
 
-**Finding 7: `kind` is hardcoded to `"note"` for all ingested artifacts**
-- Location: `app/ingest/vault_alpha.py:350, 512, 542, 562`
-- Contract referenced: `docs/NOTE_KIND_POLICIES.md` — kind routes policy and does not define
-  structure. `ARCHITECTURE.md` §Note Kind Policies — different artifact classes (vault note,
-  source artifact, reflective artifact, creative artifact, system artifact) should activate
-  different metadata axes.
-- v6.0 action: introduce artifact kind determination at ingest time; each kind routes to a policy
-  profile. Current hardcode stays as `vault_note` until the routing table is defined.
-
----
+**Finding 7: `kind` is hardcoded too narrowly**
+- Target direction: kind/policy routing becomes more explicit at ingest and normalization boundaries without collapsing into schema sprawl.
 
 ## Related documents
 
 - `docs/ARCHITECTURE.md`
 - `docs/STATUS.md`
-- `docs/plans/ARCHITECTURE_REVIEW_READINESS.md`
-- `docs/adr/ADR-0006-deepagents-harness.md`
-- `docs/PROJECT_KERNEL.md`
-- `docs/HUMAN-FLOWS.md`
 - `docs/ROADMAP.md`
-- `docs/ONTOLOGY_RUNTIME_BRIDGE.md`
-- `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
-- `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md`
+- `docs/DESIGN_PRINCIPLES.md`
+- `docs/HUMAN-FLOWS.md`
+- `docs/RETRIEVAL.md`
+- `docs/PANEL_AGENT.md`
+- `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`
+- `docs/plans/ARTIFACT_MODEL_AND_LIFECYCLES.md`
+- `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`
 - `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`
-- `docs/CONCEPTS/CONTEXT_TERMINOLOGY_CONTRACT.md`
+- `docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md`
 - `docs/CONCEPTS/CONTEXT_REPRESENTATION_POSTURE.md`
+- `docs/CONCEPTS/CONTEXT_TERMINOLOGY_CONTRACT.md`
