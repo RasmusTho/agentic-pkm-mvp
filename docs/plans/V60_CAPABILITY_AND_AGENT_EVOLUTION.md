@@ -2,8 +2,8 @@ State: Plan (v6.0 target-state sequencing for capability-based architecture and 
 Doc role: Plan
 Authority: Working plan for the capability-based architecture, dual interaction model, and staged agent evolution. This document expands the roadmap with sequencing and design decisions, but does not override current runtime truth in `docs/ARCHITECTURE.md` or `docs/STATUS.md`.
 Owner: `docs/ROADMAP.md`
-Last reviewed: 2026-04-12
-Last verified against: docs/DESIGN_PRINCIPLES.md, docs/ROADMAP.md, docs/ARCHITECTURE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, current repo state at 0d37257 on 2026-04-12
+Last reviewed: 2026-04-14
+Last verified against: docs/DESIGN_PRINCIPLES.md, docs/ROADMAP.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/RETRIEVAL.md, docs/PANEL_AGENT.md, docs/plans/V60_ARCHITECTURE_TARGET.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md
 
 # v6.0 Capability-Based Architecture and Agent Evolution
 
@@ -17,6 +17,7 @@ This document holds the working plan for moving the system toward:
 
 It exists so the roadmap can stay phase-oriented without turning into a delivery backlog.
 It also makes explicit that the v5.6 line should be treated mainly as a stabilization layer for invariants rather than as a rigid step-by-step prerequisite chain.
+The broader target operating model lives in `docs/plans/V60_ARCHITECTURE_TARGET.md` and should be read as baseline-aware: v6.0 inherits the vault-first surface, registry watcher ingress, DB outbox, companion-note continuity set, and rebuildable DB/index posture rather than starting from an abstract blank slate.
 
 ## Scope
 
@@ -36,7 +37,7 @@ It also makes explicit that the v5.6 line should be treated mainly as a stabiliz
 - `docs/ARCHITECTURE.md` — current structure and v6-direction layer framing.
 - `docs/ROADMAP.md` — high-level migration sequence.
 - `docs/STATUS.md` — present-tense operational posture.
-- `docs/plans/V60_ARCHITECTURE_TARGET.md` — broader v6 wanted-state architecture context.
+- `docs/plans/V60_ARCHITECTURE_TARGET.md` — broader v6 target operating model context.
 
 ## Reading Order
 
@@ -58,6 +59,7 @@ It also makes explicit that the v5.6 line should be treated mainly as a stabiliz
 - Retrieval is reusable infrastructure that must serve multiple interaction surfaces.
 - Treating retrieval as an agent encourages unnecessary control-center behavior and tighter coupling.
 - The architecture should instead expose retrieval as a reusable capability that can be orchestrated by different surfaces and cognition mechanisms.
+- The staged migration is: current-state scope/domain fixes first, then capability extraction, then relation/provenance/retained-material signals, then retrieval/orientation/resurfacing separation. Do not describe relation-aware retrieval as current runtime until the implementation and acceptance evidence exist.
 
 ### Interaction is primary; retrieval is supporting
 
@@ -89,12 +91,14 @@ It also makes explicit that the v5.6 line should be treated mainly as a stabiliz
 - LLM reasoning must not directly mutate durable state.
 - Any execution expansion must remain policy-bounded, approval-aware, auditable, and idempotent.
 - Readiness for richer execution is a governance question before it is a tooling question.
+- The target execution boundary is `observation -> normalization/contract -> admission -> execution`; cognition may assist proposal and normalization, but must not collapse admission into execution.
 
 ### System-of-systems framing is intentional
 
 - Interaction, cognition, execution, memory, and governance are treated as separate but coordinated subsystems.
 - The design goal is modularity with replaceability, not one monolithic agent runtime.
 - This keeps the architecture flexible without erasing important authority distinctions.
+- The v6 operating model names human canonical, replication, observation, normalization/contract, execution, and derived machine layers so the current runtime can evolve without losing current-state truth.
 
 ### The operating spectrum is broad
 
@@ -114,6 +118,8 @@ The repo should not treat all v5.6 work as equally blocking for v6 structure.
 - The intent and action pipeline is stable enough to preserve deterministic mutation paths.
 - The settings/compiler layer is reliable enough to expose topology and policy with provenance.
 - Panel is stable enough to act as the current mutation-capable interaction baseline.
+- The current vault note + companion note continuity set stays portable, and runtime DB/index projections remain rebuildable.
+- The DB outbox remains the canonical runtime queue while JSONL remains audit/diagnostic only.
 
 ### Can continue later without blocking the v6 structure definition
 
@@ -128,10 +134,11 @@ Working rule:
 
 ### Phase 0 — Stabilization (v5.6)
 
-- Complete PanelAgent as the default mutation-capable interaction path.
-- Stabilize `AgentState`, LangGraph rollout posture, and settings/compiler work.
+- Preserve PanelAgent as the current mutation-capable interaction path.
+- Stabilize `AgentState`, LangGraph rollout posture, and settings/compiler work without re-opening the delivered v5.6 line by default.
 - Preserve current runtime compatibility and contract safety.
 - Keep Deep Agents out of production mutation flows.
+- Treat domain/zone/mirror/promotion findings as current-state bug fixes or enabling changes, not as already-realized v6 behavior.
 
 ### Phase 1 — v6.0 Baseline (Structural Separation)
 
@@ -142,8 +149,9 @@ Expected shifts:
 - ASK is no longer treated as the architectural center.
 - Retrieval is extracted into a capability layer.
 - Panel uses capabilities rather than embedded retrieval-centric logic.
-- Mutation-capable flows are modeled as `intent -> plan -> proposal -> validation -> execution`.
+- Mutation-capable flows are modeled through `observation -> normalization/contract -> admission -> execution`.
 - Foundational capabilities such as ingestion and indexing remain explicit and first-class in the architecture.
+- Human canonical, replication, observation, contract, execution, and derived-machine layers are explicit enough to keep writing, retention, system, runtime, and execution-record authority distinct.
 
 ### Phase 2 — Deep Agent Introduction in Chat
 

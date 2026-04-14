@@ -8,6 +8,19 @@ Authority: Current retrieval and optional rerank behavior for the runtime; retri
 - Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout remains opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
+## v6 Reading Boundary
+
+`docs/plans/V60_ARCHITECTURE_TARGET.md` treats retrieval as a future reusable capability inside a
+baseline-aware target operating model. This document still describes the current path.
+
+For v6 planning, read current retrieval migration in stages:
+- current-state bug fixes first: make missing scope/domain behavior conservative and avoid path as
+  silent semantic authority;
+- enabling work next: expose retrieval contracts and add explicit provenance/relation inputs without
+  changing default authority;
+- target-state change later: separate retrieval, orientation, and resurfacing, with salience and
+  relation-aware behavior implemented and accepted before it is described as runtime reality.
+
 # Retrieval (Current Reality)
 
 The default retrieval path is an in-process memory store (`app/retrieval/hybrid.py`) that combines:
