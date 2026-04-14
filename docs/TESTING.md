@@ -172,7 +172,7 @@ The CI surface should stay small and explicit. The intended steady-state roles a
 
 | Workflow role | Purpose | Expected posture |
 | --- | --- | --- |
-| `pr-smoke` | Fast merge blocker: lint, settings validation, `not pg` smoke, architecture/contract checks, Quality Wave suite, fitness summary parsing | required on PRs |
+| `pr-smoke` | Fast merge blocker: lint, settings validation, `not pg` smoke, architecture/contract checks, deterministic Quality Wave UAT harness, fitness summary parsing | required on PRs |
 | `integration-nightly` | Full `pytest -m "not pg and not alpha_llm"` suite, explicit deterministic Quality Wave acceptance harness, first bounded PG contracts lane, runtime contract regressions, fitness gates | nightly / scheduled |
 | `release-uat` | Quality Wave gate (UAT harness + golden vault + full QW suite), fitness gates | release/UAT gate (tags + manual) |
 
@@ -184,7 +184,7 @@ Human-need acceptance scenarios should map onto those roles explicitly instead o
 Older overlapping workflows may still exist while the surface is being consolidated, but new coverage should map to these roles instead of adding more partial gates.
 
 Current implementation:
-- `.github/workflows/ci-smoke.yaml` — PR smoke including `tests/quality_wave/` (99 QW tests).
+- `.github/workflows/ci-smoke.yaml` — PR smoke with explicit system dependency parity (`ffmpeg`, `ripgrep`), split baseline pytest and deterministic Quality Wave UAT harness steps, and path-based skipping of the heavy pytest slices for docs-only PRs that do not touch code, tests, scripts, workflow, Docker, dependency, or Makefile surfaces.
 - `.github/workflows/integration-nightly.yaml` — full suite nightly at 02:00 UTC, explicit deterministic acceptance harness coverage via `tests/quality_wave/test_uat_harness.py`, first bounded PG contracts lane (`tests/int/test_pg_backend.py`, `tests/api/test_status_store_pg.py`, `tests/indexer/test_outbox_roundtrip_pg.py`), runtime contract regressions, and fitness gates.
 - `.github/workflows/release-uat.yaml` — UAT harness + golden vault + full QW suite + fitness gates; triggered on version tags and manual dispatch.
 

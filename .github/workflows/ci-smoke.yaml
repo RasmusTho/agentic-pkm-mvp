@@ -38,6 +38,11 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install system deps (ffmpeg, ripgrep)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg ripgrep
+
       - name: Install Python deps
         run: |
           python -m pip install -U pip
@@ -77,7 +82,25 @@ jobs:
       - name: Prepare tmp dir
         run: mkdir -p tmp
 
-      - name: Pytest smoke (memory, fail-fast)
+      - name: Detect heavy smoke surface
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            heavy_smoke:
+              - 'app/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - '.github/workflows/**'
+              - 'pyproject.toml'
+              - 'requirements*.txt'
+              - 'Makefile'
+              - 'Dockerfile'
+              - 'docker-compose*.yaml'
+              - 'docker-compose*.yml'
+
+      - name: Pytest smoke baseline (memory, fail-fast)
+        if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         timeout-minutes: 12
         run: |
           pytest -c /dev/null -m "not pg and not alpha_llm" \
@@ -91,8 +114,20 @@ jobs:
             tests/ports/test_vault_port_contract.py \
             tests/services/test_filesystem_vault_adapter.py \
             tests/services/test_vault_sync_lifecycle.py \
-            tests/quality_wave \
             --maxfail=1 -ra --durations=20
+
+      - name: Pytest Quality Wave smoke (memory, fail-fast)
+        if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
+        timeout-minutes: 8
+        run: |
+          pytest -c /dev/null -m "not pg and not alpha_llm" \
+            tests/quality_wave/test_uat_harness.py \
+            --maxfail=1 -ra --durations=20
+
+      - name: Skip heavy pytest smoke for docs-only PR
+        if: github.event_name == 'pull_request' && steps.changes.outputs.heavy_smoke != 'true'
+        run: |
+          echo "Docs-only PR detected; skipping heavy pytest smoke slices."
 
       - name: Ensure persisted vector index artifact exists
         run: |
