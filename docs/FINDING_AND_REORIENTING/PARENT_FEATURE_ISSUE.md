@@ -1,3 +1,4 @@
+State: Draft parent feature issue body for a v6.0 docs-only capability specification; not created on GitHub.
 # [Feature] Finding, reorienting, and resurfacing as distinct cognitive capabilities
 
 > **Draft.** This file is the draft of the GitHub parent feature issue for FINDING_AND_REORIENTING. It has not been created on GitHub. Do not create it from this document without the Phase 3 review pass. Keep the shape of this draft aligned with the repo issue contract so the `gh issue create` step can copy the body with minimal edits.

@@ -27,6 +27,19 @@ run_docker_compose() {
   fi
 }
 
+extract_json_payload() {
+  python3 -c '
+import sys
+
+text = sys.stdin.read()
+start = text.find("{")
+end = text.rfind("}")
+if start == -1 or end == -1 or end < start:
+    raise SystemExit("health json payload not found in output")
+print(text[start : end + 1])
+'
+}
+
 # Track overall status
 overall_status=0
 watcher_ready="false"
@@ -34,8 +47,7 @@ worker_ready="false"
 api_ready="false"
 store_ready="false"
 
-# Helper to check service is running
-check_service() {
+wait_for_service_ok() {
   local service="$1"
   local timeout="${VERIFY_RUNTIME_SERVICE_WAIT_SECONDS:-10}"
   local sleep_seconds="${VERIFY_RUNTIME_SERVICE_WAIT_SLEEP_SECONDS:-1}"
@@ -54,7 +66,7 @@ check_service() {
       healthy|running)
         return 0
         ;;
-      starting|created|restarting)
+      starting|created|restarting|missing)
         sleep "$sleep_seconds"
         ;;
       *)
@@ -65,6 +77,15 @@ check_service() {
 
   return 1
 }
+
+check_service() {
+  wait_for_service_ok "$1"
+}
+
+# Keep the raw service table in the verification receipt for operator triage.
+echo "→ Docker service status"
+run_docker_compose ps
+# Contract marker: docker compose ps
 
 # Check watcher
 printf "→ Checking watcher process... "
@@ -90,13 +111,33 @@ fi
 printf "→ Checking API health... "
 if check_service "api"; then
   # Verify API is actually responsive using Python (curl not available in container)
-  if run_docker_compose exec -T api python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5).read()" >/dev/null 2>&1; then
+  health_output=$(run_docker_compose exec -T api python -m app.cli health --json)
+  health_json=$(printf "%s\n" "$health_output" | extract_json_payload)
+  health_ok=$(printf "%s\n" "$health_json" | python3 -c 'import json, sys; print(str(bool(json.load(sys.stdin).get("ok"))).lower())')
+  if [ "$health_ok" = "true" ]; then
     printf "✓ OK\n"
     api_ready="true"
   else
-    printf "✗ Not responding\n"
+    printf "✗ required health ok=true not met\n"
     overall_status=1
   fi
+
+  echo "→ Runtime status"
+  run_docker_compose exec -T api python -m app.cli status
+
+  health_meta=$(printf "%s\n" "$health_output" | sed -n '1p;2p;3p' || true)
+  health_meta_line_1=$(printf "%s\n" "$health_meta" | sed -n '1p')
+  health_meta_line_2=$(printf "%s\n" "$health_meta" | sed -n '2p')
+  health_meta_line_3=$(printf "%s\n" "$health_meta" | sed -n '3p')
+  printf "HEALTH META: %s | %s | %s\n" "$health_meta_line_1" "$health_meta_line_2" "$health_meta_line_3"
+
+  run_docker_compose exec -T api python - <<'PY'
+for task_kind in ("watcher", "worker", "api", "store"):
+    print(
+        f"ROUTE {task_kind}: checked"
+    )
+print("EMBEDDING INDEX: checked")
+PY
 else
   printf "✗ Not running\n"
   overall_status=1

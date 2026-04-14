@@ -1,4 +1,4 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard) with the forward line exploring v5.6 LangGraph/Reasoning improvements.
+State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard) with the v5.6 delivery line closed and post-v5.6 follow-ups tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
 Doc role: Core SoT
 Authority: Current operational snapshot for the active baseline; subordinate to concept contracts for normative semantics, but authoritative for current runtime status and rollout posture.
 Owner: Runtime / current-state SoT
@@ -6,8 +6,8 @@ Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
 Last reviewed: 2026-04-13
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/runbooks/UAT_PANEL_WATCHER.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #365/#376/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431/#434, current repo state at 73310f0 on 2026-04-13, backlog issues #435/#436/#437
-Status snapshot now includes SoT baseline + forward-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/runbooks/UAT_PANEL_WATCHER.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orchestrator/executor.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #365/#376/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431/#434, current repo state at 73310f0 on 2026-04-13, backlog issues #435/#436/#437
+Status snapshot now includes SoT baseline + release-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). Code still exposes `sot_forward_line_version` / `feature_line_version` as the v5.6 release-line marker, but GitHub issue truth treats v5.6 as delivered rather than active. `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
 
@@ -51,23 +51,25 @@ Validation posture note:
 - Required tests: `ruff check app tests`, `mypy app`, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`, plus `python -m app.cli settings-validate --json` and the new concurrency/promote/settings regression suites.
 - CI gate workflows: `.github/workflows/ci-smoke.yaml` and `.github/workflows/ci-lite.yml` parse the fitness report summary lines (including `CI SUMMARY GATES ok=<bool>`) and exit non-zero when `GATES.ok != true`, making them the enforced gate jobs that must pass before merges to main.
 
-## Forward line: SoT v5.6 (Now / Next / Later)
-### Now
-- Ground the v5.6 objectives in a docs-first kickoff: the detailed plan in `docs/plans/V56_FORWARD_LINE.md` captures the pillars, acceptance criteria, and immediate signal checks the forward line needs to ship.
-- Run the docs-first local test bootstrap stabilization wave: the repo now documents one intended clean-state path, one lightweight planning chain, and one verification/acceptance spine for bootstrap work. Source anchor: `docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md`.
-- Keep the watcher auto-run/evidence pipeline ready for safe enablement: confirm allowlist enforcement, dedup counts, skipped receipts, and write-guard state are surfaced in status, events, and the new CLI `settings-explain` output before any runtime gate opens.
-- PanelAgent decider hardening through the shared `ReasoningFacade` seam is shipped for the current pilot path. Delivery receipt: Issue #230, PR #236.
-### Next
-- ReasoningFacade + LangGraph rollout for the PanelAgent pilot agent pool is delivered. Delivery receipt: Issue #231 (closed COMPLETED). The remaining phased rollout to Promotion/Reviewer/Hygiene is gated on v5.6A pilot stabilization (see Later). Source Anchor: RF-ADOPTION
-- The companion note + Note Context doc-sync correction is shipped. Delivery receipt: Issue #229, PR #237. Any remaining rollout verification or cleanup should be captured as new bounded follow-up issues rather than treated as missing implementation.
-- Vault-as-GUI settings compiler and operator surfaces: panel-action/compiler provenance (source paths, mtimes, combined sha256) is now surfaced in the `/api/status` endpoint and `python -m app.cli status --json` via `panel_diagnostics` fields. Delivery receipt: Issue #238 (closed COMPLETED), PR #254. Source Anchor: SETTINGS-PROVENANCE
-- CLI/docs runbook alignment with v5.6 narrative: operators now know what signals (`settings-explain`, watcher summaries, `CI SUMMARY GATES`, panel/promote counters) prove the rollout is safe. Delivery receipt: Issue #232 (closed COMPLETED). Source Anchor: ROLLOUT-RUNBOOKS
-- Nightly verification now includes the deterministic Quality Wave acceptance harness (`tests/quality_wave/test_uat_harness.py`) plus a first bounded Postgres contracts lane (`tests/int/test_pg_backend.py`, `tests/api/test_status_store_pg.py`, `tests/indexer/test_outbox_roundtrip_pg.py`) inside `integration-nightly`. The PG lane flows through the repo DB abstraction: `DATABASE_URL`/`DB_DSN` provide the target endpoint, `STORE_BACKEND=pg` selects the backend, and `alembic upgrade head` is the schema/bootstrap contract for the first green recurring PG wave.
-### Later
-- Extend LangGraph adoption across more agents (Promotion, Reviewer, Hygiene) and the orchestrator V2 control plane once the v5.6A pilot stabilizes.
-- Surface LangGraph/Reasoning rollouts in the evaluation stack (golden vault, metamorphic runs, cold rebuild, fitness gates) so the forward line has measurable acceptance per contract.
-- Begin planning multi-user and external sync guardrails that rely on the v5.6 safe mode (watcher gating + plan audits) before the next forward milestone.
-**Out of scope for the v5.6 kickoff PR**: orchestrator/langgraph plumbing stays opt-in until the defined gates pass; watcher auto-run is controlled by `WATCHER_AUTO_EXEC` (set `WATCHER_AUTO_EXEC=0` for emit-only/safe mode).
+## v5.6 Closure and Post-v5.6 Follow-ups
+
+GitHub issue/PR truth treats the v5.6 delivery line as closed, not as the active work queue. Direct v5.6 issues found in the current audit are closed, including PanelAgent/ReasoningFacade/runtime surface sync, Orchestrator V2 pilot slices, runbook alignment, Quality Wave / bounded PG verification, PanelAgent 2.0 Alpha acceptance, and low-risk sync validation parent #355.
+
+Delivered v5.6 receipts include:
+- PanelAgent decider hardening through the shared `ReasoningFacade` seam: Issue #230 / PR #236.
+- ReasoningFacade + LangGraph rollout for the PanelAgent pilot agent pool: Issue #231 closed COMPLETED.
+- Companion note + Note Context doc-sync correction: Issue #229 / PR #237.
+- Vault-as-GUI settings provenance: Issue #238 / PR #254.
+- CLI/docs runbook alignment: Issue #232 closed COMPLETED.
+- Nightly deterministic Quality Wave acceptance harness and first bounded PG contracts lane: Issue #274 and Issue #285 closed.
+- PanelAgent 2.0 Alpha real-vault acceptance: Issue #240 / PR #381.
+- Low-risk autonomy + automated sync validation: parent Issue #355 closed COMPLETED with a final acceptance receipt on 2026-04-13; #432 and #433 remain follow-up/infra/statistical timing work, not blockers for #355 closure.
+
+Post-v5.6 follow-up truth:
+- Orchestrator V2 remains flagged; `CheckpointStore` plumbing exists, but a code audit shows the V2 runtime does not call `_save_checkpoint()` during execution, so checkpoint/resume must not be claimed as supported baseline behavior.
+- A2A in-process handler routing exists and the current traceability test passes, while parent lifecycle issue #359 remains open and should be treated as stale lifecycle/project drift until closed or re-scoped.
+- Local runtime health verification shipped via #334/#365; repo contract drift in `tests/ops/test_runtime_verify_contract.py` and docs-index validation drift are tracked by #441 and addressed in PR #439 as local verification hardening, not as active v5.6 feature work.
+- v6 target-state audits opened current-state bugs for domain/zone handling (#435, #436, #437); these are post-v5.6 bug/follow-up slices.
 
 ## Agent Evolution Track
 
@@ -82,9 +84,9 @@ Validation posture note:
 The system is not yet an autonomous agent system. All execution remains controlled and mediated.
 High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.md`; roadmap and architecture should stay aligned to that split.
 
-## Status fields (baseline vs forward line)
+## Status fields (baseline vs release line)
 - `sot_baseline_version`: locked SoT v5.5 Reality-MVP baseline.
-- `sot_forward_line_version` / `feature_line_version`: active forward line (v5.6 features on top of the v5.5 baseline).
+- `sot_forward_line_version` / `feature_line_version`: code-level release-line marker that still reports v5.6 on top of the v5.5 baseline; this is not proof that v5.6 remains the active issue queue.
 - `active_features`: human-readable list of forward-line capabilities (PanelAgent runtime, watcher track, config-driven wiring).
 - Counters (totals + 24h window): `panel_runs` (`panel.intent.executed`), `promote.intent.created`, `promotion_executed` (`promote.done`), `watcher_runs` (`watcher.run` from registry and legacy watcher ticks), and ingest run counts per plane. Registry watcher health is also tracked via heartbeat + tick logs.
 
@@ -100,7 +102,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - The local test stack can be started successfully against a separate test vault, and `uat-seed-vault-test` works.
 - The repo-supported local bootstrap/UAT path is still not fully self-contained end to end; several concrete blocker issues already exist for that work.
 - Issue #240 has a real-vault Alpha acceptance receipt recorded in `docs/PANEL_AGENT.md` after the 2026-04-08 server-side soak; that specific PanelAgent 2.0 acceptance gate is no longer pending.
-- iCloud sync transport chain is validated end-to-end (MacBook → Mac mini via CloudDocs, 2026-04-12); the `.git.nosync` + symlink fix (Issue #421) removed the root-cause CloudDocs upload-queue blocker. Sync-latency harness partial receipt posted to parent feature #355. Clean timing measurement (numeric MacBook→Mac mini latency) is pending until allowlist is extended and Mac mini headless infrastructure is stable (#432, #433).
+- iCloud sync transport chain is validated end-to-end (MacBook → Mac mini via CloudDocs); the `.git.nosync` + symlink fix (Issue #421) removed the root-cause CloudDocs upload-queue blocker. Parent feature #355 is closed COMPLETED with its final acceptance receipt posted on 2026-04-13; clean statistical timing measurement and Mac mini headless infrastructure hardening remain follow-up work in #432 and #433, not blockers for #355 closure.
 - The current docs-first stabilization wave is making the intended supported path explicit before further implementation continues.
 - Objective: a clean-state, repo-supported local test bootstrap path that is resettable, reproducible, verified, and acceptable as the canonical local verification flow.
 - PanelAgent runtime V1 is part of the active baseline; planner pipeline and LangGraph expansion remain opt-in.
@@ -109,11 +111,11 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 
 ## Forward-Line Tracking
 
-| Area | Current baseline posture | Forward-line direction |
+| Area | Current baseline posture | Follow-up direction |
 | --- | --- | --- |
 | Watcher auto-exec | Guarded by dedup + optimistic writes + idempotency | Safe enablement only after gates and receipts prove stable behavior |
-| LangGraph rollout | Active for ASK and PanelAgent-related flows; the shared `ReasoningFacade` seam is adopted for the PanelAgent pilot (Issue #231 delivered) | Expand in phases as additional agent pools (Promotion/Reviewer/Hygiene) migrate onto the shared `ReasoningFacade`; gated on v5.6A pilot stabilization |
-| Orchestrator V2 pilot | Shipped: parallel execution + dependency-aware scheduling with `ORCHESTRATOR_VERSION=v2` flag. V1 is default. Coverage: flag contract, plan-graph scheduling, event/trace compat, compensation/rollback. Delivery receipt: Issue #250 (pilot), Issue #251 (compensation). | Future slices: checkpointing, retry/timeout policy. Adopt in broader rollout after stability signals. |
+| LangGraph rollout | Active for ASK and PanelAgent-related flows; the shared `ReasoningFacade` seam is adopted for the PanelAgent pilot (Issue #231 delivered) | Expand in phases as additional agent pools (Promotion/Reviewer/Hygiene) migrate onto the shared `ReasoningFacade`; treat this as post-v5.6 adoption work rather than an open v5.6 blocker. |
+| Orchestrator V2 pilot | Shipped/flagged: parallel execution + dependency-aware scheduling with `ORCHESTRATOR_VERSION=v2`; V1 is default. Coverage: flag contract, plan-graph scheduling, event/trace compat, compensation/rollback, and retry metadata handling. `CheckpointStore` plumbing exists, but checkpoint/resume is not the supported baseline execution path. Delivery receipts include Issue #250 (pilot), Issue #251 (compensation), and Issue #252 (checkpoint/retry handling). | Future slices: checkpoint/resume hardening, broader timeout/SLA policy beyond executor-level tool timeouts, and adoption after stability signals. |
 
 For detailed sequencing, version history, and roadmap ladder, use:
 - `docs/ROADMAP.md`

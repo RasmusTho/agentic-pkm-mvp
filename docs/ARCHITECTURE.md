@@ -1,4 +1,4 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency hardening) with the forward line now entering v5.6 LangGraph/Reasoning rollouts.
+State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency hardening) with the v5.6 delivery line closed and post-v5.6 follow-ups tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
 Doc role: Core SoT
 Authority: Active runtime architecture source of truth for the current baseline and runtime contracts; wins over roadmap and historical references on current-state questions.
 Owner: Runtime / architecture SoT
@@ -6,8 +6,8 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-04-13
-Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, app/cli/__init__.py, app/orchestrator/executor.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #272/#302/#346/#349/#365/#376/#377/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431, current repo state at 73310f0 on 2026-04-13, backlog issues #435/#436/#437
-# Architecture — SoT v5.5 Reality-MVP baseline (forward line v5.6)
+Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/ROADMAP.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, app/cli/__init__.py, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orchestrator/executor.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #272/#302/#346/#349/#365/#376/#377/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431, current repo state at 73310f0 on 2026-04-13, backlog issues #435/#436/#437
+# Architecture — SoT v5.5 Reality-MVP baseline (v5.6 delivered)
 
 This document is the active architecture source of truth for the SoT v5.5 Reality-MVP baseline and the place where current runtime contracts are defined.
 
@@ -15,6 +15,36 @@ Historic SoT snapshots and older plans live in `docs/archive/`; the 4.x ladder h
 Those documents are kept for reference but are not active truth for the current baseline. If a historical or roadmap document conflicts with this document on current-state runtime architecture, this document wins.
 
 This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system.
+
+## Executive Summary
+
+The current architecture is a local-first Mimer runtime, not the full Yggdrasil target system:
+- the shipped baseline is vault-first ingestion, registry watcher, DB outbox, worker/indexing,
+  PanelAgent, ASK, status/health, and guarded note mutation;
+- the current data shape should be read through the three artifact surfaces: human vault notes,
+  system companion/continuity artifacts, and rebuildable runtime DB/index projections;
+- `ReasoningFacade`, LangGraph, A2A, MCP descriptors, and Orchestrator V2 are real repo surfaces,
+  but their current status is mixed: some are active runtime paths, some are flagged pilots, and
+  some are scaffolding or reference contracts rather than broad production rollout;
+- the planned architecture continues toward capability-based composition, separate Panel and Chat
+  interaction surfaces, governed execution, and relation-aware context without treating ASK,
+  retrieval, a single agent, or historical AMG/SetDB terminology as the architectural center.
+
+Proposal:
+- keep v5.5 as the locked operational baseline,
+- treat v5.6 as the closed stabilization and enablement delivery line for safe automation,
+  shared reasoning seams, flagged Orchestrator V2 pilot work, A2A/MCP contract hardening,
+  and reproducible local verification,
+- move unresolved work into explicit post-v5.6 follow-ups instead of reading it as an
+  active v5.6 blocker; current known follow-ups include checkpoint/resume hardening,
+  stale lifecycle closure on A2A/sync parent issues, and v6-driven current-state bugs,
+- keep v6.0 as the target-state architecture lane for interaction/cognition/execution/memory/governance
+  separation, capability reuse, Chat canvas planning, Deep Agent introduction, commitments, and richer
+  context/relation modeling.
+
+Non-current material is deliberately not restated here: historical system maps, `AMG`/`SetDB`
+lineage, legacy snapshot watcher posture, and old module names are background only unless a current
+owner document explicitly promotes them.
 
 Related documents and authority boundaries:
 - `docs/DESIGN_PRINCIPLES.md` defines the stable design rules for modularity, flexibility, authority separation, and documentation layering. Use it before changing architecture wording or roadmap framing.
@@ -185,7 +215,7 @@ See also:
 ## SoT lines
 - **SoT v5.5 Reality-MVP baseline (locked)** — watcher auto-run gate + panel action provenance + concurrency/idempotency guardrails on top of the stable vault ingest, hybrid retrieval/ASK, observability/status surfaces, and orchestrator runtime V1.
 - **Reality-MVP foundation snapshot** — single-user PKM with stable vault ingest, minimal external ingest, hybrid retrieval + ASK with sources/latency, observability/status surfaces (CLI/API/GUI), and orchestrator runtime V1. Retained as foundation history; superseded by the v5.5 baseline.
-- **SoT v5.x Agentic PKM (active forward line, currently entering v5.6)** — Agentic flows (PanelAgent v5+), Satellite Sync (`docs/plans/PROTOCOL_SATELLITE_SYNC.md`), and Yggdrasil modules (Munin/Brokkr/Tyr/Heimdall) that extend the v5.5 baseline; richer orchestration (LangGraph + MCP ToolProvider) and reasoning live here. The forward line includes the watcher/agent infra track: v5.1 watcher-ready ingest/panel flows (including targeted ingest via `ingest-vault-paths` and multi-note panel CLI), v5.2 snapshot-based CLI polling watcher MVP (`vault-watcher-run` driving ingest + panel), v5.3 explicit policy for auto-panel via frontmatter gating watcher runs, v5.4 watcher hardening/ergonomics (dry-run, max-notes guard, structured summaries), and v5.5 planner pipeline + CLI-first orchestration.
+- **SoT v5.x Agentic PKM (v5.6 delivered, post-v5.6 follow-up mode)** — Agentic flows extend the v5.5 baseline through PanelAgent, guarded watcher automation, shared reasoning seams, A2A/MCP contract hardening, and a flagged Orchestrator V2 pilot. Satellite Sync (`docs/plans/PROTOCOL_SATELLITE_SYNC.md`) and broader Yggdrasil module expansion remain planned/conceptual, not baseline runtime. Shipped v5.6 pieces include targeted ingest via `ingest-vault-paths`, multi-note panel CLI, registry watcher defaulting, watcher safety gates, planner pipeline + CLI-first orchestration, `ReasoningFacade`, descriptor-based MCP/tool execution, bounded A2A in-process routing, sync-latency validation, and deterministic runtime health checks. MCP ToolProvider integration, remote MCP multiplexing, broad A2A delivery semantics, Orchestrator V2 checkpoint/resume, and statistical/infra sync hardening remain post-v5.6 follow-ups.
 
 ### Runtime watcher choice
 - Registry watcher is the runtime default; start-system flows and Docker compose use `python -m app.cli watcher run` with `configs/watchers.yaml`.
@@ -206,7 +236,7 @@ See also:
 - Shared scaffolding such as `AgentState`, LangGraph control patterns, common prompts, policies, and capabilities should provide the reusable foundation for those agents.
 - Tools/MCP: tools are actions an agent chooses from within its LangGraph or equivalent bounded control flow; they should not be hard-wired at the pipeline/Orchestrator level beyond routing envelopes.
 - Foundational capabilities such as ingestion, indexing, retrieval, reasoning support, and execution/governance support remain first-class even when they are not expressed as standalone agents.
-- Current adoption is phased: ASK, PanelAgent, and Reviewer use LangGraph; most other agents remain deterministic pipelines until later v5.6 rollout phases.
+- Current adoption is phased and mixed: ASK and PanelAgent are active runtime LangGraph surfaces; Reviewer/pilot and older graph wrappers exist for selected agent lanes, CLI/dev use, or tests; most ingest/index production paths still run as deterministic pipelines until later rollout phases.
 
 ## Agent Implementation Pattern (Current Direction)
 - Agents MUST preserve external event contracts and Outbox envelopes during migrations.
@@ -343,11 +373,27 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
    - Registry watcher: config-driven loop (`configs/watchers.yaml`, `python -m app.cli watcher run`) emits `panel.scan.requested` and `ingest.vault.changed`, appends `watcher.run` audit events for status counting, writes heartbeat + tick logs, and enqueues DB outbox events. JSONL outbox is audit-only.
    - Legacy snapshot watcher (`vault-watcher-run`) is dev-only and not used in runtime start-system flows.
 2) **External corpus ingest (minimal)** — a small drop folder/pipeline for real external documents ingested as `external_raw` runtime objects, stored in ObjectStore and indexed without surfacing as vault notes (txt/md drop-folder CLI implemented; newsletters/PDFs can extend the same path).
-3) **ASK API** — FastAPI endpoint returning answer text plus sources `{uuid, title, origin (vault/external), zone overlay if known, path/source_ref}` and latency; uses hybrid retrieval over both planes with an in-process HybridStore warmed from `store_objects` on first use. Zone overlays are planned but not yet populated in responses.
+3) **ASK API** — FastAPI endpoint returning answer text plus sources `{uuid, title, origin (vault/external), zone overlay if known, path/source_ref}` and latency; uses hybrid retrieval over both planes with an in-process HybridStore warmed from `store_objects` on first use. `zone` is passed through when present on the hit payload, but derived zone coverage is not guaranteed baseline behavior.
 4) **Observability backend** — status service that aggregates per-store projection counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency; exposed via CLI and interim GUI.
 5) **Interim GUI** — simple FastAPI-served page (root `/`) that shows status (object counts, last ingest, ASK stats) and an ASK input with answers + visible sources; explicitly a temporary observability/interaction surface.
 6) **Panel action catalog & watcher settings** — the canonical action catalog (`docs/settings/panel-actions.md`) + `vault/@Settings/watchers.md` describe allowed `watcher_allowed` actions, auto-run env (`WATCHER_AUTO_EXEC`), and outbox paths; `python -m app.cli settings-explain` and `python -m app.cli settings-validate` emit provenance + validation output for reviews.
 All current runtime surfaces build on the same Store abstraction (ObjectStore, VectorIndex, RelationIndex), event envelope, and vault-first write boundary.
+
+## Current vs Planned Status
+
+| Area | Actual status | Planned / non-baseline status |
+| --- | --- | --- |
+| Mimer runtime | Active baseline: vault ingest, registry watcher, DB outbox, worker/indexing, PanelAgent, ASK, status/health, and guarded writes. | Broader Yggdrasil module expansion remains conceptual/planned unless a current owner doc says otherwise. |
+| Artifact persistence | Active reading model: human vault notes, system companion notes, and rebuildable runtime DB/index projections. | v6 target-state work refines writing/retention/system surfaces; it must not revive DB-primary or AMG-primary wording. |
+| Watcher path | Registry watcher (`python -m app.cli watcher run`) is the production-facing default; legacy snapshot watchers and `runtime-loop` are lab/dev-only. | Sync and autonomy validation continue through bounded harnesses and follow-up slices. |
+| PanelAgent | Active governed mutation-capable surface with action catalog, watcher gates, provenance, and write guards. | Richer cognition may support Panel later, but execution remains downstream of policy, validation, and events. |
+| ASK | Active v5.x API/runtime surface over hybrid retrieval and answer composition. | Deprecated as the v6 architectural center; retrieval becomes a reusable capability. |
+| Reasoning/LangGraph | `ReasoningFacade` exists; ASK and PanelAgent use LangGraph in active runtime paths; selected pilot/graph wrappers exist. | Broader Promotion/Reviewer/Hygiene adoption is phased and gated; graph wrappers do not by themselves make every agent a baseline LangGraph runtime path. |
+| Orchestrator | V1 is default. V2 is flag-selected via `ORCHESTRATOR_VERSION=v2` and includes dependency-aware parallel scheduling, event/trace compatibility, compensation/rollback, and retry metadata handling. | Broad V2 adoption is not baseline. Checkpoint/resume support and repo-wide timeout/SLA policy remain non-baseline; `CheckpointStore` plumbing exists but is not the supported execution path. |
+| A2A | Internal schema and audit helpers are current-state contracts (`agent.request.created`, `agent.response.created`, `agent.error.created`); routed in-process agent calls exist where handlers are registered. | No production A2A transport, retry queue, dead-letter queue, or repo-wide delivery SLA is claimed. |
+| MCP/tools | Descriptor registry, validation, deterministic/mock execution, internal tools, and gated real `mcp.vault.append_note` path exist. | MCP ToolProvider integration, dynamic discovery, remote server multiplexing, and richer versioning are planned. |
+| Chat / Deep Agents | No production Chat or Deep Agent mutation flow is active. | Chat is the planned canvas-shaped interaction surface; the first Deep Agent slice is read-only Chat, with any later mutation routed through governed execution. |
+| Satellite sync | Instance/device plumbing and sync-latency validation harnesses exist. | Full satellite-sync behavior remains planned, not a current runtime claim. |
 
 ## Operational and Implementation Detail
 
@@ -367,16 +413,16 @@ The following topics are part of the current system, but their detailed behavior
   - `docs/HEALTH.md`
   - `docs/TESTING.md`
 
-## Forward-Line Features (Non-baseline)
+## Post-v5.6 Follow-ups (Non-baseline)
 
 These topics are real parts of the repo and roadmap, but they are not baseline-defining architecture for the locked v5.5 runtime:
-- richer Reasoning/LangGraph rollout beyond the currently active agents
-- A2A envelopes and cross-agent routing experiments
-- MCP-facing runtime surfaces
-- Orchestrator V2 design and rollout
+- broader Reasoning/LangGraph rollout beyond the currently active and pilot agent paths
+- full A2A runtime semantics beyond the current internal schema, audit helpers, and in-process routed calls
+- full MCP ToolProvider/runtime integration beyond the current descriptor registry and executor adapter behavior
+- Orchestrator V2 broad adoption, checkpoint/resume, and repo-wide timeout/SLA policy beyond the flagged pilot
 - future satellite-sync behavior
 
-Treat these as forward-line or specialized-reference topics owned by:
+Treat these as post-v5.6 follow-up or specialized-reference topics owned by:
 - `docs/ROADMAP.md`
 - `docs/plans/V56_FORWARD_LINE.md`
 - `docs/plans/PROTOCOL_SATELLITE_SYNC.md`
@@ -385,7 +431,7 @@ Treat these as forward-line or specialized-reference topics owned by:
 
 ## Layered System Architecture (v6 Direction)
 
-This section describes the intended v6 direction. It does not override the locked v5.5 baseline or active v5.6 contracts.
+This section describes the intended v6 direction. It does not override the locked v5.5 baseline or the delivered v5.6 contracts.
 
 - Interaction is the primary organizing concern for the user-facing architecture; cognition and reusable capabilities support those interaction surfaces, while foundational capabilities such as ingestion and indexing remain first-class elsewhere in the system.
 - The architecture is organized around five distinct concerns: interaction, cognition, execution, memory, and governance.
@@ -393,7 +439,10 @@ This section describes the intended v6 direction. It does not override the locke
 - Deep Agents are a future cognition mechanism for planning, decomposition, and multi-step reasoning. They are introduced only after structural separation is in place.
 - The capability layer provides reusable functions such as retrieval, reranking, and context building. Capabilities are shared building blocks, not conceptual centers of the system.
 - The execution layer contains controlled effectors only. Reasoning must not directly mutate notes or trigger execution.
-- The memory layer remains AMG plus backing stores as the canonical persistence substrate.
+- The memory/persistence layer is the three-surface model plus backing runtime stores: human vault
+  artifacts, system companion/continuity artifacts, and rebuildable runtime projections/indexes.
+  Historical `AMG`/`SetDB` language is lineage only and must not be revived as the canonical
+  persistence substrate.
 - The governance layer enforces policies, admissibility, provenance, approval, and auditability across mutation-capable paths.
 - This structure treats Yggdrasil as a system-of-systems so the layers can evolve independently without collapsing authority boundaries.
 

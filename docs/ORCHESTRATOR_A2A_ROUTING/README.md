@@ -11,7 +11,7 @@ related_docs:
   - docs/development/DEV_WORKFLOW.md
 ---
 
-State: Tasks 1 and 2 delivered (issues #360, #361). Task 3 remains in backlog.
+State: Tasks 1-3 delivered (issues #360, #361, #362). Parent issue #359 remains open for lifecycle/project validation cleanup.
 
 # Orchestrator A2A Routing Specification
 
@@ -27,7 +27,7 @@ Current repo reality:
 - `agent_call` plan steps already emit A2A requests from the orchestrator.
 - Handler-registry routing delivered: supported targets now route through registered `AgentHandler` callables on `MockPlanExecutor`; unsupported targets fail the step clearly with `not_implemented`.
 
-This specification covers the remaining bounded capability:
+This specification covers the delivered bounded capability:
 
 - emit complete request/response/error receipts with trace and correlation continuity
 - prove the routing contract across multi-step plans and the current V1/V2 orchestrator surfaces
@@ -53,17 +53,17 @@ plan step (agent_call)
 2. **[EMIT_AGENT_CALL_RESPONSES_AND_FAILURES.md](EMIT_AGENT_CALL_RESPONSES_AND_FAILURES.md)** ✓ Delivered (issue #361, PR #377)
    Emit complete success and failure receipts for routed calls, including timeout and handler-error surfaces.
 
-3. **[VERIFY_MULTI_AGENT_CHAIN_TRACEABILITY.md](VERIFY_MULTI_AGENT_CHAIN_TRACEABILITY.md)**
+3. **[VERIFY_MULTI_AGENT_CHAIN_TRACEABILITY.md](VERIFY_MULTI_AGENT_CHAIN_TRACEABILITY.md)** ✓ Delivered (issue #362)
    Prove the routing contract across multi-step plans and the current V1/V2 orchestrator surfaces.
 
 ## Acceptance
 
 The parent capability "Orchestrator-managed A2A routing" is accepted when:
 
-- [x] All 3 task specifications are represented by bounded GitHub issues. (#360 delivered, #361 delivered, #362 open)
+- [x] All 3 task specifications are represented by bounded GitHub issues. (#360 delivered, #361 delivered, #362 delivered)
 - [x] Supported `agent_call` steps no longer collapse into the generic `not_implemented` fallback. (delivered by #360)
 - [x] Request, response, and error receipts preserve `trace_id` and correlation data through the orchestrator-owned routing path. (delivered by #361 / PR #377)
-- [ ] Multi-agent chain verification passes on the current orchestrator surfaces that execute `agent_call` steps, including flagged V2 where applicable.
+- [x] Multi-agent chain verification passes on the current orchestrator surfaces that execute `agent_call` steps, including flagged V2 where applicable. (delivered by #362)
 - [ ] Validation receipts are recorded on the parent feature issue before owner docs are promoted to claim the capability as supported.
 
 When those conditions are met, update the owning current-state docs in one narrow writeback pass rather than spreading partial claims across roadmap or track docs.
@@ -81,10 +81,10 @@ Backlog receipts created from this specification:
 - Parent feature issue: `#359`
 - Task issue `#360`: `ROUTE_AGENT_CALLS_THROUGH_REGISTERED_HANDLERS` — delivered
 - Task issue `#361`: `EMIT_AGENT_CALL_RESPONSES_AND_FAILURES` — delivered
-- Task issue `#362`: `VERIFY_MULTI_AGENT_CHAIN_TRACEABILITY`
+- Task issue `#362`: `VERIFY_MULTI_AGENT_CHAIN_TRACEABILITY` — delivered
 
-Keep the parent feature issue open as the live validation hub while the task issues are being delivered.
+Keep the parent feature issue open as the live validation hub until lifecycle/project validation cleanup is complete.
 
 ---
 
-Status: Tasks 1 and 2 delivered. Task 3 remains in backlog.
+Status: Tasks 1-3 delivered. Parent issue #359 remains open for lifecycle/project validation cleanup.

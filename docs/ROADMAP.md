@@ -1,12 +1,12 @@
-State: Locked baseline SoT v5.5 (Reality-MVP + watchers/panel policy) with forward line now moving into v5.6 LangGraph/Reasoning rollouts.
+State: Locked baseline SoT v5.5 (Reality-MVP + watchers/panel policy) with the v5.6 delivery line closed and post-v5.6 follow-ups tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
 Doc role: Plan
-Authority: Strategic sequencing and forward-looking delivery framing for the active line; owner/current-state docs win on shipped reality and present-tense behavior.
+Authority: Strategic sequencing and forward-looking delivery/follow-up framing; owner/current-state docs win on shipped reality and present-tense behavior.
 Owner: Product / architecture forward line
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
 Last reviewed: 2026-04-13
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, merged PRs #365/#376/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431/#434, current repo state at 73310f0 on 2026-04-13, backlog issues #435/#436/#437
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md, docs/plans/V60_ARCHITECTURE_TARGET.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orchestrator/executor.py, merged PRs #365/#376/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431/#434, current repo state at 73310f0 on 2026-04-13, backlog issues #435/#436/#437
 # Roadmap — Strategic Control
 
 This roadmap is forward-looking and skimmable. History lives in `docs/history/SOT_4X_HISTORY.md`; deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
@@ -15,6 +15,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 - **Shipped** — merged to main; code/doc exists.
 - **Operationally accepted** — proven on real vault/external samples with runbook/soak.
 - **Baseline locked** — scope frozen; only bugfixes allowed.
+- **Post-delivery follow-up** — bounded work discovered after a delivery line closed; does not reopen that line unless the owner explicitly reclassifies it as a release blocker.
 - **Planned / In progress** — tracked work not yet shipped.
 
 ## Baselines
@@ -27,27 +28,29 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - Keep the shipped PanelAgent LangGraph decider opt-in and watcher policy auto-exec plumbing stable under the v5.5 baseline guardrails while broader rollout stays gated.
   - Watcher → panel → planner/orchestrator automation with safety limits now includes dedup reports, promotion consumer visibility, and explicit skipped receipts.
   - Vault-first config validation (panel wiring, watcher, outbox) with schema enforcement and `python -m app.cli settings-explain`.
-- **Next**
-  - **Low-risk autonomy + automated sync validation** — iCloud transport chain validated end-to-end (MacBook → Mac mini via CloudDocs, 2026-04-12); `.git.nosync` fix shipped (Issue #421); server-side watcher detection confirmed. Partial receipt posted to #355. Remaining: (1) extend allowlist in `vault/@Settings/watchers.md` to permit the harness action type so the harness captures real numeric latency; (2) stabilize Mac mini headless infrastructure (#432); (3) capture clean timing receipt (#433). Proposal writeback path and broader low-risk autonomy expansion remain as follow-on slices after timing receipt is captured. Source Anchor: AUTO-LOW-RISK-AUTONOMY
+- **Closed v5.6 delivery line**
+  - **Low-risk autonomy + automated sync validation** — delivered through child slices and final parent receipt: #355 is closed COMPLETED with iCloud sync transport validated end to end and an upper-bound transport latency receipt on 2026-04-13. Remaining #432/#433 work is follow-up infra/statistical timing, not a blocker for #355 closure. Source Anchor: AUTO-LOW-RISK-AUTONOMY
   - **Environment contract follow-through** — implement the remaining docs-first environment contract slices from `docs/ENVIRONMENTS.md` in bounded steps: explicit runtime environment selection and environment-scoped vault/store separation are shipped, and environment-aware operator diagnostics are delivered via Issue #265 / PR #272; remaining follow-through should stay bounded and avoid changing the shared architecture contracts.
   - **Companion note + Note Context rollout hardening** — the core companion-note and Note Context implementation is shipped, and the active doc-sync correction has landed. Delivery receipt: Issue #229, PR #237. Any remaining rollout verification or cleanup should be captured as new bounded follow-up issues rather than treated as missing first implementation.
   - **Quality Wave: Registry Watcher Evaluation Stack** — shipped and now serves as the v5.6 rollout gate via `docs/TESTING.md`, `docs/QUALITY_WAVE_IMPLEMENTATION.md`, and `docs/quality_wave/README.md`. Delivery receipt: PRs #197, #198, #199, #200, #201, #202, #210.
   - **ReasoningFacade + broader graph adoption** — the shared `ReasoningFacade` seam is present; the PanelAgent decider migration is shipped via Issue #230 / PR #236, and the review-flow agent migration is delivered via Issue #231. Delivery receipt: #230 (PR #236), #231 (closed COMPLETED). Source Anchor: RF-ADOPTION
-    - Rationale: prevents pattern fragmentation; broader agent adoption should route reasoning/tool calls through the existing shared facade instead of introducing new direct call paths. Remaining phased rollout to Promotion/Reviewer/Hygiene is gated on v5.6A pilot stabilization (see Later).
-  - **Orchestrator V2 pilot slice** — initial V2 runtime with flagged parallel execution and plan-graph scheduling shipped. Implements: `ORCHESTRATOR_VERSION=v1|v2` flag, dependency-aware step scheduling, parallel execution with ThreadPoolExecutor, event/trace compatibility with V1. Compensation/rollback slice shipped: failed-step triggers reverse-order compensation of completed predecessors via `compensate_fn` metadata, with compensation events and `orchestration.rolled_back` lifecycle event. Out of scope in pilot: checkpointing, retry policy (deferred to follow-up slices). Delivery receipt: Issue #250 (pilot), Issue #251 (compensation). Source Anchor: ORCHV2-TDD
+    - Rationale: prevents pattern fragmentation; broader agent adoption should route reasoning/tool calls through the existing shared facade instead of introducing new direct call paths. Remaining phased rollout to Promotion/Reviewer/Hygiene is post-v5.6 adoption work.
+  - **Orchestrator V2 pilot slice** — initial V2 runtime with flagged parallel execution and plan-graph scheduling shipped. Implements: `ORCHESTRATOR_VERSION=v1|v2` flag, dependency-aware step scheduling, parallel execution with ThreadPoolExecutor, event/trace compatibility with V1, compensation/rollback via `compensate_fn` metadata, and retry metadata handling for failed steps. `CheckpointStore` plumbing exists, but checkpoint/resume is not yet a baseline-supported execution path. Broader timeout/SLA semantics remain limited to executor/tool settings such as `tool_timeout_seconds`; there is no repo-wide A2A/runtime timeout policy. Delivery receipt: Issue #250 (pilot), Issue #251 (compensation), Issue #252 (checkpoint/retry handling). Source Anchor: ORCHV2-TDD
     - Back-compat preserved: `ORCHESTRATOR_VERSION=v1` (default) uses existing sequential V1; `v2` selects parallel pilot with compensation.
-    - Next slices: checkpoint persistence, retry/timeout policy.
+    - Post-v5.6 slices: checkpoint/resume hardening, retry/backoff observability, and broader timeout/SLA policy.
   - PanelAgent 2.0 timeline: <!-- PA2-ROLLUP -->
     - v5.5C: decider — shipped (rule default + opt-in LLM mode + fallback + telemetry).
     - v5.6 shipped/accepted: engine-neutral cognition seam (#244, PR #249), freeform catalog-driven proposal path (#241, PR #248), suggested checkbox writeback for uncertain/freeform panel proposals (#242), multi-step plans (#243, PR #302), and real-vault acceptance (#240) now have a delivery receipt on the Alpha vault.
     - Broader expansion beyond the current PanelAgent 2.0 slices remains bounded; keep new work broken down from the owner docs / tracks before widening scope.
     - v5.7: advanced (panel versioning, cross-note coordination) remains future-line work and should stay in roadmap form until a governing slice issue exists.
   - Vault-as-GUI settings compiler (`@Settings` / System/Config) now covers panel-action catalogs, watcher settings, and outbox paths with CI schema checks (v5.6 track).
+- **Post-v5.6 follow-ups**
   - LangGraph rollout to additional agents (Promotion/Reviewer/Hygiene) in phases:
     - Phase 1: single pilot agent behind a flag; AgentState + graph parity tests green.
     - Phase 2: two agents; planner/orchestrator integration stable; event/A2A contracts unchanged.
     - Phase 3: broader adoption; runtime metrics + rollback plan validated.
-  - A2A/MCP orchestration routing with deterministic adapters and audit.
+  - A2A/MCP orchestration routing with deterministic adapters and audit; current in-process A2A routing is implemented and covered, while parent issue lifecycle/project closure still needs cleanup.
+  - Runtime health and docs-index validation hardening: #334/#365 shipped deterministic checks; #441/PR #439 restores the richer runtime verifier contract and makes the docs-index guard compatible with repo-local v6 spec metadata.
 - **Later**
   - Watcher auto-exec of panel plans with guardrails and rollback; richer panel actions (summary/reply) via tool/MCP boundary.
   - PanelAgent 2.0 expansion beyond the current slices remains bounded even after real-vault acceptance; break new behavior into smaller tracked slices first.
@@ -63,13 +66,13 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
 
 ## Capability-Based Architecture & Agent Evolution
 
-This section defines the v6 direction without changing the locked SoT v5.5 guarantees or the active v5.6 rollout contracts.
+This section defines the v6 direction without changing the locked SoT v5.5 guarantees or the delivered v5.6 contracts.
 It follows the design rules in `docs/DESIGN_PRINCIPLES.md`: principles first, structure second, sequencing third, implementation detail elsewhere.
 The working plan detail for this section lives in `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`.
 
 Sequencing rule:
-- v5.6 should be read here primarily as an invariant and stabilization layer, not as a strict linear prerequisite list for every v6 design decision.
-- The design goal is to preserve the contracts v5.6 is establishing while allowing v6 structural work to be defined in parallel.
+- v5.6 should be read here primarily as a delivered invariant and stabilization layer, not as a strict linear prerequisite list for every v6 design decision.
+- The design goal is to preserve the contracts v5.6 established while allowing v6 structural work to be defined in parallel.
 
 Decisions already fixed for this direction:
 - ASK is deprecated as the architectural center rather than expanded.
@@ -80,9 +83,10 @@ Decisions already fixed for this direction:
 - Execution remains governed and mediated; reasoning alone must not trigger mutation.
 - The long-term system spans manual through automated and reactive through proactive behavior under governance.
 
-## Phase 0 — Stabilization (v5.6, current)
+## Phase 0 — Stabilization (v5.6 delivered; post-v5.6 follow-up mode)
 
-- Finish the current v5.6 enablement work needed for structural separation.
+- Preserve the delivered v5.6 enablement work needed for structural separation.
+- Track defects and lifecycle drift as post-v5.6 follow-ups instead of reopening the delivery line by default.
 - Keep current runtime contracts stable and deterministic.
 - No Deep Agents in production mutation flows.
 - No execution outside the controlled action layer.
@@ -103,8 +107,10 @@ Introduce explicit system layers:
 - Execution Layer:
   - controlled actions only
   - no LLM direct mutation
-- Memory Layer:
-  - AMG + stores
+- Memory / Persistence Layer:
+  - human vault artifacts
+  - system companion/continuity artifacts
+  - rebuildable runtime stores and indexes
 - Governance Layer:
   - policies
   - admissibility
@@ -221,7 +227,7 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 | v5.1–v5.4 | Watcher track (ingest/panel CLI, policy, ergonomics) | Operationally accepted |
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
 | v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
-| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped, PR #302), real-vault acceptance (accepted on Alpha vault for #240), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler, iCloud transport chain validated + `.git.nosync` fix shipped (#421), sync-latency harness partial receipt posted (#355); clean timing measurement pending (#433) | Selective forward work (multiple panel/runtime slices shipped; acceptance receipt recorded; sync transport validated) |
+| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped, PR #302), real-vault acceptance (accepted on Alpha vault for #240), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler, A2A in-process routing, iCloud transport chain validated + `.git.nosync` fix shipped (#421), low-risk autonomy + sync validation parent #355 closed | Closed delivery line; remaining checkpoint/resume, statistical sync/infra hardening, and lifecycle/project cleanup are post-v5.6 follow-ups; local runtime/docs validation drift is tracked by #441 and fixed in PR #439 |
 | v6.0 | Wanted-state architecture pass to align runtime boundaries with the newer human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
 
 ## Tracks (details moved)
