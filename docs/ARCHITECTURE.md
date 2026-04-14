@@ -5,8 +5,8 @@ Owner: Runtime / architecture SoT
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-13
-Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/ROADMAP.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, app/cli/__init__.py, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orchestrator/executor.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #272/#302/#346/#349/#365/#376/#377/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431, current repo state at 73310f0 on 2026-04-13, backlog issues #435/#436/#437
+Last reviewed: 2026-04-14
+Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/ROADMAP.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, app/cli/__init__.py, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orchestrator/executor.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #272/#302/#346/#349/#365/#376/#377/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431/#439, current repo state at f20c0fb on 2026-04-14, backlog issues #435/#436/#437/#444/#445/#446
 # Architecture — SoT v5.5 Reality-MVP baseline (v5.6 delivered)
 
 This document is the active architecture source of truth for the SoT v5.5 Reality-MVP baseline and the place where current runtime contracts are defined.
@@ -419,7 +419,7 @@ These topics are real parts of the repo and roadmap, but they are not baseline-d
 - broader Reasoning/LangGraph rollout beyond the currently active and pilot agent paths
 - full A2A runtime semantics beyond the current internal schema, audit helpers, and in-process routed calls
 - full MCP ToolProvider/runtime integration beyond the current descriptor registry and executor adapter behavior
-- Orchestrator V2 broad adoption, checkpoint/resume, and repo-wide timeout/SLA policy beyond the flagged pilot
+- Orchestrator V2 broad adoption, checkpoint/resume (#444), retry/backoff observability (#445), and repo-wide timeout/SLA policy (#446) beyond the flagged pilot
 - future satellite-sync behavior
 
 Treat these as post-v5.6 follow-up or specialized-reference topics owned by:
