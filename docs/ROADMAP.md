@@ -56,13 +56,14 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - PanelAgent 2.0 expansion beyond the current slices remains bounded even after real-vault acceptance; break new behavior into smaller tracked slices first.
   - Reasoning/reflective layers with eval gates; expanded observability counters for orchestration/A2A.
   - Collaboration/multi-user after single-user flows are stable.
-  - `v6.0` architecture target: semantics-aligned runtime architecture where context layering,
-    overlap relations, primary-human-artifact boundaries, and local-first multi-device assumptions
-    are expressed more cleanly than in the current v5.x transitional runtime.
+  - `v6.0` architecture target: a baseline-aware target operating model that preserves the
+    vault-first / registry-watcher / DB-outbox / companion-note continuity baseline while making
+    the next operating boundary explicit: `observation -> normalization/contract -> admission -> execution`.
     - Make the ontology/runtime bridge explicit so human loops, ontology classes, and runtime contracts can be read together without pretending they are the same layer.
     - Test commitment-first modeling where open loops, projects, waiting states, and execution accountability are not flattened into generic note state.
     - Separate retrieval, orientation, and resurfacing as related but distinct runtime concerns.
-    - Clarify surface and authority contracts so writing, retention, and system surfaces stay distinct and receipt-bearing actions remain inspectable.
+    - Clarify authority across writing, retention, system, runtime, and execution-record surfaces so receipt-bearing actions remain inspectable.
+    - Treat current domain/zone/mirror/promotion findings as current-state bug fixes or enabling changes unless a later implementation slice explicitly realizes the v6 target state.
 
 ## Capability-Based Architecture & Agent Evolution
 
@@ -93,29 +94,22 @@ Decisions already fixed for this direction:
 
 ## Phase 1 — v6.0 Baseline (Structural Separation)
 
-Introduce explicit system layers:
+Introduce explicit operating layers:
 
-- Interaction Layer:
-  - Panel (primary, mutation-capable)
-  - Chat (planned canvas-shaped interaction surface; early Deep Agent slice is read-only)
-- Orchestration Layer:
-  - LangGraph (control plane, deterministic)
-- Capability Layer:
-  - retrieval (`retrieve`, `rerank`, `context_build`)
-  - reasoning (future)
-  - transformation (future)
-- Execution Layer:
-  - controlled actions only
-  - no LLM direct mutation
-- Memory / Persistence Layer:
-  - human vault artifacts
-  - system companion/continuity artifacts
-  - rebuildable runtime stores and indexes
-- Governance Layer:
-  - policies
-  - admissibility
-  - provenance
-  - approval
+- Human canonical layer:
+  - vault notes as the human writing/reading surface
+- Replication layer:
+  - companion note + vault note continuity set and multi-device convergence posture
+- Observation layer:
+  - registry watcher, Panel/API/CLI inputs, and runtime signals
+- Normalization / contract layer:
+  - event envelopes, panel/action contracts, settings provenance, tool descriptors, scope/provenance checks
+- Execution layer:
+  - controlled actions only; no LLM direct mutation
+- Derived machine layer:
+  - rebuildable stores, indexes, retrieval projections, status, traces, and metrics
+- Governance/admission layer:
+  - policies, admissibility, provenance, approval, idempotency, and surface authority checks
 
 Deliverables:
 
@@ -124,6 +118,7 @@ Deliverables:
 - Interaction, cognition, execution, memory, and governance separated clearly enough to evolve independently.
 - Template-based bounded agents and reusable capabilities can coexist without collapsing into one central agent.
 - Governed mutation paths remain explicit and mediated across interaction and automation surfaces.
+- The v6 target operating model classifies proposed changes as current-state bug fixes, enabling changes, or target-state changes before implementation begins.
 
 ## Phase 2 — Deep Agent Introduction (Thin Slice, Post-v6.0)
 
@@ -228,7 +223,7 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
 | v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
 | v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped, PR #302), real-vault acceptance (accepted on Alpha vault for #240), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler, A2A in-process routing, iCloud transport chain validated + `.git.nosync` fix shipped (#421), low-risk autonomy + sync validation parent #355 closed | Closed delivery line; remaining checkpoint/resume, statistical sync/infra hardening, and lifecycle/project cleanup are post-v5.6 follow-ups; local runtime/docs validation drift is tracked by #441 and fixed in PR #439 |
-| v6.0 | Wanted-state architecture pass to align runtime boundaries with the newer human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
+| v6.0 | Baseline-aware target operating model that preserves the current vault-first/runtime-queue/continuity baseline while aligning operating boundaries with human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
 
 ## Tracks (details moved)
 - Watcher track details: `docs/tracks/TRACK_WATCHER.md`
