@@ -1,4 +1,4 @@
-State: Locked baseline SoT v5.5 (Reality-MVP + watchers/panel policy) with the v5.6 delivery line closed and post-v5.6 follow-ups tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification defects.
+State: Locked baseline SoT v5.5 (Reality-MVP + watchers/panel policy) with the v5.6 delivery line closed and post-v5.6 follow-ups tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
 Doc role: Plan
 Authority: Strategic sequencing and forward-looking delivery/follow-up framing; owner/current-state docs win on shipped reality and present-tense behavior.
 Owner: Product / architecture forward line
@@ -50,7 +50,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
     - Phase 2: two agents; planner/orchestrator integration stable; event/A2A contracts unchanged.
     - Phase 3: broader adoption; runtime metrics + rollback plan validated.
   - A2A/MCP orchestration routing with deterministic adapters and audit; current in-process A2A routing is implemented and covered, while parent issue lifecycle/project closure still needs cleanup.
-  - Runtime health verification contract drift: #334/#365 shipped deterministic checks, but `tests/ops/test_runtime_verify_contract.py` currently expects the older richer health/status script shape.
+  - Runtime health and docs-index validation hardening: #334/#365 shipped deterministic checks; #441/PR #439 restores the richer runtime verifier contract and makes the docs-index guard compatible with repo-local v6 spec metadata.
 - **Later**
   - Watcher auto-exec of panel plans with guardrails and rollback; richer panel actions (summary/reply) via tool/MCP boundary.
   - PanelAgent 2.0 expansion beyond the current slices remains bounded even after real-vault acceptance; break new behavior into smaller tracked slices first.
@@ -227,7 +227,7 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 | v5.1–v5.4 | Watcher track (ingest/panel CLI, policy, ergonomics) | Operationally accepted |
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
 | v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
-| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped, PR #302), real-vault acceptance (accepted on Alpha vault for #240), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler, A2A in-process routing, iCloud transport chain validated + `.git.nosync` fix shipped (#421), low-risk autonomy + sync validation parent #355 closed | Closed delivery line; remaining checkpoint/resume, statistical sync/infra hardening, runtime-health contract drift, and lifecycle/project cleanup are post-v5.6 follow-ups |
+| v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform panel catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped, PR #302), real-vault acceptance (accepted on Alpha vault for #240), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler, A2A in-process routing, iCloud transport chain validated + `.git.nosync` fix shipped (#421), low-risk autonomy + sync validation parent #355 closed | Closed delivery line; remaining checkpoint/resume, statistical sync/infra hardening, and lifecycle/project cleanup are post-v5.6 follow-ups; local runtime/docs validation drift is tracked by #441 and fixed in PR #439 |
 | v6.0 | Wanted-state architecture pass to align runtime boundaries with the newer human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
 
 ## Tracks (details moved)

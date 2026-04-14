@@ -1,4 +1,4 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard) with the v5.6 delivery line closed and post-v5.6 follow-ups tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification defects.
+State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard) with the v5.6 delivery line closed and post-v5.6 follow-ups tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
 Doc role: Core SoT
 Authority: Current operational snapshot for the active baseline; subordinate to concept contracts for normative semantics, but authoritative for current runtime status and rollout posture.
 Owner: Runtime / current-state SoT
@@ -68,7 +68,7 @@ Delivered v5.6 receipts include:
 Post-v5.6 follow-up truth:
 - Orchestrator V2 remains flagged; `CheckpointStore` plumbing exists, but a code audit shows the V2 runtime does not call `_save_checkpoint()` during execution, so checkpoint/resume must not be claimed as supported baseline behavior.
 - A2A in-process handler routing exists and the current traceability test passes, while parent lifecycle issue #359 remains open and should be treated as stale lifecycle/project drift until closed or re-scoped.
-- Local runtime health verification shipped via #334/#365, but the repo contract test `tests/ops/test_runtime_verify_contract.py` currently fails against `scripts/verify_runtime_stack.sh`; treat this as verification contract drift, not as active v5.6 feature work.
+- Local runtime health verification shipped via #334/#365; repo contract drift in `tests/ops/test_runtime_verify_contract.py` and docs-index validation drift are tracked by #441 and addressed in PR #439 as local verification hardening, not as active v5.6 feature work.
 - v6 target-state audits opened current-state bugs for domain/zone handling (#435, #436, #437); these are post-v5.6 bug/follow-up slices.
 
 ## Agent Evolution Track

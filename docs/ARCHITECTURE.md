@@ -1,4 +1,4 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency hardening) with the v5.6 delivery line closed and post-v5.6 follow-ups tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification defects.
+State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency hardening) with the v5.6 delivery line closed and post-v5.6 follow-ups tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
 Doc role: Core SoT
 Authority: Active runtime architecture source of truth for the current baseline and runtime contracts; wins over roadmap and historical references on current-state questions.
 Owner: Runtime / architecture SoT
@@ -37,8 +37,7 @@ Proposal:
   and reproducible local verification,
 - move unresolved work into explicit post-v5.6 follow-ups instead of reading it as an
   active v5.6 blocker; current known follow-ups include checkpoint/resume hardening,
-  runtime verification contract drift, stale lifecycle closure on A2A/sync parent issues,
-  and v6-driven current-state bugs,
+  stale lifecycle closure on A2A/sync parent issues, and v6-driven current-state bugs,
 - keep v6.0 as the target-state architecture lane for interaction/cognition/execution/memory/governance
   separation, capability reuse, Chat canvas planning, Deep Agent introduction, commitments, and richer
   context/relation modeling.
