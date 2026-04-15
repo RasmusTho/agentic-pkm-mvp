@@ -148,7 +148,8 @@ class OrchestratorV2:
         self._outbox = outbox
         self._tool_settings = dict(tool_settings) if tool_settings else None
         self._max_workers = max_workers
-        self._checkpoint_interval = checkpoint_interval
+        # Validate checkpoint_interval: must be >= 1 to avoid ZeroDivisionError in modulo
+        self._checkpoint_interval = max(1, checkpoint_interval) if checkpoint_interval else 3
 
     def run_plan(self, plan: Plan) -> List[Dict[str, Any]]:
         """Execute plan with dependency-safe parallel scheduling and compensation."""
@@ -162,6 +163,18 @@ class OrchestratorV2:
         execution_order: List[str] = []  # Track completion order for reverse compensation
         results: List[Dict[str, Any]] = []
         failed_step_id: str | None = None
+
+        # Attempt to load checkpoint for resume
+        checkpoint = self._load_checkpoint(plan)
+        if checkpoint:
+            completed_steps = set(checkpoint.get("completed_steps", []))
+            plan_results = checkpoint.get("step_results", {})
+            # Add checkpoint results to the results list with "ok" status (not "resumed")
+            # to ensure consistent status handling for rollback and compensation
+            for step_id in completed_steps:
+                execution_order.append(step_id)
+                result = plan_results.get(step_id, {})
+                results.append({"step_id": step_id, "status": "ok", "result": result})
 
         # Resolve tool settings
         plan_tool_settings = None
@@ -248,6 +261,10 @@ class OrchestratorV2:
                             results.append({"step_id": step_id, "status": "ok", "result": output})
                             completed_steps.add(step_id)
                             execution_order.append(step_id)
+
+                            # Save checkpoint at configured interval
+                            if len(completed_steps) % self._checkpoint_interval == 0:
+                                self._save_checkpoint(plan, completed_steps, plan_results)
                         except StepExecutionError as exc:
                             error_message = str(exc)
                             error_type = getattr(exc, "error_type", None)
@@ -490,6 +507,15 @@ class OrchestratorV2:
             "timestamp": time.time(),
         }
         self._outbox.emit(event)
+
+    def _load_checkpoint(self, plan: Plan) -> Optional[Dict[str, Any]]:
+        """Load a checkpoint for plan resume."""
+        if not self._checkpoint_store:
+            return None
+
+        checkpoint_key = f"checkpoint-{plan.id}"
+        checkpoint_data = self._checkpoint_store.load_checkpoint(checkpoint_key)
+        return checkpoint_data
 
     def _save_checkpoint(self, plan: Plan, completed_steps: set[str], plan_results: Dict[str, Any]) -> None:
         """Save a checkpoint for recovery."""
