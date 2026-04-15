@@ -148,7 +148,8 @@ class OrchestratorV2:
         self._outbox = outbox
         self._tool_settings = dict(tool_settings) if tool_settings else None
         self._max_workers = max_workers
-        self._checkpoint_interval = checkpoint_interval
+        # Validate checkpoint_interval: must be >= 1 to avoid ZeroDivisionError in modulo
+        self._checkpoint_interval = max(1, checkpoint_interval) if checkpoint_interval else 3
 
     def run_plan(self, plan: Plan) -> List[Dict[str, Any]]:
         """Execute plan with dependency-safe parallel scheduling and compensation."""
@@ -168,11 +169,12 @@ class OrchestratorV2:
         if checkpoint:
             completed_steps = set(checkpoint.get("completed_steps", []))
             plan_results = checkpoint.get("step_results", {})
-            # Add checkpoint results to the results list
+            # Add checkpoint results to the results list with "ok" status (not "resumed")
+            # to ensure consistent status handling for rollback and compensation
             for step_id in completed_steps:
                 execution_order.append(step_id)
                 result = plan_results.get(step_id, {})
-                results.append({"step_id": step_id, "status": "resumed", "result": result})
+                results.append({"step_id": step_id, "status": "ok", "result": result})
 
         # Resolve tool settings
         plan_tool_settings = None
