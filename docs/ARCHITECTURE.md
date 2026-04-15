@@ -420,7 +420,7 @@ These topics are real parts of the repo and roadmap, but they are not baseline-d
 - broader Reasoning/LangGraph rollout beyond the currently active and pilot agent paths
 - full A2A runtime semantics beyond the current internal schema, audit helpers, and in-process routed calls
 - full MCP ToolProvider/runtime integration beyond the current descriptor registry and executor adapter behavior
-- Orchestrator V2 broad adoption, retry/backoff observability (#445), and repo-wide timeout/SLA policy beyond the delivered #446 per-tool timeout/SLA contract (checkpoint/resume implemented in #444)
+- Orchestrator V2 broad adoption, and any future plan-level timeout budget or repo-wide A2A/runtime delivery SLA beyond the delivered #446 per-tool timeout/SLA contract
 - future satellite-sync behavior
 
 Treat these as post-v5.6 follow-up or specialized-reference topics owned by:
