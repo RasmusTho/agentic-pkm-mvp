@@ -36,7 +36,7 @@ Proposal:
   shared reasoning seams, flagged Orchestrator V2 pilot work, A2A/MCP contract hardening,
   and reproducible local verification,
 - move unresolved work into explicit post-v5.6 follow-ups instead of reading it as an
-  active v5.6 blocker; current known follow-ups include checkpoint/resume hardening,
+  active v5.6 blocker; current known follow-ups include retry/backoff observability,
   stale lifecycle closure on A2A/sync parent issues, and v6-driven current-state bugs,
 - keep v6.0 as the target-state architecture lane for interaction/cognition/execution/memory/governance
   separation, capability reuse, Chat canvas planning, Deep Agent introduction, commitments, and richer
@@ -420,7 +420,7 @@ These topics are real parts of the repo and roadmap, but they are not baseline-d
 - broader Reasoning/LangGraph rollout beyond the currently active and pilot agent paths
 - full A2A runtime semantics beyond the current internal schema, audit helpers, and in-process routed calls
 - full MCP ToolProvider/runtime integration beyond the current descriptor registry and executor adapter behavior
-- Orchestrator V2 broad adoption, checkpoint/resume (#444), retry/backoff observability (#445), and any future plan-level timeout budget or repo-wide A2A/runtime delivery SLA beyond the delivered #446 per-tool timeout/SLA contract
+- Orchestrator V2 broad adoption, retry/backoff observability (#445), and repo-wide timeout/SLA policy beyond the delivered #446 per-tool timeout/SLA contract (checkpoint/resume implemented in #444)
 - future satellite-sync behavior
 
 Treat these as post-v5.6 follow-up or specialized-reference topics owned by:
