@@ -27,6 +27,8 @@ from .events import (
     emit_orchestration_rolled_back,
     emit_step_error,
     emit_step_finished,
+    emit_step_retry,
+    emit_step_retry_exhausted,
     emit_step_started,
 )
 from .executor import MockPlanExecutor, PlanExecutor, StepContext, StepExecutionError
@@ -453,7 +455,7 @@ class OrchestratorV2:
         self._executor.execute_step(comp_step, context)
 
     def _execute_step_safe(self, step: PlanStep, context: StepContext) -> Dict[str, Any]:
-        """Execute a single step with retry handling, raising StepExecutionError on failure."""
+        """Execute a single step with retry handling and observability, raising StepExecutionError on failure."""
         # Get retry configuration from step metadata
         metadata = getattr(step, "metadata", {}) or {}
         if not isinstance(metadata, Mapping):
@@ -465,6 +467,8 @@ class OrchestratorV2:
         attempt = 0
         last_error = None
         last_error_type = None
+        object_id = context.object_id
+        trace_id = context.trace_id
 
         while attempt <= retry_count:
             attempt += 1
@@ -478,13 +482,75 @@ class OrchestratorV2:
                 if last_error_type == "timeout":
                     raise
 
-                # If we have retries left, backoff and retry
+                # If we have retries left, emit observability and backoff
                 if attempt <= retry_count:
-                    self._emit_retry_event(context.plan_id, step.id, attempt, context.trace_id)
+                    # Emit structured retry event with observability details (audit log + outbox)
+                    emit_step_retry(
+                        plan_id=context.plan_id,
+                        step=step,
+                        attempt=attempt,
+                        backoff_ms=backoff_ms,
+                        error=last_error,
+                        error_type=last_error_type,
+                        object_id=object_id,
+                        trace_id=trace_id,
+                    )
+                    # Also emit to outbox for real-time observability
+                    self._emit_outbox_retry_event(
+                        plan_id=context.plan_id,
+                        step_id=step.id,
+                        attempt=attempt,
+                        backoff_ms=backoff_ms,
+                        error=last_error,
+                        error_type=last_error_type,
+                        trace_id=trace_id,
+                    )
+                    # Log retry for debugging
+                    logger.debug(
+                        f"Step {step.id} attempt {attempt} failed; retrying after {backoff_ms}ms",
+                        extra={
+                            "step_id": step.id,
+                            "plan_id": context.plan_id,
+                            "attempt": attempt,
+                            "backoff_ms": backoff_ms,
+                            "error": last_error,
+                            "error_type": last_error_type,
+                            "trace_id": trace_id,
+                        },
+                    )
                     time.sleep(backoff_ms / 1000.0)
                     continue
 
-                # Retries exhausted
+                # Retries exhausted - emit terminal failure event only if retries were configured
+                if retry_count > 0:
+                    emit_step_retry_exhausted(
+                        plan_id=context.plan_id,
+                        step=step,
+                        max_retries=retry_count,
+                        final_error=last_error,
+                        error_type=last_error_type,
+                        object_id=object_id,
+                        trace_id=trace_id,
+                    )
+                    # Also emit to outbox for real-time observability
+                    self._emit_outbox_retry_exhausted_event(
+                        plan_id=context.plan_id,
+                        step_id=step.id,
+                        max_retries=retry_count,
+                        final_error=last_error,
+                        trace_id=trace_id,
+                    )
+                    logger.debug(
+                        f"Step {step.id} exhausted all {retry_count} retries",
+                        extra={
+                            "step_id": step.id,
+                            "plan_id": context.plan_id,
+                            "max_retries": retry_count,
+                            "final_error": last_error,
+                            "error_type": last_error_type,
+                            "trace_id": trace_id,
+                        },
+                    )
                 raise
 
         raise StepExecutionError(
@@ -492,21 +558,14 @@ class OrchestratorV2:
             error_type=last_error_type,
         )
 
-    def _emit_retry_event(self, plan_id: str, step_id: str, attempt: int, trace_id: str | None) -> None:
-        """Emit a retry event."""
-        if not self._outbox:
-            return
+    def _load_checkpoint(self, plan: Plan) -> Optional[Dict[str, Any]]:
+        """Load a checkpoint for plan resume."""
+        if not self._checkpoint_store:
+            return None
 
-        event = {
-            "event": "step.retry",
-            "source": "orchestrator.v2",
-            "plan_id": plan_id,
-            "step_id": step_id,
-            "attempt": attempt,
-            "trace_id": trace_id,
-            "timestamp": time.time(),
-        }
-        self._outbox.emit(event)
+        checkpoint_key = f"checkpoint-{plan.id}"
+        checkpoint_data = self._checkpoint_store.load_checkpoint(checkpoint_key)
+        return checkpoint_data
 
     def _load_checkpoint(self, plan: Plan) -> Optional[Dict[str, Any]]:
         """Load a checkpoint for plan resume."""
@@ -543,6 +602,54 @@ class OrchestratorV2:
             "source": "orchestrator.v2",
             "plan_id": plan_id,
             "checkpoint_step_count": step_count,
+            "trace_id": trace_id,
+            "timestamp": time.time(),
+        }
+        self._outbox.emit(event)
+
+    def _emit_outbox_retry_event(
+        self,
+        plan_id: str,
+        step_id: str,
+        attempt: int,
+        backoff_ms: int,
+        error: str,
+        error_type: str | None,
+        trace_id: str | None,
+    ) -> None:
+        """Emit a retry event to outbox for observability."""
+        if not self._outbox:
+            return
+
+        event = {
+            "event": "orchestrator.step.retry",
+            "source": "orchestrator.v2",
+            "plan_id": plan_id,
+            "step_id": step_id,
+            "attempt": attempt,
+            "backoff_ms": backoff_ms,
+            "error": error,
+            "trace_id": trace_id,
+            "timestamp": time.time(),
+        }
+        if error_type:
+            event["error_type"] = error_type
+        self._outbox.emit(event)
+
+    def _emit_outbox_retry_exhausted_event(
+        self, plan_id: str, step_id: str, max_retries: int, final_error: str, trace_id: str | None
+    ) -> None:
+        """Emit a retry exhaustion event to outbox."""
+        if not self._outbox:
+            return
+
+        event = {
+            "event": "orchestrator.step.retry.exhausted",
+            "source": "orchestrator.v2",
+            "plan_id": plan_id,
+            "step_id": step_id,
+            "max_retries": max_retries,
+            "final_error": final_error,
             "trace_id": trace_id,
             "timestamp": time.time(),
         }

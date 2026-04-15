@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-
+from app.orchestrator.v2_runtime import OrchestratorV2
+from app.orchestrator.executor import StepExecutionError
+from app.planner.schema import Plan, PlanMetadata, PlanStep
 
 from .conftest import MockAgentExecutor, MockOutbox
 
@@ -189,3 +191,245 @@ class TestRetryContract:
         # Default backoff vs custom
         assert "retry_backoff_ms" not in step_default["metadata"]
         assert step_custom["metadata"]["retry_backoff_ms"] == 500
+
+
+class TestRetryObservability:
+    """Test retry/backoff observability and event emission."""
+
+    def test_retry_event_emitted_on_transient_failure(
+        self,
+        mock_outbox: MockOutbox,
+    ) -> None:
+        """Verify retry event is emitted when step fails and retries."""
+        call_count = {"count": 0}
+
+        class FailingExecutor:
+            def execute_step(self, step, context):
+                call_count["count"] += 1
+                if call_count["count"] == 1:
+                    raise StepExecutionError("Transient failure")
+                return {"result": "ok"}
+
+        # Create plan with retry-enabled step
+        plan = Plan(
+            id="plan-1",
+            meta=PlanMetadata(
+                goal="test",
+                source_object_uuid="obj-1",
+                created_by="test",
+                trace_id="trace-1",
+            ),
+            steps=[
+                PlanStep(
+                    id="step-1",
+                    kind="agent_call",
+                    description="Flaky task",
+                    agent="test_agent",
+                    metadata={"retry_count": 2},
+                )
+            ],
+            context={},
+        )
+
+        orchestrator = OrchestratorV2(
+            executor=FailingExecutor(),
+            outbox=mock_outbox,
+        )
+
+        results = orchestrator.run_plan(plan)
+
+        # Verify step succeeded after retry
+        assert any(r["status"] == "ok" for r in results)
+
+        # Verify retry event was emitted
+        retry_events = mock_outbox.list_events("orchestrator.step.retry")
+        assert len(retry_events) >= 1
+        assert retry_events[0]["step_id"] == "step-1"
+        assert retry_events[0]["attempt"] == 1
+        assert "backoff_ms" in retry_events[0]
+
+    def test_retry_exhaustion_event_emitted(
+        self,
+        mock_outbox: MockOutbox,
+    ) -> None:
+        """Verify retry exhaustion event when all retries are consumed."""
+        class FailingExecutor:
+            def execute_step(self, step, context):
+                raise StepExecutionError("Permanent failure")
+
+        plan = Plan(
+            id="plan-1",
+            meta=PlanMetadata(
+                goal="test",
+                source_object_uuid="obj-1",
+                created_by="test",
+                trace_id="trace-1",
+            ),
+            steps=[
+                PlanStep(
+                    id="step-1",
+                    kind="agent_call",
+                    description="Failing task",
+                    agent="test_agent",
+                    metadata={"retry_count": 2},
+                )
+            ],
+            context={},
+        )
+
+        orchestrator = OrchestratorV2(
+            executor=FailingExecutor(),
+            outbox=mock_outbox,
+        )
+
+        results = orchestrator.run_plan(plan)
+
+        # Verify step failed
+        assert any(r["status"] == "error" for r in results)
+
+        # Verify retry exhaustion event was emitted
+        exhaustion_events = mock_outbox.list_events("orchestrator.step.retry.exhausted")
+        assert len(exhaustion_events) >= 1
+        assert exhaustion_events[0]["step_id"] == "step-1"
+        assert exhaustion_events[0]["max_retries"] == 2
+        assert "final_error" in exhaustion_events[0]
+
+    def test_retry_event_contains_observability_metadata(
+        self,
+        mock_outbox: MockOutbox,
+    ) -> None:
+        """Verify retry events contain detailed observability metadata."""
+        call_count = {"count": 0}
+
+        class FailingExecutor:
+            def execute_step(self, step, context):
+                call_count["count"] += 1
+                if call_count["count"] <= 1:
+                    raise StepExecutionError("Transient error", error_type="transient")
+                return {"result": "ok"}
+
+        plan = Plan(
+            id="plan-1",
+            meta=PlanMetadata(
+                goal="test",
+                source_object_uuid="obj-1",
+                created_by="test",
+                trace_id="trace-1",
+            ),
+            steps=[
+                PlanStep(
+                    id="step-1",
+                    kind="agent_call",
+                    description="Task",
+                    agent="test_agent",
+                    metadata={"retry_count": 2, "retry_backoff_ms": 250},
+                )
+            ],
+            context={},
+        )
+
+        orchestrator = OrchestratorV2(
+            executor=FailingExecutor(),
+            outbox=mock_outbox,
+        )
+
+        results = orchestrator.run_plan(plan)
+
+        # Verify retry event has all expected metadata
+        retry_events = mock_outbox.list_events("orchestrator.step.retry")
+        assert len(retry_events) >= 1
+
+        event = retry_events[0]
+        assert event["plan_id"] == "plan-1"
+        assert event["step_id"] == "step-1"
+        assert event["attempt"] == 1
+        assert event["backoff_ms"] == 250
+        assert event["error"] == "Transient error"
+        assert event["error_type"] == "transient"
+
+    def test_no_retry_events_on_no_retries_configured(
+        self,
+        mock_outbox: MockOutbox,
+    ) -> None:
+        """Verify no retry events emitted when retry_count is 0."""
+        class FailingExecutor:
+            def execute_step(self, step, context):
+                raise StepExecutionError("Failed immediately")
+
+        plan = Plan(
+            id="plan-1",
+            meta=PlanMetadata(
+                goal="test",
+                source_object_uuid="obj-1",
+                created_by="test",
+                trace_id="trace-1",
+            ),
+            steps=[
+                PlanStep(
+                    id="step-1",
+                    kind="agent_call",
+                    description="No-retry task",
+                    agent="test_agent",
+                    metadata={"retry_count": 0},
+                )
+            ],
+            context={},
+        )
+
+        orchestrator = OrchestratorV2(
+            executor=FailingExecutor(),
+            outbox=mock_outbox,
+        )
+
+        results = orchestrator.run_plan(plan)
+
+        # Verify no retry events were emitted
+        retry_events = mock_outbox.list_events("orchestrator.step.retry")
+        assert len(retry_events) == 0
+
+        # Verify final failure was not marked as retry exhaustion (no retries configured)
+        exhaustion_events = mock_outbox.list_events("orchestrator.step.retry.exhausted")
+        assert len(exhaustion_events) == 0
+
+    def test_timeout_failure_not_retried(
+        self,
+        mock_outbox: MockOutbox,
+    ) -> None:
+        """Verify timeout failures are not retried regardless of retry_count."""
+        class TimeoutExecutor:
+            def execute_step(self, step, context):
+                raise StepExecutionError("Timeout", error_type="timeout")
+
+        plan = Plan(
+            id="plan-1",
+            meta=PlanMetadata(
+                goal="test",
+                source_object_uuid="obj-1",
+                created_by="test",
+                trace_id="trace-1",
+            ),
+            steps=[
+                PlanStep(
+                    id="step-1",
+                    kind="agent_call",
+                    description="Timeout task",
+                    agent="test_agent",
+                    metadata={"retry_count": 3},
+                )
+            ],
+            context={},
+        )
+
+        orchestrator = OrchestratorV2(
+            executor=TimeoutExecutor(),
+            outbox=mock_outbox,
+        )
+
+        results = orchestrator.run_plan(plan)
+
+        # Verify no retry events (timeout is not retried)
+        retry_events = mock_outbox.list_events("orchestrator.step.retry")
+        assert len(retry_events) == 0
+
+        # Verify step failed immediately
+        assert any(r["status"] == "error" for r in results)
