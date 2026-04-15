@@ -18,7 +18,7 @@ Use this document with:
 - Per-tool timeout is supported via `tool_timeout_seconds` setting passed to the executor.
 - Timeout is enforced at the executor level for individual tool calls, not at the orchestrator level.
 - Orchestrator V1 (default) and V2 (flagged) both delegate timeout enforcement to the executor.
-- Both orchestrators support a ThreadPoolExecutor for parallel execution (V1 uses single-threaded by default; V2 uses parallel).
+- V1 executes steps sequentially (no parallel execution); V2 uses ThreadPoolExecutor for dependency-aware parallel scheduling.
 - Timeout is observable: caught errors are emitted with error_type `tool_timeout`.
 - No repo-wide A2A/runtime timeout policy, retry queue, delivery SLA, or multi-step plan budget exists.
 
