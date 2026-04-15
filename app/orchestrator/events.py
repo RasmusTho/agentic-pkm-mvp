@@ -12,6 +12,8 @@ from app.events.types import (
     ORCHESTRATOR_ROLLED_BACK,
     ORCHESTRATOR_STEP_ERROR,
     ORCHESTRATOR_STEP_FINISHED,
+    ORCHESTRATOR_STEP_RETRY,
+    ORCHESTRATOR_STEP_RETRY_EXHAUSTED,
     ORCHESTRATOR_STEP_STARTED,
 )
 from app.planner.schema import PlanStep
@@ -60,6 +62,46 @@ def emit_step_error(
     if error_type:
         details["error_type"] = error_type
     _emit(ORCHESTRATOR_STEP_ERROR, object_id=object_id, trace_id=trace_id, details=details)
+
+
+def emit_step_retry(
+    *,
+    plan_id: str,
+    step: PlanStep,
+    attempt: int,
+    backoff_ms: int,
+    error: str,
+    error_type: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+) -> None:
+    """Emit a retry attempt event with observability details."""
+    details = _base_step_details(plan_id, step)
+    details["attempt"] = attempt
+    details["backoff_ms"] = backoff_ms
+    details["error"] = error
+    if error_type:
+        details["error_type"] = error_type
+    _emit(ORCHESTRATOR_STEP_RETRY, object_id=object_id, trace_id=trace_id, details=details)
+
+
+def emit_step_retry_exhausted(
+    *,
+    plan_id: str,
+    step: PlanStep,
+    max_retries: int,
+    final_error: str,
+    error_type: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+) -> None:
+    """Emit a retry exhaustion event when all retry attempts are consumed."""
+    details = _base_step_details(plan_id, step)
+    details["max_retries"] = max_retries
+    details["final_error"] = final_error
+    if error_type:
+        details["error_type"] = error_type
+    _emit(ORCHESTRATOR_STEP_RETRY_EXHAUSTED, object_id=object_id, trace_id=trace_id, details=details)
 
 
 def emit_compensation_started(
@@ -139,6 +181,8 @@ __all__ = [
     "emit_step_started",
     "emit_step_finished",
     "emit_step_error",
+    "emit_step_retry",
+    "emit_step_retry_exhausted",
     "emit_compensation_started",
     "emit_compensation_step_completed",
     "emit_compensation_step_failed",
