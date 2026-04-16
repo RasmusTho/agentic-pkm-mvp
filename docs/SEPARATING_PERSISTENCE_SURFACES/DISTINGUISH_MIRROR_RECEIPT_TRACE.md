@@ -9,11 +9,168 @@ depends_on: [NAME_THE_THREE_PERSISTENCE_SURFACES.md, DEFINE_SYSTEM_SURFACE_CONTR
 can_parallelize_with: []
 ---
 
-State: Specification ready. Docs-only. Downstream of SEPSURF-04.
+State: Implementation complete. Docs-only. Downstream of SEPSURF-04.
 
-# Distinguish Mirror, Receipt, Trace, and Index/Projection
+# Distinguishing Mirror, Receipt, Operational Trace, and Index/Projection
 
-## Purpose
+## Why this distinction matters
+
+Inside the system surface (task 4), four sub-kinds are particularly easy to collapse into one another in documentation and runtime: **mirrors**, **receipts**, **operational traces**, and **indexes/projections**. When they collapse, the user loses distinct guarantees: portability vs. accountability, human-facing records vs. diagnostic breadcrumbs, durable source-of-truth vs. rebuildable projections.
+
+Two upstream contracts have already separated mirrors, receipts, and traces:
+- `MIRROR_RECEIPT_DECISION.md` distinguishes mirrors from receipts
+- `RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md` distinguishes receipts from traces and names audit records as adjacent
+
+This document restates those separations at the persistence-surface level, adds the fourth sub-kind (index/projection), names the hard invariants that define each, and cites cautionary tales (Finding 4 and Finding 5) that demonstrate what the collapses look like in practice. This task does **not** fix the collapses; fixes belong to enabling-change work.
+
+## Mirror
+
+**Identity:** A portable machine-side projection of a human artifact. Mirrors preserve artifact identity, structure, and metadata in a form that survives device changes, repo resets, and rebuilds. Used for continuity, portability, identity repair, and local-first replica convergence.
+
+**Function:** Mirrors answer the question "what does this human artifact look like in projection?" They are the runtime's read-side continuity structure — the answer to "what did I last see for this artifact?"
+
+**What a mirror is:**
+- A machine-owned projection of the human artifact
+- Portable across instances and devices
+- Rebuildable from the original artifact
+- A structural memory of "what we remember about this"
+
+**What a mirror is not:**
+- A record of what the system did (that is a receipt)
+- An audit log (that is an audit record)
+- The definition of the artifact (the original note is the definition)
+
+**Upstream contract:** `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`
+
+## Receipt
+
+**Identity:** A human-legible accountability record of what happened, under what authority, on what basis, and with what outcome. Receipts are the machine's answer to "what did the system do on my behalf?" They are meant to be readable by a human who wants to understand and trust the system.
+
+**Function:** Receipts make system action *inspectable*. They answer: Who initiated this? What was the intent? What authority did they have? What happened? What was the outcome? A user reading a receipt should understand what the system did and why.
+
+**What a receipt is:**
+- A human-legible accountability surface
+- A record of action, authority, basis, and outcome
+- The machine's answer to the user's question "what happened?"
+- Durable enough to be reviewed later
+
+**What a receipt is not:**
+- A portable projection of the artifact (that is a mirror)
+- A raw runtime trace (operational traces support receipts but are not themselves receipts)
+- An ephemeral log (receipts are meant to persist)
+
+**Upstream contract:** `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md` §1
+
+## Operational Trace
+
+**Identity:** Runtime coordination and diagnostic records — the machine's internal breadcrumbs. Traces record outbox events, trace_id-linked logs, orchestration decisions, watcher and worker run records, and similar runtime housekeeping. Traces are for diagnosing what the machine did internally, not for human accountability.
+
+**Function:** Operational traces support runtime diagnostics, replay, and coordination troubleshooting. They help engineers understand what the system tried to do when something failed.
+
+**What an operational trace is:**
+- An internal runtime breadcrumb
+- Ephemeral (lives long enough for diagnostics, may be cleaned up later)
+- For machine operators and engineers to troubleshoot and understand coordination
+- Often linked by trace_id or execution context
+
+**What an operational trace is not:**
+- A human-legible accountability surface (that is a receipt)
+- A durable inspectable record (that is an audit record)
+- A source-of-truth for what the user intended
+
+**Upstream contract:** `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md` §2
+
+## Audit Record
+
+**Identity:** Durable inspectable records preserved for later review and compliance. Audit records are distinct from operational traces (which are ephemeral) and are often derived from or linked to traces, but they serve a different purpose: providing a legal/compliance trail rather than operational diagnostics.
+
+**Function:** Audit records create an immutable record of significant system actions for later inspection, compliance verification, or regulatory review.
+
+**What an audit record is:**
+- A durable record meant to survive long-term
+- Often tied to compliance or legal requirements
+- Preserved in a form suitable for auditing
+- Linked to receipts or traces for context
+
+**What an audit record is not:**
+- An operational trace (not ephemeral; not for real-time diagnostics)
+- A receipt (not meant to be human-readable; meant for compliance machines)
+
+**Upstream contract:** `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md` §3
+
+## Index / Projection
+
+**Identity:** Search-time reconstructed representations of artifacts for retrieval, ranking, scoring, embedding lookup, hybrid-store reads, and context assembly. Indexes and projections are rebuildable derived-state that helps capabilities like retrieval, orientation, and resurfacing find and score material without moving or mutating the artifacts themselves.
+
+**Function:** Indexes answer the question "where is the relevant material?" They support finding, ranking, and contextualizing without requiring the user to know where things are or requiring the artifacts to be transformed.
+
+**What an index/projection is:**
+- A rebuildable derived representation
+- Created from writing-surface, retention-surface, and system-surface sources
+- Meant to be reconstructed when indexes are stale or corrupt
+- A way to find and score material efficiently
+
+**What an index/projection is not:**
+- The artifact it projects (the original artifact is the artifact)
+- A mirror (not a portability/continuity structure; a rebuildable index does not carry identity-repair semantics)
+- A receipt or accountability surface (findability is not action; "I found this" ≠ "I did this on your behalf")
+- A source-of-truth (must remain safely rebuildable from upstream sources)
+
+**Upstream contract:** Named in this spec (no upstream concept contract yet). Future work may promote index/projection into its own dedicated concept contract, but this persistence-surfaces capability does not require that.
+
+## The Six Hard Invariants
+
+These non-equivalences define the structural line of defense between accountability and logs, between remembering and finding, between system action and derived convenience:
+
+1. **mirror ≠ receipt** — A portability/projection artifact must not carry accountability semantics by accident. Mirror fields (identity, structure, metadata) must not include audit markers or action logs.
+
+2. **receipt ≠ trace** — A human-legible accountability surface must not be replaced by raw runtime breadcrumbs. Receipts are curated and readable; traces are for machines.
+
+3. **trace ≠ audit record** — An ephemeral runtime coordination record is not a durable inspectable record. Traces may be cleaned up; audit records are kept.
+
+4. **index ≠ mirror** — A search-time reconstruction is not a portability projection. Rebuildable indexes do not carry the continuity/identity-repair role of mirrors, and mirrors do not carry retrieval/scoring semantics.
+
+5. **index ≠ receipt** — An index entry is not accountability. The fact that something is findable is not the fact that the system did something inspectable on the user's behalf.
+
+6. **index ≠ source-of-truth** — The index must be safely rebuildable from its upstream sources (writing, retention, and system surfaces). If an index silently becomes the only place a piece of meaning lives, the capability has failed and the cognitive-prosthetic guarantee is broken.
+
+## Cautionary tales (cited for clarity; not fixed here)
+
+Finding 4 and Finding 5 from the v6.0 architecture review are textbook examples of what happens when these invariants fail. They are cited here as cautionary tales to illustrate the cost of collapse; they are **explicitly not in scope** for this capability.
+
+### Finding 4: Mirror conflates artifact identity with audit log
+
+**What happens:** The current `VaultMirror` implementation mixes identity fields (used for portability) with audit markers (used for accountability). Over time, mirror files become read as accountability records. The mirror becomes the master of the note. Users stop trusting the original note and read the mirror as the source of truth.
+
+**Why it happens:** When mirror and audit live in the same data structure, they are easy to conflate. Portability and accountability look like the same problem if you do not name them separately.
+
+**How to spot it:** Mirrors start carrying timestamps of system actions. Mirror reads become the way users understand what the system did. The mirror field becomes "the truth" about the artifact.
+
+**In scope here:** This task names the collapse clearly so readers understand what mirror ≠ receipt means. **Not in scope:** Fixing VaultMirror, prescribing the companion-note migration, or touching runtime code. The fix belongs to enabling-change work.
+
+**Reference:** `docs/plans/V60_ARCHITECTURE_TARGET.md` §Finding 4
+
+### Finding 5: Promotion mutates state without clear transition record
+
+**What happens:** Promotion (moving a note from one zone to another, or marking it as stable/canonical) currently writes state mutations without emitting a distinct receipt. The state change *is* the record of what happened. Users read state as a proxy for action, and accountability dissolves into grep.
+
+**Why it happens:** When receipts are optional and traces are cheap, state mutation looks like a sufficient record. Why write a receipt if the state change itself is evidence?
+
+**How to spot it:** Users need to read code or DB rows to understand what the system did. "What happened to this note?" requires artifact inspection rather than receipt inspection. State and action become indistinguishable.
+
+**In scope here:** This task names the collapse (receipt ≠ trace) clearly so readers understand why promotion needs a distinct accountability surface. **Not in scope:** Fixing promotion flows, prescribing receipt emit patterns, or touching runtime code. The fix belongs to enabling-change work.
+
+**Reference:** `docs/plans/V60_ARCHITECTURE_TARGET.md` §Finding 5
+
+## Bridge to task 6: Classification
+
+All four sub-kinds (mirror, receipt, operational trace, index/projection) live on the system surface. None live on the writing or retention surface. This distinction is the foundation for task 6 (Classify Current Artifacts), which maps every current runtime artifact class (vault note, VaultMirror, companion note, store payload, outbox event, audit row, index record, status callout, etc.) to exactly one surface, with explicit flags for where the companion-note migration leaves pending state.
+
+---
+
+## Purpose (Original Specification Section)
+
+Inside the system surface, the four sub-kinds **mirror**, **receipt**, **operational trace**, and **index/projection** must remain distinct. This task produces the document that names the invariants each sub-kind carries, the collapses that must not happen, and the existing concept contracts each sub-kind is subordinate to. Finding 4 and Finding 5 from the architecture review are cited as cautionary tales that demonstrate what the collapses look like in runtime; this task does **not** fix them.
 
 Inside the system surface, the four sub-kinds **mirror**, **receipt**, **operational trace**, and **index/projection** must remain distinct. This task produces the document that names the invariants each sub-kind carries, the collapses that must not happen, and the existing concept contracts each sub-kind is subordinate to. Finding 4 and Finding 5 from the architecture review are cited as cautionary tales that demonstrate what the collapses look like in runtime; this task does **not** fix them.
 

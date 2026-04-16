@@ -9,11 +9,89 @@ depends_on: [NAME_THE_THREE_PERSISTENCE_SURFACES.md, DEFINE_WRITING_SURFACE_CONT
 can_parallelize_with: []
 ---
 
-State: Specification ready. Docs-only. Downstream of SEPSURF-01/02/03. Heavy companion-note-migration dependency.
+State: Implementation complete. Docs-only. Downstream of SEPSURF-01/02/03.
 
-# Define System Surface Contract
+# System Surface Contract
 
-## Purpose
+## Identity
+
+The system surface is where the runtime keeps the structures it needs to do its own job — portable projections of human artifacts, indexes, receipts, execution traces, ingest state, audit rows, queue/outbox records, and similar machine-owned support structures. The system surface is structurally *supportive*, never *central*.
+
+## What the system surface holds (kinds, not implementations)
+
+- **Mirrors**: portable machine-side projections of a human artifact, used for continuity, identity, portability, and rebuild. Mirrors preserve identity across instances and devices.
+
+- **Receipts**: human-legible accountability records of what happened, under what authority, on what basis. Receipts are the machine's answer to "what did the system do?"
+
+- **Operational traces**: runtime coordination and diagnostic records. Traces record internal runtime handoffs, decisions, and observations for later troubleshooting and observability.
+
+- **Audit records**: durable inspectable records preserved for later review. Audit records create an immutable trail of significant runtime actions.
+
+- **Indexes, embeddings, retrieval documents, and scoring projections**: system-owned representations used to find or rank artifacts. These are derived views that help the system locate and surface material; they are not the artifacts themselves.
+
+- **Ingest state and healing metadata**: the runtime's own notes about what it has tracked, what it has repaired, what state has been seen and reconciled. This metadata is how the runtime knows what it has already processed.
+
+- **Queue/outbox records and execution artifacts**: machine coordination records that track pending work, completed work, and durable side effects. These ensure the runtime can continue work across failures and validate that operations completed.
+
+Each of these is a *kind*, not an implementation. Tasks 5 and 6 distinguish these further and classify specific runtime artifacts.
+
+## Authority
+
+The system surface is machine-owned. The user can inspect it but does not author it. Read access is expected and encouraged (transparency is trust). Write authority belongs to the runtime. The user's trust relationship with the system surface is that *it is honest about what the system did*, not that *it contains human meaning*.
+
+## Hard invariant: the system surface must never silently become the only real source of meaning
+
+This is the single most important rule in this contract. It is inherited directly from `docs/plans/V60_ARCHITECTURE_TARGET.md` §Pillar 3 and §Delta 3.
+
+If the system surface becomes the *de facto* center of gravity — because it is structurally convenient, or because projections are faster to search than original artifacts, or because mirrors are more up-to-date than the human originals — the user can no longer trust that their central artifacts remain intelligible without hidden machinery. Every time a mirror becomes the master, a receipt becomes just another log line, an index entry becomes the canonical truth about what an artifact contains, the user loses a piece of the cognitive-prosthetic guarantee: *"I can still read my own work without the runtime."*
+
+This invariant is what stops that drift before it is rationalized into convenience. The system surface is allowed to be useful, fast, and complete. It is not allowed to become the only place meaning lives.
+
+## What the system surface must never silently become
+
+- **The only real source of meaning**: If the system surface becomes the de facto center, the user loses the guarantee that central artifacts remain intelligible without the runtime.
+
+- **The replacement for the writing surface**: No hidden master. The human original is not replaced by a mirror or a cached version, even if the mirror is more consistent or complete.
+
+- **The replacement for the retention surface**: No quiet absorption of retained source material. Sources do not disappear into system-surface indexes; they remain first-class retained artifacts.
+
+- **A place where mirrors become receipts**: Mirrors and receipts serve different epistemic functions (task 5 distinguishes them in detail). They must not collapse.
+
+- **A place where receipts become mere traces**: Receipts are human-legible accountability (what happened, under what authority). Traces are diagnostic records. They must not become indistinguishable.
+
+- **A place where traces are treated as human-legible accountability**: Traces are for machines. They are not evidence or accountability in the way receipts are. See `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`.
+
+- **The effective definition of an artifact**: Indexes and retrieval documents are projections. An index entry that describes what a note contains is not the definition of what the note contains. The note itself is the definition.
+
+- **A shortcut for user-facing flows**: The system surface must never be written to by user-facing flows as a shortcut to avoid writing-surface authorship rules. System-surface writes are machine coordination, not user intent.
+
+## Companion-note migration as reference implementation (not prescribed)
+
+The companion-note migration is the *reference implementation for the per-note system-surface sub-lane*. This contract treats the companion-note migration as a trusted peer that demonstrates what the per-note system surface looks like in practice.
+
+This contract does **not** prescribe the companion-note implementation:
+- It does not prescribe the field set or data shape
+- It does not prescribe the file path or location
+- It does not prescribe the write path or sequencing
+- It does not prescribe the migration timeline
+
+If tension ever arises between this contract and the `COMPANION_NOTE_CONTRACT.md`, the resolution lives in this file (citation update), not in the companion-note contract. This is how we keep the per-note implementation free to converge with the naming without forcing the naming to ossify around an early implementation shape.
+
+Language in this contract is intentionally compatible with the companion-note migration being in-flight on a parallel worktree. Transitional compatibility shapes may be referenced as cautionary context but are not frozen into this contract.
+
+## Relation to the other two surfaces
+
+A writing-surface artifact and a retention-surface artifact may each have one or more system-surface projections (mirrors, receipts, indexes, traces). Those projections are *about* the human artifact; they are not *instances* of it.
+
+The writing surface is the human original. The system surface is the machine's infrastructure and record *about* that original. The distinction is not about storage format or location; it is about authority and intent.
+
+See [DEFINE_WRITING_SURFACE_CONTRACT.md](DEFINE_WRITING_SURFACE_CONTRACT.md) and [DEFINE_RETENTION_SURFACE_CONTRACT.md](DEFINE_RETENTION_SURFACE_CONTRACT.md) for the other surface contracts.
+
+---
+
+## Purpose (Original Specification Section)
+
+Define the contract for the **system surface** — the persistence surface that holds mirrors, receipts, indexes, traces, execution artifacts, and other runtime support structures. Make explicit that the system surface is structurally *supportive*, never *central*; and that per-note system surface implementation is being realized by the companion-note migration, which this contract cites but does not prescribe.
 
 Define the contract for the **system surface** — the persistence surface that holds mirrors, receipts, indexes, traces, execution artifacts, and other runtime support structures. Make explicit that the system surface is structurally *supportive*, never *central*; and that per-note system surface implementation is being realized by the companion-note migration, which this contract cites but does not prescribe.
 

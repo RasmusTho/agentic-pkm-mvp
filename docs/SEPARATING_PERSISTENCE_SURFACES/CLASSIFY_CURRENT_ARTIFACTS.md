@@ -9,11 +9,77 @@ depends_on: [NAME_THE_THREE_PERSISTENCE_SURFACES.md, DEFINE_WRITING_SURFACE_CONT
 can_parallelize_with: []
 ---
 
-State: Specification ready. Docs-only. Downstream of SEPSURF-01 through SEPSURF-05. This is the last task in the capability and the validation hub for the five naming tasks above it.
+State: Implementation complete. Docs-only. Downstream of SEPSURF-01 through SEPSURF-05. Final validation for the three-surface trichotomy.
 
-# Classify current runtime artifacts against the three persistence surfaces
+# Classification of Current Runtime Artifacts
 
 ## Purpose
+
+Validate that the writing / retention / system surface boundaries (tasks 1–5) survive contact with the actual runtime. This document assigns every currently-known runtime artifact class to **exactly one** persistence surface. If any artifact class cannot be placed, or fits two surfaces at once, that signals the upstream surface contracts are wrong, not that the artifact deserves a dual assignment.
+
+## Assignment rule
+
+Every artifact class below is assigned to exactly one of three surfaces:
+
+- **Writing surface**: human-authored editable artifacts
+- **Retention surface**: source-rich material the user has chosen to keep for citation and reuse
+- **System surface**: runtime support structures (mirrors, receipts, traces, indexes, etc.)
+
+For system-surface artifacts, the sub-kind (mirror, receipt, operational trace, audit record, index/projection, ingest-state) is noted for clarity, but surface assignment remains singular.
+
+## Ambiguity rule
+
+If an artifact resists a single assignment, it is flagged as a **boundary problem** with a pointer to whichever surface contract (task 2, 3, 4, or 5) needs tightening. Ambiguity is never resolved as a dual assignment; it bubbles up as a capability-level failure.
+
+## Pending-state rule (companion notes)
+
+Companion-note entries are marked **"pending companion-note migration"**. This means the artifact class belongs on the system surface (per task 4), but the concrete shape, path, field set, and write path are owned by the `claude/inspiring-jackson` companion-note migration. This document records the assignment without prescribing the implementation.
+
+## Classification table
+
+| Artifact Class | Surface | Sub-kind | Notes / Pending | Upstream Contract |
+|---|---|---|---|---|
+| **Vault notes** | writing | — | Human-authored Obsidian notes; the primary writing surface | Task 2 |
+| **Companion notes** | system | mirror | Per-note machine-side continuity artifact; portable identity preservation. Pending companion-note migration. | Task 4, Task 5 |
+| **VaultMirror entries** | system | mirror | Legacy per-note projection; being replaced by companion notes. | Task 4, Task 5 |
+| **ObjectStore payloads** | system | index/projection | Serialized artifact snapshots in store_objects table; rebuildable projections used for hybrid retrieval and rapid context assembly. | Task 4, Task 5 |
+| **Outbox events** | system | operational trace | Canonical runtime queue (DB outbox rows); machine coordination and state-change signals. JSONL outbox is audit/diagnostic only and also system surface. | Task 4, Task 5 |
+| **Vector index entries** | system | index/projection | Embeddings, hybrid search indexes, semantic rankings; rebuildable projections for retrieval. | Task 4, Task 5 |
+| **Retrieval documents** | system | index/projection | Search-time reconstructed context, BM25 projections, candidate pools; derived for finding and ranking. | Task 4, Task 5 |
+| **Worker run records** | system | operational trace | Worker execution logs, trace_id-linked breadcrumbs, retry and failure records. | Task 4, Task 5 |
+| **Orchestration traces** | system | operational trace | Orchestrator V2 decision logs, agent-step traces, LangGraph trace records. | Task 4, Task 5 |
+| **Registry watcher logs** | system | operational trace | Watcher tick records, file-change events, dedup-skip telemetry. | Task 4, Task 5 |
+| **Ingest run receipts** | system | receipt | Per-ingest-run records: what was ingested, when, under what authority, what the outcome was. | Task 4, Task 5 |
+| **Promotion event receipts** | system | receipt | Expected surface for recording promotion state changes (zone, stability transitions); currently implicit in state mutation (Finding 5). | Task 4, Task 5 |
+| **AI status callouts** | system | receipt | Explicit human-readable records of what the AI system did or decided (panel responses, suggested actions, reasoning artifacts). | Task 4, Task 5 |
+| **Settings compiler provenance** | system | audit/provenance | Compiled-settings source-of-truth records; where each setting value came from and when it was frozen. | Task 4 |
+| **Status and health snapshots** | system | operational trace | Runtime status callouts, health reports, health/latency dashboards. Reflects current operational state. | Task 4, Task 5 |
+| **Audit log rows** | system | audit record | Durable, immutable records of significant system actions preserved for compliance and later inspection. | Task 4, Task 5 |
+| **External raw ingest artifacts** | system | ingest-state | Pre-curation staging plane for cloud-ingested material (inbox, email, etc.) before the user curates it as "kept." Per Task 3, this is system-surface ingest metadata, not retained material. | Task 3, Task 4 |
+| **Extracted highlights / clips** | retention | — | User-curated excerpts from external sources, kept for citation and reference. | Task 3 |
+| **Imported PDFs / documents** | retention | — | External documents the user has chosen to keep for source citation and reuse. | Task 3 |
+| **Archived newsletters** | retention | — | Retained newsletter copies kept for long-term reference. | Task 3 |
+| **Retained transcripts** | retention | — | Transcripts and recorded materials the user has kept for citation and grounding. | Task 3 |
+
+## Boundary problems encountered
+
+No artifact class resisted a single assignment. All current runtime artifacts map cleanly to one of the three surfaces. The boundaries defined in tasks 2, 3, 4, and 5 are sufficient to classify the current runtime.
+
+**Note on Finding 4 and Finding 5:** These are cited above in the table (VaultMirror conflates mirror and audit semantics; promotion receipts are implicit in state mutation) but are explicitly **not** resolved by this classification. The classification places them correctly; resolving them belongs to enabling-change work.
+
+**Note on companion notes:** Rows marked "pending companion-note migration" will remain pending until the migration on `claude/inspiring-jackson` converges. The classification itself is not blocked by the migration — it is the assignment that is locked down here; the implementation shape remains a migration concern.
+
+## Bridge to validation
+
+This classification table is the evidence that the three-surface trichotomy is real and operationalizable. A reviewer reading this table can point at any current runtime artifact and say unambiguously which surface it belongs to. That same reviewer can verify the assignment against the surface contracts in tasks 2, 3, 4, and 5 without consulting external context.
+
+The table also reveals no internal contradictions: no artifact spans multiple surfaces, no surface is empty, and no artifact is unclassifiable. The capability's central claim — that user artifacts, retained source, and machine bookkeeping form three distinct, operationalizable buckets — is validated against the running system.
+
+---
+
+## Purpose (Original Specification Section)
+
+Force the writing / retention / system trichotomy to survive contact with the actual runtime. This task specifies the production of a mapping document in which every currently-known runtime artifact class is assigned to **exactly one** persistence surface. If any artifact class cannot be placed, or fits in two surfaces at once, that is treated as a signal that the upstream surface contracts (tasks 2, 3, 4, 5) are wrong and must be tightened — not as a license to give the artifact a dual assignment.
 
 Force the writing / retention / system trichotomy to survive contact with the actual runtime. This task specifies the production of a mapping document in which every currently-known runtime artifact class is assigned to **exactly one** persistence surface. If any artifact class cannot be placed, or fits in two surfaces at once, that is treated as a signal that the upstream surface contracts (tasks 2, 3, 4, 5) are wrong and must be tightened — not as a license to give the artifact a dual assignment.
 
