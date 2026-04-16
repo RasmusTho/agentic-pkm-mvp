@@ -59,6 +59,70 @@ Concretely, collapsing commitments into execution plans causes these failure mod
 
 Each of these turns the system from a cognitive prosthetic into an automation log. The contract in this file exists to prevent that at the architecture layer.
 
+## What an execution plan is
+
+An execution plan (called `Plan`, `Subplan`, or execution structure in the runtime vocabulary) is a generated system artifact used to sequence and coordinate work that the system performs.
+
+The authoritative vocabulary for execution artifacts is documented in:
+- `docs/plans/V56_COMMITMENT_RUNTIME_SLICE.md` (§Execution Artifact)
+- `docs/ARCHITECTURE.md` (execution and planner sections)
+- `docs/plans/V60_ARCHITECTURE_TARGET.md` (execution-layer evolution)
+
+Execution plans describe the **ordered steps the system will take** (tool calls, orchestrator steps, planner reasoning sequences). They are system process structures expressed in runtime terms.
+
+## What a commitment is, and why it is not a plan
+
+A commitment is a **human responsibility structure** such as an open loop, project, next action, waiting state, or review obligation.
+
+The authoritative contract for commitments is documented in:
+- `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md` (core human commitment semantics)
+- `docs/HUMAN-FLOWS.md` (lived human experience of commitments)
+
+### The distinction
+
+**Commitments describe what the human owes, is waiting on, or considers next.**
+They are expressed in human-facing terms: "I owe", "I'm waiting on", "this is what's next for me", "I need to return to this".
+
+**Execution plans describe what the system orders its own work to accomplish.**
+They are expressed in system terms: tool calls, sequenced orchestrator steps, planner-generated reasoning.
+
+They are related but fundamentally different:
+- Commitments are about human responsibility and attention.
+- Plans are about system process.
+- A commitment may cause the system to generate a plan to help advance it.
+- But generating a plan does not create a commitment.
+- And completing a plan does not automatically close a commitment.
+
+### Direction of causality
+
+Execution plans **may support** human commitments. The system can generate a plan to help the human move a project forward, gather information for a decision, or make progress on a waiting state.
+
+But this relationship is one-way:
+- A human commitment may cause a plan to be generated.
+- A completed plan may contribute evidence toward closing a commitment.
+- But **a finished execution plan never automatically transitions a commitment to `done`.**
+
+Commitment transitions belong to the human's decision (possibly assisted by the system), not to runtime plan completion.
+
+**The human's commitment landscape is authoritative. The system's execution plans are subordinate to it.**
+
+## Forbidden vocabulary collisions
+
+The following terms are used distinctly in each layer and must NOT be reused across them:
+
+| Term | Execution Only | Commitment Only | Why |
+|------|---|---|---|
+| `Plan` | Generated system artifact; sequence of tool calls or orchestrator steps | FORBIDDEN | A commitment is never called a "Plan"; it is not reducible to system sequencing |
+| `Step` | Orchestrator action; element of an execution sequence | FORBIDDEN | A human next action is not a system step; system sequencing and human action are different concepts |
+| `waiting` | Orchestrator awaiting a tool result; async operation paused | FORBIDDEN | Commitment-layer waiting (e.g., "I'm waiting for Alice's reply") is a human responsibility state, not system inactivity |
+| `done` | Execution step finished; planner step completed; tool call returned | FORBIDDEN | A commitment is closed by human decision, not by system process completion |
+| `next` | Next orchestrator step; next planner action in a sequence | FORBIDDEN | A human next action is a human responsibility; next system step is execution sequencing |
+| `project` | Planner project; execution-layer grouping for orchestrator steps | FORBIDDEN | A human project is a multi-step commitment with a meaningful outcome; planner project is internal sequencing |
+
+**Violation example:** If a finished planner project causes a human project commitment to auto-close, the vocabulary collision has caused a failure mode. The planner's "project" is not the human's commitment.
+
+**Non-violation example:** System documentation may correctly state "the system generated a plan to help the user advance the hiring project commitment" (plan and project refer to different layers and serve different purposes).
+
 ## Acceptance Criteria
 
 - [ ] This file contains a "## What an execution plan is" section that points to existing execution-artifact vocabulary without redefining it.
