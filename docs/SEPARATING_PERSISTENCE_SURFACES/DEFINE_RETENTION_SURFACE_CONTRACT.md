@@ -9,11 +9,89 @@ depends_on: [NAME_THE_THREE_PERSISTENCE_SURFACES.md, DEFINE_WRITING_SURFACE_CONT
 can_parallelize_with: []
 ---
 
-State: Specification ready. Docs-only. Downstream of SEPSURF-01 and SEPSURF-02.
+State: Implementation complete. Docs-only. Downstream of SEPSURF-01 and SEPSURF-02.
 
-# Define Retention Surface Contract
+# Retention Surface Contract
 
-## Purpose
+## Identity
+
+The retention surface is where the system keeps source-rich material the user has chosen to retain because it matters later. PDFs, long-form external documents, transcripts, newsletters, reference captures, retained excerpts, and similar artifacts whose primary value is being *citable* and *re-readable*. These are received, not authored.
+
+## What the retention surface holds
+
+- Externally authored documents (PDFs, articles, whitepapers, newsletters, transcripts)
+- Long-form reference captures from external sources
+- Retained excerpts with provenance intact
+- Archived material the user intends to return to for citation or grounding
+- Documentation and specifications kept as reference
+- Any artifact whose primary function is to serve as a source for future reference, citation, or reuse
+
+All of these share a defining property: the user chose to keep them because they have ongoing value as *source material*, not because they are actively being written or worked on. The retention surface is defined by the user's curatorial decision to maintain these artifacts as accessible, citable references.
+
+## Authority
+
+Retention-surface artifacts are *received*, not *authored*. The user's authority over them is:
+- **Curatorial**: choosing what to keep, organizing and annotating it
+- **Not authorial**: not rewriting the source material itself
+
+The user can annotate a retained document, copy excerpts into writing-surface notes, index it for search, and cite it. But the user does not *author* the retention-surface artifact in place. Its voice and shape remain as received.
+
+## Source as role, not type (Cited from ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md)
+
+It is essential to understand that *retention* and *source* are not the same idea.
+
+- **Retention is a function**: retention-surface artifacts are kept because the user wants to return to them and refer to them later.
+- **Source is a role**: any artifact (writing-surface, retention-surface, or system-surface) may play the role of source material in a particular context — cited, consulted, grounded against.
+
+A writing-surface note may play a source role (cited by a later note) without being a retention-surface artifact. A retention-surface artifact is *typically* consulted as source, but the retention function is what defines it, not the source role in any particular query.
+
+The system surface also creates projections of retained material (indexes, embeddings, retrieval documents). These projections are *about* retained source material; they do not *become* retained source material by virtue of being created. See [DEFINE_SYSTEM_SURFACE_CONTRACT.md](DEFINE_SYSTEM_SURFACE_CONTRACT.md) for system-surface clarification.
+
+## Post-curation, not pre-curation
+
+A critical distinction: **the retention surface holds curated material only**.
+
+Raw external material sitting in a staging plane before the user has decided to keep it is *not* on the retention surface yet. It is **system-surface ingest-state** (see task 4). Once the user curates it as "kept," the curated artifact joins the retention surface; the system-surface ingest record remains a system surface artifact recording the history of what was ingested and when.
+
+The staging plane is not retention-in-progress; it is machine-owned observation. Conflating them would mean the retention surface slowly fills with every external document that ever passed through the ingest pipeline, whether the user wanted to keep it or not.
+
+## What the retention surface must never silently become
+
+- **The writing surface**: Retained material must never silently become re-authored work. The user must not find that source material has been edited, reformatted, or combined in place as if it were a writing-surface artifact. Retention means the original voice is preserved.
+
+- **The system surface**: Retained material must never be treated as machine bookkeeping. The fact that the runtime indexes, embeds, or creates retrieval documents for retained material does not make the retained artifact itself a system-surface artifact. Retention is first-class; projections are derived.
+
+- **The only remaining place a piece of human meaning lives**: Writing-surface artifacts must not decay into retention artifacts simply because they have not been edited in a while. If a note you wrote ages out of activity and drifts into retention just by force of disuse, you lose the guarantee that your own work lives where you put it.
+
+- **An absorber of creative fragments**: Creative fragments belong on the writing surface (see task 2). If fragments are pushed onto the retention surface because "they are not yet finished," fragments lose their home and creative work becomes institutionalized as "not-yet-ready source material."
+
+- **A substitute for a receipt of what the system did**: If the system performs an action (ingest, retrieval, promotion, transformation) on or with retained material, the record of that action belongs on the system surface as a receipt or trace (see tasks 4 and 5). The system-surface receipt should never be confused with the retained artifact itself. "The system found this" is not the same as "this is retained source."
+
+- **A repository for pre-curation staging material**: Raw external ingest in a staging plane is system-surface ingest-state (see task 4), not retained source. The staging row belongs on the system surface as an ingest-metadata artifact. Only curated material joins the retention surface.
+
+## Relation to the writing surface
+
+A writing-surface artifact may cite retained material. The human may copy excerpts from retained sources into notes and work with them. The human may be inspired by retained material and author new notes based on it. But the writing-surface artifact and the retained artifact remain distinct. Migration of material from retention to writing (the user turning source into authored note) is a writing-surface *event* (a new note is created), not a retention-surface *demotion* (the source is not moved). The retained artifact stays retained.
+
+See [DEFINE_WRITING_SURFACE_CONTRACT.md](DEFINE_WRITING_SURFACE_CONTRACT.md) for the writing surface contract.
+
+## Relation to the system surface
+
+The retention surface may have system-surface projections. Indexes, embeddings, retrieval documents, and ingest-state records are all system-surface artifacts that *reference* or *describe* retained material. These projections exist to support retrieval, search, and operational observability. But the projections are not the retention-surface artifact. A retrieval document is not the source; it is a machine representation *about* the source. An index entry is not the artifact; it is a machine representation that helps us find the artifact.
+
+The critical rule: the retained artifact is not defined by its projections. If the index is more up-to-date than the source, the source remains the source. If a retrieval document is what the system found most convenient, the retrieval document is not what you chose to keep.
+
+See [DEFINE_SYSTEM_SURFACE_CONTRACT.md](DEFINE_SYSTEM_SURFACE_CONTRACT.md) for the system surface contract.
+
+## User-facing implication
+
+The user must be able to point at a retention-surface artifact and say *"this is a copy of something I chose to keep"* without conflating it with their own authored work or with machine bookkeeping. When you return to a retained source document months later, it should be recognizable as the same thing you kept — not edited, not absorbed into your notes, not replaced by an index entry or a summary.
+
+---
+
+## Purpose (Original Specification Section)
+
+Define the contract for the **retention surface** — the persistence surface that holds retained source-rich artifacts kept for citation, grounding, later reuse, and long-horizon reference. Clarify that *retention* is a distinct function from *authorship* (writing surface) and from *system bookkeeping* (system surface), and that *source* is an epistemic role an artifact plays in context rather than an intrinsic type.
 
 Define the contract for the **retention surface** — the persistence surface that holds retained source-rich artifacts kept for citation, grounding, later reuse, and long-horizon reference. Clarify that *retention* is a distinct function from *authorship* (writing surface) and from *system bookkeeping* (system surface), and that *source* is an epistemic role an artifact plays in context rather than an intrinsic type.
 
