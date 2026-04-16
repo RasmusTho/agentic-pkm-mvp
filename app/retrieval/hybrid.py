@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Iterable, Iterator, List, Optional
 
 import numpy as np
@@ -137,11 +136,6 @@ def _extract_domain(doc: Document) -> str | None:
     raw = payload.get("domain")
     if isinstance(raw, str) and raw.strip():
         return raw.strip()
-    if doc.source_ref:
-        path = Path(str(doc.source_ref))
-        parts = [part for part in path.parts if part not in (path.anchor, "")]
-        if parts:
-            return parts[0]
     return None
 
 
