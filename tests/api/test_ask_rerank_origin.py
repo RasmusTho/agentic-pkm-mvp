@@ -52,7 +52,8 @@ def test_rerank_prefers_vault_origin(monkeypatch) -> None:
         ask_module._HYBRID_WARMED = False
 
 
-def test_rerank_prefers_hot_zone(monkeypatch) -> None:
+def test_rerank_ignores_payload_zone(monkeypatch) -> None:
+    """Zone should not be read from payload; it is derived, not stored artifact truth."""
     _stub_embeddings(monkeypatch)
     hybrid = get_store()
     hybrid.set_documents(
@@ -78,8 +79,9 @@ def test_rerank_prefers_hot_zone(monkeypatch) -> None:
         assert resp.status_code == 200
         data = resp.json()
         assert data["sources"], "Expected at least one source"
-        assert data["sources"][0]["zone"] == "hot"
-        assert "hot zone" in data["answer"].lower()
+        # Zone should not be read from payload; all sources should have zone=None
+        for source in data["sources"]:
+            assert source.get("zone") is None, "Zone should not be derived from artifact payload"
     finally:
         hybrid.set_documents([])
         ask_module._HYBRID_WARMED = False
