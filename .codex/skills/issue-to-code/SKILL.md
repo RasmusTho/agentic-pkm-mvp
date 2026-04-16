@@ -7,6 +7,8 @@ description: "Implement a bounded GitHub slice issue as the canonical task contr
 
 You are a builder agent implementing GitHub backlog work in a repo-first, docs-as-code software system.
 
+⚠️ **CRITICAL: All lifecycle state changes (labels, Project Status) must be executed using explicit commands (`gh issue edit`, `gh api graphql`, `gh pr edit`). Do not describe these changes—execute them and verify they succeeded before continuing.**
+
 Your governing rule:
 Only execute bounded implementation work from a GitHub Issue that is the canonical task contract.
 
@@ -72,19 +74,108 @@ Allowed Project statuses:
 
 ## Lifecycle rules during execution
 
-- Before starting implementation, ensure the selected Issue is present in Project `Agent Delivery Control Plane`.
-- If the Issue is missing from the Project, add it first.
-- When you begin active work on an Issue, set Project Status to `In Progress` and remove `agent:ready`.
-- If you determine the Issue is blocked before or during implementation:
-  - do not continue coding
-  - update labels and Project state truthfully
-  - use `agent:blocked` when the work is blocked by dependency or setup
-  - use `agent:needs-human` when the work requires a human decision or missing authority
-  - move Project Status out of active execution if appropriate, normally back to `Backlog`
-- If you open a draft PR or keep implementing after opening a PR, keep Project Status at `In Progress`.
-- Move Project Status to `Review` only when the PR becomes the explicit review handoff artifact, normally after review is requested.
-- Do not leave actively worked Issues in `Ready`.
-- Do not leave blocked Issues in `In Progress` without an explicit blocker note and corrected labels.
+**All state changes must be executed using explicit commands, not described as recommendations.**
+
+### Action: Begin Implementation Work
+
+When you start active work on an Issue:
+
+1. **Ensure Issue is in Project** (if missing, add it first):
+   ```bash
+   gh api graphql -f query='query { repository(owner:"OWNER", name:"REPO") { issue(number:N) { projectItems(first:1) { nodes { id } } } } }'
+   ```
+
+2. **Remove `agent:ready` label:**
+   ```bash
+   gh issue edit #<N> --remove-label agent:ready
+   ```
+
+3. **Set Issue Project Status to In Progress:**
+   ```bash
+   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
+     -f fieldId="$STATUS_FIELD_ID" -f optionId="$IN_PROGRESS_OPTION_ID" \
+     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
+   ```
+
+4. **Verify:**
+   ```bash
+   gh issue view #<N> --json labels,projectItems
+   ```
+
+### Action: Issue is Blocked (Mid-Implementation)
+
+If work becomes blocked before or during implementation:
+
+1. **Add blocker label:**
+   ```bash
+   gh issue edit #<N> --add-label agent:blocked --remove-label agent:ready
+   ```
+
+2. **Set Issue Project Status to Backlog:**
+   ```bash
+   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
+     -f fieldId="$STATUS_FIELD_ID" -f optionId="$BACKLOG_OPTION_ID" \
+     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
+   ```
+
+3. **Add a blocking comment to the Issue with explicit reason**
+
+4. **Verify:**
+   ```bash
+   gh issue view #<N> --json labels,projectItems
+   ```
+
+**Use `agent:blocked`** when blocked by dependency or setup.  
+**Use `agent:needs-human`** when work requires a human decision or missing authority.
+
+### Action: Open Draft PR (Work In Progress)
+
+When you open a draft PR or continue implementing after opening a PR:
+
+1. **Keep Issue Project Status at In Progress** (no change needed if already set)
+
+2. **If creating PR, no status change yet** — PR remains draft
+
+3. **Verify Issue still shows In Progress:**
+   ```bash
+   gh issue view #<N> --json projectItems
+   ```
+
+### Action: Request Review (Explicit Handoff)
+
+Only move to Review when the PR is the **explicit review handoff artifact** (normally after review is requested):
+
+1. **Move Issue Project Status to Review:**
+   ```bash
+   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
+     -f fieldId="$STATUS_FIELD_ID" -f optionId="$REVIEW_OPTION_ID" \
+     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
+   ```
+
+2. **Move PR Project Status to Review:**
+   ```bash
+   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$PR_ITEM_ID" \
+     -f fieldId="$STATUS_FIELD_ID" -f optionId="$REVIEW_OPTION_ID" \
+     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
+   ```
+
+3. **Verify both Issue and PR:**
+   ```bash
+   gh issue view #<N> --json projectItems
+   gh pr view #<PR> --json projectItems
+   ```
+
+**Do not move to Review** just because a PR exists. Move to Review only when review is explicitly requested.
+
+## Quick Reference: State Transitions
+
+| When | Issue Labels | Issue Status | PR Labels | PR Status |
+|------|-------------|-------------|-----------|-----------|
+| Start work | -agent:ready | In Progress | — | — |
+| Blocked mid-work | +agent:blocked,-agent:ready | Backlog | — | — |
+| Open draft PR | (no change) | In Progress | — | (draft, no Project status) |
+| Request review | (no change) | Review | — | Review |
+| Merge + verified | -agent:* | (verification owns) | — | (Done via verification skill) |
 
 ## Execution rules
 
@@ -129,7 +220,7 @@ When continuing through anchor drift:
 ## Implementation workflow
 
 1. Select the Issue according to priority and readiness rules.
-2. Ensure the Issue is in the Project, set Status to `In Progress`, and remove `agent:ready`.
+2. **Execute Action: Begin Implementation Work** (update labels, Issue Project Status, verify).
 3. Restate the bounded outcome from the Issue.
 4. Read source-anchored docs and owning code paths.
 5. If anchor drift exists, resolve it using the rules above before coding.
@@ -140,7 +231,7 @@ When continuing through anchor drift:
 10. Run `Suggested Validation` plus any obviously necessary focused checks.
 11. Run `.codex/skills/publish-pr/SKILL.md` to create or update the implementation PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
 12. Run `.codex/skills/pr-integration/SKILL.md` to resolve merge conflicts and ensure CI/check truth on the latest PR head.
-13. Ensure Project Status is `Review` only once the PR is the active review handoff artifact.
+13. **Execute Action: Request Review** (only move Issue and PR Project Status to Review when review is explicitly requested).
 14. If the slice merges but the parent feature still needs validation, keep that parent issue open for the later acceptance step.
 
 ## PR handoff requirements

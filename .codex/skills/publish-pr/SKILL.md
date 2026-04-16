@@ -10,6 +10,8 @@ Use this skill when local work is complete enough to publish as a branch and pul
 Goal:
 turn validated local changes into a truthful branch, commit, pushed head, and PR artifact without mixing publication with implementation logic.
 
+⚠️ **CRITICAL: All publication steps (branch creation, staging, commit, push, PR creation) must be executed using explicit git/gh commands. Do not describe these steps—execute them and verify they succeeded. Hand off to pr-integration is mandatory.**
+
 ## Canonical workflow position
 
 `Docs -> Issue -> Project -> Issue maintenance -> Agent -> Publish PR -> PR integration -> CI -> Verification -> Project/doc closure -> Owner Doc`
@@ -41,15 +43,154 @@ turn validated local changes into a truthful branch, commit, pushed head, and PR
 - Default to opening a draft PR unless the work is explicitly ready for review handoff.
 - Publication does not move work to `Done`.
 
-## Recommended publication sequence
+## Publication workflow (all steps are executable)
 
-1. Confirm the file set belongs to a single lane and single bounded change.
-2. Create or switch to a dedicated branch.
-3. Stage only the intended files.
-4. Write a commit message that matches the bounded outcome.
-5. Push the branch.
-6. Open or update the PR with truthful lane classification.
-7. Hand off to `.codex/skills/pr-integration/SKILL.md`.
+### Step 1: Confirm File Set
+
+Verify files belong to a single lane and single bounded change:
+
+```bash
+git status --porcelain
+```
+
+All modified/new files must align with a single lane (implementation, docs-authoring, or governance).
+
+### Step 2: Create or Switch Branch
+
+```bash
+# Option A: Create new branch from main
+git fetch origin main
+git checkout -b <branch-name> origin/main
+
+# OR Option B: Switch to existing branch
+git checkout <branch-name>
+
+# Verify correct branch
+git status
+```
+
+Branch naming: Descriptive, hyphenated (e.g., `fix-auth-token-expiry`, `docs-roadmap-update`, `governance-skill-updates`).
+
+### Step 3: Stage Intended Files
+
+```bash
+# Stage specific files (not all changes)
+git add <file1> <file2> <file3>
+
+# Verify staging
+git status
+```
+
+Do not use `git add -A` or `git add .`—stage only intended files.
+
+### Step 4: Create Commit
+
+```bash
+git commit -m "$(cat <<'EOF'
+Brief summary of bounded outcome
+
+Optional detailed explanation of why this change is needed.
+
+Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>
+EOF
+)"
+```
+
+Commit message must:
+- Start with imperative verb (Fix, Add, Update, Rebuild, etc.)
+- Summarize the bounded outcome, not the mechanical changes
+- Be truthful about scope
+
+### Step 5: Push Branch
+
+```bash
+git push origin <branch-name>
+```
+
+Verify push succeeded and GitHub suggests PR creation.
+
+### Step 6: Create or Update PR
+
+Execute based on lane classification:
+
+**Implementation Lane (Fixes an Issue):**
+```bash
+gh pr create --draft \
+  --title "<bounded outcome>" \
+  --body "$(cat <<'EOF'
+Fixes #<ISSUE_NUMBER>
+
+## Summary
+<1-2 sentence summary of the bounded change>
+
+## Validation
+<What validation actually ran>
+
+---
+EOF
+)"
+```
+
+**Docs Authoring Lane:**
+```bash
+gh pr create --draft \
+  --title "<docs update title>" \
+  --body "$(cat <<'EOF'
+- [x] Docs authoring lane
+
+## Summary
+<Summary of documentation changes>
+
+## Changes
+<What surfaces were updated>
+
+## Validation
+<Docs validation that ran>
+
+---
+EOF
+)"
+```
+
+**Governance Lane:**
+```bash
+gh pr create --draft \
+  --title "<governance change title>" \
+  --body "$(cat <<'EOF'
+- [x] Governance lane
+
+## Summary
+<Summary of governance/workflow change>
+
+## Changes
+<What surfaces were updated>
+
+## Validation
+<Governance validation that ran>
+
+---
+EOF
+)"
+```
+
+**Update Existing PR:**
+```bash
+gh pr edit <pr-number> --body "$(cat <<'EOF'
+... updated body content ...
+EOF
+)"
+```
+
+### Step 7: Hand Off to pr-integration
+
+After PR is created/updated, execute pr-integration skill:
+
+```bash
+# Invoke pr-integration skill to verify, check CI, and prepare for verification
+echo "Handing off to pr-integration skill"
+```
+
+**Do not skip this handoff.** PR integration resolves merge conflicts, verifies CI, and prepares the PR for verification/merge.
 
 ## PR body requirements
 
