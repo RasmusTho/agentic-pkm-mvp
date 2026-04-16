@@ -35,8 +35,6 @@ def score_hit(hit: dict[str, Any]) -> float:
 
     payload = hit.get("payload") or {}
     origin = str(payload.get("origin") or "vault").lower()
-    zone_raw = payload.get("zone")
-    zone = str(zone_raw).lower().strip() if zone_raw not in (None, "") else None
     trust_raw = payload.get("trust")
     trust = str(trust_raw).lower().strip() if trust_raw not in (None, "") else None
 
@@ -44,11 +42,12 @@ def score_hit(hit: dict[str, Any]) -> float:
     if origin.startswith("external"):
         origin_boost = 0.0
 
-    zone_boost = 0.3 if zone == "hot" else 0.15 if zone == "warm" else 0.0
+    # Zone is a derived signal, not a stored payload field.
+    # Zone-based salience boosts removed; zone should be computed from runtime signals.
 
     trust_boost = 0.2 if trust in {"own_reviewed", "evergreen"} else 0.1 if trust in {"own_raw"} else 0.0
 
-    return base + origin_boost + zone_boost + trust_boost
+    return base + origin_boost + trust_boost
 
 
 def _collect_hit_text(hit: dict[str, Any]) -> str:
@@ -67,14 +66,13 @@ def build_ask_context(question: str, hits: List[dict[str, Any]], ask_settings: A
     for idx, hit in enumerate(hits, start=1):
         payload = hit.get("payload") or {}
         origin = str(payload.get("origin") or "vault")
-        zone_raw = payload.get("zone")
-        zone = str(zone_raw) if zone_raw not in (None, "") else "unspecified"
+        # Zone is derived, not read from stored artifact payload
         title = payload.get("title") or hit.get("title") or payload.get("source_ref") or hit.get("source_ref") or ""
         text = _collect_hit_text(hit)
         if remaining is not None and remaining <= 0:
             break
         snippet = text if remaining is None else text[:remaining]
-        parts.append(f"[SOURCE {idx}] origin={origin} zone={zone} title=\"{title}\"")
+        parts.append(f"[SOURCE {idx}] origin={origin} title=\"{title}\"")
         parts.append(snippet.strip())
         parts.append("")
         if remaining is not None:
