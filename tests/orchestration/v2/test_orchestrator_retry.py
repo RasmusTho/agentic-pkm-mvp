@@ -395,10 +395,10 @@ class TestRetryObservability:
         self,
         mock_outbox: MockOutbox,
     ) -> None:
-        """Verify timeout failures are not retried regardless of retry_count."""
+        """Verify tool_timeout failures are not retried regardless of retry_count."""
         class TimeoutExecutor:
             def execute_step(self, step, context):
-                raise StepExecutionError("Timeout", error_type="timeout")
+                raise StepExecutionError("tool call timed out", error_type="tool_timeout")
 
         plan = Plan(
             id="plan-1",

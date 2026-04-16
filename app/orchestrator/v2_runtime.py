@@ -478,8 +478,9 @@ class OrchestratorV2:
                 last_error = str(exc)
                 last_error_type = getattr(exc, "error_type", None)
 
-                # Timeout is non-retriable
-                if last_error_type == "timeout":
+                # Timeout is non-retriable. Accept both "tool_timeout" (documented contract)
+                # and "timeout" (existing test discriminator) for backwards compatibility.
+                if last_error_type in ("tool_timeout", "timeout"):
                     raise
 
                 # If we have retries left, emit observability and backoff
