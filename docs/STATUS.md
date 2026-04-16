@@ -70,7 +70,7 @@ Post-v5.6 follow-up truth:
 - Retry/backoff observability has shipped for the flagged V2 path (Issue #445 / PR #452), including retry events, backoff diagnostics, and terminal retry-exhausted tracking. A follow-up bug remains open for the timeout discriminator mismatch where documented executor `tool_timeout` errors may retry in V2 (#456).
 - A2A in-process handler routing exists and the current traceability test passes, while parent lifecycle issue #359 remains open and should be treated as stale lifecycle/project drift until closed or re-scoped.
 - Local runtime health verification shipped via #334/#365; repo contract drift in `tests/ops/test_runtime_verify_contract.py` and docs-index validation drift were fixed by #441 / PR #439 as local verification hardening, not as active v5.6 feature work.
-- v6 target-state audits opened current-state bugs for domain/zone handling (#435, #436, #437); these are post-v5.6 bug/follow-up slices.
+- v6 target-state audits opened current-state bugs for domain/zone handling (#435, #436, #437). Issue #437 (domain validation at ingest/write boundary) shipped via PR #460; retrieval fix (#453) and ingest/audit recording completed. Issues #435, #436 remain open as follow-up slices.
 
 ## Agent Evolution Track
 
