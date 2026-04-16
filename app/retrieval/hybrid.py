@@ -132,6 +132,12 @@ def _resolve_domain_scope() -> str | None:
 
 
 def _extract_domain(doc: Document) -> str | None:
+    """Extract domain from document payload.
+
+    Domain must be explicitly set at ingest/write boundary.
+    Missing domain is treated as 'unscoped' (conservative default).
+    Path-derived domain is NOT used per LAYERING_MODEL contract.
+    """
     payload = doc.payload or {}
     raw = payload.get("domain")
     if isinstance(raw, str) and raw.strip():
