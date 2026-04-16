@@ -96,8 +96,8 @@ Example event payload (simplified):
 
 ### Retry and compensation (V2 only)
 
-V2 runtime checks `last_error_type == "timeout"` (line 461 in v2_runtime.py) to inform retry/compensation logic.
-Current behavior: timeout is treated as a retriable error, and compensation may roll back predecessors.
+V2 runtime checks `last_error_type in ("tool_timeout", "timeout")` to identify non-retriable timeout failures.
+Timeouts are not retried; if a timeout occurs, the step fails immediately and may trigger compensation rollback of predecessors.
 
 ## Constraints and non-claims
 
