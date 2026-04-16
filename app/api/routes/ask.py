@@ -88,8 +88,8 @@ def _to_source(hit: Any) -> AskSource:
     plane = str(payload.get("plane") or origin)
     path = raw.get("source_ref") or payload.get("source_ref") or raw.get("path")
     title = payload.get("title") or raw.get("title") or ""
-    raw_zone = payload.get("zone") or raw.get("zone")
-    zone = str(raw_zone) if raw_zone not in (None, "") else None
+    # Zone is derived, not read from stored artifact payload
+    zone = None
     return AskSource(
         uuid=str(raw.get("id") or raw.get("doc_id") or raw.get("object_id") or payload.get("uuid") or ""),
         title=str(title),
