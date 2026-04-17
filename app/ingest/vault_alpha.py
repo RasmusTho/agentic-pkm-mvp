@@ -402,7 +402,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
     title = _frontmatter_title(frontmatter) or _derive_title(body, path)
     review_state = str(frontmatter.get("review_state") or "provisional")
     maturity = str(frontmatter.get("maturity") or "note")
-    domain = str(frontmatter.get("domain") or "unscoped")
+    domain = str(frontmatter.get("domain") or "").strip() or "unscoped"
     stripped_body = strip_ai_panels(body)
     stripped_text = stripped_body.strip()
     ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)

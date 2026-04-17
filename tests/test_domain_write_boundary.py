@@ -36,6 +36,22 @@ def test_ingest_without_domain_marks_unscoped(tmp_path: Path) -> None:
     assert obj.payload["core6"].get("domain") == "unscoped"
 
 
+def test_ingest_with_whitespace_only_domain_normalizes_to_unscoped(tmp_path: Path) -> None:
+    """Whitespace-only domain values must normalize to 'unscoped' at ingest boundary (Issue #466)."""
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+
+    note_path = vault_root / "test_note.md"
+    note_path.write_text("---\ndomain: \"   \"\n---\n# Test Note\n\nWhitespace domain.")
+
+    note_uuid = _ingest_single(note_path, vault_root=vault_root, trace_id="test-trace")
+
+    obj = ObjectStore().get_object(note_uuid)
+    assert obj is not None
+    assert obj.payload.get("domain") == "unscoped"
+    assert obj.payload["core6"].get("domain") == "unscoped"
+
+
 def test_ingest_with_explicit_domain_preserves_domain(tmp_path: Path) -> None:
     """Test that notes with explicit domain preserve that domain."""
     vault_root = tmp_path / "vault"
