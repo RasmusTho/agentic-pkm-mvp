@@ -69,6 +69,10 @@ Prioritize findings first:
   - `Suggested Validation`
 - Run the exact `Suggested Validation` commands where possible.
 - Add focused extra checks if the touched surface obviously needs them.
+- **Resolve every AC's `Verify:` target on the current PR head SHA:**
+  - Behavioral AC: confirm the named test exists in the PR diff or in prior code, is included in the CI suite that actually ran, and passes. A `Verify:` test that is missing, skipped, `xfail`, or excluded from CI is a verification miss, not a pass.
+  - Non-behavioral AC: confirm the named doc anchor, roadmap diff, or runtime receipt is present and matches the AC intent.
+- If any AC lacks a `Verify:` marker at verification time, this is a contract-shape defect. Do not infer satisfaction from "it looks done." Route through `issue-maintenance-change-control` to repair the Issue, then re-verify.
 - Verify owner-doc writeback if shipped behavior/contracts changed and acceptance is actually complete.
 - Verify roadmap/plan wording was cleaned up if the item is now delivered.
 - Verify no duplicate `planned` and `shipped` statements remain active at once.
@@ -85,6 +89,7 @@ Prioritize findings first:
 ### Prerequisites for Merge
 
 - All acceptance criteria from the governing Issue are satisfied.
+- Every AC's `Verify:` target resolves green on the current head SHA (behavioral tests pass in CI, non-behavioral writebacks present in the diff).
 - CI is green on the current head SHA.
 - No unresolved blocking review comments.
 - No scope drift from the governing Issue.
@@ -142,6 +147,8 @@ When all merge prerequisites are met:
 ### When NOT to merge
 
 - Any acceptance criterion is not met → create follow-up Issue instead.
+- Any behavioral AC's `Verify:` test is missing, skipped, xfailed, or excluded from the CI suite that ran → **do NOT merge**; route through Issue maintenance (missing Verify target) or back to the builder (test present but not exercised).
+- Any non-behavioral AC's `Verify:` target (doc anchor, roadmap diff, runtime receipt) is absent → **do NOT merge**; require writeback in the same PR.
 - CI has regressed since pr-integration handoff → route back to pr-integration.
 - Scope drift detected → route through Issue maintenance.
 - Work is only partial → **do NOT merge**, keep Issue open, create follow-up Issue(s).

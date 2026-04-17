@@ -173,6 +173,39 @@ Lifecycle truth rule:
 - closed or delivered work must not retain `agent:*` labels.
 - if Project state drifts because automation cannot update the board, correct it opportunistically without treating the drift itself as a delivery blocker
 
+## Acceptance verifiability
+
+Every Acceptance Criterion on a backlog Issue must declare its verification inline with a `Verify:` marker. This is a contract-shape rule, not a test-methodology rule: it covers behavioral and non-behavioral ACs alike.
+
+Form:
+
+```
+## Acceptance Criteria
+
+- [ ] Ingest rejects entries whose domain fails boundary validation.
+  Verify: `tests/ingest/test_domain_boundary.py::test_rejects_invalid_domain`
+- [ ] `docs/CONCEPTS/DOMAIN.md` describes the ingest boundary as shipped.
+  Verify: doc writeback at `docs/CONCEPTS/DOMAIN.md :: ingest-boundary`
+- [ ] Roadmap no longer lists domain-at-ingest as pending.
+  Verify: `docs/ROADMAP.md :: DOMAIN-INGEST` removed or rewritten as delivered.
+```
+
+Rules:
+
+- Behavioral ACs point to a concrete test (existing or to-be-added) by file and test name.
+- Non-behavioral ACs point to a concrete observable target: doc writeback path plus anchor, roadmap diff, or runtime receipt.
+- If an AC cannot carry a resolvable `Verify:` target, refine or split it before marking the Issue `agent:ready`.
+- `Suggested Validation` remains the section that lists the commands and procedures that execute the declared `Verify:` targets. ACs and Suggested Validation are coupled: commands exist to resolve the Verify targets, not to duplicate them.
+
+Enforcement surfaces:
+
+- Creation: `docs-to-issue`, `feature-breakdown`, and `bug-to-issue` must produce ACs with `Verify:` lines.
+- Repair: `issue-maintenance-change-control` treats missing `Verify:` as malformed contract shape.
+- Consumption: `issue-to-code` gates on `Verify:` presence and implements test-first for behavioral ACs, writeback-first for non-behavioral ACs.
+- Closure: `verification-validation-feedback` resolves every AC's `Verify:` target and blocks merge if any behavioral test is missing, skipped, or xfailed.
+
+The builder-agent effect: test-first discipline emerges automatically for behavioral work — the failing test is the AC's declared proof, so the agent writes or confirms it before code, then implements the smallest change to turn it green.
+
 ## Source-anchor rule for backlog creation
 
 For new backlog work, GitHub is the live tracking surface and docs provide the semantic source.

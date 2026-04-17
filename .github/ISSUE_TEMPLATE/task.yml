@@ -48,11 +48,16 @@ body:
     id: acceptance
     attributes:
       label: Acceptance Criteria
-      description: Concrete done conditions.
+      description: |
+        Concrete done conditions. Every item must carry an inline `Verify:` marker naming a concrete verification target:
+        - Behavioral AC → test pointer: `Verify: tests/<path>::<test_name>` (the test may be new; the name is the commitment)
+        - Non-behavioral AC → explicit target: doc writeback path plus anchor, roadmap diff, or runtime receipt
+        ACs without a resolvable `Verify:` target are not executable and must be refined before the Issue is marked ready.
       placeholder: |
-        - [ ]
-        - [ ]
-        - [ ]
+        - [ ] <behavioral outcome>
+          Verify: `tests/<module>/test_<name>.py::test_<case>`
+        - [ ] <doc/roadmap/receipt outcome>
+          Verify: doc writeback at `docs/<PATH>.md :: <anchor>`
     validations:
       required: true
   - type: textarea
@@ -67,10 +72,13 @@ body:
     id: suggested_validation
     attributes:
       label: Suggested Validation
-      description: Exact commands or checks that prove the bounded change.
+      description: |
+        Exact commands or checks that execute the `Verify:` targets declared in Acceptance Criteria.
+        This section is the procedural form of the AC verification plan — commands should resolve every Verify target, not duplicate them.
       placeholder: |
-        - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/...`
+        - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/<module>/test_<name>.py`
         - `python -m app.cli ...`
+        - doc check: `docs/<PATH>.md :: <anchor>` present after change
     validations:
       required: true
   - type: textarea

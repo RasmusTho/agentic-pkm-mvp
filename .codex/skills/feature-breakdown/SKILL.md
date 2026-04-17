@@ -104,11 +104,17 @@ Each task specification must contain these sections:
 - `## What This Task Does` — concrete behavior description
 - `## Concretely` — example commands and expected output
 - `## Why This Matters` — what breaks if this is wrong
-- `## Acceptance Criteria` — checkboxes for definition of done
-- `## How to Verify (Pre-Merge)` — concrete local and CI verification steps
+- `## Acceptance Criteria` — checkboxes for definition of done; each AC carries an inline `Verify:` target (test pointer for behavioral ACs, doc/receipt target for non-behavioral ACs)
+- `## How to Verify (Pre-Merge)` — concrete local and CI verification steps that execute the `Verify:` targets from `Acceptance Criteria`; the two sections are coupled and must stay consistent
 - `## Out of Scope` — what this task does not do
 - `## Related Docs` — links to parent plan, testing docs, implementation files
 - `## Related GitHub Issues` — guidance for issue creation, not a template
+
+AC verifiability rule for task specs:
+
+- Every behavioral AC names the test that proves it (path and test name). New tests are acceptable — the name is the spec-level commitment.
+- Every non-behavioral AC names a concrete observable target (doc writeback anchor, roadmap diff, runtime receipt).
+- If an AC cannot name either, the specification is still too coarse. Refine or split the task before creating issues.
 
 ## Real-life operating rules
 
@@ -153,7 +159,7 @@ Trigger this skill when any of the following are true:
 4. Define four things before creating anything:
    - capability intent
    - implementation tasks (human-named, not numbered)
-   - verification path
+   - verification path, including the test-or-receipt target for every behavioral and non-behavioral AC in every task
    - validation / acceptance path
 5. Create the specification directory under `docs/{CAPABILITY_NAME}/` with:
    - `README.md` — overview, task list with links, execution order, acceptance criteria, relationship to GitHub issues
@@ -193,7 +199,7 @@ Feature issue guidance:
 
 - `Context` explains why the capability exists and what docs define it.
 - `Scope` defines the outcome boundary, not one PR.
-- `Acceptance Criteria` define what must be true before the capability can be claimed as supported.
+- `Acceptance Criteria` define what must be true before the capability can be claimed as supported. Each AC carries a `Verify:` marker — test pointer (behavioral) or doc/receipt target (non-behavioral).
 - `Implementation Tasks` links to the specification directory and lists the bounded task files with their intended order.
 - `Verification Path` defines the task-level proof surfaces.
 - `Validation / Acceptance Path` defines the post-merge evidence, operator checks, and owner-doc promotion trigger.
@@ -216,6 +222,7 @@ Issue guidance:
 
 - keep each issue bounded enough for one agent and usually one PR
 - give each issue a concrete acceptance target that can be verified pre-merge
+- every AC on every issue carries a `Verify:` marker, matching the parent task spec: test pointer for behavioral ACs, doc/receipt target for non-behavioral ACs
 - point back to the parent feature issue in `Context`
 - reference the task specification: "Implements {CAPABILITY}/{TASK_NAME}"
 - do not make one issue responsible for the entire capability acceptance path
