@@ -30,9 +30,9 @@ This task produces the canonical naming document for the three sub-capabilities 
 
 The canonical three-way naming the rest of this directory cites:
 
-- **Retrieval** answers the user verb "retrieve the right thing." The user has a concrete question, lookup, or operation in mind. A query or retrieval request exists. The system's job is to return the correct material with legible provenance.
-- **Orientation** answers the user verb "re-orient after interruption." Orientation is situational reorientation after interruption: the user cannot yet formulate a query and needs the system to reconstruct where they were, what mattered, what remains open, and what changed.
-- **Resurfacing** answers the user verb "notice what is becoming relevant again." The user has no active query and is not asking to be led home. The system's job is to bring something back into view because open-loop pressure, temporal drift, relational change, or renewed context has made it quietly matter again.
+- **Retrieval** answers the user sentence "I need to retrieve the right thing." The user has a concrete question, lookup, or operation in mind. A query or retrieval request exists. The system's job is to return the correct material with legible provenance.
+- **Orientation** answers the user sentence "I need to re-orient after interruption." Orientation is situational reorientation after interruption: the user cannot yet formulate a query and needs the system to reconstruct where they were, what mattered, what remains open, and what changed.
+- **Resurfacing** answers the user sentence "I need to notice what is becoming relevant again." The user has no active query and is not asking to be led home. The system's job is to bring something back into view because open-loop pressure, temporal drift, relational change, or renewed context has made it quietly matter again.
 
 What each uniquely does that the other two cannot:
 
@@ -48,7 +48,7 @@ The forbidden collapses, stated as rules the other tasks may cite:
 
 ## Why This Matters
 
-If the three are not named separately, ASK-style question answering quietly re-becomes the architectural center for all three needs, and the system loses the ability to help a returning human who does not yet have a question. Pillar 7 of `docs/plans/V60_ARCHITECTURE_TARGET.md` calls this out directly: "findability does not masquerade as orientation, resurfacing does not masquerade as retrieval." This task is how that non-masquerade is enforced at the docs level.
+If the three are not named separately, ASK-style question answering quietly re-becomes the architectural center for all three needs, and the system loses the ability to help a returning human who does not yet have a question. Pillar 7 of `docs/plans/V60_ARCHITECTURE_TARGET.md` calls this out directly: "findability does not masquerade as orientation, resurfacing does not masquerade as retrieval." The current v6.0 target doc now carries that same boundary in the changes list and retrieval migration stages: retrieval, orientation, and resurfacing are separate capabilities, and ranking explanations must not masquerade as orientation or salience. Pillar 7A's companion rule is now carried in the capability model: capabilities are reusable building blocks, not broad-authority agents. `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` states the fixed decision this task depends on: "Retrieval becomes a capability, not an agent." This task is how those non-masquerade and non-agent-center rules are enforced at the docs level.
 
 Without this naming:
 
