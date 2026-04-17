@@ -111,4 +111,49 @@ If later filed, the issue should reference "Implements INTERACTION_SURFACES_AND_
 
 ---
 
+## Chat Authority Boundary
+
+**Chat is canvas, not ASK.** Chat is the exploration-oriented interaction surface where the user externalizes and manipulates thought across the context the system can already see, and where richer cognition may be introduced safely because the surface is structured as a canvas rather than as a command line.
+
+### What Chat Is Not
+
+- **Chat is not the ASK loop.** ASK was receive-query / return-answer. Canvas is externalize-thought / manipulate-in-place / optionally-commit. The difference is structural, not stylistic: a canvas is a place the user thinks on; an ASK exchange is a turn-based Q&A. This distinction must be preserved even if Chat gains governed mutation rights.
+- **Chat is not a second Panel.** Panel is command-oriented with in-note receipts. Chat, if it eventually mutates, will not inherit Panel's in-note receipt locality automatically. The mutation-boundary decision (Candidate A) names where Chat receipts live: the same gated-execution pipeline as Panel, not a separate Chat receipt store.
+- **Chat is not a generic conversation surface.** The `docs/DESIGN_PRINCIPLES.md` §Explicit Mutation Authority clause permits Chat to carry authority, but only if its authority is as explicit and as governed as Panel's.
+
+### Chat's Cognitive Posture Today
+
+Regardless of the mutation decision:
+
+- **Exploration-oriented:** reason across vault context, orient the user in their own thinking, decompose a fuzzy problem.
+- **Canvas-shaped:** content can be drafted, rearranged, annotated, and revised in place without each change being a mutation of durable vault state.
+- **Safe introduction surface** for richer cognition (Deep Agents, multi-step reasoning) because the surface is introspective by default.
+
+### The Read-Only-vs-Canvas Tension, Resolved
+
+The read-only language in `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` §Fixed Decisions was a cautious early framing that predates the full design contract. `docs/DESIGN_PRINCIPLES.md` §Explicit Mutation Authority is the higher-authority contract. When they disagree, the design contract wins.
+
+`RECONCILE_CHAT_MUTATION_AUTHORITY.md` resolves this as **Candidate A**: the "Chat is read-only" rule applies to the Deep Agent introduction phase, not to Chat's identity. Chat is a canvas-shaped interaction surface that may carry governed mutation rights through the same gated-execution pipeline used by Panel.
+
+### What Is Already Decided About Chat
+
+1. **Chat is canvas, not ASK.** Receive-query / return-answer semantics are rejected as a definition of Chat's identity. A future change that restores ASK semantics would violate the product intent this capability protects.
+2. **The mutation-boundary decision is resolved.** `RECONCILE_CHAT_MUTATION_AUTHORITY.md` §Decision records Candidate A (2026-04-11). Other tasks in this capability treat that section as authoritative.
+3. **The gated-execution invariant holds.** Chat never bypasses the gated-execution invariant described in `STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md`. LLM reasoning alone never triggers mutation, under any resolution of the Chat mutation question.
+4. **"Start read-only" applies to Deep Agents in Chat, not to Chat itself.** The Deep Agent introduction phase remains read-only to satisfy Governance Before Autonomy; that constraint scopes to the agent entry path, not to Chat's long-term identity.
+5. **Chat-originated mutation receipts live in the existing gated-execution pipeline locality.** The concrete canvas-commit receipt shape is deferred to a later capability lane, but the receipt locality is not deferred: receipts live where Panel mutation receipts already live.
+6. **Chat must not reintroduce ASK semantics.** Any future Chat evolution that converts the canvas into a query-response surface would fail the canvas-vs-ASK criterion recorded in `RECONCILE_CHAT_MUTATION_AUTHORITY.md`.
+
+### What This Boundary Does Not Say
+
+- The concrete runtime shape for canvas-Chat commits to the vault.
+- Which runtime hosts Chat or whether Chat lives inside or outside Obsidian.
+- Which Deep Agent implementation is introduced in Chat first.
+- The concrete receipt field shape Chat uses when it mutates.
+- How canvas-Chat integrates with existing Panel flows.
+
+These questions are deferred to later capability work and are out of scope for this task.
+
+---
+
 **Status:** Specification draft. The Chat mutation decision is resolved by `RECONCILE_CHAT_MUTATION_AUTHORITY.md`; runtime implementation remains out of scope here.
