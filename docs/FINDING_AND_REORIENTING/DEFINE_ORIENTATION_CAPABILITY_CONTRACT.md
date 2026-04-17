@@ -54,7 +54,7 @@ Boundary with resurfacing:
 
 ## Why This Matters
 
-Pillar 7 of `docs/plans/V60_ARCHITECTURE_TARGET.md` is explicit: "findability does not masquerade as orientation." Delta 7 restates this as a transition from retrieval-as-orientation to explicit retrieval/orientation/resurfacing separation. Without this contract, orientation keeps getting built as "a better ASK response" and keeps failing, because ASK assumes a question already exists — the one thing the orientation user precisely does not have. This task is how orientation becomes its own capability instead of an unnamed expectation that ASK will "also do orientation somehow."
+Pillar 7 of `docs/plans/V60_ARCHITECTURE_TARGET.md` is explicit: "findability does not masquerade as orientation." The current v6.0 target doc carries that boundary in the active changes list and retrieval migration stages: retrieval, orientation, and resurfacing are separate capabilities, and ranking explanations must not masquerade as orientation or salience. Pillar 7A's companion rule is now carried in the capability model: capabilities are reusable building blocks, not broad-authority agents. Delta 7 restates the transition from retrieval-as-orientation to explicit retrieval/orientation/resurfacing separation. Without this contract, orientation keeps getting built as "a better ASK response" and keeps failing, because ASK assumes a question already exists — the one thing the orientation user precisely does not have. This task is how orientation becomes its own capability instead of an unnamed expectation that ASK will "also do orientation somehow."
 
 If orientation is not specified:
 
@@ -65,15 +65,25 @@ If orientation is not specified:
 ## Acceptance Criteria
 
 - [ ] The contract defines orientation as a reusable capability, not an agent.
+  Verify: doc review of `docs/FINDING_AND_REORIENTING/DEFINE_ORIENTATION_CAPABILITY_CONTRACT.md :: What This Task Does` and `:: Concretely`.
 - [ ] The contract states the trigger: the user is resuming work and does not yet have a query.
+  Verify: `rg -n "Trigger:|resuming work|does not yet have a query|has not yet posed a question" docs/FINDING_AND_REORIENTING/DEFINE_ORIENTATION_CAPABILITY_CONTRACT.md`.
 - [ ] The contract lists the signals orientation draws on as situational and derived, not as stored fields.
+  Verify: `rg -n "Consumes|situational|signals|request time|None of them is stored|not.*stored" docs/FINDING_AND_REORIENTING/DEFINE_ORIENTATION_CAPABILITY_CONTRACT.md`.
 - [ ] The contract states that the primary output is a situational frame, not a ranked artifact list.
+  Verify: `rg -n "Produces:.*situational frame|primary output is the frame|not.*artifact list|ranked artifact list" docs/FINDING_AND_REORIENTING/DEFINE_ORIENTATION_CAPABILITY_CONTRACT.md`.
 - [ ] The situational frame is specified as answering at minimum four things: where the user was, what mattered, what is still open, what has changed.
+  Verify: `rg -n "where the user was|what mattered|what is still open|what has changed" docs/FINDING_AND_REORIENTING/DEFINE_ORIENTATION_CAPABILITY_CONTRACT.md`.
 - [ ] The contract specifies the orientation explanation shape ("when you left, you were here; these threads were active; these remain open; this changed while you were away") and confirms it differs structurally from the retrieval and resurfacing explanation shapes.
+  Verify: `rg -n "Explanation shape|when you left|situation-anchored|request-anchored|surfacing-decision-anchored" docs/FINDING_AND_REORIENTING/DEFINE_ORIENTATION_CAPABILITY_CONTRACT.md`.
 - [ ] The contract states that orientation may compose retrieval as a subordinate mechanism without inheriting retrieval's contract.
+  Verify: `rg -n "compose retrieval|subordinate mechanism|does not make orientation a kind of retrieval" docs/FINDING_AND_REORIENTING/DEFINE_ORIENTATION_CAPABILITY_CONTRACT.md`.
 - [ ] The contract explicitly states that orientation does not write any durable situational field.
+  Verify: `rg -n "does not write any durable situational field|does not.*durable situational field|not.*stored" docs/FINDING_AND_REORIENTING/DEFINE_ORIENTATION_CAPABILITY_CONTRACT.md`.
 - [ ] The contract cites Pillar 7, Pillar 7A, and Delta 7 of `docs/plans/V60_ARCHITECTURE_TARGET.md`.
+  Verify: `rg -n "Pillar 7|Pillar 7A|Delta 7|retrieval, orientation, and resurfacing|capabilities" docs/FINDING_AND_REORIENTING/DEFINE_ORIENTATION_CAPABILITY_CONTRACT.md`.
 - [ ] The contract does not propose any code change.
+  Verify: `git diff --name-only` contains only `docs/FINDING_AND_REORIENTING/DEFINE_ORIENTATION_CAPABILITY_CONTRACT.md`, and doc review finds no runtime/schema/code instruction.
 
 ## How to Verify (Pre-Merge)
 
