@@ -49,7 +49,7 @@ The spec must hold these negatives as firmly as it holds the positives. Task wri
 
 - **Not generic question-answering.** ASK-as-center is explicitly deprecated in `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` Fixed Decisions. This capability is not an ASK replacement; it is the reason ASK no longer needs to be the architectural center.
 - **Not a search box.** Retrieval is one of three functions, and none of them is a free-text search input. A search box is a UI affordance; this capability is a cognitive-prosthetic contract.
-- **Not a ranking algorithm.** Resurfacing is not "better ranking." Ranking is a mechanism detail downstream of a surfacing decision; the decision to surface at all is what resurfacing specifies.
+- **Not a ranking algorithm.** Resurfacing is not "better ranking." Ranking orders candidates after a candidate set exists; resurfacing governs whether something should be brought into attention at all.
 - **Not salience-as-stored-field.** Salience is derived, always, per `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md`. No task in this directory may propose a durable `salience`, `zone`, or equivalent field on an artifact.
 - **Not an agent.** Per Pillar 7A and the Fixed Decisions, retrieval is a reusable capability, not an agent. Orientation and resurfacing follow the same rule: reusable capabilities, not new architectural agents.
 - **Not an interaction-surface authority decision.** Whether Panel, Chat, or another surface consumes these capabilities, and with what mutation rights, is out of scope. That question belongs to a separate `INTERACTION_SURFACES_AND_AUTHORITY` capability.
@@ -79,7 +79,7 @@ The capability FINDING_AND_REORIENTING is accepted when all of the following are
 - [ ] Salience is documented as derived in every place this capability references it, and no spec task proposes a durable salience field.
 - [ ] ASK's de-centering is framed in text, with a clear statement of what ASK stops being as an architectural center and what stays as a runtime/API compatibility concern.
 - [ ] A human returning to work after an interruption could read the three contracts and correctly articulate which of the three capabilities applies to their situation.
-- [ ] The system's future explanation of "why this was surfaced" differs correctly between the retrieval case, the orientation case, and the resurfacing case — i.e. each contract specifies its own explanation shape.
+- [ ] The system's future explanation differs correctly between the retrieval case ("this matched your request because…"), the orientation case ("when you left, you were here; these threads were active; these remain open; this changed while you were away"), and the resurfacing case ("this is back in view now because…").
 - [ ] All tasks in this directory are deliverable by editing `docs/` only; no task requires code, runtime, or schema change to be considered complete.
 - [ ] The boundary is internally consistent: no task contradicts another, and no task takes authority that belongs to `INTERACTION_SURFACES_AND_AUTHORITY`.
 

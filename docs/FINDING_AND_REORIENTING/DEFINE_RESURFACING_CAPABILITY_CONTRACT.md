@@ -15,6 +15,8 @@ can_parallelize_with: [DEFINE_RETRIEVAL_CAPABILITY_CONTRACT, DEFINE_ORIENTATION_
 
 Let the user come back to work and rediscover what mattered without doing the remembering themselves. The third prosthetic — the one the user is least likely to ask for, and the one the system must do without being asked — is resurfacing. Resurfacing brings something back into view because open-loop pressure, temporal drift, relational change, or renewed context has made it quietly matter again. This task writes the resurfacing contract and pins down the distinction that keeps being lost: resurfacing is not ranking, and resurfacing is not retrieval-with-a-timer.
 
+Resurfacing is repo working language for unprompted return-to-attention support, adjacent to prospective-memory reminders, opportunistic reminding, and information encountering.
+
 ## What This Task Does
 
 This task produces the resurfacing capability contract as a docs artifact inside `docs/FINDING_AND_REORIENTING/`. It:
@@ -32,14 +34,15 @@ This task produces the resurfacing capability contract as a docs artifact inside
 The contract the document establishes:
 
 - **Trigger:** a change in attentional relevance that the system notices on behalf of the user. The user has not asked, is not resuming work, and has not posed a query. The system notices that something once parked has become relevant again.
-- **Consumes (conceptually):** derived salience signals as specified by `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md` — open-loop pressure, temporal drift or staleness, relational change, renewed context, review cadence, and so on. All of these are situational and computed at decision time. None of them are stored on an artifact.
+- **Consumes (conceptually):** derived salience signals as specified by `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md` — open-loop pressure, temporal drift or staleness, relational change, renewed context, review cadence, and so on. These signals are evaluated at decision time; any durable operational inputs must not be treated as salience stored on an artifact.
 - **Produces:** a surfacing decision — one item (or a small set) accompanied by a "why now" explanation and enough provenance that the user can answer "is this really relevant right now or is the system wrong about me." The output is a surfacing event, not a ranked list of hits.
-- **Explanation shape:** resurfacing explains itself as "this became relevant again because…" — relevance-change-anchored, pointing at the specific signal (a loop that reopened, a commitment whose deadline moved, a context that became active again, a related artifact that changed). The sentence is always anchored in a change, not in a query and not in a situational frame.
+- **Explanation shape:** resurfacing explains itself as "this is back in view now because…" — relevance-change-anchored, pointing at the specific signal (a loop that reopened, a commitment whose deadline moved, a context that became active again, a related artifact that changed). The sentence is always anchored in a change, not in a query and not in a situational frame.
 - **Does not do:** resurfacing does not fire in response to a user query (that is retrieval), does not fire because the user just came back to work (that is orientation), does not store its own decisions as durable fields, and does not collapse into "the top of a ranked list."
 
 Relationship to ranking:
 
 - Ranking is a mechanism. Given a candidate set and some signals, ranking orders them. Resurfacing is the decision that a surfacing event should happen at all. Ranking may be used as a subordinate mechanism inside a resurfacing pipeline, but a resurfacing decision is never reducible to "the top of a ranking."
+- Ranking orders candidates after a candidate set exists; resurfacing governs whether something should be brought into attention at all.
 - A higher-ranked retrieval hit is not a resurfacing event. If the user did not ask, ranking alone did nothing.
 
 Relationship to salience:
@@ -66,7 +69,7 @@ If resurfacing is not specified:
 - [ ] The contract states the trigger: a change in attentional relevance noticed without a user query or a user-initiated return to work.
 - [ ] The contract cites `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md` and affirms that resurfacing consumes derived salience signals, does not own them, and does not store them.
 - [ ] The contract states that the output is a surfacing decision with a "why now" explanation, not a ranked list.
-- [ ] The contract specifies the resurfacing explanation shape as relevance-change-anchored and confirms it differs structurally from the retrieval and orientation explanation shapes.
+- [ ] The contract specifies the resurfacing explanation shape ("this is back in view now because…") as relevance-change-anchored and confirms it differs structurally from the retrieval and orientation explanation shapes.
 - [ ] The contract explicitly rejects two collapses: resurfacing-as-better-ranking and resurfacing-as-retrieval-with-a-timer.
 - [ ] The contract cites Finding 2 in `docs/plans/V60_ARCHITECTURE_TARGET.md` as the cautionary tale for storing attentional overlays, without attempting to fix Finding 2.
 - [ ] The contract does not propose any code change or any durable storage of salience or surfacing decisions.
