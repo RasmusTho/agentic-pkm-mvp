@@ -62,14 +62,14 @@ Without this invariant stated at the capability level, the reconcile task would 
 
 ## Acceptance Criteria
 
-- [x] The task file states the invariant in one quotable sentence.
-- [x] The task file explicitly says LLM reasoning alone never triggers execution.
-- [x] The task file defines "durable state" and explicitly notes that transient canvas state becomes durable only at the commit-through-governance step.
-- [x] The task file shows the invariant holds under both candidate resolutions of `RECONCILE_CHAT_MUTATION_AUTHORITY.md`.
-- [x] The task file shows the invariant covers Automation as well as Panel and Chat.
-- [x] The task file does not claim current runtime code is fully aligned; it states the invariant as the contract.
-- [x] The task file cites `docs/DESIGN_PRINCIPLES.md` §Explicit Mutation Authority and `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` Fixed Decisions as source anchors.
-- [x] The vocabulary matches `NAME_THE_THREE_INTERACTION_SURFACES.md`.
+- [ ] The task file states the invariant in one quotable sentence.
+- [ ] The task file explicitly says LLM reasoning alone never triggers execution.
+- [ ] The task file defines "durable state" and explicitly notes that transient canvas state becomes durable only at the commit-through-governance step.
+- [ ] The task file shows the invariant holds under both candidate resolutions of `RECONCILE_CHAT_MUTATION_AUTHORITY.md`.
+- [ ] The task file shows the invariant covers Automation as well as Panel and Chat.
+- [ ] The task file does not claim current runtime code is fully aligned; it states the invariant as the contract.
+- [ ] The task file cites `docs/DESIGN_PRINCIPLES.md` §Explicit Mutation Authority and `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` Fixed Decisions as source anchors.
+- [ ] The vocabulary matches `NAME_THE_THREE_INTERACTION_SURFACES.md`.
 
 ## How to Verify (Pre-Merge)
 
@@ -105,55 +105,66 @@ Docs review:
 
 None in this capability. If later filed, the issue should reference "Implements INTERACTION_SURFACES_AND_AUTHORITY/STATE_EXECUTION_AUTHORITY_REMAINS_GATED" and use the acceptance criteria above.
 
+---
+
 ## The Invariant
 
-> **"No interaction surface — including Panel, Chat (under any resolution of the Chat mutation question), Automation, and any future surface — mutates durable state except through the existing governed path: policy, validation, event pipeline, and the deterministic note writer or equivalent state-writer."**
+> **No interaction surface — including Panel, Chat (under any resolution of the Chat mutation question), Automation, and any future surface — mutates durable state except through the existing governed path: policy, validation, event pipeline, and the deterministic note writer or equivalent state-writer.**
 
-This invariant is the floor. Every surface described in this capability sits above it; none sits below it.
+This is a floor-level invariant. Every surface described in this capability sits above it. No surface may define its authority boundary in a way that breaches this invariant.
 
-### Corollary: LLM reasoning alone never triggers execution
+### Corollary: LLM Reasoning Alone Never Triggers Execution
 
-Cognition and execution are separated. A model's decision to act is never the sole cause of an action. A model may propose an action, surface an intent, or draft a mutation. Something else — a human action, a policy-approved watcher event, a validated intent contract — must be the thing that actually moves state.
+Cognition and execution are separated. A model's decision to act is never the sole cause of an action in this system. A model can:
+- propose an action,
+- surface an intent,
+- draft a mutation.
 
-This corollary holds for Panel, Chat, and Automation alike. There is no exception for "obvious" or "low-risk" reasoning; the boundary between proposal and execution is not relaxed based on perceived safety.
+But something else — a human action, a policy-approved watcher event, a validated intent contract — must be the thing that actually moves state. This corollary holds regardless of how capable the model is and regardless of how confident its reasoning appears.
 
-### What "durable state" means here
+### What "Durable State" Means Here
 
-- Vault notes and their frontmatter.
-- Graph or store projections that the user relies on as truth.
-- Receipts, event history, and governance-visible records.
-- Scheduled or watcher-declared future behavior.
+For the purposes of this invariant, durable state includes:
 
-Transient canvas state — for example, what Chat-as-canvas manipulates in-place before any commit — is **not** durable state by this definition. Canvas state becomes durable state at the moment a commit-through-governance step runs. That step is subject to the invariant; the transient manipulation preceding it is not.
+- **Vault notes and their frontmatter.** Any file the system writes, creates, modifies, or deletes inside the vault.
+- **Graph or store projections.** Derived views and index structures the user relies on as truth (for example, relation graphs, knowledge-graph projections).
+- **Receipts, event history, and governance-visible records.** The audit trail of what the system did on the user's behalf.
+- **Scheduled or watcher-declared future behavior.** Registering a scheduled job, a watcher rule, or a policy trigger is itself a durable state change because it commits the system to future action.
 
-### Why the invariant is stated at the capability level, not per surface
+**Transient canvas state is not durable state.** Whatever Chat-as-canvas manipulates in-place — drafts, reasoning traces, in-flight thought manipulations — remains non-durable until a commit-through-governance step runs. At the moment a commit step runs, the output becomes durable state and that step is subject to this invariant.
 
-Each surface describes its own authority upward from this floor. If the invariant lived only inside the Panel task, the Chat task would be free to ignore it. Stating it at the capability level makes the floor identical across surfaces and prevents per-surface carve-outs that would hollow it out.
+### Why the Invariant Is Stated at the Capability Level, Not Per Surface
 
-### How the invariant interacts with the Chat mutation decision
+Each surface in this capability defines its authority boundary upward from this floor. If the invariant lived only inside the Panel task, the Chat and Automation tasks would feel structurally free to ignore it. Stating it once here makes the floor identical across all surfaces: the same sentence applies to Panel, Chat, Automation, and any future surface the architecture adds.
 
-The invariant holds under both candidate resolutions of `RECONCILE_CHAT_MUTATION_AUTHORITY.md`.
+### How the Invariant Interacts With the Chat Mutation Decision
 
-- **Candidate A (DESIGN_PRINCIPLES wins, currently selected):** Chat may carry governed mutation rights. Those mutations flow through the same gated path — policy, validation, event pipeline — that Panel mutations flow through. The invariant holds because the path requirement is the same.
-- **Candidate B (V60 plan wins):** Chat stays structurally read-only. The invariant holds trivially because Chat never mutates.
+The invariant holds under both candidate resolutions in `RECONCILE_CHAT_MUTATION_AUTHORITY.md`:
 
-The invariant is not a vote for either resolution. It is the shared contract both resolutions must honour.
+- **Candidate A (DESIGN_PRINCIPLES wins):** Chat is a canvas-shaped surface that may carry governed mutation rights. Chat mutations, when they exist, flow through the same policy + validation + event pipeline Panel mutations use. The invariant is satisfied because the governed path is identical.
+- **Candidate B (V60 plan wins):** Chat is structurally read-only and never mutates durable state. The invariant holds trivially.
 
-### How the invariant interacts with Automation
+Neither resolution produces a Chat surface that mutates durable state outside the governed path. The invariant is not a tiebreaker between the candidates; it is a shared constraint both candidates satisfy.
 
-Watcher reactions and scheduled jobs are not exceptions to the invariant. They are governed upstream by the policy that approves them and downstream by the same pipeline Panel uses. A watcher that used an LLM to decide what to do would still be subject to the invariant: the LLM may propose; the pipeline acts.
+### How the Invariant Interacts With Automation
 
-### What the invariant does not claim
+Watcher reactions and scheduled jobs are not exceptions to this invariant. They are governed *upstream* by the policy that authorized them and *downstream* by the same pipeline Panel uses. A watcher that called an LLM to decide autonomously what to do would still be subject to the invariant: the LLM can propose; the governed pipeline acts. An Automation action that writes directly to vault state without passing through policy, validation, and the event pipeline breaches the invariant regardless of how routine the action appears.
 
-- It does not claim that the governance pipeline is finished or that every policy surface has landed. It claims the shape: no surface bypasses it.
-- It does not claim that existing event names or writer paths are final.
-- It does not claim that all current runtime code already matches the invariant. It states the invariant as the contract; delta-from-contract work is tracked separately in implementation-track docs, not here.
+See `DEFINE_AUTOMATION_SURFACE_AUTHORITY.md` for Automation's full authority boundary statement.
 
-### Source anchors
+### What the Invariant Does Not Claim
 
-- `docs/DESIGN_PRINCIPLES.md` §Explicit Mutation Authority: "Any path that can mutate durable state must be policy-bounded, auditable, and reviewable."
-- `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` §Fixed Decisions :: Execution remains gated: "The target execution boundary is `observation -> normalization/contract -> admission -> execution`; cognition may assist proposal and normalization, but must not collapse admission into execution."
+- **It does not claim current runtime code is fully aligned.** The invariant is the contract. Delta-from-contract work — where current code does not yet satisfy the invariant — is tracked in implementation-track docs, not here. Shipping this invariant doc does not imply the runtime already satisfies it on every code path.
+- **It does not claim the governance pipeline is finished.** The pipeline may evolve. The invariant names the *shape* — policy, validation, event pipeline, state-writer — not the specific implementation artifacts.
+- **It does not claim existing event names or writer paths are final.** Renaming events, refactoring the note writer, or extending the pipeline are all permitted as long as the shape is preserved.
+- **It does not pick a resolution to the Chat mutation question.** See `RECONCILE_CHAT_MUTATION_AUTHORITY.md`.
+
+### Source Anchors
+
+This invariant is derived from:
+- `docs/DESIGN_PRINCIPLES.md` §Explicit Mutation Authority: "No system component may mutate durable state without a validated, policy-gated, event-producing execution step."
+- `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` §Fixed Decisions: "Execution remains gated. The LLM reasoning layer does not directly trigger mutations."
 
 ---
 
-**Status:** Specification complete. `## The Invariant` section delivered. All acceptance criteria satisfied.
+**Status:** Specification draft. `## The Invariant` section complete. Ready for review.
