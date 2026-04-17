@@ -1,7 +1,7 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency guardrails); v5.6 delivery line closed with post-v5.6 follow-ups tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening while referencing `docs/STATUS.md#baseline-definition`.
+State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency guardrails); v5.6 delivery line closed; v6 is the active design and planning direction. Post-v5.6 follow-ups are tracked separately; see `docs/STATUS.md#version-framing-consistency-note` for the authoritative framing map.
 Doc role: Core SoT
 Authority: Canonical map of document roles and review status for the current repo; use it to determine whether a document is Core SoT, Reference, Plan, or Historical.
-# Documentation Review Index — SoT v5.5 baseline + v5.x delivery line
+# Documentation Review Index — SoT v5.5 baseline + v6 active planning
 
 Central map of active and archived documentation artifacts in this repo. Use this index before treating any document as decision input.
 
@@ -70,7 +70,8 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 ## SoT Notes
 - v4.10 — locked Reality-MVP baseline (foundation only).
 - v5.0 — PanelAgent Runtime V1 baseline on top of v4.10.
-- v5.x — **SoT delivery line** (v5.5 locked baseline plus delivered v5.6 enablement) for guarded automation, PanelAgent planner/runtime evolution, A2A/MCP contracts, Orchestrator/Reasoning 2.0 pilots, and local verification; unresolved work is post-v5.6 follow-up unless an owner issue reclassifies it.
+- v5.x — **SoT delivery line** (v5.5 locked baseline plus delivered v5.6 enablement); v5.6 is closed. Unresolved work is post-v5.6 follow-up unless an owner issue reclassifies it.
+- v6 — **active design and planning direction**; target operating model under active design but not yet runtime baseline. Governing docs: `docs/ROADMAP.md`, `docs/plans/V60_ARCHITECTURE_TARGET.md`, `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`. See `docs/STATUS.md#version-framing-consistency-note` for the authoritative framing map.
 
 ## Root and Repo Docs
 - `docs/EMBEDDINGS.md` — Normative embeddings spec (identity, guardrails, rebuild policy).

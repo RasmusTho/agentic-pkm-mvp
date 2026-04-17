@@ -1,4 +1,4 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard) with the v5.6 delivery line closed and post-v5.6 follow-ups tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
+State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard); v5.6 delivery line closed; v6 is the active design and planning direction. Post-v5.6 follow-ups are tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
 Doc role: Core SoT
 Authority: Current operational snapshot for the active baseline; subordinate to concept contracts for normative semantics, but authoritative for current runtime status and rollout posture.
 Owner: Runtime / current-state SoT
@@ -30,6 +30,16 @@ Validation posture note:
 - blocking smoke/release gates are anchored to the active baseline in this document
 - broader human-need acceptance scenarios may exist in the repo as non-blocking system-level TDD derived from `docs/HUMAN-FLOWS.md`
 - failures in those broader scenarios indicate target-state gaps unless and until this status document promotes the capability into the claimed baseline
+
+## Version framing consistency note
+
+| Version framing | Role | Authoritative doc |
+| --- | --- | --- |
+| v5.5 (SoT baseline locked) | Current operational runtime; no new feature scope | `docs/ARCHITECTURE.md`, `docs/STATUS.md` |
+| v5.6 (delivered/closed) | Historical delivery line; read as shipped invariants | `docs/ROADMAP.md#closed-v56-delivery-line`, `docs/STATUS.md#v56-closure` |
+| v6 (active design/planning direction) | Target operating model under active design; not yet baseline | `docs/ROADMAP.md`, `docs/plans/V60_ARCHITECTURE_TARGET.md`, `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` |
+
+Use `docs/ARCHITECTURE.md` for current-state runtime questions. Use `docs/ROADMAP.md` and the v6 plans for target-state design direction questions. Do not read v5.5 as an active work queue; new implementation work is sliced against v6 target-state docs.
 
 ## Baseline Definition (SoT v5.5)
 - Environment posture: `dev`, `test`, and `prod` are now the explicit minimal environment model in the SoT. The governing contract lives in `docs/ENVIRONMENTS.md`. `dev` and `prod` are runtime-selected environments today; `test` is the current workflow-driven bootstrap and verification environment.

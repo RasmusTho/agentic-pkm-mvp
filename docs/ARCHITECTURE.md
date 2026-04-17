@@ -1,4 +1,4 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency hardening) with the v5.6 delivery line closed and post-v5.6 follow-ups tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
+State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency hardening); v5.6 delivery line closed; v6 is the active design and planning direction. Post-v5.6 follow-ups are tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
 Doc role: Core SoT
 Authority: Active runtime architecture source of truth for the current baseline and runtime contracts; wins over roadmap and historical references on current-state questions.
 Owner: Runtime / architecture SoT
@@ -7,7 +7,7 @@ Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-04-16
 Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/ROADMAP.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, app/cli/__init__.py, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orchestrator/executor.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #272/#302/#346/#349/#365/#376/#377/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431/#439/#448/#450/#452, current repo state at e226878 on 2026-04-16, backlog issues #435/#436/#437/#456, stale lifecycle issue #359, and closed Orchestrator follow-up issues #444/#445/#446
-# Architecture — SoT v5.5 Reality-MVP baseline (v5.6 delivered)
+# Architecture — SoT v5.5 Reality-MVP baseline (v5.6 delivered, v6 active design)
 
 This document is the active architecture source of truth for the SoT v5.5 Reality-MVP baseline and the place where current runtime contracts are defined.
 
