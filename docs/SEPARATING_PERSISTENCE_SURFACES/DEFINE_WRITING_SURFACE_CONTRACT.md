@@ -210,15 +210,15 @@ This is also the task that prevents the writing surface from becoming a convenie
 
 ## Acceptance Criteria
 
-- [ ] The writing surface identity is defined in one short paragraph.
-- [ ] The "holds" list explicitly includes fragments, alternatives, and selective stabilization.
-- [ ] `CREATIVE_PROCESS_CONTRACT.md` is cited as the upstream source for fragment tolerance.
-- [ ] The authority rule (human is final author; runtime may assist but not silently rewrite) is present.
-- [ ] The "must never silently become" list names at least four collapses this contract prevents.
-- [ ] The document distinguishes the writing surface from both the retention and system surfaces at the contract level, with forward pointers to those tasks.
-- [ ] The document does not prescribe paths, file formats, schemas, or ingest behavior.
-- [ ] The document does not prescribe companion-note implementation shape.
-- [ ] The document does not touch Finding 4 or Finding 5.
+- [x] The writing surface identity is defined in one short paragraph.
+- [x] The "holds" list explicitly includes fragments, alternatives, and selective stabilization.
+- [x] `CREATIVE_PROCESS_CONTRACT.md` is cited as the upstream source for fragment tolerance.
+- [x] The authority rule (human is final author; runtime may assist but not silently rewrite) is present.
+- [x] The "must never silently become" list names at least four collapses this contract prevents.
+- [x] The document distinguishes the writing surface from both the retention and system surfaces at the contract level, with forward pointers to those tasks.
+- [x] The document does not prescribe paths, file formats, schemas, or ingest behavior.
+- [x] The document does not prescribe companion-note implementation shape.
+- [x] The document does not touch Finding 4 or Finding 5.
 
 ## How to Verify (Pre-Merge)
 
@@ -256,4 +256,4 @@ When implementing, a single issue is sufficient: "Implements SEPARATING_PERSISTE
 
 ---
 
-**Status:** Specification ready. Blocked on SEPSURF-01 naming merge.
+**Status:** Implementation complete.
