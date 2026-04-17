@@ -60,13 +60,13 @@ Panel is currently the only shipping mutation-capable interaction surface. If it
 
 ## Acceptance Criteria
 
-- [ ] The task file contains a one-sentence Panel authority statement.
-- [ ] The "is allowed" list is grounded in `docs/PANEL_AGENT.md` Runtime V1 and does not invent capabilities.
-- [ ] The "is not allowed" list explicitly includes "no LLM reasoning alone triggers mutation" and references `STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md` for the invariant.
-- [ ] Panel's cognitive posture language matches the vocabulary established in `NAME_THE_THREE_INTERACTION_SURFACES.md`.
-- [ ] The receipt surface section names in-note status callout and the event stream.
-- [ ] The task file does not propose changes to Panel runtime, schemas, or events.
-- [ ] The task file explicitly says this is current truth, not a redesign.
+- [x] The task file contains a one-sentence Panel authority statement.
+- [x] The "is allowed" list is grounded in `docs/PANEL_AGENT.md` Runtime V1 and does not invent capabilities.
+- [x] The "is not allowed" list explicitly includes "no LLM reasoning alone triggers mutation" and references `STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md` for the invariant.
+- [x] Panel's cognitive posture language matches the vocabulary established in `NAME_THE_THREE_INTERACTION_SURFACES.md`.
+- [x] The receipt surface section names in-note status callout and the event stream.
+- [x] The task file does not propose changes to Panel runtime, schemas, or events.
+- [x] The task file explicitly says this is current truth, not a redesign.
 
 ## How to Verify (Pre-Merge)
 
@@ -97,6 +97,58 @@ Docs review:
 ## Related GitHub Issues
 
 None in this capability. If later filed, the issue should reference "Implements INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AUTHORITY_BOUNDARY" and use the acceptance criteria above.
+
+---
+
+## Panel Authority Boundary
+
+**This section captures current runtime truth. It does not redesign Panel.**
+
+### One-Sentence Authority Statement
+
+Panel is the command-oriented interaction surface where the user expresses explicit intent inside a vault note, and the system translates that intent into governed, receipt-bearing actions through the intent/event/note-writer pipeline.
+
+### What Panel Is Allowed to Do on the User's Behalf Today
+
+Grounded in `docs/PANEL_AGENT.md` §Runtime V1:
+
+- Parse checked panel action checkboxes into `panel.intent.created` events.
+- Emit `panel.intent.executed` with per-action status (success, failure, or logged/unhandled).
+- Emit `panel.action.triggered` for handled actions and `panel.action.logged` for unmapped or unhandled actions.
+- Emit downstream intents such as `promote.intent.created` when a checked action carries `intent_type: promotion`.
+- Remove executed checkboxes from the panel working set on re-run.
+- Write an in-note AI status callout receipt (`> [!info]- AI status`) that records outcomes via the note writer path.
+- Mutate note frontmatter via the note writer / event pipeline path — never directly.
+- Surface uncertain or no-checkbox interpretations as suggested unchecked checkboxes so ambiguous intent stays human-reviewable before entering the execution path.
+
+### What Panel Is Not Allowed to Do
+
+- Mutate durable state outside the note writer / event pipeline path.
+- Act on unchecked or ambiguous panel items without first surfacing them as suggested checkboxes for explicit human confirmation.
+- Use LLM reasoning as the sole basis for a mutation; every mutation flows through policy, validation, and the deterministic writer path. See `STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md` for the invariant that governs this constraint.
+- Carry forward intent across notes without an explicit new panel action on the target note.
+- Execute actions the user has not explicitly checked, except for freeform catalog-driven proposals that are written back as suggested (unchecked) checkboxes first.
+
+### Panel's Cognitive Posture
+
+**Command-oriented.** The user sees the action, checks it, and is accountable for it. Panel does not externalize thinking; it executes committed intent. This posture is defined in `NAME_THE_THREE_INTERACTION_SURFACES.md` and applies here without modification: explicit intent, explicit action, explicit receipt.
+
+### Panel's Receipt Surface
+
+- **In-note AI status callout** (`> [!info]- AI status`): foldable, lives in the note where the action happened, trimmed to the last 20 entries.
+- **Event stream**: `panel.intent.created`, `panel.intent.executed`, `panel.action.triggered`, `panel.action.logged`, and downstream events such as `promote.intent.created`.
+
+Receipt locality is a deliberate trust feature: receipts live where the action happened, making Panel's side effects directly observable without leaving the note context. The other interaction surfaces must either match this locality or differ from it deliberately — not by accident.
+
+### Panel's Relationship to Cognition
+
+Panel currently uses LLM reasoning (`PANEL_AGENT_DECIDER=llm` is the default runtime posture) to interpret panel instructions and select catalog-matching actions. This cognition is bounded to action selection. Cognition does not become authority: no LLM output triggers a mutation unless the user has confirmed a checked checkbox or the freeform path has written back a suggested checkbox for human review first.
+
+Panel may consume richer cognition in the future (v6.0 Phase 3) but only as planning and proposal support. The mutation authority boundary does not change when cognition is added.
+
+### What a Reviewer Should Be Able to Say After Reading This
+
+"Panel turns explicit in-note checkboxes into governed events and writes a receipt back into the same note. The user decides; the system executes deterministically through the note-writer path. LLM reasoning informs action selection but does not bypass human confirmation for mutations."
 
 ---
 
