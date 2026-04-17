@@ -31,7 +31,7 @@ This task produces the canonical naming document for the three sub-capabilities 
 The canonical three-way naming the rest of this directory cites:
 
 - **Retrieval** answers the user verb "retrieve the right thing." The user has a concrete question, lookup, or operation in mind. A query or retrieval request exists. The system's job is to return the correct material with legible provenance.
-- **Orientation** answers the user verb "re-orient after interruption." The user has lost the thread. There is not yet a question in their head — there is a missing situational picture. The system's job is to walk the user back to where they were and what mattered when they left.
+- **Orientation** answers the user verb "re-orient after interruption." Orientation is situational reorientation after interruption: the user cannot yet formulate a query and needs the system to reconstruct where they were, what mattered, what remains open, and what changed.
 - **Resurfacing** answers the user verb "notice what is becoming relevant again." The user has no active query and is not asking to be led home. The system's job is to bring something back into view because open-loop pressure, temporal drift, relational change, or renewed context has made it quietly matter again.
 
 What each uniquely does that the other two cannot:

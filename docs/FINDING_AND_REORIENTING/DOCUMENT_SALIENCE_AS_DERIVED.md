@@ -37,6 +37,8 @@ Salience is real in the user's model — they experience what is mentally near, 
 
 This rule exists because salience is situational and relational, not essential. What matters changes when context changes, when time passes, when relations shift, or when the human's open loops resolve. A stored salience field would capture a frozen moment and then slowly become obsolete, creating silent failures where the system appears to work but returns stale answers (see Finding 2, below).
 
+The prohibition is specifically against storing salience as the durable essence of an artifact. Durable operational fields such as review cadence, commitment state, due date, or last-reviewed timestamp may still exist as input signals, provided they are not treated as salience itself.
+
 ### Allowed Signal Families (Concept-Level Only)
 
 The three capabilities may derive salience signals from any of the following signal families. **This list is conceptual only; no weights, thresholds, or fusion rules are specified here.** Those decisions are implementation details downstream of this spec.
@@ -58,6 +60,7 @@ To enforce that salience stays derived, the following moves are forbidden. Any t
 - **No durable `salience` field on any artifact.** The runtime must not add a `salience` property to any artifact payload, frontmatter, or metadata, regardless of whether the field is set during ingest, promotion, or later.
 - **No durable `zone` field on any artifact,** regardless of what the current v5.x runtime does. The v5.x runtime reads `zone` from payloads that never had it written; this is the exact anti-pattern this spec forbids.
 - **No persistent "attentional state" on any artifact.** No capability in this directory may mark an artifact with an attentional overlay, hotness label, temperature, or any equivalent that claims to be a durable property of the artifact itself.
+- **No treating operational fields as salience itself.** Durable fields such as review cadence, commitment state, due date, or last-reviewed timestamp may inform a derived salience calculation, but they must not be renamed, read, or governed as durable attentional truth.
 - **No implication that ingest should set an attentional flag.** Ingest writes artifact identity, domain, and provenance. It must not attempt to set any salience-related property.
 - **No implication that a mirror, receipt, or projection should carry salience as stored truth.** Mirrors and receipts are structural aids for the runtime; they are not the place to store salience. Projections (such as ordered lists or ranked views) are ephemeral; they must not be promoted into artifact-level attentional state.
 
@@ -65,7 +68,7 @@ To enforce that salience stays derived, the following moves are forbidden. Any t
 
 **Retrieval:** Retrieval may consult any of the signal families above to influence ranking within a single query execution. For example, it may weight recent matches higher, or prefer artifacts with unresolved status. It must not read a stored salience field, and it must not write one. It must not assume that a high-ranking result is the same as a resurfacing decision; the two are distinct user needs.
 
-**Orientation:** Orientation builds a situational frame at request time, drawing on the signal families above to help the human regain context after an interruption. It must not persist the frame as a durable field on any artifact. It may cite the signals it used inside its explanation — e.g., "this came back to your attention because it has unresolved status" — so the human can see where the reorientation came from and decide whether the frame is still correct.
+**Orientation:** Orientation builds a situational frame at request time, drawing on the signal families above to help the human regain context after an interruption. It must not persist the frame as a durable field on any artifact. It may cite the signals it used inside its explanation — e.g., "this remains open because it has unresolved status" — so the human can see where the reorientation came from and decide whether the frame is still correct.
 
 **Resurfacing:** Resurfacing decides to bring an artifact back into view based on a change in derived relevance (a signal family above shifted in a way that matters). It must not cache the decision as a durable field on the artifact — no "attention marker," no "resurfaced on [date]" property. It may record that a resurfacing decision happened as a receipt or trace, but receipts and traces are structural records of what the system did, not the same as artifact-level attentional state.
 

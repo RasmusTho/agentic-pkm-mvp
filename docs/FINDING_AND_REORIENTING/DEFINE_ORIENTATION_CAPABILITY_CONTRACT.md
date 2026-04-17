@@ -15,6 +15,8 @@ can_parallelize_with: [DEFINE_RETRIEVAL_CAPABILITY_CONTRACT, DEFINE_RESURFACING_
 
 Let the user come back to work and rediscover what mattered without doing the remembering themselves. When the user is lost — after interruption, a context switch, or time passing — there is not yet a question in their head. There is a missing situational frame. Orientation is the cognitive prosthetic that rebuilds that frame and leads the human back to where they were and what mattered when they left. This task writes the orientation contract.
 
+Orientation is repo working language closest to task resumption, context reconstruction, and situation-awareness recovery; it is not generic Q&A and not merely retrieving artifacts.
+
 ## What This Task Does
 
 This task produces the orientation capability contract as a docs artifact inside `docs/FINDING_AND_REORIENTING/`. It:
@@ -37,7 +39,7 @@ The contract the document establishes:
   - what mattered (the open commitments or active threads at that point),
   - what is still open (unresolved loops that had not closed before the leave),
   - and what has changed (anything relevant that moved while the user was away).
-- **Explanation shape:** orientation explains itself as "you were here, this mattered, and this is different now." Situation-anchored, not request-anchored and not surfacing-decision-anchored.
+- **Explanation shape:** orientation explains itself as "when you left, you were here; these threads were active; these remain open; this changed while you were away." Situation-anchored, not request-anchored and not surfacing-decision-anchored.
 - **Does not do:** orientation does not require or wait for a query, does not reduce its output to a ranked artifact list, does not silently promote items into attention for the user (that is resurfacing), and does not write any durable situational field anywhere.
 
 Boundary with retrieval:
@@ -67,7 +69,7 @@ If orientation is not specified:
 - [ ] The contract lists the signals orientation draws on as situational and derived, not as stored fields.
 - [ ] The contract states that the primary output is a situational frame, not a ranked artifact list.
 - [ ] The situational frame is specified as answering at minimum four things: where the user was, what mattered, what is still open, what has changed.
-- [ ] The contract specifies the orientation explanation shape ("you were here, this mattered, this is different now") and confirms it differs structurally from the retrieval and resurfacing explanation shapes.
+- [ ] The contract specifies the orientation explanation shape ("when you left, you were here; these threads were active; these remain open; this changed while you were away") and confirms it differs structurally from the retrieval and resurfacing explanation shapes.
 - [ ] The contract states that orientation may compose retrieval as a subordinate mechanism without inheriting retrieval's contract.
 - [ ] The contract explicitly states that orientation does not write any durable situational field.
 - [ ] The contract cites Pillar 7, Pillar 7A, and Delta 7 of `docs/plans/V60_ARCHITECTURE_TARGET.md`.
