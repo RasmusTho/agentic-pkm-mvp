@@ -28,6 +28,16 @@ This task produces the ASK-deprecation framing document inside `docs/FINDING_AND
 
 ## Concretely
 
+The binding decision this document acts on is the Fixed Decision recorded in `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`:
+
+> **ASK is deprecated as an architectural center**
+>
+> - ASK may remain a valid runtime/API surface in the v5.x line.
+> - ASK should not remain the conceptual center for retrieval, reasoning, or future cognition.
+> - New design work should not extend a special central-agent framing around ASK.
+
+This document states that deprecation in full — conceptual only — and maps what it means in practice.
+
 What ASK stops being (conceptual deprecation):
 
 - ASK stops being the place new retrieval work is attached to.
@@ -40,7 +50,7 @@ What ASK remains (non-deprecation):
 
 - ASK remains a working v5.x runtime and API surface.
 - Existing callers of ASK keep working.
-- `app/agents/ask/*` continues to exist and behave as it does today.
+- `app/agents/ask/*`, `app/api/routes/ask.py`, and all related runtime files are not modified by this spec or by any task in this directory. They continue to exist and behave as they do today.
 - Finding 2 remains ASK's bug and is owned by the v5.x enablement lane, not by this spec.
 
 What replaces ASK at the conceptual center:
