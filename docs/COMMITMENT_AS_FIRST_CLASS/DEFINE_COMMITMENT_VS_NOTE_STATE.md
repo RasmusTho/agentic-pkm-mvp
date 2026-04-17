@@ -95,3 +95,64 @@ Each of these is a trust violation disguised as a data-model convenience. The co
 ## Related GitHub Issues
 
 When this task is later turned into issues, reference: "Implements COMMITMENT_AS_FIRST_CLASS/DEFINE_COMMITMENT_VS_NOTE_STATE". Use the acceptance criteria above as the issue contract.
+
+## What a note with review_state is
+
+A note's `review_state` and `maturity` are artifact-layer attributes, as defined in `docs/CONCEPTS/STATE_AXES_CONTRACT.md`.
+
+- `review_state` describes the review and mutation posture of an artifact: whether it is draft, provisional, reviewed, protected, or archived.
+- `maturity` describes the standing or durability of an artifact: whether it is raw, draft, developing, stable, or evergreen.
+
+These axes answer the question: *"What is the current review/mutation/durability state of this artifact?"*
+
+They do **not** answer the question: *"What does the user owe, or what requires attention?"*
+
+That question belongs to the commitment layer.
+
+## What a commitment is, and why it is not that
+
+A commitment is something the human experiences as requiring attention, maintenance, progress, decision, follow-up, or closure. It is about responsibility, obligation, and open loops over time — not about the review posture or durability standing of an artifact.
+
+Commitments are defined in `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md` and include:
+- responsibilities the user is carrying (`Commitment`)
+- multi-step outcomes (`Project`)
+- immediate next steps (`Next Action`)
+- deferred matters awaiting an external condition or actor (`Waiting`)
+- periodic orientation practices (`Review Cycle`)
+
+These are distinct from review posture. The collision table below shows where notes and commitments diverge:
+
+| Collision | Commitment Layer | State Axes Layer |
+| --- | --- | --- |
+| "I still owe this" | `Commitment` (open) | — (not a `review_state`) |
+| "I'm waiting on X" | `Waiting` | — (not `draft`, not `archived`) |
+| "This draft is still being edited" | — | `review_state = draft` / `maturity = draft` |
+| "This note has been reviewed and should be stable" | — | `review_state = reviewed` / `maturity = stable` |
+| "I need to come back to this next week" | `Review Cycle` / `Waiting` | — (not `review_state`) |
+| "This note is now retired from editing" | — | `review_state = archived` |
+| "This project is done" | `Commitment` (done) | — (not `maturity = evergreen`) |
+| "I'm unsure if I should revise this" | — | `review_state` posture question |
+| "I'm unsure what my next step is on this project" | `Project` with unresolved `Next Action` | — (not a note state question) |
+
+The key distinction: commitment states track **responsibility and progress over time**, while review/maturity states track **artifact mutation safety and standing**.
+
+Do not write commitment meaning into `review_state` values. In particular, do not repurpose legacy values (`promoted`, `processed`, `inbox`) as commitment proxies. Those belong to compatibility migration, not commitment semantics.
+
+## Why flattening damages user trust
+
+A second brain succeeds by providing two distinct levers of trust:
+
+1. **"The thing I wrote down is still editable in the right way"** — this is the state axes layer (review posture, maturity standing).
+2. **"The thing I owe is still being tracked"** — this is the commitment layer.
+
+When these collapse into one, the user loses both.
+
+**Concretely**, flattening creates these failure modes:
+
+- A user captures an open loop (e.g., "I need to send Alice a report"). The system stores it as `review_state = draft`. The user later looks for "what I owe" and cannot find it anywhere, because they are searching the commitment layer while the system only stores draft artifacts. The open loop is lost.
+- A user reviews and approves a note. The system interprets this as "this commitment is done" and closes a related open loop. The user loses trust immediately because the two meanings were never the same.
+- A routine tool sweeps all `draft` notes (legitimate: they are unfinished artifacts). It unintentionally sweeps every open commitment too, because both were written into the same axis. Responsibilities vanish with drafts.
+
+Each scenario is a trust violation disguised as a data-model convenience. A user who cannot distinguish between "my note is still being revised" and "my responsibility is still being tracked" cannot confidently offload either burden to the system.
+
+The cognitive-prosthetic function requires that these two questions have **unambiguous, separate answers**. This contract establishes those answers at the architecture layer, before any schema is designed.
