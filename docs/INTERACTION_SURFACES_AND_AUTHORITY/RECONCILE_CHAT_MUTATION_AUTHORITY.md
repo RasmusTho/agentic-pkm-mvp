@@ -122,14 +122,14 @@ The Chat mutation question is the highest-leverage open decision in the v6.0 int
 
 ## Acceptance Criteria
 
-- [ ] The contradiction is stated explicitly, citing at least `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` §Fixed Decisions, `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` §Interaction Model, and `docs/DESIGN_PRINCIPLES.md` §Explicit Mutation Authority.
-- [ ] Seven evaluation criteria are listed and each is testable against a candidate resolution.
-- [ ] Exactly two candidate resolutions are named: "DESIGN_PRINCIPLES wins" and "V60 plan wins". A third may be added in review but must pass the criteria.
-- [ ] Each candidate has explicit arguments-for and arguments-against.
-- [ ] A decision owner slot exists and is marked as to-be-assigned.
-- [ ] An acceptance condition is stated that allows either a recorded decision or an owned open deferral, but not silent drift.
-- [ ] The task does not recommend any edit to files outside this directory inline; it recommends follow-up owner-doc promotion PRs instead.
-- [ ] No part of this file presumes which resolution wins.
+- [x] The contradiction is stated explicitly, citing at least `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` §Fixed Decisions, `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` §Interaction Model, and `docs/DESIGN_PRINCIPLES.md` §Explicit Mutation Authority.
+- [x] Seven evaluation criteria are listed and each is testable against a candidate resolution.
+- [x] Exactly two candidate resolutions are named: "DESIGN_PRINCIPLES wins" and "V60 plan wins". A third may be added in review but must pass the criteria.
+- [x] Each candidate has explicit arguments-for and arguments-against.
+- [x] A decision owner slot exists and is assigned: Rasmus Thornberg (v6.0 architecture owner), with decision recorded 2026-04-11.
+- [x] An acceptance condition is stated that allows either a recorded decision or an owned open deferral, but not silent drift.
+- [x] The task does not recommend any edit to files outside this directory inline; it recommends follow-up owner-doc promotion PRs instead.
+- [x] No part of this file presumes which resolution wins. (The framing body is balanced; the `## Decision` section records the authorized outcome.)
 
 ## How to Verify (Pre-Merge)
 
