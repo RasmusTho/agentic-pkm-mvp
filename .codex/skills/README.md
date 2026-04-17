@@ -46,3 +46,14 @@ These skills are workflow helpers, not replacements for the canonical builder-ag
   `temporal-doc-governance` and, when GitHub state is involved, `backlog-reconciliation-drift-audit`
 
 If multiple skills seem relevant, prefer the narrower workflow skill over the generic repo-dev skill.
+
+## Cross-cutting invariant: acceptance verifiability
+
+Every Acceptance Criterion in a GitHub Issue must declare its verification inline with a `Verify:` marker — a test pointer for behavioral ACs, a concrete doc anchor / roadmap diff / runtime receipt for non-behavioral ACs. See `docs/development/DEV_WORKFLOW.md` ("Acceptance verifiability") for the canonical rule.
+
+The invariant is enforced across the chain:
+
+- Creation: `docs-to-issue`, `feature-breakdown`, `bug-to-issue` produce `Verify:`-bearing ACs.
+- Repair: `issue-maintenance-change-control` treats missing `Verify:` as malformed contract.
+- Consumption: `issue-to-code` gates on `Verify:` presence and runs test-first for behavioral ACs.
+- Closure: `verification-validation-feedback` resolves every `Verify:` target before merge.

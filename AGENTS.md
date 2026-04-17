@@ -103,6 +103,7 @@ Builder-agent rules:
 - Only pick work from a GitHub Issue that is both `Status=Ready` and labeled `agent:ready`.
 - Read the full Issue before editing.
 - Treat `Context`, `Scope`, `Source Anchors`, `Constraints`, `Acceptance Criteria`, `Out of Scope`, `Suggested Validation`, and `Source Docs` as binding.
+- Every `Acceptance Criterion` must declare its verification inline with a `Verify:` marker: a concrete test pointer (`tests/...::test_name`) for behavioral criteria, or a concrete non-test target (doc writeback path plus anchor, runtime receipt, roadmap diff) for non-behavioral criteria. ACs without a resolvable `Verify:` target are not executable and the Issue must not be `agent:ready`.
 - Link the PR back to the governing Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
 - Do not treat chat-only requests as canonical implementation tasks when an Issue is expected.
 - Do not expand scope beyond the Issue without updating the task contract first.

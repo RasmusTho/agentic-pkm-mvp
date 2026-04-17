@@ -27,6 +27,10 @@ Turn any discovered bug into a compliant GitHub Issue that matches the repo's co
      - `## Suggested Validation`
      - `## Source Docs`
    - Include exact repro steps and observed/expected results when available.
+   - Acceptance Criteria must carry `Verify:` markers:
+     - The primary behavioral AC ("bug no longer reproduces") points to a regression test the fix will add: `Verify: \`tests/<path>::test_<bug_name>\`` — the test should fail against current code and go green after the fix.
+     - Any non-behavioral AC (doc clarifications, roadmap/status wording) points to its observable target.
+     - If the bug cannot yet be expressed as a failing test (e.g., the repro is environment-dependent or requires instrumentation that does not exist), mark `agent:needs-human` rather than `agent:ready`.
 4. Labels:
    - Always add `type:bug`.
    - Add one priority: `prio:high`, `prio:med`, or `prio:low` based on impact.
@@ -39,6 +43,7 @@ Turn any discovered bug into a compliant GitHub Issue that matches the repo's co
 
 Set `agent:ready` when all are true:
 - Concrete scope and acceptance criteria are present.
+- Every AC carries a resolvable `Verify:` target; the repro is expressible as a named failing test.
 - Source anchors point to specific files or docs.
 - No unresolved decisions or missing contract inputs.
 

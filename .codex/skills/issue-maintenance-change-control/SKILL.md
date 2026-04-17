@@ -83,11 +83,13 @@ If any of the above is ambiguous, do not code. Keep the Issue `agent:needs-human
 5. Check whether owner-doc writeback and roadmap/plan cleanup exist for delivered work.
 6. For feature-breakdown issue waves, distinguish parent feature issues from child slice issues before changing labels.
 7. If a child issue delegates its contract to a `Source contract` spec file instead of carrying the standard issue sections, verify whether the spec is already merged and reachable; if the spec is not merged/reachable and the issue body lacks the required local contract sections, do not mark it `agent:ready`.
+8. Check acceptance verifiability: every `Acceptance Criterion` must carry a `Verify:` marker naming a test (behavioral) or a concrete doc/receipt target (non-behavioral). ACs without a resolvable `Verify:` target are a malformed contract shape.
 
 ## Allowed corrective actions
 
 - rewrite Issue body to match current bounded work
 - add or fix `Source Anchors`
+- add missing `Verify:` markers to ACs, or rewrite ACs that cannot carry one (refine, split, or route back to `docs-to-issue` / `feature-breakdown` for re-specification)
 - split oversized work into replacement Issues
 - close duplicate or superseded Issues
 - close delivered Issues
@@ -259,6 +261,7 @@ Use this when the user asks for a maintenance run across everything not done.
      gh issue edit #<N> --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human
      ```
      - Add `agent:ready` only if Scope/Constraints/Acceptance Criteria are concrete and no ambiguity remains.
+     - Do not add or preserve `agent:ready` when any AC lacks a resolvable `Verify:` marker.
      - Do not add or preserve `agent:ready` when recent comments, linked PRs, or linked blocker/follow-up issues show the Issue is blocked, already active, or waiting on validation.
      - Do not add or preserve `agent:ready` when a child issue's executable contract exists only in an unmerged spec PR.
      - Keep or set `agent:needs-human` for boundary moves without explicit direction or module paths.

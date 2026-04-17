@@ -86,6 +86,14 @@ Issue body must contain exactly these sections:
 - `## Suggested Validation`
 - `## Source Docs`
 
+`Acceptance Criteria` must be verifiable:
+
+- Every AC checkbox carries a `Verify:` line that names its verification target.
+- Behavioral AC → test pointer: `Verify: \`tests/<path>::<test_name>\``. The test may be new (to be written by the builder); it must be concrete enough to resolve after implementation.
+- Non-behavioral AC → explicit target: doc writeback path plus anchor, roadmap diff, or runtime receipt (e.g. `Verify: doc writeback at \`docs/CONCEPTS/DOMAIN.md :: ingest-boundary\``).
+- If an AC cannot carry a resolvable `Verify:` target, the AC is not crisp enough. Refine the AC, split the Issue, or route the docs item through `feature-breakdown` before marking it `agent:ready`.
+- `Suggested Validation` lists the commands that execute the declared `Verify:` targets; it does not replace them.
+
 `Source Anchors` rules:
 
 - Use the most local actionable source item, not just a broad document path.
@@ -100,6 +108,7 @@ Issue body must contain exactly these sections:
 - Add each new Issue to Project `Agent Delivery Control Plane`.
 - Set Status appropriately:
   - `Ready` only if bounded, testable, unblocked, and safe for agent execution
+  - every Acceptance Criterion must carry a resolvable `Verify:` target before `Status=Ready`
   - otherwise `Backlog`
 - Every new implementation Issue should leave creation with exactly one truthful agent-state label.
 - Use `agent:ready` only with `Status=Ready`.
