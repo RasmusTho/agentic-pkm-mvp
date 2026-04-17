@@ -273,7 +273,10 @@ Use this when the user asks for a maintenance run across everything not done.
                content {
                  __typename
                  ... on Issue { number state }
-                 ... on PullRequest { number state isDraft mergedAt }
+                 ... on PullRequest {
+                   number state isDraft mergedAt
+                   reviewRequests { totalCount }
+                 }
                }
                fieldValues(first: 20) {
                  nodes {
@@ -383,6 +386,8 @@ Use this when the user asks for a maintenance run across everything not done.
     - Every closed Issue is in `Status=Done`
     - Every merged / closed PR is in `Status=Done`
     - Every open Draft PR is in `Status=In Progress`
+    - Every open non-Draft PR with review explicitly requested is in `Status=Review`
+    - Every open non-Draft PR without review requested is in `Status=In Progress`
     - Zero Project items are in `NO_STATUS`
     If any drift remains, the run is not complete — fix before writing the receipt.
 
