@@ -1,12 +1,12 @@
-State: SoT v5.5 Reality-MVP baseline locked with v5.6 forward line extending PanelAgent runtime and registry watcher behavior.
+State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; v6 interaction, finding/reorienting, persistence-surface, and commitment specifications are active docs-only planning surfaces.
 Doc role: Core SoT
 Authority: Canonical user-facing function contract for the system; architecture and implementation changes should remain compatible with this document unless it is updated intentionally.
 Owner: Product / human-function SoT
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-16
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/PANEL_AGENT.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, merged PRs #423/#424/#425/#426/#427/#431/#439/#448, current repo state at e226878 on 2026-04-16, backlog issues #435/#436/#437
+Last reviewed: 2026-04-17
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/PANEL_AGENT.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, merged PRs #423/#424/#425/#426/#427/#431/#439/#448/#453/#454/#460/#463/#467/#469/#472/#473/#474/#475/#476/#477/#478, current repo state at 7944669 on 2026-04-17, closed current-state bug issues #435/#436/#437
 
 # Human Flows — Yggdrasil / agentic-pkm-mvp
 
