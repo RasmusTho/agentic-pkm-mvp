@@ -54,14 +54,23 @@ If retrieval stays overloaded:
 ## Acceptance Criteria
 
 - [ ] The contract defines retrieval as a reusable capability with no agent identity.
+  Verify: doc review of `docs/FINDING_AND_REORIENTING/DEFINE_RETRIEVAL_CAPABILITY_CONTRACT.md :: What This Task Does` and `:: Concretely`.
 - [ ] The contract states the trigger condition: a retrieval request exists.
+  Verify: `rg -n "Trigger:|retrieval request exists|does not fire without" docs/FINDING_AND_REORIENTING/DEFINE_RETRIEVAL_CAPABILITY_CONTRACT.md`.
 - [ ] The contract states what retrieval consumes in user-visible terms, drawing from scope, relations, and provenance per Pillar 6.
+  Verify: `rg -n "Consumes|scope|relations|provenance|Pillar 6" docs/FINDING_AND_REORIENTING/DEFINE_RETRIEVAL_CAPABILITY_CONTRACT.md`.
 - [ ] The contract states what retrieval produces: a bounded, explainable result set with provenance.
+  Verify: `rg -n "Produces|bounded|explainable|result set|provenance" docs/FINDING_AND_REORIENTING/DEFINE_RETRIEVAL_CAPABILITY_CONTRACT.md`.
 - [ ] The contract specifies the retrieval-specific explanation shape: request-anchored ("this matched your request because…").
+  Verify: `rg -n "Explanation shape|matched your request|request-anchored" docs/FINDING_AND_REORIENTING/DEFINE_RETRIEVAL_CAPABILITY_CONTRACT.md`.
 - [ ] The contract lists what retrieval does not do: rebuild situational context, fire without a query, decide surfacing, write durable salience.
+  Verify: `rg -n "Does not do|situational context|without a query|surfacing|durable salience" docs/FINDING_AND_REORIENTING/DEFINE_RETRIEVAL_CAPABILITY_CONTRACT.md`.
 - [ ] The contract explicitly cites Finding 2 as the cautionary tale for overloading retrieval with surfacing responsibility, without attempting to fix Finding 2.
+  Verify: `rg -n "Finding 2|cautionary|without attempting to fix|fixing Finding 2|Cite only" docs/FINDING_AND_REORIENTING/DEFINE_RETRIEVAL_CAPABILITY_CONTRACT.md`.
 - [ ] The contract does not propose any modification to `app/retrieval/*` or any other code file.
+  Verify: `git diff --name-only` contains only `docs/FINDING_AND_REORIENTING/DEFINE_RETRIEVAL_CAPABILITY_CONTRACT.md`, and doc review finds no runtime/schema/code instruction.
 - [ ] A reviewer can confirm the retrieval explanation shape differs structurally from the orientation and resurfacing explanation shapes in the sibling contracts.
+  Verify: doc review receipt in PR validation notes comparing `DEFINE_RETRIEVAL_CAPABILITY_CONTRACT.md`, `DEFINE_ORIENTATION_CAPABILITY_CONTRACT.md`, and `DEFINE_RESURFACING_CAPABILITY_CONTRACT.md`.
 
 ## How to Verify (Pre-Merge)
 
