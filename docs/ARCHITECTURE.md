@@ -5,8 +5,8 @@ Owner: Runtime / architecture SoT
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-16
-Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/ROADMAP.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, app/cli/__init__.py, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orchestrator/executor.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #272/#302/#346/#349/#365/#376/#377/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431/#439/#448/#450/#452, current repo state at e226878 on 2026-04-16, backlog issues #435/#436/#437/#456, stale lifecycle issue #359, and closed Orchestrator follow-up issues #444/#445/#446
+Last reviewed: 2026-04-17
+Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/ROADMAP.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, app/cli/__init__.py, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orchestrator/executor.py, app/watcher/registry.py, app/workers/outbox_worker.py, Makefile, merged PRs #272/#302/#346/#349/#365/#376/#377/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431/#439/#448/#450/#452/#453/#454/#458/#460/#463/#467/#468/#469/#470/#471/#472/#473/#474/#475/#476/#477/#478, current repo state at 7944669 on 2026-04-17, closed current-state bug issues #435/#436/#437/#456, closed lifecycle issue #359, and closed Orchestrator follow-up issues #444/#445/#446
 # Architecture — SoT v5.5 Reality-MVP baseline (v5.6 delivered, v6 active design)
 
 This document is the active architecture source of truth for the SoT v5.5 Reality-MVP baseline and the place where current runtime contracts are defined.
@@ -36,8 +36,9 @@ Proposal:
   shared reasoning seams, flagged Orchestrator V2 pilot work, A2A/MCP contract hardening,
   and reproducible local verification,
 - move unresolved work into explicit post-v5.6 follow-ups instead of reading it as an
-  active v5.6 blocker; current known follow-ups include stale lifecycle closure on A2A/sync
-  parent issues, the V2 timeout discriminator bug (#456), and v6-driven current-state bugs,
+  active v5.6 blocker; recent post-v5.6 closures include the A2A lifecycle cleanup (#359),
+  the V2 timeout discriminator bug (#456), and v6-driven current-state domain/zone bugs
+  (#435/#436/#437),
 - keep v6.0 as the target-state architecture lane for interaction/cognition/execution/memory/governance
   separation, capability reuse, Chat canvas planning, Deep Agent introduction, commitments, and richer
   context/relation modeling.
@@ -216,7 +217,7 @@ See also:
 ## SoT lines
 - **SoT v5.5 Reality-MVP baseline (locked)** — watcher auto-run gate + panel action provenance + concurrency/idempotency guardrails on top of the stable vault ingest, hybrid retrieval/ASK, observability/status surfaces, and orchestrator runtime V1.
 - **Reality-MVP foundation snapshot** — single-user PKM with stable vault ingest, minimal external ingest, hybrid retrieval + ASK with sources/latency, observability/status surfaces (CLI/API/GUI), and orchestrator runtime V1. Retained as foundation history; superseded by the v5.5 baseline.
-- **SoT v5.x Agentic PKM (v5.6 delivered, post-v5.6 follow-up mode)** — Agentic flows extend the v5.5 baseline through PanelAgent, guarded watcher automation, shared reasoning seams, A2A/MCP contract hardening, and a flagged Orchestrator V2 pilot. Satellite Sync (`docs/plans/PROTOCOL_SATELLITE_SYNC.md`) and broader Yggdrasil module expansion remain planned/conceptual, not baseline runtime. Shipped v5.6 pieces include targeted ingest via `ingest-vault-paths`, multi-note panel CLI, registry watcher defaulting, watcher safety gates, planner pipeline + CLI-first orchestration, `ReasoningFacade`, descriptor-based MCP/tool execution, bounded A2A in-process routing, sync-latency validation, deterministic runtime health checks, V2 checkpoint/resume hardening, and V2 retry/backoff observability. MCP ToolProvider integration, remote MCP multiplexing, broad A2A delivery semantics, plan-level orchestration timeout budgets, and statistical/infra sync hardening remain post-v5.6 follow-ups.
+- **SoT v5.x Agentic PKM (v5.6 delivered, post-v5.6 follow-up mode)** — Agentic flows extend the v5.5 baseline through PanelAgent, guarded watcher automation, shared reasoning seams, A2A/MCP contract hardening, and a flagged Orchestrator V2 pilot. Satellite Sync (`docs/plans/PROTOCOL_SATELLITE_SYNC.md`) and broader Yggdrasil module expansion remain planned/conceptual, not baseline runtime. Shipped v5.6 pieces include targeted ingest via `ingest-vault-paths`, multi-note panel CLI, registry watcher defaulting, watcher safety gates, planner pipeline + CLI-first orchestration, `ReasoningFacade`, descriptor-based MCP/tool execution, bounded A2A in-process routing, sync-latency validation, deterministic runtime health checks, V2 checkpoint/resume hardening, V2 retry/backoff observability, and the V2 timeout discriminator fix. MCP ToolProvider integration, remote MCP multiplexing, broad A2A delivery semantics, plan-level orchestration timeout budgets, and statistical/infra sync hardening remain post-v5.6 follow-ups.
 
 ### Runtime watcher choice
 - Registry watcher is the runtime default; start-system flows and Docker compose use `python -m app.cli watcher run` with `configs/watchers.yaml`.
