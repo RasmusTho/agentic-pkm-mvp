@@ -1,4 +1,4 @@
-State: Locked baseline SoT v5.5 (Reality-MVP + watchers/panel policy) with the v5.6 delivery line closed and post-v5.6 follow-ups tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
+State: SoT v5.5 baseline locked (Reality-MVP + watchers/panel policy); v5.6 delivery line closed; v6 is the active design and planning direction. Post-v5.6 follow-ups are tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
 Doc role: Plan
 Authority: Strategic sequencing and forward-looking delivery/follow-up framing; owner/current-state docs win on shipped reality and present-tense behavior.
 Owner: Product / architecture forward line
@@ -57,7 +57,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - PanelAgent 2.0 expansion beyond the current slices remains bounded even after real-vault acceptance; break new behavior into smaller tracked slices first.
   - Reasoning/reflective layers with eval gates; expanded observability counters for orchestration/A2A.
   - Collaboration/multi-user after single-user flows are stable.
-  - `v6.0` architecture target: a baseline-aware target operating model that preserves the
+  - `v6.0` architecture target (**active design direction** — see `Capability-Based Architecture & Agent Evolution` above): a baseline-aware target operating model that preserves the
     vault-first / registry-watcher / DB-outbox / companion-note continuity baseline while making
     the next operating boundary explicit: `observation -> normalization/contract -> admission -> execution`.
     - Make the ontology/runtime bridge explicit so human loops, ontology classes, and runtime contracts can be read together without pretending they are the same layer.
@@ -222,9 +222,9 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 | v5.0 | PanelAgent Runtime V1 | Shipped |
 | v5.1–v5.4 | Watcher track (ingest/panel CLI, policy, ergonomics) | Operationally accepted |
 | v5.5A/B | Panel planner pipeline + CLI-first orchestration/promotion consumer | Shipped |
-| v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Planned/In progress |
+| v5.5C/D | Panel LangGraph decider + watcher auto-exec; watcher→planner/orchestrator automation | Shipped |
 | v5.6 | Engine-neutral cognition seam (PA2-ENGINE-SEAM, shipped), freeform catalog-discovery (shipped), suggested checkbox writeback for uncertain/no-checkbox panel proposals (shipped), multi-step plans (shipped, PR #302), real-vault acceptance (accepted on Alpha vault for #240), Companion note/doc-sync cleanup, shared ReasoningFacade + LangGraph rollout, Orchestrator V2 (flagged), Vault-as-GUI settings compiler, A2A in-process routing, iCloud transport chain validated + `.git.nosync` fix shipped (#421), low-risk autonomy + sync validation parent #355 closed | Closed delivery line; remaining statistical sync/infra hardening, A2A lifecycle/project cleanup, and timeout discriminator bug #456 are post-v5.6 follow-ups; local runtime/docs validation drift was fixed by #441 / PR #439 |
-| v6.0 | Baseline-aware target operating model that preserves the current vault-first/runtime-queue/continuity baseline while aligning operating boundaries with human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Proposed target state |
+| v6.0 | Baseline-aware target operating model that preserves the current vault-first/runtime-queue/continuity baseline while aligning operating boundaries with human/context/artifact semantics, ontology/runtime bridge, commitment-first modeling, retrieval vs orientation vs resurfacing separation, and clearer surface/authority contracts; target described in `docs/plans/V60_ARCHITECTURE_TARGET.md` | Active design/planning direction |
 
 ## Tracks (details moved)
 - Watcher track details: `docs/tracks/TRACK_WATCHER.md`

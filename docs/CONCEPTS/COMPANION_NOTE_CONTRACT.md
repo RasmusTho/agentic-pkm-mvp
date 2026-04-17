@@ -1,4 +1,4 @@
-State: SoT v5.x forward line (v5.6 companion note contract)
+State: Delivered (v5.6 companion note contract); stable invariant for v6 design
 Doc role: Core SoT
 Authority: Canonical definition of the companion note as a first-class system artifact for continuity, identity repair, and bounded system-side tracking of vault notes.
 
