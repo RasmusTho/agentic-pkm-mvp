@@ -1,4 +1,4 @@
-State: SoT v5.5 Reality-MVP baseline (locked) with forward line v5.6 planned (docs-first).
+State: SoT v5.5 Reality-MVP baseline (locked); v5.6 delivered and closed; v6 is the active design and planning direction.
 # Agentic PKM — Vault-First, Event-Driven PKM Runtime
 
 Agentic PKM is a vault-first, event-driven PKM runtime:
@@ -7,7 +7,7 @@ Agentic PKM is a vault-first, event-driven PKM runtime:
 - The runtime is guarded by CI fitness gates and explicit safety switches (watcher auto-run, dedup/idempotency, optimistic writes).
 
 Start here:
-- `docs/STATUS.md` — current baseline reality (v5.5) + forward line (v5.6)
+- `docs/STATUS.md` — current baseline reality (v5.5); v5.6 delivered; v6 active design direction
 - `docs/ARCHITECTURE.md` — active runtime architecture source of truth
 - `docs/HUMAN-FLOWS.md` — user-facing behavior contract
 - `docs/DOCS_INDEX.md` — map of the wider documentation set, including reference and historical docs
@@ -45,7 +45,8 @@ Prereqs:
 ## Documentation Reading Order
 - Core SoT: `docs/STATUS.md`, `docs/ARCHITECTURE.md`, `docs/HUMAN-FLOWS.md`, `docs/COMPONENTS.md`, `docs/EVENTS.md`, `docs/TESTING.md`, `docs/OPERATIONS.md`
 - Reference docs: use `docs/DOCS_INDEX.md` to find implementation, operator, and development guidance outside the core set
-- Plan docs: `docs/ROADMAP.md`, `docs/plans/V56_FORWARD_LINE.md`, `docs/plans/PROTOCOL_SATELLITE_SYNC.md`, and the docs under `docs/tracks/`
+- Plan docs: `docs/ROADMAP.md`, `docs/plans/V60_ARCHITECTURE_TARGET.md`, `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`, `docs/plans/PROTOCOL_SATELLITE_SYNC.md`, and the docs under `docs/tracks/`
+- Historical plan docs: `docs/plans/V56_FORWARD_LINE.md` (delivered/closed)
 - Historical docs: read only for background after the core docs; they are not current truth
 
 ## Quickstart (Developer / CI)
@@ -94,4 +95,4 @@ SoT v4.10 is the historical Reality-MVP foundation snapshot and is not current r
 - `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
 - `docs/history/SOT_4X_HISTORY.md`
 
-The current baseline is v5.5; forward-line work for v5.6 is tracked in `docs/plans/V56_FORWARD_LINE.md`.
+The current baseline is v5.5; v5.6 is delivered and closed. Active design and planning direction is v6 — see `docs/plans/V60_ARCHITECTURE_TARGET.md` and `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`.
