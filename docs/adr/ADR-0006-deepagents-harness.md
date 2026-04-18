@@ -98,7 +98,7 @@ This eliminates most of the need for a custom MCP filesystem layer.
 
 ### 6. LangSmith observability — ALREADY IN REQUIREMENTS
 
-`langsmith==0.4.37` is already locked in `requirements.txt`. DeepAgents is built on LangChain and traces automatically via LangSmith when `LANGCHAIN_API_KEY` is set. This complements (not replaces) the Prometheus/status stack.
+`langsmith==0.7.31` is pinned in `requirements.txt`. DeepAgents is built on LangChain and traces automatically via LangSmith when `LANGCHAIN_API_KEY` is set. This complements (not replaces) the Prometheus/status stack.
 
 ---
 

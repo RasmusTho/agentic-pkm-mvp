@@ -103,7 +103,7 @@ Last verified against: Dependabot alert snapshot summarized on 2026-04-07
 - **Risk:** SSRF via tracing header injection
 - **Single-User Impact:** LOW-MEDIUM - requires attacker to inject malicious tracing headers
 - **Context:** Client SDK for LangSmith monitoring
-- **Action:** Plan for v6.2; upgrade langsmith with next release cycle
+- **Action:** Remediated via Issue #488 by upgrading `langsmith` to `0.7.31`, which also closes Dependabot alert #20; keep this row as the historical snapshot record.
 
 ### #15: Requests Insecure Temp File Reuse (MEDIUM)
 - **Package:** requests
