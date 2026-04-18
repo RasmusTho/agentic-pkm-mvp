@@ -9,7 +9,7 @@ import pytest
 
 from app.agents.panel_agent.agent import run_panel_intent_for_note
 from app.agents.panel_agent.execution import run_panel_note_execution
-from app.agents.panel_agent.runtime import PanelRuntimeResult, execute_panel_intent
+from app.agents.panel_agent.runtime import PanelRuntimeResult, _write_proposals_to_panel, execute_panel_intent
 from app.components.concurrency import IdempotencyGuard
 from app.store import object_store as object_store_module
 from app.store.object_store import DomainObject, ObjectStore
@@ -581,3 +581,33 @@ def test_runtime_writeback_proposes_idempotent_on_rerun(tmp_path: Path, monkeypa
     # Count proposals — there should be exactly one.
     proposal_count = after_second.count("- [ ] Make this note evergreen")
     assert proposal_count == 1
+
+
+def test_runtime_writeback_proposal_dedupe_is_scoped_to_last_panel() -> None:
+    """Proposal dedupe must be scoped to the panel block being updated (the last panel)."""
+    markdown = (
+        "---\n"
+        "uuid: test-uuid\n"
+        "---\n"
+        "# Test Note\n"
+        "\n"
+        "%% AI:Start %%\n"
+        "## AI-instruktion\n"
+        "Earlier panel\n"
+        "## AI-åtgärder\n"
+        "- [ ] Make this note evergreen\n"
+        "%% AI:End %%\n"
+        "\n"
+        "%% AI:Start %%\n"
+        "## AI-instruktion\n"
+        "Make this note evergreen\n"
+        "%% AI:End %%\n"
+    )
+    updated = _write_proposals_to_panel(markdown, [("promote.evergreen", "Make this note evergreen")])
+
+    # Existing proposal in first panel + proposal inserted into second panel.
+    assert updated.count("- [ ] Make this note evergreen") == 2
+
+    # Verify the last panel now contains the proposal suggestion.
+    last_panel = "%% AI:Start %%\n" + updated.split("%% AI:Start %%\n")[-1]
+    assert "- [ ] Make this note evergreen" in last_panel

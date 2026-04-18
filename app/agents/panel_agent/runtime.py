@@ -165,9 +165,6 @@ def _write_proposals_to_panel(markdown: str, proposed_labels: list[tuple[str, st
         return markdown
 
     lines = markdown.splitlines()
-    proposal_lines = []
-    for action_id, label in proposed_labels:
-        proposal_lines.append(f"- [ ] {label} <!--ai:id={stable_action_id(label)}-->")
 
     # Find the last panel block (by looking for start/end fences from end to start).
     # This handles multiple panels by choosing the last one.
@@ -184,6 +181,27 @@ def _write_proposals_to_panel(markdown: str, proposed_labels: list[tuple[str, st
             else:
                 panel_start = idx
                 break
+
+    if panel_end is not None and panel_start is not None:
+        # Dedupe against the panel block being updated, not against all panels in the note.
+        panel_text = "\n".join(lines[panel_start : panel_end + 1])
+        parsed = parse_panel(panel_text)
+        existing_ids = {action.action_id for action in parsed.actions if action.action_id}
+        existing_labels = {action.text.strip() for action in parsed.actions if action.text.strip()}
+    else:
+        existing_ids = set()
+        existing_labels = set()
+
+    proposal_lines = []
+    for action_id, label in proposed_labels:
+        label_text = label.strip()
+        stable_id = stable_action_id(label_text)
+        if stable_id in existing_ids or label_text in existing_labels:
+            continue
+        proposal_lines.append(f"- [ ] {label_text} <!--ai:id={stable_id}-->")
+
+    if not proposal_lines:
+        return markdown
 
     if panel_end is None or panel_start is None:
         # No clear panel structure found; append at end (fallback).
