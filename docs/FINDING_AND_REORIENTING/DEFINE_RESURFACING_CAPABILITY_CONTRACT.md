@@ -21,7 +21,7 @@ Resurfacing is repo working language for unprompted return-to-attention support,
 
 This task produces the resurfacing capability contract as a docs artifact inside `docs/FINDING_AND_REORIENTING/`. It:
 
-- Defines resurfacing as a reusable capability, not an agent, not a cron job, and not a ranking knob.
+- Defines resurfacing as a reusable capability, not an agent, not a cron job, and not a ranking knob, consistent with Pillar 7A's capability-based composition model.
 - States its trigger: a change in relevance that does not come from a user-initiated query or a user-initiated return to work.
 - States its relationship to salience: resurfacing consumes derived salience signals (per the salience contract) but does not own them, does not store them, and does not treat its own decisions as durable facts.
 - States what resurfacing produces: an explained surfacing decision with provenance for why now and why this.
@@ -55,7 +55,7 @@ Relationship to retrieval:
 
 ## Why This Matters
 
-Pillar 7 and Delta 7 of `docs/plans/V60_ARCHITECTURE_TARGET.md` say it directly: "resurfacing does not masquerade as retrieval" and "resurfacing is not reduced to ranking or query-answer relevance." Without this contract, resurfacing keeps being implemented as "retrieval but with better ranking over time" and never learns to fire without a query. The system then cannot serve the user's real need — "notice for me what is becoming relevant again, because I won't." This is precisely the use case the user cannot ask for in advance.
+Pillar 7 and Delta 7 of `docs/plans/V60_ARCHITECTURE_TARGET.md` say it directly: "resurfacing does not masquerade as retrieval" and "resurfacing is not reduced to ranking or query-answer relevance." The current v6.0 target doc also carries the same authority through the target changes list, the capability vocabulary row, and the retrieval migration stages: retrieval, orientation, and resurfacing are separate capabilities; capabilities are callable building blocks; and ranking explanations must not masquerade as orientation or salience. Pillar 7A's companion rule is now carried in that capability model rather than only in the older pillar wording. Without this contract, resurfacing keeps being implemented as "retrieval but with better ranking over time" and never learns to fire without a query. The system then cannot serve the user's real need — "notice for me what is becoming relevant again, because I won't." This is precisely the use case the user cannot ask for in advance.
 
 If resurfacing is not specified:
 
@@ -66,14 +66,23 @@ If resurfacing is not specified:
 ## Acceptance Criteria
 
 - [ ] The contract defines resurfacing as a reusable capability, not an agent and not a ranking knob.
+  Verify: doc review of `docs/FINDING_AND_REORIENTING/DEFINE_RESURFACING_CAPABILITY_CONTRACT.md :: What This Task Does` and `:: Concretely`.
 - [ ] The contract states the trigger: a change in attentional relevance noticed without a user query or a user-initiated return to work.
+  Verify: `rg -n "Trigger:|change in attentional relevance|has not asked|not resuming work|has not posed a query" docs/FINDING_AND_REORIENTING/DEFINE_RESURFACING_CAPABILITY_CONTRACT.md`.
 - [ ] The contract cites `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md` and affirms that resurfacing consumes derived salience signals, does not own them, and does not store them.
+  Verify: `rg -n "SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT|derived salience|does not own|does not store|never stored" docs/FINDING_AND_REORIENTING/DEFINE_RESURFACING_CAPABILITY_CONTRACT.md`.
 - [ ] The contract states that the output is a surfacing decision with a "why now" explanation, not a ranked list.
+  Verify: `rg -n "Produces:.*surfacing decision|why now|not a ranked list|output is a surfacing event" docs/FINDING_AND_REORIENTING/DEFINE_RESURFACING_CAPABILITY_CONTRACT.md`.
 - [ ] The contract specifies the resurfacing explanation shape ("this is back in view now because…") as relevance-change-anchored and confirms it differs structurally from the retrieval and orientation explanation shapes.
+  Verify: `rg -n "Explanation shape|back in view now|relevance-change-anchored|not in a query|not in a situational frame" docs/FINDING_AND_REORIENTING/DEFINE_RESURFACING_CAPABILITY_CONTRACT.md`.
 - [ ] The contract explicitly rejects two collapses: resurfacing-as-better-ranking and resurfacing-as-retrieval-with-a-timer.
+  Verify: `rg -n "better ranking|retrieval-with-a-timer|Ranking is a mechanism|not reducible|not retrieval" docs/FINDING_AND_REORIENTING/DEFINE_RESURFACING_CAPABILITY_CONTRACT.md`.
 - [ ] The contract cites Finding 2 in `docs/plans/V60_ARCHITECTURE_TARGET.md` as the cautionary tale for storing attentional overlays, without attempting to fix Finding 2.
+  Verify: `rg -n "Finding 2|cautionary tale|fix Finding 2|Fixing Finding 2" docs/FINDING_AND_REORIENTING/DEFINE_RESURFACING_CAPABILITY_CONTRACT.md`.
 - [ ] The contract does not propose any code change or any durable storage of salience or surfacing decisions.
+  Verify: `git diff --name-only` contains only `docs/FINDING_AND_REORIENTING/DEFINE_RESURFACING_CAPABILITY_CONTRACT.md`, and doc review finds no runtime/schema/code instruction.
 - [ ] The contract cites Pillar 7, Pillar 7A, and Delta 7 of `docs/plans/V60_ARCHITECTURE_TARGET.md`.
+  Verify: `rg -n "Pillar 7|Pillar 7A|Delta 7|retrieval, orientation, and resurfacing|capabilities|capability model" docs/FINDING_AND_REORIENTING/DEFINE_RESURFACING_CAPABILITY_CONTRACT.md`.
 
 ## How to Verify (Pre-Merge)
 
