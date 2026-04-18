@@ -165,9 +165,19 @@ def _write_proposals_to_panel(markdown: str, proposed_labels: list[tuple[str, st
         return markdown
 
     lines = markdown.splitlines()
+    parsed = parse_panel(markdown)
+    existing_ids = {action.action_id for action in parsed.actions if action.action_id}
+    existing_labels = {action.text.strip() for action in parsed.actions if action.text.strip()}
     proposal_lines = []
     for action_id, label in proposed_labels:
-        proposal_lines.append(f"- [ ] {label} <!--ai:id={stable_action_id(label)}-->")
+        label_text = label.strip()
+        stable_id = stable_action_id(label_text)
+        if stable_id in existing_ids or label_text in existing_labels:
+            continue
+        proposal_lines.append(f"- [ ] {label_text} <!--ai:id={stable_id}-->")
+
+    if not proposal_lines:
+        return markdown
 
     # Find the last panel block (by looking for start/end fences from end to start).
     # This handles multiple panels by choosing the last one.
