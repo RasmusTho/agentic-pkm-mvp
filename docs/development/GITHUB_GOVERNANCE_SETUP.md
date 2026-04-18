@@ -100,6 +100,7 @@ Docs authoring is the separate PR lane for docs-only changes that evolve or clar
 Approved docs-authoring surfaces:
 
 - `docs/**`
+- `README.md`
 - `AGENTS.md`
 - `CLAUDE.md`
 - `.codex/AGENTS.md`

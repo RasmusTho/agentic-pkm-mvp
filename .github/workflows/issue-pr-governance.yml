@@ -99,6 +99,7 @@ jobs:
               return;
             }
             const docsAllowedExact = new Set([
+              "README.md",
               "AGENTS.md",
               "CLAUDE.md",
               ".codex/AGENTS.md",

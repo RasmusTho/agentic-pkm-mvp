@@ -85,6 +85,7 @@ Use this lane only when:
 
 - changed files stay inside approved docs-authoring surfaces:
   - `docs/**`
+  - `README.md`
   - `AGENTS.md`
   - `CLAUDE.md`
   - `.codex/AGENTS.md`
