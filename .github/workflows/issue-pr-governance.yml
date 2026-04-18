@@ -99,6 +99,7 @@ jobs:
               return;
             }
             const docsAllowedExact = new Set([
+              "README.md",
               "AGENTS.md",
               "CLAUDE.md",
               ".codex/AGENTS.md",
@@ -111,6 +112,7 @@ jobs:
               ".github/ISSUE_TEMPLATE/",
             ];
             const governanceAllowedExact = new Set([
+              "README.md",
               "AGENTS.md",
               "CLAUDE.md",
               ".codex/AGENTS.md",

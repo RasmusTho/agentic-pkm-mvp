@@ -20,6 +20,7 @@ Use this skill when the task is a docs-only change that evolves or clarifies aut
 - the PR is docs-only
 - changed files stay inside approved docs-authoring surfaces:
   - `docs/**`
+  - `README.md`
   - `AGENTS.md`
   - `CLAUDE.md`
   - `.codex/AGENTS.md`
