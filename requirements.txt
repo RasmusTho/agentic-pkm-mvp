@@ -14,7 +14,7 @@ httpcore==1.0.9
 httptools==0.7.1
 httpx==0.27.2
 faster-whisper==1.0.3
-yt-dlp==2024.8.6
+yt-dlp==2026.3.17
 rank-bm25==0.2.2
 numpy==1.26.4
 tqdm==4.66.4
