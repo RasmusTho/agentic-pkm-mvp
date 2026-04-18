@@ -17,6 +17,7 @@ from typing import Any
 
 GOVERNANCE_PATH = Path(".github/github-governance.yml")
 DEFAULT_PROJECT_NAME = "Agent Delivery Control Plane"
+PROJECT_ITEM_LIST_INITIAL_LIMIT = 200
 
 
 def run_gh(*args: str) -> str:
@@ -71,20 +72,31 @@ def get_status_field(owner: str, project_number: int) -> tuple[str, dict[str, st
 
 
 def list_project_items(owner: str, project_number: int) -> list[dict[str, Any]]:
-    payload = json.loads(
-        run_gh(
-            "project",
-            "item-list",
-            str(project_number),
-            "--owner",
-            owner,
-            "--limit",
-            "200",
-            "--format",
-            "json",
+    limit = PROJECT_ITEM_LIST_INITIAL_LIMIT
+    while True:
+        payload = json.loads(
+            run_gh(
+                "project",
+                "item-list",
+                str(project_number),
+                "--owner",
+                owner,
+                "--limit",
+                str(limit),
+                "--format",
+                "json",
+            )
         )
-    )
-    return payload.get("items", [])
+        items = payload.get("items", [])
+        total_count = payload.get("totalCount")
+        if not isinstance(total_count, int) or len(items) >= total_count:
+            return items
+        if total_count <= limit:
+            raise RuntimeError(
+                "Project item-list returned"
+                f" {len(items)} of {total_count} item(s) with limit {limit}"
+            )
+        limit = total_count
 
 
 def find_item_by_number(items: list[dict[str, Any]], kind: str, number: int) -> dict[str, Any] | None:
