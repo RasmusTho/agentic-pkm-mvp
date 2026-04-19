@@ -37,7 +37,7 @@ That note is the receipt. If it's absent on a closed implementation issue, the l
 
 ## The single invocation hook
 
-`verification-validation-feedback` already runs at merge time. It gains one step at the end: invoke the `post-merge-owner-doc` agent on the just-merged PR.
+`verification-and-closure` already runs at merge time. It gains one step at the end: invoke the `post-merge-owner-doc` agent on the just-merged PR.
 
 That is the entire workflow change.
 
@@ -51,7 +51,7 @@ That is the entire workflow change.
 ## What gets built
 
 1. A new skill at `.codex/skills/post-merge-owner-doc/SKILL.md` describing the agent's job and judgment rules.
-2. A one-paragraph addition to `.codex/skills/verification-validation-feedback/SKILL.md` that invokes it at the end of the merge step.
+2. A one-paragraph addition to `.codex/skills/verification-and-closure/SKILL.md` that invokes it at the end of the merge step.
 3. Nothing else.
 
 ## Acceptance
@@ -62,6 +62,6 @@ That is the entire workflow change.
 
 ## Related Documents
 
-- `.codex/skills/verification-validation-feedback/SKILL.md`
+- `.codex/skills/verification-and-closure/SKILL.md`
 - `.codex/skills/docs-authoring/SKILL.md` (the agent routes owner-doc PR authoring through this)
 - `AGENTS.md`

@@ -210,6 +210,11 @@ Governance lane:
 - mark `Governance lane`
 - confirm the change stays within approved governance surfaces
 
+
+## Capturing learning
+
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+
 ## Output format
 
 1. Publication Inputs

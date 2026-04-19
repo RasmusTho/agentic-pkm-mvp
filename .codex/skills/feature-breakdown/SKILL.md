@@ -142,7 +142,7 @@ Trigger this skill when any of the following are true:
 - the most local owner docs named by the source material
 - `.codex/skills/docs-to-issue/SKILL.md`
 - `.codex/skills/issue-to-code/SKILL.md`
-- `.codex/skills/verification-validation-feedback/SKILL.md`
+- `.codex/skills/verification-and-closure/SKILL.md`
 
 ## Authority order
 
@@ -248,7 +248,12 @@ Recommended habit:
 - Use `docs-to-issue` when one docs item can become one bounded implementation issue directly.
 - Use `feature-breakdown` when one docs item should become a specification directory plus implementation tasks.
 - Use `issue-to-code` only on ready GitHub issues created from task specifications, not on the parent feature issue.
-- Use `verification-validation-feedback` to verify task delivery, then validate the parent capability and decide whether owner-doc promotion is warranted.
+- Use `verification-and-closure` to verify task delivery, then validate the parent capability and decide whether owner-doc promotion is warranted.
+
+
+## Capturing learning
+
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
 
 ## Output format
 

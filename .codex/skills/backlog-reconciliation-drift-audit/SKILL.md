@@ -86,6 +86,11 @@ For each drift case, recommend one concrete corrective action only:
 - Treat Project `Status` as the primary lifecycle signal.
 - Treat `agent:ready` as the pickup qualifier for `Status=Ready`, not as a substitute for `In Progress`, `Review`, or `Done`.
 
+
+## Capturing learning
+
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+
 ## Output format
 
 1. Drift Findings

@@ -2,7 +2,7 @@
 
 ## Problem
 
-The `verification-validation-feedback` skill closes issues and updates project state but does not feed signal back into upstream artifacts. Every delivery is amnesiac: contract defects, process friction, and agent-behavior surprises die in the PR and never improve the system.
+The `verification-and-closure` skill closes issues and updates project state but does not feed signal back into upstream artifacts. Every delivery is amnesiac: contract defects, process friction, and agent-behavior surprises die in the PR and never improve the system.
 
 The loop must be pipeline-wide, not owned by verification alone. Any skill that encounters a divergence from plan holds signal worth capturing.
 
@@ -84,6 +84,8 @@ A distinct work-stream on the Project board for changes to delivery-system artif
 - Verification skill treats `lane:governance` issues with relaxed behavioral-AC rules — non-behavioral `Verify:` targets (adoption evidence, doc presence) are the norm
 
 ### 5. "Applies learning" slot in task-contract template
+
+The task-contract template is defined in `.codex/skills/docs-to-issue/SKILL.md` (the "Issue body must contain exactly these sections" list). Agents creating new Issues from docs must follow that template.
 
 Optional section at the bottom of every slice issue:
 

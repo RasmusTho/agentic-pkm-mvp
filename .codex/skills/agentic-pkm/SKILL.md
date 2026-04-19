@@ -39,3 +39,7 @@ description: "Dev-time work in the agentic-pkm-mvp repo (Agentic PKM / Yggdrasil
 - Install: `python -m pip install -e .`
 - Tests: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`
 - Alpha runtime: `make alpha-up` then `python -m scripts.alpha_e2e`
+
+## Capturing learning
+
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.

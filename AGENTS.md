@@ -35,7 +35,11 @@ Repo-local workflow helpers live under `.codex/skills/`. They do not replace thi
 - PR mergeability / CI attachment before verification:
   `.codex/skills/pr-integration/SKILL.md`
 - Delivery verification and feedback-loop closure:
-  `.codex/skills/verification-validation-feedback/SKILL.md`
+  `.codex/skills/verification-and-closure/SKILL.md`
+- Log a divergence from plan during delivery:
+  `.codex/skills/capture-learning/SKILL.md`
+- Retrospective over divergence log to improve upstream artifacts:
+  `.codex/skills/learning-retrospective/SKILL.md`
 
 For GitHub implementation work, loading `.codex/skills/issue-to-code/SKILL.md` is mandatory before coding.
 That skill owns the pickup rule:
@@ -79,13 +83,19 @@ For longer explanations, maintenance rules, and compatibility-file policy, use t
 
 Bounded repository-governance changes may use the explicit governance PR lane without a governing GitHub Issue.
 
-Use this lane for:
+The governance lane is a distinct work-stream for changes to delivery-system artifacts: skills, `AGENTS.md`, templates, and conventions. It is labeled `lane:governance` on Issues and PRs and has a filter view on the Project board.
+
+Target artifacts:
 
 - repo-local skills under `.codex/skills/**`
 - pull request / issue governance surfaces under `.github/**`
 - lightweight enforcement for docs/governance workflows such as `scripts/docs_guard.py`
 - focused governance tests such as `tests/architecture/test_agent_skill_entrypoints.py`
 - companion governance docs under `docs/**`
+
+Governance specs live under `docs/development/`.
+
+Acceptance shape: adoption evidence, not behavioral tests. Typical `Verify:` targets are doc presence, label existence, or observed adoption across the next N deliveries — not test-suite assertions.
 
 Rules:
 

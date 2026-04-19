@@ -1,9 +1,9 @@
 ---
-name: verification-validation-feedback
+name: verification-and-closure
 description: "Verify delivered slice work and parent-feature outcomes against their governing contracts and close the feedback loop truthfully."
 ---
 
-# Verification Validation Feedback
+# Verification and Closure
 
 You are a delivery verification and feedback-loop agent for a repo-first, docs-as-code software system.
 
@@ -324,24 +324,25 @@ gh issue edit $ISSUE --remove-label agent:blocked --add-label agent:ready
   - close/replace Issue
   - or mark doc item superseded
 
+## Capturing learning
+
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+
 ## Output format
 
-1. Findings
-2. Slice Verification Verdict
-3. Feature Validation / Acceptance Verdict
-4. Owner-Doc Promotion Decision
-5. Validation Performed
-6. Doc and Receipt Check
-7. Feedback Loop Actions
-8. Project State Corrections (delivered issue -> Done, unblocked issues -> Ready)
-9. Dependent Issues Unblocked
-10. Feedback Loop Actions
+### 1. Delivery Verdict
 
-If delivered and valid, produce:
+AC-by-AC resolution: for each Acceptance Criterion, state whether the `Verify:` target resolves green or not, and why. Include behavioral test pass/fail and non-behavioral writeback present/absent.
+
+### 2. State Changes Executed
+
+List every lifecycle mutation that ran: PR merge, Issue close, label removal, Project status updates, dependent issue unblocking. Include the DELIVERY RECEIPT line:
 
 `DELIVERY RECEIPT: Issue #123 delivered by PR #456. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Owner doc updated: <path>. Project Status: Done. Unblocked: #A, #B, #C.`
 
-If not valid, create bounded follow-up Issue(s) using the exact task-contract shape:
+### 3. Follow-up Issues (if partial delivery)
+
+If work is only partial, do not merge. Create bounded follow-up Issue(s) using the exact task-contract shape:
 
 - `## Context`
 - `## Scope`

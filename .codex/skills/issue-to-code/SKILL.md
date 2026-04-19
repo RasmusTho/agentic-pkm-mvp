@@ -247,6 +247,11 @@ Before handing off to `publish-pr`, confirm:
 - docs were updated in the same change when needed
 - owner docs and roadmap/plan wording were updated when the work became shipped reality
 
+
+## Capturing learning
+
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+
 ## Output format
 
 1. Selected Issue and Selection Rationale

@@ -42,3 +42,7 @@ Use this skill when the task is a docs-only change that evolves or clarifies aut
 
 - Treat this skill as a routing guide, not a second policy surface.
 - Point back to the governing repo docs rather than re-explaining them in detail.
+
+## Capturing learning
+
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.

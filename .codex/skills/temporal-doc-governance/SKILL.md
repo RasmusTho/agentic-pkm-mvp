@@ -82,3 +82,7 @@ When updating, also report:
 1. Which claims were rewritten
 2. Which metadata fields were refreshed
 3. Which items remain intentionally unverified
+
+## Capturing learning
+
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.

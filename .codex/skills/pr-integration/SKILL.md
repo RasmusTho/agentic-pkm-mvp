@@ -368,7 +368,7 @@ echo "New PR head SHA: $NEW_HEAD"
   - move to `Review` only when review handoff is explicit (normally after review requested)
 - Do not mark lifecycle `Done` in this stage.
 - Do not close the governing Issue in this stage.
-- **Do not merge the PR in this stage.** Merge is owned by verification-validation-feedback after delivery contract verification.
+- **Do not merge the PR in this stage.** Merge is owned by verification-and-closure after delivery contract verification.
 
 ## Handoff Decision (Executable)
 
@@ -394,7 +394,7 @@ gh pr view <PR_NUMBER> --json reviews | jq '.[].state' | grep -iE "request_chang
 **Handoff:**
 ```bash
 echo "HANDOFF DECISION: ready-for-verification"
-echo "Execute: .codex/skills/verification-validation-feedback/SKILL.md"
+echo "Execute: .codex/skills/verification-and-closure/SKILL.md"
 ```
 
 ### Outcome 2: ❌ `blocked-merge-conflict`
@@ -455,3 +455,7 @@ echo "Route back to: Issue maintenance or implementer for resolution"
 4. CI Attachment and Status (✅ attached + results or ❌ missing/timeout)
 5. Review Comment Assessment (✅ none/addressed or ❌ blocking comments)
 6. **Explicit Handoff Decision** (one of the 5 outcomes above)
+
+## Capturing learning
+
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
