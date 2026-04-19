@@ -144,6 +144,8 @@ When all merge prerequisites are met:
    gh pr view #<PR> --json state,projectItems
    ```
 
+9. **Invoke `post-merge-owner-doc`** on the merged PR. It reads the diff and either opens a docs-only PR, files one bounded follow-up issue, or leaves an explicit "no owner-doc change implied" receipt comment on the closed issue. This is the only owner-doc promotion step; do not duplicate its judgment here. If the skill does not leave a receipt comment on the closed issue, verification is not complete.
+
 ### When NOT to merge
 
 - Any acceptance criterion is not met → create follow-up Issue instead.

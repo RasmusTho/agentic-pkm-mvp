@@ -31,13 +31,15 @@ These skills are workflow helpers, not replacements for the canonical builder-ag
   - run after `publish-pr` and before verification to make the PR mergeable and CI-attached
 - `verification-validation-feedback`
   - final verification, merge, and delivery-state closure after implementation / PR work
+- `post-merge-owner-doc`
+  - invoked by `verification-validation-feedback` at merge time; reads the diff and decides whether any owner doc needs promotion, then acts on it
 - `backlog-reconciliation-drift-audit`
   - backlog and GitHub-state reconciliation support when doc/backlog drift is the main problem
 
 ## Connected execution paths
 
 - Implementation path:
-  `agentic-pkm -> issue-to-code -> publish-pr -> pr-integration -> verification-validation-feedback`
+  `agentic-pkm -> issue-to-code -> publish-pr -> pr-integration -> verification-validation-feedback -> post-merge-owner-doc`
 - Drift-correction path:
   `issue-maintenance-change-control -> issue-to-code` when the Issue becomes executable again
 - Docs backlog path:

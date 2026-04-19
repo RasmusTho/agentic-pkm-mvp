@@ -1,8 +1,8 @@
-State: Plan (bounded v5.6-style enablement slice; not current runtime truth and not full v6 commitment realization).
-Doc role: Plan
-Authority: Defines the narrowest acceptable first commitment-runtime slice for forward-line enablement work. It does not override `docs/ARCHITECTURE.md` for current runtime truth, `docs/STATUS.md` for operational posture, or `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md` for semantic ownership.
-Owner: Forward-line architecture planning, downstream of `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md` and `docs/HUMAN-FLOWS.md`
-Last reviewed: 2026-03-22
+State: Historical precursor. Absorbed into v6.0 Priority 5 (see `docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md`). The v6.0 commitment capability in `docs/COMMITMENT_AS_FIRST_CLASS/` is the active SoT; this document is retained for its non-collapse guardrails and scope framing, not as a live enablement slice.
+Doc role: Historical plan snapshot
+Authority: None over current forward-line work. Semantic authority for commitments belongs to `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md` and the v6.0 capability spec at `docs/COMMITMENT_AS_FIRST_CLASS/README.md`. This doc's guardrails (below) remain useful as non-collapse constraints the v6.0 capability must continue to honor.
+Owner: Archived under forward-line architecture planning
+Last reviewed: 2026-04-18
 
 # v5.6 Commitment Runtime Slice
 
