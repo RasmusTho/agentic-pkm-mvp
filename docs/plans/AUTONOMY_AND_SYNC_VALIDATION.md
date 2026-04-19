@@ -1,12 +1,12 @@
-State: Plan
+State: Delivered
 Doc role: Plan
 Authority: Docs-first capability plan for low-risk autonomy posture and automated multi-device sync/latency validation.
 Owner: Runtime / interaction automation
 Temporal class: strategic
-Review cadence: weekly
+Review cadence: on delivery or regression
 Source of truth: mixed
-Last reviewed: 2026-04-07
-Last verified against: docs/HUMAN-FLOWS.md, docs/PANEL_AGENT.md, docs/STATUS.md, docs/ENVIRONMENTS.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, current repo state on 2026-04-07
+Last reviewed: 2026-04-19
+Last verified against: docs/HUMAN-FLOWS.md, docs/PANEL_AGENT.md, docs/STATUS.md, docs/ENVIRONMENTS.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, current repo state on 2026-04-19
 # Low-Risk Autonomy And Sync Validation
 
 ## Purpose
@@ -36,6 +36,15 @@ This plan does not:
 - relax current write-safety, provenance, or idempotency requirements for risky mutations
 - define a universal risk taxonomy for every future tool/action surface
 - replace the existing local test bootstrap plan or the real-vault acceptance work for PanelAgent
+
+## Delivery receipt
+
+Delivered and closed 2026-04-13 to 2026-04-18.
+
+- **#355** — parent feature closed COMPLETED 2026-04-13; policy/contract, panel proposal, sync trace, and multi-device harness slices delivered.
+- **#380** — real-device sync validation run executed and acceptance receipt attached 2026-04-18; end-to-end iCloud propagation and watcher/runtime reaction latency verified against the acceptance criteria.
+
+The capability anchors below describe the architecture as shipped. Forward-looking language in this document refers to the design intent that was implemented, not to pending work.
 
 ## Working interpretation
 
@@ -105,27 +114,15 @@ that can answer:
 The initial evidence surface may be CLI or machine-readable logs; a richer dashboard is optional
 follow-up work.
 
-## Recommended feature breakdown
+## Feature breakdown (as executed)
 
-This capability should not be executed as one flat issue. Use one parent feature issue plus child
-slices.
+Delivered as one parent feature issue (#355) plus child slices:
 
-Parent feature:
-
-- low-risk autonomy and automated sync validation
-
-Suggested child slices in dependency order:
-
-1. policy/contract slice
-   - encode the low-risk versus artifact-risk guardrail boundary in the owning docs and status surfaces
-2. panel proposal slice
-   - expand or harden AI-panel proposal writeback for low-risk suggestion flows
-3. sync trace slice
-   - capture machine-readable timestamps across watcher/runtime stages for changed notes
-4. multi-device harness slice
-   - provide an automated test/harness for real sync-chain latency runs against the supported test flow
-5. acceptance/evidence slice
-   - run repeated multi-device trials and attach latency evidence to the parent feature issue
+1. policy/contract slice — low-risk versus artifact-risk guardrail boundary encoded in owning docs and status surfaces
+2. panel proposal slice — AI-panel proposal writeback hardened for low-risk suggestion flows
+3. sync trace slice — machine-readable timestamps captured across watcher/runtime stages for changed notes
+4. multi-device harness slice — automated test/harness for real sync-chain latency runs
+5. acceptance/evidence slice — repeated multi-device trials run; latency evidence attached to #355 via #380
 
 ## Verification path
 
@@ -136,16 +133,14 @@ Slice-level verification should stay bounded:
 - sync trace slice: regression coverage for emitted timestamps / structured summaries
 - multi-device harness slice: scripted run that emits machine-readable latency results without manual timing
 
-## Validation / acceptance path
+## Validation / acceptance path (met)
 
-The parent feature should remain open after early slices merge.
+Parent feature #355 accepted and closed 2026-04-13. Acceptance criteria met:
 
-Acceptance requires:
-
-- a documented low-risk autonomy posture that matches owner docs and current runtime claims
-- a runnable automated sync/latency harness against the supported test path
-- repeated end-to-end evidence from a real multi-device chain, including iCloud-backed propagation when applicable
-- owner-doc promotion only after the repo can truthfully claim the automated validation path as supported
+- documented low-risk autonomy posture matches owner docs and current runtime claims
+- runnable automated sync/latency harness delivered against the supported test path
+- repeated end-to-end evidence from a real multi-device chain attached via #380 (iCloud-backed propagation included)
+- owner-doc promotion completed with this update
 
 ## Relationship to existing docs
 
