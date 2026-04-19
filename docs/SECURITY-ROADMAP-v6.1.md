@@ -5,8 +5,8 @@ Owner: Security / dependency maintenance
 Temporal class: snapshot
 Review cadence: ad hoc
 Source of truth: external source
-Last reviewed: 2026-04-08
-Last verified against: Dependabot alert snapshot summarized on 2026-04-07
+Last reviewed: 2026-04-18
+Last verified against: Issue #374 audit on 2026-04-18; GitHub Advisory GHSA-v34v-rq6j-cj6p
 
 # Security Vulnerabilities Roadmap - v6.1
 
@@ -64,7 +64,8 @@ Last verified against: Dependabot alert snapshot summarized on 2026-04-07
 - **Risk:** SQL injection via metadata filter key in list method
 - **Single-User Impact:** MEDIUM - only if you use SQLite checkpointer with untrusted metadata keys
 - **Context:** Specific to checkpoint feature; check if actively used
-- **Action:** Create GitHub issue; assess actual usage
+- **Audit result:** Issue #374 found active repo usage only in `langgraph.checkpoint.sqlite.SqliteSaver`; no `langgraph.store.sqlite.SqliteStore` metadata-filter path exists in the current codebase.
+- **Action:** Keep the current `langgraph-checkpoint-sqlite==3.0.3` pin, which is newer than the advisory's patched `2.0.11` release, and revisit only if `SqliteStore` with untrusted metadata keys is introduced.
 
 ### #11: yt-dlp Command Injection (HIGH)
 - **Package:** yt-dlp
@@ -132,13 +133,13 @@ Last verified against: Dependabot alert snapshot summarized on 2026-04-07
 3. **Create issue:** Starlette #1 - Range header DoS
 4. **Create issue:** LangChain #16 + #3 - path traversal & template injection
 5. **Audit:** yt-dlp usage - verify `--netrc-cmd` is not used; if not, low priority
-6. **Assess:** LangGraph SQLite #6 - check if checkpoint feature is active
+6. **Assess:** LangGraph SQLite #6 - audit complete in Issue #374; no vulnerable `SqliteStore` metadata-filter path found in the current repo.
 
 ### v6.1 Roadmap (This Sprint)
 - Fix #7, #8/#4/#5, #1 (all upstream-dependent)
 - Fix #16, #3 as part of broader LangChain upgrade
 - Audit yt-dlp; fix #11 if applicable
-- Assess and fix #6 if SQLite checkpoints are used
+- #6 audited in Issue #374; keep the patched-or-newer checkpoint pin unless a `SqliteStore` metadata-filter path is added later.
 
 ### v6.2 Roadmap (Next Sprint)
 - #14, #12, #13 (LangGraph/orjson) - monitor patches
@@ -157,3 +158,4 @@ Last verified against: Dependabot alert snapshot summarized on 2026-04-07
 - See GitHub Issues (created separately) for implementation tasks
 - Use labels: `security`, `vulnerability`, `dependencies`
 - Link back to Dependabot alerts in each issue
+- Issue #374 / Dependabot alert #6: audited; current code uses `SqliteSaver` only, the vulnerable `SqliteStore` metadata-filter path is absent, and the repo pin is `langgraph-checkpoint-sqlite==3.0.3` (patched-or-newer relative to `2.0.11`).
