@@ -39,11 +39,11 @@ Last verified against: Issue #374 audit on 2026-04-18; GitHub Advisory GHSA-v34v
 - **Context:** All three are decompression-related; bundled fix in single urllib3 upgrade
 - **Action:** Create GitHub issue; upgrade urllib3 to latest patched version
 
-### #1: Starlette O(n²) DoS via Range Header (HIGH)
+### #1: Starlette O(n²) DoS via Range Header (HIGH) — REMEDIATED
 - **Package:** starlette
 - **Risk:** DoS via malicious Range header merging in FileResponse
 - **Single-User Impact:** MEDIUM - affects your FastAPI app if it serves files or uses Range requests
-- **Action:** Create GitHub issue; upgrade starlette to patch version
+- **Resolution:** Upgraded starlette 0.48.0 → 0.49.1 and fastapi 0.119.0 → 0.121.0. Closes Dependabot alert #1.
 
 ### #16: LangChain Path Traversal (HIGH)
 - **Package:** langchain-core
