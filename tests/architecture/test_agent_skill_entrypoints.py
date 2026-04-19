@@ -36,7 +36,7 @@ def test_repo_skill_index_describes_connected_workflow_paths() -> None:
         "publish-pr",
         "issue-maintenance-change-control",
         "pr-integration",
-        "verification-validation-feedback",
+        "verification-and-closure",
     ):
         assert name in text
-    assert "agentic-pkm -> issue-to-code -> publish-pr -> pr-integration -> verification-validation-feedback" in text
+    assert "agentic-pkm -> issue-to-code -> publish-pr -> pr-integration -> verification-and-closure" in text
