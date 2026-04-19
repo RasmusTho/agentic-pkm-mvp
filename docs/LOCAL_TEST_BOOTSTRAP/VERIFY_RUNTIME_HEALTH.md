@@ -124,8 +124,8 @@ kill %1 2>/dev/null || true
 
 ## Related GitHub Issues
 
-When implementing, create GitHub issue(s) referencing this spec: "Implements LOCAL_TEST_BOOTSTRAP/VERIFY_RUNTIME_HEALTH". Use the acceptance criteria above as the issue contract. Blocked by: START_FULL_SYSTEM.
+Delivered by Issue #334 / PR #365. Use the acceptance criteria above as the delivery contract when auditing or extending this slice.
 
 ---
 
-**Status:** Specification ready. Blocked on START_FULL_SYSTEM.
+**Status:** Delivered via PR #365 (2026-04-07); keep follow-up changes in bounded issues.
