@@ -356,9 +356,7 @@ Per `.codex/skills/README.md`, route each priority as follows:
    issues are then created from the task files in dependency order. This plan contributes
    sequencing and dependency constraints across capabilities; it does not override the task shape
    inside any capability.
-3. **Priority 2a** routes through `docs-to-issue` as a single bounded Issue. It is a
-   `current-state correction` per `AGENTS.md`; Source Anchor points to
-   `docs/plans/V60_ARCHITECTURE_TARGET.md` Finding 1, not to this plan.
+3. **Priority 2a** (DELIVERED) requires no further issue creation. It is documented here for traceability only.
 4. **Priority 2b** routes through `feature-breakdown` first (no capability directory exists
    yet), producing `docs/{capability_name}/` with README, task files, and
    `PARENT_FEATURE_ISSUE.md`. Then parent issue creation proceeds as in point 2. Capability naming
