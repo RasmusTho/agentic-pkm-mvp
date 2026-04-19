@@ -203,7 +203,7 @@ Enforcement surfaces:
 - Creation: `docs-to-issue`, `feature-breakdown`, and `bug-to-issue` must produce ACs with `Verify:` lines.
 - Repair: `issue-maintenance-change-control` treats missing `Verify:` as malformed contract shape.
 - Consumption: `issue-to-code` gates on `Verify:` presence and implements test-first for behavioral ACs, writeback-first for non-behavioral ACs.
-- Closure: `verification-validation-feedback` resolves every AC's `Verify:` target and blocks merge if any behavioral test is missing, skipped, or xfailed.
+- Closure: `verification-and-closure` resolves every AC's `Verify:` target and blocks merge if any behavioral test is missing, skipped, or xfailed.
 
 The builder-agent effect: test-first discipline emerges automatically for behavioral work — the failing test is the AC's declared proof, so the agent writes or confirms it before code, then implements the smallest change to turn it green.
 

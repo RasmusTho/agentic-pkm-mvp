@@ -50,3 +50,7 @@ Set `agent:ready` when all are true:
 Force `agent:needs-human` when:
 - It is a Core Runtime ↔ Agentic Lab boundary move without explicit direction and module paths.
 - The change would alter operator-facing defaults without explicit posture and validation plan.
+
+## Capturing learning
+
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.

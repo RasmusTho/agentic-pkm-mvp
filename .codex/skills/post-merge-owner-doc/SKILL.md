@@ -5,7 +5,7 @@ description: "After an implementation PR merges, read the diff and decide whethe
 
 # Post-Merge Owner Doc
 
-You are invoked at the end of `verification-validation-feedback`, after a PR has merged. Your job is one question: **did this merge change something an owner doc currently claims?**
+You are invoked at the end of `verification-and-closure`, after a PR has merged. Your job is one question: **did this merge change something an owner doc currently claims?**
 
 You act on the answer. You do not ask the user to classify, attest, or unblock.
 
@@ -79,6 +79,11 @@ When invoked against a batch of recent closed issues (not a single just-merged P
 - Do not edit owner docs in-place as part of this skill; always route through a docs-only PR.
 - Do not touch plan docs, spec directories, or target-state docs.
 - Do not block anything. Your only outputs are: a docs PR, a follow-up issue, or a receipt comment.
+
+
+## Capturing learning
+
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
 
 ## Output format
 

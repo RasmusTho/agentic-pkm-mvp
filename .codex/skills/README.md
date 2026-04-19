@@ -29,17 +29,21 @@ These skills are workflow helpers, not replacements for the canonical builder-ag
   - publication boundary for branch, commit, push, and PR creation after local work is ready
 - `pr-integration`
   - run after `publish-pr` and before verification to make the PR mergeable and CI-attached
-- `verification-validation-feedback`
+- `verification-and-closure`
   - final verification, merge, and delivery-state closure after implementation / PR work
 - `post-merge-owner-doc`
-  - invoked by `verification-validation-feedback` at merge time; reads the diff and decides whether any owner doc needs promotion, then acts on it
+  - invoked by `verification-and-closure` at merge time; reads the diff and decides whether any owner doc needs promotion, then acts on it
 - `backlog-reconciliation-drift-audit`
   - backlog and GitHub-state reconciliation support when doc/backlog drift is the main problem
+- `capture-learning`
+  - micro-skill: append one structured divergence entry to `docs/learning-log.md` when a plan divergence occurs; invoke on divergence, not on normal work
+- `learning-retrospective`
+  - cadence-triggered: read `docs/learning-log.md` since last retro marker, cluster by upstream artifact, propose concrete edits for human review, append retro marker after human response
 
 ## Connected execution paths
 
 - Implementation path:
-  `agentic-pkm -> issue-to-code -> publish-pr -> pr-integration -> verification-validation-feedback -> post-merge-owner-doc`
+  `agentic-pkm -> issue-to-code -> publish-pr -> pr-integration -> verification-and-closure -> post-merge-owner-doc`
 - Drift-correction path:
   `issue-maintenance-change-control -> issue-to-code` when the Issue becomes executable again
 - Docs backlog path:
@@ -58,4 +62,4 @@ The invariant is enforced across the chain:
 - Creation: `docs-to-issue`, `feature-breakdown`, `bug-to-issue` produce `Verify:`-bearing ACs.
 - Repair: `issue-maintenance-change-control` treats missing `Verify:` as malformed contract.
 - Consumption: `issue-to-code` gates on `Verify:` presence and runs test-first for behavioral ACs.
-- Closure: `verification-validation-feedback` resolves every `Verify:` target before merge.
+- Closure: `verification-and-closure` resolves every `Verify:` target before merge.

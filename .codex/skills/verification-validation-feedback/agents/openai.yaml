@@ -1,4 +1,0 @@
-interface:
-  display_name: "Verification & Validation"
-  short_description: "Verify delivery against Issue contract, merge if accepted, close the loop"
-  default_prompt: "Use $verification-validation-feedback to verify the PR against the governing Issue contract. If all acceptance criteria pass, merge the PR, close the Issue, set Project Status to Done, and unblock dependent issues."
