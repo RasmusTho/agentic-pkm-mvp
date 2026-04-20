@@ -144,7 +144,13 @@ When all merge prerequisites are met:
    gh pr view #<PR> --json state,projectItems
    ```
 
-9. **Invoke `post-merge-owner-doc`** on the merged PR. It reads the diff and either opens a docs-only PR, files one bounded follow-up issue, or leaves an explicit "no owner-doc change implied" receipt comment on the closed issue. This is the only owner-doc promotion step; do not duplicate its judgment here. If the skill does not leave a receipt comment on the closed issue, verification is not complete.
+9. **Invoke `post-merge-owner-doc`** on the merged PR. It reads the diff and either opens a docs-only PR, files one bounded follow-up issue, or leaves an explicit "no owner-doc change implied" receipt comment on the closed issue. This is the only owner-doc promotion step; do not duplicate its judgment here.
+
+10. **Assert the receipt exists** before emitting `DELIVERY RECEIPT`. For each issue closed by the PR, run:
+    ```bash
+    gh issue view #<N> --json comments --jq '[.comments[].body | select(contains("post-merge owner-doc check"))] | length'
+    ```
+    If the result is `0`, the skill did not complete. Do not emit `DELIVERY RECEIPT` until the receipt comment is present on every closed issue (or on the PR itself if no issues were closed).
 
 ### When NOT to merge
 

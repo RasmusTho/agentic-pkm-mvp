@@ -22,6 +22,10 @@ For the merged PR, read:
 
 Then answer: does the diff change something those owner docs currently claim?
 
+## Receipt placement
+
+The receipt comment always goes on the **closed issue** that the PR fixes. If the PR closed multiple issues, post the receipt on each one. If the PR closed no issues (docs-only lane, governance lane), post the receipt as a **PR comment** instead — the PR is then the auditable artifact.
+
 ## Three outcomes
 
 **1. Yes, and the wording change is clear.**
