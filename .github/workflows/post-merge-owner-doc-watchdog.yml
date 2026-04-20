@@ -1,0 +1,83 @@
+name: Post-Merge Owner Doc Watchdog
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  check-receipt:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const prNumber = pr.number;
+            const prBody = pr.body || "";
+            const RECEIPT_MARKER = "post-merge owner-doc check";
+
+            // Resolve closed issues from the PR's closing references
+            const closingIssues = await github.paginate(
+              "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits",
+              { owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber }
+            ).catch(() => []);
+
+            // GraphQL gives us the closing issues directly
+            const { repository } = await github.graphql(`
+              query($owner: String!, $repo: String!, $pr: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $pr) {
+                    closingIssuesReferences(first: 25) {
+                      nodes { number }
+                    }
+                  }
+                }
+              }
+            `, { owner: context.repo.owner, repo: context.repo.repo, pr: prNumber });
+
+            const linkedIssues = repository.pullRequest.closingIssuesReferences.nodes.map(n => n.number);
+
+            const NUDGE = `post-merge owner-doc check: not yet run.\n\nInvoke \`$post-merge-owner-doc\` on PR #${prNumber} to complete the delivery feedback loop. Outcome will be one of: docs PR opened, follow-up issue filed, or this comment replaced with a no-change receipt.`;
+
+            if (linkedIssues.length === 0) {
+              // No linked issues — check the PR itself for a receipt comment
+              const prComments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+              });
+              const hasReceipt = prComments.some(c => c.body.includes(RECEIPT_MARKER));
+              if (!hasReceipt) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: NUDGE,
+                });
+              }
+              return;
+            }
+
+            // For each closed issue, check whether a receipt comment exists
+            for (const issueNumber of linkedIssues) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+              });
+              const hasReceipt = comments.some(c => c.body.includes(RECEIPT_MARKER));
+              if (!hasReceipt) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: NUDGE,
+                });
+              }
+            }

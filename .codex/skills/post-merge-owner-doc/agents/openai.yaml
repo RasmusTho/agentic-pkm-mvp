@@ -1,0 +1,4 @@
+interface:
+  display_name: "Post-Merge Owner Doc"
+  short_description: "After a PR merges, check whether any owner doc needs updating and act on it"
+  default_prompt: "Use $post-merge-owner-doc to read the merged PR diff, determine whether any owner doc is now wrong or outdated, and act: open a docs-only PR, file a bounded follow-up issue, or leave a no-change receipt comment on the closed issue."
