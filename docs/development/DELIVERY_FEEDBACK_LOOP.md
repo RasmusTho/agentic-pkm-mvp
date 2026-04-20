@@ -1,3 +1,13 @@
+State: Development governance reference for delivery learning capture and retrospective feedback.
+Doc role: Reference
+Authority: Defines the delivery feedback loop for builder-agent governance; does not override `AGENTS.md`, GitHub issue contracts, or runtime/system-agent docs.
+Owner: Builder-agent governance
+Temporal class: operational
+Review cadence: per retrospective
+Source of truth: mixed
+Last reviewed: 2026-04-20
+Last verified against: PR #523, PR #526, docs/learning-log.md, .codex/skills/capture-learning/SKILL.md, .codex/skills/learning-retrospective/SKILL.md, current repo state at 17eef96 on 2026-04-20
+
 # Delivery Feedback Loop
 
 ## Problem
