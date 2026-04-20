@@ -19,31 +19,32 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const prNumber = pr.number;
-            const prBody = pr.body || "";
             const RECEIPT_MARKER = "post-merge owner-doc check";
+            const NUDGE_PREFIX = "post-merge owner-doc watchdog:";
 
-            // Resolve closed issues from the PR's closing references
-            const closingIssues = await github.paginate(
-              "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits",
-              { owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber }
-            ).catch(() => []);
-
-            // GraphQL gives us the closing issues directly
-            const { repository } = await github.graphql(`
-              query($owner: String!, $repo: String!, $pr: Int!) {
-                repository(owner: $owner, name: $repo) {
-                  pullRequest(number: $pr) {
-                    closingIssuesReferences(first: 25) {
-                      nodes { number }
+            // Paginate closingIssuesReferences until hasNextPage is false
+            let linkedIssues = [];
+            let cursor = null;
+            do {
+              const cursorArg = cursor ? `, after: "${cursor}"` : "";
+              const result = await github.graphql(`
+                query($owner: String!, $repo: String!, $pr: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $pr) {
+                      closingIssuesReferences(first: 100${cursorArg}) {
+                        nodes { number }
+                        pageInfo { hasNextPage endCursor }
+                      }
                     }
                   }
                 }
-              }
-            `, { owner: context.repo.owner, repo: context.repo.repo, pr: prNumber });
+              `, { owner: context.repo.owner, repo: context.repo.repo, pr: prNumber });
+              const conn = result.repository.pullRequest.closingIssuesReferences;
+              linkedIssues = linkedIssues.concat(conn.nodes.map(n => n.number));
+              cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+            } while (cursor !== null);
 
-            const linkedIssues = repository.pullRequest.closingIssuesReferences.nodes.map(n => n.number);
-
-            const NUDGE = `post-merge owner-doc check: not yet run.\n\nInvoke \`$post-merge-owner-doc\` on PR #${prNumber} to complete the delivery feedback loop. Outcome will be one of: docs PR opened, follow-up issue filed, or this comment replaced with a no-change receipt.`;
+            const NUDGE = `${NUDGE_PREFIX} check not yet run for PR #${prNumber}.\n\nInvoke \`$post-merge-owner-doc\` on PR #${prNumber} to complete the delivery feedback loop. The skill will leave a receipt comment (outcome 1: docs PR, outcome 2: follow-up issue, or outcome 3: no-change note).`;
 
             if (linkedIssues.length === 0) {
               // No linked issues — check the PR itself for a receipt comment
