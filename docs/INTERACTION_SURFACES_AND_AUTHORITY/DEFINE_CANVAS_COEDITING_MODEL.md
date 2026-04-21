@@ -82,7 +82,9 @@ The following mutations do **not** fall under co-authoring and must route throug
 - cross-note operations (edits to notes other than the currently-open one, multi-note synthesis that writes to other files),
 - note lifecycle transitions (creation of new notes, renames, moves between folders, deletions, archival),
 - promotions of maturity or commitment state,
-- operations against system-owned artifacts (companion notes, receipts, chat-session logs themselves).
+- operations against system-owned artifacts (companion notes, receipts, and explicit user-directed edits to prior session logs).
+
+**Carve-out:** Routine session-log appends during an active session (the system recording the current turn's prompts and change summaries) are co-authoring mechanics, not governance-bearing actions. They are append-only, scoped to the current open session, and authorized by the same user-presence signal as content co-authoring. The governance-bearing rule applies to user-directed or system-autonomous edits to closed session logs — not to the system's own ongoing session transcript.
 
 These are *the same actions Panel would take through its proposal flow*. Candidate A's decision — that Chat-originated governance-bearing mutations land their receipts in Panel's gated-execution pipeline locality — applies to this class.
 
