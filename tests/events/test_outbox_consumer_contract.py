@@ -174,6 +174,7 @@ def test_jsonl_audit_is_not_treated_as_worker_queue(
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://app:app@db:5432/app")
     monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setenv("WORKER_ENABLE", "1")
     monkeypatch.setattr(status_service, "INDEX_OUTBOX_PATH", outbox_path, raising=False)
     monkeypatch.setattr(status_service, "_count_outbox_pending_db", lambda: 7)
 

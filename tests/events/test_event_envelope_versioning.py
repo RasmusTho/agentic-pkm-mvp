@@ -40,7 +40,9 @@ def _assert_outbox_envelope(record: dict[str, object]) -> None:
     else:
         assert isinstance(source, str) and source, "source must be non-empty string"
     assert isinstance(record.get("payload"), dict), "payload must be a dict"
-    assert isinstance(record.get("meta"), dict), "meta must be a dict"
+    meta = record.get("meta")
+    assert isinstance(meta, dict), "meta must be a dict"
+    assert meta.get("version") == "1.0", "meta.version must be 1.0"
     _parse_ts(str(record.get("timestamp") or ""))
 
 
@@ -105,6 +107,19 @@ def test_representative_events_include_version_trace_and_idempotency_fields(tmp_
     with pytest.raises(AssertionError, match="trace_id"):
         _assert_versioned_envelope(missing_trace_id)
 
+    outbox_record = _outbox_record(
+        ORCHESTRATOR_STEP_STARTED,
+        source="orchestrator.runtime",
+        trace_id="trace-orchestrator",
+        payload={"plan_id": "plan-1", "step_id": "step-1"},
+    )
+    _assert_outbox_envelope(outbox_record)
+
+    missing_meta_version = dict(outbox_record)
+    missing_meta_version["meta"] = {}
+    with pytest.raises(AssertionError, match="meta.version"):
+        _assert_outbox_envelope(missing_meta_version)
+
 
 def test_existing_event_families_pass_envelope_lint(tmp_path: Path) -> None:
     records = [
@@ -140,4 +155,3 @@ def test_existing_event_families_pass_envelope_lint(tmp_path: Path) -> None:
             _assert_versioned_envelope(record)
         else:
             _assert_outbox_envelope(record)
-
