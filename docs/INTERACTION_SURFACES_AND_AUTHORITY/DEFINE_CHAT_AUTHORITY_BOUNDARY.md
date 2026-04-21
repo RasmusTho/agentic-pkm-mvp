@@ -104,6 +104,7 @@ Docs review:
 - Sibling: `NAME_THE_THREE_INTERACTION_SURFACES.md`
 - Sibling: `RECONCILE_CHAT_MUTATION_AUTHORITY.md`
 - Sibling: `STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md`
+- Sibling: `HYBRID_CHAT_INTEGRATION_SCHEMA.md`
 
 ## Related GitHub Issues
 
@@ -164,6 +165,8 @@ This extension does not loosen the gated-execution invariant. It recognizes that
 - How canvas-Chat integrates with existing Panel flows.
 
 These questions are deferred to later capability work. The co-editing posture and its artifact/provenance conventions are specified in `DEFINE_CANVAS_COEDITING_MODEL.md`.
+
+`HYBRID_CHAT_INTEGRATION_SCHEMA.md` names the later integration boundary: Chat may exchange intents, receipts, and session provenance with Panel-adjacent governed execution, but that integration does not make Chat a second Panel and does not make Panel the only authoritative intent source.
 
 ---
 
