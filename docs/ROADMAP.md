@@ -47,6 +47,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - Vault-as-GUI settings compiler (`@Settings` / System/Config) now covers panel-action catalogs, watcher settings, and outbox paths with CI schema checks (v5.6 track).
 - **Post-v5.6 follow-ups**
   - LangGraph rollout to additional agents (Promotion/Reviewer/Hygiene) in phases:
+    - Note-hygiene phased ReasoningFacade adoption is shipped via #543 as a facade-seam alignment slice; mutation authority and KnowledgePort write routing remain unchanged, and this does not claim a full Deep Agent/LangGraph baseline rollout.
     - Phase 1: single pilot agent behind a flag; AgentState + graph parity tests green.
     - Phase 2: two agents; planner/orchestrator integration stable; event/A2A contracts unchanged.
     - Phase 3: broader adoption; runtime metrics + rollback plan validated.
