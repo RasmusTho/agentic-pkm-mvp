@@ -443,6 +443,9 @@ This section describes the intended v6 direction. It does not override the locke
 - LangGraph is the current and planned control-plane mechanism for deterministic orchestration and explicit runtime state progression.
 - Deep Agents are a future cognition mechanism for planning, decomposition, and multi-step reasoning. They are introduced only after structural separation is in place.
 - The capability layer provides reusable functions such as retrieval, reranking, and context building. Capabilities are shared building blocks, not conceptual centers of the system.
+- Current retrieval capability extraction is bounded to a typed wrapper over the existing hybrid
+  search path. It carries optional provenance, relation, and view-freshness diagnostics as metadata
+  for future surfaces, but relation-aware ranking, orientation, and resurfacing remain future work.
 - The execution layer contains controlled effectors only. Reasoning must not directly mutate notes or trigger execution.
 - The memory/persistence layer is the three-surface model plus backing runtime stores: human vault
   artifacts, system companion/continuity artifacts, and rebuildable runtime projections/indexes.
@@ -475,6 +478,9 @@ This section describes the intended v6 direction. It does not override the locke
 
 - Retrieval is a capability, not an agent.
 - Retrieval must be reusable across Panel, Chat, and future cognition surfaces without creating another agent-specific control center.
+- The shipped capability boundary preserves current hybrid retrieval behavior and result ordering;
+  additive relation/provenance inputs and stale/partial-view diagnostics are observable metadata,
+  not ranking authority.
 - Capabilities are reusable, composable, and testable.
 - Agents and orchestration layers invoke capabilities through explicit planning and state transitions.
 - ASK remains a valid current runtime/API surface in the v5.x line, but it is deprecated as the architectural center for v6 direction. New design work should not rebuild retrieval around a special central agent, even if bounded agents remain common elsewhere in the system.

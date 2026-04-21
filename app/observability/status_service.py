@@ -21,6 +21,7 @@ from app.observability.status_model import (
     OutboxLagStatus,
     StoreStatus,
     SystemStatus,
+    ViewFreshnessStatus,
     WatcherAutomationStatus,
     WorkerQueueStatus,
     WriteGuardStatus,
@@ -583,6 +584,62 @@ def _get_worker_queue_status() -> WorkerQueueStatus:
     )
 
 
+def classify_view_freshness(
+    *,
+    stores: list[StoreStatus],
+    ingestion: IngestionStatus,
+    worker_queue: WorkerQueueStatus | None = None,
+) -> ViewFreshnessStatus:
+    sources: list[str] = []
+    if stores:
+        sources.append("stores")
+    if ingestion.last_run_at or ingestion.planes:
+        sources.append("ingestion")
+    if worker_queue and worker_queue.mode != "none":
+        sources.append("worker_queue")
+
+    if not sources:
+        return ViewFreshnessStatus(
+            state="unknown",
+            reason="no runtime freshness signals are available",
+            sources=[],
+        )
+
+    if ingestion.total_errors or ingestion.total_malformed:
+        return ViewFreshnessStatus(
+            state="partial",
+            reason="latest ingest signals include errors or malformed inputs",
+            sources=sources,
+        )
+
+    if ingestion.last_run_ok is False:
+        return ViewFreshnessStatus(
+            state="stale",
+            reason="latest ingest run failed",
+            sources=sources,
+        )
+
+    if worker_queue and worker_queue.pending and worker_queue.pending > 0:
+        return ViewFreshnessStatus(
+            state="partial",
+            reason="worker queue has pending runtime changes",
+            sources=sources,
+        )
+
+    if ingestion.last_run_at or any(store.last_ingest_at for store in stores):
+        return ViewFreshnessStatus(
+            state="fresh",
+            reason="ingest/status signals are present and no stale or partial condition was detected",
+            sources=sources,
+        )
+
+    return ViewFreshnessStatus(
+        state="unknown",
+        reason="runtime signals exist but no freshness timestamp is available",
+        sources=sources,
+    )
+
+
 def _get_watcher_automation_status() -> WatcherAutomationStatus:
     try:
         watcher_settings = load_watcher_settings()
@@ -642,6 +699,8 @@ def get_system_status() -> SystemStatus:
         counters = _count_events(Path(INDEX_OUTBOX_PATH)) if INDEX_OUTBOX_PATH else EventCounters()
     counters = _fill_ingest_run_counts(counters, ingestion)
     intent_status = _get_intent_status(counters)
+    stores = get_store_status()
+    worker_queue = _get_worker_queue_status()
     return SystemStatus(
         timestamp=datetime.now(timezone.utc),
         environment=active_environment(),
@@ -651,7 +710,7 @@ def get_system_status() -> SystemStatus:
         sot_label=sot_meta["label"],
         feature_line_version=SOT_FORWARD,
         active_features=list(_ACTIVE_FEATURES),
-        stores=get_store_status(),
+        stores=stores,
         ingestion=ingestion,
         ask=get_ask_status(),
         intents=intent_status,
@@ -661,7 +720,12 @@ def get_system_status() -> SystemStatus:
         write_guard=_get_write_guard_status(),
         outbox_lag=_get_outbox_lag(),
         events_log=_events_log_status(),
-        worker_queue=_get_worker_queue_status(),
+        worker_queue=worker_queue,
+        view_freshness=classify_view_freshness(
+            stores=stores,
+            ingestion=ingestion,
+            worker_queue=worker_queue,
+        ),
         watcher_automation=_get_watcher_automation_status(),
     )
 
@@ -674,4 +738,5 @@ __all__ = [
     "record_ask_query",
     "record_ask_error",
     "reset_ask_metrics",
+    "classify_view_freshness",
 ]

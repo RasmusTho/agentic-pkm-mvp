@@ -54,6 +54,11 @@ Architectural reading note:
 - Status snapshot now reports SoT baseline (v5.5) and forward line (v5.6) plus the active feature list.
 - Intent counters: totals and 24h window for `promote.intent.created`, sourced from the configured outbox path; useful for UAT to confirm panel emission without tailing logs.
 - **Status semantics**: `events_log` is an append-only audit log (JSONL). `worker_queue` is the active processing queue. Do not derive `pending` across them unless `worker_queue.mode` is `file`/`jsonl` and the queue is explicitly wired to that log.
+- **View freshness**: `view_freshness` classifies the current runtime view as `fresh`, `stale`,
+  `partial`, or `unknown` from existing ingest, store, and worker-queue signals. This is an
+  operator-facing honesty signal for stale or partial runtime views; it is not distributed
+  consensus, replica conflict resolution, or a guarantee that every retrieval result is globally
+  fresh.
 
 ## Feature-line and Event Counters
 - **SoT baseline vs forward line**: `sot_baseline_version` is the locked baseline (v5.5). `sot_forward_line_version` / `feature_line_version` represent the active forward line (v5.6: LangGraph/Reasoning rollouts on top of the v5.5 baseline). `active_features` enumerates which forward-line capabilities are present (PanelAgent runtime, watcher snapshot/policy track, config-driven panel wiring).

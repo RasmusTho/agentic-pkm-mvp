@@ -16,8 +16,9 @@ baseline-aware target operating model. This document still describes the current
 For v6 planning, read current retrieval migration in stages:
 - current-state bug fixes first: make missing scope/domain behavior conservative and avoid path as
   silent semantic authority;
-- enabling work next: expose retrieval contracts and add explicit provenance/relation inputs without
-  changing default authority;
+- enabling work next: the runtime now has a small typed retrieval capability wrapper around current
+  hybrid search plus optional provenance, relation, and view-freshness diagnostics. These inputs are
+  metadata plumbing only; they do not change ranking, filtering, or default authority.
 - target-state change later: separate retrieval, orientation, and resurfacing, with salience and
   relation-aware behavior implemented and accepted before it is described as runtime reality.
 
@@ -40,6 +41,12 @@ Interpretation note:
 
 ## Hybrid Search (Current)
 Entry point: `app/retrieval/hybrid.py:hybrid_search(query, k=8, ...)`
+
+Capability wrapper: `app/retrieval/capability.py:retrieve(RetrievalRequest)` exposes the same
+current hybrid path through typed request/response objects for non-ASK callers. The wrapper carries
+query, scope/domain inputs, trace id, hit metadata, and optional diagnostics for relation/provenance
+inputs or view freshness. It adapts the current results; it does not introduce relation-aware
+ranking, orientation, resurfacing, or a new retrieval agent.
 
 ### Scoring
 Per document, we compute:
@@ -94,3 +101,7 @@ Interpretation:
 ## Delta / Known Limits
 - This retrieval store is in-memory; it is not a durable vector DB.
 - Rerank defaults to disabled (`RERANK_ENABLE` unset/false).
+- Relation/provenance inputs and view-freshness diagnostics are carried as optional metadata only.
+  They do not affect result ordering or filtering in the current slice.
+- Stale/partial/unknown view reporting is runtime honesty from existing status signals. It is not a
+  multi-replica freshness guarantee and does not fail retrieval by itself.
