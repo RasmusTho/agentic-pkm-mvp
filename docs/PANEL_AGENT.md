@@ -148,6 +148,8 @@ Architectural reading note:
 - Default wiring: `docs/settings/panel-action-wiring.yaml` (maps canonical action ids to target events).
 - Resolution order: `PANEL_ACTION_WIRING_PATH` env override > `<vault>/System/Config/panel-action-wiring.yaml` (vault override) > repo default.
 - Validation: config must define an `actions` list with `id`, `kind` (event|intent, defaults to event), and `event_type`/`target_event` (or `intent_type`). Unknown/invalid configs emit a warning and fall back to the default wiring; runtime behaviour stays unchanged.
+- CI/operator validation path: run `python -m app.cli settings-validate` to validate panel action catalog entries, panel action wiring schema, and watcher settings schema before rollout.
 - CLI/Watcher use the same wiring; panel decider (rule/LLM) still selects actions, wiring only controls emitted events.
+- Guardrails remain unchanged: watcher auto-exec still requires `WATCHER_AUTO_EXEC=1`, only allows configured `auto_run.allowed_actions`, and preserves per-note opt-out via `ai_panel_auto_run: never`.
 
 Promotion intents (`promote.intent.created`) represent intent-only; apply effects by running the promotion consumer (`python -m app.cli promote-consume`), which emits `promote.done` when successful and updates the vault note frontmatter via the note writer path, writing standing changes to `maturity` and review posture separately (Store updates remain optional).
