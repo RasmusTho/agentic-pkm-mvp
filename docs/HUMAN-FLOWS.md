@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-04-20
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/PANEL_AGENT.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, merged PRs #423/#424/#425/#426/#427/#431/#439/#448/#453/#454/#460/#463/#467/#469/#472/#473/#474/#475/#476/#477/#478/#479/#490/#491/#492/#493/#494/#496/#501/#521/#527, current repo state at 17eef96 on 2026-04-20, closed current-state bug issues #435/#436/#437
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/PANEL_AGENT.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/research/CHAT_SURFACE_BUILD_VS_BUY.md, merged PRs #423/#424/#425/#426/#427/#431/#439/#448/#453/#454/#460/#463/#467/#469/#472/#473/#474/#475/#476/#477/#478/#479/#490/#491/#492/#493/#494/#496/#501/#521/#527, current repo state at 17eef96 on 2026-04-20, closed current-state bug issues #435/#436/#437
 
 # Human Flows — Yggdrasil / agentic-pkm-mvp
 
@@ -618,6 +618,21 @@ The system should help the user:
 - distinguish commitment from note text,
 - and inspect what the system did, under what authority, and with what result.
 
+### Case: I want to think on a note with a writing partner
+
+User need:
+- "I have a note that is rough, or partial, or messy, and I want to work on it with assistance that edits the note directly, not in a separate chat window."
+
+The system should help the user:
+- open a canvas session on the note where edits apply in place as they are generated, the way a collaborative editor behaves,
+- treat the note itself as the surface they are working on, not a conversation transcript,
+- keep sessions short and purposeful rather than accumulating a long chat log per note,
+- retain the session as a subordinate intent trail so the user can later ask "why did this note become what it is," without that trail growing into a second document that competes with the note,
+- keep content edits in the active session authorized by the user's presence, and keep any governance-bearing change (classification, cross-note moves, lifecycle transitions) on the same gated-execution path the Panel already uses,
+- and undo any edit the way the user would undo their own typing.
+
+This case is what the canvas-Chat surface exists for. The note remains the artifact; the session log remains the provenance of intent behind it.
+
 ## 9. Context-sensitive use
 
 The same human may use the system across multiple life spheres and contexts.
@@ -746,6 +761,14 @@ The human may also occasionally observe system-surface artifacts such as compani
 Those artifacts are not normal authoring surfaces, but their presence should still remain legible
 enough that the human is not surprised by them.
 
+A canvas-Chat surface is specified as a future human-facing surface for thinking on a note with
+assistance — direct in-place editing during an active session, with session logs retained
+alongside the note as subordinate intent trails. This surface is designed but not yet implemented.
+Its authority model and artifact conventions are specified in
+`docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md` so that the co-editing
+posture cannot be either over-restricted (reintroducing ASK-shaped turn-taking) or
+over-permissive (collapsing the gated-execution invariant) when it ships.
+
 ### Satellite and tablet flow
 
 The system should support a practical flow where:
@@ -782,6 +805,9 @@ The current baseline realizes only part of the broader function set.
 - stronger learning-oriented flows
 - clearer creative/hobby-specific support patterns
 - fuller receipt artifacts beyond current overlays and operational traces
+- canvas-Chat surface for direct in-place co-authoring of a note with assistance, with
+  session-as-provenance stored alongside the note as a subordinate artifact class (see
+  `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md`)
 
 This is acceptable as long as the system is developed toward the broader human functions rather than
 mistaking current baseline mechanics for the full target.

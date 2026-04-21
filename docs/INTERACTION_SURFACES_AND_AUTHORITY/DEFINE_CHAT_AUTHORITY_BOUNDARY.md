@@ -144,16 +144,27 @@ The read-only language in `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` §F
 5. **Chat-originated mutation receipts live in the existing gated-execution pipeline locality.** The concrete canvas-commit receipt shape is deferred to a later capability lane, but the receipt locality is not deferred: receipts live where Panel mutation receipts already live.
 6. **Chat must not reintroduce ASK semantics.** Any future Chat evolution that converts the canvas into a query-response surface would fail the canvas-vs-ASK criterion recorded in `RECONCILE_CHAT_MUTATION_AUTHORITY.md`.
 
+### Co-Authoring vs Governance-Bearing Mutation
+
+Candidate A makes Chat mutation-capable but does not, on its own, say how that mutation expresses itself in a live editing workflow. `DEFINE_CANVAS_COEDITING_MODEL.md` extends the decision with a two-class split:
+
+- **Co-authoring.** Content edits to the body of the currently-open note during an active session. Authorized by user presence (the same authority class as the user's own keystrokes). Rolled back by undo. Audited by the session log. Applied in place, live — not through a pre-commit approval step.
+- **Governance-bearing.** Frontmatter classification changes, cross-note operations, note lifecycle transitions, promotions, and mutations of system-owned artifacts. Flow through the gated-execution pipeline named in `STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md` regardless of user presence — the same locality Panel mutations use, as recorded in Candidate A.
+
+The split is scope-based: co-authoring is "within this note's body, during this session, with the user present." Anything outside that scope is governance-bearing. Ambiguous cases default to governance-bearing.
+
+This extension does not loosen the gated-execution invariant. It recognizes that user-present co-authoring is a distinct mutation class from autonomous system action, and that the invariant applies to the latter.
+
 ### What This Boundary Does Not Say
 
 - The concrete runtime shape for canvas-Chat commits to the vault.
 - Which runtime hosts Chat or whether Chat lives inside or outside Obsidian.
 - Which Deep Agent implementation is introduced in Chat first.
-- The concrete receipt field shape Chat uses when it mutates.
+- The concrete receipt field shape Chat uses when it mutates governance-bearing state.
 - How canvas-Chat integrates with existing Panel flows.
 
-These questions are deferred to later capability work and are out of scope for this task.
+These questions are deferred to later capability work. The co-editing posture and its artifact/provenance conventions are specified in `DEFINE_CANVAS_COEDITING_MODEL.md`.
 
 ---
 
-**Status:** Specification draft. The Chat mutation decision is resolved by `RECONCILE_CHAT_MUTATION_AUTHORITY.md`; runtime implementation remains out of scope here.
+**Status:** Specification draft. The Chat mutation decision is resolved by `RECONCILE_CHAT_MUTATION_AUTHORITY.md`; the co-editing posture extension is in `DEFINE_CANVAS_COEDITING_MODEL.md`; runtime implementation remains out of scope here.

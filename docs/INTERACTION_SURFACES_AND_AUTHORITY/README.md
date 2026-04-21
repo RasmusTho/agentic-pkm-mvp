@@ -70,6 +70,7 @@ Crucially, "Chat as canvas" is not a revival of the ASK-style question-answering
 5. [DEFINE_AUTOMATION_SURFACE_AUTHORITY.md](DEFINE_AUTOMATION_SURFACE_AUTHORITY.md) — Automation as a distinct authority lane.
 6. [RECONCILE_CHAT_MUTATION_AUTHORITY.md](RECONCILE_CHAT_MUTATION_AUTHORITY.md) — the keystone decision task.
 7. [STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md](STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md) — the invariant that no surface mutates durable state without governance.
+8. [DEFINE_CANVAS_COEDITING_MODEL.md](DEFINE_CANVAS_COEDITING_MODEL.md) — the co-editing posture, co-authoring vs governance-bearing split, note-as-artifact / session-as-provenance, `.chats/` and `type:` conventions.
 
 Tasks 2, 3, 4, 5, and 7 may proceed in parallel as docs drafts. Task 6 (reconcile) depends on tasks 2–5 naming the surfaces consistently and on task 7 stating the gated-execution invariant, because the reconcile task evaluates options against those contracts.
 
