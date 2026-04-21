@@ -44,6 +44,12 @@ Notes:
 
 - Producers MAY add additional top-level fields for compatibility or convenience; consumers MUST ignore unknown fields (see `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`).
 - Some producers emit a richer `source` object (e.g. `{component, trigger, sot}`) instead of a string, especially for watcher/panel runtime events. Consumers MUST support both shapes and degrade safely by extracting a string attribution (typically `source.component`) when present. New event producers should prefer a string unless the `component/trigger/sot` trio is required for auditability.
+- New or changed event families MUST keep envelope versioning explicit. The active envelope version is
+  carried by `version` when a typed event model exposes it, or by `meta.version` for generic
+  `OutboxEvent` emitters. Compatibility-only legacy events may omit version only when the owning
+  compatibility contract documents the exception.
+- Representative CI coverage must include watcher, panel/promotion, orchestrator, and MCP/tool event
+  families so envelope regressions fail before runtime rollout.
 
 ## Event Idempotency (normative)
 
@@ -53,6 +59,26 @@ Notes:
 - `watcher.run` and watcher auto-exec events MUST be deduplicated to prevent duplicate panel intents or promotions.
 
 See `docs/CONCURRENCY.md` for the broader concurrency and idempotency guardrails.
+
+## Outbox consumer contract
+
+The DB outbox is the canonical worker queue. JSONL event files are audit/diagnostic surfaces unless
+an explicitly configured file-backed worker queue says otherwise.
+
+Current consumer expectations:
+
+- Ordering is FIFO by `created_at` for undelivered DB rows.
+- Delivery completion is recorded by `delivered_at`; rows without `delivered_at` remain pending.
+- Worker handlers propagate `trace_id` from the event envelope or payload into downstream spans and
+  emitted retry events.
+- Consumer idempotency is keyed by `event_id`; duplicate event ids are skipped without replaying
+  mutation work.
+- Transient note-read failures in ingest and panel-scan handlers are requeued with
+  `_worker_retry_count`, `_worker_retry_reason`, and `_worker_retry_enqueued_at` metadata up to the
+  bounded retry limit.
+- There is no dedicated DLQ service in the active runtime. When retry enqueueing fails or retry
+  attempts are exhausted, the worker logs the failure and leaves the condition observable through
+  worker logs, status/heartbeat signals, and the undelivered DB outbox row.
 
 ## Embeddings and Outbox
 

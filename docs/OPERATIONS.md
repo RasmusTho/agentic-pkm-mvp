@@ -223,6 +223,24 @@ Task-specific operator walkthroughs live in `docs/runbooks/`.
 - Settings gate view: `python -m app.cli settings-explain --json` is the canonical provenance and gate-resolution surface for watcher auto-exec, allowlist validity, and write guard context.
 - Health command semantics and degradation rules live in `docs/HEALTH.md`.
 
+## Event and queue troubleshooting
+- Use the DB `outbox` table as the authoritative queue. Rows with `delivered_at is null` are pending
+  or failed work; order them by `created_at` when reconstructing worker consumption order.
+- Inspect the worker logs for `worker retry queued`, `worker retry exhausted`, `worker retry enqueue
+  failed`, and `worker handler failed` messages. These are the current poison-message and retry
+  observation points; there is no separate DLQ service in the active runtime.
+- Promotion consumer failures should also surface as `promote.error` rows in the DB outbox or
+  JSONL audit stream, with `source_event` and `trace_id` intact so the failed intent can be traced
+  back to the originating input.
+- Retry events carry `_worker_retry_count`, `_worker_retry_reason`, and
+  `_worker_retry_enqueued_at` in the payload so operators can distinguish transient deferrals from
+  fresh work.
+- Use `event_id` to identify duplicate deliveries and `trace_id` to correlate watcher, worker,
+  panel, promotion, and status/audit observations.
+- Treat `INDEX_OUTBOX_PATH` JSONL lines as audit evidence only. A line in JSONL does not prove a DB
+  outbox row is pending, delivered, or failed, and `python -m app.cli status` keeps
+  `events_log` separate from `worker_queue` for that reason.
+
 Operator triage order:
 1. Run `make verify-runtime`.
 2. If you need extra detail, run `docker compose exec -T api python -m app.cli health --json`.
