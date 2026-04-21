@@ -93,6 +93,8 @@ Docs review:
 - `docs/ROADMAP.md` §Panel Agent rollup
 - Sibling: `NAME_THE_THREE_INTERACTION_SURFACES.md`
 - Sibling: `STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md`
+- Sibling: `DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md`
+- Sibling: `HYBRID_CHAT_INTEGRATION_SCHEMA.md`
 
 ## Related GitHub Issues
 
@@ -149,6 +151,8 @@ Panel may consume richer cognition in the future (v6.0 Phase 3) but only as plan
 ### What a Reviewer Should Be Able to Say After Reading This
 
 "Panel turns explicit in-note checkboxes into governed events and writes a receipt back into the same note. The user decides; the system executes deterministically through the note-writer path. LLM reasoning informs action selection but does not bypass human confirmation for mutations."
+
+Panel is the primary command-oriented surface, not the exclusive authoritative intent surface. Hybrid Chat integration must preserve Panel's receipt-bearing command role while allowing Chat-originated governance-bearing intents to enter the same gated execution boundary when explicitly authorized.
 
 ---
 

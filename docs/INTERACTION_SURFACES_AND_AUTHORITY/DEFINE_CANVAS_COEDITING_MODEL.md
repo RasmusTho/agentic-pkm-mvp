@@ -265,6 +265,7 @@ Docs review:
 - `docs/CONCEPTS/USER_NEEDS_MODEL.md` :: externalize and manipulate thought
 - `docs/HUMAN-FLOWS.md` §8 (scenario), §13 (surfaces)
 - `docs/research/CHAT_SURFACE_BUILD_VS_BUY.md` §F, §G (phased path to custom canvas)
+- `docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md`
 
 ## Related GitHub Issues
 
@@ -273,3 +274,5 @@ If later filed, the issue should reference "Implements INTERACTION_SURFACES_AND_
 ---
 
 **Status:** Specification draft. Extends Candidate A with the concrete co-editing posture and the system-owned chat-session artifact class. Runtime implementation remains out of scope here.
+
+Hybrid integration is deferred to `HYBRID_CHAT_INTEGRATION_SCHEMA.md`; this co-editing model remains the authority for the note-as-artifact / session-as-provenance split.

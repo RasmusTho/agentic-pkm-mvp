@@ -6,7 +6,8 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-04-21
-Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/ROADMAP.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, app/cli/__init__.py, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orchestrator/executor.py, app/watcher/registry.py, app/workers/outbox_worker.py, tests/events/test_event_envelope_versioning.py, tests/events/test_outbox_consumer_contract.py, Makefile, merged PRs #272/#302/#346/#349/#365/#376/#377/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431/#439/#448/#450/#452/#453/#454/#458/#460/#463/#467/#468/#469/#470/#471/#472/#473/#474/#475/#476/#477/#478/#479/#490/#491/#492/#493/#494/#496/#497/#499/#501/#502/#503/#505/#506/#507/#508/#509/#510/#521/#523/#525/#526/#527/#529/#531/#533/#547, current repo state at 5cd5f7b on 2026-04-21, closed current-state bug issues #435/#436/#437/#456, closed lifecycle issue #359, and closed Orchestrator follow-up issues #444/#445/#446
+Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/ROADMAP.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, app/cli/__init__.py, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orchestrator/executor.py, app/watcher/registry.py, app/workers/outbox_worker.py, tests/events/test_event_envelope_versioning.py, tests/events/test_outbox_consumer_contract.py, Makefile, merged PRs #272/#302/#346/#349/#365/#376/#377/#382/#383/#386/#389/#391/#423/#424/#425/#426/#427/#431/#439/#448/#450/#452/#453/#454/#458/#460/#463/#467/#468/#469/#470/#471/#472/#473/#474/#475/#476/#477/#478/#479/#490/#491/#492/#493/#494/#496/#497/#499/#501/#502/#503/#505/#506/#507/#508/#509/#510/#521/#523/#525/#526/#527/#529/#531/#533/#547/#548, current repo state at 3c44161 on 2026-04-21, closed current-state bug issues #435/#436/#437/#456, closed lifecycle issue #359, and closed Orchestrator follow-up issues #444/#445/#446
+
 # Architecture — SoT v5.5 Reality-MVP baseline (v5.6 delivered, v6 active design)
 
 This document is the active architecture source of truth for the SoT v5.5 Reality-MVP baseline and the place where current runtime contracts are defined.
@@ -452,6 +453,16 @@ This section describes the intended v6 direction. It does not override the locke
 - This structure treats Yggdrasil as a system-of-systems so the layers can evolve independently without collapsing authority boundaries.
 
 ## Interaction Surfaces
+
+Panel and Chat should both be treated as valid user-intent surfaces; their distinction is
+interaction structure (command-oriented vs canvas/co-authoring), not whether intent is
+authoritative.
+
+The compatibility details for reading Panel as the primary command surface without making it the
+exclusive intent surface live in
+`docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md`; future
+hybrid Chat/Panel crossings are bounded by
+`docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md`.
 
 ### Panel
 

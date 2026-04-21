@@ -6,7 +6,8 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-04-21
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/PANEL_AGENT.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/research/CHAT_SURFACE_BUILD_VS_BUY.md, merged PRs #423/#424/#425/#426/#427/#431/#439/#448/#453/#454/#460/#463/#467/#469/#472/#473/#474/#475/#476/#477/#478/#479/#490/#491/#492/#493/#494/#496/#501/#521/#527/#533/#547, current repo state at 5cd5f7b on 2026-04-21, closed current-state bug issues #435/#436/#437
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/PANEL_AGENT.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/research/CHAT_SURFACE_BUILD_VS_BUY.md, merged PRs #423/#424/#425/#426/#427/#431/#439/#448/#453/#454/#460/#463/#467/#469/#472/#473/#474/#475/#476/#477/#478/#479/#490/#491/#492/#493/#494/#496/#501/#521/#527/#533/#547/#548, current repo state at 3c44161 on 2026-04-21, closed current-state bug issues #435/#436/#437
+
 
 # Human Flows — Yggdrasil / agentic-pkm-mvp
 
@@ -768,6 +769,8 @@ Its authority model and artifact conventions are specified in
 `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md` so that the co-editing
 posture cannot be either over-restricted (reintroducing ASK-shaped turn-taking) or
 over-permissive (collapsing the gated-execution invariant) when it ships.
+Hybrid Panel/Chat behavior remains future work; its docs-only compatibility schema is
+`docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md`.
 
 ### Satellite and tablet flow
 
@@ -808,6 +811,9 @@ The current baseline realizes only part of the broader function set.
 - canvas-Chat surface for direct in-place co-authoring of a note with assistance, with
   session-as-provenance stored alongside the note as a subordinate artifact class (see
   `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md`)
+- hybrid Panel/Chat integration that preserves Panel as primary command surface without making it
+  the exclusive authoritative intent source (see
+  `docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md`)
 
 This is acceptable as long as the system is developed toward the broader human functions rather than
 mistaking current baseline mechanics for the full target.
