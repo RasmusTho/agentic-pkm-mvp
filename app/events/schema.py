@@ -11,6 +11,10 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _default_meta() -> Dict[str, Any]:
+    return {"version": "1.0"}
+
+
 class OutboxEvent(BaseModel):
     """Canonical outbox event envelope."""
 
@@ -22,7 +26,7 @@ class OutboxEvent(BaseModel):
     source: str
     timestamp: str = Field(default_factory=_now_iso)
     payload: Dict[str, Any] = Field(default_factory=dict)
-    meta: Dict[str, Any] = Field(default_factory=dict)
+    meta: Dict[str, Any] = Field(default_factory=_default_meta)
 
     @property
     def event_type(self) -> str:
@@ -45,7 +49,7 @@ def make_outbox_event(
         source=source,
         timestamp=timestamp or _now_iso(),
         payload=payload or {},
-        meta=meta or {},
+        meta=meta or _default_meta(),
     )
 
 

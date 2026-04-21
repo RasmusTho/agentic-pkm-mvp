@@ -154,7 +154,10 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 
 ## Component Catalog
 - See `docs/COMPONENTS.md` for the canonical, human- and machine-readable list of active components (stores, agents, embeddings, rerankers, eval stack, observability). Update it when wiring new component entrypoints under `app/components/*`.
-- The outbox/event system uses a common envelope (`event`, `trace_id`, `source`, `timestamp`, `payload`, `meta`) defined in `app/events/schema.py` and enforced by architecture tests; emitters should write via outbox helpers to preserve the contract.
+- The outbox/event system uses a common envelope (`event`, `event_id`, `trace_id`, `source`,
+  `timestamp`, `payload`, `meta`, and version metadata for new/changed families) defined in
+  `app/events/schema.py` and enforced by architecture tests; emitters should write via outbox
+  helpers to preserve the contract.
 
 ## System-of-systems view
 

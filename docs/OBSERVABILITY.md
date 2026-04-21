@@ -39,6 +39,10 @@ Logs are the primary tracing surface; no external APM is required for the curren
 - Canonical compose stack: `db`, `api`, `watcher`, `worker` (registry watcher).
 - The watcher writes audit JSONL events and enqueues DB outbox events; the worker consumes the DB outbox for ingest and promotion side effects.
 - Treat `events_log` as append-only audit and `worker_queue` as the live queue; do not derive pending across them unless `worker_queue.mode` is `file`/`jsonl` and explicitly wired.
+- Retry/poison-message posture is current-state and bounded: transient missing or unstable note
+  failures are requeued with retry metadata, duplicate `event_id` values are skipped, and exhausted
+  or failed retry enqueue paths are observable through worker logs plus undelivered DB outbox rows.
+  The active runtime does not claim a dedicated DLQ service.
 
 Architectural reading note:
 - these monitoring and queue interpretations are current operational truth,
