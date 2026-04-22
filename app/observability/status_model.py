@@ -109,6 +109,12 @@ class ViewFreshnessStatus(BaseModel):
     sources: list[str] = Field(default_factory=list)
 
 
+class InstanceProvenanceStatus(BaseModel):
+    instance_id: str
+    instance_role: str
+    environment: str
+
+
 class WatcherAutomationStatus(BaseModel):
     auto_exec_enabled: bool = False
     mode: str = "emit-only"
@@ -157,6 +163,7 @@ class SystemStatus(BaseModel):
     worker_queue: Optional[WorkerQueueStatus] = None
     view_freshness: Optional[ViewFreshnessStatus] = None
     watcher_automation: Optional[WatcherAutomationStatus] = None
+    instance_provenance: Optional[InstanceProvenanceStatus] = None
 
 
 __all__ = [
@@ -173,6 +180,7 @@ __all__ = [
     "EventsLogStatus",
     "WorkerQueueStatus",
     "ViewFreshnessStatus",
+    "InstanceProvenanceStatus",
     "WatcherAutomationStatus",
     "SystemStatus",
 ]

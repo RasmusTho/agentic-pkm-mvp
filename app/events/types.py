@@ -62,6 +62,7 @@ PROMOTE_SKIP_ORPHAN = "promote.skip.orphan"
 PROMOTE_SKIP_DECODE = "promote.skip.decode"
 PROMOTE_ERROR = "promote.error"
 PROMOTE_DONE = "promote.done"
+PROMOTION_TRANSITION_APPLIED = "promotion.transition.applied"
 PROMOTE_ORPHAN_OVERRIDE = "promote.orphan.override"
 PROMOTION_DECISION_PENDING = "promotion.pending_move"
 PROMOTE_SKIP_MOVE = "promote.skip.move"
@@ -136,6 +137,7 @@ __all__ = [
     "PROMOTE_SKIP_DECODE",
     "PROMOTE_ERROR",
     "PROMOTE_DONE",
+    "PROMOTION_TRANSITION_APPLIED",
     "PROMOTE_ORPHAN_OVERRIDE",
     "PROMOTION_DECISION_PENDING",
     "PROMOTE_SKIP_MOVE",

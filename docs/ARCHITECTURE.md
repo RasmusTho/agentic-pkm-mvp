@@ -135,6 +135,9 @@ At minimum, the following must stay true:
 - Defaults when nothing is configured: `id="home"`, `role="master"`, `environment="prod"`, matching the Reality-MVP single-runtime focus and production-safe baseline.
 - Environment selection: resolved from `PKM_ENVIRONMENT` (explicit), `PKM_SETTINGS_PROFILE` mapping (lab→dev, operator→prod), or default (prod). See `docs/ENVIRONMENTS.md`.
 - Scope: internal plumbing that informs events/logs, feature gates, and future sync topology; no change to the Obsidian surface or frontmatter.
+- Runtime event/status attachment: common outbox event helpers attach `meta.instance_provenance` (`instance_id`, `instance_role`, `environment`) so runtime telemetry can attribute execution context without per-caller wiring.
+- Identity boundary: this provenance is operational metadata only and must not alter artifact identity fields (`uuid`, `source_ref`, vault path identity, companion identity).
+- Replica posture boundary: recording instance provenance is shipped baseline behavior; replica conflict resolution, transport semantics, and distributed authority remain future work.
 
 ## Contracts (concept anchors)
 
@@ -328,6 +331,9 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 - Planner/orchestrator normalization keeps external event compatibility (`promote.intent.created`)
   while routing internal promotion work through explicit transition semantics (`request_promotion_transition`
   with `transition.family = promotion` and `transition.target_maturity`).
+- Promotion consumer apply paths now emit `promotion.transition.applied` as a human-legible applied-transition
+  receipt linked to the triggering intent/trace, while preserving `promote.done` / `promote.error` as
+  execution-result compatibility events.
 - Compatibility-only legacy `review_state` inputs still accepted at normalization boundaries are:
   `evergreen`, `processed`, `promoted`, `inbox`, and `logged`. Current runtime callers should not
   produce those values as new canonical state-axis outputs.
@@ -344,6 +350,13 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 - Note kinds are policy profiles, not schemas. `kind` routes policy and does not define structure.
 - State axes are orthogonal and selectively enabled by policy per kind.
 - Policies can lock axis values and gate agent read/write permissions; defaults live in vault settings (vault-as-GUI).
+- Current ingest normalization is conservative: explicit `artifact_kind` values from frontmatter or
+  normalized ingest input are accepted only for a small allowlist (`note`, `task`, `knowledge`,
+  `reference`, `log`) and then exposed as policy-routing metadata (`artifact_kind` /
+  `policy_profile_kind`) while runtime object identity remains `kind="note"`.
+- Missing or unsupported explicit kinds degrade to `note` with ingest diagnostics; no path-derived
+  kind inference is performed.
+- This shipped behavior is intentionally not the full v6 artifact taxonomy.
 - See `docs/NOTE_KIND_POLICIES.md` for policy profile examples.
 
 ## Planes and Metadata Surfaces

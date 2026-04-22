@@ -6,21 +6,66 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from app.events.types import INGEST_NORMALIZE_DONE
 from app.store.object_store import ObjectStore
 from app.services.audit import audit_event
 
 
 AGENT = "normalizer"
+_ALLOWED_ARTIFACT_KINDS = {"note", "task", "knowledge", "reference", "log"}
 
 
-def _read_file(path: str) -> tuple[str, str]:
+def _split_frontmatter(raw: str) -> tuple[dict[str, Any], str]:
+    if not raw.startswith("---"):
+        return {}, raw
+    lines = raw.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}, raw
+    end_idx: int | None = None
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            end_idx = idx
+            break
+    if end_idx is None:
+        return {}, raw
+    frontmatter_text = "\n".join(lines[1:end_idx])
+    body = "\n".join(lines[end_idx + 1 :])
+    try:
+        frontmatter = yaml.safe_load(frontmatter_text) or {}
+        if not isinstance(frontmatter, dict):
+            frontmatter = {}
+    except Exception:
+        frontmatter = {}
+    return frontmatter, body
+
+
+def _resolve_artifact_kind(frontmatter: dict[str, Any], explicit_kind: str | None) -> tuple[str, list[dict[str, str]]]:
+    diagnostics: list[dict[str, str]] = []
+    requested = str(explicit_kind or frontmatter.get("artifact_kind") or frontmatter.get("kind") or "").strip().lower()
+    if not requested:
+        return "note", diagnostics
+    if requested in _ALLOWED_ARTIFACT_KINDS:
+        return requested, diagnostics
+    diagnostics.append(
+        {
+            "code": "unsupported_artifact_kind",
+            "requested_kind": requested,
+            "fallback_kind": "note",
+        }
+    )
+    return "note", diagnostics
+
+
+def _read_file(path: str) -> tuple[str, str, dict[str, Any]]:
     """
     Return (title, body_text) from a markdown-ish file.
     """
     p = Path(path)
     raw = p.read_text(encoding="utf-8")
-    lines = [ln.strip() for ln in raw.splitlines()]
+    frontmatter, body = _split_frontmatter(raw)
+    lines = [ln.strip() for ln in body.splitlines()]
     title = ""
     for ln in lines:
         if ln.startswith("#"):
@@ -33,17 +78,18 @@ def _read_file(path: str) -> tuple[str, str]:
             break
     if not title:
         title = p.stem
-    return title, raw
+    return title, raw, frontmatter
 
 
-def normalize_file(path: str, *, trace_id: str) -> dict[str, Any]:
+def normalize_file(path: str, *, trace_id: str, artifact_kind: str | None = None) -> dict[str, Any]:
     """
     Build a 'domain object' from a source file:
     - uuid
     - core6 metadata
     - payload with raw_text + source_path
     """
-    title, raw_text = _read_file(path)
+    title, raw_text, frontmatter = _read_file(path)
+    normalized_artifact_kind, diagnostics = _resolve_artifact_kind(frontmatter, artifact_kind)
 
     object_uuid = str(_uuid.uuid4())
 
@@ -58,6 +104,9 @@ def normalize_file(path: str, *, trace_id: str) -> dict[str, Any]:
         "core6": core6,
         "raw_text": raw_text,
         "source_path": path,
+        "artifact_kind": normalized_artifact_kind,
+        "policy_profile_kind": normalized_artifact_kind,
+        "ingest_diagnostics": diagnostics,
     }
 
     domain_object = {
@@ -89,7 +138,7 @@ class _DomainObjectShim:
     source_ref: str | None
 
 
-def run(path: str, *, trace_id: str) -> dict[str, Any]:
+def run(path: str, *, trace_id: str, artifact_kind: str | None = None) -> dict[str, Any]:
     """
     End-to-end:
     - normalize file into domain_object
@@ -97,7 +146,7 @@ def run(path: str, *, trace_id: str) -> dict[str, Any]:
     - save via ObjectStore (memory + DB if available)
     """
     store = ObjectStore()
-    dom = normalize_file(path, trace_id=trace_id)
+    dom = normalize_file(path, trace_id=trace_id, artifact_kind=artifact_kind)
 
     shim = _DomainObjectShim(
         uuid=dom["uuid"],
@@ -116,6 +165,10 @@ def run(path: str, *, trace_id: str) -> dict[str, Any]:
     out = {
         "event": INGEST_NORMALIZE_DONE,
         "object_id": dom["uuid"],
+        "uuid": dom["uuid"],
+        "kind": dom["kind"],
+        "payload": dom["payload"],
+        "source_ref": dom["source_ref"],
         "core6": dom["payload"]["core6"],
         "trace_id": trace_id,
         "ts": datetime.now(timezone.utc).isoformat(),

@@ -217,6 +217,7 @@ Examples in the current runtime:
 - `panel.intent.created` = intent-creation layer
 - `promote.intent.created` = transition intent layer
 - `promote.done` / `promote.error` = execution-result layer
+- `promotion.transition.applied` = human-legible transition receipt layer for admitted promotion applies
 
 The event stream is not, by itself, the complete receipt model.
 It is primarily an operational trace surface that may support later receipt or audit construction.

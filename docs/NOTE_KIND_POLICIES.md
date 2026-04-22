@@ -21,6 +21,12 @@ Related docs:
 - State axes are orthogonal and selectively enabled by policy.
 - Policies can lock or force axis values and gate agent read/write permissions.
 - Derived overlays (e.g., `zone`, recency, salience) remain system-owned and never become core axes.
+- Current ingest normalization is conservative: explicit `artifact_kind` may be supplied from
+  frontmatter or normalized ingest input and is accepted for a limited allowlist
+  (`note`, `task`, `knowledge`, `reference`, `log`) for policy routing only.
+- Runtime identity remains `kind="note"` in this slice; missing/unknown explicit kinds degrade to
+  `note` with diagnostics and without path-based inference.
+- This is a bounded normalization slice, not a full artifact taxonomy rollout.
 
 Axis interpretation:
 - `review_state` should be read as review/mutation posture.
