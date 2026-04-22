@@ -6,7 +6,7 @@ Authority: Canonical current-state contract for the repo's timeout handling, SLA
 
 This document describes the current timeout handling, SLA boundaries, and observable timeout behavior across orchestration surfaces in the repository.
 It is a current-state contract for per-tool timeouts, executor-level timeout enforcement, and error propagation.
-It does not claim production A2A transport SLA, retry queues, dead-letter queues, or runtime-level timeout budgets for multi-step plans.
+It does not claim production A2A transport SLA, retry queues, dead-letter queues, or repo-wide runtime delivery SLA.
 
 Use this document with:
 - `docs/ARCHITECTURE.md` for current runtime boundaries and orchestrator V1/V2 posture.
@@ -16,11 +16,13 @@ Use this document with:
 ## Current posture
 
 - Per-tool timeout is supported via `tool_timeout_seconds` setting passed to the executor.
-- Timeout is enforced at the executor level for individual tool calls, not at the orchestrator level.
+- Timeout is enforced at the executor level for individual tool calls.
 - Orchestrator V1 (default) and V2 (flagged) both delegate timeout enforcement to the executor.
+- Orchestrator V1 and V2 also support an optional plan-level timeout budget via `plan_timeout_seconds`.
 - V1 executes steps sequentially (no parallel execution); V2 uses ThreadPoolExecutor for dependency-aware parallel scheduling.
 - Timeout is observable: caught errors are emitted with error_type `tool_timeout`.
-- No repo-wide A2A/runtime timeout policy, retry queue, delivery SLA, or multi-step plan budget exists.
+- Plan budget exhaustion is observable with `error_type` `plan_timeout`.
+- No repo-wide A2A/runtime timeout policy, retry queue, or delivery SLA exists.
 
 ## Timeout handling by surface
 
@@ -33,7 +35,7 @@ The executor (`MockPlanExecutor`) handles timeout for individual tool calls:
 | Setting | `StepContext.tool_settings["tool_timeout_seconds"]` | Float value (seconds) for per-tool timeout. |
 | Enforcement | `timeout_wrapper(call, timeout_secs)` from `app.quality` | Wraps tool invocation with timeout boundary. |
 | Error type | `tool_timeout` in `StepExecutionError` | Observable error discriminator for timeout vs. other failures. |
-| Scope | Per-tool call only | Does not apply to plan-level or orchestrator-level budgets. |
+| Scope | Per-tool call only | Separate from orchestrator-level plan timeout budget. |
 | Default | No timeout (None) | If `tool_timeout_seconds` is absent or unparseable, no timeout is applied. |
 
 Current implementation (executor.py lines 212-221):
@@ -50,7 +52,7 @@ Current implementation (executor.py lines 212-221):
 | V1 Orchestrator | Single-threaded execution by default | Steps are executed sequentially; timeout on one step blocks subsequent steps. |
 | V2 Orchestrator | Parallel execution via ThreadPoolExecutor | Multiple steps execute concurrently; timeout on one step does not block concurrent peers, but may trigger compensation. |
 | Compensation (V2 only) | Triggered on step failure | If a step times out or fails, V2 may compensate by rolling back completed predecessors in reverse order. |
-| Plan-level budget | Not supported | No orchestrator-level timeout for the entire plan. Each step has only its per-tool timeout. |
+| Plan-level budget | Optional via `plan_timeout_seconds` | Orchestrator can stop a plan once elapsed wall-clock time reaches the configured budget and emit `plan_timeout`. |
 
 ### Tool-specific timeout semantics
 
@@ -99,12 +101,19 @@ Example event payload (simplified):
 V2 runtime checks `last_error_type in ("tool_timeout", "timeout")` to identify non-retriable timeout failures.
 Timeouts are not retried; if a timeout occurs, the step fails immediately and may trigger compensation rollback of predecessors.
 
+When a configured plan timeout budget is exhausted:
+
+1. The orchestrator marks the next unstarted executable step as failed with `error_type="plan_timeout"`.
+2. V1 stops scheduling additional steps.
+3. V2 stops scheduling and runs compensation for previously completed predecessors.
+
 ## Constraints and non-claims
 
 - No production A2A transport or runtime-level SLA beyond per-tool timeout.
 - No retry queue, dead-letter queue, or orchestrator-managed delivery SLA.
-- V1 and V2 both preserve the per-tool timeout boundary; no plan-level or orchestrator-level timeout budget.
+- V1 and V2 preserve per-tool timeout behavior and also support an optional plan-level timeout budget.
 - Tool timeout is observable and distinguishable from other failure modes via error_type.
+- Plan timeout budget exhaustion is observable and distinct via `error_type="plan_timeout"`.
 - In-process A2A handlers have no timeout protection from the A2A layer; timeouts are caller-owned.
 
 ## Validation and compliance checklist
