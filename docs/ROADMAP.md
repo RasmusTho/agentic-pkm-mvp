@@ -147,6 +147,7 @@ Explicit rule: "Deep Agents cannot execute actions or mutate system state."
 Deliverables:
 
 - The read-only Chat slice becomes the first safe cognition sandbox for Deep Agents.
+- Initial implementation routes read-only Chat cognition through `ReasoningFacade` and returns planning metadata only; execution and mutation pathways remain denied.
 - Deep Agent behavior remains decoupled from execution authority.
 
 ## Phase 3 — Panel Integration (Controlled Cognition)
