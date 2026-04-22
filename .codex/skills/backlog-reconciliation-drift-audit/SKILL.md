@@ -92,7 +92,7 @@ For each drift case, recommend one concrete corrective action only:
 - Treat `agent:ready` as the pickup qualifier for `Status=Ready`, not as a substitute for `In Progress`, `Review`, or `Done`.
 - For PR cards, treat open non-draft as `Review` and open draft as `In Progress`.
 - Prefer one repair action per drift class when the same correction repeats across multiple items; do not churn the board with separate micro-fixes when a batched audit can close the gap.
-- If full-project scan is slow or blocked by API latency, run a targeted audit for open issues, open PRs, and recently merged PRs, then report that fallback explicitly.
+- If full-project scan is slow or blocked by API latency, run a targeted audit for open issues, open PRs, recently merged PRs, and recently closed-unmerged PRs, then report that fallback explicitly.
 
 
 ## Capturing learning
