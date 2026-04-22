@@ -103,6 +103,12 @@ class WorkerQueueStatus(BaseModel):
     source_path: str | None = None
 
 
+class ViewFreshnessStatus(BaseModel):
+    state: str
+    reason: str | None = None
+    sources: list[str] = Field(default_factory=list)
+
+
 class WatcherAutomationStatus(BaseModel):
     auto_exec_enabled: bool = False
     mode: str = "emit-only"
@@ -149,6 +155,7 @@ class SystemStatus(BaseModel):
     outbox_lag: Optional[OutboxLagStatus] = None
     events_log: Optional[EventsLogStatus] = None
     worker_queue: Optional[WorkerQueueStatus] = None
+    view_freshness: Optional[ViewFreshnessStatus] = None
     watcher_automation: Optional[WatcherAutomationStatus] = None
 
 
@@ -165,6 +172,7 @@ __all__ = [
     "OutboxLagStatus",
     "EventsLogStatus",
     "WorkerQueueStatus",
+    "ViewFreshnessStatus",
     "WatcherAutomationStatus",
     "SystemStatus",
 ]
