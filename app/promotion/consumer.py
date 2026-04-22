@@ -7,7 +7,7 @@ from typing import Iterable, Mapping
 
 from app.domain.state_axes import normalize_promotion_payload, resolve_promotion_axes
 from app.events.schema import OutboxEvent, make_outbox_event
-from app.events.types import PROMOTE_DONE, PROMOTE_ERROR, PROMOTE_INTENT_CREATED
+from app.events.types import PROMOTE_DONE, PROMOTE_ERROR, PROMOTE_INTENT_CREATED, PROMOTION_TRANSITION_APPLIED
 from app.events.models import new_event
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.note_update import apply_promotion_frontmatter
@@ -192,6 +192,28 @@ def _handle_promotion_payload(
             "state": axes.maturity or axes.review_state,
             "maturity": axes.maturity,
             "review_state": axes.review_state,
+            "source_event": event_id,
+        },
+        trace_id,
+    )
+    summary["emitted"] += 1
+    transition = payload.get("transition") if isinstance(payload, Mapping) else None
+    transition_family = "promotion"
+    target_maturity = axes.maturity
+    if isinstance(transition, Mapping):
+        transition_family = str(transition.get("family") or transition_family)
+        target_maturity = str(transition.get("target_maturity") or target_maturity or "") or target_maturity
+    emit(
+        PROMOTION_TRANSITION_APPLIED,
+        {
+            "intent_event_id": event_id,
+            "trace_id": trace_id,
+            "note_uuid": note_uuid,
+            "note_path": str(note_path),
+            "transition_family": transition_family,
+            "target_maturity": target_maturity,
+            "executor": "promotion.consumer",
+            "effect": "applied",
             "source_event": event_id,
         },
         trace_id,

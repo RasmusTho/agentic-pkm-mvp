@@ -5,7 +5,7 @@ description: "Prepare a slice-implementation PR for verification by resolving me
 
 # PR Integration
 
-Use this skill after `publish-pr` and before the verification stage.
+Use this skill when a PR needs readiness/repair before verification; it is the conditional path after `publish-pr`, not a mandatory immediate publication step.
 
 Goal:
 produce a mergeable, policy-compliant PR with CI **green** on the latest head SHA so verification can run on truthful state.
@@ -16,6 +16,10 @@ This skill does NOT merge the PR. Merge is owned by the verification skill after
 
 ## Canonical workflow position
 
+Hot path:
+`Docs -> Feature issue -> Slice issue -> Agent -> Publish PR -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
+
+Conditional / readiness-repair path:
 `Docs -> Feature issue -> Slice issue -> Agent -> Publish PR -> PR integration -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
 
 ## First context to load
@@ -32,6 +36,7 @@ This skill does NOT merge the PR. Merge is owned by the verification skill after
 - A PR exists (draft or ready) and links the governing branch.
 - The PR was just created or updated by `.codex/skills/publish-pr/SKILL.md` or equivalent truthful publication flow.
 - Implementation changes are already in place.
+- Use this skill when the PR still needs mergeability, CI attachment, or review-feedback repair before verification.
 
 ## Exit conditions
 

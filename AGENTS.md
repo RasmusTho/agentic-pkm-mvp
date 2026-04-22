@@ -45,6 +45,15 @@ For GitHub implementation work, loading `.codex/skills/issue-to-code/SKILL.md` i
 That skill owns the pickup rule:
 when active work begins, move the governing Issue/Project state to `In Progress` and remove `agent:ready` before local edits so another agent does not pick up the same task.
 
+Workflow state model:
+
+- Issue state is for claim/active/block/closure flow: `Ready`, `In Progress`, `Blocked`, `Done`.
+- PR/Project-item state is for review/integration/delivery projection: `Review`, `In Progress`, `Blocked`, `Done`.
+- Default PR mode is open (non-draft). Draft PR is opt-in and requires an explicit reason.
+- `Review` is the agent-review phase before verification; it is not a human-waiting synonym.
+- PR/project `Done` should be projected by automation where possible; skills should only fallback-correct when projection drifts.
+- `pr-integration` is a conditional repair/readiness step, not a mandatory hop after every publish.
+
 ## Change classification
 
 Before editing, classify the change:

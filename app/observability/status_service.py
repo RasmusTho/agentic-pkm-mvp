@@ -15,6 +15,7 @@ from app.observability.status_model import (
     EventCounters,
     EventsLogStatus,
     IngestionStatus,
+    InstanceProvenanceStatus,
     IntentStatus,
     IndexStatus,
     PanelDiagnostics,
@@ -28,6 +29,7 @@ from app.observability.status_model import (
 )
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
+from app.settings.runtime import get_settings_bundle
 from app.settings.panel_actions_settings import load_panel_actions_settings, panel_action_ids
 from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_settings, resolve_auto_exec_state
 from app.settings.panel_actions import get_panel_actions_diagnostics
@@ -688,6 +690,21 @@ def _get_watcher_automation_status() -> WatcherAutomationStatus:
     )
 
 
+def _get_instance_provenance_status() -> InstanceProvenanceStatus | None:
+    try:
+        bundle = get_settings_bundle()
+    except Exception:
+        return None
+    instance = getattr(bundle, "instance", None)
+    if instance is None:
+        return None
+    return InstanceProvenanceStatus(
+        instance_id=str(getattr(instance, "id", "home")),
+        instance_role=str(getattr(instance, "role", "master")),
+        environment=str(getattr(instance, "environment", active_environment())),
+    )
+
+
 def get_system_status() -> SystemStatus:
     sot_meta = get_sot_metadata()
     ingestion = get_ingestion_status()
@@ -727,6 +744,7 @@ def get_system_status() -> SystemStatus:
             worker_queue=worker_queue,
         ),
         watcher_automation=_get_watcher_automation_status(),
+        instance_provenance=_get_instance_provenance_status(),
     )
 
 

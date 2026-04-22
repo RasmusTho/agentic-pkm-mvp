@@ -118,6 +118,8 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 ## Current Snapshot
 
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
+- Runtime event envelopes emitted through the shared outbox helper now include `meta.instance_provenance` (`instance_id`, `instance_role`, `environment`) as backward-compatible operational metadata.
+- Status summaries now expose instance provenance (`instance_id`, `instance_role`, `environment`) for runtime attribution; this does not change artifact identity or companion note identity semantics.
 - Production-facing path is the active current-state default; lab/dev-only flows remain explicitly non-production.
 - The local test stack can be started successfully against a separate test vault, and `uat-seed-vault-test` works.
 - The repo-supported local bootstrap/UAT path is still not fully self-contained end to end; several concrete blocker issues already exist for that work.
@@ -128,6 +130,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - PanelAgent runtime V1 is part of the active baseline; planner pipeline and LangGraph expansion remain opt-in.
 - Legacy snapshot watchers remain available only for lab/dev workflows and are not part of the runtime default.
 - Eval suites remain opt-in diagnostics; they do not define baseline health by themselves.
+- Full replica-aware behavior (conflict handling, distributed authority, sync transport semantics) remains post-baseline work.
 
 ## Forward-Line Tracking
 

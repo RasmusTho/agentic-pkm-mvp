@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.settings.runtime import get_settings_bundle
 
 
 def _now_iso() -> str:
@@ -13,6 +14,30 @@ def _now_iso() -> str:
 
 def _default_meta() -> Dict[str, Any]:
     return {"version": "1.0"}
+
+
+def _instance_provenance() -> Dict[str, str] | None:
+    try:
+        bundle = get_settings_bundle()
+        instance = getattr(bundle, "instance", None)
+        if instance is None:
+            return None
+        return {
+            "instance_id": str(getattr(instance, "id", "home")),
+            "instance_role": str(getattr(instance, "role", "master")),
+            "environment": str(getattr(instance, "environment", "prod")),
+        }
+    except Exception:
+        return None
+
+
+def _build_meta(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    resolved = dict(meta or _default_meta())
+    resolved.setdefault("version", "1.0")
+    instance = _instance_provenance()
+    if instance is not None:
+        resolved["instance_provenance"] = instance
+    return resolved
 
 
 class OutboxEvent(BaseModel):
@@ -49,7 +74,7 @@ def make_outbox_event(
         source=source,
         timestamp=timestamp or _now_iso(),
         payload=payload or {},
-        meta=meta or _default_meta(),
+        meta=_build_meta(meta),
     )
 
 

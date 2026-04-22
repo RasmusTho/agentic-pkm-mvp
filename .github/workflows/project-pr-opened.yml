@@ -1,0 +1,26 @@
+name: Project PR Opened
+
+on:
+  pull_request:
+    types: [opened, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+  repository-projects: write
+
+jobs:
+  project-pr-status:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Project PR state projection
+        # Draft PRs stay In Progress; non-draft PRs move to Review.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/project_status.py \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.pull_request.number }}" \
+            --action "${{ github.event.action }}" \
+            --draft "${{ github.event.pull_request.draft }}"

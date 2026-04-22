@@ -18,6 +18,7 @@ You operate after PR integration has produced a mergeable, CI-green PR.
 - ensure shipped truth moved to the right owner docs
 - ensure roadmap/plan wording no longer falsely reads as pending
 - detect false backlog/project states
+- honor automation-driven PR/Project `Done` projection first, and only fallback-set `Done` when needed
 - **merge the PR when the delivery contract is satisfied**
 - close the governing Issue and set Project Status to Done
 - unblock dependent issues
@@ -124,14 +125,14 @@ When all merge prerequisites are met:
    gh issue edit #<N> --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
    ```
 
-6. **Set Issue Project Status to Done:**
+6. **Set Issue Project Status to Done if automation has not already projected it:**
    ```bash
    gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
      -f fieldId="$STATUS_FIELD_ID" -f optionId="$DONE_OPTION_ID" \
      -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
    ```
 
-7. **Set PR Project Status to Done:**
+7. **Set PR Project Status to Done if automation has not already projected it:**
    ```bash
    gh api graphql -f projectId="$PROJECT_ID" -f itemId="$PR_ITEM_ID" \
      -f fieldId="$STATUS_FIELD_ID" -f optionId="$DONE_OPTION_ID" \
@@ -166,6 +167,7 @@ When all merge prerequisites are met:
 **Verification owns terminal delivery-state correction. All state changes must be executed, not just described.**
 
 - An open or draft PR without explicit review handoff remains `In Progress`; `Review` is reserved for the review handoff state.
+- If project/PR automation has already projected `Done`, verify that state rather than writing it again; only apply the fallback `Done` mutation when the item still needs terminal projection.
 
 ### Slice Issue Fully Delivered
 
@@ -202,7 +204,7 @@ If the feature issue is fully delivered and acceptance is satisfied:
 
 If a related PR was closed without merge but represents terminal tracked work:
 
-1. **Set PR Project Status to Done:**
+1. **Set PR Project Status to Done if automation has not already projected it:**
    ```bash
    gh api graphql -f projectId="$PROJECT_ID" -f itemId="$PR_ITEM_ID" \
      -f fieldId="$STATUS_FIELD_ID" -f optionId="$DONE_OPTION_ID" \

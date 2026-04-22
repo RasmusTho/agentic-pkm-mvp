@@ -3,8 +3,6 @@ name: Project Status Reconcile
 on:
   issues:
     types: [opened, reopened, closed, labeled, unlabeled]
-  pull_request:
-    types: [opened, reopened, synchronize, ready_for_review, review_requested, closed]
   schedule:
     - cron: '17 * * * *'
   workflow_dispatch:
@@ -28,24 +26,6 @@ jobs:
           python3 scripts/reconcile_project_status.py \
             --repo "${{ github.repository }}" \
             --issue "${{ github.event.issue.number }}"
-
-  reconcile-pr:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Reconcile PR project status
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          EXTRA_ARGS=""
-          if [ "${{ github.event.action }}" = "review_requested" ]; then
-            EXTRA_ARGS="--status Review"
-          fi
-          python3 scripts/reconcile_project_status.py \
-            --repo "${{ github.repository }}" \
-            --pr "${{ github.event.pull_request.number }}" \
-            ${EXTRA_ARGS}
 
   reconcile-scan:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'

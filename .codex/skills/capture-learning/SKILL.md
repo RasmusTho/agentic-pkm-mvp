@@ -1,11 +1,11 @@
 ---
 name: capture-learning
-description: "Append one structured divergence entry to docs/learning-log.md. Invoke when you do something you did not expect to do, or discover an earlier artifact was wrong — not on normal work."
+description: "Append one structured divergence entry to docs/learning-log.md when a concrete divergence is worth immediate upstream repair; defer low-signal cases to retrospective batching."
 ---
 
 # Capture Learning
 
-Single-job micro-skill. Appends one entry to `docs/learning-log.md` when a plan divergence occurs during delivery.
+Maintenance-path repair skill. Appends one entry to `docs/learning-log.md` when a plan divergence is concrete enough to name an upstream artifact now.
 
 ## When to invoke
 
@@ -14,6 +14,8 @@ Invoke only when:
 - you discovered an earlier artifact was wrong
 
 Do NOT invoke when work went exactly as planned.
+
+This is not a hot-path routine for every small divergence. If the signal is minor, repetitive, or not yet actionable, batch it for `learning-retrospective` instead of interrupting the current task.
 
 The "name an artifact" gate: you must name an upstream artifact before logging. If you cannot name one, do not log.
 
@@ -44,7 +46,7 @@ Append after the last existing entry (or after the `---` separator if the log is
 
 ## Timing
 
-Invoke before continuing with remaining task work. Context is freshest at the moment of divergence — do not batch to end of task.
+Invoke before continuing only when the divergence needs immediate upstream repair. Otherwise, collect the signal and let the next retrospective convert batched notes into a concrete edit.
 
 ## Output format
 

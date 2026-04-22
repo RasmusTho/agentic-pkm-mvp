@@ -6,6 +6,7 @@ description: "Audit and update time-sensitive docs such as STATUS, ROADMAP, roll
 # Temporal Doc Governance
 
 Use this skill when the task is to audit or update documentation with a strong temporal component.
+This is a periodic maintenance pass, not a hot-path delivery step.
 
 Typical targets:
 
@@ -14,6 +15,8 @@ Typical targets:
 - `docs/DOCS_INDEX.md`
 - rollout, track, runbook, and current-state docs
 - any doc that can drift because code, issues, runtime posture, or operational state changed
+
+Use it to repair temporal drift, not to add one-off backlog intake or implementation chatter.
 
 ## First context to load
 
@@ -63,6 +66,7 @@ Use these classes:
 - Prefer correcting current-state claims over rewriting large sections.
 - Keep `ROADMAP` forward-looking; move delivered truth into the owner/current-state doc.
 - Keep `STATUS` explicitly operational; remove roadmap-like language when reality is already shipped or no longer active.
+- Batch repeated temporal corrections where the same claim appears across multiple docs, and avoid splitting one drift class into many micro-edits unless the surfaces truly diverge.
 - If a claim cannot be verified, mark the uncertainty instead of presenting it as current truth.
 - Update `Last reviewed` whenever the doc is intentionally checked.
 - Update `Last verified against` with the most local concrete verification anchor available.

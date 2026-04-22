@@ -8,6 +8,7 @@ description: "After an implementation PR merges, read the diff and decide whethe
 You are invoked at the end of `verification-and-closure`, after a PR has merged. Your job is one question: **did this merge change something an owner doc currently claims?**
 
 You act on the answer. You do not ask the user to classify, attest, or unblock.
+This is a cold-path maintenance check, not a hot-path implementation step.
 
 ## The one question
 
@@ -28,11 +29,13 @@ The receipt comment always goes on the **closed issue** that the PR fixes. If th
 
 ## Three outcomes
 
-**1. Yes, and the wording change is clear.**
+Classify the claim into one of three lanes: immediate action, queued follow-up, or no change.
+
+**1. Yes, and the wording change is clear. Immediate action.**
 
 Open a docs-only PR via `docs-authoring` that updates the owner doc(s). Title: `docs: owner-doc promotion for #<closed-issue>`. Body links back to the closed issue and names the specific claim(s) being corrected. Add a comment on the closed issue: `post-merge owner-doc check: docs PR opened at #<docs-pr>`.
 
-**2. Yes, but the right wording needs human judgment.**
+**2. Yes, but the right wording needs human judgment. Queue a follow-up.**
 
 Open one bounded follow-up issue. Title: `docs: owner-doc promotion needed for #<closed-issue>`. Body names:
 
@@ -54,6 +57,7 @@ That comment is the receipt. If it is missing on a closed implementation issue, 
 - **Owner docs claim current-state truth.** If a shipped change makes an owner-doc sentence false, outdated, or misleading, the sentence needs to change. Stylistic preference is not a reason to open a PR.
 - **Target-state and plan docs are not owner docs.** `docs/plans/*`, `docs/{CAPABILITY}/*` specs, and v6.0 target docs describe intent, not current-state truth. Do not open promotion PRs against them unless the merge itself changes target-state intent, which is rare.
 - **Prefer the smallest correct change.** A single sentence fix in `STATUS.md` beats a chapter rewrite. If the wording gap is small, just fix it (outcome 1). Only escalate to outcome 2 when the correct phrasing genuinely needs the user's judgment.
+- **Split immediate action from queued repair.** If the owner-doc claim is clearly wrong, open the docs PR now. If the claim is only plausibly wrong or needs interpretation, queue one bounded follow-up issue instead of creating churn or guessing.
 - **When unsure between outcomes 1 and 2, pick 2.** A follow-up issue is cheaper than an incorrect owner-doc PR.
 - **When unsure between outcomes 2 and 3, pick 2.** A false negative (silent drift) is worse than a spurious follow-up issue the user can close in ten seconds.
 - **Never open more than one PR or one issue per merge.** If multiple owner docs need changes, bundle them. If the bundle is too large to review, that is signal that the merge itself should have been split — file one follow-up issue noting the scope, not many.

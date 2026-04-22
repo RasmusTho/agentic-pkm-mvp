@@ -8,7 +8,11 @@ These skills are workflow helpers, not replacements for the canonical builder-ag
 
 ## Workflow map
 
-`Docs -> Issue -> Project -> Issue maintenance -> Agent -> Publish PR -> PR integration -> CI -> Verification -> Merge -> Project/doc closure -> Owner Doc`
+Hot path:
+`Docs -> Issue -> Project -> Issue maintenance -> Agent -> issue-to-code fast claim -> Publish PR -> CI -> Verification -> Merge -> Project/doc closure -> Owner Doc`
+
+Conditional / maintenance path:
+`Issue maintenance -> Agent` for stale or false backlog state, and `Publish PR -> pr-integration` only when readiness/repair work is still needed before verification.
 
 ## Skill routing
 
@@ -17,6 +21,7 @@ These skills are workflow helpers, not replacements for the canonical builder-ag
 - `issue-to-code`
   - implementation entrypoint for bounded GitHub Issue work
   - before coding, update lifecycle state truthfully: move active work to `In Progress` and remove `agent:ready`
+  - use that transition as the minimal shared claim/lease compatibility signal in multi-agent environments
 - `issue-maintenance-change-control`
   - repair stale or false Issue / PR / label / Project state before or during execution
 - `docs-authoring`
@@ -28,9 +33,9 @@ These skills are workflow helpers, not replacements for the canonical builder-ag
 - `publish-pr`
   - publication boundary for branch, commit, push, and PR creation after local work is ready
 - `pr-integration`
-  - run after `publish-pr` and before verification to make the PR mergeable and CI-attached
+  - readiness/repair path after `publish-pr` when the PR still needs mergeability, CI attachment, or review-feedback repair before verification
 - `verification-and-closure`
-  - final verification, merge, and delivery-state closure after implementation / PR work
+  - final verification, merge, and delivery-state closure after implementation / PR work; honors automation-driven `Done` projection and only fallback-writes it when needed
 - `post-merge-owner-doc`
   - invoked by `verification-and-closure` at merge time; reads the diff and decides whether any owner doc needs promotion, then acts on it
 - `backlog-reconciliation-drift-audit`
