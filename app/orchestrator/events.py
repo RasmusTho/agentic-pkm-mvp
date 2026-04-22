@@ -164,16 +164,33 @@ def emit_orchestration_rolled_back(
 
 
 def emit_mcp_tool_call_started(
-    *, plan_id: str, step_id: str, tool_name: str, object_id: str | None, trace_id: str | None
+    *,
+    plan_id: str,
+    step_id: str,
+    tool_name: str,
+    object_id: str | None,
+    trace_id: str | None,
+    route: Dict[str, Any] | None = None,
 ) -> None:
     details = {"plan_id": plan_id, "step_id": step_id, "tool": tool_name}
+    if route:
+        details.update(route)
     _emit(MCP_TOOL_CALL_STARTED, object_id=object_id, trace_id=trace_id, details=details)
 
 
 def emit_mcp_tool_call_finished(
-    *, plan_id: str, step_id: str, tool_name: str, result: Dict[str, Any], object_id: str | None, trace_id: str | None
+    *,
+    plan_id: str,
+    step_id: str,
+    tool_name: str,
+    result: Dict[str, Any],
+    object_id: str | None,
+    trace_id: str | None,
+    route: Dict[str, Any] | None = None,
 ) -> None:
     details = {"plan_id": plan_id, "step_id": step_id, "tool": tool_name, "result": result}
+    if route:
+        details.update(route)
     _emit(MCP_TOOL_CALL_FINISHED, object_id=object_id, trace_id=trace_id, details=details)
 
 
