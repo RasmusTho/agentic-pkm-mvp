@@ -7,6 +7,7 @@ tools, mutates notes, writes outbox events, or emits promotion/action intents.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any, Callable
 
 from app.reasoning.facade import ReasoningFacade, get_reasoning_facade
@@ -25,6 +26,7 @@ _DENY_HINTS = (
     "emit",
     "outbox",
 )
+_DENY_PATTERN = re.compile(r"\b(" + "|".join(re.escape(token) for token in _DENY_HINTS) + r")\b")
 
 
 @dataclass(frozen=True)
@@ -76,11 +78,21 @@ class ReadOnlyChatCognition:
     @staticmethod
     def _detect_denied_requests(prompt: str) -> list[str]:
         lowered = prompt.lower()
-        return [token for token in _DENY_HINTS if token in lowered]
+        return sorted({match.group(1) for match in _DENY_PATTERN.finditer(lowered)})
 
     def _plan_read_only(self, prompt: str, *, trace_id: str | None) -> dict[str, Any]:
         facade = self._facade_factory()
         run = facade.plan([], goal=prompt, trace_id=trace_id)
-        if run.status != "ok" or not isinstance(run.result, dict):
-            return {}
-        return run.result
+        if run.status == "ok" and isinstance(run.result, dict) and run.result:
+            return run.result
+        return {
+            "mode": "read_only_fallback",
+            "goal": prompt,
+            "steps": [
+                "Clarify the request and constraints.",
+                "Identify relevant context and assumptions.",
+                "Propose a non-mutating response strategy.",
+            ],
+            "execution_allowed": False,
+            "trace_id": trace_id,
+        }

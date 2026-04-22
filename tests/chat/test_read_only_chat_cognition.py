@@ -29,6 +29,19 @@ class _SpySideEffect:
         self.calls += 1
 
 
+class _FailingFacade:
+    def plan(self, object_ids: list[str], *, goal: str | None = None, trace_id: str | None = None) -> ReasoningRun:
+        return ReasoningRun(
+            id="run-chat-fail",
+            mode=ReasoningMode.PLANNING,
+            status="failed",
+            result={},
+            object_uuids=[],
+            trace_id=trace_id,
+            error="mode planning not implemented",
+        )
+
+
 def test_chat_cognition_uses_reasoning_facade_and_returns_structured_response() -> None:
     facade = _StubFacade()
     cognition = ReadOnlyChatCognition(facade_factory=lambda: facade)
@@ -69,3 +82,19 @@ def test_chat_cognition_has_no_note_or_outbox_side_effects() -> None:
     assert result.side_effects_emitted is False
     assert note_writer.calls == 0
     assert outbox_writer.calls == 0
+
+
+def test_chat_cognition_uses_fallback_planning_when_reasoning_plan_fails() -> None:
+    cognition = ReadOnlyChatCognition(facade_factory=lambda: _FailingFacade())
+    result = cognition.respond("Plan how to summarize this thread", trace_id="trace-chat-fallback")
+    assert result.planning["mode"] == "read_only_fallback"
+    assert result.planning["execution_allowed"] is False
+    assert "steps" in result.planning and result.planning["steps"]
+
+
+def test_chat_cognition_denied_detection_uses_word_boundaries() -> None:
+    facade = _StubFacade()
+    cognition = ReadOnlyChatCognition(facade_factory=lambda: facade)
+    result = cognition.respond("Explain runtime architecture and actionable constraints.")
+    assert "run" not in result.denied_requests
+    assert "action" not in result.denied_requests
