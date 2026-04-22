@@ -125,6 +125,8 @@ Watcher auto-exec enablement rule:
 - `WATCHER_AUTO_EXEC=1` is necessary to arm panel auto-exec, but it is not sufficient on its own to prove rollout safety.
 - Before enabling auto-exec for a wider runtime scope, confirm the effective allowlist, recent skip counters, and write-guard/provenance context are coherent across both CLI surfaces.
 - When the question is release or merge readiness rather than a live local diagnosis, corroborate the operator view with the enforced CI summary line (`CI SUMMARY GATES ok=<bool>`).
+- `python -m app.cli settings-validate` is the schema validation gate for repo-shipped panel action catalog/wiring and watcher settings. It rejects invalid panel action ids, missing required panel fields, malformed watcher `auto_run` values, and unknown watcher allowlist action ids.
+- This validation path does not widen runtime authority: watcher auto-exec remains guarded by `WATCHER_AUTO_EXEC`, allowlist policy, and per-note `ai_panel_auto_run: never` opt-out.
 
 ### Docker-first deployment
 1. Set `VAULT_ROOT` to your local vault path:
@@ -278,6 +280,7 @@ LLM_PROVIDER=mock python -m app.cli health --json
 python -m app.cli watcher run --max-ticks 1
 python -m app.cli pipe notes/meeting.md
 python -m app.cli settings-explain --json
+python -m app.cli settings-validate
 ```
 
 Startup/runtime verification now treats task routes and embeddings explicitly:
