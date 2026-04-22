@@ -343,6 +343,10 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 - Execution plans are runtime orchestration artifacts. They must not be read as equivalent to the
   human commitment/project layer described in `docs/PROJECT_KERNEL.md` and the commitment concept
   contracts.
+- Minimal commitment-runtime seam: runtime now includes a bounded commitment read model for
+  `next`/`waiting` surfacing plus governed commitment transition metadata that links transition
+  receipts (`before_state`, `after_state`, `cause`, `receipt_event_id`, `trace_id`) without
+  collapsing commitments into note `review_state`/`maturity` semantics.
 - Derived / overlay metadata: system-owned overlays such as `zone`, recency, or salience are computed from signals and remain outside the core contract.
 - Agent reasoning operates on Core-6 + state axes + policy profiles (see `docs/NOTE_KIND_POLICIES.md`) + derived overlays.
 

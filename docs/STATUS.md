@@ -64,6 +64,13 @@ co-editing and hybrid Panel/Chat integration remain v6 future surfaces, governed
 - Context enablement posture: the relation store now supports optional `sphere_membership`
   memberships as broader belonging metadata. This seam is additive only; operational scope still
   governs conservative runtime behavior and retrieval is not relation-driven by default.
+- Retrieval capability seam: salience/staleness signal payload exists as an optional diagnostics
+  seam and is emitted only on explicit opt-in. Runtime does not source staleness from persisted
+  state-axis labels in artifact payload (`review_state`, `maturity`).
+- Commitment-runtime minimal slice: bounded `next`/`waiting` commitment query surfacing is present
+  in the domain layer, commitment state values remain distinct from note state axes, and
+  commitment-state transitions now carry receipt-linkage metadata through the governed transition
+  path.
 - Minimal concurrency guarantees: DedupTaskQueue + event_id dedup guard watcher runs, optimistic writes protect note updates, and the promotion consumer uses an EventDedupStore to skip duplicate intents (`docs/CONCURRENCY.md`, `app/promotion/consumer.py`).
 - Settings compiler scope: panel action catalog, watcher settings, and outbox paths now compile with provenance (path/mtime/sha) via `vault/@Settings/watchers.md`, `docs/settings/panel-actions.md`, `python -m app.cli settings-validate`, and `python -m app.cli settings-explain`.
 - Operator enablement signals: `python -m app.cli settings-explain` surfaces watcher auto-exec state, allowlist validity, provenance, and write-guard context; `python -m app.cli status` exposes the same gate, watcher automation counters, last tick skips, last-run skip reasons, and panel-action/compiler provenance (source paths, mtimes, combined digest). Treat `allowlist`, `dedup/skipped_*`, `panel_skipped_policy`, and `writes_allowed` as the safe-to-enable checklist, not just the raw `WATCHER_AUTO_EXEC` value.
@@ -119,6 +126,8 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
 - Runtime event envelopes emitted through the shared outbox helper now include `meta.instance_provenance` (`instance_id`, `instance_role`, `environment`) as backward-compatible operational metadata.
+- Panel mutation gating now enforces explicit trust-verb classification on mutation-capable panel actions: only admitted `APPLY` actions can emit promotion mutation intents; `SUGGEST` remains non-mutating unless promoted through the governed execution path.
+- APPLY transition receipts (`promotion.transition.applied`) now include accountability fields (`verb`, `authority`, `basis`, `outcome`, `artifact_linkage`, `instance_provenance`) as backward-compatible payload extensions.
 - Status summaries now expose instance provenance (`instance_id`, `instance_role`, `environment`) for runtime attribution; this does not change artifact identity or companion note identity semantics.
 - Production-facing path is the active current-state default; lab/dev-only flows remain explicitly non-production.
 - The local test stack can be started successfully against a separate test vault, and `uat-seed-vault-test` works.
