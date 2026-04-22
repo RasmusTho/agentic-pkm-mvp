@@ -4,8 +4,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, Mapping
 
 from app.components.settings.tools_loader import load_tools
+from app.planner.tools import MCP_TOOL_DESCRIPTORS
 from app.orchestrator.executor import MockPlanExecutor, StepContext, StepExecutionError
-from app.planner.schema import PlanStep, ToolDescriptor
+from app.planner.schema import ToolDescriptor
 
 
 @dataclass
@@ -13,7 +14,9 @@ class MCPToolProvider:
     """Registry-backed tool provider that executes via existing executor paths."""
 
     def list_descriptors(self) -> Dict[str, ToolDescriptor]:
-        return _load_registry_descriptors()
+        descriptors = _load_registry_descriptors()
+        supported = set(MCP_TOOL_DESCRIPTORS.keys())
+        return {name: descriptor for name, descriptor in descriptors.items() if name in supported}
 
     def get_descriptor(self, tool_name: str) -> ToolDescriptor | None:
         return self.list_descriptors().get(tool_name)
@@ -32,15 +35,21 @@ class MCPToolProvider:
         if descriptor is None:
             raise StepExecutionError(f"unknown MCP tool '{tool_name}'", error_type="invalid_tool")
 
-        step = PlanStep(
-            id=step_id,
-            kind="tool_call",
-            description=description,
-            tool=tool_name,
-            tool_args=dict(tool_args or {}),
-        )
         active_executor = executor or MockPlanExecutor()
-        return active_executor.execute_step(step, context)
+        call_args = dict(tool_args or {})
+        active_executor._validate_tool_args(call_args, descriptor.allowed_args)  # noqa: SLF001 - parity with executor
+        active_executor._validate_required_args(call_args, descriptor.schema.get("required", []))  # noqa: SLF001
+        timeout_value = None
+        settings = context.tool_settings or {}
+        if "tool_timeout_seconds" in settings:
+            try:
+                timeout_value = float(settings["tool_timeout_seconds"])
+            except Exception:
+                timeout_value = None
+        result_payload = active_executor._invoke_tool(  # noqa: SLF001 - preserve executor runtime path
+            descriptor, call_args, context, timeout_value
+        )
+        return {"tool": descriptor.name, "result": result_payload}
 
 
 def _load_registry_descriptors() -> Dict[str, ToolDescriptor]:

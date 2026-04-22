@@ -30,6 +30,7 @@ def test_tool_provider_lists_registry_descriptors() -> None:
 
     assert "mcp.search.objects" in descriptors
     assert "mcp.vault.append_note" in descriptors
+    assert "vault.read_note.v1" not in descriptors
     assert descriptors["mcp.search.objects"].kind == "mcp"
     assert descriptors["mcp.search.objects"].allowed_args["query"] == "string"
 
