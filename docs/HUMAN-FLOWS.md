@@ -1,12 +1,12 @@
-State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; v6 interaction, finding/reorienting, persistence-surface, and commitment specifications are active docs-only planning surfaces.
+State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; v6 interaction, finding/reorienting, persistence-surface, and commitment specifications are active planning surfaces; read-only Chat cognition has a shipped scaffold, while canvas co-editing and hybrid Chat/Panel mutation remain future work.
 Doc role: Core SoT
 Authority: Canonical user-facing function contract for the system; architecture and implementation changes should remain compatible with this document unless it is updated intentionally.
 Owner: Product / human-function SoT
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-21
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/PANEL_AGENT.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/RECONCILE_CHAT_MUTATION_AUTHORITY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md, docs/FINDING_AND_REORIENTING/README.md, docs/FINDING_AND_REORIENTING/DOCUMENT_SALIENCE_AS_DERIVED.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/research/CHAT_SURFACE_BUILD_VS_BUY.md, merged PRs #423/#424/#425/#426/#427/#431/#439/#448/#453/#454/#460/#463/#467/#469/#472/#473/#474/#475/#476/#477/#478/#479/#490/#491/#492/#493/#494/#496/#501/#521/#527/#533/#547/#548, current repo state at 3c44161 on 2026-04-21, closed current-state bug issues #435/#436/#437
+Last reviewed: 2026-04-22
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/PANEL_AGENT.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CHAT_AUTHORITY_BOUNDARY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md, docs/FINDING_AND_REORIENTING/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/research/CHAT_SURFACE_BUILD_VS_BUY.md, app/chat/read_only_cognition.py, tests/chat/test_read_only_chat_cognition.py, merged PRs #547/#548/#550/#551/#552, current repo state at 59966e9 on 2026-04-22, closed current-state bug issues #435/#436/#437, closed Chat scaffold issue #542, and closed ReasoningFacade adoption issue #543
 
 
 # Human Flows — Yggdrasil / agentic-pkm-mvp

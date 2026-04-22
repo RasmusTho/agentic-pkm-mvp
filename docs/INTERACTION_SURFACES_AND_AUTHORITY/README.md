@@ -15,7 +15,7 @@ related_docs:
   - docs/HUMAN-FLOWS.md
 ---
 
-State: Active specification for v6.0 capability "Interaction surfaces and authority boundaries". Docs-only lane. No runtime code changes. No GitHub issues created yet.
+State: Active specification for v6.0 capability "Interaction surfaces and authority boundaries". The specification itself remains docs-first; downstream implementation issues and runtime slices may reference it without making canvas Chat or Chat-originated mutation current runtime behavior.
 
 # Interaction Surfaces and Authority Specification
 
@@ -93,7 +93,7 @@ Owner-doc promotion (updates to `docs/DESIGN_PRINCIPLES.md`, `docs/plans/V60_CAP
 
 ## Relationship to GitHub issues
 
-This directory is the source of truth. GitHub issues, if later created, reference task specs with "Implements INTERACTION_SURFACES_AND_AUTHORITY/{TASK_NAME}" and use the task's acceptance criteria as the issue contract. No issues are created as part of this capability's specification phase.
+This directory is the source of truth. GitHub issues that implement or validate downstream slices reference task specs with "Implements INTERACTION_SURFACES_AND_AUTHORITY/{TASK_NAME}" and use the task's acceptance criteria as the issue contract. Creating those issues does not by itself promote future canvas Chat or Chat-originated mutation into current runtime behavior.
 
 ## Navigation
 
