@@ -69,6 +69,30 @@ project:
     review_requires_explicit_review_handoff: true
     done_requires_closed_issue_or_terminal_pr_card: true
     project_may_drift_when_platform_access_is_limited: true
+shared_operational_state:
+  purpose: minimal multi-agent exclusion, not lifecycle projection
+  allowed_resources:
+    - issue_claim
+    - lane_claim
+    - ttl_lease
+    - heartbeat_renewal
+    - optional_branch_or_worktree_reservation
+  forbidden_uses:
+    - general_workflow_metadata_registry
+    - repo_file_live_status
+    - large_operational_database_model
+    - mcp_first_control_plane
+    - free_form_agent_queries
+  tool_surface:
+    - claim_issue
+    - release_issue
+    - claim_lane
+    - renew_lease
+    - get_claim
+  git_hygiene:
+    preflight: read_only_hot_path
+    janitor: report_first_cold_path
+    destructive_cleanup_default: false
 pull_requests:
   implementation:
     issue_reference_required: true
@@ -97,9 +121,13 @@ pull_requests:
       - .github/ISSUE_TEMPLATE/*.yml
       - .github/pull_request_template.md
       - .github/workflows/issue-pr-governance.yml
+      - scripts/git_hygiene.py
+      - scripts/git_hygiene_preflight.py
+      - scripts/git_hygiene_janitor.py
       - scripts/docs_guard.py
       - scripts/reconcile_project_status.py
       - scripts/validate_source_anchors.py
+      - tests/ops/test_git_hygiene.py
       - tests/ops/test_project_status_reconcile.py
 rules:
   pr_must_reference_issue_for_implementation: true
