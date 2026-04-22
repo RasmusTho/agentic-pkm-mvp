@@ -54,7 +54,17 @@ def _panel_action_catalog_paths() -> list[Path]:
 def _validate_panel_action_entries() -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     for path in _panel_action_catalog_paths():
-        frontmatter, _ = parse_markdown(path)
+        try:
+            frontmatter, _ = parse_markdown(path)
+        except Exception as exc:
+            issues.append(
+                ValidationIssue(
+                    code="panel_actions.invalid",
+                    message=f"{path}: failed to load panel action catalog: {exc}",
+                    ref="panel_actions",
+                )
+            )
+            continue
         mappings = frontmatter.get("mappings")
         if not isinstance(mappings, list):
             continue

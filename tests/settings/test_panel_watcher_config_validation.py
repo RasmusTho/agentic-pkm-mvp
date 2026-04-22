@@ -77,3 +77,16 @@ def test_invalid_panel_and_watcher_settings_fail_with_clear_errors(
     assert "missing target_event/event_type" in by_code["panel_wiring.invalid"].message
     assert "watcher_settings.malformed_auto_run" in by_code
     assert "auto_run.allowed_actions must be a list" in by_code["watcher_settings.malformed_auto_run"].message
+
+
+def test_unreadable_panel_actions_path_reports_validation_issue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    missing_panel_actions = tmp_path / "missing-panel-actions.md"
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(missing_panel_actions))
+
+    issues = validate_settings()
+    panel_issues = [issue for issue in issues if issue.code == "panel_actions.invalid"]
+
+    assert panel_issues
+    assert all(issue.message for issue in panel_issues)
