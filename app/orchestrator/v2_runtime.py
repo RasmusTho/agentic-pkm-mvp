@@ -65,6 +65,13 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
+def _coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
 def _default_agent_id_for_flow(flow_id: str | None) -> str | None:
     if not flow_id:
         return None
@@ -194,6 +201,8 @@ class OrchestratorV2:
         # Budget tracking
         budget_state: MutableMapping[str, int] = {"steps": 0, "tool_calls": 0}
         max_steps = _coerce_int(context_tool_settings.get("max_steps")) if context_tool_settings else None
+        plan_timeout = _coerce_float(context_tool_settings.get("plan_timeout_seconds")) if context_tool_settings else None
+        deadline = (time.monotonic() + plan_timeout) if plan_timeout and plan_timeout > 0 else None
 
         # Build dependency graph
         graph = DependencyGraph(plan.steps)
@@ -214,6 +223,26 @@ class OrchestratorV2:
 
                 # Submit executable steps
                 for step_id in executable:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        step = graph.steps[step_id]
+                        results.append({
+                            "step_id": step_id,
+                            "status": "error",
+                            "error": "plan timeout budget exhausted",
+                            "error_type": "plan_timeout",
+                        })
+                        emit_step_error(
+                            plan_id=plan.id,
+                            step=step,
+                            error="plan timeout budget exhausted",
+                            error_type="plan_timeout",
+                            object_id=object_id,
+                            trace_id=trace_id,
+                        )
+                        completed_steps.add(step_id)
+                        failed_step_id = step_id
+                        break
+
                     if max_steps is not None and budget_state.get("steps", 0) >= max_steps:
                         results.append({
                             "step_id": step_id,
@@ -245,6 +274,9 @@ class OrchestratorV2:
 
                     future = executor.submit(self._execute_step_safe, step, context)
                     pending_futures[future] = (step, step_id)
+
+                if failed_step_id is not None:
+                    break
 
                 if pending_futures:
                     for future in as_completed(pending_futures):

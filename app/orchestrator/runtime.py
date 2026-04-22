@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Set
 
 from app.planner.schema import Plan, PlanStep
@@ -12,6 +13,13 @@ from .executor import MockPlanExecutor, PlanExecutor, StepContext, StepExecution
 def _coerce_int(value: Any) -> int | None:
     try:
         return int(value)
+    except Exception:
+        return None
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
     except Exception:
         return None
 
@@ -90,8 +98,18 @@ class Orchestrator:
 
         budget_state: MutableMapping[str, int] = {"steps": 0, "tool_calls": 0}
         max_steps = _coerce_int(context_tool_settings.get("max_steps")) if context_tool_settings else None
+        plan_timeout = _coerce_float(context_tool_settings.get("plan_timeout_seconds")) if context_tool_settings else None
+        deadline = (time.monotonic() + plan_timeout) if plan_timeout and plan_timeout > 0 else None
 
         for step in plan.steps:
+            if deadline is not None and time.monotonic() >= deadline:
+                results.append({
+                    "step_id": step.id,
+                    "status": "error",
+                    "error": "plan timeout budget exhausted",
+                    "error_type": "plan_timeout",
+                })
+                break
             emit_step_started(plan_id=plan.id, step=step, object_id=object_id, trace_id=trace_id)
             plan_flow_id = None
             profile_selection = (plan.context or {}).get("profile_selection") if plan.context else None
