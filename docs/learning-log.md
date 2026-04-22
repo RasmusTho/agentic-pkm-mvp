@@ -45,3 +45,8 @@ This lets `learning-retrospective` scope its next read to entries since the last
 **Source:** human (observed during issue creation)
 **Diverged:** The issue-creation workflow made multiple GraphQL calls (label lookup, issue creation, project board operations) and hit the per-hour GraphQL rate limit mid-run, blocking project board assignment.
 **Upstream artifact:** `.codex/skills/` — all skills that interact with GitHub; prefer REST endpoints over GraphQL; resolve GraphQL identifiers once per run and cache in variables; defer project board mutations to a single batched pass at the end.
+
+## 2026-04-22 — temporal-docs-audit (Temporal docs audit)
+**Source:** temporal-doc-governance
+**Diverged:** The audit expected high-risk docs to be clean after recent temporal refreshes, but `docs/ARCHITECTURE.md` still contained a merge-conflict marker on `main`.
+**Upstream artifact:** `.codex/skills/pr-integration/SKILL.md` and CI docs checks — add conflict-marker detection to doc validation before merge.
