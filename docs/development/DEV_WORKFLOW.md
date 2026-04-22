@@ -151,6 +151,17 @@ For implementation work, the delivery loop is:
 7. Feature validation continues on the parent issue until the operator/product path is proven.
 8. Acceptance closes the feature and triggers owner-doc promotion when the support claim changes.
 
+State model for lane-based delivery:
+
+- Issue state supports claim and bounded execution truth: `Ready`, `In Progress`, `Blocked`, `Done`.
+- PR/Project-item state supports review/integration projection: `Review`, `In Progress`, `Blocked`, `Done`.
+- Keep issue and PR state separate in multi-slice lanes where several implementation issues can feed the same lane PR.
+- `issue-to-code` owns fast issue claim (`Ready` -> `In Progress` and remove `agent:ready`) to prevent double-pick.
+- Open PR is the default publication mode. Draft PR is opt-in and requires an explicit reason.
+- `Review` is the agent-review gate before verification, not a generic waiting state.
+- `pr-integration` is conditional and should be used when mergeability/CI attachment/reviewability needs repair; it is not required after every publication.
+- Prefer automation for PR/project-item projection (especially `Done` on terminal PR state) and use manual skill writes as fallback correction when drift is detected.
+
 Execution rule:
 
 - do not start non-trivial implementation without a governing Issue

@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""
+Project PR status projection helper.
+
+Maps GitHub PR lifecycle events to a deterministic Project `Status` and then
+delegates the actual write to the existing reconcile script.
+"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+
+
+def parse_bool(value: str) -> bool:
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def desired_status(action: str, draft: bool | None) -> str:
+    if action in {"opened", "reopened"}:
+        if draft is None:
+            raise ValueError("draft is required for opened/reopened events")
+        return "In Progress" if draft else "Review"
+    if action == "ready_for_review":
+        return "Review"
+    if action == "converted_to_draft":
+        return "In Progress"
+    raise ValueError(f"unsupported pull request action: {action}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repo", required=True, help="owner/repo")
+    parser.add_argument("--pr", type=int, required=True, help="Pull request number")
+    parser.add_argument("--action", required=True, help="GitHub pull_request action")
+    parser.add_argument("--draft", help="True when the PR is currently a draft")
+    args = parser.parse_args()
+
+    draft = None if args.draft is None else parse_bool(args.draft)
+    status = desired_status(args.action, draft)
+    cmd = [
+        sys.executable,
+        "scripts/reconcile_project_status.py",
+        "--repo",
+        args.repo,
+        "--pr",
+        str(args.pr),
+        "--status",
+        status,
+    ]
+    subprocess.run(cmd, check=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -5,13 +5,15 @@ description: "Read docs/learning-log.md since the last retro marker, cluster sig
 
 # Learning Retrospective
 
-Cadence-triggered (manual, or roughly every 10 deliveries). Reads divergence signals logged since the last retrospective and converts them into concrete, actionable edit proposals for upstream artifacts.
+Periodic maintenance pass. Reads batched divergence signals logged since the last retrospective and converts them into concrete, actionable edit proposals for upstream artifacts.
 
 **Does NOT execute edits.** All proposals go to human review first.
 
 ## Trigger
 
 Run when the human requests a retrospective, or after approximately 10 deliveries have accumulated entries in `docs/learning-log.md`.
+
+This is a cold-path repair step, not a hot-path delivery routine.
 
 ## Workflow
 
@@ -33,6 +35,8 @@ Group entries by their `**Upstream artifact:**` field. Example clusters:
 - `.codex/skills/issue-to-code/SKILL.md` — entries pointing to the issue-to-code skill
 - `task-contract template` — entries pointing to the issue body template
 - `unknown — flag for retro` — entries where the artifact was unresolved at log time
+
+Prefer batching similar low-signal entries into one repair proposal when they point at the same upstream artifact.
 
 ### Step 3: Propose concrete edits
 

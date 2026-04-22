@@ -1,0 +1,25 @@
+name: Project PR Stage Change
+
+on:
+  pull_request:
+    types: [ready_for_review, converted_to_draft]
+
+permissions:
+  contents: read
+  pull-requests: read
+  repository-projects: write
+
+jobs:
+  project-pr-status:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Project PR stage projection
+        # Stage-change events are deterministic: ready -> Review, draft -> In Progress.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/project_status.py \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.pull_request.number }}" \
+            --action "${{ github.event.action }}"

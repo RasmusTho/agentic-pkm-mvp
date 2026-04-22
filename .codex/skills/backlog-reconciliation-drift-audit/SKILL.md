@@ -12,6 +12,7 @@ Treat closed PR cards as part of lifecycle truth, not as an afterthought.
 
 This is not feature planning.
 This is anti-drift maintenance.
+It is a cold-path audit, not a hot-path intake workflow.
 
 ## Audit model
 
@@ -24,6 +25,7 @@ You must detect:
 - Issues whose `Source Anchors` no longer match current docs
 - roadmap/plan items that still read as pending after merge
 - delivered code with missing owner-doc writeback
+- backlog items that should have been repaired in a batch but were instead handled one-by-one
 - duplicate Issues covering the same anchored source item
 - Issues in false Project status
 - closed PR cards that still have blank or non-terminal Project status
@@ -85,6 +87,7 @@ For each drift case, recommend one concrete corrective action only:
 - GitHub remains the canonical backlog-state surface.
 - Treat Project `Status` as the primary lifecycle signal.
 - Treat `agent:ready` as the pickup qualifier for `Status=Ready`, not as a substitute for `In Progress`, `Review`, or `Done`.
+- Prefer one repair action per drift class when the same correction repeats across multiple items; do not churn the board with separate micro-fixes when a batched audit can close the gap.
 
 
 ## Capturing learning

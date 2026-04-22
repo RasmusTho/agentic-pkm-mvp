@@ -14,7 +14,11 @@ Only execute bounded implementation work from a GitHub Issue that is the canonic
 
 ## Canonical workflow
 
-`Docs -> Feature issue -> Slice issue -> Agent -> Publish PR -> PR integration -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
+Hot path:
+`Docs -> Feature issue -> Slice issue -> Agent -> Fast claim (Ready -> In Progress + remove agent:ready) -> Publish PR -> PR integration (conditional readiness/repair) -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
+
+Conditional / maintenance path:
+`Issue maintenance -> Agent` and `Publish PR -> PR integration` only when mergeability, CI attachment, or review repair is still needed.
 
 Treat these Issue sections as binding for the governing slice issue:
 
@@ -35,6 +39,8 @@ Treat these Issue sections as binding for the governing slice issue:
 - Do not leave actively worked Issues in `Ready`.
 - Do not leave blocked Issues in `In Progress`.
 - Do not use `Review` only because a PR exists; keep work `In Progress` until review handoff is explicit.
+- Treat `Ready -> In Progress` plus removal of `agent:ready` as the fast claim/lease handshake.
+- Keep that claim minimal and compatible with multi-agent environments: one active lease per Issue, with the label/status transition as the shared signal.
 
 Allowed labels:
 
@@ -85,7 +91,7 @@ When you start active work on an Issue:
    gh api graphql -f query='query { repository(owner:"OWNER", name:"REPO") { issue(number:N) { projectItems(first:1) { nodes { id } } } } }'
    ```
 
-2. **Remove `agent:ready` label:**
+2. **Fast-claim the Issue by removing `agent:ready`:**
    ```bash
    gh issue edit #<N> --remove-label agent:ready
    ```

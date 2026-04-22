@@ -39,8 +39,8 @@ Required fields:
 Status meanings:
 - `Backlog`: tracked work that is not yet ready for agent execution or has been moved out of active execution
 - `Ready`: bounded, testable, unblocked work that is eligible for pickup and labeled `agent:ready`
-- `In Progress`: active implementation, including draft PRs and open PRs before explicit review handoff
-- `Review`: explicit review handoff, normally after review is requested on the active PR
+- `In Progress`: active implementation issue state; on PR items this means draft/rework phase
+- `Review`: PR/project-item review/integration gate and default state for normal open PRs
 - `Done`: merged or otherwise fully delivered work; the Issue is closed and no `agent:*` labels remain
 
 Agent-label meanings:
@@ -61,8 +61,10 @@ Required views:
 Required automation:
 - new issue -> `Status=Backlog`
 - issue reopened or agent-label changed -> reconcile `Status` from the current Issue state and truthful agent label
-- PR opened -> `Status=In Progress`
-- PR review requested -> `Status=Review`
+- PR opened/reopened (non-draft) -> `Status=Review`
+- PR opened/reopened (draft) -> `Status=In Progress`
+- PR marked ready for review -> `Status=Review`
+- PR converted to draft -> `Status=In Progress`
 - PR merged -> `Status=Done`
 - PR closed -> `Status=Done` when the PR is terminal and no longer active
 - issue and PR Project items are reconciled by repo-side workflow so merged PR cards and closed Issue cards do not drift
@@ -73,7 +75,8 @@ Interpretation note:
 
 Lifecycle guardrails:
 - active implementation must not remain `Ready`
-- `Review` must not be used only because a PR exists; use it when review handoff is explicit
+- issues should not move to `Review` only because a PR exists; issue state remains claim/execution truth
+- normal open PRs should default to `Review`; draft is opt-in and should be used only with an explicit reason
 - closed issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`
 - merged or otherwise closed terminal PR items must not remain unset or non-terminal in the Project; they should reconcile to `Done`
 
@@ -90,6 +93,7 @@ Projection rule:
 - Governance-lane PRs may omit an Issue reference only when they are explicitly classified as governance lane and remain limited to approved governance surfaces.
 - Agents only pick Issues labeled `agent:ready`.
 - Agents only pick Issues when `Status=Ready` and the Issue is labeled `agent:ready`.
+- Issue claim (`Ready` -> `In Progress` plus `agent:ready` removal) remains a synchronous skill action, not PR automation.
 - Agents must stay within Issue scope, constraints, and acceptance criteria.
 - Blank/free-form Issues are disabled at repo level.
 

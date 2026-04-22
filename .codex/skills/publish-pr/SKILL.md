@@ -10,7 +10,7 @@ Use this skill when local work is complete enough to publish as a branch and pul
 Goal:
 turn validated local changes into a truthful branch, commit, pushed head, and PR artifact without mixing publication with implementation logic.
 
-⚠️ **CRITICAL: All publication steps (branch creation, staging, commit, push, PR creation) must be executed using explicit git/gh commands. Do not describe these steps—execute them and verify they succeeded. Hand off to pr-integration is mandatory.**
+⚠️ **CRITICAL: All publication steps (branch creation, staging, commit, push, PR creation) must be executed using explicit git/gh commands. Do not describe these steps—execute them and verify they succeeded. Treat pr-integration as a conditional readiness/repair path, not an automatic immediate handoff.**
 
 ## Canonical workflow position
 
@@ -40,7 +40,8 @@ turn validated local changes into a truthful branch, commit, pushed head, and PR
 - Do not publish unrelated local changes.
 - For implementation lane PRs, the body must include `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
 - For docs-authoring or governance lane PRs, leave the linked Issue blank unless a governing Issue actually exists.
-- Default to opening a draft PR unless the work is explicitly ready for review handoff.
+- Default to opening an open PR.
+- Use `--draft` only with an explicit reason that the PR is not yet ready for review or still needs integration/repair.
 - Publication does not move work to `Done`.
 
 ## Publication workflow (all steps are executable)
@@ -115,7 +116,7 @@ Execute based on lane classification:
 
 **Implementation Lane (Fixes an Issue):**
 ```bash
-gh pr create --draft \
+gh pr create \
   --title "<bounded outcome>" \
   --body "$(cat <<'EOF'
 Fixes #<ISSUE_NUMBER>
@@ -133,7 +134,7 @@ EOF
 
 **Docs Authoring Lane:**
 ```bash
-gh pr create --draft \
+gh pr create \
   --title "<docs update title>" \
   --body "$(cat <<'EOF'
 - [x] Docs authoring lane
@@ -154,7 +155,7 @@ EOF
 
 **Governance Lane:**
 ```bash
-gh pr create --draft \
+gh pr create \
   --title "<governance change title>" \
   --body "$(cat <<'EOF'
 - [x] Governance lane
@@ -183,14 +184,14 @@ EOF
 
 ### Step 7: Hand Off to pr-integration
 
-After PR is created/updated, execute pr-integration skill:
+After PR is created/updated, use pr-integration only when the PR still needs readiness/repair work before verification:
 
 ```bash
 # Invoke pr-integration skill to verify, check CI, and prepare for verification
 echo "Handing off to pr-integration skill"
 ```
 
-**Do not skip this handoff.** PR integration resolves merge conflicts, verifies CI, and prepares the PR for verification/merge.
+**Do not force this as an immediate publication step.** PR integration resolves merge conflicts, verifies CI, and prepares the PR for verification/merge when the PR needs that readiness path.
 
 ## PR body requirements
 

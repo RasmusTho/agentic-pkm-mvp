@@ -8,6 +8,7 @@ description: "Create a GitHub Issue whenever a bug is discovered during analysis
 ## Overview
 
 Turn any discovered bug into a compliant GitHub Issue that matches the repo's contract shape and labels. Default to creating issues in the current repo unless the user specifies a different one.
+This is the hot-path defect intake lane, not the cold-path maintenance lane.
 
 ## Workflow
 
@@ -27,6 +28,7 @@ Turn any discovered bug into a compliant GitHub Issue that matches the repo's co
      - `## Suggested Validation`
      - `## Source Docs`
    - Include exact repro steps and observed/expected results when available.
+   - Do not create a micro-issue for routine repair, reconciliation, or bookkeeping churn; route those signals to the maintenance skills instead.
    - Acceptance Criteria must carry `Verify:` markers:
      - The primary behavioral AC ("bug no longer reproduces") points to a regression test the fix will add: `Verify: \`tests/<path>::test_<bug_name>\`` — the test should fail against current code and go green after the fix.
      - Any non-behavioral AC (doc clarifications, roadmap/status wording) points to its observable target.
@@ -46,6 +48,7 @@ Set `agent:ready` when all are true:
 - Every AC carries a resolvable `Verify:` target; the repro is expressible as a named failing test.
 - Source anchors point to specific files or docs.
 - No unresolved decisions or missing contract inputs.
+- The bug is a real defect, not a low-signal maintenance correction that should be batched into audit or retrospective work.
 
 Force `agent:needs-human` when:
 - It is a Core Runtime ↔ Agentic Lab boundary move without explicit direction and module paths.
