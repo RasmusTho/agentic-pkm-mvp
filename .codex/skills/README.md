@@ -68,3 +68,18 @@ The invariant is enforced across the chain:
 - Repair: `issue-maintenance-change-control` treats missing `Verify:` as malformed contract.
 - Consumption: `issue-to-code` gates on `Verify:` presence and runs test-first for behavioral ACs.
 - Closure: `verification-and-closure` resolves every `Verify:` target before merge.
+
+## Cross-cutting invariant: minimal shared leases
+
+GitHub lifecycle state remains the human-visible projection, not the live operational store for
+multi-agent exclusion. Hot-path workflows should use the smallest available shared issue or lane
+lease check, then keep the rest of execution local and deterministic.
+
+- `issue-to-code` owns fast issue claiming and should consult shared issue/lane leases when that
+  surface is available.
+- `publish-pr` and lane-aware workflows may consult lane or branch/worktree reservations when they
+  share an active PR or workspace.
+- `git-hygiene-preflight` is the read-only hot-path check for dirty tree, in-progress git
+  operations, branch/worktree mismatch, and relevant lease conflicts.
+- `git-hygiene-janitor` is a cold-path, report-first cleanup helper. It must respect active leases
+  and must not perform destructive cleanup automatically in v1.

@@ -84,6 +84,29 @@ Projection rule:
 - When Project state disagrees with Issue state, PR state, or merged delivery reality, treat the Issue/PR state as authoritative and correct the Project opportunistically.
 - Do not block delivery solely because a personal Project v2 card could not be updated by repo automation.
 
+## Shared operational lease boundary
+
+GitHub Issues, labels, PRs, and Project status are the shared human-visible lifecycle projection.
+They are not the live operational store for fast multi-agent exclusion. Multiple agent
+environments should use only a minimal shared lease layer for operational coordination:
+
+- issue claims such as `issue:<number>`
+- lane claims such as `lane:<id>`
+- TTL, heartbeat/renewal, and explicit release by `execution_id`
+- optional branch or worktree reservation when needed to avoid active-work collision
+
+The lease layer must stay behind a tiny deterministic API or tool surface such as `claim_issue`,
+`release_issue`, `claim_lane`, `renew_lease`, and `get_claim`. Agents and skills should consume
+that surface instead of querying a backend store directly. This boundary excludes a general
+workflow metadata registry, repo-file-based live status, a large operational database model,
+MCP-first control-plane behavior, and free-form agent queries over operational data.
+
+Git hygiene remains local first. Hot-path preflight is read-only and checks dirty tree,
+in-progress git operations, branch/worktree mismatch, and relevant lease conflicts before local
+mutation. Broader cleanup belongs to a cold-path janitor flow that reports stale merged branches,
+orphaned worktrees, old stashes, and prune candidates while respecting active leases. Destructive
+cleanup is not automatic in v1.
+
 ## Enforcement intent
 
 - Issues are the canonical delivery task contract for implementation work.
@@ -137,8 +160,12 @@ Approved governance surfaces:
 - `.github/pull_request_template.md`
 - `.github/workflows/issue-pr-governance.yml`
 - `scripts/docs_guard.py`
+- `scripts/git_hygiene.py`
+- `scripts/git_hygiene_preflight.py`
+- `scripts/git_hygiene_janitor.py`
 - `scripts/reconcile_project_status.py`
 - `scripts/validate_source_anchors.py`
+- `tests/ops/test_git_hygiene.py`
 - `tests/ops/test_project_status_reconcile.py`
 
 Rules:
