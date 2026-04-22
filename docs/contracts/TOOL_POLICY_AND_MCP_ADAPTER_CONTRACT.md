@@ -1,12 +1,12 @@
 State: Aligned (forward line v5.x)
 Doc role: Reference contract
-Authority: Canonical current-state contract for the repo's tool descriptor registry, validation posture, timeout handling, and MCP adapter behavior. This document describes enacted behavior only and must stay aligned with `app/planner/tools.py`, `app/components/settings/tools_loader.py`, `docs/settings/tools/`, and `app/orchestrator/executor.py`.
+Authority: Canonical current-state contract for the repo's tool descriptor registry, validation posture, timeout handling, and MCP adapter behavior. This document describes enacted behavior only and must stay aligned with `app/planner/tools.py`, `app/components/settings/tools_loader.py`, `docs/settings/tools/`, `app/orchestrator/executor.py`, and `app/orchestrator/mcp_tool_provider.py`.
 
 # Tool Policy And MCP Adapter Contract
 
 This document describes the current tool descriptor registry, validation rules, timeout handling, and the MCP adapter boundary inside the repository for bounded tool execution.
 It is a current-state contract for tool descriptor completeness, allowed-argument validation, mock/deterministic test behavior, and audit expectations.
-It does not claim that orchestrator-managed MCP ToolProvider integration, rich descriptor versioning, or future permission-model expansion are already shipped.
+It does not claim rich descriptor versioning, remote multiplexing, or future permission-model expansion as shipped.
 
 Use this document with:
 - `docs/ARCHITECTURE.md` for current runtime boundaries and the planner/orchestrator pipeline.
@@ -21,7 +21,8 @@ Use this document with:
 - The current tool kinds are: `mcp` (MCP-backed tools), `internal` (repo-owned step handlers), and `cli` (future; not currently dispatched).
 - Tool validation happens at execution time in the orchestrator (MockPlanExecutor) and includes argument type checking, required-field validation, and agent authorization checks via `POLICY_ENFORCE`.
 - Tool execution supports deterministic/mock behavior for CI and development, real vault append for enabled MCP tools, and internal step handlers for repo-specific operations.
-- There is no shipped MCP ToolProvider integration, no remote MCP server multiplexing, and no dynamic descriptor discovery.
+- A local MCP ToolProvider boundary exposes registry-loaded descriptors and delegates execution through the existing executor validation/policy/timeout/mock-real paths.
+- Remote MCP server multiplexing and dynamic descriptor discovery are not shipped.
 
 ## Descriptor sources and structure
 
@@ -204,9 +205,10 @@ Both are handled synchronously during plan execution and do not support real vs.
 
 This contract explicitly bounds the current tool execution behavior and reserves future expansion space:
 
-- **Not currently implemented**: MCP ToolProvider integration, dynamic tool discovery, remote MCP server multiplexing, or tool versioning/evolution policies.
-- **Planned**: The repo plans to integrate LangGraph and MCP ToolProvider semantics as part of the v5.6 forward line (see `docs/tracks/TRACK_AGENTOPS_A2A_MCP.md`).
-- **Scope boundary**: Until that future integration is shipped, this contract describes the enacted descriptor registry, validation, and executor behavior.
+- **Not currently implemented**: dynamic tool discovery, remote MCP server multiplexing, or tool versioning/evolution policies.
+- **Current implementation boundary**: ToolProvider support is local and registry-backed; execution semantics still run through the existing executor contract.
+- **Planned**: The repo still tracks broader LangGraph and remote MCP integration work in the v5.6 forward line (see `docs/tracks/TRACK_AGENTOPS_A2A_MCP.md`).
+- **Scope boundary**: This contract describes enacted descriptor-registry, ToolProvider boundary, validation, and executor behavior only.
 - **Descriptor stability**: Adding new tools via the YAML registry does not require changes to this contract; only changes to the descriptor format, validation rules, or execution semantics should trigger contract updates.
 
 ## Validation and compliance checklist
