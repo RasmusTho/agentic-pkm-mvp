@@ -275,9 +275,6 @@ class OrchestratorV2:
                     future = executor.submit(self._execute_step_safe, step, context)
                     pending_futures[future] = (step, step_id)
 
-                if failed_step_id is not None:
-                    break
-
                 if pending_futures:
                     for future in as_completed(pending_futures):
                         step, step_id = pending_futures.pop(future)
