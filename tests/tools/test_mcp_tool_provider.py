@@ -6,7 +6,7 @@ import pytest
 
 from app.orchestrator.executor import MockPlanExecutor, StepContext, StepExecutionError
 from app.orchestrator.mcp_tool_provider import MCPToolProvider
-from app.planner.schema import PlanMetadata, PlanStep
+from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
 
 pytestmark = pytest.mark.not_pg
 
@@ -119,3 +119,60 @@ def test_tool_provider_vault_append_respects_existing_gates(tmp_path: Path) -> N
     )
     assert allowed_result["result"]["note_path"] != "vault/_mcp/mock-note.md"
     assert any(tmp_path.rglob("*.md"))
+
+
+class _RemoteProviderOK:
+    def list_descriptors(self) -> dict[str, ToolDescriptor]:
+        return {
+            "mcp.search.objects": ToolDescriptor(
+                name="mcp.search.objects",
+                kind="mcp",
+                schema={"type": "object", "required": ["query"]},
+                allowed_args={"query": "string"},
+                mock_result={"status": "ok"},
+            )
+        }
+
+    def execute_tool_call(self, **_: object) -> dict[str, object]:
+        return {"tool": "mcp.search.objects", "result": {"status": "remote-ok", "route": "remote"}}
+
+
+class _RemoteProviderError(_RemoteProviderOK):
+    def execute_tool_call(self, **_: object) -> dict[str, object]:
+        raise RuntimeError("remote unavailable")
+
+
+def test_remote_multiplex_path_flagged() -> None:
+    provider = MCPToolProvider(remote_provider=_RemoteProviderOK())
+    executor = MockPlanExecutor()
+    context = _context({"mcp_remote_multiplex_enable": True})
+
+    result = provider.execute_tool_call(
+        tool_name="mcp.search.objects",
+        tool_args={"query": "agentic"},
+        context=context,
+        step_id="s-remote",
+        description="Remote path",
+        executor=executor,
+    )
+
+    assert result["result"]["status"] == "remote-ok"
+    assert result["result"]["route"] == "remote"
+
+
+def test_remote_multiplex_fallback_on_provider_error() -> None:
+    provider = MCPToolProvider(remote_provider=_RemoteProviderError())
+    executor = MockPlanExecutor()
+    context = _context({"mcp_remote_multiplex_enable": True})
+
+    result = provider.execute_tool_call(
+        tool_name="mcp.search.objects",
+        tool_args={"query": "agentic"},
+        context=context,
+        step_id="s-fallback",
+        description="Fallback path",
+        executor=executor,
+    )
+
+    assert result["tool"] == "mcp.search.objects"
+    assert result["result"]["status"] == "ok"
