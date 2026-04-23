@@ -6,7 +6,7 @@ Authority: Canonical current-state contract for the repo's tool descriptor regis
 
 This document describes the current tool descriptor registry, validation rules, timeout handling, and the MCP adapter boundary inside the repository for bounded tool execution.
 It is a current-state contract for tool descriptor completeness, allowed-argument validation, mock/deterministic test behavior, and audit expectations.
-It does not claim rich descriptor versioning, dynamic remote discovery, or future permission-model expansion as shipped.
+It does not claim rich descriptor versioning or future permission-model expansion as shipped.
 
 Use this document with:
 - `docs/ARCHITECTURE.md` for current runtime boundaries and the planner/orchestrator pipeline.
@@ -24,6 +24,8 @@ Use this document with:
 - A local MCP ToolProvider boundary exposes registry-loaded descriptors and delegates execution through the existing executor validation/policy/timeout/mock-real paths.
 - A bounded remote multiplex seam is available behind explicit flag `mcp_remote_multiplex_enable`; default behavior remains local registry execution.
 - If remote multiplex is enabled but unavailable or failing, execution deterministically falls back to local registry with route reason codes.
+- Dynamic remote descriptor discovery is available behind explicit enablement and policy admission (`mcp_remote_allowed_providers` must admit `remote_multiplex`).
+- Operator-facing discovery diagnostics expose `discovered`, `admitted`, and `rejected` tool sets with deterministic reason codes.
 
 ## Descriptor sources and structure
 
@@ -202,13 +204,30 @@ The executor defines built-in handlers for `internal` protocol tools:
 
 Both are handled synchronously during plan execution and do not support real vs. mock branching (they always execute).
 
+## MCP discovery and admission
+
+Dynamic MCP discovery is deterministic and bounded:
+
+- Discovery runs only when `mcp_remote_multiplex_enable` is truthy.
+- Discovery enumerates descriptors from the remote provider into a diagnostics surface (`discovered`).
+- Discovered tools are not routable by default. Admission requires policy allowlist entry: `mcp_remote_allowed_providers` including `remote_multiplex`.
+- Unsupported discovered tools are rejected with reason `unsupported_tool`.
+- When admission is missing, supported discovered tools are rejected with reason `policy_admission_required`.
+- When admitted, supported discovered tools appear in `admitted` and can be routed via `provider_route=remote_multiplex`.
+- When discovery is disabled/unavailable/failing, reason codes are deterministic:
+  - `remote_disabled`
+  - `remote_unavailable`
+  - `remote_discovery_error`
+  - `policy_admission_required`
+  - `ok`
+
 ## MCP integration boundary
 
-This contract explicitly bounds the current tool execution behavior and reserves future expansion space:
+This contract explicitly bounds current tool execution behavior and reserves future expansion space:
 
-- **Currently implemented**: local registry-backed ToolProvider default path, plus optional remote multiplex seam behind `mcp_remote_multiplex_enable`.
+- **Currently implemented**: local registry-backed ToolProvider default path, plus optional remote multiplex seam with explicit discovery + admission gating.
 - **Fallback behavior**: when remote multiplex is enabled but no remote adapter is present or the adapter errors, route falls back to local registry with deterministic reason codes (`remote_unavailable`, `remote_provider_error`).
-- **Not currently implemented**: dynamic tool discovery or tool versioning/evolution policies.
+- **Not currently implemented**: descriptor versioning/evolution policies across remote providers.
 - **Current implementation boundary**: execution semantics still run through the existing executor contract and policy checks.
 - **Planned**: The repo still tracks broader LangGraph and remote MCP integration work in the v5.6 forward line (see `docs/tracks/TRACK_AGENTOPS_A2A_MCP.md`).
 - **Scope boundary**: This contract describes enacted descriptor-registry, ToolProvider boundary, validation, and executor behavior only.
