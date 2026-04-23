@@ -55,7 +55,12 @@ def test_tool_execution_records_provider_route(monkeypatch: pytest.MonkeyPatch) 
     provider.execute_tool_call(
         tool_name="mcp.search.objects",
         tool_args={"query": "agentic"},
-        context=_context({"mcp_remote_multiplex_enable": True}),
+        context=_context(
+            {
+                "mcp_remote_multiplex_enable": True,
+                "mcp_remote_allowed_providers": ["remote_multiplex"],
+            }
+        ),
         step_id="s-route",
         description="Route metadata",
     )
@@ -80,7 +85,12 @@ def test_tool_execution_records_remote_error_fallback_reason(monkeypatch: pytest
     provider.execute_tool_call(
         tool_name="mcp.search.objects",
         tool_args={"query": "agentic"},
-        context=_context({"mcp_remote_multiplex_enable": True}),
+        context=_context(
+            {
+                "mcp_remote_multiplex_enable": True,
+                "mcp_remote_allowed_providers": ["remote_multiplex"],
+            }
+        ),
         step_id="s-route-fallback",
         description="Route metadata fallback",
     )
