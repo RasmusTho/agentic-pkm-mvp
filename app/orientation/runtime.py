@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.observability.status_service import get_orientation_signals
+from app.observability.status_service import get_system_status
 
 
 class OrientationExplanation(BaseModel):
@@ -27,10 +27,10 @@ def _iso(dt: datetime | None) -> str:
 
 
 def build_orientation_frame() -> OrientationFrame:
-    signals = get_orientation_signals()
-    events = signals.events
-    ingestion = signals.ingestion
-    queue = signals.worker_queue
+    status = get_system_status()
+    events = status.events
+    ingestion = status.ingestion
+    queue = status.worker_queue
 
     leave_point = (
         "Last known runtime leave-point: "

@@ -5,9 +5,9 @@ from typing import Any, Dict, Mapping, Protocol
 
 from app.components.settings.tools_loader import load_tools
 from app.orchestrator.events import emit_mcp_tool_call_finished, emit_mcp_tool_call_started
+from app.planner.tools import MCP_TOOL_DESCRIPTORS
 from app.orchestrator.executor import MockPlanExecutor, StepContext, StepExecutionError
 from app.planner.schema import ToolDescriptor
-from app.planner.tools import MCP_TOOL_DESCRIPTORS
 
 
 class RemoteMCPProvider(Protocol):
@@ -37,7 +37,7 @@ class MCPToolProvider:
         if _remote_multiplex_enabled(tool_settings) and self.remote_provider is not None:
             try:
                 remote = dict(self.remote_provider.list_descriptors())
-                descriptors.update(self._filter_supported(remote))
+                descriptors.update(remote)
             except Exception:
                 # Remote descriptor discovery is best-effort; keep local registry route available.
                 pass
@@ -67,11 +67,8 @@ class MCPToolProvider:
 
         active_executor = executor or MockPlanExecutor()
         call_args = dict(tool_args or {})
-        # Keep validation aligned to local contract when available.
-        local_descriptor = self._filter_supported(self._list_local_descriptors()).get(tool_name)
-        validation_descriptor = local_descriptor or descriptor
-        active_executor._validate_tool_args(call_args, validation_descriptor.allowed_args)  # noqa: SLF001
-        active_executor._validate_required_args(call_args, validation_descriptor.schema.get("required", []))  # noqa: SLF001
+        active_executor._validate_tool_args(call_args, descriptor.allowed_args)  # noqa: SLF001 - parity with executor
+        active_executor._validate_required_args(call_args, descriptor.schema.get("required", []))  # noqa: SLF001
         timeout_value = None
         settings = context.tool_settings or {}
         if "tool_timeout_seconds" in settings:
@@ -79,7 +76,6 @@ class MCPToolProvider:
                 timeout_value = float(settings["tool_timeout_seconds"])
             except Exception:
                 timeout_value = None
-
         emit_mcp_tool_call_started(
             plan_id=context.plan_id,
             step_id=step_id,
@@ -160,9 +156,7 @@ class MCPToolProvider:
                     step_id=step_id,
                     description=description,
                 )
-                if isinstance(response, Mapping) and "result" in response:
-                    return dict(response["result"])
-                return dict(response)
+                return dict(response.get("result") if isinstance(response, Mapping) and "result" in response else response)
             except Exception:
                 route["provider_route"] = "local_registry"
                 route["provider_route_reason"] = "remote_provider_error"
@@ -177,10 +171,7 @@ class MCPToolProvider:
                 executor._validate_tool_args(call_args, descriptor.allowed_args)  # noqa: SLF001
                 executor._validate_required_args(call_args, descriptor.schema.get("required", []))  # noqa: SLF001
 
-        # Always invoke with local descriptor when present to keep local contract semantics.
-        local_descriptor = self._filter_supported(self._list_local_descriptors()).get(descriptor.name)
-        invoke_descriptor = local_descriptor or descriptor
-        return executor._invoke_tool(invoke_descriptor, call_args, context, timeout_value)  # noqa: SLF001
+        return executor._invoke_tool(descriptor, call_args, context, timeout_value)  # noqa: SLF001
 
     def _list_local_descriptors(self) -> Dict[str, ToolDescriptor]:
         return _load_registry_descriptors()

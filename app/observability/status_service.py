@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
@@ -51,13 +50,6 @@ _WATCHER_EVENT_NAMES = {"watcher.run", "watcher.run.completed"}
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
-
-
-@dataclass(frozen=True)
-class OrientationSignals:
-    events: EventCounters
-    ingestion: IngestionStatus
-    worker_queue: WorkerQueueStatus
 
 
 def record_ask_query(latency_ms: float) -> None:
@@ -756,25 +748,8 @@ def get_system_status() -> SystemStatus:
     )
 
 
-def get_orientation_signals() -> OrientationSignals:
-    ingestion = get_ingestion_status()
-    queue_mode = _worker_queue_mode()
-    counters: EventCounters | None = None
-    if queue_mode == "db":
-        counters = _count_events_db()
-    if counters is None:
-        counters = _count_events(Path(INDEX_OUTBOX_PATH)) if INDEX_OUTBOX_PATH else EventCounters()
-    counters = _fill_ingest_run_counts(counters, ingestion)
-    return OrientationSignals(
-        events=counters,
-        ingestion=ingestion,
-        worker_queue=_get_worker_queue_status(),
-    )
-
-
 __all__ = [
     "get_system_status",
-    "get_orientation_signals",
     "get_store_status",
     "get_ingestion_status",
     "get_ask_status",
