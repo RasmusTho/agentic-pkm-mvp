@@ -82,3 +82,26 @@ def test_missing_relation_provenance_metadata_preserves_current_behavior(monkeyp
         assert response.hits
     finally:
         get_store().set_documents([])
+
+
+def test_retrieval_response_contains_temporal_validity_flags(monkeypatch) -> None:
+    _patch_embeddings(monkeypatch)
+    _seed_store()
+    try:
+        stale = retrieve(
+            RetrievalRequest(
+                query="relation provenance",
+                k=1,
+                provenance_metadata={"requested_by": "ask"},
+            )
+        )
+        assert stale.metadata["temporal_validity"] == {
+            "state": "unknown",
+            "is_fresh": False,
+            "is_stale": False,
+            "is_partial": False,
+            "is_unknown": True,
+        }
+        assert stale.metadata["provenance"]["hints"] == {"requested_by": "ask"}
+    finally:
+        get_store().set_documents([])

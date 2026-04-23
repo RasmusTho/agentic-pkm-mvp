@@ -509,9 +509,12 @@ hybrid Chat/Panel crossings are bounded by
 - Retrieval must be reusable across Panel, Chat, and future cognition surfaces without creating another agent-specific control center.
 - The shipped capability boundary preserves current hybrid retrieval behavior and result ordering;
   additive relation/provenance inputs and stale/partial-view diagnostics are observable metadata,
-  not ranking authority.
+  not ranking authority. Response metadata now includes explicit provenance and temporal-validity
+  flags as part of the retrieval capability contract.
 - Capabilities are reusable, composable, and testable.
 - Agents and orchestration layers invoke capabilities through explicit planning and state transitions.
+- ASK remains functional as a consumer of the extracted retrieval capability seam; this is a runtime
+  wiring extraction, not a full Chat rollout.
 - ASK remains a valid current runtime/API surface in the v5.x line, but it is deprecated as the architectural center for v6 direction. New design work should not rebuild retrieval around a special central agent, even if bounded agents remain common elsewhere in the system.
 
 ## Historical Material

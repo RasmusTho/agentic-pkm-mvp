@@ -7,7 +7,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agents.ask.state import AgentState, RetrievedHit
 from app.agents.ask.utils import build_ask_context, get_ask_settings, llm_answer, reasoning_enabled, score_hit
 from app.components.rerankers import get_reranker
-from app.retrieval.hybrid import hybrid_search
+from app.retrieval.capability import RetrievalRequest, retrieve
 
 TOP_K_INITIAL = 40
 
@@ -29,9 +29,10 @@ def _to_retrieved_hit(hit: dict[str, Any], ask_score: float | None = None) -> Re
 
 
 def _retrieve_node(state: AgentState, *, k: int, ask_settings) -> AgentState:
-    hits = hybrid_search(state.query, k=k)
+    response = retrieve(RetrievalRequest(query=state.query, k=k, trace_id=state.trace_id))
     enriched: list[RetrievedHit] = []
-    for hit in hits:
+    for retrieval_hit in response.hits:
+        hit = retrieval_hit.to_hybrid_dict()
         ask_score = score_hit(hit)
         enriched.append(_to_retrieved_hit(hit, ask_score=ask_score))
     state.hits = enriched

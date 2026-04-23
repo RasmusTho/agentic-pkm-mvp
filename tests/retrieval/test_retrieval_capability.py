@@ -82,6 +82,31 @@ def test_retrieval_capability_accepts_surface_neutral_request(monkeypatch) -> No
         get_store().set_documents([])
 
 
+def test_retrieval_contract_objects_are_surface_independent(monkeypatch) -> None:
+    _patch_embeddings(monkeypatch)
+    _seed_store()
+    try:
+        response = retrieve(
+            RetrievalRequest(
+                query="alpha retrieval",
+                k=1,
+                scope="operator",
+                domain="core",
+                trace_id="contract-1",
+            )
+        )
+
+        assert response.query == "alpha retrieval"
+        assert response.trace_id == "contract-1"
+        assert response.metadata["provenance"]["capability"] == "retrieval"
+        assert response.metadata["provenance"]["adapter"] == "hybrid_search"
+        assert response.metadata["provenance"]["request"] == {"scope": "operator", "domain": "core"}
+        assert response.hits
+        assert response.hits[0].doc_id == "alpha"
+    finally:
+        get_store().set_documents([])
+
+
 def test_retrieval_signal_payload_opt_in(monkeypatch) -> None:
     _patch_embeddings(monkeypatch)
     _seed_store()
