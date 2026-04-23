@@ -208,6 +208,24 @@ def test_remote_descriptor_list_error_falls_back_to_local_registry() -> None:
     assert descriptors["mcp.search.objects"].mock_result.get("status") == "ok"
 
 
+def test_remote_descriptor_list_error_during_execute_forces_local_route() -> None:
+    provider = MCPToolProvider(remote_provider=_RemoteProviderListError())
+    executor = MockPlanExecutor()
+    context = _context({"mcp_remote_multiplex_enable": True})
+
+    result = provider.execute_tool_call(
+        tool_name="mcp.search.objects",
+        tool_args={"query": "agentic"},
+        context=context,
+        step_id="s-list-error-execute",
+        description="Descriptor list should force local route",
+        executor=executor,
+    )
+
+    assert result["tool"] == "mcp.search.objects"
+    assert result["result"]["status"] == "ok"
+
+
 def test_remote_error_fallback_re_resolves_local_descriptor() -> None:
     provider = MCPToolProvider(remote_provider=_RemoteProviderOverrideThenError())
     executor = MockPlanExecutor()
@@ -224,3 +242,24 @@ def test_remote_error_fallback_re_resolves_local_descriptor() -> None:
 
     assert result["tool"] == "mcp.search.objects"
     assert result["result"]["status"] == "ok"
+
+
+def test_remote_error_without_local_descriptor_raises_tool_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.orchestrator.mcp_tool_provider._load_registry_descriptors", lambda: {})
+    provider = MCPToolProvider(remote_provider=_RemoteProviderOverrideThenError())
+    executor = MockPlanExecutor()
+    context = _context({"mcp_remote_multiplex_enable": True})
+
+    with pytest.raises(StepExecutionError) as exc:
+        provider.execute_tool_call(
+            tool_name="mcp.search.objects",
+            tool_args={"query": "agentic"},
+            context=context,
+            step_id="s-no-local-fallback",
+            description="No local descriptor available",
+            executor=executor,
+        )
+
+    assert exc.value.error_type == "tool_unavailable"
