@@ -382,7 +382,17 @@ Use this when the user asks for a maintenance run across everything not done.
    - Open non-Draft PRs without review requested → `In Progress`
    - Open PRs missing from the Project entirely → add them, then apply the row above
 
-8. **Reconciliation helper (optional, with known gaps).** If the repo has a reconciliation helper (for example `scripts/reconcile_project_status.py`), run it after steps 2, 6, and 7 as a belt-and-braces pass — not as the primary mechanism. Known gaps in common helpers:
+8. **Reconciliation helper (optional, with known gaps).** If the repo has a reconciliation helper (for example `scripts/reconcile_project_status.py`), run it after steps 2, 6, and 7 as a belt-and-braces pass — not as the primary mechanism.
+   - Prefer targeted calls first (one issue/PR per invocation), then optional scan:
+     ```bash
+     python3 scripts/reconcile_project_status.py --repo <owner/repo> --owner @me --issue <N>
+     python3 scripts/reconcile_project_status.py --repo <owner/repo> --owner @me --pr <N>
+     # Optional sweep after targeted corrections:
+     python3 scripts/reconcile_project_status.py --repo <owner/repo> --owner @me --scan
+     ```
+   - Why `--owner @me`: user-owned projects are less flaky than explicit login owner resolution in `gh project` flows.
+   - The helper now retries transient `gh project` failures (including `unknown owner type`) with bounded backoff, but it is still secondary to the explicit lifecycle mutations above.
+   - Known gaps in common helpers:
    - They typically reconcile Issue-label → Status drift only
    - They may not reconcile PR lifecycle state (merged/closed/draft)
    - They may not correct non-terminal Status on terminal work (e.g. merged PR in `Review`)

@@ -8,9 +8,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -18,16 +20,47 @@ from typing import Any
 GOVERNANCE_PATH = Path(".github/github-governance.yml")
 DEFAULT_PROJECT_NAME = "Agent Delivery Control Plane"
 PROJECT_ITEM_LIST_INITIAL_LIMIT = 200
+GH_RETRY_ATTEMPTS = 5
+GH_RETRY_BASE_DELAY_SECONDS = 0.4
+
+
+def _should_retry_gh_error(exc: subprocess.CalledProcessError) -> bool:
+    combined = f"{exc.stdout or ''}\n{exc.stderr or ''}".lower()
+    retry_markers = (
+        "unknown owner type",
+        "api rate limit exceeded",
+        "secondary rate limit",
+        "temporarily unavailable",
+        "service unavailable",
+        "internal server error",
+        "gateway timeout",
+        "connection reset",
+        "tls handshake timeout",
+    )
+    return any(marker in combined for marker in retry_markers)
 
 
 def run_gh(*args: str) -> str:
-    result = subprocess.run(
-        ["gh", *args],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
+    for attempt in range(1, GH_RETRY_ATTEMPTS + 1):
+        try:
+            result = subprocess.run(
+                ["gh", *args],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError as exc:
+            if attempt == GH_RETRY_ATTEMPTS or not _should_retry_gh_error(exc):
+                raise
+            # Bounded jittered backoff for flaky `gh project`/GraphQL responses.
+            sleep_seconds = GH_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)) + random.uniform(0.0, 0.25)
+            time.sleep(sleep_seconds)
+    raise RuntimeError("unreachable")
+
+
+def run_gh_project(owner: str, *args: str) -> str:
+    return run_gh("project", *args, "--owner", owner)
 
 
 def load_governance_project_name() -> str:
@@ -41,7 +74,7 @@ def load_governance_project_name() -> str:
 
 
 def discover_project(owner: str, title: str) -> dict[str, Any]:
-    payload = json.loads(run_gh("project", "list", "--owner", owner, "--format", "json"))
+    payload = json.loads(run_gh_project(owner, "list", "--format", "json"))
     for project in payload.get("projects", []):
         if project.get("title") == title:
             return project
@@ -60,9 +93,7 @@ def warn_and_exit_if_project_unavailable(args: argparse.Namespace, exc: Exceptio
 
 
 def get_status_field(owner: str, project_number: int) -> tuple[str, dict[str, str]]:
-    payload = json.loads(
-        run_gh("project", "field-list", str(project_number), "--owner", owner, "--format", "json")
-    )
+    payload = json.loads(run_gh_project(owner, "field-list", str(project_number), "--format", "json"))
     for field in payload.get("fields", []):
         if field.get("name") != "Status":
             continue
@@ -75,12 +106,10 @@ def list_project_items(owner: str, project_number: int) -> list[dict[str, Any]]:
     limit = PROJECT_ITEM_LIST_INITIAL_LIMIT
     while True:
         payload = json.loads(
-            run_gh(
-                "project",
+            run_gh_project(
+                owner,
                 "item-list",
                 str(project_number),
-                "--owner",
-                owner,
                 "--limit",
                 str(limit),
                 "--format",
@@ -144,7 +173,7 @@ def desired_pr_status(pr: dict[str, Any], explicit_status: str | None) -> str | 
 
 
 def add_item_to_project(owner: str, project_number: int, url: str) -> None:
-    run_gh("project", "item-add", str(project_number), "--owner", owner, "--url", url)
+    run_gh_project(owner, "item-add", str(project_number), "--url", url)
 
 
 def set_project_status(
@@ -156,7 +185,6 @@ def set_project_status(
     dry_run: bool,
 ) -> None:
     cmd = [
-        "project",
         "item-edit",
         "--id",
         item_id,
@@ -168,9 +196,9 @@ def set_project_status(
         option_id,
     ]
     if dry_run:
-        print("DRY RUN:", "gh", *cmd)
+        print("DRY RUN:", "gh", "project", *cmd, "--owner", owner)
         return
-    run_gh(*cmd)
+    run_gh_project(owner, *cmd)
 
 
 def reconcile_issue(
