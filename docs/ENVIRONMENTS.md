@@ -206,6 +206,33 @@ Operator note:
 - `test` is the current golden path for local verification and stabilization work.
 - `dev` remains the flexible development posture, and `prod` remains the conservative operator posture.
 
+## Parallel Local Stacks
+
+The repo supports parallel local Compose stacks for `dev`, `test`, and `prod` on one machine without host-port conflicts.
+
+Commands:
+
+```bash
+make prod-up
+make dev-up
+make test-up
+```
+
+Port map:
+- `prod`: Postgres `15432`, API `18000`
+- `dev`: Postgres `15433`, API `18001`
+- `test`: Postgres `15434`, API `18002`
+
+Compose files:
+- `docker-compose.yaml` (base + prod defaults)
+- `docker-compose.dev.yml` (dev overrides)
+- `docker-compose.test.yml` (test overrides)
+
+Notes:
+- `make start-test-system` and `make test-bootstrap` remain unchanged and are still the canonical local `test` verification workflow.
+- The `test` compose override uses the same runtime environment selector posture as `dev` (`PKM_ENVIRONMENT=dev`) because runtime selection currently supports `dev` and `prod`; test remains a workflow-defined environment in this baseline.
+- Full parallel isolation still depends on DB separation work tracked by Issue #594.
+
 ## Relation to Current Health, Write Guard, and Settings Direction
 
 ### Health and Write Guard
