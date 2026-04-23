@@ -212,7 +212,7 @@ def test_remote_multiplex_fallback_on_provider_error() -> None:
     assert result["result"]["status"] == "ok"
 
 
-def test_remote_multiplex_fallback_when_descriptor_lookup_fails() -> None:
+def test_remote_descriptor_list_error_falls_back_to_local_registry() -> None:
     provider = MCPToolProvider(remote_provider=_RemoteProviderListError())
     context = _context({"mcp_remote_multiplex_enable": True})
 
@@ -228,7 +228,7 @@ def test_remote_multiplex_fallback_when_descriptor_lookup_fails() -> None:
     assert result["result"]["status"] == "ok"
 
 
-def test_remote_fallback_revalidates_against_local_descriptor() -> None:
+def test_remote_error_fallback_re_resolves_local_descriptor() -> None:
     provider = MCPToolProvider(remote_provider=_RemoteProviderMismatchedDescriptor())
     context = _context({"mcp_remote_multiplex_enable": True})
 
