@@ -121,6 +121,22 @@ def test_tool_provider_vault_append_respects_existing_gates(tmp_path: Path) -> N
     assert any(tmp_path.rglob("*.md"))
 
 
+def test_tool_provider_rejects_registry_only_tool_not_in_supported_allowlist() -> None:
+    provider = MCPToolProvider()
+    context = _context()
+
+    with pytest.raises(StepExecutionError) as exc:
+        provider.execute_tool_call(
+            tool_name="vault.read_note.v1",
+            tool_args={"path": "x.md"},
+            context=context,
+            step_id="s-unsupported",
+            description="Unsupported tool",
+        )
+
+    assert exc.value.error_type == "invalid_tool"
+
+
 class _RemoteProviderOK:
     def list_descriptors(self) -> dict[str, ToolDescriptor]:
         return {
@@ -142,25 +158,22 @@ class _RemoteProviderError(_RemoteProviderOK):
         raise RuntimeError("remote unavailable")
 
 
-class _RemoteProviderListError(_RemoteProviderOK):
+class _RemoteProviderListError(_RemoteProviderError):
     def list_descriptors(self) -> dict[str, ToolDescriptor]:
-        raise RuntimeError("remote descriptor list unavailable")
+        raise RuntimeError("remote descriptor lookup failed")
 
 
-class _RemoteProviderOverrideThenError(_RemoteProviderOK):
+class _RemoteProviderMismatchedDescriptor(_RemoteProviderError):
     def list_descriptors(self) -> dict[str, ToolDescriptor]:
         return {
             "mcp.search.objects": ToolDescriptor(
                 name="mcp.search.objects",
                 kind="mcp",
-                schema={"type": "object", "required": ["query"]},
-                allowed_args={"query": "string"},
-                mock_result={"status": "remote-override"},
+                schema={"type": "object", "required": ["query", "tenant"]},
+                allowed_args={"query": "string", "tenant": "string"},
+                mock_result={"status": "remote-schema"},
             )
         }
-
-    def execute_tool_call(self, **_: object) -> dict[str, object]:
-        raise RuntimeError("remote unavailable")
 
 
 def test_remote_multiplex_path_flagged() -> None:
@@ -199,45 +212,32 @@ def test_remote_multiplex_fallback_on_provider_error() -> None:
     assert result["result"]["status"] == "ok"
 
 
-def test_remote_descriptor_list_error_falls_back_to_local_registry() -> None:
+def test_remote_multiplex_fallback_when_descriptor_lookup_fails() -> None:
     provider = MCPToolProvider(remote_provider=_RemoteProviderListError())
-
-    descriptors = provider.list_descriptors({"mcp_remote_multiplex_enable": True})
-
-    assert "mcp.search.objects" in descriptors
-    assert descriptors["mcp.search.objects"].mock_result.get("status") == "ok"
-
-
-def test_remote_descriptor_list_error_during_execute_forces_local_route() -> None:
-    provider = MCPToolProvider(remote_provider=_RemoteProviderListError())
-    executor = MockPlanExecutor()
     context = _context({"mcp_remote_multiplex_enable": True})
 
     result = provider.execute_tool_call(
         tool_name="mcp.search.objects",
         tool_args={"query": "agentic"},
         context=context,
-        step_id="s-list-error-execute",
-        description="Descriptor list should force local route",
-        executor=executor,
+        step_id="s-fallback-descriptor",
+        description="Fallback path when descriptor lookup fails",
     )
 
     assert result["tool"] == "mcp.search.objects"
     assert result["result"]["status"] == "ok"
 
 
-def test_remote_error_fallback_re_resolves_local_descriptor() -> None:
-    provider = MCPToolProvider(remote_provider=_RemoteProviderOverrideThenError())
-    executor = MockPlanExecutor()
+def test_remote_fallback_revalidates_against_local_descriptor() -> None:
+    provider = MCPToolProvider(remote_provider=_RemoteProviderMismatchedDescriptor())
     context = _context({"mcp_remote_multiplex_enable": True})
 
     result = provider.execute_tool_call(
         tool_name="mcp.search.objects",
         tool_args={"query": "agentic"},
         context=context,
-        step_id="s-local-fallback",
-        description="Fallback should use local descriptor",
-        executor=executor,
+        step_id="s-fallback-local-descriptor",
+        description="Fallback should use local descriptor semantics",
     )
 
     assert result["tool"] == "mcp.search.objects"
@@ -248,8 +248,7 @@ def test_remote_error_without_local_descriptor_raises_tool_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("app.orchestrator.mcp_tool_provider._load_registry_descriptors", lambda: {})
-    provider = MCPToolProvider(remote_provider=_RemoteProviderOverrideThenError())
-    executor = MockPlanExecutor()
+    provider = MCPToolProvider(remote_provider=_RemoteProviderMismatchedDescriptor())
     context = _context({"mcp_remote_multiplex_enable": True})
 
     with pytest.raises(StepExecutionError) as exc:
@@ -259,24 +258,6 @@ def test_remote_error_without_local_descriptor_raises_tool_unavailable(
             context=context,
             step_id="s-no-local-fallback",
             description="No local descriptor available",
-            executor=executor,
         )
 
     assert exc.value.error_type == "tool_unavailable"
-
-
-def test_execute_tool_call_rejects_registry_tool_outside_supported_allowlist() -> None:
-    provider = MCPToolProvider()
-    executor = MockPlanExecutor()
-
-    with pytest.raises(StepExecutionError) as exc:
-        provider.execute_tool_call(
-            tool_name="vault.read_note.v1",
-            tool_args={"path": "vault/_mcp/mock-note.md"},
-            context=_context(),
-            step_id="s-unsupported",
-            description="Unsupported registry tool should be rejected",
-            executor=executor,
-        )
-
-    assert exc.value.error_type == "invalid_tool"

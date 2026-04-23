@@ -57,6 +57,7 @@ class MCPToolProvider:
         executor: MockPlanExecutor | None = None,
     ) -> Dict[str, Any]:
         route = self._resolve_route(context.tool_settings)
+        local_descriptor = self._list_local_descriptors().get(tool_name)
         descriptor = self._resolve_descriptor_for_execution(
             tool_name=tool_name,
             tool_settings=context.tool_settings,
@@ -67,8 +68,9 @@ class MCPToolProvider:
 
         active_executor = executor or MockPlanExecutor()
         call_args = dict(tool_args or {})
-        active_executor._validate_tool_args(call_args, descriptor.allowed_args)  # noqa: SLF001 - parity with executor
-        active_executor._validate_required_args(call_args, descriptor.schema.get("required", []))  # noqa: SLF001
+        validation_descriptor = local_descriptor or descriptor
+        active_executor._validate_tool_args(call_args, validation_descriptor.allowed_args)  # noqa: SLF001 - parity with executor
+        active_executor._validate_required_args(call_args, validation_descriptor.schema.get("required", []))  # noqa: SLF001
         timeout_value = None
         settings = context.tool_settings or {}
         if "tool_timeout_seconds" in settings:
@@ -171,7 +173,9 @@ class MCPToolProvider:
                 executor._validate_tool_args(call_args, descriptor.allowed_args)  # noqa: SLF001
                 executor._validate_required_args(call_args, descriptor.schema.get("required", []))  # noqa: SLF001
 
-        return executor._invoke_tool(descriptor, call_args, context, timeout_value)  # noqa: SLF001
+        local_descriptor = self._list_local_descriptors().get(descriptor.name)
+        fallback_descriptor = local_descriptor or descriptor
+        return executor._invoke_tool(fallback_descriptor, call_args, context, timeout_value)  # noqa: SLF001
 
     def _list_local_descriptors(self) -> Dict[str, ToolDescriptor]:
         return _load_registry_descriptors()
