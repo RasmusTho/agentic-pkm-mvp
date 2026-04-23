@@ -1,12 +1,12 @@
-State: SoT v5.5 Reality-MVP baseline locked. This is the top-level operations entrypoint for the current runtime.
+State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; this is the top-level operations entrypoint for the current runtime while v6 remains planning-only.
 Doc role: Core SoT
 Authority: Top-level operator guidance for the current runtime; delegates specialized operational detail to linked companion docs but remains the main operational entrypoint.
 Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-22
-Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/PANEL_AGENT.md, docs/runbooks/UAT_PANEL_WATCHER.md, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/settings/validate.py, app/watcher/registry.py, app/workers/outbox_worker.py, tests/events/test_outbox_consumer_contract.py, tests/settings/test_panel_watcher_config_validation.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #547/#553, current repo state at 59966e9 on 2026-04-22, and closed settings validation issue #546
+Last reviewed: 2026-04-23
+Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/PANEL_AGENT.md, docs/STATUS.md, docs/runbooks/UAT_PANEL_WATCHER.md, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/settings/validate.py, app/watcher/registry.py, app/workers/outbox_worker.py, tests/cli/test_sync_latency_harness.py, tests/events/test_outbox_consumer_contract.py, tests/settings/test_panel_watcher_config_validation.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #547/#553/#581/#583, current repo state at 3846449 on 2026-04-23, and closed issues #546/#570/#572
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
