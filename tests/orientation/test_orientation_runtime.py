@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.orientation.runtime import build_orientation_frame
 
 
 def test_orientation_returns_frame_without_query() -> None:
@@ -28,3 +29,12 @@ def test_orientation_is_read_only() -> None:
     body = resp.json()
     assert body.get('read_only') is True
     assert body.get('mutation_intents') == []
+
+
+def test_orientation_does_not_evaluate_write_guard(monkeypatch) -> None:
+    def _fail() -> None:
+        raise AssertionError("write guard should not be evaluated for orientation frame")
+
+    monkeypatch.setattr("app.observability.status_service.DEFAULT_CONTRACT.evaluate", _fail)
+    frame = build_orientation_frame()
+    assert frame.read_only is True

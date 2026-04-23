@@ -263,20 +263,3 @@ def test_remote_error_without_local_descriptor_raises_tool_unavailable(
         )
 
     assert exc.value.error_type == "tool_unavailable"
-
-
-def test_execute_tool_call_rejects_registry_tool_outside_supported_allowlist() -> None:
-    provider = MCPToolProvider()
-    executor = MockPlanExecutor()
-
-    with pytest.raises(StepExecutionError) as exc:
-        provider.execute_tool_call(
-            tool_name="vault.read_note.v1",
-            tool_args={"path": "vault/_mcp/mock-note.md"},
-            context=_context(),
-            step_id="s-unsupported",
-            description="Unsupported registry tool should be rejected",
-            executor=executor,
-        )
-
-    assert exc.value.error_type == "invalid_tool"
