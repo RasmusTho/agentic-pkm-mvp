@@ -33,10 +33,14 @@ class MCPToolProvider:
     remote_provider: RemoteMCPProvider | None = None
 
     def list_descriptors(self, tool_settings: Mapping[str, Any] | None = None) -> Dict[str, ToolDescriptor]:
-        descriptors = _load_registry_descriptors()
+        descriptors = self._list_local_descriptors()
         if _remote_multiplex_enabled(tool_settings) and self.remote_provider is not None:
-            remote = dict(self.remote_provider.list_descriptors())
-            descriptors.update(remote)
+            try:
+                remote = dict(self.remote_provider.list_descriptors())
+                descriptors.update(remote)
+            except Exception:
+                # Remote descriptor discovery is best-effort; keep local registry route available.
+                pass
         supported = set(MCP_TOOL_DESCRIPTORS.keys())
         return {name: descriptor for name, descriptor in descriptors.items() if name in supported}
 
@@ -169,6 +173,9 @@ class MCPToolProvider:
                 executor._validate_required_args(call_args, descriptor.schema.get("required", []))  # noqa: SLF001
 
         return executor._invoke_tool(descriptor, call_args, context, timeout_value)  # noqa: SLF001
+
+    def _list_local_descriptors(self) -> Dict[str, ToolDescriptor]:
+        return _load_registry_descriptors()
 
 
 def _load_registry_descriptors() -> Dict[str, ToolDescriptor]:
