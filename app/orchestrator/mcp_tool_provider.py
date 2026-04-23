@@ -35,7 +35,10 @@ class MCPToolProvider:
     def list_descriptors(self, tool_settings: Mapping[str, Any] | None = None) -> Dict[str, ToolDescriptor]:
         descriptors = _load_registry_descriptors()
         if _remote_multiplex_enabled(tool_settings) and self.remote_provider is not None:
-            remote = dict(self.remote_provider.list_descriptors())
+            try:
+                remote = dict(self.remote_provider.list_descriptors())
+            except Exception:
+                remote = {}
             descriptors.update(remote)
         supported = set(MCP_TOOL_DESCRIPTORS.keys())
         return {name: descriptor for name, descriptor in descriptors.items() if name in supported}
@@ -54,14 +57,24 @@ class MCPToolProvider:
         executor: MockPlanExecutor | None = None,
     ) -> Dict[str, Any]:
         route = self._resolve_route(context.tool_settings)
+        supported = set(MCP_TOOL_DESCRIPTORS.keys())
+        if tool_name not in supported:
+            raise StepExecutionError(f"unknown MCP tool '{tool_name}'", error_type="invalid_tool")
+
+        local_descriptor = _load_registry_descriptors().get(tool_name)
         descriptor = self.get_descriptor(tool_name, context.tool_settings)
         if descriptor is None:
             raise StepExecutionError(f"unknown MCP tool '{tool_name}'", error_type="invalid_tool")
 
         active_executor = executor or MockPlanExecutor()
         call_args = dict(tool_args or {})
-        active_executor._validate_tool_args(call_args, descriptor.allowed_args)  # noqa: SLF001 - parity with executor
-        active_executor._validate_required_args(call_args, descriptor.schema.get("required", []))  # noqa: SLF001
+        validation_descriptor = local_descriptor or descriptor
+        active_executor._validate_tool_args(  # noqa: SLF001 - parity with executor
+            call_args, validation_descriptor.allowed_args
+        )
+        active_executor._validate_required_args(  # noqa: SLF001
+            call_args, validation_descriptor.schema.get("required", [])
+        )
         timeout_value = None
         settings = context.tool_settings or {}
         if "tool_timeout_seconds" in settings:
@@ -132,7 +145,9 @@ class MCPToolProvider:
                 route["provider_route_reason"] = "remote_provider_error"
                 route["provider_route_attempted"] = "remote_multiplex"
 
-        return executor._invoke_tool(descriptor, call_args, context, timeout_value)  # noqa: SLF001
+        local_descriptor = _load_registry_descriptors().get(descriptor.name)
+        fallback_descriptor = local_descriptor or descriptor
+        return executor._invoke_tool(fallback_descriptor, call_args, context, timeout_value)  # noqa: SLF001
 
 
 def _load_registry_descriptors() -> Dict[str, ToolDescriptor]:
