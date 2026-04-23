@@ -97,6 +97,7 @@ class RetrievalResponse:
     query: str
     hits: list[RetrievalHit]
     trace_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
@@ -121,10 +122,32 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
         diagnostics["view_freshness"] = request.view_freshness.to_dict()
     if request.include_signal_payload and request.signal_payload is not None:
         diagnostics["signal_payload"] = request.signal_payload.to_dict()
+    view_freshness_state = request.view_freshness.state if request.view_freshness is not None else "unknown"
+    metadata: dict[str, Any] = {
+        "provenance": {
+            "capability": "retrieval",
+            "adapter": "hybrid_search",
+            "trace_id": request.trace_id,
+            "request": {
+                "scope": request.scope,
+                "domain": request.domain,
+            },
+        },
+        "temporal_validity": {
+            "state": view_freshness_state,
+            "is_fresh": view_freshness_state == "fresh",
+            "is_stale": view_freshness_state == "stale",
+            "is_partial": view_freshness_state == "partial",
+            "is_unknown": view_freshness_state == "unknown",
+        },
+    }
+    if request.provenance_metadata:
+        metadata["provenance"]["hints"] = dict(request.provenance_metadata)
     return RetrievalResponse(
         query=request.query,
         hits=[RetrievalHit.from_hybrid(hit) for hit in raw_hits],
         trace_id=request.trace_id,
+        metadata=metadata,
         diagnostics=diagnostics,
     )
 

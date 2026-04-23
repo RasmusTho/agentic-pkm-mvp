@@ -43,10 +43,12 @@ Interpretation note:
 Entry point: `app/retrieval/hybrid.py:hybrid_search(query, k=8, ...)`
 
 Capability wrapper: `app/retrieval/capability.py:retrieve(RetrievalRequest)` exposes the same
-current hybrid path through typed request/response objects for non-ASK callers. The wrapper carries
-query, scope/domain inputs, trace id, hit metadata, and optional diagnostics for relation/provenance
-inputs, view freshness, or an opt-in salience/staleness signal payload seam. It adapts the current results; it does not introduce relation-aware
-ranking, orientation, resurfacing, or a new retrieval agent.
+current hybrid path through typed request/response objects. ASK now consumes this capability seam,
+and other surfaces can call the same contract without depending on ASK internals. The wrapper carries
+query, scope/domain inputs, trace id, hit metadata, response `metadata.provenance`, response
+`metadata.temporal_validity` flags, and optional diagnostics for relation/provenance inputs, view
+freshness, or an opt-in salience/staleness signal payload seam. It adapts the current results; it
+does not introduce relation-aware ranking, orientation, resurfacing, or a new retrieval agent.
 
 ### Scoring
 Per document, we compute:
@@ -108,3 +110,7 @@ Interpretation:
   from persisted artifact payload or state-axis labels.
 - Stale/partial/unknown view reporting is runtime honesty from existing status signals. It is not a
   multi-replica freshness guarantee and does not fail retrieval by itself.
+- Query-independent resurfacing now has a separate read-only runtime seam
+  (`app/resurfacing/runtime.py`) that derives relevance-change candidates from runtime status signals
+  and emits operator-visible receipt/status summaries with explicit "why now" signal provenance.
+  It does not write artifact state and does not run on the active retrieval query path.
