@@ -39,9 +39,6 @@ class _RemoteProviderOK:
 
 
 class _RemoteProviderError(_RemoteProviderOK):
-    def list_descriptors(self) -> dict[str, ToolDescriptor]:
-        raise RuntimeError("remote descriptor lookup failed")
-
     def execute_tool_call(self, **_: object) -> dict[str, object]:
         raise RuntimeError("remote execute failed")
 

@@ -242,3 +242,22 @@ def test_remote_fallback_revalidates_against_local_descriptor() -> None:
 
     assert result["tool"] == "mcp.search.objects"
     assert result["result"]["status"] == "ok"
+
+
+def test_remote_error_without_local_descriptor_raises_tool_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.orchestrator.mcp_tool_provider._load_registry_descriptors", lambda: {})
+    provider = MCPToolProvider(remote_provider=_RemoteProviderMismatchedDescriptor())
+    context = _context({"mcp_remote_multiplex_enable": True})
+
+    with pytest.raises(StepExecutionError) as exc:
+        provider.execute_tool_call(
+            tool_name="mcp.search.objects",
+            tool_args={"query": "agentic", "tenant": "t1"},
+            context=context,
+            step_id="s-no-local-fallback",
+            description="No local descriptor available",
+        )
+
+    assert exc.value.error_type == "tool_unavailable"
