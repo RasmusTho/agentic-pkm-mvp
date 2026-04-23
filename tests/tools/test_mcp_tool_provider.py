@@ -254,7 +254,7 @@ def test_remote_error_without_local_descriptor_raises_tool_unavailable(
     with pytest.raises(StepExecutionError) as exc:
         provider.execute_tool_call(
             tool_name="mcp.search.objects",
-            tool_args={"query": "agentic"},
+            tool_args={"query": "agentic", "tenant": "t1"},
             context=context,
             step_id="s-no-local-fallback",
             description="No local descriptor available",
