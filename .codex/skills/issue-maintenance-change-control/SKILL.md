@@ -71,8 +71,7 @@ Project Status must match content state. Every other cell is drift and must be c
 | PR | MERGED | `Done` |
 | PR | CLOSED (unmerged) | `Done` |
 | PR | OPEN + Draft | `In Progress` |
-| PR | OPEN + review requested | `Review` |
-| PR | OPEN + no review requested | `In Progress` |
+| PR | OPEN + non-draft | `Review` |
 | Any | Present but no Project entry | Add to Project, apply row above |
 
 ### Drift patterns that must be flagged explicitly
@@ -83,6 +82,7 @@ These are the high-frequency drift patterns that are easy to miss. A maintenance
 - **Closed Issues stuck in `Review` or `In Progress`** — the Issue is Done; non-terminal status on closed Issues is drift, not a pending handoff.
 - **Open `agent:ready` Issues not in `Ready`** — the queue is lying about what is pickable. The `agent:ready ↔ Status=Ready` binding is a post-condition, not just a declarative rule.
 - **PRs with no Project Status (blank / not in Project)** — the board cannot reflect lifecycle if the PR isn't represented at all. Open and closed PRs both need Project entries.
+- **Open non-draft PRs stuck in `In Progress`** — this violates the shipped projection model where non-draft PRs default to `Review`.
 
 ## Change-control checklist (Core Runtime <-> Agentic Lab)
 

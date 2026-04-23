@@ -32,7 +32,9 @@ You must detect:
 - issues missing required contract sections
 - open implementation Issues missing a truthful agent-state label
 - stale `agent:ready` labels on work that is blocked or already done
-- draft PR work or open PR work that was moved to `Review` before explicit review handoff
+- open non-draft PR work that is not projected to `Review`
+- merged PR cards that remain non-terminal (`In Progress`/`Review`) after merge
+- fixes that were validated on a branch but are not yet present on `origin/main`
 - active work that still presents as `Ready`
 
 ## Authority order
@@ -52,6 +54,7 @@ You must detect:
 4. Inspect recent closed PRs that are not merged.
 5. Inspect current Project states.
 6. Match all of them by `Source Anchors`, doc items, and delivered reality.
+7. Confirm recently merged fix PRs are actually present on `origin/main` when they claim to resolve projection drift.
 
 For each inspected doc item or issue, classify exactly one state:
 
@@ -87,7 +90,9 @@ For each drift case, recommend one concrete corrective action only:
 - GitHub remains the canonical backlog-state surface.
 - Treat Project `Status` as the primary lifecycle signal.
 - Treat `agent:ready` as the pickup qualifier for `Status=Ready`, not as a substitute for `In Progress`, `Review`, or `Done`.
+- For PR cards, treat open non-draft as `Review` and open draft as `In Progress`.
 - Prefer one repair action per drift class when the same correction repeats across multiple items; do not churn the board with separate micro-fixes when a batched audit can close the gap.
+- If full-project scan is slow or blocked by API latency, run a targeted audit for open issues, open PRs, recently merged PRs, and recently closed-unmerged PRs, then report that fallback explicitly.
 
 
 ## Capturing learning
