@@ -1,7 +1,11 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap dev-up dev-down prod-up prod-down test-up test-down
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 TEST_VAULT_ROOT ?= $(PWD)/vault-test
+COMPOSE_BASE := docker compose -f docker-compose.yaml
+COMPOSE_DEV := $(COMPOSE_BASE) -f docker-compose.dev.yml -p pkm-dev
+COMPOSE_TEST := $(COMPOSE_BASE) -f docker-compose.test.yml -p pkm-test
+COMPOSE_PROD := $(COMPOSE_BASE) -p pkm-prod
 
 fmt:
 	rufflehog --version >/dev/null 2>&1 || true
@@ -70,6 +74,24 @@ test-bootstrap: reset-zero-force test-vault-init
 	@VAULT_ROOT="$(TEST_VAULT_ROOT)" scripts/start_full_system.sh
 	@VAULT_ROOT="$(TEST_VAULT_ROOT)" bash scripts/verify_runtime_stack.sh
 	@VAULT_ROOT="$(TEST_VAULT_ROOT)" $(PYTHON) -m app.cli uat-run-vault-test --vault-root "$(TEST_VAULT_ROOT)" --assert
+
+dev-up:
+	@$(COMPOSE_DEV) up -d --build
+
+dev-down:
+	@$(COMPOSE_DEV) down --remove-orphans
+
+prod-up:
+	@$(COMPOSE_PROD) up -d --build
+
+prod-down:
+	@$(COMPOSE_PROD) down --remove-orphans
+
+test-up:
+	@$(COMPOSE_TEST) up -d --build
+
+test-down:
+	@$(COMPOSE_TEST) down --remove-orphans
 
 alpha-e2e-smoke:
 	@$(PYTHON) - <<'PY'

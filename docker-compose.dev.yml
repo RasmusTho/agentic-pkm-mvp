@@ -1,0 +1,24 @@
+services:
+  db:
+    ports:
+      - "15433:5432"
+
+  api:
+    ports:
+      - "18001:8000"
+    environment:
+      PKM_ENVIRONMENT: dev
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
+      DB_DSN: postgresql+psycopg://app:app@db:5432/app
+
+  worker:
+    environment:
+      PKM_ENVIRONMENT: dev
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
+      DB_DSN: postgresql+psycopg://app:app@db:5432/app
+
+  watcher:
+    environment:
+      PKM_ENVIRONMENT: dev
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
+      DB_DSN: postgresql+psycopg://app:app@db:5432/app
