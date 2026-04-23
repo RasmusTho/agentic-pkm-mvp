@@ -57,8 +57,12 @@ class MCPToolProvider:
         executor: MockPlanExecutor | None = None,
     ) -> Dict[str, Any]:
         route = self._resolve_route(context.tool_settings)
+        supported = set(MCP_TOOL_DESCRIPTORS.keys())
+        if tool_name not in supported:
+            raise StepExecutionError(f"unknown MCP tool '{tool_name}'", error_type="invalid_tool")
+
         local_descriptor = _load_registry_descriptors().get(tool_name)
-        descriptor = local_descriptor or self.get_descriptor(tool_name, context.tool_settings)
+        descriptor = self.get_descriptor(tool_name, context.tool_settings)
         if descriptor is None:
             raise StepExecutionError(f"unknown MCP tool '{tool_name}'", error_type="invalid_tool")
 

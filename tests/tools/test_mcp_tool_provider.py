@@ -121,6 +121,22 @@ def test_tool_provider_vault_append_respects_existing_gates(tmp_path: Path) -> N
     assert any(tmp_path.rglob("*.md"))
 
 
+def test_tool_provider_rejects_registry_only_tool_not_in_supported_allowlist() -> None:
+    provider = MCPToolProvider()
+    context = _context()
+
+    with pytest.raises(StepExecutionError) as exc:
+        provider.execute_tool_call(
+            tool_name="vault.read_note.v1",
+            tool_args={"path": "x.md"},
+            context=context,
+            step_id="s-unsupported",
+            description="Unsupported tool",
+        )
+
+    assert exc.value.error_type == "invalid_tool"
+
+
 class _RemoteProviderOK:
     def list_descriptors(self) -> dict[str, ToolDescriptor]:
         return {
