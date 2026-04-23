@@ -2,6 +2,7 @@
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 TEST_VAULT_ROOT ?= $(PWD)/vault-test
+TEST_DATABASE_URL ?= postgresql+psycopg://app:app@db:5432/app_test
 COMPOSE_BASE := docker compose -f docker-compose.yaml
 COMPOSE_DEV := $(COMPOSE_BASE) -f docker-compose.dev.yml -p pkm-dev
 COMPOSE_TEST := $(COMPOSE_BASE) -f docker-compose.test.yml -p pkm-test
@@ -68,12 +69,12 @@ reset-zero-force:
 	@RESET_FORCE=1 bash scripts/reset_to_zero.sh
 
 start-test-system:
-	@VAULT_ROOT="$(TEST_VAULT_ROOT)" scripts/start_full_system.sh
+	@VAULT_ROOT="$(TEST_VAULT_ROOT)" DATABASE_URL="$(TEST_DATABASE_URL)" DB_DSN="$(TEST_DATABASE_URL)" scripts/start_full_system.sh
 
 test-bootstrap: reset-zero-force test-vault-init
-	@VAULT_ROOT="$(TEST_VAULT_ROOT)" scripts/start_full_system.sh
-	@VAULT_ROOT="$(TEST_VAULT_ROOT)" bash scripts/verify_runtime_stack.sh
-	@VAULT_ROOT="$(TEST_VAULT_ROOT)" $(PYTHON) -m app.cli uat-run-vault-test --vault-root "$(TEST_VAULT_ROOT)" --assert
+	@VAULT_ROOT="$(TEST_VAULT_ROOT)" DATABASE_URL="$(TEST_DATABASE_URL)" DB_DSN="$(TEST_DATABASE_URL)" scripts/start_full_system.sh
+	@VAULT_ROOT="$(TEST_VAULT_ROOT)" DATABASE_URL="$(TEST_DATABASE_URL)" DB_DSN="$(TEST_DATABASE_URL)" bash scripts/verify_runtime_stack.sh
+	@VAULT_ROOT="$(TEST_VAULT_ROOT)" DATABASE_URL="$(TEST_DATABASE_URL)" DB_DSN="$(TEST_DATABASE_URL)" $(PYTHON) -m app.cli uat-run-vault-test --vault-root "$(TEST_VAULT_ROOT)" --assert
 
 dev-up:
 	@$(COMPOSE_DEV) up -d --build

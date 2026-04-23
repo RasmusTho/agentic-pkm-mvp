@@ -96,11 +96,15 @@ Environment separation MUST be explicit across the following surfaces.
 - `test` runtime state may be reset and rebuilt as part of the supported bootstrap contract; repeatability is more important than persistence.
 - Rebuildable does not mean disposable in `prod`; recovery and audit expectations still apply.
 
-**Implementation Status (Issue #266)**:
+**Implementation Status (Issue #266 + #594)**:
 - Index outbox and store paths are now environment-scoped via `app.config.paths.resolve_runtime_artifact_path()`.
 - Default behavior: `prod` uses `tmp/` subdirectories, `dev` uses `tmp-dev/` subdirectories.
 - Watcher settings automatically apply environment scoping to all artifact paths via `load_watcher_settings(environment=...)`.
-- DB outbox (PostgreSQL) is shared; file-based audit logs respect environment separation.
+- PostgreSQL now follows per-environment database naming conventions for runtime stacks:
+  - `prod`: `app`
+  - `dev`: `app_dev`
+  - `test` bootstrap/runtime lane: `app_test`
+- Explicit `DATABASE_URL` / `DB_DSN` still overrides environment-derived conventions.
 - The `test` path currently relies on explicit reset/bootstrap commands and test-specific runtime artifacts rather than a separate runtime selector.
 
 ### Runtime State and Process Surfaces
