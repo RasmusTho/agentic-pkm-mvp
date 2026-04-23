@@ -1,8 +1,8 @@
 # Environments
 
-State: SoT v5.5 baseline with explicit `dev` / `test` / `prod` environment model, control surfaces, and artifact separation (Issues #263, #266), with the local `test` environment now documented as the canonical bootstrap and verification posture.
+State: SoT v5.5 baseline with explicit `dev` / `test` / `prod` environment model, control surfaces, and artifact separation (Issues #263, #266), with the local `test` environment documented as the canonical bootstrap and verification posture. Channel-level identity, per-channel DB isolation, promotion, and rollback are specified by the v6.0 release-channels capability at `docs/RELEASE_CHANNELS/README.md`; this document continues to own environment selection and path scoping only.
 Doc role: Core SoT
-Authority: Canonical environment contract for the current baseline and forward-line work; defines what `dev`, `test`, and `prod` mean, what must remain invariant, and what may vary. Architecture, operations, testing, status, and component docs should reference this document instead of restating environment policy.
+Authority: Canonical environment contract for the current baseline and forward-line work; defines what `dev`, `test`, and `prod` mean, what must remain invariant, and what may vary. Architecture, operations, testing, status, and component docs should reference this document instead of restating environment policy. Release-channel semantics (channel identity, DB-per-channel, promotion, rollback) are owned by `docs/RELEASE_CHANNELS/README.md`.
 
 ## Overview
 
@@ -105,6 +105,7 @@ Environment separation MUST be explicit across the following surfaces.
   - `dev`: `app_dev`
   - `test` bootstrap/runtime lane: `app_test`
 - Explicit `DATABASE_URL` / `DB_DSN` still overrides environment-derived conventions.
+- File-based audit logs respect environment separation.
 - The `test` path currently relies on explicit reset/bootstrap commands and test-specific runtime artifacts rather than a separate runtime selector.
 
 ### Runtime State and Process Surfaces
@@ -293,7 +294,8 @@ The existing `app.settings.tiering` module continues to work and is now understo
 ## Constraints and Out of Scope
 
 - Environment selection does not redefine product semantics.
-- Deployment automation, secrets handling, and CI/CD remain out of scope.
+- Channel identity, promotion, rollback, and DB-per-channel semantics are owned by `docs/RELEASE_CHANNELS/README.md`, not this document. This document continues to own environment selection and path scoping only.
+- Hosted deployment, secrets handling, and CI/CD-driven release remain out of scope. Local, single-user promotion between channels is owned by the release-channels capability.
 - Health/status/operator diagnostics changes are independent of environment selection.
 - Multi-user/multi-instance coordination remains orthogonal to environment selection.
 - The current docs wave does not require promoting `test` into a third runtime selector before the supported bootstrap contract is stabilized.
