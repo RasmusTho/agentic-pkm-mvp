@@ -14,6 +14,8 @@ from app.settings.source import SettingsSource, build_source
 DEFAULT_INDEX_OUTBOX = Path("tmp/index-outbox.jsonl")
 DEFAULT_WATCHER_TICK_LOG = Path("tmp/watcher_tick.jsonl")
 DEFAULT_ALLOWED_ACTIONS = ("promote.evergreen",)
+SUMMARY_MEASUREMENT_ACTION = "ingest.summary.create"
+MEASUREMENT_MODE_ENV = "WATCHER_MEASUREMENT_MODE"
 DEFAULT_AUTO_EXEC_ENV = "WATCHER_AUTO_EXEC"
 DEFAULT_AUTO_EXEC_DEFAULT = True
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -133,6 +135,9 @@ def load_watcher_settings(vault_root: Path | None = None, *, environment: Litera
         allowed_actions = ()
     if not allowed_actions:
         allowed_actions = DEFAULT_ALLOWED_ACTIONS
+    if str(os.getenv(MEASUREMENT_MODE_ENV, "")).strip().lower() in _TRUE_VALUES:
+        if SUMMARY_MEASUREMENT_ACTION not in allowed_actions:
+            allowed_actions = (*allowed_actions, SUMMARY_MEASUREMENT_ACTION)
 
     auto_exec_env = str(auto_run.get("auto_exec_env") or DEFAULT_AUTO_EXEC_ENV).strip()
     if not auto_exec_env:

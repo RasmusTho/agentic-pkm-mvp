@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.settings.validate import validate_settings
+from app.settings.watcher_settings import load_watcher_settings
 
 
 def _write_watchers_file(vault: Path, content: str) -> None:
@@ -90,3 +91,57 @@ def test_unreadable_panel_actions_path_reports_validation_issue(
 
     assert panel_issues
     assert all(issue.message for issue in panel_issues)
+
+
+def test_summary_action_allowlisted_only_in_measurement_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    panel_actions = tmp_path / "panel-actions.md"
+    panel_actions.write_text(
+        (
+            "---\n"
+            "mappings:\n"
+            "  - id: \"promote.evergreen\"\n"
+            "    intent_type: promotion\n"
+            "    downstream_event: promote.intent.created\n"
+            "  - id: \"ingest.summary.create\"\n"
+            "    intent_type: summary\n"
+            "    downstream_event: ingest.summary.create\n"
+            "---\n"
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(panel_actions))
+
+    vault = tmp_path / "vault"
+    _write_watchers_file(
+        vault,
+        (
+            "---\n"
+            "auto_run:\n"
+            "  allowed_actions:\n"
+            "    - promote.evergreen\n"
+            "    - ingest.summary.create\n"
+            "---\n"
+        ),
+    )
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+
+    issues = validate_settings()
+    assert any(issue.code == "watcher_settings.measurement_mode_required" for issue in issues)
+
+    _write_watchers_file(
+        vault,
+        (
+            "---\n"
+            "auto_run:\n"
+            "  allowed_actions:\n"
+            "    - promote.evergreen\n"
+            "---\n"
+        ),
+    )
+    monkeypatch.setenv("WATCHER_MEASUREMENT_MODE", "1")
+    settings = load_watcher_settings(vault_root=vault)
+
+    assert "promote.evergreen" in settings.allowed_actions
+    assert "ingest.summary.create" in settings.allowed_actions

@@ -15,6 +15,7 @@ class PanelActionMapping(BaseModel):
     id: str
     intent_type: str
     downstream_event: str
+    trust_verb: str | None = None
     params: Dict[str, Any] = Field(default_factory=dict)
 
 

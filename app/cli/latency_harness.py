@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict
 from app.events.outbox import read_outbox
 from app.testing.runtime_contract import write_contract_report
 from app.promotion.consumer import consume_promotion_intents
+from app.settings.watcher_settings import MEASUREMENT_MODE_ENV
 from app.watcher.vault_watcher import VaultWatcher, run_watcher_tick
 
 
@@ -316,8 +317,10 @@ def run_latency_harness(
 
     original_scope = os.environ.get("WATCHER_SCOPE_GLOB")
     original_decider = os.environ.get("PANEL_AGENT_DECIDER")
+    original_measurement_mode = os.environ.get(MEASUREMENT_MODE_ENV)
     os.environ["WATCHER_SCOPE_GLOB"] = f"{target_subdir}/{folder}/*.md,{target_subdir}/{folder}/**/*.md"
     os.environ["PANEL_AGENT_DECIDER"] = panel_decider
+    os.environ[MEASUREMENT_MODE_ENV] = "1"
 
     try:
         emit_progress(f"Harness scenario path: {scenario_path}")
@@ -384,6 +387,10 @@ def run_latency_harness(
             os.environ.pop("PANEL_AGENT_DECIDER", None)
         else:
             os.environ["PANEL_AGENT_DECIDER"] = original_decider
+        if original_measurement_mode is None:
+            os.environ.pop(MEASUREMENT_MODE_ENV, None)
+        else:
+            os.environ[MEASUREMENT_MODE_ENV] = original_measurement_mode
 
     # Extract latency events from the outbox
     all_events = read_outbox(outbox_path)

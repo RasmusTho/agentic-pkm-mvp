@@ -30,12 +30,14 @@ class PanelActionDescriptor(BaseModel):
     params: Dict[str, Any] = Field(default_factory=dict)
     watcher_allowed: bool = True
     manual_only: bool = False
+    trust_verb: str | None = None
 
     def to_mapping(self) -> PanelActionMapping:
         return PanelActionMapping(
             id=self.id,
             intent_type=self.intent_type,
             downstream_event=self.downstream_event,
+            trust_verb=self.trust_verb,
             params=self.params,
         )
 
@@ -156,6 +158,7 @@ def _entry_to_descriptor(entry: dict[str, Any]) -> PanelActionDescriptor | None:
         params=dict(params) if isinstance(params, dict) else {},
         watcher_allowed=bool(entry.get("watcher_allowed", True)),
         manual_only=bool(entry.get("manual_only", False)),
+        trust_verb=str(entry.get("trust_verb") or entry.get("verb") or "").strip() or None,
     )
 
 

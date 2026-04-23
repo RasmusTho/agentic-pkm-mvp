@@ -34,6 +34,7 @@ class ValidationIssue:
 
 
 _ACTION_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+_MEASUREMENT_ONLY_ACTIONS = {"ingest.summary.create"}
 
 
 def _panel_action_catalog_paths() -> list[Path]:
@@ -154,6 +155,17 @@ def _validate_watcher_auto_run_shape() -> list[ValidationIssue]:
                         ValidationIssue(
                             code="watcher_settings.malformed_auto_run",
                             message=f"{path}: auto_run.allowed_actions[{idx}] must be a non-empty string",
+                            ref="watcher_settings:auto_run",
+                        )
+                    )
+                elif action.strip() in _MEASUREMENT_ONLY_ACTIONS:
+                    issues.append(
+                        ValidationIssue(
+                            code="watcher_settings.measurement_mode_required",
+                            message=(
+                                f"{path}: auto_run.allowed_actions[{idx}]={action!r} is measurement-only; "
+                                "enable WATCHER_MEASUREMENT_MODE=1 during sync-latency harness runs instead"
+                            ),
                             ref="watcher_settings:auto_run",
                         )
                     )

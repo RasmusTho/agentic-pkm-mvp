@@ -215,6 +215,29 @@ def _handle_promotion_payload(
             "executor": "promotion.consumer",
             "effect": "applied",
             "source_event": event_id,
+            "verb": str(payload.get("trust_verb") or "APPLY").strip().upper(),
+            "authority": {
+                "mode": "governed_execution",
+                "component": "panel_agent.runtime",
+                "executor": "promotion.consumer",
+            },
+            "basis": {
+                "source_event": event_id,
+                "intent_type": "promotion",
+            },
+            "outcome": {
+                "status": "applied",
+                "review_state": axes.review_state,
+                "maturity": axes.maturity,
+            },
+            "artifact_linkage": {
+                "note_uuid": note_uuid,
+                "note_path": str(note_path),
+            },
+            "instance_provenance": {
+                "source": "promotion.consumer",
+                "trace_id": trace_id,
+            },
         },
         trace_id,
     )

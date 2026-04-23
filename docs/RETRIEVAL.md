@@ -45,7 +45,7 @@ Entry point: `app/retrieval/hybrid.py:hybrid_search(query, k=8, ...)`
 Capability wrapper: `app/retrieval/capability.py:retrieve(RetrievalRequest)` exposes the same
 current hybrid path through typed request/response objects for non-ASK callers. The wrapper carries
 query, scope/domain inputs, trace id, hit metadata, and optional diagnostics for relation/provenance
-inputs or view freshness. It adapts the current results; it does not introduce relation-aware
+inputs, view freshness, or an opt-in salience/staleness signal payload seam. It adapts the current results; it does not introduce relation-aware
 ranking, orientation, resurfacing, or a new retrieval agent.
 
 ### Scoring
@@ -103,5 +103,8 @@ Interpretation:
 - Rerank defaults to disabled (`RERANK_ENABLE` unset/false).
 - Relation/provenance inputs and view-freshness diagnostics are carried as optional metadata only.
   They do not affect result ordering or filtering in the current slice.
+- Salience/staleness signal payload is capability-level metadata only and is included only when
+  callers explicitly opt in (`include_signal_payload=True`). Retrieval does not derive these signals
+  from persisted artifact payload or state-axis labels.
 - Stale/partial/unknown view reporting is runtime honesty from existing status signals. It is not a
   multi-replica freshness guarantee and does not fail retrieval by itself.
