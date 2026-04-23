@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Set
 
 from app.planner.schema import Plan, PlanMetadata, PlanStep
 
+from .delivery_sla import map_delivery_sla_terminal_state
 from .events import (
     emit_compensation_started,
     emit_compensation_step_completed,
@@ -230,6 +231,10 @@ class OrchestratorV2:
                             "status": "error",
                             "error": "plan timeout budget exhausted",
                             "error_type": "plan_timeout",
+                            "delivery_sla_state": map_delivery_sla_terminal_state(
+                                status="error",
+                                error_type="plan_timeout",
+                            ),
                         })
                         emit_step_error(
                             plan_id=plan.id,
@@ -249,6 +254,10 @@ class OrchestratorV2:
                             "status": "error",
                             "error": "step budget exhausted",
                             "error_type": "budget_exhausted",
+                            "delivery_sla_state": map_delivery_sla_terminal_state(
+                                status="error",
+                                error_type="budget_exhausted",
+                            ),
                         })
                         completed_steps.add(step_id)
                         continue
@@ -289,7 +298,14 @@ class OrchestratorV2:
                                 trace_id=trace_id,
                             )
                             plan_results[step_id] = output
-                            results.append({"step_id": step_id, "status": "ok", "result": output})
+                            results.append(
+                                {
+                                    "step_id": step_id,
+                                    "status": "ok",
+                                    "result": output,
+                                    "delivery_sla_state": map_delivery_sla_terminal_state(status="ok"),
+                                }
+                            )
                             completed_steps.add(step_id)
                             execution_order.append(step_id)
 
@@ -310,6 +326,10 @@ class OrchestratorV2:
                             entry = {"step_id": step_id, "status": "error", "error": error_message}
                             if error_type:
                                 entry["error_type"] = error_type
+                            entry["delivery_sla_state"] = map_delivery_sla_terminal_state(
+                                status="error",
+                                error_type=error_type,
+                            )
                             results.append(entry)
                             completed_steps.add(step_id)
                             failed_step_id = step_id
@@ -328,6 +348,10 @@ class OrchestratorV2:
                                 "status": "error",
                                 "error": error_message,
                                 "error_type": "unexpected_error",
+                                "delivery_sla_state": map_delivery_sla_terminal_state(
+                                    status="error",
+                                    error_type="unexpected_error",
+                                ),
                             })
                             completed_steps.add(step_id)
                             failed_step_id = step_id
@@ -356,6 +380,7 @@ class OrchestratorV2:
             for entry in results:
                 if entry["step_id"] in compensation_result["compensated_steps"] and entry["status"] == "ok":
                     entry["status"] = "rolled_back"
+                    entry["delivery_sla_state"] = map_delivery_sla_terminal_state(status="rolled_back")
             results.append({
                 "step_id": "__compensation__",
                 "status": "rolled_back",

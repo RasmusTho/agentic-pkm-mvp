@@ -10,9 +10,18 @@ from typing import Iterable
 
 from app.config.environment import active_environment
 from app.events.types import PROMOTE_INTENT_CREATED, PROMOTE_DONE
+from app.events.types import ORCHESTRATOR_STEP_ERROR, ORCHESTRATOR_STEP_FINISHED
 from app.observability.ingest_meta import get_ingest_status
+from app.orchestrator.delivery_sla import (
+    DELIVERY_SLA_DELIVERED,
+    DELIVERY_SLA_FAILED,
+    DELIVERY_SLA_ROLLED_BACK,
+    DELIVERY_SLA_TIMEOUT,
+    map_delivery_sla_from_event_record,
+)
 from app.observability.status_model import (
     AskStatus,
+    DeliverySLAStatus,
     EventCounters,
     EventsLogStatus,
     IngestionStatus,
@@ -259,6 +268,37 @@ def _count_events(outbox_path: Path) -> EventCounters:
         ingest_runs_by_plane={},
         source_path=source,
     )
+
+
+def _delivery_sla_status(outbox_path: Path) -> DeliverySLAStatus:
+    outcomes = {
+        DELIVERY_SLA_DELIVERED: 0,
+        DELIVERY_SLA_TIMEOUT: 0,
+        DELIVERY_SLA_FAILED: 0,
+        DELIVERY_SLA_ROLLED_BACK: 0,
+    }
+    try:
+        with outbox_path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except Exception:
+                    continue
+                event = record.get("event") or record.get("event_type") or record.get("topic") or ""
+                if event not in {ORCHESTRATOR_STEP_ERROR, ORCHESTRATOR_STEP_FINISHED}:
+                    continue
+                state = map_delivery_sla_from_event_record(record)
+                if not state:
+                    continue
+                outcomes[state] = outcomes.get(state, 0) + 1
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    return DeliverySLAStatus(outcomes_total=outcomes, source_path=str(outbox_path))
 
 
 def _outbox_db_source() -> str:
@@ -740,6 +780,7 @@ def get_system_status() -> SystemStatus:
         ask=get_ask_status(),
         intents=intent_status,
         events=counters,
+        delivery_sla=_delivery_sla_status(Path(INDEX_OUTBOX_PATH)),
         index=_get_index_status(),
         panel_diagnostics=_get_panel_diagnostics(),
         write_guard=_get_write_guard_status(),
