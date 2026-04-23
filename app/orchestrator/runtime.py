@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Set
 
 from app.planner.schema import Plan, PlanStep
 
+from .delivery_sla import map_delivery_sla_terminal_state
 from .events import emit_step_error, emit_step_finished, emit_step_started
 from .executor import MockPlanExecutor, PlanExecutor, StepContext, StepExecutionError
 
@@ -108,6 +109,10 @@ class Orchestrator:
                     "status": "error",
                     "error": "plan timeout budget exhausted",
                     "error_type": "plan_timeout",
+                    "delivery_sla_state": map_delivery_sla_terminal_state(
+                        status="error",
+                        error_type="plan_timeout",
+                    ),
                 })
                 break
             emit_step_started(plan_id=plan.id, step=step, object_id=object_id, trace_id=trace_id)
@@ -130,6 +135,10 @@ class Orchestrator:
                     "status": "error",
                     "error": "step budget exhausted",
                     "error_type": "budget_exhausted",
+                    "delivery_sla_state": map_delivery_sla_terminal_state(
+                        status="error",
+                        error_type="budget_exhausted",
+                    ),
                 })
                 break
 
@@ -164,6 +173,7 @@ class Orchestrator:
                 entry = {"step_id": step.id, "status": "error", "error": error_message}
                 if error_type:
                     entry["error_type"] = error_type
+                entry["delivery_sla_state"] = map_delivery_sla_terminal_state(status="error", error_type=error_type)
                 results.append(entry)
                 break
             else:
@@ -175,7 +185,14 @@ class Orchestrator:
                     trace_id=trace_id,
                 )
                 plan_results[step.id] = output
-                results.append({"step_id": step.id, "status": "ok", "result": output})
+                results.append(
+                    {
+                        "step_id": step.id,
+                        "status": "ok",
+                        "result": output,
+                        "delivery_sla_state": map_delivery_sla_terminal_state(status="ok"),
+                    }
+                )
         return results
 
     def _validate_plan(self, plan: Plan) -> None:

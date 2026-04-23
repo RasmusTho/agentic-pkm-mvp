@@ -59,6 +59,11 @@ class EventCounters(BaseModel):
     source_path: str | None = None
 
 
+class DeliverySLAStatus(BaseModel):
+    outcomes_total: dict[str, int] = Field(default_factory=dict)
+    source_path: str | None = None
+
+
 class IndexStatus(BaseModel):
     status: str | None = None
     issues: list[str] = Field(default_factory=list)
@@ -155,6 +160,7 @@ class SystemStatus(BaseModel):
     ask: AskStatus
     intents: Optional[IntentStatus] = None
     events: Optional[EventCounters] = None
+    delivery_sla: Optional[DeliverySLAStatus] = None
     index: Optional[IndexStatus] = None
     panel_diagnostics: Optional[PanelDiagnostics] = None
     write_guard: Optional[WriteGuardStatus] = None
@@ -173,6 +179,7 @@ __all__ = [
     "AskStatus",
     "IntentStatus",
     "EventCounters",
+    "DeliverySLAStatus",
     "IndexStatus",
     "PanelDiagnostics",
     "WriteGuardStatus",

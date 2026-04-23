@@ -75,6 +75,7 @@ Current runtime truth:
 - Responses and errors are represented by schema objects and can be emitted to audit via `emit_agent_response_event(...)` and `emit_agent_error_event(...)`.
 - There is no shipped repo-wide timeout scheduler, retry loop, dead-letter queue, or delivery SLA for A2A messages.
 - If a caller needs timeout behavior today, that policy lives in the owning caller/agent/orchestrator code path rather than in a central A2A runtime.
+- Delivery-SLA terminal-state reporting for timeouts/failures is owned by orchestrator runtime/status surfaces, not by A2A transport.
 
 Error taxonomy posture:
 

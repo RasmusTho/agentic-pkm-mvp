@@ -22,7 +22,8 @@ Use this document with:
 - V1 executes steps sequentially (no parallel execution); V2 uses ThreadPoolExecutor for dependency-aware parallel scheduling.
 - Timeout is observable: caught errors are emitted with error_type `tool_timeout`.
 - Plan budget exhaustion is observable with `error_type` `plan_timeout`.
-- No repo-wide A2A/runtime timeout policy, retry queue, or delivery SLA exists.
+- Delivery-SLA terminal state mapping is deterministic for orchestrator step outcomes and exposed in status/trace surfaces.
+- No repo-wide A2A transport delivery queue or retry-SLA scheduler exists.
 
 ## Timeout handling by surface
 
@@ -106,6 +107,25 @@ When a configured plan timeout budget is exhausted:
 1. The orchestrator marks the next unstarted executable step as failed with `error_type="plan_timeout"`.
 2. V1 stops scheduling additional steps.
 3. V2 stops scheduling and runs compensation for previously completed predecessors.
+
+## Delivery-SLA terminal state contract
+
+Delivery-SLA status is a deterministic terminal mapping for orchestrator step outcomes:
+
+| Input runtime state | Mapping output |
+| --- | --- |
+| `status="ok"` | `delivered` |
+| `status="rolled_back"` | `rolled_back_terminal` |
+| `status="error"` and `error_type in {"tool_timeout","timeout","plan_timeout"}` | `timeout_terminal` |
+| any other `status="error"` | `failed_terminal` |
+
+Current exposure:
+- Orchestrator step trace events (`orchestrator.step.finished`, `orchestrator.step.error`) include `details.delivery_sla_state`.
+- Status surface includes aggregate delivery-SLA outcome totals under `delivery_sla.outcomes_total`.
+
+Compatibility posture:
+- Existing `error_type` semantics and per-tool timeout behavior are unchanged.
+- Plan-timeout budget behavior is unchanged (`error_type="plan_timeout"` remains canonical).
 
 ## Constraints and non-claims
 

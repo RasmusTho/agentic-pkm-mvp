@@ -16,6 +16,7 @@ from app.events.types import (
     ORCHESTRATOR_STEP_RETRY_EXHAUSTED,
     ORCHESTRATOR_STEP_STARTED,
 )
+from app.orchestrator.delivery_sla import map_delivery_sla_terminal_state
 from app.planner.schema import PlanStep
 
 ORCHESTRATOR_AGENT = "orchestrator.runtime"
@@ -45,6 +46,7 @@ def emit_step_finished(
 ) -> None:
     details = _base_step_details(plan_id, step)
     details["result"] = result
+    details["delivery_sla_state"] = map_delivery_sla_terminal_state(status="ok")
     _emit(ORCHESTRATOR_STEP_FINISHED, object_id=object_id, trace_id=trace_id, details=details)
 
 
@@ -59,6 +61,7 @@ def emit_step_error(
 ) -> None:
     details = _base_step_details(plan_id, step)
     details["error"] = error
+    details["delivery_sla_state"] = map_delivery_sla_terminal_state(status="error", error_type=error_type)
     if error_type:
         details["error_type"] = error_type
     _emit(ORCHESTRATOR_STEP_ERROR, object_id=object_id, trace_id=trace_id, details=details)
