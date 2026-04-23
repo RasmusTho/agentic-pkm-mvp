@@ -41,8 +41,7 @@ class MCPToolProvider:
             except Exception:
                 # Remote descriptor discovery is best-effort; keep local registry route available.
                 pass
-        supported = set(MCP_TOOL_DESCRIPTORS.keys())
-        return {name: descriptor for name, descriptor in descriptors.items() if name in supported}
+        return self._filter_supported(descriptors)
 
     def get_descriptor(self, tool_name: str, tool_settings: Mapping[str, Any] | None = None) -> ToolDescriptor | None:
         return self.list_descriptors(tool_settings).get(tool_name)
@@ -113,7 +112,7 @@ class MCPToolProvider:
         tool_settings: Mapping[str, Any] | None,
         route: Dict[str, str],
     ) -> ToolDescriptor | None:
-        local_descriptors = self._list_local_descriptors()
+        local_descriptors = self._filter_supported(self._list_local_descriptors())
         if route.get("provider_route") != "remote_multiplex" or self.remote_provider is None:
             return local_descriptors.get(tool_name)
 
@@ -126,7 +125,7 @@ class MCPToolProvider:
             return local_descriptors.get(tool_name)
 
         merged = dict(local_descriptors)
-        merged.update(remote_descriptors)
+        merged.update(self._filter_supported(remote_descriptors))
         return merged.get(tool_name)
 
     def _resolve_route(self, tool_settings: Mapping[str, Any] | None) -> Dict[str, str]:
@@ -162,7 +161,7 @@ class MCPToolProvider:
                 route["provider_route"] = "local_registry"
                 route["provider_route_reason"] = "remote_provider_error"
                 route["provider_route_attempted"] = "remote_multiplex"
-                local_descriptor = self._list_local_descriptors().get(descriptor.name)
+                local_descriptor = self._filter_supported(self._list_local_descriptors()).get(descriptor.name)
                 if local_descriptor is None:
                     raise StepExecutionError(
                         f"remote provider failed and no local fallback is available for '{descriptor.name}'",
@@ -176,6 +175,10 @@ class MCPToolProvider:
 
     def _list_local_descriptors(self) -> Dict[str, ToolDescriptor]:
         return _load_registry_descriptors()
+
+    def _filter_supported(self, descriptors: Mapping[str, ToolDescriptor]) -> Dict[str, ToolDescriptor]:
+        supported = set(MCP_TOOL_DESCRIPTORS.keys())
+        return {name: descriptor for name, descriptor in descriptors.items() if name in supported}
 
 
 def _load_registry_descriptors() -> Dict[str, ToolDescriptor]:
