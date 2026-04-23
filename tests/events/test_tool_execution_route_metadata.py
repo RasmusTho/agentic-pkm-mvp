@@ -37,7 +37,9 @@ class _RemoteProviderOK:
     def execute_tool_call(self, **_: object) -> dict[str, object]:
         return {"tool": "mcp.search.objects", "result": {"status": "remote-ok"}}
 
-
+class _RemoteProviderError(_RemoteProviderOK):
+    def execute_tool_call(self, **_: object) -> dict[str, object]:
+        raise RuntimeError("remote execute failed")
 def test_tool_execution_records_provider_route(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[tuple[str, dict[str, object]]] = []
 
