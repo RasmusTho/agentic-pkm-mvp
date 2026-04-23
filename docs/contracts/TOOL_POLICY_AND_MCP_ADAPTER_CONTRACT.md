@@ -6,7 +6,7 @@ Authority: Canonical current-state contract for the repo's tool descriptor regis
 
 This document describes the current tool descriptor registry, validation rules, timeout handling, and the MCP adapter boundary inside the repository for bounded tool execution.
 It is a current-state contract for tool descriptor completeness, allowed-argument validation, mock/deterministic test behavior, and audit expectations.
-It does not claim rich descriptor versioning, remote multiplexing, or future permission-model expansion as shipped.
+It does not claim rich descriptor versioning, dynamic remote discovery, or future permission-model expansion as shipped.
 
 Use this document with:
 - `docs/ARCHITECTURE.md` for current runtime boundaries and the planner/orchestrator pipeline.
@@ -22,7 +22,8 @@ Use this document with:
 - Tool validation happens at execution time in the orchestrator (MockPlanExecutor) and includes argument type checking, required-field validation, and agent authorization checks via `POLICY_ENFORCE`.
 - Tool execution supports deterministic/mock behavior for CI and development, real vault append for enabled MCP tools, and internal step handlers for repo-specific operations.
 - A local MCP ToolProvider boundary exposes registry-loaded descriptors and delegates execution through the existing executor validation/policy/timeout/mock-real paths.
-- Remote MCP server multiplexing and dynamic descriptor discovery are not shipped.
+- A bounded remote multiplex seam is available behind explicit flag `mcp_remote_multiplex_enable`; default behavior remains local registry execution.
+- If remote multiplex is enabled but unavailable or failing, execution deterministically falls back to local registry with route reason codes.
 
 ## Descriptor sources and structure
 
@@ -176,8 +177,8 @@ The executor emits outbox events for tool execution:
 
 | Event | Source | Timing | Fields |
 | --- | --- | --- | --- |
-| `mcp.tool.call.started` | `emit_mcp_tool_call_started(...)` (line 165-171) | Before tool execution | `plan_id`, `step_id`, `tool_name`, `object_id`, `trace_id` |
-| `mcp.tool.call.finished` | `emit_mcp_tool_call_finished(...)` (line 194-201) | After successful tool execution | `plan_id`, `step_id`, `tool_name`, `result`, `object_id`, `trace_id` |
+| `mcp.tool.call.started` | `emit_mcp_tool_call_started(...)` | Before tool execution | `plan_id`, `step_id`, `tool_name`, `object_id`, `trace_id`, `provider_route`, optional route reason metadata |
+| `mcp.tool.call.finished` | `emit_mcp_tool_call_finished(...)` | After successful tool execution | `plan_id`, `step_id`, `tool_name`, `result`, `object_id`, `trace_id`, `provider_route`, optional route reason metadata |
 | (vault-specific) `mcp.vault.append_note` | `OutboxEvent(event=..., source="orchestrator.runtime", ...)` (line 276-283) | After real vault append | `trace_id` if available |
 
 ### Trace propagation
@@ -201,12 +202,14 @@ The executor defines built-in handlers for `internal` protocol tools:
 
 Both are handled synchronously during plan execution and do not support real vs. mock branching (they always execute).
 
-## Future MCP integration boundary
+## MCP integration boundary
 
 This contract explicitly bounds the current tool execution behavior and reserves future expansion space:
 
-- **Not currently implemented**: dynamic tool discovery, remote MCP server multiplexing, or tool versioning/evolution policies.
-- **Current implementation boundary**: ToolProvider support is local and registry-backed; execution semantics still run through the existing executor contract.
+- **Currently implemented**: local registry-backed ToolProvider default path, plus optional remote multiplex seam behind `mcp_remote_multiplex_enable`.
+- **Fallback behavior**: when remote multiplex is enabled but no remote adapter is present or the adapter errors, route falls back to local registry with deterministic reason codes (`remote_unavailable`, `remote_provider_error`).
+- **Not currently implemented**: dynamic tool discovery or tool versioning/evolution policies.
+- **Current implementation boundary**: execution semantics still run through the existing executor contract and policy checks.
 - **Planned**: The repo still tracks broader LangGraph and remote MCP integration work in the v5.6 forward line (see `docs/tracks/TRACK_AGENTOPS_A2A_MCP.md`).
 - **Scope boundary**: This contract describes enacted descriptor-registry, ToolProvider boundary, validation, and executor behavior only.
 - **Descriptor stability**: Adding new tools via the YAML registry does not require changes to this contract; only changes to the descriptor format, validation rules, or execution semantics should trigger contract updates.
