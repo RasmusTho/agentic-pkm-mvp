@@ -8,5 +8,5 @@ def test_openapi_includes_operator_endpoints() -> None:
     resp = client.get("/openapi.json")
     assert resp.status_code == 200
     paths = resp.json().get("paths") or {}
-    for route in ["/api/health", "/api/settings/validate", "/api/events/tail", "/api/status"]:
+    for route in ["/api/health", "/api/settings/validate", "/api/events/tail", "/api/status", "/api/orientation"]:
         assert route in paths

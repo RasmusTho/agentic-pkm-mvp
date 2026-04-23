@@ -81,7 +81,7 @@ The current runtime sits inside a small local system boundary:
 - Human-facing surfaces:
   - the Obsidian vault as the canonical writing and reading surface,
   - the CLI for operator and developer workflows,
-  - the HTTP API for ASK, health, and status.
+  - the HTTP API for ASK, orientation, health, and status.
 - Runtime components in this repository:
   - ingestion, watcher, panel, ASK, promotion, worker, and store-facing application code,
   - event emission and observability hooks,
@@ -397,9 +397,10 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
    - Legacy snapshot watcher (`vault-watcher-run`) is dev-only and not used in runtime start-system flows.
 2) **External corpus ingest (minimal)** — a small drop folder/pipeline for real external documents ingested as `external_raw` runtime objects, stored in ObjectStore and indexed without surfacing as vault notes (txt/md drop-folder CLI implemented; newsletters/PDFs can extend the same path).
 3) **ASK API** — FastAPI endpoint returning answer text plus sources `{uuid, title, origin (vault/external), zone overlay if known, path/source_ref}` and latency; uses hybrid retrieval over both planes with an in-process HybridStore warmed from `store_objects` on first use. `zone` is passed through when present on the hit payload, but derived zone coverage is not guaranteed baseline behavior.
-4) **Observability backend** — status service that aggregates per-store projection counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency; exposed via CLI and interim GUI.
-5) **Interim GUI** — simple FastAPI-served page (root `/`) that shows status (object counts, last ingest, ASK stats) and an ASK input with answers + visible sources; explicitly a temporary observability/interaction surface.
-6) **Panel action catalog & watcher settings** — the canonical action catalog (`docs/settings/panel-actions.md`) + `vault/@Settings/watchers.md` describe allowed `watcher_allowed` actions, auto-run env (`WATCHER_AUTO_EXEC`), and outbox paths; `python -m app.cli settings-explain` and `python -m app.cli settings-validate` emit provenance + validation output for reviews.
+4) **Orientation API (read-only seam)** — FastAPI endpoint returning a situational frame without requiring a query term. It composes only derived runtime signals (recent activity, open-loop proxies, and context-change hints) and exposes explicit explanation fields (`leave_point`, `open_items`, `notable_change`) with no mutation intents.
+5) **Observability backend** — status service that aggregates per-store projection counts (vault vs external), ingest timestamps/errors, and ASK query counts/latency; exposed via CLI and interim GUI.
+6) **Interim GUI** — simple FastAPI-served page (root `/`) that shows status (object counts, last ingest, ASK stats) and an ASK input with answers + visible sources; explicitly a temporary observability/interaction surface.
+7) **Panel action catalog & watcher settings** — the canonical action catalog (`docs/settings/panel-actions.md`) + `vault/@Settings/watchers.md` describe allowed `watcher_allowed` actions, auto-run env (`WATCHER_AUTO_EXEC`), and outbox paths; `python -m app.cli settings-explain` and `python -m app.cli settings-validate` emit provenance + validation output for reviews.
 All current runtime surfaces build on the same Store abstraction (ObjectStore, VectorIndex, RelationIndex), event envelope, and vault-first write boundary.
 
 ## Current vs Planned Status

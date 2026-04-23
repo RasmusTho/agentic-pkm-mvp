@@ -34,6 +34,11 @@ except ImportError:
     ask_router = None
 
 try:
+    from app.api.routes.orientation import router as orientation_router
+except ImportError:
+    orientation_router = None
+
+try:
     from app.api.routes.health import router as health_router
 except ImportError:
     health_router = None
@@ -120,6 +125,8 @@ def _create_app() -> FastAPI:
         application.include_router(status_router, prefix="/api")
     if ask_router is not None:
         application.include_router(ask_router, prefix="/api")
+    if orientation_router is not None:
+        application.include_router(orientation_router, prefix="/api")
     if health_router is not None:
         application.include_router(health_router, prefix="/api")
     if health_contract_router is not None:
@@ -143,5 +150,4 @@ async def index() -> HTMLResponse:
     """Interim dashboard for status visibility and manual ASK checks."""
     index_path = static_dir / "index.html"
     return HTMLResponse(index_path.read_text(encoding="utf-8"))
-
 
