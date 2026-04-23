@@ -127,6 +127,7 @@ Watcher auto-exec enablement rule:
 - When the question is release or merge readiness rather than a live local diagnosis, corroborate the operator view with the enforced CI summary line (`CI SUMMARY GATES ok=<bool>`).
 - `python -m app.cli settings-validate` is the schema validation gate for repo-shipped panel action catalog/wiring and watcher settings. It rejects invalid panel action ids, missing required panel fields, malformed watcher `auto_run` values, and unknown watcher allowlist action ids.
 - This validation path does not widen runtime authority: watcher auto-exec remains guarded by `WATCHER_AUTO_EXEC`, allowlist policy, and per-note `ai_panel_auto_run: never` opt-out.
+- Sync-latency measurement mode is operator-scoped: keep `vault/@Settings/watchers.md` allowlist at default (`promote.evergreen`) and run harness/measurement sessions with `WATCHER_MEASUREMENT_MODE=1`. This temporarily appends `ingest.summary.create` during the run and returns to the default posture after the process exits.
 
 ### Docker-first deployment
 1. Set `VAULT_ROOT` to your local vault path:

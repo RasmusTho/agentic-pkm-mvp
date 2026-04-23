@@ -82,6 +82,24 @@ Error taxonomy posture:
 - The repo does not yet define a closed global enum for all A2A error categories.
 - Existing code/tests show local values such as `not_ready`, `failed`, and `not_implemented`; callers should use stable machine-readable labels rather than prose-only categories.
 
+## Panel trust-verb and APPLY receipt compatibility
+
+Current runtime now carries bounded trust-verb and APPLY-accountability fields for the Panel mutation path while preserving the existing outbox envelope:
+
+- Promotion-intent payloads emitted from Panel runtime include `trust_verb` and `action.trust_verb` when available from the panel action mapping.
+- Mutation-capable panel actions (current promotion path) are admitted only when explicitly classified as `APPLY`; missing/invalid/non-`APPLY` trust-verb values are logged and not emitted as mutation intents.
+- `promotion.transition.applied` payloads include accountability fields:
+  - `verb`
+  - `authority`
+  - `basis`
+  - `outcome`
+  - `artifact_linkage`
+  - `instance_provenance`
+
+Compatibility posture:
+- Event envelope shape (`event`, `event_id`, `trace_id`, `source`, `timestamp`, `payload`) is unchanged.
+- Added payload fields are backward-compatible extensions; existing consumers that ignore unknown payload keys remain valid.
+
 ## Audit event mapping
 
 The canonical event-type constants live in `app/events/types.py`.

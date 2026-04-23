@@ -24,6 +24,23 @@ class RetrievalViewFreshness:
 
 
 @dataclass(frozen=True)
+class RetrievalSignalPayload:
+    salience: dict[str, Any] = field(default_factory=dict)
+    staleness: dict[str, Any] = field(default_factory=dict)
+    source: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if self.salience:
+            payload["salience"] = dict(self.salience)
+        if self.staleness:
+            payload["staleness"] = dict(self.staleness)
+        if self.source:
+            payload["source"] = self.source
+        return payload
+
+
+@dataclass(frozen=True)
 class RetrievalRequest:
     query: str
     k: int = 8
@@ -35,6 +52,8 @@ class RetrievalRequest:
     relation_metadata: dict[str, Any] = field(default_factory=dict)
     provenance_metadata: dict[str, Any] = field(default_factory=dict)
     view_freshness: RetrievalViewFreshness | None = None
+    include_signal_payload: bool = False
+    signal_payload: RetrievalSignalPayload | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +119,8 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
         diagnostics["provenance_metadata"] = dict(request.provenance_metadata)
     if request.view_freshness is not None:
         diagnostics["view_freshness"] = request.view_freshness.to_dict()
+    if request.include_signal_payload and request.signal_payload is not None:
+        diagnostics["signal_payload"] = request.signal_payload.to_dict()
     return RetrievalResponse(
         query=request.query,
         hits=[RetrievalHit.from_hybrid(hit) for hit in raw_hits],
@@ -112,6 +133,7 @@ __all__ = [
     "RetrievalHit",
     "RetrievalRequest",
     "RetrievalResponse",
+    "RetrievalSignalPayload",
     "RetrievalViewFreshness",
     "ViewFreshnessState",
     "retrieve",

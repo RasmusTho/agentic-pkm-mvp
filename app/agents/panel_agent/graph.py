@@ -29,6 +29,7 @@ from app.events.schema import OutboxEvent
 _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 
 logger = logging.getLogger(__name__)
+_TRUST_VERBS = {"ASSERT", "SUGGEST", "APPLY"}
 
 
 def _build_panel_source() -> PanelEventSource:
@@ -82,6 +83,16 @@ def _action_resolution_reason(
     if mapping is None:
         return "unmapped_action"
 
+    # Mutation-capable actions must be explicitly trust-verb classified and admitted as APPLY.
+    if (mapping.intent_type or "").strip().lower() == "promotion":
+        trust_verb = str(mapping.trust_verb or "").strip().upper()
+        if not trust_verb:
+            return "trust_verb_missing"
+        if trust_verb not in _TRUST_VERBS:
+            return "trust_verb_invalid"
+        if trust_verb != "APPLY":
+            return "admission_required"
+
     if catalog and catalog.actions and catalog.get(mapping.id) is None:
         return "unknown_mapping"
 
@@ -96,6 +107,7 @@ def _action_resolution_reason(
 
 def _promotion_event(intent_event: PanelIntentEvent, action: PanelIntentAction, *, target_event: str = "promote.intent.created") -> OutboxEvent:
     params = action.mapping.params if action.mapping else {}
+    trust_verb = str(action.mapping.trust_verb or "").strip().upper() if action.mapping else ""
     payload = {
         "note": intent_event.payload.note.model_dump(mode="json"),
         "panel": intent_event.payload.panel.model_dump(mode="json", exclude_none=True),
@@ -104,9 +116,11 @@ def _promotion_event(intent_event: PanelIntentEvent, action: PanelIntentAction, 
             "label": action.label,
             "intent_type": action.mapping.intent_type if action.mapping else None,
             "downstream_event": action.mapping.downstream_event if action.mapping else None,
+            "trust_verb": trust_verb or None,
             "params": params,
         },
         "instruction": intent_event.payload.panel.instruction,
+        "trust_verb": trust_verb or None,
     }
     maturity = params.get("maturity")
     if maturity:
@@ -180,7 +194,15 @@ def _handle_action(
     resolution_reason = _action_resolution_reason(state, action_to_use)
     wiring = action_wiring or {}
     target_event = wiring.get(action_to_use.id)
-    if resolution_reason in {"ambiguous_action", "unmapped_action", "unknown_mapping", "watcher_not_allowed"}:
+    if resolution_reason in {
+        "ambiguous_action",
+        "unmapped_action",
+        "unknown_mapping",
+        "watcher_not_allowed",
+        "trust_verb_missing",
+        "trust_verb_invalid",
+        "admission_required",
+    }:
         logged = _logged_event(intent_event, action_to_use, resolution_reason)
         emitted.append(logged)
         emitted_names.append(logged.event)

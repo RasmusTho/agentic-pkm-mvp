@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.retrieval.capability import RetrievalRequest, retrieve
+from app.retrieval.capability import RetrievalRequest, RetrievalSignalPayload, retrieve
 from app.retrieval.hybrid import get_store, hybrid_search
 
 
@@ -78,5 +78,43 @@ def test_retrieval_capability_accepts_surface_neutral_request(monkeypatch) -> No
         assert response.diagnostics["scope"] == "operator"
         assert response.diagnostics["domain"] == "core"
         assert response.hits
+    finally:
+        get_store().set_documents([])
+
+
+def test_retrieval_signal_payload_opt_in(monkeypatch) -> None:
+    _patch_embeddings(monkeypatch)
+    _seed_store()
+    try:
+        without_opt_in = retrieve(
+            RetrievalRequest(
+                query="alpha retrieval",
+                k=1,
+                signal_payload=RetrievalSignalPayload(
+                    salience={"tier": "active"},
+                    staleness={"state": "fresh"},
+                    source="runtime",
+                ),
+            )
+        )
+        with_opt_in = retrieve(
+            RetrievalRequest(
+                query="alpha retrieval",
+                k=1,
+                include_signal_payload=True,
+                signal_payload=RetrievalSignalPayload(
+                    salience={"tier": "active"},
+                    staleness={"state": "fresh"},
+                    source="runtime",
+                ),
+            )
+        )
+
+        assert "signal_payload" not in without_opt_in.diagnostics
+        assert with_opt_in.diagnostics["signal_payload"] == {
+            "salience": {"tier": "active"},
+            "staleness": {"state": "fresh"},
+            "source": "runtime",
+        }
     finally:
         get_store().set_documents([])
