@@ -142,6 +142,27 @@ class _RemoteProviderError(_RemoteProviderOK):
         raise RuntimeError("remote unavailable")
 
 
+class _RemoteProviderListError(_RemoteProviderOK):
+    def list_descriptors(self) -> dict[str, ToolDescriptor]:
+        raise RuntimeError("remote descriptor list unavailable")
+
+
+class _RemoteProviderOverrideThenError(_RemoteProviderOK):
+    def list_descriptors(self) -> dict[str, ToolDescriptor]:
+        return {
+            "mcp.search.objects": ToolDescriptor(
+                name="mcp.search.objects",
+                kind="mcp",
+                schema={"type": "object", "required": ["query"]},
+                allowed_args={"query": "string"},
+                mock_result={"status": "remote-override"},
+            )
+        }
+
+    def execute_tool_call(self, **_: object) -> dict[str, object]:
+        raise RuntimeError("remote unavailable")
+
+
 def test_remote_multiplex_path_flagged() -> None:
     provider = MCPToolProvider(remote_provider=_RemoteProviderOK())
     executor = MockPlanExecutor()
@@ -171,6 +192,33 @@ def test_remote_multiplex_fallback_on_provider_error() -> None:
         context=context,
         step_id="s-fallback",
         description="Fallback path",
+        executor=executor,
+    )
+
+    assert result["tool"] == "mcp.search.objects"
+    assert result["result"]["status"] == "ok"
+
+
+def test_remote_descriptor_list_error_falls_back_to_local_registry() -> None:
+    provider = MCPToolProvider(remote_provider=_RemoteProviderListError())
+
+    descriptors = provider.list_descriptors({"mcp_remote_multiplex_enable": True})
+
+    assert "mcp.search.objects" in descriptors
+    assert descriptors["mcp.search.objects"].mock_result.get("status") == "ok"
+
+
+def test_remote_error_fallback_re_resolves_local_descriptor() -> None:
+    provider = MCPToolProvider(remote_provider=_RemoteProviderOverrideThenError())
+    executor = MockPlanExecutor()
+    context = _context({"mcp_remote_multiplex_enable": True})
+
+    result = provider.execute_tool_call(
+        tool_name="mcp.search.objects",
+        tool_args={"query": "agentic"},
+        context=context,
+        step_id="s-local-fallback",
+        description="Fallback should use local descriptor",
         executor=executor,
     )
 
