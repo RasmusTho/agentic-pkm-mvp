@@ -89,17 +89,19 @@ class CloseResponse(BaseModel):
 
 
 def _validate_note_path(note_path_str: str, vault_root: Path) -> Path:
-    """Validate and resolve note path to be within vault_root."""
+    """Validate and resolve note path to be within vault_root.
+
+    Rejects absolute paths; only relative paths are accepted.
+    """
     if not note_path_str:
         raise ValueError("note_path cannot be empty")
-    if note_path_str.startswith("/"):
-        candidate = Path(note_path_str).resolve()
-    else:
-        candidate = (vault_root / note_path_str).resolve()
+    if Path(note_path_str).is_absolute():
+        raise ValueError("note_path must be relative to vault_root")
+    candidate = (vault_root / note_path_str).resolve()
     try:
         candidate.relative_to(vault_root)
     except ValueError:
-        raise ValueError(f"note_path is outside vault_root")
+        raise ValueError("note_path escapes vault_root")
     return candidate
 
 

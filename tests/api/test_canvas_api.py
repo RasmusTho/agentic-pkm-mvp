@@ -36,8 +36,7 @@ def client(monkeypatch, vault: Path) -> TestClient:
 
 
 def test_open_session_returns_session_id(client: TestClient, vault: Path) -> None:
-    note = vault / "note.md"
-    resp = client.post("/api/canvas/sessions", json={"note_path": str(note), "label": "test"})
+    resp = client.post("/api/canvas/sessions", json={"note_path": "note.md", "label": "test"})
     assert resp.status_code == 200
     data = resp.json()
     assert "session_id" in data
@@ -45,9 +44,8 @@ def test_open_session_returns_session_id(client: TestClient, vault: Path) -> Non
 
 
 def test_edit_updates_vault_file(client: TestClient, vault: Path) -> None:
-    note = vault / "note.md"
     open_resp = client.post(
-        "/api/canvas/sessions", json={"note_path": str(note), "label": "edit-test"}
+        "/api/canvas/sessions", json={"note_path": "note.md", "label": "edit-test"}
     )
     session_id = open_resp.json()["session_id"]
 
@@ -57,13 +55,13 @@ def test_edit_updates_vault_file(client: TestClient, vault: Path) -> None:
     )
     assert edit_resp.status_code == 200
     assert edit_resp.json()["ok"] is True
+    note = vault / "note.md"
     assert "Updated body." in note.read_text(encoding="utf-8")
 
 
 def test_close_session_writes_log(client: TestClient, vault: Path) -> None:
-    note = vault / "note.md"
     open_resp = client.post(
-        "/api/canvas/sessions", json={"note_path": str(note), "label": "close-test"}
+        "/api/canvas/sessions", json={"note_path": "note.md", "label": "close-test"}
     )
     data = open_resp.json()
     session_id = data["session_id"]
@@ -80,7 +78,7 @@ def test_governance_action_creates_intent_not_note_edit(client: TestClient, vaul
     note = vault / "note.md"
     original = note.read_text(encoding="utf-8")
     open_resp = client.post(
-        "/api/canvas/sessions", json={"note_path": str(note), "label": "gov-test"}
+        "/api/canvas/sessions", json={"note_path": "note.md", "label": "gov-test"}
     )
     session_id = open_resp.json()["session_id"]
 
@@ -100,6 +98,5 @@ def test_canvas_disabled_returns_403(monkeypatch, vault: Path) -> None:
     monkeypatch.setenv("CANVAS_ENABLED", "0")
     monkeypatch.setattr(canvas_module, "_get_vault_root", lambda: vault)
     client = TestClient(app)
-    note = vault / "note.md"
-    resp = client.post("/api/canvas/sessions", json={"note_path": str(note), "label": "x"})
+    resp = client.post("/api/canvas/sessions", json={"note_path": "note.md", "label": "x"})
     assert resp.status_code == 403
