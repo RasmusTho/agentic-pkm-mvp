@@ -97,6 +97,10 @@ def open_session(req: OpenSessionRequest) -> OpenSessionResponse:
     if not note_path.is_absolute():
         note_path = vault_root / note_path
     note_path = note_path.resolve()
+    try:
+        note_path.relative_to(vault_root)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Note path {note_path} is outside vault_root")
     session = log_writer.open_session(note_path, req.label)
     _sessions[session.session_id] = session
     return OpenSessionResponse(
@@ -135,12 +139,13 @@ def governance_action(session_id: str, req: GovernanceRequest) -> GovernanceResp
     vault_root = _get_vault_root()
     log_writer = SessionLogWriter(vault_root=vault_root)
 
-    class _NullPipeline:
+    class _StubPipeline:
+        """Stub pipeline for governance actions. TODO: route to real panel pipeline."""
         def submit_intent(self, action_type: str, payload: dict, session_id: str) -> str:
             import uuid
             return str(uuid.uuid4())
 
-    gov = GovernanceRouter(panel_pipeline=_NullPipeline(), session_log_writer=log_writer)
+    gov = GovernanceRouter(panel_pipeline=_StubPipeline(), session_log_writer=log_writer)
     pending = gov.request_governance_action(session, action_type, req.payload)
     return GovernanceResponse(intent_id=pending.intent_id, session_id=pending.session_id)
 
