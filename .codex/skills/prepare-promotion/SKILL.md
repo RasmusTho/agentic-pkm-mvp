@@ -44,6 +44,7 @@ Per `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md`:
 
 ## Pre-conditions
 
+- `docs/RELEASE_CHANNELS/` is present on `main` (docs capability PR merged; originally PR #602). If those docs are not on `main`, do not run this skill.
 - `make prod-up` is running and the prod Postgres container is healthy on port 15432.
 - The `stable` ref resolves without ambiguity (`git rev-parse stable` succeeds).
 - The operator has specified the target commit (defaults to `HEAD` on `main` if not provided).
