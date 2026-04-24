@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Sequence
 
+from app.config.database import resolve_runtime_database_url
 from app.config.environment import active_environment
 from app.health_contract import DEFAULT_CONTRACT
 from app.settings.panel_actions_settings import load_panel_actions_settings, panel_action_ids
@@ -10,6 +12,7 @@ from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_
 
 
 def build_settings_explain_payload() -> dict[str, Any]:
+    db_url = resolve_runtime_database_url(os.environ)
     panel_settings = load_panel_actions_settings()
     watcher_settings = load_watcher_settings()
     auto_exec = resolve_auto_exec_state()
@@ -18,6 +21,7 @@ def build_settings_explain_payload() -> dict[str, Any]:
     write_guard = DEFAULT_CONTRACT.evaluate()
     return {
         "environment": active_environment(),
+        "database_url": db_url,
         "panel_actions": {
             "action_count": len(panel_settings.catalog.actions),
             "action_ids": sorted(panel_settings.catalog.ids()),

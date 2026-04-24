@@ -9,6 +9,7 @@ from psycopg import Error
 from psycopg.errors import DependentObjectsStillExist, DuplicateObject, InsufficientPrivilege
 from psycopg.rows import dict_row
 
+from app.config.database import resolve_runtime_database_url
 from app.db.dsn import connect as _connect, resolve_dsn
 from app.settings import settings
 
@@ -19,7 +20,7 @@ _SCHEMA_INITIALIZED = False
 
 def _psycopg_dsn() -> str:
     """Allow DATABASE_URL overrides while keeping Pydantic defaults."""
-    url = os.getenv("DATABASE_URL")
+    url = resolve_runtime_database_url(os.environ)
     return resolve_dsn(url or settings.db_dsn)
 
 

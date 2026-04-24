@@ -1,5 +1,7 @@
 services:
   db:
+    environment:
+      POSTGRES_DB: app_test
     ports:
       - "15434:5432"
 
@@ -8,17 +10,17 @@ services:
       - "18002:8000"
     environment:
       PKM_ENVIRONMENT: dev
-      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
-      DB_DSN: postgresql+psycopg://app:app@db:5432/app
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
+      DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
 
   worker:
     environment:
       PKM_ENVIRONMENT: dev
-      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
-      DB_DSN: postgresql+psycopg://app:app@db:5432/app
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
+      DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
 
   watcher:
     environment:
       PKM_ENVIRONMENT: dev
-      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
-      DB_DSN: postgresql+psycopg://app:app@db:5432/app
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
+      DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
