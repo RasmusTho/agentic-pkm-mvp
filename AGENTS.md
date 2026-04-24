@@ -40,6 +40,14 @@ Repo-local workflow helpers live under `.codex/skills/`. They do not replace thi
   `.codex/skills/capture-learning/SKILL.md`
 - Retrospective over divergence log to improve upstream artifacts:
   `.codex/skills/learning-retrospective/SKILL.md`
+- Promote a reviewed commit from dev to stable prod (produce plan):
+  `.codex/skills/prepare-promotion/SKILL.md`
+- Execute an operator-acknowledged promotion plan:
+  `.codex/skills/execute-promotion/SKILL.md`
+- Verify prod health after promotion or rollback:
+  `.codex/skills/verify-promotion/SKILL.md`
+- Roll prod back to the previous stable ref:
+  `.codex/skills/rollback-promotion/SKILL.md`
 
 For GitHub implementation work, loading `.codex/skills/issue-to-code/SKILL.md` is mandatory before coding.
 That skill owns the pickup rule:

@@ -44,6 +44,14 @@ Conditional / maintenance path:
   - micro-skill: append one structured divergence entry to `docs/learning-log.md` when a plan divergence occurs; invoke on divergence, not on normal work
 - `learning-retrospective`
   - cadence-triggered: read `docs/learning-log.md` since last retro marker, cluster by upstream artifact, propose concrete edits for human review, append retro marker after human response
+- `prepare-promotion`
+  - release-channel operator skill: produce a promotion plan diffing `main` against `stable` with code delta, migration delta (reversible vs forward-only), config delta, and risk notes; always runs before `execute-promotion`; governed by `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md`
+- `execute-promotion`
+  - release-channel operator skill: consume a reviewed and operator-acknowledged promotion plan; move the `stable` ref, apply migrations to the prod DB, restart the prod process; always follow with `verify-promotion`
+- `verify-promotion`
+  - release-channel operator skill: verify prod is healthy after `execute-promotion` or `rollback-promotion`; runs health, status, settings-explain, and smoke checks; appends a verification receipt to the promotion plan; PASS/FAIL only
+- `rollback-promotion`
+  - release-channel operator skill: restore `stable` to `stable-prev`, reverse reversible migrations, restart prod; call after `execute-promotion` failure or `verify-promotion` FAIL; always follow with `verify-promotion`; governed by `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`
 
 ## Connected execution paths
 
@@ -55,6 +63,8 @@ Conditional / maintenance path:
   `docs-authoring -> docs-to-issue`
 - Temporal audit path:
   `temporal-doc-governance` and, when GitHub state is involved, `backlog-reconciliation-drift-audit`
+- Release-channel promotion path:
+  `prepare-promotion -> (operator review) -> execute-promotion -> verify-promotion`; on failure: `rollback-promotion -> verify-promotion`
 
 If multiple skills seem relevant, prefer the narrower workflow skill over the generic repo-dev skill.
 
