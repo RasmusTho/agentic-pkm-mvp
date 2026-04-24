@@ -88,19 +88,30 @@ class CloseResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _validate_note_path(note_path_str: str, vault_root: Path) -> Path:
+    """Validate and resolve note path to be within vault_root."""
+    if not note_path_str:
+        raise ValueError("note_path cannot be empty")
+    if note_path_str.startswith("/"):
+        candidate = Path(note_path_str).resolve()
+    else:
+        candidate = (vault_root / note_path_str).resolve()
+    try:
+        candidate.relative_to(vault_root)
+    except ValueError:
+        raise ValueError(f"note_path is outside vault_root")
+    return candidate
+
+
 @router.post("/sessions", response_model=OpenSessionResponse)
 def open_session(req: OpenSessionRequest) -> OpenSessionResponse:
     _require_canvas()
     vault_root = _get_vault_root()
-    log_writer = SessionLogWriter(vault_root=vault_root)
-    note_path = Path(req.note_path).expanduser()
-    if not note_path.is_absolute():
-        note_path = vault_root / note_path
-    note_path = note_path.resolve()
     try:
-        note_path.relative_to(vault_root)
-    except ValueError:
-        raise HTTPException(status_code=422, detail=f"Note path {note_path} is outside vault_root")
+        note_path = _validate_note_path(req.note_path, vault_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    log_writer = SessionLogWriter(vault_root=vault_root)
     session = log_writer.open_session(note_path, req.label)
     _sessions[session.session_id] = session
     return OpenSessionResponse(
