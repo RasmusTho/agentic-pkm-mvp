@@ -68,6 +68,11 @@ try:
 except ImportError:
     agent_router = None
 
+try:
+    from app.api.routes.canvas import router as canvas_router
+except ImportError:
+    canvas_router = None
+
 static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
 logger = logging.getLogger(__name__)
 
@@ -139,6 +144,8 @@ def _create_app() -> FastAPI:
         application.include_router(debug_router)
     if agent_router is not None:
         application.include_router(agent_router)
+    if canvas_router is not None:
+        application.include_router(canvas_router, prefix="/api")
     return application
 
 

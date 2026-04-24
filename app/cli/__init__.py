@@ -245,6 +245,88 @@ cli.add_command(llm_cli)
 cli.add_command(events_doctor)
 cli.add_command(smoke_cli, name="smoke")
 
+# ---------------------------------------------------------------------------
+# Canvas CLI group
+# ---------------------------------------------------------------------------
+
+# In-memory session registry for tests (process lifetime).
+_canvas_sessions: dict[str, object] = {}
+
+
+@cli.group(name="canvas", help="Canvas Chat session commands.")
+def canvas_cli() -> None:
+    ...
+
+
+@canvas_cli.command(name="open", help="Open a canvas session on a note.")
+@click.argument("note_path")
+@click.option("--label", default="canvas-session", help="Human label for the session.")
+@click.option("--vault-root", "vault_root", default=None, help="Vault root (defaults to VAULT_ROOT).")
+def canvas_open(note_path: str, label: str, vault_root: str | None) -> None:
+    from app.chat.session_log import SessionLogWriter
+    from app.chat.session_store import SessionStore
+
+    root = Path(vault_root).expanduser().resolve() if vault_root else resolve_vault_root().expanduser().resolve()
+    note = Path(note_path).expanduser()
+    if not note.is_absolute():
+        note = root / note
+    note = note.resolve()
+    lw = SessionLogWriter(vault_root=root)
+    session = lw.open_session(note, label)
+    store = SessionStore(vault_root=root)
+    store.save(session)
+    _canvas_sessions[session.session_id] = session
+    click.echo(f"session_id {session.session_id}")
+    click.echo(f"log_path {session.log_path}")
+
+
+@canvas_cli.command(name="edit", help="Apply a body edit to an open canvas session.")
+@click.argument("session_id")
+@click.option("--body", required=True, help="New note body content.")
+@click.option("--summary", required=True, help="Change summary for the session log.")
+@click.option("--vault-root", "vault_root", default=None, help="Vault root.")
+def canvas_edit(session_id: str, body: str, summary: str, vault_root: str | None) -> None:
+    from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError
+    from app.chat.session_log import SessionLogWriter
+    from app.chat.session_store import SessionStore
+
+    root = Path(vault_root).expanduser().resolve() if vault_root else resolve_vault_root().expanduser().resolve()
+    store = SessionStore(vault_root=root)
+    session = store.load(session_id)
+    if session is None:
+        session = _canvas_sessions.get(session_id)
+    if session is None:
+        raise click.ClickException(f"Session {session_id!r} not found — run 'canvas open' first")
+    lw = SessionLogWriter(vault_root=root)
+    cw = CanvasWriter(vault_root=root, log_writer=lw)
+    try:
+        cw.apply_edit(session, body, summary)
+    except GovernanceBearingMutationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    store.save(session)
+    click.echo(f"edit applied to session {session_id}")
+
+
+@canvas_cli.command(name="close", help="Close a canvas session and write the session log.")
+@click.argument("session_id")
+@click.option("--summary", default="session closed", help="Total session summary.")
+@click.option("--vault-root", "vault_root", default=None, help="Vault root.")
+def canvas_close(session_id: str, summary: str, vault_root: str | None) -> None:
+    from app.chat.session_log import SessionLogWriter
+    from app.chat.session_store import SessionStore
+
+    root = Path(vault_root).expanduser().resolve() if vault_root else resolve_vault_root().expanduser().resolve()
+    store = SessionStore(vault_root=root)
+    session = store.load(session_id)
+    if session is None:
+        session = _canvas_sessions.pop(session_id, None)
+    if session is None:
+        raise click.ClickException(f"Session {session_id!r} not found")
+    lw = SessionLogWriter(vault_root=root)
+    lw.close_session(session, summary)
+    store.delete(session_id)
+    click.echo(f"session {session_id} closed")
+
 
 def _store_stats_payload() -> dict:
     backend = resolve_store_backend()
