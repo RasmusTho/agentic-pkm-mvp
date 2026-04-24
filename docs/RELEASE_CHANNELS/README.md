@@ -58,15 +58,17 @@ It does **not** own:
 
 ## Channel model
 
-Three channels map one-to-one onto the existing environment model, but add identity and isolation guarantees:
+Three channels map one-to-one onto the existing environment model, but add identity and isolation guarantees.
 
-| Channel | Environment | Code ref | DB | Vault | Runtime artifacts |
-| --- | --- | --- | --- | --- | --- |
-| **stable** | `prod` | `stable` (tag or branch) | `pkm_prod` | real operator vault | `tmp/` |
-| **dev** | `dev` | `main` or feature branch | `pkm_dev` | `vault-dev/` | `tmp-dev/` |
-| **test** | `test` (workflow-driven) | current worktree | `pkm_test` (dropped/recreated by bootstrap) | `vault-test/` | `tmp-test/` |
+DB isolation is two-layer: a **container layer** (shipped, PR #596) provides physical isolation via separate Postgres containers on dedicated host ports; a **resolver layer** (Issue #594, in progress) ensures application code resolves the correct DB name through `app.config.environment` rather than hard-coded strings. Both layers are required.
 
-The channel is the operational identity; the environment is the runtime selector that resolves paths and policies. A channel's build can be inspected by resolving its code ref; its data footprint can be inspected by resolving its DB name, vault root, and runtime-artifact directory.
+| Channel | Environment | Compose target | Postgres port | Code ref | Vault | Runtime artifacts |
+| --- | --- | --- | --- | --- | --- | --- |
+| **stable** | `prod` | `make prod-up` | 15432 | `stable` (tag or branch) | real operator vault | `tmp/` |
+| **dev** | `dev` | `make dev-up` | 15433 | `main` or feature branch | `vault-dev/` | `tmp-dev/` |
+| **test** | `test` (workflow-driven) | `make test-up` | 15434 | current worktree | `vault-test/` | `tmp-test/` |
+
+The channel is the operational identity; the environment is the runtime selector that resolves paths and policies. A channel's build can be inspected by resolving its code ref; its data footprint can be inspected by resolving its DB name (via Issue #594), vault root, and runtime-artifact directory.
 
 ## Invariants (MUST hold)
 
