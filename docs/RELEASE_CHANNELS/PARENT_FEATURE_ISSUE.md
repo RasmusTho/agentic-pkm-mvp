@@ -1,8 +1,8 @@
-State: Draft parent feature issue body for the RELEASE_CHANNELS capability. Not yet created on GitHub.
+State: Created on GitHub as Issue #609. This file is the local draft source; the live issue is authoritative.
 
 # [Feature] Release channels: run stable in prod while dev continues
 
-> **Draft.** This file is the draft of the GitHub parent feature issue for RELEASE_CHANNELS. It has not been created on GitHub yet. Keep the shape aligned with the repo issue contract so `gh issue create` can copy the body with minimal edits.
+> **Created.** GitHub Issue #609: https://github.com/RasmusTho/agentic-pkm-mvp/issues/609. This file is the local draft source kept in sync as the spec evolves. The live issue is the authoritative backlog surface.
 
 ## Context
 
