@@ -96,7 +96,7 @@ class CanvasWriter:
 
         # Reassemble: original frontmatter + new body
         if frontmatter_block is not None:
-            new_content = f"---\n{frontmatter_block}---\n\n{new_body}\n"
+            new_content = f"---{frontmatter_block}\n---\n{new_body}"
         else:
             new_content = new_body if new_body.endswith("\n") else new_body + "\n"
 
@@ -126,18 +126,19 @@ def _split_frontmatter(content: str) -> tuple[str | None, str]:
 
     Returns ``(None, content)`` if there is no frontmatter block.
     ``frontmatter_inner`` is the text between the opening and closing ``---``
-    delimiters (not including the delimiters themselves).
+    delimiters (not including the delimiters or trailing newline).
     """
     if not content.startswith("---"):
         return None, content
 
-    # Find the closing --- after the opening
+    # Find the closing --- after the opening (handle both with body and EOF cases)
     rest = content[3:]
-    close = re.search(r"\n---\s*\n", rest)
+    # Try matching with newline after --- (has body)
+    close = re.search(r"\n---(?:\s*\n|\s*$)", rest)
     if close is None:
         return None, content
 
-    frontmatter_inner = rest[: close.start() + 1]  # include trailing newline
+    frontmatter_inner = rest[: close.start()]  # exclude trailing newline
     body = rest[close.end() :]
     return frontmatter_inner, body
 
