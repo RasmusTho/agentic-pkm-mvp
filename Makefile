@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap dev-up dev-down prod-up prod-down test-up test-down
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap dev-up dev-down prod-up prod-down test-up test-down dispatcher-init dispatcher-sync
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 TEST_VAULT_ROOT ?= $(PWD)/vault-test
@@ -178,3 +178,10 @@ alpha-smoke:
 alpha-e2e:
 	@if [ -z "$(VAULT_ROOT)" ]; then echo "VAULT_ROOT is required (path to your vault)"; exit 1; fi
 	VAULT_ROOT="$(VAULT_ROOT)" $(PYTHON) -m scripts.alpha_e2e --teardown
+
+dispatcher-init:
+	$(PYTHON) -m app.dispatcher init --json
+	@$(PYTHON) -m app.dispatcher pull --repo rasmusthornberg/agentic-pkm-mvp --json
+
+dispatcher-sync:
+	$(PYTHON) -m app.dispatcher pull --repo rasmusthornberg/agentic-pkm-mvp --json

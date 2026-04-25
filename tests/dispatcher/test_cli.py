@@ -406,3 +406,72 @@ def test_complete_event_emitted(tmp_env, store):
     completed_events = [e for e in events if e.get("event_type") == "task.completed"]
     assert len(completed_events) > 0
     assert completed_events[0]["task_id"] == ready.task_id
+
+
+# ---------------------------------------------------------------------------
+# AC: python -m app.dispatcher pull --repo <repo> --json upserts open
+#     agent:ready issues and prints a sync receipt.
+# Verify: test_pull_command_upserts_issues
+# ---------------------------------------------------------------------------
+
+def test_pull_command_upserts_issues(tmp_env):
+    """pull command uses gh-backed source to upsert issues into the queue."""
+    from unittest.mock import MagicMock, patch
+    from app.dispatcher.sync_github import GitHubIssueSource
+
+    _run(["init", "--json"], tmp_env)
+
+    # Mock the GitHub source to avoid real API calls
+    mock_source = MagicMock(spec=GitHubIssueSource)
+    mock_source.list_issues.return_value = [
+        {
+            "number": 101,
+            "title": "Test issue 1",
+            "state": "open",
+            "labels": [{"name": "prio:high"}, {"name": "agent:ready"}],
+            "createdAt": "2026-04-20T10:00:00Z",
+            "updatedAt": "2026-04-21T12:00:00Z",
+        },
+        {
+            "number": 102,
+            "title": "Test issue 2",
+            "state": "open",
+            "labels": [{"name": "prio:med"}],
+            "createdAt": "2026-04-20T10:00:00Z",
+            "updatedAt": "2026-04-21T12:00:00Z",
+        },
+    ]
+    mock_source.get_rate_limit.return_value = {"remaining": 5000, "reset": "2026-04-25T10:00:00Z"}
+
+    with patch("app.dispatcher.cli.GhCliIssueSource", return_value=mock_source):
+        code, data = _run(["pull", "--repo", "test/repo", "--json"], tmp_env)
+
+    assert code == 0
+    assert data["ok"] is True
+    assert data["upserted"] == 2
+    assert data["provider"] == "github"
+
+    # Verify tasks were actually stored (2 real issues + 1 sync metadata record)
+    code, queue_data = _run(["queue", "--json"], tmp_env)
+    assert code == 0
+    assert len(queue_data["tasks"]) >= 2
+    # Verify at least the expected issues are there
+    task_ids = {t["issue_number"] for t in queue_data["tasks"]}
+    assert 101 in task_ids
+    assert 102 in task_ids
+
+
+# ---------------------------------------------------------------------------
+# AC: dispatcher next --json on a missing DB exits 1 with
+#     {"ok": false, "error": "...dispatcher not initialised..."}
+# Verify: test_guard_missing_db
+# ---------------------------------------------------------------------------
+
+def test_guard_missing_db(tmp_env):
+    """Commands requiring a DB exit 1 with clear error when DB is missing."""
+    # Don't initialize, so DB is missing
+    code, data = _run(["next", "--agent", "test-agent", "--json"], tmp_env)
+    assert code == 1
+    assert data["ok"] is False
+    assert "not initialised" in data["error"]
+    assert "dispatcher-init" in data["error"]

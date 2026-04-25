@@ -20,10 +20,11 @@ from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import LeaseRecord, TaskRecord
 from app.dispatcher.store import SqliteStore
+from app.dispatcher.sync_github import GhCliIssueSource, PullSyncAdapter
 
 REQUIRED_COMMANDS = frozenset([
     "init", "queue", "next", "show", "claim",
-    "heartbeat", "release", "update", "block", "complete", "events",
+    "heartbeat", "release", "update", "block", "complete", "events", "pull",
 ])
 
 
@@ -254,6 +255,26 @@ def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
     return 0
 
 
+def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
+    repo = args.repo
+    if not repo:
+        return _emit_error("--repo is required for pull command", args.json)
+
+    source = GhCliIssueSource()
+    adapter = PullSyncAdapter(store=store, source=source)
+    try:
+        upserted = adapter.pull(repo)
+        _emit({
+            "ok": True,
+            "upserted": len(upserted),
+            "skipped": 0,
+            "provider": "github",
+        }, args.json)
+        return 0
+    except Exception as exc:
+        return _emit_error(f"pull failed: {exc}", args.json)
+
+
 # ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
@@ -273,6 +294,7 @@ _COMMAND_MAP = {
     "seed-demo": _cmd_seed_demo,
     "link-pr": _cmd_link_pr,
     "status": _cmd_status,
+    "pull": _cmd_pull,
 }
 
 
@@ -348,6 +370,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("status", help="Show dispatcher path/status information")
     p.add_argument("--json", action="store_true")
 
+    p = sub.add_parser("pull", help="Pull open agent:ready issues from GitHub")
+    p.add_argument("--repo", required=True, help="GitHub repo (owner/repo)")
+    p.add_argument("--json", action="store_true")
+
     return parser
 
 
@@ -363,6 +389,13 @@ def main(argv: list[str] | None = None) -> int:
     if handler is None:
         print(f"Unknown command: {args.command}", file=sys.stderr)
         return 1
+
+    # Guard: commands requiring a DB must exit clearly if DB doesn't exist
+    if args.command in REQUIRED_COMMANDS and args.command != "init":
+        paths = load_paths()
+        if not paths.db_path.exists():
+            msg = "dispatcher not initialised — run: make dispatcher-init"
+            return _emit_error(msg, getattr(args, "json", False))
 
     store = _make_store()
     return handler(args, store)
