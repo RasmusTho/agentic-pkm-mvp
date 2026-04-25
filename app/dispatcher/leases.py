@@ -85,14 +85,17 @@ def claim(
             (lease_id, f"issue:{task_row['issue_number']}", agent_id, ttl_seconds, now, expires, now)
         )
 
-        conn.execute(
+        result = conn.execute(
             """
             UPDATE dispatcher_tasks
             SET lease_id = ?, claimed_by = ?, status = 'claimed', updated_at = ?
-            WHERE task_id = ?
+            WHERE task_id = ? AND status = 'ready' AND lease_id IS NULL
             """,
             (lease_id, agent_id, now, task_id)
         )
+
+        if result.rowcount == 0:
+            raise ValueError(f"Cannot claim task {task_id}: preconditions changed (concurrent claim or status change)")
 
         conn.commit()
 
@@ -236,6 +239,8 @@ def reclaim_expired_leases(
 ) -> list[str]:
     """Find and release all expired leases.
 
+    Reclaims expired leases with audit trail attribution to the specified actor.
+
     Returns list of task_ids that had leases reclaimed.
     """
     now = _utc_now()
@@ -256,8 +261,39 @@ def reclaim_expired_leases(
     for row in rows:
         task_id = row["task_id"]
         holder = row["holder"]
+        lease_id = row["lease_id"]
         try:
-            release(store, task_id, holder, reason="expired")
+            task = store.get_task(task_id)
+            lease = store.get_lease(lease_id)
+
+            if task is None or lease is None:
+                continue
+
+            lease.released_at = now
+            lease.release_reason = "expired"
+            store.upsert_lease(lease)
+
+            task.lease_id = None
+            task.claimed_by = None
+            task.last_heartbeat_at = None
+            if task.blocked_reason is None:
+                task.status = "ready"
+            else:
+                task.status = "blocked"
+            task.updated_at = now
+            store.upsert_task(task)
+
+            event = EventRecord(
+                event_id=_make_event_id(),
+                timestamp=now,
+                task_id=task_id,
+                event_type="task.released",
+                actor=actor,
+                lease_id=lease_id,
+                payload={"reason": "expired"},
+            )
+            store.append_event(event)
+
             reclaimed.append(task_id)
         except (ValueError, Exception):
             pass
