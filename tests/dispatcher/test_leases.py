@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.leases import claim, heartbeat, reclaim_expired_leases, release
 from app.dispatcher.models import TaskRecord

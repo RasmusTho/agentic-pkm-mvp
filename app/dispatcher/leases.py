@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from app.dispatcher.models import EventRecord, LeaseRecord, TaskRecord
 from app.dispatcher.store import SqliteStore
@@ -260,7 +258,6 @@ def reclaim_expired_leases(
     reclaimed = []
     for row in rows:
         task_id = row["task_id"]
-        holder = row["holder"]
         lease_id = row["lease_id"]
         try:
             task = store.get_task(task_id)
