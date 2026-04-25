@@ -1,12 +1,12 @@
-State: Contract approved for MVP implementation planning; runtime implementation not yet shipped.
+State: MVP implementation shipped (#622 store, #623 queue/lease, #624 CLI); GitHub sync (#625) still open.
 Doc role: Reference contract (development governance)
 Authority: Authoritative contract for local Agent Issue Dispatcher MVP boundaries and behavior expectations.
 Owner: Delivery governance / multi-agent coordination
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed (GitHub issue contracts + repo governance docs)
-Last reviewed: 2026-04-24
-Last verified against: #617, #621, #561, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
+Last reviewed: 2026-04-25
+Last verified against: #617, #621, #622, #623, #624, #561, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
 
 # Agent Issue Dispatcher (MVP Contract)
 
@@ -19,7 +19,7 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 ## Current-State Honesty
 
 - This document defines an MVP contract boundary only.
-- Dispatcher runtime/storage/CLI/sync implementations are tracked as follow-up issues (#622, #623, #624, #625) and are not claimed as shipped here.
+- Dispatcher storage (#622), queue/lease (#623), and CLI (#624) are shipped on main. GitHub sync (#625) is still open and not claimed as shipped here.
 - Existing GitHub issue/PR/label/project governance in `AGENTS.md` and `docs/development/GITHUB_GOVERNANCE_SETUP.md` remains current truth today.
 
 ## Source-of-Truth Boundaries
