@@ -42,4 +42,5 @@ tmp/index-outbox.jsonl
 *.jsonl
 tmp/index.jsonl
 runtime/settings/
+runtime/dispatcher/
 verification_report.md
