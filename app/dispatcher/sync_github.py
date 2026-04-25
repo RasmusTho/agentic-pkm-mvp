@@ -106,19 +106,20 @@ def record_sync_success(
     pull_at: str,
     rate_limit_remaining: int | None = None,
     rate_limit_reset: str | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> None:
     """Persist a successful pull-sync metadata record for *provider*."""
-    extra: dict[str, Any] = {}
+    merged: dict[str, Any] = dict(extra or {})
     if rate_limit_remaining is not None:
-        extra["rate_limit_remaining"] = rate_limit_remaining
+        merged["rate_limit_remaining"] = rate_limit_remaining
     if rate_limit_reset is not None:
-        extra["rate_limit_reset"] = rate_limit_reset
+        merged["rate_limit_reset"] = rate_limit_reset
 
     sync_state = SyncState(
         last_pull_at=pull_at,
         sync_result="ok",
         sync_note=None,
-        extra=extra,
+        extra=merged,
     )
     _write_sync_meta(store, provider, sync_state, pull_at)
 
@@ -229,10 +230,14 @@ class PullSyncAdapter:
             return []
 
         upserted: list[TaskRecord] = []
+        skipped: list[str] = []
         for issue in issues:
-            task = normalize_github_issue(issue, now=pull_at)
-            self._store.upsert_task(task)
-            upserted.append(task)
+            try:
+                task = normalize_github_issue(issue, now=pull_at)
+                self._store.upsert_task(task)
+                upserted.append(task)
+            except Exception as exc:
+                skipped.append(f"issue={issue.get('number', '?')}: {exc}")
 
         rl_remaining: int | None = None
         rl_reset: str | None = None
@@ -240,11 +245,17 @@ class PullSyncAdapter:
             rl_remaining = rate_limit.get("remaining")
             rl_reset = rate_limit.get("reset")
 
+        extra: dict[str, Any] = {}
+        if skipped:
+            extra["skipped_count"] = len(skipped)
+            extra["skipped_notes"] = skipped[:10]
+
         record_sync_success(
             self._store,
             self._provider,
             pull_at,
             rate_limit_remaining=rl_remaining,
             rate_limit_reset=rl_reset,
+            extra=extra,
         )
         return upserted

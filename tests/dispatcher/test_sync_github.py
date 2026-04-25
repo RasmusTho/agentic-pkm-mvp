@@ -283,6 +283,24 @@ def test_github_source_protocol_has_no_projects_method() -> None:
 # Full pull-sync integration (offline)
 # ---------------------------------------------------------------------------
 
+def test_pull_skips_malformed_issue_without_aborting(tmp_store: SqliteStore) -> None:
+    """A malformed issue payload is skipped; valid issues still upsert and sync meta records skipped_count."""
+    malformed = {"title": "no number field"}
+    issues = [malformed, SAMPLE_ISSUE_HIGH]
+    source = _mock_source(issues)
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+
+    upserted = adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    assert len(upserted) == 1
+    assert upserted[0].task_id == "github-issue-101"
+
+    meta = get_sync_meta(tmp_store, PROVIDER_IDENTITY)
+    assert meta is not None
+    assert meta["sync_result"] == "ok"
+    assert meta.get("skipped_count") == 1
+
+
 def test_pull_upserts_tasks_into_store(tmp_store: SqliteStore) -> None:
     """PullSyncAdapter.pull upserts normalised tasks and records success meta."""
     issues = [SAMPLE_ISSUE_HIGH, SAMPLE_ISSUE_LOW]
