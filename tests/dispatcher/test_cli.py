@@ -300,6 +300,26 @@ def test_update_status(tmp_env, store):
     assert data["task"]["status"] == "in_progress"
 
 
+def test_update_clears_blocked_reason_on_non_blocked_status(tmp_env, store):
+    from app.dispatcher.services import seed_demo
+    tasks = seed_demo(store)
+    ready = next(t for t in tasks if t.status == "ready")
+    _run(["block", ready.task_id, "--reason", "upstream dep", "--json"], tmp_env)
+
+    code, data = _run(
+        ["update", ready.task_id, "--status", "ready", "--json"],
+        tmp_env,
+    )
+    assert code == 0
+    assert data["task"]["status"] == "ready"
+    assert data["task"]["blocked_reason"] is None
+
+    next_code, next_data = _run(["next", "--agent", "codex", "--json"], tmp_env)
+    assert next_code == 0
+    assert next_data["task"] is not None
+    assert next_data["task"]["task_id"] == ready.task_id
+
+
 def test_status_command(tmp_env):
     _run(["init", "--json"], tmp_env)
     code, data = _run(["status", "--json"], tmp_env)

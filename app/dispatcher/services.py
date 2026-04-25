@@ -40,6 +40,8 @@ def update_task(
     if status is not None:
         task.status = status
         payload["status"] = status
+        if status != "blocked":
+            task.blocked_reason = None
     if note is not None:
         payload["note"] = note
 
