@@ -117,6 +117,57 @@ def unblock(
     return task
 
 
+def complete(
+    store: SqliteStore,
+    task_id: str,
+    actor: str,
+) -> TaskRecord:
+    """Mark a task as completed, releasing its lease.
+
+    Only the current lease holder can complete the task.
+    Emits a task.completed event.
+    """
+    task = store.get_task(task_id)
+    if task is None:
+        raise ValueError(f"Task {task_id} not found")
+
+    if task.lease_id is None:
+        raise ValueError(f"Task {task_id} has no active lease")
+
+    lease = store.get_lease(task.lease_id)
+    if lease is None:
+        raise ValueError(f"Lease {task.lease_id} not found")
+
+    if lease.holder != actor:
+        raise ValueError(
+            f"Cannot complete task {task_id}: held by {lease.holder}, not {actor}"
+        )
+
+    now = _utc_now()
+    lease.released_at = now
+    lease.release_reason = "completed"
+    store.upsert_lease(lease)
+
+    task.status = "completed"
+    task.lease_id = None
+    task.claimed_by = None
+    task.last_heartbeat_at = None
+    task.updated_at = now
+    store.upsert_task(task)
+
+    event = EventRecord(
+        event_id=_make_event_id(),
+        timestamp=now,
+        task_id=task_id,
+        event_type="task.completed",
+        actor=actor,
+        lease_id=lease.lease_id,
+    )
+    store.append_event(event)
+
+    return task
+
+
 def _row_to_task(row: sqlite3.Row) -> TaskRecord:
     """Convert a sqlite3.Row to a TaskRecord."""
     import json

@@ -326,3 +326,83 @@ def test_status_command(tmp_env):
     assert code == 0
     assert data["ok"] is True
     assert "db_path" in data
+
+
+# ---------------------------------------------------------------------------
+# AC: dispatcher complete <task_id> --agent <id> sets status to completed,
+#     releases the lease, and emits task.completed
+# Verify: test_complete_command
+# ---------------------------------------------------------------------------
+
+def test_complete_command(tmp_env, store):
+    from app.dispatcher.services import seed_demo
+    tasks = seed_demo(store)
+    ready = next(t for t in tasks if t.status == "ready")
+
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+    code, data = _run(["complete", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+    assert code == 0
+    assert data["ok"] is True
+    assert data["task"]["status"] == "completed"
+    assert data["task"]["lease_id"] is None
+    assert data["task"]["claimed_by"] is None
+
+
+# ---------------------------------------------------------------------------
+# AC: Completing a task by a non-holder agent exits 1 with
+#     {"ok": false, "error": "..."}
+# Verify: test_complete_wrong_holder
+# ---------------------------------------------------------------------------
+
+def test_complete_wrong_holder(tmp_env, store):
+    from app.dispatcher.services import seed_demo
+    tasks = seed_demo(store)
+    ready = next(t for t in tasks if t.status == "ready")
+
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+    code, data = _run(["complete", ready.task_id, "--agent", "other-agent", "--json"], tmp_env)
+    assert code == 1
+    assert data["ok"] is False
+    assert "error" in data
+
+
+# ---------------------------------------------------------------------------
+# AC: dispatcher next does not return a completed task
+# Verify: test_next_skips_completed
+# ---------------------------------------------------------------------------
+
+def test_next_skips_completed(tmp_env, store):
+    from app.dispatcher.services import seed_demo
+    tasks = seed_demo(store)
+    ready = next(t for t in tasks if t.status == "ready")
+
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+    _run(["complete", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+
+    code, data = _run(["next", "--agent", "codex", "--json"], tmp_env)
+    assert code == 0
+    assert data["ok"] is True
+    if data.get("task"):
+        assert data["task"]["task_id"] != ready.task_id
+
+
+# ---------------------------------------------------------------------------
+# AC: task.completed event appears in dispatcher events --json
+# Verify: test_complete_event_emitted
+# ---------------------------------------------------------------------------
+
+def test_complete_event_emitted(tmp_env, store):
+    from app.dispatcher.services import seed_demo
+    tasks = seed_demo(store)
+    ready = next(t for t in tasks if t.status == "ready")
+
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+    _run(["complete", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+
+    code, data = _run(["events", "--tail", "20", "--json"], tmp_env)
+    assert code == 0
+    assert data["ok"] is True
+    events = data.get("events", [])
+    completed_events = [e for e in events if e.get("event_type") == "task.completed"]
+    assert len(completed_events) > 0
+    assert completed_events[0]["task_id"] == ready.task_id
