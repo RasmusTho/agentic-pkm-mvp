@@ -223,6 +223,47 @@ The following are described as **optional projections only** and are not part of
 
 External boards and GitHub Projects are projections only and must not become required for core queue/lease/claim behavior.
 
+## Operational Deployment
+
+The dispatcher runs as a **central shared instance** on Demerzel (Mac mini) accessible to all agent machines via Tailscale.
+
+**Central host:** `demerzel`
+**Database path:** `~/workspace/runtime/dispatcher/dispatcher.sqlite3`
+**Event log:** `~/workspace/runtime/dispatcher/events.jsonl`
+
+### Setup on the central host (Demerzel)
+
+```bash
+cd ~/workspace
+python -m app.dispatcher init
+python -m app.dispatcher status --json   # verify db_exists: true
+```
+
+### Setup on each agent machine
+
+Install a wrapper script that proxies dispatcher commands over SSH:
+
+```bash
+cat > ~/.local/bin/dispatcher << 'EOF'
+#!/bin/zsh
+ssh rasmus@demerzel "cd ~/workspace && .venv/bin/python -m app.dispatcher $*"
+EOF
+chmod +x ~/.local/bin/dispatcher
+```
+
+Verify:
+
+```bash
+dispatcher queue --json
+```
+
+### Notes
+
+- Requires Tailscale connectivity to `demerzel` and SSH key access.
+- SQLite is the lock authority on Demerzel; all agents coordinate through the same database.
+- No daemon or server process runs — each CLI invocation is a stateless SSH call against the central database.
+- Service mode (HTTP API) is a future extension; the SSH wrapper is the current deployment model.
+
 ## Future Extensions (Not MVP)
 
 - GitHub pull-sync with richer conflict classification and reconciliation policies.
