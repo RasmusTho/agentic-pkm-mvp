@@ -48,6 +48,48 @@ def test_jsonl_writer_creates_parent_dir(tmp_path: Path) -> None:
     assert target.exists()
 
 
+def test_mutations_emit_events(tmp_path: Path) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.queue import block
+    from app.dispatcher.leases import claim, heartbeat, release
+
+    db = tmp_path / "dispatcher.sqlite3"
+    events_file = tmp_path / "events.jsonl"
+    store = SqliteStore(db, JsonlEventWriter(events_file))
+    store.initialize()
+
+    task = TaskRecord(
+        task_id="task-test",
+        issue_number=623,
+        title="Test mutations",
+        status="ready",
+        priority="high",
+        source_anchor_refs=["#617"],
+        created_at="2026-04-25T10:00:00Z",
+        updated_at="2026-04-25T10:00:00Z",
+    )
+    store.upsert_task(task)
+
+    claim(store, "task-test", "agent-1", ttl_minutes=30)
+    heartbeat(store, "task-test", "agent-1")
+    release(store, "task-test", "agent-1", reason="manual")
+    block(store, "task-test", "test reason", "agent-2")
+
+    events = store.list_events("task-test")
+    assert len(events) == 4
+    event_types = {e.event_type for e in events}
+    assert "task.claimed" in event_types
+    assert "task.heartbeat" in event_types
+    assert "task.released" in event_types
+    assert "task.blocked" in event_types
+
+    lines = events_file.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 4
+    for ln in lines:
+        parsed = json.loads(ln)
+        assert parsed["task_id"] == "task-test"
+
+
 def test_store_appends_to_jsonl_and_sqlite(tmp_path: Path) -> None:
     db = tmp_path / "d.sqlite3"
     events_path = tmp_path / "events.jsonl"
