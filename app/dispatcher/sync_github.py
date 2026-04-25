@@ -192,6 +192,67 @@ class GitHubIssueSource(Protocol):
     def get_rate_limit(self) -> dict[str, Any] | None: ...
 
 
+class GhCliIssueSource:
+    """GitHub issue source using the ``gh`` CLI to list open issues.
+
+    Queries issues with ``agent:ready`` label; requires ``gh`` authentication.
+    Completely offline-testable via mocking; no live API imports at module level.
+    """
+
+    def __init__(self) -> None:
+        pass
+
+    def list_issues(self, repo: str, **kwargs: Any) -> list[dict[str, Any]]:
+        """List open issues with agent:ready label from the repo."""
+        import json
+        import subprocess
+
+        try:
+            # Query open issues with agent:ready label
+            result = subprocess.run(
+                [
+                    "gh",
+                    "issue",
+                    "list",
+                    "--repo",
+                    repo,
+                    "--search",
+                    "is:open label:agent:ready",
+                    "--json",
+                    "number,title,state,labels,createdAt,updatedAt",
+                    "--limit",
+                    "100",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"gh issue list failed: {result.stderr}")
+            return json.loads(result.stdout)
+        except FileNotFoundError:
+            raise RuntimeError("gh CLI not found; ensure gh is installed and in PATH")
+
+    def get_rate_limit(self) -> dict[str, Any] | None:
+        """Get current GitHub API rate limit info."""
+        import json
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["gh", "api", "rate_limit", "--json", "remaining,reset"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                return data.get("rate_limit", {})
+        except Exception:
+            pass
+        return None
+
+
 class PullSyncAdapter:
     """Pull issues from *source* and upsert them as local dispatcher tasks.
 

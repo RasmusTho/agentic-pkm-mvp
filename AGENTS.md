@@ -140,3 +140,39 @@ Builder-agent rules:
 - Prefer Issues plus truthful agent labels and linked PR state as harder authority than Project state if they drift.
 - Use Project `Status` as the pickup and coordination projection. `agent:ready` is only the pickup qualifier for `Status=Ready`; blocked labels belong on non-active work, and closed issues must not retain `agent:*` labels.
 - When a PR delivers a tracked backlog item, update the owner doc to describe shipped reality and rewrite roadmap/plan wording so it no longer reads as pending work.
+
+## Dispatcher policy
+
+The Agent Issue Dispatcher is an operational coordination layer for multi-agent issue pickup and execution.
+
+**Database location:**
+- Local dispatcher state lives in `runtime/dispatcher/dispatcher.sqlite3` (configurable via `DISPATCHER_STATE_DIR` env var).
+- Dispatcher state directory is `.gitignore`'d and is not committed.
+
+**Agent loop (normal case, dispatcher available):**
+1. **Status check**: `dispatcher status --json` — verify `db_exists: true`; if false or exit non-zero, fall back to GitHub-label-only claim (see below).
+2. **Next**: `dispatcher next --json --agent <agent_id>` — request next eligible `ready` task.
+3. **Claim**: `dispatcher claim <task_id> --agent <agent_id> --ttl-minutes 90 --json` — acquire 90-minute lease.
+4. **Confirm**: `gh issue edit <issue_number> --remove-label agent:ready` — confirm claim in GitHub (unchanged from current behaviour).
+5. **Work**: execute issue scope (implementation, testing, doc updates).
+6. **Heartbeat** (every ~30 min during active work): `dispatcher heartbeat <task_id> --agent <agent_id> --json` — renew lease before 90-min expiry.
+7. **Closure**: `dispatcher complete <task_id> --agent <agent_id> --json` (successful work) or `dispatcher release <task_id> --agent <agent_id> --json` (abandoned/blocked).
+
+**TTL and heartbeat cadence:**
+- Lease TTL: **90 minutes** (default).
+- Heartbeat interval: **~30 minutes** of active execution (before 90-min expiry).
+- Agents must heartbeat before expiry or the dispatcher will mark the lease expired and the task becomes claimable by others.
+
+**Fallback (dispatcher unavailable):**
+- If `dispatcher status --json` returns `db_exists: false` or exits non-zero (missing DB, corrupted state, network failure, etc.):
+  - Skip dispatcher entirely.
+  - Use GitHub-label-only claim: `gh issue edit <issue_number> --remove-label agent:ready` (current behaviour, unchanged).
+  - No dispatcher heartbeat or completion — GitHub label state is the only record.
+  - **Log the fallback in the PR body** with the failure reason (e.g., "Dispatcher unavailable (db_exists: false) — used GitHub-label-only claim").
+- If any dispatcher command fails during work (non-zero exit from heartbeat, update, etc.):
+  - Log the failure, continue with local work, do not retry dispatcher commands in a loop.
+  - At closure, attempt `dispatcher complete`; if it fails, continue with PR closure via GitHub.
+
+**Multi-agent collision handling:**
+- Dispatcher claims are atomic per lease and per agent ID.
+- If two agents attempt to claim the same task, the dispatcher responds with a clear conflict error; the agent must fall back to GitHub-label-only or re-request `next`.
