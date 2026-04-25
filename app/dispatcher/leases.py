@@ -46,7 +46,7 @@ def claim(
 ) -> tuple[TaskRecord, LeaseRecord]:
     """Claim a task by creating a lease and updating task state.
 
-    Atomically:
+    Atomically within a single transaction:
     1. Check if task is ready and unleased
     2. Create lease
     3. Update task with lease reference and claimed_by
@@ -54,26 +54,51 @@ def claim(
 
     Raises ValueError if task doesn't exist, is not ready, or is already claimed.
     """
-    task = store.get_task(task_id)
-    if task is None:
-        raise ValueError(f"Task {task_id} not found")
-
-    if task.lease_id is not None:
-        raise ValueError(f"Cannot claim task {task_id}: already has active lease")
-
-    if task.status != "ready":
-        raise ValueError(
-            f"Cannot claim task {task_id}: not in ready status (current: {task.status})"
-        )
-
     lease_id = _make_lease_id()
     ttl_seconds = ttl_minutes * 60
     now = _utc_now()
     expires = _expires_at(ttl_seconds)
 
+    with store._connect() as conn:
+        task_row = conn.execute(
+            "SELECT * FROM dispatcher_tasks WHERE task_id = ?",
+            (task_id,)
+        ).fetchone()
+
+        if task_row is None:
+            raise ValueError(f"Task {task_id} not found")
+
+        if task_row["lease_id"] is not None:
+            raise ValueError(f"Cannot claim task {task_id}: already has active lease")
+
+        if task_row["status"] != "ready":
+            raise ValueError(
+                f"Cannot claim task {task_id}: not in ready status (current: {task_row['status']})"
+            )
+
+        conn.execute(
+            """
+            INSERT INTO dispatcher_leases (
+                lease_id, resource, holder, ttl_seconds, acquired_at, expires_at, heartbeat_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (lease_id, f"issue:{task_row['issue_number']}", agent_id, ttl_seconds, now, expires, now)
+        )
+
+        conn.execute(
+            """
+            UPDATE dispatcher_tasks
+            SET lease_id = ?, claimed_by = ?, status = 'claimed', updated_at = ?
+            WHERE task_id = ?
+            """,
+            (lease_id, agent_id, now, task_id)
+        )
+
+        conn.commit()
+
     lease = LeaseRecord(
         lease_id=lease_id,
-        resource=f"issue:{task.issue_number}",
+        resource=f"issue:{task_row['issue_number']}",
         holder=agent_id,
         ttl_seconds=ttl_seconds,
         acquired_at=now,
@@ -81,13 +106,7 @@ def claim(
         heartbeat_at=now,
     )
 
-    store.upsert_lease(lease)
-
-    task.lease_id = lease_id
-    task.claimed_by = agent_id
-    task.status = "claimed"
-    task.updated_at = now
-    store.upsert_task(task)
+    task = store.get_task(task_id)
 
     event = EventRecord(
         event_id=_make_event_id(),

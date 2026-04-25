@@ -69,6 +69,7 @@ def block(
         raise ValueError(f"Task {task_id} not found")
 
     task.blocked_reason = reason
+    task.status = "blocked"
     task.updated_at = _utc_now()
     store.upsert_task(task)
 
