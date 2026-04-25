@@ -86,6 +86,33 @@ Allowed Project statuses:
 
 When you start active work on an Issue:
 
+#### Dispatcher Integration
+
+The dispatcher is an optional but preferred coordination layer for multi-agent issue pickup. Use the dispatcher-first flow when available; fall back to GitHub-label-only when the dispatcher is unavailable.
+
+**Dispatcher availability check:**
+```bash
+python -m app.dispatcher status --json
+# => {"ok": true, "db_exists": true} → proceed with dispatcher
+# => {"ok": false} or "db_exists": false → fall back to step 2 (GitHub-label-only)
+```
+
+**If dispatcher is available (db_exists: true):**
+
+1. **Get next task:** `python -m app.dispatcher next --json --agent <agent_id>` — returns a candidate task.
+2. **Claim with dispatcher:** `python -m app.dispatcher claim <task_id> --agent <agent_id> --ttl-minutes 90 --json` — acquire 90-minute lease.
+3. **Confirm in GitHub:** `gh issue edit #<ISSUE_NUMBER> --remove-label agent:ready` — confirmation step (unchanged current behaviour).
+4. **Mid-work heartbeat** (~every 30 min of active execution): `python -m app.dispatcher heartbeat <task_id> --agent <agent_id> --json` — renew lease before 90-min expiry.
+5. **On closure:** `python -m app.dispatcher complete <task_id> --agent <agent_id> --json` (successful) or `python -m app.dispatcher release <task_id> --agent <agent_id> --json` (abandoned).
+6. **Fallback on dispatcher failure:** If any dispatcher command fails (non-zero exit) during work, log the failure and continue with local work (do not retry dispatcher commands in a loop). At closure, attempt `dispatcher complete`; if it fails, continue with PR closure via GitHub.
+
+**If dispatcher is unavailable (db_exists: false or dispatcher status fails):**
+
+- Skip dispatcher entirely and use GitHub-label-only claim (step 2 below, unchanged current behaviour).
+- **Log the fallback reason in the PR body** (e.g., "Dispatcher unavailable (db_exists: false) — used GitHub-label-only claim").
+
+#### GitHub-Based Claim (Fallback or Non-Dispatcher Flow)
+
 1. **Ensure Issue is in Project** (if missing, add it first):
    ```bash
    gh api graphql -f query='query { repository(owner:"OWNER", name:"REPO") { issue(number:N) { projectItems(first:1) { nodes { id } } } } }'
