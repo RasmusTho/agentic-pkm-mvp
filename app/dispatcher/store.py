@@ -25,6 +25,7 @@ class DispatcherStore(Protocol):
     def upsert_lease(self, lease: LeaseRecord) -> None: ...
     def get_lease(self, lease_id: str) -> LeaseRecord | None: ...
     def append_event(self, event: EventRecord) -> None: ...
+    def list_tasks(self, status: str | None = None) -> list[TaskRecord]: ...
     def list_events(self, task_id: str | None = None) -> list[EventRecord]: ...
 
 
@@ -225,6 +226,39 @@ class SqliteStore:
             conn.commit()
         if self._event_writer is not None:
             self._event_writer.append(event)
+
+    def list_tasks(self, status: str | None = None) -> list[TaskRecord]:
+        with self._connect() as conn:
+            if status is None:
+                rows = conn.execute(
+                    "SELECT * FROM dispatcher_tasks ORDER BY updated_at DESC, created_at DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM dispatcher_tasks WHERE status = ? "
+                    "ORDER BY updated_at DESC, created_at DESC",
+                    (status,),
+                ).fetchall()
+        return [
+            TaskRecord(
+                task_id=r["task_id"],
+                issue_number=r["issue_number"],
+                title=r["title"],
+                status=r["status"],
+                priority=r["priority"],
+                source_anchor_refs=list(_loads(r["source_anchor_refs"]) or []),
+                claimed_by=r["claimed_by"],
+                lease_id=r["lease_id"],
+                lease_expires_at=r["lease_expires_at"],
+                linked_pr=r["linked_pr"],
+                blocked_reason=r["blocked_reason"],
+                last_heartbeat_at=r["last_heartbeat_at"],
+                sync_state=_loads(r["sync_state"]),
+                created_at=r["created_at"],
+                updated_at=r["updated_at"],
+            )
+            for r in rows
+        ]
 
     def list_events(self, task_id: str | None = None) -> list[EventRecord]:
         with self._connect() as conn:
