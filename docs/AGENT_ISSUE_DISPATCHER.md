@@ -5,8 +5,8 @@ Owner: Delivery governance / multi-agent coordination
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed (GitHub issue contracts + repo governance docs)
-Last reviewed: 2026-04-24
-Last verified against: #617, #621, #561, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
+Last reviewed: 2026-04-25
+Last verified against: #617, #621, #622, #623, #624, #625, #561, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
 
 # Agent Issue Dispatcher (MVP Contract)
 
@@ -19,7 +19,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 ## Current-State Honesty
 
 - This document defines an MVP contract boundary only.
-- Dispatcher runtime/storage/CLI/sync implementations are tracked as follow-up issues (#622, #623, #624, #625) and are not claimed as shipped here.
+- Dispatcher runtime/storage foundation (#622), queue/lease lifecycle (#623), and agent-facing CLI (#624) are shipped.
+- GitHub pull-sync boundary (#625) is shipped: `app/dispatcher/sync_github.py` provides the `PullSyncAdapter` and `normalize_github_issue` normalisation function.
 - Existing GitHub issue/PR/label/project governance in `AGENTS.md` and `docs/development/GITHUB_GOVERNANCE_SETUP.md` remains current truth today.
 
 ## Source-of-Truth Boundaries
@@ -180,6 +181,47 @@ Contract expectations:
 
 - #617 is the parent dispatcher workstream and sequencing authority. This document satisfies #621 as the prerequisite contract before implementation issues proceed.
 - #561 defines the minimal shared lease and git-hygiene guardrails. Dispatcher MVP reuses that lease-boundary intent but remains scoped to issue coordination, not janitor/preflight tooling.
+
+## GitHub Sync Model
+
+The dispatcher pulls issue state from GitHub in a narrow, read-only adapter boundary.
+
+Pull-sync contract:
+- The adapter reads GitHub issue fields and normalises them into local `TaskRecord` rows.
+- No write-back: the adapter never writes labels, comments, or status back to GitHub in the MVP.
+- GitHub Projects is not queried or mutated in the sync hot path.
+- Sync state (`last_pull_at`, `sync_result`, `sync_note`, rate-limit metadata) is recorded locally as a `_sync_meta:<provider>` task row.
+- Sync failures record an `error` state in sync metadata and leave all existing task rows untouched.
+
+Implementation surface:
+- `app/dispatcher/sync_github.py` — `GitHubIssueSource` protocol, `PullSyncAdapter`, `normalize_github_issue`, sync-state helpers.
+- `GitHubIssueSource` is a mockable protocol; the adapter never imports `requests`, `httpx`, or a GitHub SDK.
+- Tests in `tests/dispatcher/test_sync_github.py` use only mocked data; no live GitHub API access is required.
+
+## Sync Failure Behavior
+
+If the `GitHubIssueSource` raises during `list_issues`:
+1. `PullSyncAdapter.pull` catches the exception.
+2. `record_sync_failure` writes `sync_result=error` and `sync_note=<error message>` to the provider meta row.
+3. The method returns an empty list.
+4. Existing task rows in the store are unaffected.
+
+Observable signals:
+- Sync meta row (`_sync_meta:github`) carries `sync_result` and `sync_note` for last-attempt observability.
+- `get_sync_meta(store, provider)` returns the raw metadata dict for CLI or diagnostic use.
+
+## Optional Future Projections
+
+The following are described as **optional projections only** and are not part of the dispatcher hot path:
+
+| Target | Type | Status |
+| --- | --- | --- |
+| GitHub Projects board | Optional read projection | Not in dispatcher hot path (see Source-of-Truth Boundaries) |
+| Plane / Vikunja / Baserow | Optional external board | Not implemented — future scope only |
+| Local Markdown/JSON dashboard | Optional local projection | Not implemented — future scope only |
+| CLI sync-status command | Optional surface | Expressible via `get_sync_meta` in a future `disp sync-status` command |
+
+External boards and GitHub Projects are projections only and must not become required for core queue/lease/claim behavior.
 
 ## Future Extensions (Not MVP)
 
