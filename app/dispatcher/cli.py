@@ -23,7 +23,7 @@ from app.dispatcher.store import SqliteStore
 
 REQUIRED_COMMANDS = frozenset([
     "init", "queue", "next", "show", "claim",
-    "heartbeat", "release", "update", "block", "events",
+    "heartbeat", "release", "update", "block", "complete", "events",
 ])
 
 
@@ -195,6 +195,19 @@ def _cmd_block(args: argparse.Namespace, store: SqliteStore) -> int:
         return _emit_error(str(exc), args.json)
 
 
+def _cmd_complete(args: argparse.Namespace, store: SqliteStore) -> int:
+    try:
+        task = queue_module.complete(
+            store,
+            task_id=args.task_id,
+            actor=args.agent,
+        )
+        _emit({"ok": True, "task": _compact_task(task)}, args.json)
+        return 0
+    except ValueError as exc:
+        return _emit_error(str(exc), args.json)
+
+
 def _cmd_events(args: argparse.Namespace, store: SqliteStore) -> int:
     events = store.list_events()
     tail = args.tail
@@ -255,6 +268,7 @@ _COMMAND_MAP = {
     "release": _cmd_release,
     "update": _cmd_update,
     "block": _cmd_block,
+    "complete": _cmd_complete,
     "events": _cmd_events,
     "seed-demo": _cmd_seed_demo,
     "link-pr": _cmd_link_pr,
@@ -311,6 +325,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("task_id")
     p.add_argument("--reason", required=True)
     p.add_argument("--agent", default="cli")
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("complete", help="Complete a task (terminal)")
+    p.add_argument("task_id")
+    p.add_argument("--agent", required=True)
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("events", help="Show recent events")
