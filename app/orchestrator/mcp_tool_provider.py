@@ -180,9 +180,13 @@ class MCPToolProvider:
     def _list_local_descriptors(self) -> Dict[str, ToolDescriptor]:
         return _load_registry_descriptors()
 
-    def _filter_supported(self, descriptors: Mapping[str, ToolDescriptor]) -> Dict[str, ToolDescriptor]:
+    def _filter_supported(self, descriptors: Mapping[str, Any]) -> Dict[str, ToolDescriptor]:
         supported = set(MCP_TOOL_DESCRIPTORS.keys())
-        return {name: descriptor for name, descriptor in descriptors.items() if name in supported}
+        return {
+            name: descriptor
+            for name, descriptor in descriptors.items()
+            if name in supported and isinstance(descriptor, ToolDescriptor)
+        }
 
 
 def _load_registry_descriptors() -> Dict[str, ToolDescriptor]:
