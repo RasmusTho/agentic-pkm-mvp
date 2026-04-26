@@ -105,7 +105,7 @@ Four paths carry context semantics today or will carry them as SSI dimensions ar
 | `bridge_domains` per-document metadata | `bridge_domains` | → cross-scope allowance (not a context dimension; see SSI-01 mapping rules) |
 | Sphere and identity | (not present) | → `sphere_memberships`, `situated_identity` (additive) |
 
-Current runtime: `app/retrieval/hybrid.py::_extract_domain()` reads `ASK_DOMAIN_SCOPE`. This is
+Current runtime: `app/retrieval/hybrid.py::_resolve_domain_scope()` reads `ASK_DOMAIN_SCOPE`. This is
 the `scope` entry point. No `sphere_memberships` or `situated_identity` fields exist here yet.
 
 **Must preserve checkpoint:** `scope` resolved at entry must flow unchanged to the retrieval
@@ -116,7 +116,7 @@ scope switch.
 
 | Stage | What happens | Preservation requirement |
 |---|---|---|
-| Domain/scope resolution | `_extract_domain()` returns a single string; used as the retrieval partition filter | Rename as `scope` when SSI dimensions are introduced; must not be joined with `sphere_memberships` into one string |
+| Domain/scope resolution | `_resolve_domain_scope()` resolves the active scope from env; `_extract_domain(doc)` reads the domain from each document for comparison against the active scope | Rename/alias as `scope` when SSI dimensions are introduced; must not be joined with `sphere_memberships` into one string |
 | `bridge_domains` inclusion | Per-document flag that widens the scope filter for specific documents | Must remain a document-level cross-scope allowance, not collapsed into `scope` |
 | Sphere filtering (future) | `sphere_memberships` will narrow or weight results within the active scope | Must be applied as an additive filter, not as a replacement for `scope` |
 | Identity signal (future) | `situated_identity` may influence ranking or prompt framing | Must remain readable as null; null means "no identity signal", not "default scope" |
@@ -287,7 +287,7 @@ are absent.
 
 #### Stage 1 — Rename and alias `scope` at entry points
 
-- Introduce `scope` as the canonical name at ASK entry (`_extract_domain()` result) and
+- Introduce `scope` as the canonical name at ASK entry (`_resolve_domain_scope()` result) and
   orchestrator plan context (`plan.context["scope"]`).
 - Backward-compatible: existing `domain` values map directly to `scope` via the SSI-01 rule.
 - **Must not break:** any code reading `domain` or `ASK_DOMAIN_SCOPE` directly continues to
