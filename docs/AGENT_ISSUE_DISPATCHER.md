@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed (GitHub issue contracts + repo governance docs)
 Last reviewed: 2026-04-25
-Last verified against: #617, #621, #622, #623, #624, #625, #561, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
+Last verified against: #617, #621, #622, #623, #624, #625, #637, #639, #640, #561, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
 
 # Agent Issue Dispatcher (MVP Contract)
 
@@ -20,7 +20,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 
 - This document defines an MVP contract boundary only.
 - Dispatcher runtime/storage foundation (#622), queue/lease lifecycle (#623), and agent-facing CLI (#624) are shipped.
-- GitHub pull-sync boundary (#625) is shipped: `app/dispatcher/sync_github.py` provides the `PullSyncAdapter` and `normalize_github_issue` normalisation function.
+- GitHub pull-sync boundary (#625) is shipped: `app/dispatcher/sync_github.py` provides the `PullSyncAdapter`, `GhCliIssueSource`, and `normalize_github_issue` normalisation function.
+- Bootstrap-and-sync wiring (#637) is shipped: `python -m app.dispatcher pull --repo <owner/repo>` command, `make dispatcher-init` (init + pull), `make dispatcher-sync` (pull only), and missing-DB guard for CLI commands.
+- Fallback policy (#639) is shipped: dispatcher loop, TTL, heartbeat cadence, and GitHub-label-only fallback are documented in `AGENTS.md` and `.codex/skills/issue-to-code/SKILL.md`.
 - Existing GitHub issue/PR/label/project governance in `AGENTS.md` and `docs/development/GITHUB_GOVERNANCE_SETUP.md` remains current truth today.
 
 ## Source-of-Truth Boundaries
@@ -153,10 +155,11 @@ Design boundary:
 ## Agent Interaction Contract (MVP Loop)
 
 Canonical loop:
+0. `status --json`: preflight check — verify `db_exists: true`; if false or non-zero exit, skip dispatcher and fall back to GitHub-label-only claim (`gh issue edit --remove-label agent:ready`); log fallback reason in PR body.
 1. `next`: request next eligible task (`ready` only).
-2. `claim`: create lease and claim ownership.
+2. `claim`: create lease and claim ownership. Default TTL: **90 minutes**.
 3. `work`: execute issue scope locally.
-4. `heartbeat/update`: renew lease and persist status/progress.
+4. `heartbeat/update` (every **~30 minutes** of active execution): renew lease before 90-min expiry.
 5. `link_pr`: attach PR reference when opened.
 6. `complete` or `block` or `release`: write terminal or transitional outcome.
 
@@ -164,6 +167,7 @@ Operational expectations:
 - Agents must not mutate lifecycle truth in dispatcher in ways that conflict with GitHub issue/PR truth.
 - Dispatcher outputs should be compact and actionable for CLI-driven agents.
 - Failure to heartbeat before expiry makes the claim recoverable by others after lease expiry processing.
+- Commands requiring a live DB (`next`, `claim`, `queue`, `pull`) exit 1 with `{"ok": false, "error": "dispatcher not initialised — run: make dispatcher-init"}` when the DB is missing.
 
 ## Observability and Persistence Expectations (MVP)
 
@@ -194,8 +198,10 @@ Pull-sync contract:
 - Sync failures record an `error` state in sync metadata and leave all existing task rows untouched.
 
 Implementation surface:
-- `app/dispatcher/sync_github.py` — `GitHubIssueSource` protocol, `PullSyncAdapter`, `normalize_github_issue`, sync-state helpers.
+- `app/dispatcher/sync_github.py` — `GitHubIssueSource` protocol, `GhCliIssueSource` (concrete `gh`-CLI-backed implementation), `PullSyncAdapter`, `normalize_github_issue`, sync-state helpers.
 - `GitHubIssueSource` is a mockable protocol; the adapter never imports `requests`, `httpx`, or a GitHub SDK.
+- `GhCliIssueSource` uses the `gh` CLI to list open issues with `agent:ready` label; requires `gh` authentication at runtime but is fully mockable in tests.
+- `python -m app.dispatcher pull --repo <owner/repo> --json` is the shipped CLI command for pull sync.
 - Tests in `tests/dispatcher/test_sync_github.py` use only mocked data; no live GitHub API access is required.
 
 ## Sync Failure Behavior
@@ -235,8 +241,14 @@ The dispatcher runs as a **central shared instance** on Demerzel (Mac mini) acce
 
 ```bash
 cd ~/workspace
-python -m app.dispatcher init
+make dispatcher-init          # runs: python -m app.dispatcher init + pull
 python -m app.dispatcher status --json   # verify db_exists: true
+```
+
+`make dispatcher-init` is the canonical first-time bootstrap: it initialises the schema and pulls open `agent:ready` issues from GitHub in one step. To re-sync issues without reinitialising:
+
+```bash
+make dispatcher-sync          # runs: python -m app.dispatcher pull --repo <repo> only
 ```
 
 ### Setup on each agent machine
