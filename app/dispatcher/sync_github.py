@@ -290,11 +290,21 @@ class PullSyncAdapter:
             record_sync_failure(self._store, self._provider, pull_at, str(exc))
             return []
 
+        _ACTIVE_STATUSES = frozenset({"blocked", "claimed", "in_progress"})
+
         upserted: list[TaskRecord] = []
         skipped: list[str] = []
         for issue in issues:
             try:
                 task = normalize_github_issue(issue, now=pull_at)
+                existing = self._store.get_task(task.task_id)
+                if existing is not None and existing.status in _ACTIVE_STATUSES:
+                    # Preserve local operational state; only refresh metadata from GitHub.
+                    existing.title = task.title
+                    existing.priority = task.priority
+                    existing.sync_state = task.sync_state
+                    existing.updated_at = task.updated_at
+                    task = existing
                 self._store.upsert_task(task)
                 upserted.append(task)
             except Exception as exc:

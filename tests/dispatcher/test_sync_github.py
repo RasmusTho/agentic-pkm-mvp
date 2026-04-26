@@ -320,3 +320,100 @@ def test_pull_upserts_tasks_into_store(tmp_store: SqliteStore) -> None:
     assert meta is not None
     assert meta["sync_result"] == "ok"
     assert meta["rate_limit_remaining"] == 4800
+
+
+# ---------------------------------------------------------------------------
+# AC: Pull-sync preserves local operational state (issue #669)
+# ---------------------------------------------------------------------------
+
+def test_pull_does_not_clobber_blocked_status(tmp_store: SqliteStore) -> None:
+    """A locally-blocked task is NOT reset to ready when GitHub still shows agent:ready."""
+    # Pre-seed task as blocked locally
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    task.status = "blocked"
+    task.blocked_reason = "dependency on #200"
+    tmp_store.upsert_task(task)
+
+    # GitHub payload still carries agent:ready — simulates the window before label removal
+    source = _mock_source([SAMPLE_ISSUE_HIGH])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    stored = tmp_store.get_task("github-issue-101")
+    assert stored is not None
+    assert stored.status == "blocked", "pull-sync must not clobber local blocked status"
+    assert stored.blocked_reason == "dependency on #200"
+
+
+def test_pull_does_not_clobber_active_lease_status(tmp_store: SqliteStore) -> None:
+    """Tasks with local claimed or in_progress status are NOT reset to ready by a sync."""
+    now = "2026-04-24T00:00:00+00:00"
+
+    # claimed task
+    claimed_task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now=now)
+    claimed_task.status = "claimed"
+    claimed_task.claimed_by = "agent-x"
+    claimed_task.lease_id = "lease-abc"
+    tmp_store.upsert_task(claimed_task)
+
+    # in_progress task (use a different issue number)
+    in_progress_issue = {**SAMPLE_ISSUE_LOW, "labels": [{"name": "agent:ready"}, {"name": "prio:low"}]}
+    in_progress_task = normalize_github_issue(in_progress_issue, now=now)
+    in_progress_task.status = "in_progress"
+    tmp_store.upsert_task(in_progress_task)
+
+    source = _mock_source([SAMPLE_ISSUE_HIGH, in_progress_issue])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    stored_claimed = tmp_store.get_task("github-issue-101")
+    assert stored_claimed is not None
+    assert stored_claimed.status == "claimed", "pull-sync must not clobber claimed status"
+    assert stored_claimed.claimed_by == "agent-x"
+    assert stored_claimed.lease_id == "lease-abc"
+
+    stored_ip = tmp_store.get_task("github-issue-102")
+    assert stored_ip is not None
+    assert stored_ip.status == "in_progress", "pull-sync must not clobber in_progress status"
+
+
+def test_pull_creates_new_task_from_github(tmp_store: SqliteStore) -> None:
+    """New tasks (not yet in local DB) are created normally from the GitHub payload."""
+    source = _mock_source([SAMPLE_ISSUE_HIGH])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    stored = tmp_store.get_task("github-issue-101")
+    assert stored is not None
+    assert stored.status == "ready"
+    assert stored.priority == "high"
+    assert stored.title == SAMPLE_ISSUE_HIGH["title"]
+
+
+def test_pull_updates_metadata_for_blocked_task(tmp_store: SqliteStore) -> None:
+    """Metadata (title, priority, sync_state) is updated from GitHub even when local status is preserved."""
+    old_now = "2026-04-23T00:00:00+00:00"
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now=old_now)
+    task.status = "blocked"
+    task.blocked_reason = "waiting on infra"
+    tmp_store.upsert_task(task)
+
+    # GitHub payload has updated title and different priority
+    updated_issue = {
+        **SAMPLE_ISSUE_HIGH,
+        "title": "Fix critical bug in queue selection (updated)",
+        "labels": [{"name": "prio:high"}, {"name": "agent:ready"}],
+        "updatedAt": "2026-04-25T00:00:00Z",
+    }
+    source = _mock_source([updated_issue])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    stored = tmp_store.get_task("github-issue-101")
+    assert stored is not None
+    assert stored.status == "blocked", "local operational status must be preserved"
+    assert stored.blocked_reason == "waiting on infra"
+    assert stored.title == "Fix critical bug in queue selection (updated)", "title must be refreshed"
+    assert stored.priority == "high"
+    assert stored.sync_state is not None
+    assert stored.sync_state["sync_result"] == "ok"
