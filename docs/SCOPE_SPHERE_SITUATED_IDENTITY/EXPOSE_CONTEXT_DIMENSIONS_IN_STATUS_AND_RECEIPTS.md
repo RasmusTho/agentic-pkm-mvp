@@ -144,7 +144,9 @@ The `situated_identity` field names an active role mode and may carry sensitive 
 
 **Redaction posture:**
 - `situated_identity` values must not be logged at debug verbosity without operator opt-in. At default log levels, treat the value as opaque and do not echo it in structured logs that may be forwarded to third-party aggregators.
-- If an operator-facing API response is served over an unauthenticated surface, omit `situated_identity` from the `context_dimensions` block in that response. Preserve `scope` and `sphere_memberships`, which are less sensitive operational signals.
+- If an operator-facing API response is served over an unauthenticated surface and `situated_identity` must be redacted, use one of these two schema-preserving strategies — do **not** omit only the field while retaining the block, as that violates the required-fields contract and breaks schema validation for consumers:
+  1. **Set `situated_identity: null`** (preferred). `null` already carries the explicit semantic of "no active identity declared" per the payload contract, so clients cannot distinguish redaction from a legitimately absent identity signal.
+  2. **Omit the entire `context_dimensions` block** if all three dimensions are sensitive for the response context.
 - `sphere_memberships` values may name personal life areas (e.g., `"health"`, `"private-life"`). Apply the same caution as for `situated_identity` in unauthenticated or externally-shared outputs.
 
 **Interpretation rules for operators:**
