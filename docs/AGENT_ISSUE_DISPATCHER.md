@@ -1,4 +1,4 @@
-State: Contract approved for MVP implementation planning; runtime implementation not yet shipped.
+State: Active and operational. MVP implementation complete and shipping in agent workflows (issue-to-code skill via dispatcher claim/heartbeat/complete).
 Doc role: Reference contract (development governance)
 Authority: Authoritative contract for local Agent Issue Dispatcher MVP boundaries and behavior expectations.
 Owner: Delivery governance / multi-agent coordination
@@ -18,11 +18,21 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 
 ## Current-State Honesty
 
-- This document defines an MVP contract boundary only.
+**MVP Implementation Status: SHIPPED ✅**
+
 - Dispatcher runtime/storage foundation (#622), queue/lease lifecycle (#623), and agent-facing CLI (#624) are shipped.
 - GitHub pull-sync boundary (#625) is shipped: `app/dispatcher/sync_github.py` provides the `PullSyncAdapter`, `GhCliIssueSource`, and `normalize_github_issue` normalisation function.
 - Bootstrap-and-sync wiring (#637) is shipped: `python -m app.dispatcher pull --repo <owner/repo>` command, `make dispatcher-init` (init + pull), `make dispatcher-sync` (pull only), and missing-DB guard for CLI commands.
+- Complete command (#642) is shipped: `python -m app.dispatcher complete <task_id>` marks tasks finished and releases leases cleanly.
 - Fallback policy (#639) is shipped: dispatcher loop, TTL, heartbeat cadence, and GitHub-label-only fallback are documented in `AGENTS.md` and `.codex/skills/issue-to-code/SKILL.md`.
+- Dispatcher cleanup in verification-and-closure (#662) is shipped: ensures leases are released when issues are merged, partially delivered, or abandoned.
+
+**Adoption Status: ACTIVE ✅**
+
+- Agents are now wired to use the dispatcher as the hot-path claim primitive (issue-to-code skill).
+- Dispatcher operates in shadow mode: agents call claim/heartbeat/complete while GitHub labels remain durable truth.
+- Fallback to GitHub-label-only claim is always available when dispatcher is unavailable.
+- Three adoption receipts verified and logged on parent feature issue (#636).
 - Existing GitHub issue/PR/label/project governance in `AGENTS.md` and `docs/development/GITHUB_GOVERNANCE_SETUP.md` remains current truth today.
 
 ## Source-of-Truth Boundaries
