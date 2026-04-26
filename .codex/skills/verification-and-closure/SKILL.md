@@ -21,6 +21,7 @@ You operate after PR integration has produced a mergeable, CI-green PR.
 - honor automation-driven PR/Project `Done` projection first, and only fallback-set `Done` when needed
 - **merge the PR when the delivery contract is satisfied**
 - close the governing Issue and set Project Status to Done
+- **release dispatcher lease** if task was claimed (complete on success, release on abandon)
 - unblock dependent issues
 - create bounded follow-up Issues for gaps instead of leaving vague drift
 
@@ -120,6 +121,15 @@ When all merge prerequisites are met:
    gh issue close #<N>
    ```
 
+4b. **Complete dispatcher task (if available):**
+   ```bash
+   # Dispatcher cleanup: mark task completed to release lease
+   # (Non-fatal if dispatcher unavailable; log the result)
+   TASK_ID="github-issue-<N>"
+   python -m app.dispatcher complete "$TASK_ID" --agent "verification" --json \
+     || echo "ℹ️ Dispatcher complete skipped or failed (dispatcher unavailable); lease will expire naturally at 90-min TTL"
+   ```
+
 5. **Remove all agent labels from Issue:**
    ```bash
    gh issue edit #<N> --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
@@ -204,7 +214,14 @@ If the feature issue is fully delivered and acceptance is satisfied:
 
 If a related PR was closed without merge but represents terminal tracked work:
 
-1. **Set PR Project Status to Done if automation has not already projected it:**
+1. **Release dispatcher task** (if claimed):
+   ```bash
+   TASK_ID="github-issue-<N>"
+   python -m app.dispatcher release "$TASK_ID" --agent "verification" --json \
+     || true
+   ```
+
+2. **Set PR Project Status to Done if automation has not already projected it:**
    ```bash
    gh api graphql -f projectId="$PROJECT_ID" -f itemId="$PR_ITEM_ID" \
      -f fieldId="$STATUS_FIELD_ID" -f optionId="$DONE_OPTION_ID" \
@@ -215,16 +232,24 @@ If a related PR was closed without merge but represents terminal tracked work:
 
 If the work is only partial:
 
-1. **Do NOT merge the PR**
-2. **Keep the Issue open**
-3. **Update labels and status to reflect reality:**
+1. **Release dispatcher task** (if claimed):
+   ```bash
+   # Return task to ready queue for re-pickup
+   TASK_ID="github-issue-<N>"
+   python -m app.dispatcher release "$TASK_ID" --agent "verification" --json \
+     || true
+   ```
+
+2. **Do NOT merge the PR**
+3. **Keep the Issue open**
+4. **Update labels and status to reflect reality:**
    ```bash
    gh issue edit #<N> --remove-label agent:ready --add-label agent:needs-human
    gh api graphql ... (set Project Status to Backlog)
    ```
-4. **Create bounded follow-up Issue(s)** with exact task-contract sections
+5. **Create bounded follow-up Issue(s)** with exact task-contract sections
 
-**Critical:** Do not leave merged, delivered work in `Backlog`, `Ready`, `In Progress`, or `Review`.
+**Critical:** Do not leave merged, delivered work in `Backlog`, `Ready`, `In Progress`, or `Review`. Also release any dispatcher lease so the task can be re-picked up.
 
 ## Quick Reference: Verification State Transitions
 
