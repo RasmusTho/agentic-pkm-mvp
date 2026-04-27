@@ -221,17 +221,6 @@ def _cmd_events(args: argparse.Namespace, store: SqliteStore) -> int:
     return 0
 
 
-def _cmd_seed_demo(args: argparse.Namespace, store: SqliteStore) -> int:
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
-    _emit({
-        "ok": True,
-        "created": len(tasks),
-        "tasks": [_compact_task(t) for t in tasks],
-    }, args.json)
-    return 0
-
-
 def _cmd_link_pr(args: argparse.Namespace, store: SqliteStore) -> int:
     from app.dispatcher.services import link_pr
     try:
@@ -291,7 +280,6 @@ _COMMAND_MAP = {
     "block": _cmd_block,
     "complete": _cmd_complete,
     "events": _cmd_events,
-    "seed-demo": _cmd_seed_demo,
     "link-pr": _cmd_link_pr,
     "status": _cmd_status,
     "pull": _cmd_pull,
@@ -356,9 +344,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("events", help="Show recent events")
     p.add_argument("--tail", type=int, default=20)
-    p.add_argument("--json", action="store_true")
-
-    p = sub.add_parser("seed-demo", help="Create demo tasks without GitHub access")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("link-pr", help="Link a PR to a task")
