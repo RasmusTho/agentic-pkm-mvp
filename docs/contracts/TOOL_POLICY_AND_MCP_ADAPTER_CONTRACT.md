@@ -24,8 +24,7 @@ Use this document with:
 - A local MCP ToolProvider boundary exposes registry-loaded descriptors and delegates execution through the existing executor validation/policy/timeout/mock-real paths.
 - A bounded remote multiplex seam is available behind explicit flag `mcp_remote_multiplex_enable`; default behavior remains local registry execution.
 - If remote multiplex is enabled but unavailable or failing, execution deterministically falls back to local registry with route reason codes.
-- Dynamic remote descriptor discovery is available behind explicit enablement and policy admission (`mcp_remote_allowed_providers` must admit `remote_multiplex`).
-- Operator-facing discovery diagnostics expose `discovered`, `admitted`, and `rejected` tool sets with deterministic reason codes.
+- When remote multiplex is enabled and a remote provider is configured, remote descriptors are merged into the local registry on a best-effort basis (try/except; failures are silent and local registry remains available).
 
 ## Descriptor sources and structure
 
@@ -204,28 +203,26 @@ The executor defines built-in handlers for `internal` protocol tools:
 
 Both are handled synchronously during plan execution and do not support real vs. mock branching (they always execute).
 
-## MCP discovery and admission
+## MCP discovery
 
-Dynamic MCP discovery is deterministic and bounded:
+Dynamic MCP descriptor discovery is best-effort and bounded:
 
-- Discovery runs only when `mcp_remote_multiplex_enable` is truthy.
-- Discovery enumerates descriptors from the remote provider into a diagnostics surface (`discovered`).
-- Discovered tools are not routable by default. Admission requires policy allowlist entry: `mcp_remote_allowed_providers` including `remote_multiplex`.
-- Unsupported discovered tools are rejected with reason `unsupported_tool`.
-- When admission is missing, supported discovered tools are rejected with reason `policy_admission_required`.
-- When admitted, supported discovered tools appear in `admitted` and can be routed via `provider_route=remote_multiplex`.
-- When discovery is disabled/unavailable/failing, reason codes are deterministic:
-  - `remote_disabled`
-  - `remote_unavailable`
-  - `remote_discovery_error`
-  - `policy_admission_required`
-  - `ok`
+- Discovery runs only when `mcp_remote_multiplex_enable` is truthy and a remote provider is configured.
+- When enabled, `list_descriptors` calls the remote provider and merges the returned descriptors into the local registry. If the remote call fails, the exception is silently swallowed and local registry descriptors remain available.
+- There is no admission-allowlist gate. Enabling `mcp_remote_multiplex_enable` is sufficient to route to the remote provider.
+- Unsupported discovered tools (not in the local `MCP_TOOL_DESCRIPTORS` supported set) are filtered out by `_filter_supported`.
+- Route reason codes are deterministic:
+  - `remote_disabled` — `mcp_remote_multiplex_enable` is falsy
+  - `remote_unavailable` — flag enabled but no remote provider is injected
+  - `remote_provider_error` — remote execution failed; fell back to local registry
+  - `remote_descriptor_list_error` — remote descriptor fetch failed during execution resolution
+  - `ok` — routed successfully
 
 ## MCP integration boundary
 
 This contract explicitly bounds current tool execution behavior and reserves future expansion space:
 
-- **Currently implemented**: local registry-backed ToolProvider default path, plus optional remote multiplex seam with explicit discovery + admission gating.
+- **Currently implemented**: local registry-backed ToolProvider default path, plus optional remote multiplex seam with best-effort descriptor merging (no admission gate).
 - **Fallback behavior**: when remote multiplex is enabled but no remote adapter is present or the adapter errors, route falls back to local registry with deterministic reason codes (`remote_unavailable`, `remote_provider_error`).
 - **Not currently implemented**: descriptor versioning/evolution policies across remote providers.
 - **Current implementation boundary**: execution semantics still run through the existing executor contract and policy checks.
