@@ -254,6 +254,31 @@ fi
 
 **Purpose**: Surface and address review feedback before handoff to avoid back-and-forth delays.
 
+**Action: Post-CI Settling Poll (automated-reviewer window)**
+
+Automated reviewers (e.g. `chatgpt-codex-connector`) use CI completion as a trigger and post their
+comments *after* CI reaches terminal state. To avoid sampling reviews before those comments arrive,
+wait up to 60 seconds for new review activity before fetching reviews.
+
+```bash
+# Poll every 15 s for up to 60 s (4 attempts) for new review activity
+PREV_REVIEW_COUNT=$(gh pr view <PR_NUMBER> --json reviews --jq '.reviews | length')
+for i in {1..4}; do
+  sleep 15
+  NEW_REVIEW_COUNT=$(gh pr view <PR_NUMBER> --json reviews --jq '.reviews | length')
+  if [ "$NEW_REVIEW_COUNT" -gt "$PREV_REVIEW_COUNT" ]; then
+    echo "✅ New review activity detected after ${i}x15s — proceeding to review fetch"
+    break
+  fi
+  echo "Attempt $i/4: no new reviews yet (total: $NEW_REVIEW_COUNT)"
+done
+echo "Post-CI settling window complete — fetching reviews"
+```
+
+This poll is bounded: it runs at most 4 × 15 s = 60 s regardless of reviewer behaviour. If no new
+reviews arrive, Gate 5 continues normally. The total additional wall-clock cost is at most 60 s,
+which keeps the integration within the 90 s constraint from the governing Issue.
+
 **Action: Fetch and Classify Reviews**
 
 ```bash
