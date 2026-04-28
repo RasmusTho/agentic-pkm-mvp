@@ -60,3 +60,101 @@ Capability acceptance requires proof of separation under realistic scenarios, no
 
 - Parent: `docs/SCOPE_SPHERE_SITUATED_IDENTITY/PARENT_FEATURE_ISSUE.md`
 - Follow-up implementation issue: to be created from this task spec.
+
+---
+
+## Scenario Matrix
+
+Each scenario class independently varies one context dimension while holding the others fixed. Pass = each field in runtime payloads, status, and receipts is populated from the right source and the other two dimensions are unaffected.
+
+### Scenario Class 1: scope-only change
+
+**Setup:** Runtime receives two sequential requests. Between them, only `scope` changes (e.g. `"work"` → `"writing"`). `sphere_memberships` and `situated_identity` are identical in both.
+
+**Expected outputs:**
+
+| Surface | Field | Expected value (request 1) | Expected value (request 2) |
+|---|---|---|---|
+| Runtime payload | `scope` | `"work"` | `"writing"` |
+| Runtime payload | `sphere_memberships` | `["work"]` | `["work"]` |
+| Runtime payload | `situated_identity` | `"professional"` | `"professional"` |
+| Status surface | `context.scope` | `"work"` | `"writing"` |
+| Receipt metadata | `scope` | `"work"` | `"writing"` |
+
+**Failure signatures — dimension collapse:**
+- `sphere_memberships` changes when only `scope` changed → scope-to-sphere collapse.
+- `situated_identity` changes when only `scope` changed → scope-to-identity collapse.
+- Status or receipt omits `scope` or conflates it with `sphere_memberships` → reporting collapse.
+
+---
+
+### Scenario Class 2: sphere-only change
+
+**Setup:** Runtime receives two sequential requests. Between them, only `sphere_memberships` changes (e.g. `["work"]` → `["work", "learning"]`). `scope` and `situated_identity` are identical in both.
+
+**Expected outputs:**
+
+| Surface | Field | Expected value (request 1) | Expected value (request 2) |
+|---|---|---|---|
+| Runtime payload | `scope` | `"work"` | `"work"` |
+| Runtime payload | `sphere_memberships` | `["work"]` | `["work", "learning"]` |
+| Runtime payload | `situated_identity` | `"professional"` | `"professional"` |
+| Status surface | `context.sphere_memberships` | `["work"]` | `["work", "learning"]` |
+| Receipt metadata | `sphere_memberships` | `["work"]` | `["work", "learning"]` |
+
+**Failure signatures — dimension collapse:**
+- `scope` changes when only `sphere_memberships` changed → sphere-to-scope collapse.
+- `situated_identity` changes when only `sphere_memberships` changed → sphere-to-identity collapse.
+- Receipt uses a single `domain` field that merges scope + sphere → legacy collapse (invariant violation, see SSI-01).
+
+---
+
+### Scenario Class 3: identity-only change
+
+**Setup:** Runtime receives two sequential requests. Between them, only `situated_identity` changes (e.g. `"professional"` → `null`). `scope` and `sphere_memberships` are identical in both.
+
+**Expected outputs:**
+
+| Surface | Field | Expected value (request 1) | Expected value (request 2) |
+|---|---|---|---|
+| Runtime payload | `scope` | `"work"` | `"work"` |
+| Runtime payload | `sphere_memberships` | `["work"]` | `["work"]` |
+| Runtime payload | `situated_identity` | `"professional"` | `null` |
+| Status surface | `context.situated_identity` | `"professional"` | `null` (not omitted — must be present as null) |
+| Receipt metadata | `situated_identity` | `"professional"` | `null` |
+
+**Failure signatures — dimension collapse:**
+- `scope` changes when only `situated_identity` changed → identity-to-scope collapse.
+- `sphere_memberships` changes when only `situated_identity` changed → identity-to-sphere collapse.
+- `situated_identity: null` causes runtime to fill a scope value into identity field → null-to-scope fallback (SSI-01 invariant 5 violation).
+- Status surface omits `situated_identity` when it is null instead of reporting it explicitly → silent collapse.
+
+---
+
+## Collapse Failure Signatures (Summary)
+
+The following signatures indicate that at least one invariant from SSI-01 has been violated:
+
+| Signature | Violated invariant |
+|---|---|
+| One field change causes another to change unexpectedly | Dimensions are entangled in code or schema |
+| `domain` or `context` single-key appears in payloads instead of three distinct keys | Legacy collapse not yet migrated |
+| `situated_identity: null` is replaced by a scope value | Null-to-scope fallback (forbidden by SSI-01 §Invariant 5) |
+| Status surface omits any of the three fields when they are `null` or `[]` | Reporting collapse — must report explicit null/empty |
+| Receipt uses `sphere_memberships` with a single-value assumption | Multi-valued sphere semantics not yet implemented |
+| `scope` is multi-valued in any payload | Single-scope-per-invocation invariant violated (SSI-01 §Invariant 4) |
+
+---
+
+## Parent Feature Acceptance Receipt Checklist
+
+Use this checklist to verify that parent feature issue #645 is ready for closure. Each item must be confirmed by the reviewer/human, not asserted by the implementing agent.
+
+- [ ] SSI-01 merged and verified: payload contract doc contains canonical field names, mapping rules, and invariants.
+- [ ] SSI-02 merged and verified: thread-through doc specifies how each runtime path receives and propagates the three dimensions.
+- [ ] SSI-03 merged and verified: status/receipt doc specifies operator-visible representation, required fields, and guardrail notes.
+- [ ] SSI-04 merged and verified (this doc): scenario matrix covers all three scenario classes, expected outputs are specified, and collapse failure signatures are enumerated.
+- [ ] Cross-surface validation scenario results recorded: for each of the three scenario classes, a reviewer or CI run has confirmed that expected outputs match actual outputs in staging/test.
+- [ ] No open `agent:blocked` or `agent:needs-human` labels remain on any SSI child issue.
+- [ ] Owner-doc promotion language reviewed: no roadmap/plan docs still read SSI capability as pending after the above is complete.
+- [ ] Human reviewer has signed off on parent issue #645 closure (closure is not agent-unilateral).
