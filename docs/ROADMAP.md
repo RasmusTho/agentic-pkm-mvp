@@ -268,3 +268,29 @@ Platform-state note:
 
 - repo-side enforcement lives in `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/issue-pr-governance.yml`, and `.github/github-governance.yml`
 - GitHub labels, Project fields/views, and Project automation must match that contract
+
+## Release Channels
+
+<!-- release-channels -->
+
+The release-channel model gives the operator unambiguous answers to "what is running in prod right now?" and "how does prod differ from dev?" It is independent of the existing `dev`/`prod` environment layer, which controls code-execution path and settings resolution.
+
+### Channel identity (shipped — Issue #610)
+
+Three canonical channels — `stable`, `dev`, `test` — are defined. Each channel is identified by four mandatory properties: code ref, DB name, vault root, and runtime-artifact directory. The contract is implemented in `app/config/channel.py` and enforced at construction time via `ChannelIdentity`.
+
+| Channel  | DB         | Vault root          | Artifacts  |
+|----------|------------|---------------------|------------|
+| `stable` | `pkm_prod` | operator-configured | `tmp`      |
+| `dev`    | `pkm_dev`  | `vault-dev`         | `tmp-dev`  |
+| `test`   | `pkm_test` | `vault-test`        | `tmp-test` |
+
+Full identity contract: [`docs/RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md`](RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md)
+
+### Remaining release-channel work (planned)
+
+- **DB-per-channel isolation** — resolver-level DB naming and two-layer isolation (Issue #611, verification pending).
+- **Promotion plan contract** — `prepare-promotion` plan generation with deterministic receipts (Issue #612).
+- **Migration reversibility classification** — classify each migration as reversible or forward-only before promotion (spec: `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`).
+- **Concurrency rule** — single-active-deployment enforcement per channel (spec: `docs/RELEASE_CHANNELS/DEFINE_CONCURRENCY_RULE.md`).
+- **Rollback contract** — operator-safe rollback to previous stable ref (spec: `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`).
