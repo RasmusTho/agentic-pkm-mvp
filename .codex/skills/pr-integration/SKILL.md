@@ -254,6 +254,29 @@ fi
 
 **Purpose**: Surface and address review feedback before handoff to avoid back-and-forth delays.
 
+**Action: Post-CI Review Arrival Poll (bounded, 60 s max)**
+
+Automated reviewers (e.g. `chatgpt-codex-connector`) use CI completion as their trigger and post their comments *after* CI reaches terminal state. Sampling reviews immediately at Gate 4 exit misses these comments. Wait up to 60 s (4 × 15 s polls) for new review activity before proceeding to the fetch step.
+
+```bash
+# Record review count before the poll window
+REVIEWS_BEFORE=$(gh pr view <PR_NUMBER> --json reviews --jq '.reviews | length')
+
+echo "Post-CI poll: waiting up to 60 s for automated reviewer comments..."
+for i in 1 2 3 4; do
+  sleep 15
+  REVIEWS_NOW=$(gh pr view <PR_NUMBER> --json reviews --jq '.reviews | length')
+  if [ "$REVIEWS_NOW" -gt "$REVIEWS_BEFORE" ]; then
+    echo "✅ New review activity detected after ${i}×15 s — proceeding to fetch"
+    break
+  fi
+  echo "  Poll $i/4: no new reviews yet (${REVIEWS_NOW} reviews)"
+done
+echo "Post-CI poll complete — sampling reviews now"
+```
+
+This poll is optional and bounded: it adds at most 60 s of wall-clock time and never blocks if no reviews arrive.
+
 **Action: Fetch and Classify Reviews**
 
 ```bash
