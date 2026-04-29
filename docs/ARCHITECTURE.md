@@ -585,3 +585,29 @@ Guardrails for builder agents:
 
 This GitHub control plane is a development governance layer around the repo-first/docs-as-code workflow.
 It must not be confused with the runtime agent architecture described elsewhere in this document.
+
+## Release Channel Identity
+
+<!-- release-channel-identity -->
+
+A release channel is a named operational build identified by four mandatory properties.
+The channel layer is orthogonal to the existing `dev`/`prod` environment layer:
+- **environment** (`PKM_ENVIRONMENT`) selects the code-execution path and settings profile.
+- **channel** names the operational build and its storage/artifact roots.
+
+### Canonical channels
+
+| Channel  | Code ref    | DB name    | Vault root                  | Runtime artifact dir |
+|----------|-------------|------------|-----------------------------|----------------------|
+| `stable` | `stable`    | `pkm_prod` | operator-configured         | `tmp`                |
+| `dev`    | `main`      | `pkm_dev`  | `vault-dev`                 | `tmp-dev`            |
+| `test`   | `<worktree>`| `pkm_test` | `vault-test`                | `tmp-test`           |
+
+### Identity contract
+
+- All four properties are mandatory and non-empty for a valid channel definition.
+- Channel identity is inspectable without reading code: `python -m app.cli status` and `python -m app.cli settings-explain` must report the active channel including all four properties.
+- The contract is implemented in `app/config/channel.py`. `ChannelIdentity` validates all four properties at construction time; invalid definitions raise `ValueError` with an operator-readable message.
+- Downstream features (promotion, rollback, DB isolation) resolve channel identity through `app.config.channel` rather than scattering individual env-var lookups.
+
+See [`docs/RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md`](RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md) for the full contract spec.

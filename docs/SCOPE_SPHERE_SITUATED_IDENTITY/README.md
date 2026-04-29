@@ -53,5 +53,5 @@ This capability gates later priorities in `docs/plans/V60_COGNITIVE_SUPPORT_PRIO
 
 ## Related GitHub Issues
 
-- Parent feature issue draft: `PARENT_FEATURE_ISSUE.md` in this directory.
-- Task implementation issues are intentionally not created in this slice; they are follow-up backlog work.
+- Parent feature issue: `PARENT_FEATURE_ISSUE.md` in this directory; open as GitHub issue #645.
+- Slice issues created from task files: #651 (SSI-01, delivered PR #660), #652 (SSI-02), #653 (SSI-03), #654 (SSI-04).
