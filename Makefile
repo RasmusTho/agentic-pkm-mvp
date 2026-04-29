@@ -181,7 +181,7 @@ alpha-e2e:
 
 dispatcher-init:
 	$(PYTHON) -m app.dispatcher init --json
-	@$(PYTHON) -m app.dispatcher pull --repo rasmusthornberg/agentic-pkm-mvp --json
+	@$(PYTHON) -m app.dispatcher pull --repo RasmusTho/agentic-pkm-mvp --json
 
 dispatcher-sync:
-	$(PYTHON) -m app.dispatcher pull --repo rasmusthornberg/agentic-pkm-mvp --json
+	$(PYTHON) -m app.dispatcher pull --repo RasmusTho/agentic-pkm-mvp --json
