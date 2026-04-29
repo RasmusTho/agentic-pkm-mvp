@@ -334,6 +334,14 @@ class PullSyncAdapter:
         for issue in ready_issues:
             try:
                 task = normalize_github_issue(issue, now=pull_at)
+                existing = self._store.get_task(task.task_id)
+                if existing is not None and existing.status in {"blocked", "claimed", "in_progress"}:
+                    task.status = existing.status
+                    task.claimed_by = existing.claimed_by
+                    task.lease_id = existing.lease_id
+                    task.lease_expires_at = existing.lease_expires_at
+                    task.blocked_reason = existing.blocked_reason
+                    task.last_heartbeat_at = existing.last_heartbeat_at
                 self._store.upsert_task(task)
                 upserted.append(task)
             except Exception as exc:
