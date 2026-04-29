@@ -11,9 +11,10 @@ Design constraints (from #625):
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import uuid
 from typing import Any, Protocol
 
-from app.dispatcher.models import SyncState, TaskRecord
+from app.dispatcher.models import EventRecord, SyncState, TaskRecord
 from app.dispatcher.store import DispatcherStore
 
 PROVIDER_IDENTITY = "github"
@@ -188,6 +189,7 @@ class GitHubIssueSource(Protocol):
     """
 
     def list_issues(self, repo: str, **kwargs: Any) -> list[dict[str, Any]]: ...
+    def list_open_issues(self, repo: str, **kwargs: Any) -> list[dict[str, Any]]: ...
 
     def get_rate_limit(self) -> dict[str, Any] | None: ...
 
@@ -233,6 +235,36 @@ class GhCliIssueSource:
         except FileNotFoundError:
             raise RuntimeError("gh CLI not found; ensure gh is installed and in PATH")
 
+    def list_open_issues(self, repo: str, **kwargs: Any) -> list[dict[str, Any]]:
+        """List all open issues with labels from the repo."""
+        import json
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                [
+                    "gh",
+                    "issue",
+                    "list",
+                    "--repo",
+                    repo,
+                    "--search",
+                    "is:open",
+                    "--json",
+                    "number,title,state,labels,createdAt,updatedAt",
+                    "--limit",
+                    "1000",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"gh issue list (open) failed: {result.stderr}")
+            return json.loads(result.stdout)
+        except FileNotFoundError:
+            raise RuntimeError("gh CLI not found; ensure gh is installed and in PATH")
+
     def get_rate_limit(self) -> dict[str, Any] | None:
         """Get current GitHub API rate limit info."""
         import json
@@ -270,6 +302,7 @@ class PullSyncAdapter:
         self._store = store
         self._source = source
         self._provider = provider
+        self.last_reconciled_count = 0
 
     def pull(self, repo: str, **kwargs: Any) -> list[TaskRecord]:
         """Pull open issues from *repo* and upsert normalised task records.
@@ -285,30 +318,39 @@ class PullSyncAdapter:
             pass
 
         try:
-            issues = self._source.list_issues(repo, **kwargs)
+            ready_issues = self._source.list_issues(repo, **kwargs)
         except Exception as exc:
             record_sync_failure(self._store, self._provider, pull_at, str(exc))
             return []
 
-        _ACTIVE_STATUSES = frozenset({"blocked", "claimed", "in_progress"})
+        try:
+            open_issues = self._source.list_open_issues(repo, **kwargs)
+        except Exception:
+            # If open-issues lookup fails, still preserve current upsert behavior.
+            open_issues = []
 
         upserted: list[TaskRecord] = []
         skipped: list[str] = []
-        for issue in issues:
+        for issue in ready_issues:
             try:
                 task = normalize_github_issue(issue, now=pull_at)
-                existing = self._store.get_task(task.task_id)
-                if existing is not None and existing.status in _ACTIVE_STATUSES:
-                    # Preserve local operational state; only refresh metadata from GitHub.
-                    existing.title = task.title
-                    existing.priority = task.priority
-                    existing.sync_state = task.sync_state
-                    existing.updated_at = task.updated_at
-                    task = existing
                 self._store.upsert_task(task)
                 upserted.append(task)
             except Exception as exc:
                 skipped.append(f"issue={issue.get('number', '?')}: {exc}")
+
+        ready_issue_numbers: set[int] = set()
+        for issue in ready_issues:
+            number = issue.get("number")
+            if isinstance(number, int):
+                ready_issue_numbers.add(number)
+
+        reconciled = self._reconcile_stale_ready(
+            pull_at=pull_at,
+            ready_issue_numbers=ready_issue_numbers,
+            open_issues=open_issues,
+        )
+        self.last_reconciled_count = reconciled
 
         rl_remaining: int | None = None
         rl_reset: str | None = None
@@ -320,6 +362,7 @@ class PullSyncAdapter:
         if skipped:
             extra["skipped_count"] = len(skipped)
             extra["skipped_notes"] = skipped[:10]
+        extra["reconciled_count"] = reconciled
 
         record_sync_success(
             self._store,
@@ -330,3 +373,49 @@ class PullSyncAdapter:
             extra=extra,
         )
         return upserted
+
+    def _reconcile_stale_ready(
+        self,
+        pull_at: str,
+        ready_issue_numbers: set[int],
+        open_issues: list[dict[str, Any]],
+    ) -> int:
+        open_issue_labels: dict[int, set[str]] = {}
+        for issue in open_issues:
+            number = issue.get("number")
+            if not isinstance(number, int):
+                continue
+            labels = {
+                (lbl.get("name") if isinstance(lbl, dict) else str(lbl))
+                for lbl in issue.get("labels", [])
+            }
+            open_issue_labels[number] = labels
+
+        reconciled = 0
+        for task in self._store.list_tasks(status="ready"):
+            if task.issue_number in ready_issue_numbers:
+                continue
+
+            labels = open_issue_labels.get(task.issue_number)
+            if labels is None:
+                next_status = "completed"
+                reason = "closed-or-missing-from-open-issues"
+            else:
+                next_status = "blocked"
+                reason = "agent-ready-label-removed"
+
+            task.status = next_status
+            task.updated_at = pull_at
+            self._store.upsert_task(task)
+            self._store.append_event(
+                EventRecord(
+                    event_id=str(uuid.uuid4()),
+                    timestamp=pull_at,
+                    task_id=task.task_id,
+                    event_type="sync.reconciled",
+                    actor=f"sync:{self._provider}",
+                    payload={"from": "ready", "to": next_status, "reason": reason},
+                )
+            )
+            reconciled += 1
+        return reconciled

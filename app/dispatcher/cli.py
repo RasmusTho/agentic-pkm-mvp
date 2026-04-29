@@ -256,6 +256,7 @@ def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
         _emit({
             "ok": True,
             "upserted": len(upserted),
+            "reconciled": getattr(adapter, "last_reconciled_count", 0),
             "skipped": 0,
             "provider": "github",
         }, args.json)
