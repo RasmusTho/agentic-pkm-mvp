@@ -1,3 +1,5 @@
+State: Parent feature issue draft. Docs-only capability breakdown exists; GitHub feature issue creation and implementation remain future work.
+
 ## Context
 
 Priority 2b in `docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md` requires separating scope, sphere, and situated identity as distinct properties. The capability currently has no specification directory, so implementation cannot be safely decomposed into bounded, independently verifiable tasks.

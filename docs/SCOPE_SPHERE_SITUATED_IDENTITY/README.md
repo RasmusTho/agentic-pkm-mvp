@@ -1,3 +1,5 @@
+State: Active capability specification directory. Docs-only breakdown is present; implementation and owner-doc promotion remain future work.
+
 # Scope, Sphere, and Situated Identity
 
 ## Capability Boundary
