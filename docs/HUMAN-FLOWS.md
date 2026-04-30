@@ -1,12 +1,12 @@
-State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; v6 interaction, finding/reorienting, persistence-surface, and commitment specifications are active planning surfaces; read-only Chat cognition has a shipped scaffold, while canvas co-editing and hybrid Chat/Panel mutation remain future work.
+State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; v6 interaction, finding/reorienting, persistence-surface, and commitment specifications are active planning surfaces; read-only Chat cognition is shipped, bounded canvas-session scaffolding exists behind a gate for dev/test validation, and hybrid Chat/Panel mutation remains future work.
 Doc role: Core SoT
 Authority: Canonical user-facing function contract for the system; architecture and implementation changes should remain compatible with this document unless it is updated intentionally.
 Owner: Product / human-function SoT
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-29
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/PANEL_AGENT.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CHAT_AUTHORITY_BOUNDARY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md, docs/FINDING_AND_REORIENTING/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/research/CHAT_SURFACE_BUILD_VS_BUY.md, app/chat/read_only_cognition.py, app/domain/commitments.py, app/orientation/runtime.py, tests/chat/test_read_only_chat_cognition.py, tests/commitments/test_commitment_queries.py, tests/orientation/test_orientation_runtime.py, merged PRs #579/#581/#583/#681/#687, current repo state at 1638352 on 2026-04-29, closed current-state bug issues #435/#436/#437, closed v6 parent issues #647/#648/#649, open commitment-runtime feature issue #688, and closed Chat scaffold issue #542
+Last reviewed: 2026-04-30
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/PANEL_AGENT.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CHAT_AUTHORITY_BOUNDARY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md, docs/FINDING_AND_REORIENTING/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/research/CHAT_SURFACE_BUILD_VS_BUY.md, app/api/routes/canvas.py, app/chat/canvas_writer.py, app/chat/governance_router.py, app/chat/read_only_cognition.py, app/chat/session_log.py, app/domain/commitments.py, app/orientation/runtime.py, tests/api/test_canvas_api.py, tests/chat/test_canvas_writer.py, tests/chat/test_governance_router.py, tests/chat/test_read_only_chat_cognition.py, tests/chat/test_session_log_writer.py, tests/cli/test_canvas_cli.py, tests/commitments/test_commitment_queries.py, tests/orientation/test_orientation_runtime.py, current repo state at cff6d9c on 2026-04-30, closed current-state bug issues #435/#436/#437, closed v6 parent issues #647/#648/#649, open commitment-runtime feature issue #688, closed Chat scaffold issue #542, closed Canvas implementation issues #598/#599/#600/#601, and open owner-doc promotion issue #597
 
 
 # Human Flows — Yggdrasil / agentic-pkm-mvp
@@ -762,13 +762,14 @@ The human may also occasionally observe system-surface artifacts such as compani
 Those artifacts are not normal authoring surfaces, but their presence should still remain legible
 enough that the human is not surprised by them.
 
-A canvas-Chat surface is specified as a future human-facing surface for thinking on a note with
+A canvas-Chat surface is specified as the target human-facing surface for thinking on a note with
 assistance — direct in-place editing during an active session, with session logs retained
-alongside the note as subordinate intent trails. This surface is designed but not yet implemented.
-Its authority model and artifact conventions are specified in
+alongside the note as subordinate intent trails. A bounded repo scaffold now exists behind
+`CANVAS_ENABLED` for dev/test validation, but the surface is not yet promoted into the supported
+baseline or operator-facing runtime contract. Its authority model and artifact conventions are specified in
 `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md` so that the co-editing
 posture cannot be either over-restricted (reintroducing ASK-shaped turn-taking) or
-over-permissive (collapsing the gated-execution invariant) when it ships.
+over-permissive (collapsing the gated-execution invariant) as it moves toward acceptance.
 Hybrid Panel/Chat behavior remains future work; its docs-only compatibility schema is
 `docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md`.
 
@@ -808,7 +809,7 @@ The current baseline realizes only part of the broader function set.
 - stronger learning-oriented flows
 - clearer creative/hobby-specific support patterns
 - fuller receipt artifacts beyond current overlays and operational traces
-- canvas-Chat surface for direct in-place co-authoring of a note with assistance, with
+- canvas-Chat surface promotion from bounded gated scaffold to supported direct in-place co-authoring of a note with assistance, with
   session-as-provenance stored alongside the note as a subordinate artifact class (see
   `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md`)
 - hybrid Panel/Chat integration that preserves Panel as primary command surface without making it

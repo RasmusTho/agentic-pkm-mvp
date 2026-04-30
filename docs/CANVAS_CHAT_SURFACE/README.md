@@ -14,9 +14,9 @@ related_docs:
   - app/knowledge/write_ops.py
 ---
 
-State: Active specification. Implementation not started. Spec source is docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md (merged via PR #533).
+State: Active specification. Bounded implementation scaffolding is shipped through #598/#599/#600/#601, but owner-doc promotion and baseline acceptance remain open on parent issue #597. Spec source is docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md (merged via PR #533).
 Owner: v6.0 architecture owner
-Last reviewed: 2026-04-22
+Last reviewed: 2026-04-30
 
 # Canvas Chat Surface
 
@@ -89,7 +89,7 @@ Implementation task issues (in execution order):
 
 | Task | Issue | Status |
 |------|-------|--------|
-| WRITE_SESSION_LOGS | #598 | `agent:ready` |
-| CO_AUTHOR_NOTE_BODY | #599 | `agent:blocked` on #598 |
-| GATE_GOVERNANCE_BEARING_MUTATIONS | #600 | `agent:blocked` on #599 |
-| EXPOSE_CANVAS_SESSION_API | #601 | `agent:blocked` on #600 |
+| WRITE_SESSION_LOGS | #598 | `closed` |
+| CO_AUTHOR_NOTE_BODY | #599 | `closed` |
+| GATE_GOVERNANCE_BEARING_MUTATIONS | #600 | `closed` |
+| EXPOSE_CANVAS_SESSION_API | #601 | `closed` |
