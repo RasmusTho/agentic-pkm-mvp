@@ -16,7 +16,7 @@ related_docs:
   - docs/ARCHITECTURE.md
 ---
 
-State: Active specification index for the v6.0 `SEPARATING_PERSISTENCE_SURFACES` capability. Docs-only work. No code, no schema, no file moves on disk.
+State: Delivered docs/specification index for the v6.0 `SEPARATING_PERSISTENCE_SURFACES` capability. The parent feature was filed as GitHub Issue #394 and closed on 2026-04-17. This directory remains the local spec/source surface; GitHub is the authoritative backlog and validation record. Docs-only work. No code, no schema, no file moves on disk.
 
 # Separating Persistence Surfaces Specification
 
@@ -122,4 +122,4 @@ See [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md) for the full feature-issu
 
 ---
 
-**Status:** Specification ready. Docs-only. No GitHub issues created from this directory yet.
+**Status:** Docs/spec lane delivered and parent feature issue #394 closed. This directory does not itself claim the broader runtime migration as fully complete; companion-note, receipt, and persistence-surface runtime truth remains tracked separately in owner docs and GitHub issue history.
