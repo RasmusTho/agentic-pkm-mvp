@@ -1,3 +1,4 @@
+State: Created on GitHub as Issue #394 and closed on 2026-04-17. This file is the local source for the delivered parent feature issue; GitHub is the authoritative backlog and validation record.
 ---
 name: Parent Feature Issue - Separating Persistence Surfaces
 description: Feature-breakdown parent issue body text for the v6.0 capability that names and separates writing, retention, and system persistence surfaces
@@ -7,6 +8,8 @@ source_anchor: docs/plans/V60_ARCHITECTURE_TARGET.md :: Pillar 4, Delta 4, Pilla
 ---
 
 # [Feature] Separate writing, retention, and system persistence surfaces
+
+> **Created and delivered.** GitHub Issue #394: https://github.com/RasmusTho/agentic-pkm-mvp/issues/394. Keep this file aligned with the issue contract and delivered capability history; the live GitHub issue remains the authoritative backlog and validation surface.
 
 ## Context
 

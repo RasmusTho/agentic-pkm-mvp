@@ -1,10 +1,12 @@
-State: Parent feature issue draft. Docs-only capability breakdown exists; GitHub feature issue creation and implementation remain future work.
+State: Created on GitHub as Issue #645 and closed on 2026-04-26. This file is the local source for the delivered parent feature issue; GitHub is the authoritative backlog and validation record.
+
+> **Created and delivered.** GitHub Issue #645: https://github.com/RasmusTho/agentic-pkm-mvp/issues/645. Keep this file aligned with the issue contract and delivered capability history; the live GitHub issue remains the authoritative backlog and validation surface.
 
 ## Context
 
 Priority 2b in `docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md` requires separating scope, sphere, and situated identity as distinct properties. The capability currently has no specification directory, so implementation cannot be safely decomposed into bounded, independently verifiable tasks.
 
-This parent issue draft defines the capability-level contract and acceptance path for the new `docs/SCOPE_SPHERE_SITUATED_IDENTITY/` specification.
+This parent issue source defines the capability-level contract and acceptance path for `docs/SCOPE_SPHERE_SITUATED_IDENTITY/`, while the closed GitHub feature issue remains the authoritative backlog and validation record.
 
 ## Scope
 

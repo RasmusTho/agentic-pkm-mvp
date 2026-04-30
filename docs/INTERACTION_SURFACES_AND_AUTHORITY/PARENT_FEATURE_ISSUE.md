@@ -1,8 +1,9 @@
+State: Created on GitHub as Issue #393 and closed on 2026-04-20. This file is the local source for the delivered parent feature issue; GitHub is the authoritative backlog and validation record.
 ---
 name: Interaction surfaces and authority boundaries for Panel, Chat, and automation
 description: Parent feature issue body for the v6.0 capability that names Panel, Chat, and Automation as distinct interaction surfaces with explicit authority boundaries and reconciles the Chat read-only-vs-canvas contradiction
 type: parent-feature-issue
-authority: Capability-level contract; not yet filed as a GitHub issue
+authority: Capability-level contract mirrored from closed GitHub Issue #393; GitHub is authoritative for backlog and validation state
 parent_capability: Interaction surfaces and authority boundaries
 source_anchors:
   - docs/plans/V60_ARCHITECTURE_TARGET.md :: Pillar 10, Pillar 10A
@@ -12,6 +13,8 @@ source_anchors:
 ---
 
 # [Feature] Interaction surfaces and authority boundaries for Panel, Chat, and automation
+
+> **Created and delivered.** GitHub Issue #393: https://github.com/RasmusTho/agentic-pkm-mvp/issues/393. Keep this file aligned with the issue contract and delivered capability history; the live GitHub issue remains the authoritative backlog and validation surface.
 
 ## Context
 

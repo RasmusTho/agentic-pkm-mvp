@@ -337,7 +337,7 @@ feature-breakdown has already produced spec directories for four of the five pri
 | --- | --- | --- |
 | 1 — Salience and staleness signals | `docs/FINDING_AND_REORIENTING/` | Done: README + task files + `PARENT_FEATURE_ISSUE.md` on disk |
 | 2a — Remove `domain` path-fallback | (none; single bounded v5.x fix) | Not applicable — direct `docs-to-issue` |
-| 2b — Scope / sphere / situated-identity split | `docs/SCOPE_SPHERE_SITUATED_IDENTITY/` | In progress: feature-breakdown done; parent feature issue #645 open; slice issues #651–654 created; SSI-01 (payload contract) delivered via PR #660 |
+| 2b — Scope / sphere / situated-identity split | `docs/SCOPE_SPHERE_SITUATED_IDENTITY/` | Delivered at the docs/spec layer: parent feature issue #645 closed; slice issues #651–654 closed via PRs #660/#666/#671/#675 |
 | 3 — Receipts and SUGGEST/APPLY gating | `docs/SEPARATING_PERSISTENCE_SURFACES/` (receipt side) and `docs/INTERACTION_SURFACES_AND_AUTHORITY/` (gating side) | Done on both; coordination across the two parent feature issues needed |
 | 4 — Retrieval as capability | `docs/FINDING_AND_REORIENTING/` (shared with Priority 1) | Done: `DEFINE_RETRIEVAL_CAPABILITY_CONTRACT.md` + `DEPRECATE_ASK_AS_ARCHITECTURAL_CENTER.md` authored |
 | 5 — Minimal commitment-runtime surface | `docs/COMMITMENT_AS_FIRST_CLASS/` | Done, including `RECONCILE_WITH_V56_COMMITMENT_SLICE.md` aligned with the absorption decision in Priority 5 above |
@@ -357,7 +357,7 @@ Per `.codex/skills/README.md`, route each priority as follows:
    sequencing and dependency constraints across capabilities; it does not override the task shape
    inside any capability.
 3. **Priority 2a** (DELIVERED) requires no further issue creation. It is documented here for traceability only.
-4. **Priority 2b** capability directory exists at `docs/SCOPE_SPHERE_SITUATED_IDENTITY/` (feature-breakdown done). Parent feature issue #645 is open. Route slice issues through the `issue-to-code` skill; four slice issues (#651–654) are in progress; SSI-01 (payload contract, #651) delivered via PR #660.
+4. **Priority 2b** capability directory exists at `docs/SCOPE_SPHERE_SITUATED_IDENTITY/` (feature-breakdown done). Parent feature issue #645 is closed. Slice issues #651–654 are closed via PRs #660/#666/#671/#675, so this lane is complete at the docs/spec layer and should not be read as an active implementation queue.
 5. **Cross-capability dependency enforcement** lives in the Issue `Context` field, not in this
    plan. When creating a Priority 3 parent feature issue, its `Context` must cite the Priority 1
    parent issue as a dependency so ordering is visible in GitHub state, not only here.

@@ -119,6 +119,7 @@ AC verifiability rule for task specs:
 ## Real-life operating rules
 
 - Use the parent feature issue as the live validation hub after the first task merges.
+- After creating or closing the parent feature issue on GitHub, update the local `docs/{CAPABILITY}/PARENT_FEATURE_ISSUE.md` header so it reflects the live issue number and lifecycle state instead of remaining a pre-filing draft.
 - Record post-merge validation as issue-body checklist progress or issue comments with links to runs, receipts, and operator notes.
 - Keep owner docs stable while evidence is still accumulating.
 - Open or update an owner-doc PR only when acceptance changes the supported truth the repo claims.
@@ -169,6 +170,8 @@ Trigger this skill when any of the following are true:
    - owner-doc promotion trigger
 7. If docs are still too vague, stop at `enrich-docs` instead of creating weak specs.
 8. Create or update the parent feature issue on GitHub (if needed).
+   - If you create it, immediately update the local `PARENT_FEATURE_ISSUE.md` to state that the GitHub issue now exists and is the authoritative backlog/validation surface.
+   - If the GitHub parent issue later closes, update the local `PARENT_FEATURE_ISSUE.md` again so it no longer reads as an unfiled or active draft.
 9. Create or update GitHub issues from the task specifications, in dependency order.
 10. Keep labels and Project status truthful:
     - parent feature issue normally starts as `Backlog` plus `agent:needs-human`
