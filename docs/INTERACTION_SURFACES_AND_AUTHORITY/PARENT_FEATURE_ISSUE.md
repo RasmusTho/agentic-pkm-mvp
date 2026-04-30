@@ -143,4 +143,4 @@ The capability is validated when:
 
 ---
 
-**Status:** Parent feature issue body drafted. Not yet filed on GitHub. Filing is explicitly deferred per the capability's docs-only scope.
+**Status:** Docs/spec parent delivered. Filed as GitHub Issue #393 and closed on 2026-04-20. This local file remains the source issue body; GitHub is the authoritative backlog and validation record.

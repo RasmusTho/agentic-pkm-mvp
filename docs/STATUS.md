@@ -48,9 +48,12 @@ Validation posture note:
 Use `docs/ARCHITECTURE.md` for current-state runtime questions. Use `docs/ROADMAP.md` and the v6 plans for target-state design direction questions. Do not read v5.5 as an active work queue; new implementation work is sliced against v6 target-state docs.
 
 Interaction-surface status: Panel is the shipped command-oriented mutation surface. A read-only Chat
-cognition scaffold exists for planning/decomposition through the shared `ReasoningFacade`; it does
-not execute tools, write notes, emit outbox mutations, or emit promotion/action intents. Canvas-Chat
-co-editing and hybrid Panel/Chat integration remain v6 future surfaces, governed by
+cognition scaffold exists for planning/decomposition through the shared `ReasoningFacade`. In
+addition, a flag-gated canvas session slice exists for direct in-place note-body editing plus
+governance routing (`CANVAS_ENABLED=1`; CLI/API session flow; body-only edits, frontmatter and
+cross-note mutations rejected or routed through governance). This canvas slice is not part of the
+SoT v5.5 baseline/default runtime posture, and broader canvas-Chat co-editing plus hybrid
+Panel/Chat integration remain v6/non-baseline surfaces governed by
 `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md`,
 `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md`, and
 `docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md`.
