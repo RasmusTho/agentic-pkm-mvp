@@ -122,16 +122,19 @@ Capability-level acceptance — the point at which the operator can honestly cla
 
 These accumulate as validation receipts on the parent feature issue (per [feature-breakdown SKILL.md §Real-life evidence surfaces](../../.codex/skills/feature-breakdown/SKILL.md)) before any owner-doc promotion claims "release channels are supported."
 
-## Promotion skills (to be authored, not part of this spec)
+## Promotion skills
 
-Once this capability boundary is accepted, a bounded set of repo-local skills will implement the operator workflow. One skill per job, per the human-first one-agent-one-job principle:
+The repo-local operator skills now exist as downstream governance artifacts. This spec still owns the
+capability boundary and invariants; the skills consume those contracts rather than redefine them. One
+skill per job, per the human-first one-agent-one-job principle:
 
 - `prepare-promotion` — produce the promotion plan (code/migration/config delta, risk notes, AC status).
 - `execute-promotion` — move the `stable` ref, apply migrations, restart prod.
 - `verify-promotion` — post-promotion health, status, and smoke checks.
 - `rollback-promotion` — reverse ref, reverse reversible migrations, restart.
 
-The skills are downstream artifacts. Their shape is specified in task files, not here.
+The skills remain downstream artifacts. Their shape is specified in the task files and the skill
+entrypoints under `.codex/skills/`, not redefined here.
 
 ## Out of scope
 
@@ -149,9 +152,10 @@ The skills are downstream artifacts. Their shape is specified in task files, not
 - **[DB_SCHEMA.md](../DB_SCHEMA.md)** owns schema definition; migration reversibility classification lives there, referenced during the promotion prepare phase.
 - **v6.0 priorities** ([V60_COGNITIVE_SUPPORT_PRIORITIES.md](../plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md)) are orthogonal to this capability. Release channels unblock the operator from actually running the system while the v6.0 priorities continue being built. Without release channels, every v6.0 priority destabilizes the same running instance the operator is trying to use.
 
-## Task files (to be authored by feature-breakdown)
+## Task files
 
-This README is the capability boundary. Task files under this directory will be produced by running [feature-breakdown](../../.codex/skills/feature-breakdown/SKILL.md) against this spec. Candidate task names (not finalized — feature-breakdown decides):
+This README is the capability boundary. Task files under this directory are now authored and should
+be treated as the bounded specification set for the release-channels capability:
 
 - `DEFINE_CHANNEL_IDENTITY.md` — channel identity, code ref, DB, vault, runtime-artifact mapping.
 - `SPLIT_POSTGRES_PER_CHANNEL.md` — `pkm_prod` / `pkm_dev` / `pkm_test` logical databases, connection-string resolution through the environment resolver, migration entry points.
@@ -161,4 +165,5 @@ This README is the capability boundary. Task files under this directory will be 
 - `DEFINE_ROLLBACK_CONTRACT.md` — previous-stable resolution, migration reversal, acceptance of vault immutability.
 - `UPDATE_ENVIRONMENTS_DOC.md` — cross-doc consistency with [ENVIRONMENTS.md](../ENVIRONMENTS.md) after this spec lands.
 
-Issue creation for these tasks and the promotion skills themselves is a later step, not part of this docs-authoring pass.
+Feature acceptance, operator validation receipts, and any remaining follow-up issue work still live
+outside this README.
