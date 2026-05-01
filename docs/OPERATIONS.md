@@ -5,8 +5,8 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-04-23
-Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/PANEL_AGENT.md, docs/STATUS.md, docs/runbooks/UAT_PANEL_WATCHER.md, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/settings/validate.py, app/watcher/registry.py, app/workers/outbox_worker.py, tests/cli/test_sync_latency_harness.py, tests/events/test_outbox_consumer_contract.py, tests/settings/test_panel_watcher_config_validation.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #547/#553/#581/#583, current repo state at 3846449 on 2026-04-23, and closed issues #546/#570/#572
+Last reviewed: 2026-05-01
+Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/PANEL_AGENT.md, docs/STATUS.md, docs/RELEASE_CHANNELS/README.md, docs/runbooks/UAT_PANEL_WATCHER.md, .codex/skills/prepare-promotion/SKILL.md, .codex/skills/execute-promotion/SKILL.md, .codex/skills/verify-promotion/SKILL.md, .codex/skills/rollback-promotion/SKILL.md, app/api/routes/canvas.py, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/settings/validate.py, app/watcher/registry.py, app/workers/outbox_worker.py, tests/api/test_canvas_api.py, tests/cli/test_canvas_cli.py, tests/cli/test_sync_latency_harness.py, tests/events/test_outbox_consumer_contract.py, tests/settings/test_panel_watcher_config_validation.py, Makefile, scripts/verify_runtime_stack.sh, targeted canvas verification on 2026-05-01, and current repo state at 60f0811 on 2026-04-26
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -24,6 +24,7 @@ Reading order:
 5. Use `docs/runbooks/` only for task-specific walkthroughs after you have identified the affected runtime surface.
 6. Use `docs/ENVIRONMENTS.md` when the question is whether behavior belongs to `dev`, `test`, `prod`, or a boundary between them.
 7. Use the parallel-stack recipe in `docs/ENVIRONMENTS.md` when you need to run `dev`, `test`, and `prod` Compose stacks simultaneously on one machine.
+8. Use `docs/RELEASE_CHANNELS/README.md` plus the promotion skills when the question is stable/dev channel promotion, rollback, or prod-checkout pinning.
 
 CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
@@ -33,6 +34,11 @@ CLI note:
 - Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory (supporting `--dry-run`).
 - Commit the bump with `chore(version): bump to X.Y.Z`, then create an annotated tag using `python scripts/tag_release.py [--dry-run|--push]` (tags default to `v<version>`).
 - Share noteworthy changes after tagging; the bump script already appends to the decision log.
+- App-version bumps and git tags are separate from stable-channel promotion. When moving the `stable`
+  ref, rehearsing rollback, or validating prod after a promotion, use
+  `docs/RELEASE_CHANNELS/README.md` plus `prepare-promotion`, `execute-promotion`,
+  `verify-promotion`, and `rollback-promotion`. Treat release channels as an operator-governed
+  capability with outstanding feature acceptance, not as a fully accepted baseline workflow.
 
 ## Runtime prerequisites (registry watcher)
 - `DATABASE_URL` or `DB_DSN` is required in runtime; startup must fail fast if missing.
@@ -266,6 +272,7 @@ Use `python -m app.cli <command> --help` for the full, current argument list. Th
 | `watcher run` | Registry watcher loop for the runtime path. |
 | `settings-validate` | Validate settings artifacts and compiled settings. |
 | `settings-explain` | Show settings provenance and effective resolution. |
+| `canvas open|edit|close` | Operate the bounded canvas co-authoring surface when `CANVAS_ENABLED=1`. |
 | `llm check` | Probe LLM/embedding endpoint reachability. |
 | `pipe <note.md>` | Run ingest for a note/path outside the watcher loop. |
 | `make verify-runtime` | Check container health plus in-container runtime health/status for the live Docker stack. |
@@ -273,6 +280,7 @@ Use `python -m app.cli <command> --help` for the full, current argument list. Th
 Flow mapping:
 - `python -m app.cli watcher run` -> watcher runtime
 - `python -m app.cli ask` -> ASK flow (see `docs/HUMAN-FLOWS.md`)
+- `python -m app.cli canvas open|edit|close` -> bounded canvas co-authoring surface (flagged; see `docs/HUMAN-FLOWS.md` and `docs/CANVAS_CHAT_SURFACE/README.md`)
 - `python -m app.cli runtime-loop` -> legacy/dev-only runtime path, not part of current baseline operations
 
 Useful examples:
