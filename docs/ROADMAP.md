@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
 Last reviewed: 2026-05-01
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/RETRIEVAL.md, docs/AGENT_ISSUE_DISPATCHER.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/RELEASE_CHANNELS/README.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md, docs/plans/V60_ARCHITECTURE_TARGET.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CHAT_AUTHORITY_BOUNDARY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md, docs/FINDING_AND_REORIENTING/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, AGENTS.md, .codex/skills/issue-to-code/SKILL.md, .codex/skills/prepare-promotion/SKILL.md, .codex/skills/execute-promotion/SKILL.md, .codex/skills/verify-promotion/SKILL.md, .codex/skills/rollback-promotion/SKILL.md, app/api/routes/canvas.py, app/chat/canvas_writer.py, app/chat/governance_router.py, app/chat/read_only_cognition.py, app/domain/commitments.py, app/orchestrator/executor.py, app/orchestrator/mcp_tool_provider.py, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orientation/runtime.py, app/retrieval/capability.py, tests/api/test_canvas_api.py, tests/chat/test_canvas_writer.py, tests/chat/test_governance_router.py, tests/chat/test_read_only_chat_cognition.py, tests/cli/test_canvas_cli.py, tests/commitments/test_commitment_queries.py, tests/orchestration/test_plan_timeout_budget.py, tests/orchestration/v2/test_plan_timeout_budget.py, tests/orientation/test_orientation_runtime.py, tests/retrieval/test_retrieval_capability.py, tests/retrieval/test_relation_provenance_metadata.py, tests/tools/test_mcp_tool_provider.py, merged PRs #602/#605/#608/#618/#619/#626/#633/#635/#641/#642/#643/#644/#650/#660, targeted canvas verification on 2026-05-01, and current repo state at 60f0811 on 2026-04-26
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/OPERATIONS.md, docs/RETRIEVAL.md, docs/AGENT_ISSUE_DISPATCHER.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/RELEASE_CHANNELS/README.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md, docs/plans/AUTONOMY_AND_SYNC_VALIDATION.md, docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md, docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md, docs/plans/V60_ARCHITECTURE_TARGET.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CHAT_AUTHORITY_BOUNDARY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md, docs/FINDING_AND_REORIENTING/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, AGENTS.md, .codex/skills/issue-to-code/SKILL.md, .codex/skills/prepare-promotion/SKILL.md, .codex/skills/execute-promotion/SKILL.md, .codex/skills/verify-promotion/SKILL.md, .codex/skills/rollback-promotion/SKILL.md, app/api/routes/canvas.py, app/chat/canvas_writer.py, app/chat/governance_router.py, app/chat/read_only_cognition.py, app/chat/session_log.py, app/domain/commitments.py, app/orchestrator/executor.py, app/orchestrator/mcp_tool_provider.py, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orientation/runtime.py, app/retrieval/capability.py, tests/api/test_canvas_api.py, tests/chat/test_canvas_writer.py, tests/chat/test_governance_router.py, tests/chat/test_read_only_chat_cognition.py, tests/chat/test_session_log_writer.py, tests/cli/test_canvas_cli.py, tests/commitments/test_commitment_queries.py, tests/orchestration/test_plan_timeout_budget.py, tests/orchestration/v2/test_plan_timeout_budget.py, tests/orientation/test_orientation_runtime.py, tests/retrieval/test_retrieval_capability.py, tests/retrieval/test_relation_provenance_metadata.py, tests/tools/test_mcp_tool_provider.py, merged PRs #602/#605/#608/#618/#619/#626/#633/#635/#641/#642/#643/#644/#650/#660, targeted canvas verification on 2026-05-01, and current repo state at 60f0811 on 2026-04-26
 
 # Roadmap — Strategic Control
 
@@ -54,6 +54,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - A2A/MCP orchestration routing with deterministic adapters and audit; current in-process A2A routing is implemented and covered, and parent lifecycle issue #359 is closed. A local registry-backed MCP ToolProvider boundary is implemented, and a flagged remote MCP multiplex seam with deterministic local fallback now exists; dynamic discovery and broader remote server integration remain separate follow-ups.
   - Orchestrator V2 timeout retry discriminator cleanup shipped via #456 / PR #458; possible later work is plan-level timeout budgets or repo-wide A2A/runtime delivery SLA only if owner docs promote that scope.
   - Runtime health and docs-index validation hardening: #334/#365 shipped deterministic checks; #441/PR #439 restored the richer runtime verifier contract and made the docs-index guard compatible with repo-local v6 spec metadata.
+  - Canvas-session scaffolding is shipped in bounded form through #598/#599/#600/#601: session logs, body-scoped co-authoring, governance-intent routing, and a gated API/CLI surface now exist behind `CANVAS_ENABLED`. Full owner-doc promotion and baseline support remain pending on parent issue #597 rather than reading this as accepted canvas-Chat delivery.
 - **Later**
   - Watcher auto-exec of panel plans with guardrails and rollback; richer panel actions (summary/reply) via tool/MCP boundary.
   - PanelAgent 2.0 expansion beyond the current slices remains bounded even after real-vault acceptance; break new behavior into smaller tracked slices first.
@@ -71,7 +72,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
     - Separate retrieval, orientation, and resurfacing as related but distinct runtime concerns.
     - Clarify authority across writing, retention, system, runtime, and execution-record surfaces so receipt-bearing actions remain inspectable.
     - Treat current domain/zone/mirror/promotion findings as current-state bug fixes or enabling changes unless a later implementation slice explicitly realizes the v6 target state.
-  - `docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md` is the active sequencing plan for turning the v6 capability specs into cognitive-support work. It orders salience/staleness signals, scope/sphere/identity split, receipts plus SUGGEST/APPLY gating, retrieval capability extraction, and minimal commitment runtime work without claiming those surfaces are already shipped.
+  - `docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md` remains the active sequencing plan for turning the v6 capability specs into cognitive-support work. Priority 1 (salience/staleness), Priority 2 (scope/sphere/identity), Priority 3 (receipts plus SUGGEST/APPLY gating), and Priority 4 (retrieval capability extraction) are now closed on GitHub; Priority 5 (minimal commitment runtime) remains the active open follow-up in #688.
 
 ## Capability-Based Architecture & Agent Evolution
 
@@ -88,7 +89,7 @@ Decisions already fixed for this direction:
 - Retrieval is treated as a reusable capability rather than a standalone agent.
 - Interaction is primary on the user-facing side; retrieval, reasoning, ingestion, and indexing remain foundational capabilities used by different interaction surfaces and automation paths.
 - Deep Agents start only after structural separation is in place.
-- Deep Agents start in a read-only Chat slice because read-only cognition is the safer first rollout posture; Chat itself is a canvas-shaped interaction surface that may later carry governed mutation rights through the gated execution pipeline.
+- Deep Agents start in a read-only Chat slice because read-only cognition is the safer first rollout posture; a bounded canvas-session scaffold now exists for dev/test validation behind `CANVAS_ENABLED`, but full Chat surface support and governed mutation promotion remain future acceptance work under #597.
 - Execution remains governed and mediated; reasoning alone must not trigger mutation.
 - The long-term system spans manual through automated and reactive through proactive behavior under governance.
 
@@ -274,3 +275,29 @@ Platform-state note:
 
 - repo-side enforcement lives in `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/issue-pr-governance.yml`, and `.github/github-governance.yml`
 - GitHub labels, Project fields/views, and Project automation must match that contract
+
+## Release Channels
+
+<!-- release-channels -->
+
+The release-channel model gives the operator unambiguous answers to "what is running in prod right now?" and "how does prod differ from dev?" It is independent of the existing `dev`/`prod` environment layer, which controls code-execution path and settings resolution.
+
+### Channel identity (shipped — Issue #610)
+
+Three canonical channels — `stable`, `dev`, `test` — are defined. Each channel is identified by four mandatory properties: code ref, DB name, vault root, and runtime-artifact directory. The contract is implemented in `app/config/channel.py` and enforced at construction time via `ChannelIdentity`.
+
+| Channel  | DB         | Vault root          | Artifacts  |
+|----------|------------|---------------------|------------|
+| `stable` | `pkm_prod` | operator-configured | `tmp`      |
+| `dev`    | `pkm_dev`  | `vault-dev`         | `tmp-dev`  |
+| `test`   | `pkm_test` | `vault-test`        | `tmp-test` |
+
+Full identity contract: [`docs/RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md`](RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md)
+
+### Remaining release-channel work (planned)
+
+- **DB-per-channel isolation** — resolver-level DB naming and two-layer isolation (Issue #611, verification pending).
+- **Promotion plan contract** — `prepare-promotion` plan generation with deterministic receipts (Issue #612).
+- **Migration reversibility classification** — classify each migration as reversible or forward-only before promotion (spec: `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`).
+- **Concurrency rule** — single-active-deployment enforcement per channel (spec: `docs/RELEASE_CHANNELS/DEFINE_CONCURRENCY_RULE.md`).
+- **Rollback contract** — operator-safe rollback to previous stable ref (spec: `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`).

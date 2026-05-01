@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-05-01
-Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/RETRIEVAL.md, docs/ROADMAP.md, docs/AGENT_ISSUE_DISPATCHER.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/RELEASE_CHANNELS/README.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CHAT_AUTHORITY_BOUNDARY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md, docs/FINDING_AND_REORIENTING/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, AGENTS.md, .codex/skills/issue-to-code/SKILL.md, app/api/routes/canvas.py, app/chat/canvas_writer.py, app/chat/governance_router.py, app/chat/read_only_cognition.py, app/cli/__init__.py, app/domain/commitments.py, app/orchestrator/executor.py, app/orchestrator/mcp_tool_provider.py, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orientation/runtime.py, app/retrieval/capability.py, app/watcher/registry.py, app/workers/outbox_worker.py, tests/api/test_canvas_api.py, tests/chat/test_canvas_writer.py, tests/chat/test_governance_router.py, tests/chat/test_read_only_chat_cognition.py, tests/cli/test_canvas_cli.py, tests/commitments/test_commitment_queries.py, tests/events/test_event_envelope_versioning.py, tests/events/test_outbox_consumer_contract.py, tests/orchestration/test_plan_timeout_budget.py, tests/orchestration/v2/test_plan_timeout_budget.py, tests/orientation/test_orientation_runtime.py, tests/retrieval/test_retrieval_capability.py, tests/retrieval/test_relation_provenance_metadata.py, tests/tools/test_mcp_tool_provider.py, Makefile, merged PRs #602/#605/#608/#618/#619/#626/#633/#635/#641/#642/#643/#644/#650/#660, targeted canvas verification on 2026-05-01, and current repo state at 60f0811 on 2026-04-26
+Last verified against: docs/ENVIRONMENTS.md, docs/STATUS.md, docs/PANEL_AGENT.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/OPERATIONS.md, docs/RETRIEVAL.md, docs/ROADMAP.md, docs/AGENT_ISSUE_DISPATCHER.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/RELEASE_CHANNELS/README.md, docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CHAT_AUTHORITY_BOUNDARY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md, docs/FINDING_AND_REORIENTING/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, AGENTS.md, .codex/skills/issue-to-code/SKILL.md, app/api/routes/canvas.py, app/chat/canvas_writer.py, app/chat/governance_router.py, app/chat/read_only_cognition.py, app/chat/session_log.py, app/cli/__init__.py, app/domain/commitments.py, app/orchestrator/executor.py, app/orchestrator/mcp_tool_provider.py, app/orchestrator/runtime.py, app/orchestrator/v2_runtime.py, app/orientation/runtime.py, app/resurfacing/runtime.py, app/retrieval/capability.py, app/watcher/registry.py, app/workers/outbox_worker.py, tests/api/test_canvas_api.py, tests/chat/test_canvas_writer.py, tests/chat/test_governance_router.py, tests/chat/test_read_only_chat_cognition.py, tests/chat/test_session_log_writer.py, tests/cli/test_canvas_cli.py, tests/commitments/test_commitment_queries.py, tests/events/test_event_envelope_versioning.py, tests/events/test_outbox_consumer_contract.py, tests/orchestration/test_plan_timeout_budget.py, tests/orchestration/v2/test_plan_timeout_budget.py, tests/orientation/test_orientation_runtime.py, tests/resurfacing/test_resurfacing_runtime.py, tests/retrieval/test_retrieval_capability.py, tests/retrieval/test_relation_provenance_metadata.py, tests/retrieval/test_salience_signals.py, tests/tools/test_mcp_tool_provider.py, Makefile, merged PRs #602/#605/#608/#618/#619/#626/#633/#635/#641/#642/#643/#644/#650/#660, targeted canvas verification on 2026-05-01, and current repo state at 60f0811 on 2026-04-26
 
 # Architecture — SoT v5.5 Reality-MVP baseline (v5.6 delivered, v6 active design)
 
@@ -24,7 +24,7 @@ The current architecture is a local-first Mimer runtime, not the full Yggdrasil 
   PanelAgent, ASK, status/health, and guarded note mutation;
 - the current data shape should be read through the three artifact surfaces: human vault notes,
   system companion/continuity artifacts, and rebuildable runtime DB/index projections;
-- `ReasoningFacade`, LangGraph, A2A, MCP descriptors, and Orchestrator V2 are real repo surfaces,
+- `ReasoningFacade`, LangGraph, A2A, MCP descriptors, canvas-session scaffolding, and Orchestrator V2 are real repo surfaces,
   but their current status is mixed: some are active runtime paths, some are flagged pilots, and
   some are scaffolding or reference contracts rather than broad production rollout;
 - the planned architecture continues toward capability-based composition, separate Panel and Chat
@@ -41,7 +41,7 @@ Proposal:
   the V2 timeout discriminator bug (#456), and v6-driven current-state domain/zone bugs
   (#435/#436/#437),
 - keep v6.0 as the target-state architecture lane for interaction/cognition/execution/memory/governance
-  separation, capability reuse, Chat canvas planning, Deep Agent introduction, commitments, and richer
+  separation, capability reuse, Chat canvas planning and bounded scaffolding, Deep Agent introduction, commitments, and richer
   context/relation modeling.
 
 Non-current material is deliberately not restated here: historical system maps, `AMG`/`SetDB`
@@ -417,6 +417,7 @@ All current runtime surfaces build on the same Store abstraction (ObjectStore, V
 | A2A | Internal schema and audit helpers are current-state contracts (`agent.request.created`, `agent.response.created`, `agent.error.created`); routed in-process agent calls exist where handlers are registered. | No production A2A transport, retry queue, dead-letter queue, or repo-wide delivery SLA is claimed. |
 | MCP/tools | Descriptor registry, registry-backed ToolProvider boundary, validation, deterministic/mock execution, internal tools, gated real `mcp.vault.append_note`, and an optional remote multiplex seam with deterministic local fallback exist. | Dynamic discovery, broader remote server integration, and richer versioning are planned. |
 | Chat / Deep Agents | A read-only Chat cognition scaffold exists for planning/decomposition through the shared `ReasoningFacade`, and a separate bounded canvas co-authoring slice is shipped behind `CANVAS_ENABLED`: session logs, in-place note-body editing, governance-router handoff for mutation-bearing requests, and API/CLI session lifecycle entrypoints all exist. | Broader Chat cognition, hybrid Panel/Chat mutation, and Deep Agent execution remain future work; any Chat or Deep Agent mutation still routes through governed execution. |
+| Orientation / Resurfacing / Salience | Minimal read-only runtime seams delivered: orientation frame (`app/orientation/runtime.py`, returns `leave_point`/`open_items`/`notable_change` without a query), resurfacing candidates (`app/resurfacing/runtime.py`, emits "why now" signal provenance without mutation), and opt-in derived salience/staleness signal payload on retrieval (`include_signal_payload=True`). Contracts accepted per FINDING_AND_REORIENTING spec (#392); no durable salience field is stored on any artifact. | Full interaction-surface integration (Panel/Chat consumption), relation-aware signal fusion, and resurfacing-triggered mutations remain future work outside these capability seams. |
 | Satellite sync | Instance/device plumbing and sync-latency validation harnesses exist. | Full satellite-sync behavior remains planned, not a current runtime claim. |
 
 ## Operational and Implementation Detail
@@ -462,9 +463,7 @@ This section describes the intended v6 direction. It does not override the locke
 - LangGraph is the current and planned control-plane mechanism for deterministic orchestration and explicit runtime state progression.
 - Deep Agents are a future cognition mechanism for planning, decomposition, and multi-step reasoning. They are introduced only after structural separation is in place.
 - The capability layer provides reusable functions such as retrieval, reranking, and context building. Capabilities are shared building blocks, not conceptual centers of the system.
-- Current retrieval capability extraction is bounded to a typed wrapper over the existing hybrid
-  search path. It carries optional provenance, relation, and view-freshness diagnostics as metadata
-  for future surfaces, but relation-aware ranking, orientation, and resurfacing remain future work.
+- Retrieval is now exposed as an explicit typed capability contract (RetrievalRequest/RetrievalResponse) with surface-independent provenance and temporal-validity metadata; ASK remains a consumer of this seam. Minimal read-only runtime seams for orientation (`app/orientation/runtime.py`) and resurfacing (`app/resurfacing/runtime.py`) are delivered as bounded additive capability seams consuming derived signals only; no durable salience field is stored. These are accepted capability boundaries per the FINDING_AND_REORIENTING contracts (#392); relation-aware ranking, full interaction-surface integration (Panel/Chat), and resurfacing-triggered mutations remain future work.
 - The execution layer contains controlled effectors only. Reasoning must not directly mutate notes or trigger execution.
 - The memory/persistence layer is the three-surface model plus backing runtime stores: human vault
   artifacts, system companion/continuity artifacts, and rebuildable runtime projections/indexes.
@@ -507,10 +506,7 @@ hybrid Chat/Panel crossings are bounded by
 
 - Retrieval is a capability, not an agent.
 - Retrieval must be reusable across Panel, Chat, and future cognition surfaces without creating another agent-specific control center.
-- The shipped capability boundary preserves current hybrid retrieval behavior and result ordering;
-  additive relation/provenance inputs and stale/partial-view diagnostics are observable metadata,
-  not ranking authority. Response metadata now includes explicit provenance and temporal-validity
-  flags as part of the retrieval capability contract.
+- The shipped retrieval capability boundary preserves current hybrid retrieval behavior and result ordering; additive relation/provenance inputs and stale/partial-view diagnostics are observable metadata, not ranking authority. Response metadata now includes explicit provenance and temporal-validity flags as part of the retrieval capability contract. Orientation and resurfacing are distinct capability seams with their own contracts; they are not retrieval variants and do not share a result-set or explanation shape with retrieval.
 - Capabilities are reusable, composable, and testable.
 - Agents and orchestration layers invoke capabilities through explicit planning and state transitions.
 - ASK remains functional as a consumer of the extracted retrieval capability seam; this is a runtime
@@ -591,3 +587,29 @@ Guardrails for builder agents:
 
 This GitHub control plane is a development governance layer around the repo-first/docs-as-code workflow.
 It must not be confused with the runtime agent architecture described elsewhere in this document.
+
+## Release Channel Identity
+
+<!-- release-channel-identity -->
+
+A release channel is a named operational build identified by four mandatory properties.
+The channel layer is orthogonal to the existing `dev`/`prod` environment layer:
+- **environment** (`PKM_ENVIRONMENT`) selects the code-execution path and settings profile.
+- **channel** names the operational build and its storage/artifact roots.
+
+### Canonical channels
+
+| Channel  | Code ref    | DB name    | Vault root                  | Runtime artifact dir |
+|----------|-------------|------------|-----------------------------|----------------------|
+| `stable` | `stable`    | `pkm_prod` | operator-configured         | `tmp`                |
+| `dev`    | `main`      | `pkm_dev`  | `vault-dev`                 | `tmp-dev`            |
+| `test`   | `<worktree>`| `pkm_test` | `vault-test`                | `tmp-test`           |
+
+### Identity contract
+
+- All four properties are mandatory and non-empty for a valid channel definition.
+- Channel identity is inspectable without reading code: `python -m app.cli status` and `python -m app.cli settings-explain` must report the active channel including all four properties.
+- The contract is implemented in `app/config/channel.py`. `ChannelIdentity` validates all four properties at construction time; invalid definitions raise `ValueError` with an operator-readable message.
+- Downstream features (promotion, rollback, DB isolation) resolve channel identity through `app.config.channel` rather than scattering individual env-var lookups.
+
+See [`docs/RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md`](RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md) for the full contract spec.

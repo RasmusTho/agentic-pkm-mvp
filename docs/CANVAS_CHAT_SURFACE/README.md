@@ -16,7 +16,7 @@ related_docs:
 
 State: Active specification with bounded implementation shipped behind `CANVAS_ENABLED`. Session logs, in-place body editing, governance-routing, and API/CLI session lifecycle landed via PRs #605/#618/#619/#626; owner-doc promotion now records the surface as materially supported while hybrid Panel/Chat behavior remains future work.
 Owner: v6.0 architecture owner
-Last reviewed: 2026-04-22
+Last reviewed: 2026-04-30
 
 # Canvas Chat Surface
 
@@ -89,7 +89,7 @@ Implementation task issues (in execution order):
 
 | Task | Issue | Status |
 |------|-------|--------|
-| WRITE_SESSION_LOGS | #598 | closed |
-| CO_AUTHOR_NOTE_BODY | #599 | closed |
-| GATE_GOVERNANCE_BEARING_MUTATIONS | #600 | closed |
-| EXPOSE_CANVAS_SESSION_API | #601 | closed |
+| WRITE_SESSION_LOGS | #598 | `closed` |
+| CO_AUTHOR_NOTE_BODY | #599 | `closed` |
+| GATE_GOVERNANCE_BEARING_MUTATIONS | #600 | `closed` |
+| EXPOSE_CANVAS_SESSION_API | #601 | `closed` |

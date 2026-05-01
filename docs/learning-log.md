@@ -50,3 +50,8 @@ This lets `learning-retrospective` scope its next read to entries since the last
 **Source:** temporal-doc-governance
 **Diverged:** The audit expected high-risk docs to be clean after recent temporal refreshes, but `docs/ARCHITECTURE.md` still contained a merge-conflict marker on `main`.
 **Upstream artifact:** `.codex/skills/pr-integration/SKILL.md` and CI docs checks — add conflict-marker detection to doc validation before merge.
+
+## 2026-04-29 — #683 (CANVAS-01: Write Session Logs)
+**Source:** issue-to-code
+**Diverged:** The issue was filed for unimplemented work, but `app/chat/session_log.py` and all six acceptance tests already existed in the repo and passed on first run — no implementation was required.
+**Upstream artifact:** `docs-to-issue` / `issue-to-code` — before filing a new issue from a spec, verify that the spec's target module does not already exist in the repo; add a pre-flight check step to the docs-to-issue intake lane.

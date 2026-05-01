@@ -179,12 +179,7 @@ class _RemoteProviderMismatchedDescriptor(_RemoteProviderError):
 def test_remote_multiplex_path_flagged() -> None:
     provider = MCPToolProvider(remote_provider=_RemoteProviderOK())
     executor = MockPlanExecutor()
-    context = _context(
-        {
-            "mcp_remote_multiplex_enable": True,
-            "mcp_remote_allowed_providers": ["remote_multiplex"],
-        }
-    )
+    context = _context({"mcp_remote_multiplex_enable": True})
 
     result = provider.execute_tool_call(
         tool_name="mcp.search.objects",
@@ -202,12 +197,7 @@ def test_remote_multiplex_path_flagged() -> None:
 def test_remote_multiplex_fallback_on_provider_error() -> None:
     provider = MCPToolProvider(remote_provider=_RemoteProviderError())
     executor = MockPlanExecutor()
-    context = _context(
-        {
-            "mcp_remote_multiplex_enable": True,
-            "mcp_remote_allowed_providers": ["remote_multiplex"],
-        }
-    )
+    context = _context({"mcp_remote_multiplex_enable": True})
 
     result = provider.execute_tool_call(
         tool_name="mcp.search.objects",
@@ -222,14 +212,9 @@ def test_remote_multiplex_fallback_on_provider_error() -> None:
     assert result["result"]["status"] == "ok"
 
 
-def test_remote_descriptor_list_error_falls_back_to_local_registry() -> None:
+def test_remote_multiplex_fallback_when_descriptor_lookup_fails() -> None:
     provider = MCPToolProvider(remote_provider=_RemoteProviderListError())
-    context = _context(
-        {
-            "mcp_remote_multiplex_enable": True,
-            "mcp_remote_allowed_providers": ["remote_multiplex"],
-        }
-    )
+    context = _context({"mcp_remote_multiplex_enable": True})
 
     result = provider.execute_tool_call(
         tool_name="mcp.search.objects",
@@ -243,14 +228,9 @@ def test_remote_descriptor_list_error_falls_back_to_local_registry() -> None:
     assert result["result"]["status"] == "ok"
 
 
-def test_remote_error_fallback_re_resolves_local_descriptor() -> None:
+def test_remote_fallback_revalidates_against_local_descriptor() -> None:
     provider = MCPToolProvider(remote_provider=_RemoteProviderMismatchedDescriptor())
-    context = _context(
-        {
-            "mcp_remote_multiplex_enable": True,
-            "mcp_remote_allowed_providers": ["remote_multiplex"],
-        }
-    )
+    context = _context({"mcp_remote_multiplex_enable": True})
 
     result = provider.execute_tool_call(
         tool_name="mcp.search.objects",
@@ -269,12 +249,7 @@ def test_remote_error_without_local_descriptor_raises_tool_unavailable(
 ) -> None:
     monkeypatch.setattr("app.orchestrator.mcp_tool_provider._load_registry_descriptors", lambda: {})
     provider = MCPToolProvider(remote_provider=_RemoteProviderMismatchedDescriptor())
-    context = _context(
-        {
-            "mcp_remote_multiplex_enable": True,
-            "mcp_remote_allowed_providers": ["remote_multiplex"],
-        }
-    )
+    context = _context({"mcp_remote_multiplex_enable": True})
 
     with pytest.raises(StepExecutionError) as exc:
         provider.execute_tool_call(

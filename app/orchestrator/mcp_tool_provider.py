@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Protocol, Sequence
+from typing import Any, Dict, Mapping, Protocol
 
 from app.components.settings.tools_loader import load_tools
 from app.orchestrator.events import emit_mcp_tool_call_finished, emit_mcp_tool_call_started
@@ -34,80 +34,17 @@ class MCPToolProvider:
 
     def list_descriptors(self, tool_settings: Mapping[str, Any] | None = None) -> Dict[str, ToolDescriptor]:
         descriptors = self._list_local_descriptors()
-        discovery = self.get_discovery_diagnostics(tool_settings)
-        for entry in discovery.get("admitted", []):
-            tool_name = entry.get("tool")
-            descriptor = entry.get("descriptor")
-            if isinstance(tool_name, str) and isinstance(descriptor, ToolDescriptor):
-                descriptors[tool_name] = descriptor
+        if _remote_multiplex_enabled(tool_settings) and self.remote_provider is not None:
+            try:
+                remote = dict(self.remote_provider.list_descriptors())
+                descriptors.update(remote)
+            except Exception:
+                # Remote descriptor discovery is best-effort; keep local registry route available.
+                pass
         return self._filter_supported(descriptors)
 
     def get_descriptor(self, tool_name: str, tool_settings: Mapping[str, Any] | None = None) -> ToolDescriptor | None:
         return self.list_descriptors(tool_settings).get(tool_name)
-
-    def get_discovery_diagnostics(self, tool_settings: Mapping[str, Any] | None = None) -> Dict[str, Any]:
-        diagnostics: Dict[str, Any] = {
-            "provider": "remote_multiplex",
-            "enabled": _remote_multiplex_enabled(tool_settings),
-            "discovered": [],
-            "admitted": [],
-            "rejected": [],
-        }
-        if not diagnostics["enabled"]:
-            diagnostics["reason_code"] = "remote_disabled"
-            return diagnostics
-        if self.remote_provider is None:
-            diagnostics["reason_code"] = "remote_unavailable"
-            return diagnostics
-
-        try:
-            remote = dict(self.remote_provider.list_descriptors())
-        except Exception:
-            diagnostics["reason_code"] = "remote_discovery_error"
-            return diagnostics
-
-        admitted_provider = _remote_provider_admitted(tool_settings)
-        diagnostics["provider_admitted"] = admitted_provider
-        if not admitted_provider:
-            diagnostics["reason_code"] = "policy_admission_required"
-        else:
-            diagnostics["reason_code"] = "ok"
-
-        supported = set(MCP_TOOL_DESCRIPTORS.keys())
-        for tool_name, descriptor in remote.items():
-            if not isinstance(tool_name, str) or not isinstance(descriptor, ToolDescriptor):
-                continue
-            discovered_entry = {"tool": tool_name, "provider": "remote_multiplex"}
-            diagnostics["discovered"].append(discovered_entry)
-
-            if tool_name not in supported:
-                diagnostics["rejected"].append(
-                    {
-                        "tool": tool_name,
-                        "provider": "remote_multiplex",
-                        "reason_code": "unsupported_tool",
-                    }
-                )
-                continue
-            if not admitted_provider:
-                diagnostics["rejected"].append(
-                    {
-                        "tool": tool_name,
-                        "provider": "remote_multiplex",
-                        "reason_code": "policy_admission_required",
-                    }
-                )
-                continue
-            diagnostics["admitted"].append(
-                {
-                    "tool": tool_name,
-                    "provider": "remote_multiplex",
-                    "reason_code": "admitted",
-                    "descriptor": descriptor,
-                }
-            )
-
-        return diagnostics
 
     def execute_tool_call(
         self,
@@ -180,15 +117,17 @@ class MCPToolProvider:
         local_descriptors = self._filter_supported(self._list_local_descriptors())
         if route.get("provider_route") != "remote_multiplex" or self.remote_provider is None:
             return local_descriptors.get(tool_name)
-        discovery = self.get_discovery_diagnostics(tool_settings)
-        admitted_descriptors: Dict[str, ToolDescriptor] = {}
-        for entry in discovery.get("admitted", []):
-            admitted_tool = entry.get("tool")
-            admitted_descriptor = entry.get("descriptor")
-            if isinstance(admitted_tool, str) and isinstance(admitted_descriptor, ToolDescriptor):
-                admitted_descriptors[admitted_tool] = admitted_descriptor
+
+        try:
+            remote_descriptors = dict(self.remote_provider.list_descriptors())
+        except Exception:
+            route["provider_route"] = "local_registry"
+            route["provider_route_reason"] = "remote_descriptor_list_error"
+            route["provider_route_attempted"] = "remote_multiplex"
+            return local_descriptors.get(tool_name)
+
         merged = dict(local_descriptors)
-        merged.update(admitted_descriptors)
+        merged.update(self._filter_supported(remote_descriptors))
         return merged.get(tool_name)
 
     def _resolve_route(self, tool_settings: Mapping[str, Any] | None) -> Dict[str, str]:
@@ -196,8 +135,6 @@ class MCPToolProvider:
             return {"provider_route": "local_registry", "provider_route_reason": "remote_disabled"}
         if self.remote_provider is None:
             return {"provider_route": "local_registry", "provider_route_reason": "remote_unavailable"}
-        if not _remote_provider_admitted(tool_settings):
-            return {"provider_route": "local_registry", "provider_route_reason": "policy_admission_required"}
         return {"provider_route": "remote_multiplex"}
 
     def _execute_with_route(
@@ -243,9 +180,13 @@ class MCPToolProvider:
     def _list_local_descriptors(self) -> Dict[str, ToolDescriptor]:
         return _load_registry_descriptors()
 
-    def _filter_supported(self, descriptors: Mapping[str, ToolDescriptor]) -> Dict[str, ToolDescriptor]:
+    def _filter_supported(self, descriptors: Mapping[str, Any]) -> Dict[str, ToolDescriptor]:
         supported = set(MCP_TOOL_DESCRIPTORS.keys())
-        return {name: descriptor for name, descriptor in descriptors.items() if name in supported}
+        return {
+            name: descriptor
+            for name, descriptor in descriptors.items()
+            if name in supported and isinstance(descriptor, ToolDescriptor)
+        }
 
 
 def _load_registry_descriptors() -> Dict[str, ToolDescriptor]:
@@ -307,25 +248,6 @@ def _remote_multiplex_enabled(tool_settings: Mapping[str, Any] | None) -> bool:
     if isinstance(raw, (int, float)):
         return raw != 0
     return False
-
-
-def _remote_provider_admitted(tool_settings: Mapping[str, Any] | None) -> bool:
-    if not isinstance(tool_settings, Mapping):
-        return False
-    allowlist = tool_settings.get("mcp_remote_allowed_providers")
-    return "remote_multiplex" in _normalize_string_list(allowlist)
-
-
-def _normalize_string_list(raw: Any) -> Sequence[str]:
-    if isinstance(raw, str):
-        return [part.strip() for part in raw.split(",") if part.strip()]
-    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
-        result: list[str] = []
-        for item in raw:
-            if isinstance(item, str) and item.strip():
-                result.append(item.strip())
-        return result
-    return []
 
 
 __all__ = ["MCPToolProvider", "RemoteMCPProvider"]

@@ -19,8 +19,7 @@ For v6 planning, read current retrieval migration in stages:
 - enabling work next: the runtime now has a small typed retrieval capability wrapper around current
   hybrid search plus optional provenance, relation, and view-freshness diagnostics. These inputs are
   metadata plumbing only; they do not change ranking, filtering, or default authority.
-- target-state change later: separate retrieval, orientation, and resurfacing, with salience and
-  relation-aware behavior implemented and accepted before it is described as runtime reality.
+- capability seams delivered: retrieval now exposes an explicit typed contract (RetrievalRequest/RetrievalResponse with provenance and temporal-validity metadata per #573); orientation and resurfacing are delivered as minimal read-only runtime seams consuming derived signals only (`app/orientation/runtime.py`, `app/resurfacing/runtime.py` per #576/#577); derived salience/staleness signals are available as opt-in metadata per #571. These are accepted capability boundaries per the FINDING_AND_REORIENTING contracts (#392); no durable salience field is stored. Relation-aware ranking, full interaction-surface integration, and resurfacing-triggered mutations remain future work.
 
 # Retrieval (Current Reality)
 

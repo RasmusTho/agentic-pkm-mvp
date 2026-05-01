@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-05-01
-Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/PANEL_AGENT.md, docs/STATUS.md, docs/RELEASE_CHANNELS/README.md, docs/runbooks/UAT_PANEL_WATCHER.md, .codex/skills/prepare-promotion/SKILL.md, .codex/skills/execute-promotion/SKILL.md, .codex/skills/verify-promotion/SKILL.md, .codex/skills/rollback-promotion/SKILL.md, app/api/routes/canvas.py, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/settings/validate.py, app/watcher/registry.py, app/workers/outbox_worker.py, tests/api/test_canvas_api.py, tests/cli/test_canvas_cli.py, tests/cli/test_sync_latency_harness.py, tests/events/test_outbox_consumer_contract.py, tests/settings/test_panel_watcher_config_validation.py, Makefile, scripts/verify_runtime_stack.sh, targeted canvas verification on 2026-05-01, and current repo state at 60f0811 on 2026-04-26
+Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/PANEL_AGENT.md, docs/STATUS.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/RELEASE_CHANNELS/README.md, docs/runbooks/UAT_PANEL_WATCHER.md, .codex/skills/prepare-promotion/SKILL.md, .codex/skills/execute-promotion/SKILL.md, .codex/skills/verify-promotion/SKILL.md, .codex/skills/rollback-promotion/SKILL.md, app/api/routes/canvas.py, app/chat/canvas_writer.py, app/chat/governance_router.py, app/chat/session_log.py, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/settings/validate.py, app/watcher/registry.py, app/workers/outbox_worker.py, tests/api/test_canvas_api.py, tests/cli/test_canvas_cli.py, tests/cli/test_sync_latency_harness.py, tests/events/test_outbox_consumer_contract.py, tests/settings/test_panel_watcher_config_validation.py, Makefile, scripts/verify_runtime_stack.sh, targeted canvas verification on 2026-05-01, and current repo state at 60f0811 on 2026-04-26
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -29,6 +29,7 @@ Reading order:
 CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
 - Runtime verification note: `make verify-runtime` is the authoritative local operator check for the live Docker stack because it verifies service health plus in-container CLI health, rather than the host shell environment.
+- Canvas note: `python -m app.cli canvas ...` and `/api/canvas/*` now exist as bounded session surfaces behind `CANVAS_ENABLED`; treat them as dev/test-only validation scaffolding until owner-doc promotion closes #597. They are not part of the default production operator surface.
 
 ## Version & Release Workflow
 - Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory (supporting `--dry-run`).

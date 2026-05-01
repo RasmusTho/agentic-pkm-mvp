@@ -85,8 +85,8 @@ def test_next_compact_output(tmp_env, store):
 
 
 def test_next_compact_output_with_task(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    seed_tasks(store)
     code, data = _run(["next", "--agent", "test-agent", "--json"], tmp_env)
     assert code == 0
     assert data["ok"] is True
@@ -104,8 +104,8 @@ def test_next_compact_output_with_task(tmp_env, store):
 # ---------------------------------------------------------------------------
 
 def test_claim_json_output(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
     code, data = _run(
@@ -121,8 +121,8 @@ def test_claim_json_output(tmp_env, store):
 
 
 def test_claim_conflict_returns_error(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
     _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
@@ -138,8 +138,8 @@ def test_claim_conflict_returns_error(tmp_env, store):
 # ---------------------------------------------------------------------------
 
 def test_heartbeat_json_output(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
     _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
@@ -151,8 +151,8 @@ def test_heartbeat_json_output(tmp_env, store):
 
 
 def test_heartbeat_no_lease_error(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
     code, data = _run(["heartbeat", ready.task_id, "--agent", "codex", "--json"], tmp_env)
@@ -167,8 +167,8 @@ def test_heartbeat_no_lease_error(tmp_env, store):
 # ---------------------------------------------------------------------------
 
 def test_release_json_output(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
     _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
@@ -185,8 +185,8 @@ def test_release_json_output(tmp_env, store):
 # ---------------------------------------------------------------------------
 
 def test_block_json_output(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
     code, data = _run(
@@ -205,8 +205,8 @@ def test_block_json_output(tmp_env, store):
 # ---------------------------------------------------------------------------
 
 def test_events_json_output(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
     _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
 
@@ -223,30 +223,13 @@ def test_events_json_output(tmp_env, store):
 
 
 # ---------------------------------------------------------------------------
-# AC: seed-demo creates local demo tasks without GitHub access
-# Verify: test_seed_demo_creates_tasks
-# ---------------------------------------------------------------------------
-
-def test_seed_demo_creates_tasks(tmp_env):
-    _run(["init", "--json"], tmp_env)
-    code, data = _run(["seed-demo", "--json"], tmp_env)
-    assert code == 0
-    assert data["ok"] is True
-    assert data["created"] >= 1
-    for task in data["tasks"]:
-        assert "task_id" in task
-        assert "title" in task
-        assert "status" in task
-
-
-# ---------------------------------------------------------------------------
 # AC: JSON output avoids large blobs and full board dumps
 # Verify: test_json_output_compact
 # ---------------------------------------------------------------------------
 
 def test_json_output_compact(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    seed_tasks(store)
 
     code, data = _run(["queue", "--json"], tmp_env)
     assert code == 0
@@ -273,8 +256,8 @@ def test_init_returns_paths(tmp_env):
 
 
 def test_show_returns_task(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     code, data = _run(["show", tasks[0].task_id, "--json"], tmp_env)
     assert code == 0
     assert data["ok"] is True
@@ -288,8 +271,8 @@ def test_show_not_found(tmp_env, store):
 
 
 def test_update_status(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
     code, data = _run(
         ["update", ready.task_id, "--status", "in_progress", "--json"],
@@ -301,8 +284,8 @@ def test_update_status(tmp_env, store):
 
 
 def test_update_clears_blocked_reason_on_non_blocked_status(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
     _run(["block", ready.task_id, "--reason", "upstream dep", "--json"], tmp_env)
 
@@ -335,8 +318,8 @@ def test_status_command(tmp_env):
 # ---------------------------------------------------------------------------
 
 def test_complete_command(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
     _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
@@ -355,8 +338,8 @@ def test_complete_command(tmp_env, store):
 # ---------------------------------------------------------------------------
 
 def test_complete_wrong_holder(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
     _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
@@ -372,8 +355,8 @@ def test_complete_wrong_holder(tmp_env, store):
 # ---------------------------------------------------------------------------
 
 def test_next_skips_completed(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
     _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
@@ -392,8 +375,8 @@ def test_next_skips_completed(tmp_env, store):
 # ---------------------------------------------------------------------------
 
 def test_complete_event_emitted(tmp_env, store):
-    from app.dispatcher.services import seed_demo
-    tasks = seed_demo(store)
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
     _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
