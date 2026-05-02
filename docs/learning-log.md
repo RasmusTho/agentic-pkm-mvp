@@ -55,3 +55,8 @@ This lets `learning-retrospective` scope its next read to entries since the last
 **Source:** issue-to-code
 **Diverged:** The issue was filed for unimplemented work, but `app/chat/session_log.py` and all six acceptance tests already existed in the repo and passed on first run — no implementation was required.
 **Upstream artifact:** `docs-to-issue` / `issue-to-code` — before filing a new issue from a spec, verify that the spec's target module does not already exist in the repo; add a pre-flight check step to the docs-to-issue intake lane.
+
+## 2026-05-02 — #684/#685/#686 (CANVAS-02/03/04: Co-Author, Gate, API)
+**Source:** verification-and-closure
+**Diverged:** All three remaining canvas slices (#684 co-author body, #685 governance gate, #686 API/CLI) were filed as unimplemented, but `app/chat/canvas_writer.py`, `app/chat/governance_router.py`, API routes, and CLI commands already existed with 19 passing tests. All four spec files had `State: Specification. Not yet implemented.` despite the whole canvas surface having shipped via PRs #605/#618/#619/#626.
+**Upstream artifact:** `docs-to-issue` pre-flight check (now patched in PR #701) + spec-state writeback in `verification-and-closure` (PR #701) — confirms the governance repair was correctly scoped; the three previously-untracked spec State: lines are now promoted in the follow-up docs PR.
