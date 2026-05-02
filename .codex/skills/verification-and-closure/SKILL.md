@@ -155,6 +155,21 @@ When all merge prerequisites are met:
    gh pr view #<PR> --json state,projectItems
    ```
 
+8b. **Spec-state writeback** — for each spec file referenced in the closed issue's `Source Anchors` (pattern: `docs/<CAPABILITY>/<SPEC_FILE>.md`), check whether the file contains a `State:` line that still reads "Not yet implemented" or similar undelivered language. If it does, update that line in place to:
+   ```
+   State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).
+   ```
+   Commit this writeback on the same branch or open a follow-up docs PR if the branch is already merged. This prevents `docs-to-issue` from re-filing already-delivered work.
+
+   ```bash
+   # Example: update State line in a spec file
+   sed -i '' 's/^State: Specification. Not yet implemented./State: Implemented. Delivered by PR #<PR> (issue #<N>, <date>)./' docs/<CAPABILITY>/<SPEC_FILE>.md
+   git add docs/<CAPABILITY>/<SPEC_FILE>.md
+   git commit -m "docs: mark <SPEC_FILE> as implemented (PR #<PR>)"
+   ```
+
+   If the branch is already merged, open a one-commit docs-authoring PR with the writeback instead.
+
 9. **Invoke `post-merge-owner-doc`** on the merged PR. It reads the diff and either opens a docs-only PR, files one bounded follow-up issue, or leaves an explicit "no owner-doc change implied" receipt comment on the closed issue. This is the only owner-doc promotion step; do not duplicate its judgment here.
 
 10. **Assert the receipt exists** before emitting `DELIVERY RECEIPT`. For each issue closed by the PR, run:
