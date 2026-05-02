@@ -278,6 +278,7 @@ def test_llm_decider_uses_note_context_in_prompt(monkeypatch: pytest.MonkeyPatch
     mapping = PanelActionMapping(
         id="promote.evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
         params={"maturity": "evergreen"},
     )
@@ -295,6 +296,7 @@ def test_llm_decider_uses_note_context_in_prompt(monkeypatch: pytest.MonkeyPatch
             PanelActionDescriptor(
                 id="promote.evergreen",
                 intent_type="promotion",
+                trust_verb="APPLY",
                 downstream_event="review.promote.evergreen",
                 labels=["Promote"],
             )

@@ -44,15 +44,16 @@ def _seed_note(
     ObjectStore().save_object(obj, emit_outbox=False, trace_id="trace-runtime-test")
 
 
-def _settings_file(tmp_path: Path, *, action_id: str, label: str, intent_type: str, downstream_event: str) -> Path:
+def _settings_file(tmp_path: Path, *, action_id: str, label: str, intent_type: str, downstream_event: str, trust_verb: str | None = None) -> Path:
     path = tmp_path / "panel-actions.md"
+    trust_verb_line = f'    trust_verb: "{trust_verb}"\n' if trust_verb else ""
     path.write_text(
         f"""---
 mappings:
   - id: "{action_id}"
     label: "{label}"
     intent_type: "{intent_type}"
-    downstream_event: "{downstream_event}"
+{trust_verb_line}    downstream_event: "{downstream_event}"
     params:
       maturity: "evergreen"
 ---
@@ -121,6 +122,7 @@ def test_runtime_emits_promotion_intent_and_execution_event(tmp_path: Path, monk
         action_id="promote.evergreen",
         label="Gör denna anteckning evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
     )
     markdown = _panel_markdown("Gör denna anteckning evergreen", checked=True)
@@ -187,6 +189,7 @@ def test_runtime_llm_filters_executed_actions(tmp_path: Path, monkeypatch: pytes
         action_id="promote.evergreen",
         label="Gör denna anteckning evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
     )
     markdown = _panel_markdown("Gör denna anteckning evergreen", checked=True)
@@ -255,6 +258,7 @@ def test_runtime_restart_does_not_reemit_executed_actions(tmp_path: Path, monkey
         action_id="promote.evergreen",
         label="Gör denna anteckning evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
     )
     markdown = _panel_markdown("Gör denna anteckning evergreen", checked=True)
@@ -291,6 +295,7 @@ def test_runtime_appends_ai_log_entry(tmp_path: Path, monkeypatch: pytest.Monkey
         action_id="promote.evergreen",
         label="Gör denna anteckning evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
     )
     markdown = _panel_markdown("Gör denna anteckning evergreen", checked=True)
@@ -323,6 +328,7 @@ def test_run_panel_note_execution_runs_full_pipeline(tmp_path: Path, monkeypatch
         action_id="promote.evergreen",
         label="Gör denna anteckning evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
     )
     markdown = _panel_markdown("Gör denna anteckning evergreen", checked=True)
@@ -352,6 +358,7 @@ def test_runtime_writeback_removes_checkbox_and_writes_receipt(tmp_path: Path, m
         action_id="promote.evergreen",
         label="Make this note evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
     )
     markdown = (
@@ -411,6 +418,7 @@ def test_runtime_writeback_idempotent_on_rerun(tmp_path: Path, monkeypatch: pyte
         action_id="promote.evergreen",
         label="Make this note evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
     )
     markdown = (
@@ -471,6 +479,7 @@ def test_runtime_writeback_proposed_actions_as_unchecked_suggestions(tmp_path: P
         action_id="promote.evergreen",
         label="Make this note evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
     )
     # Freeform panel (no checkbox actions) to trigger proposal discovery.
@@ -529,6 +538,7 @@ def test_runtime_writeback_proposes_idempotent_on_rerun(tmp_path: Path, monkeypa
         action_id="promote.evergreen",
         label="Make this note evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
     )
     markdown = (

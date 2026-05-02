@@ -53,6 +53,7 @@ def test_catalog_marks_duplicate_labels_ambiguous() -> None:
             PanelActionDescriptor(
                 id="promote.evergreen",
                 intent_type="promotion",
+                trust_verb="APPLY",
                 downstream_event="review.promote.evergreen",
                 labels=["Shared Label"],
             ),
