@@ -235,7 +235,7 @@ Compose files:
 
 Notes:
 - `make start-test-system` and `make test-bootstrap` remain unchanged and are still the canonical local `test` verification workflow.
-- The `test` compose override uses the same runtime environment selector posture as `dev` (`PKM_ENVIRONMENT=dev`) because runtime selection currently supports `dev` and `prod`; test remains a workflow-defined environment in this baseline.
+- The `test` compose override uses `PKM_ENVIRONMENT: prod` because runtime selection supports only `dev` and `prod`; test-channel isolation comes from port and DB separation, not from a distinct runtime environment type.
 - Full parallel isolation still depends on DB separation work tracked by Issue #594.
 
 ## Relation to Current Health, Write Guard, and Settings Direction
