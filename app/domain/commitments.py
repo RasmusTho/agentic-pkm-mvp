@@ -151,6 +151,52 @@ def apply_commitment_state_transition(
     return CommitmentTransitionResult(updated=updated, receipt_metadata=receipt_metadata)
 
 
+_REQUIRED_RECEIPT_FIELDS: tuple[str, ...] = (
+    "verb",
+    "authority",
+    "basis",
+    "outcome",
+    "artifact_linkage",
+    "instance_provenance",
+)
+
+
+def apply_commitment_mutation(
+    commitment: CommitmentRecord,
+    *,
+    to_state: object,
+    receipt_request: dict[str, object],
+) -> CommitmentTransitionResult:
+    """Gate commitment state mutations through a receipt-bearing APPLY request.
+
+    Raises ValueError if the verb is not APPLY or if any required receipt field
+    is missing. Returns a CommitmentTransitionResult on success.
+    """
+    verb = str(receipt_request.get("verb") or "").strip().upper()
+    if verb != "APPLY":
+        raise ValueError(
+            f"commitment mutation requires trust verb APPLY; got '{verb or '(empty)'}'"
+        )
+
+    for field in _REQUIRED_RECEIPT_FIELDS:
+        if field not in receipt_request or receipt_request[field] is None or str(receipt_request[field]).strip() == "":
+            raise ValueError(
+                f"commitment mutation missing required receipt field '{field}'"
+            )
+
+    next_state = normalize_commitment_state(to_state)
+    updated = replace(commitment, state=next_state)
+    receipt_metadata: dict[str, str] = {
+        "commitment_id": commitment.commitment_id,
+        "before_state": commitment.state,
+        "after_state": next_state,
+        "transition_family": "commitment_state",
+    }
+    for field in _REQUIRED_RECEIPT_FIELDS:
+        receipt_metadata[field] = verb if field == "verb" else str(receipt_request[field])
+    return CommitmentTransitionResult(updated=updated, receipt_metadata=receipt_metadata)
+
+
 __all__ = [
     "COMMITMENT_STATE_VALUES",
     "CommitmentQueryResult",
@@ -160,6 +206,7 @@ __all__ = [
     "CommitmentTransitionResult",
     "CommitmentKind",
     "FIRST_WAVE_COMMITMENT_KINDS",
+    "apply_commitment_mutation",
     "apply_commitment_state_transition",
     "make_commitment_handle",
     "normalize_commitment_state",
