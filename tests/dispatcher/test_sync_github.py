@@ -77,10 +77,12 @@ def tmp_store(tmp_path: Path) -> SqliteStore:
 
 def _mock_source(
     issues: list[dict[str, Any]],
+    open_issues: list[dict[str, Any]] | None = None,
     rate_limit: dict[str, Any] | None = None,
 ) -> MagicMock:
     source = MagicMock(spec=GitHubIssueSource)
     source.list_issues.return_value = issues
+    source.list_open_issues.return_value = open_issues if open_issues is not None else issues
     source.get_rate_limit.return_value = rate_limit
     return source
 
@@ -269,6 +271,7 @@ def test_sync_adapter_does_not_query_github_projects(tmp_store: SqliteStore) -> 
     assert "graphql" not in called_methods
     assert "get_projects" not in called_methods
     source.list_issues.assert_called_once()
+    source.list_open_issues.assert_called_once()
 
 
 def test_github_source_protocol_has_no_projects_method() -> None:
@@ -277,6 +280,56 @@ def test_github_source_protocol_has_no_projects_method() -> None:
 
     src = inspect.getsource(mod.GitHubIssueSource)
     assert "project" not in src.lower()
+
+
+def test_pull_sync_removes_stale_ready_tasks(tmp_store: SqliteStore) -> None:
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    tmp_store.upsert_task(task)
+    source = _mock_source([], open_issues=[])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    stored = tmp_store.get_task("github-issue-101")
+    assert stored is not None
+    assert stored.status == "completed"
+
+
+def test_pull_sync_demotes_label_stripped_tasks(tmp_store: SqliteStore) -> None:
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    tmp_store.upsert_task(task)
+    open_issue = dict(SAMPLE_ISSUE_HIGH)
+    open_issue["labels"] = [{"name": "prio:high"}]
+    source = _mock_source([], open_issues=[open_issue])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    stored = tmp_store.get_task("github-issue-101")
+    assert stored is not None
+    assert stored.status == "blocked"
+
+
+def test_pull_sync_emits_event_for_each_reconciled_task(tmp_store: SqliteStore) -> None:
+    for issue in (SAMPLE_ISSUE_HIGH, SAMPLE_ISSUE_LOW):
+        tmp_store.upsert_task(normalize_github_issue(issue, now="2026-04-24T00:00:00+00:00"))
+    source = _mock_source([], open_issues=[])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    events = [e for e in tmp_store.list_events() if e.event_type == "sync.reconciled"]
+    assert len(events) == 2
+
+
+def test_pull_sync_json_output_includes_reconciled_count(tmp_store: SqliteStore) -> None:
+    tmp_store.upsert_task(normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00"))
+    source = _mock_source([], open_issues=[])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    assert adapter.last_reconciled_count == 1
 
 
 # ---------------------------------------------------------------------------
