@@ -9,6 +9,7 @@ mappings:
     description: "Promote the note to evergreen maturity."
     llm_hint: "Choose this when the instruction asks to promote, make evergreen, or mature the note."
     intent_type: "promotion"
+    trust_verb: "APPLY"
     downstream_event: "review.promote.evergreen"
     params:
       maturity: "evergreen"

@@ -57,6 +57,8 @@ from app.index.outbox import append_jsonl
 from app.services.outbox import write_outbox_event
 from app.orchestrator.handler import OrchestratorContext, handle_event
 from app.orchestrator.runtime import Orchestrator
+from app.orchestrator.executor import MockPlanExecutor
+from app.a2a.schema import new_response
 from app.media.transcribe import transcribe_source
 from app.obs.log import with_trace_id
 from app.cli.health import run_health
@@ -213,6 +215,9 @@ def _render_mermaid_sequence(seq: LLMSequence) -> str:
 
 class _RecordingOrchestrator(Orchestrator):
     def __init__(self, *args, **kwargs) -> None:
+        executor = MockPlanExecutor()
+        executor.register_handler("ingest-agent", self._mock_ingest_agent)
+        kwargs.setdefault("executor", executor)
         super().__init__(*args, **kwargs)
         self.last_results: list[dict[str, Any]] | None = None
 
@@ -220,6 +225,19 @@ class _RecordingOrchestrator(Orchestrator):
         results = super().run_plan(plan)
         self.last_results = results
         return results
+
+    @staticmethod
+    def _mock_ingest_agent(request):
+        return new_response(
+            sender="ingest-agent",
+            recipient=request.sender,
+            payload={
+                "summary": "Summaries from ingest-agent",
+                "status": "ok",
+            },
+            correlation_id=str(request.id),
+            trace_id=request.trace_id,
+        )
 
 
 def _extract_note_path(results: list[dict[str, Any]]) -> str | None:

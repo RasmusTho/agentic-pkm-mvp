@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.events.types import PROMOTE_DONE, PROMOTE_ERROR, PROMOTE_INTENT_CREATED
+from app.events.types import PROMOTE_DONE, PROMOTE_ERROR, PROMOTE_INTENT_CREATED, PROMOTION_TRANSITION_APPLIED
 from app.observability import status_service
 from app.promotion.consumer import consume_promotion_intents, reset_promotion_dedup_store
 from app.store import object_store as object_store_module
@@ -115,7 +115,7 @@ def test_consumer_failure_paths_are_observable_and_idempotent(
     assert summary["applied"] == 1
     assert summary["errors"] == 1
     assert summary["skipped_duplicates"] == 1
-    assert summary["emitted"] == 2
+    assert summary["emitted"] == 3
 
     summary_again = consume_promotion_intents(outbox_path=outbox_path)
     assert summary_again == {"intents_seen": 0, "applied": 0, "errors": 0, "emitted": 0, "skipped_duplicates": 0}
@@ -123,9 +123,11 @@ def test_consumer_failure_paths_are_observable_and_idempotent(
     records = _read_records(outbox_path)
     done_events = [record for record in records if record.get("event") == PROMOTE_DONE]
     error_events = [record for record in records if record.get("event") == PROMOTE_ERROR]
+    transition_events = [record for record in records if record.get("event") == PROMOTION_TRANSITION_APPLIED]
 
     assert len(done_events) == 1
     assert len(error_events) == 1
+    assert len(transition_events) == 1
 
     done = done_events[0]
     assert done["trace_id"] == trace_id
@@ -137,6 +139,13 @@ def test_consumer_failure_paths_are_observable_and_idempotent(
     assert error["payload"]["reason"] == "path_not_found"
     assert error["payload"]["source_event"] == "evt-2"
     assert error["payload"]["note_uuid"] == missing_uuid
+
+    transition = transition_events[0]
+    assert transition["trace_id"] == trace_id
+    assert transition["payload"]["source_event"] == "evt-1"
+    assert transition["payload"]["note_uuid"] == applied_uuid
+    assert transition["payload"]["target_maturity"] == "evergreen"
+    assert transition["payload"]["effect"] == "applied"
 
     updated_note = applied_path.read_text(encoding="utf-8")
     assert "review_state: reviewed" in updated_note
