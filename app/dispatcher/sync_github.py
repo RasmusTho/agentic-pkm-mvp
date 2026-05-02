@@ -322,26 +322,31 @@ class PullSyncAdapter:
                 skipped.append(f"issue={issue.get('number', '?')}: {exc}")
 
         # Reconciliation: demote local ready tasks not in the fresh agent:ready set.
-        fresh_issue_numbers = {t.issue_number for t in upserted}
+        # Key off fetched issue numbers (not just upserted) so normalization errors
+        # don't corrupt queue truth by purging tasks that GitHub still marks agent:ready.
+        # Skip reconciliation entirely when any issue was skipped — partial fetches
+        # must not be treated as the complete agent:ready universe.
+        fresh_issue_numbers = {issue.get("number") for issue in issues}
         reconciled: list[TaskRecord] = []
-        for stale in self._store.list_tasks(status="ready"):
-            if stale.task_id.startswith("_"):
-                continue  # skip internal meta rows
-            if stale.issue_number in fresh_issue_numbers:
-                continue
-            stale.status = "blocked"
-            stale.blocked_reason = "pull-sync: no longer in agent:ready set"
-            stale.updated_at = pull_at
-            self._store.upsert_task(stale)
-            self._store.append_event(EventRecord(
-                event_id=f"evt-{uuid.uuid4().hex[:8]}",
-                timestamp=pull_at,
-                task_id=stale.task_id,
-                event_type="task.sync.purged",
-                actor="pull-sync",
-                payload={"reason": "no longer in agent:ready set"},
-            ))
-            reconciled.append(stale)
+        if not skipped:
+            for stale in self._store.list_tasks(status="ready"):
+                if stale.task_id.startswith("_"):
+                    continue  # skip internal meta rows
+                if stale.issue_number in fresh_issue_numbers:
+                    continue
+                stale.status = "blocked"
+                stale.blocked_reason = "pull-sync: no longer in agent:ready set"
+                stale.updated_at = pull_at
+                self._store.upsert_task(stale)
+                self._store.append_event(EventRecord(
+                    event_id=f"evt-{uuid.uuid4().hex[:8]}",
+                    timestamp=pull_at,
+                    task_id=stale.task_id,
+                    event_type="task.sync.purged",
+                    actor="pull-sync",
+                    payload={"reason": "no longer in agent:ready set"},
+                ))
+                reconciled.append(stale)
 
         rl_remaining: int | None = None
         rl_reset: str | None = None
