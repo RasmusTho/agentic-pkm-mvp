@@ -60,10 +60,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - PanelAgent 2.0 expansion beyond the current slices remains bounded even after real-vault acceptance; break new behavior into smaller tracked slices first.
   - Reasoning/reflective layers with eval gates; expanded observability counters for orchestration/A2A.
   - Collaboration/multi-user after single-user flows are stable.
-  - Release-channels capability is now specified under `docs/RELEASE_CHANNELS/README.md`; channel
-    identity (#610), DB-per-channel isolation (#611), and `prepare-promotion` plan generation
-    (#612) are shipped, while stable-channel validation and feature acceptance still remain pending
-    on feature #609 before roadmap text can treat the channel model as operationally accepted.
+  - Release-channels specification phase complete (Issues #609–#615 closed 2026-05-02): all six task specs (channel identity, DB-per-channel isolation, promotion plan contract, migration reversibility classification, concurrency rule, rollback contract) are delivered under `docs/RELEASE_CHANNELS/README.md`; promotion and rollback skills are authored. Operational acceptance — running a stable build against the real vault with a recorded promotion and rehearsed rollback — is the outstanding follow-up before the channel model is treated as fully live.
   - `v6.0` architecture target (**active design direction** — see `Capability-Based Architecture & Agent Evolution` above): a baseline-aware target operating model that preserves the
     vault-first / registry-watcher / DB-outbox / companion-note continuity baseline while making
     the next operating boundary explicit: `observation -> normalization/contract -> admission -> execution`.
@@ -294,10 +291,16 @@ Three canonical channels — `stable`, `dev`, `test` — are defined. Each chann
 
 Full identity contract: [`docs/RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md`](RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md)
 
-### Remaining release-channel work (planned)
+### Release-channel specification — delivered (2026-05-02)
 
-- **DB-per-channel isolation** — resolver-level DB naming and two-layer isolation shipped via Issue #611; feature-level validation still rolls up to #609.
-- **Promotion plan contract** — `prepare-promotion` plan generation with deterministic receipts shipped via Issue #612; execute/verify/rollback acceptance remains feature-level work under #609.
-- **Migration reversibility classification** — classify each migration as reversible or forward-only before promotion (spec: `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`).
-- **Concurrency rule** — single-active-deployment enforcement per channel (spec: `docs/RELEASE_CHANNELS/DEFINE_CONCURRENCY_RULE.md`).
-- **Rollback contract** — operator-safe rollback to previous stable ref (spec: `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`).
+All six task specs are complete and closed; promotion and rollback skills are authored:
+
+- **DB-per-channel isolation** — resolver-level DB naming and two-layer isolation (Issue #611, closed).
+- **Promotion plan contract** — `prepare-promotion` plan generation with deterministic receipts (Issue #612, closed).
+- **Migration reversibility classification** — migrations classified as reversible or forward-only at promotion time (spec: `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`, closed).
+- **Concurrency rule** — separate-checkout contract for prod and dev processes (spec: `docs/RELEASE_CHANNELS/DEFINE_CONCURRENCY_RULE.md`, Issue #614, closed).
+- **Rollback contract** — operator-safe rollback to previous stable ref with vault immutability and migration reversal path (spec: `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`, Issue #615, closed).
+
+### Outstanding follow-up
+
+**Operational acceptance** — running a stable build against the real vault with a recorded promotion and rehearsed rollback. This is the remaining step before the channel model is treated as fully live in production.
