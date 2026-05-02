@@ -54,8 +54,13 @@ For every candidate doc item, determine exactly one state:
 2. Inspect open Issues.
 3. Inspect recent open and merged PRs.
 4. Check whether the work is already tracked, already delivered, superseded, partially delivered, or blocked.
-5. Decide whether the item should stay as one bounded issue or be turned into one parent feature issue plus child slices via `feature-breakdown`.
-6. If the candidate would only create bookkeeping churn, keep it out of the backlog and route it to the maintenance path instead.
+5. **Pre-flight code existence check** — for spec files that name a target module path (e.g. `app/chat/session_log.py`), verify that path does not already exist in the repo before filing:
+   ```bash
+   ls <target_module_path>   # if exists → mark candidate as `delivered`, do not file
+   ```
+   Also check whether the spec file's own `State:` line has already been promoted to "Implemented" — if so, classify as `delivered` and skip. If the code exists but `State:` still reads "Not yet implemented", treat the spec as stale, update the `State:` line (docs-authoring lane), and do not file a new issue.
+6. Decide whether the item should stay as one bounded issue or be turned into one parent feature issue plus child slices via `feature-breakdown`.
+7. If the candidate would only create bookkeeping churn, keep it out of the backlog and route it to the maintenance path instead.
 
 ## When a doc item becomes a new Issue
 

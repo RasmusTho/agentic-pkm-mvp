@@ -9,7 +9,7 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Specification. Not yet implemented.
+State: Implemented. Delivered by PR #687 (issue #683, 2026-04-29).
 
 # Write Session Logs
 
