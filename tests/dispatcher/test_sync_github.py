@@ -15,6 +15,7 @@ import pytest
 from app.dispatcher.sync_github import (
     PROVIDER_IDENTITY,
     GitHubIssueSource,
+    PullResult,
     PullSyncAdapter,
     get_sync_meta,
     normalize_github_issue,
@@ -228,7 +229,7 @@ def test_pull_sync_source_error_does_not_corrupt(tmp_store: SqliteStore) -> None
     adapter = PullSyncAdapter(store=tmp_store, source=source)
     result = adapter.pull("RasmusTho/agentic-pkm-mvp")
 
-    assert result == []
+    assert result.upserted == [] and result.reconciled == []
 
     # Failure meta recorded
     meta = get_sync_meta(tmp_store, PROVIDER_IDENTITY)
@@ -290,10 +291,10 @@ def test_pull_skips_malformed_issue_without_aborting(tmp_store: SqliteStore) -> 
     source = _mock_source(issues)
     adapter = PullSyncAdapter(store=tmp_store, source=source)
 
-    upserted = adapter.pull("RasmusTho/agentic-pkm-mvp")
+    result = adapter.pull("RasmusTho/agentic-pkm-mvp")
 
-    assert len(upserted) == 1
-    assert upserted[0].task_id == "github-issue-101"
+    assert len(result.upserted) == 1
+    assert result.upserted[0].task_id == "github-issue-101"
 
     meta = get_sync_meta(tmp_store, PROVIDER_IDENTITY)
     assert meta is not None
@@ -307,10 +308,10 @@ def test_pull_upserts_tasks_into_store(tmp_store: SqliteStore) -> None:
     source = _mock_source(issues, rate_limit={"remaining": 4800, "reset": "2026-04-25T10:00:00Z"})
     adapter = PullSyncAdapter(store=tmp_store, source=source)
 
-    upserted = adapter.pull("RasmusTho/agentic-pkm-mvp")
+    result = adapter.pull("RasmusTho/agentic-pkm-mvp")
 
-    assert len(upserted) == 2
-    assert {t.task_id for t in upserted} == {"github-issue-101", "github-issue-102"}
+    assert len(result.upserted) == 2
+    assert {t.task_id for t in result.upserted} == {"github-issue-101", "github-issue-102"}
 
     stored_101 = tmp_store.get_task("github-issue-101")
     assert stored_101 is not None
@@ -328,13 +329,11 @@ def test_pull_upserts_tasks_into_store(tmp_store: SqliteStore) -> None:
 
 def test_pull_does_not_clobber_blocked_status(tmp_store: SqliteStore) -> None:
     """A locally-blocked task is NOT reset to ready when GitHub still shows agent:ready."""
-    # Pre-seed task as blocked locally
     task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
     task.status = "blocked"
     task.blocked_reason = "dependency on #200"
     tmp_store.upsert_task(task)
 
-    # GitHub payload still carries agent:ready — simulates the window before label removal
     source = _mock_source([SAMPLE_ISSUE_HIGH])
     adapter = PullSyncAdapter(store=tmp_store, source=source)
     adapter.pull("RasmusTho/agentic-pkm-mvp")
@@ -349,14 +348,12 @@ def test_pull_does_not_clobber_active_lease_status(tmp_store: SqliteStore) -> No
     """Tasks with local claimed or in_progress status are NOT reset to ready by a sync."""
     now = "2026-04-24T00:00:00+00:00"
 
-    # claimed task
     claimed_task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now=now)
     claimed_task.status = "claimed"
     claimed_task.claimed_by = "agent-x"
     claimed_task.lease_id = "lease-abc"
     tmp_store.upsert_task(claimed_task)
 
-    # in_progress task (use a different issue number)
     in_progress_issue = {**SAMPLE_ISSUE_LOW, "labels": [{"name": "agent:ready"}, {"name": "prio:low"}]}
     in_progress_task = normalize_github_issue(in_progress_issue, now=now)
     in_progress_task.status = "in_progress"
@@ -398,7 +395,6 @@ def test_pull_updates_metadata_for_blocked_task(tmp_store: SqliteStore) -> None:
     task.blocked_reason = "waiting on infra"
     tmp_store.upsert_task(task)
 
-    # GitHub payload has updated title and different priority
     updated_issue = {
         **SAMPLE_ISSUE_HIGH,
         "title": "Fix critical bug in queue selection (updated)",
@@ -417,3 +413,111 @@ def test_pull_updates_metadata_for_blocked_task(tmp_store: SqliteStore) -> None:
     assert stored.priority == "high"
     assert stored.sync_state is not None
     assert stored.sync_state["sync_result"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# AC: Reconciliation — stale ready tasks are purged after pull-sync (#680)
+# ---------------------------------------------------------------------------
+
+_STALE_CLOSED_ISSUE = {
+    "number": 999,
+    "title": "Previously ready, now closed",
+    "state": "open",
+    "labels": [{"name": "agent:ready"}, {"name": "prio:high"}],
+    "createdAt": "2026-04-01T00:00:00Z",
+    "updatedAt": "2026-04-01T00:00:00Z",
+}
+
+_STALE_LABEL_STRIPPED_ISSUE = {
+    "number": 998,
+    "title": "Previously ready, label stripped",
+    "state": "open",
+    "labels": [{"name": "agent:ready"}, {"name": "prio:med"}],
+    "createdAt": "2026-04-01T00:00:00Z",
+    "updatedAt": "2026-04-01T00:00:00Z",
+}
+
+
+def test_pull_sync_removes_stale_ready_tasks(tmp_store: SqliteStore) -> None:
+    """After pull-sync, a local ready task whose GitHub issue is no longer
+    in the agent:ready set (simulating closure) is demoted — not returned
+    by dispatcher next."""
+    from app.dispatcher import queue as dq
+
+    stale = normalize_github_issue(_STALE_CLOSED_ISSUE)
+    tmp_store.upsert_task(stale)
+
+    source = _mock_source([SAMPLE_ISSUE_HIGH])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    reconciled_task = tmp_store.get_task("github-issue-999")
+    assert reconciled_task is not None
+    assert reconciled_task.status != "ready", (
+        "Stale closed task must not remain in ready state after pull-sync"
+    )
+
+    next_task = dq.next(tmp_store, "test-agent")
+    assert next_task is None or next_task.issue_number != 999
+
+
+def test_pull_sync_demotes_label_stripped_tasks(tmp_store: SqliteStore) -> None:
+    """After pull-sync, a local ready task whose GitHub issue had agent:ready
+    stripped (but is still open) is demoted — not returned by dispatcher next."""
+    from app.dispatcher import queue as dq
+
+    stale = normalize_github_issue(_STALE_LABEL_STRIPPED_ISSUE)
+    tmp_store.upsert_task(stale)
+
+    source = _mock_source([SAMPLE_ISSUE_HIGH])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    reconciled_task = tmp_store.get_task("github-issue-998")
+    assert reconciled_task is not None
+    assert reconciled_task.status != "ready", (
+        "Label-stripped task must not remain in ready state after pull-sync"
+    )
+
+    next_task = dq.next(tmp_store, "test-agent")
+    assert next_task is None or next_task.issue_number != 998
+
+
+def test_pull_sync_emits_event_for_each_reconciled_task(tmp_store: SqliteStore) -> None:
+    """pull-sync emits a task.sync.purged event for every stale ready task it demotes."""
+    stale_999 = normalize_github_issue(_STALE_CLOSED_ISSUE)
+    stale_998 = normalize_github_issue(_STALE_LABEL_STRIPPED_ISSUE)
+    tmp_store.upsert_task(stale_999)
+    tmp_store.upsert_task(stale_998)
+
+    source = _mock_source([])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    events_999 = tmp_store.list_events("github-issue-999")
+    events_998 = tmp_store.list_events("github-issue-998")
+
+    purge_types = {"task.sync.purged"}
+    assert any(e.event_type in purge_types for e in events_999), (
+        "Expected a task.sync.purged event for reconciled task 999"
+    )
+    assert any(e.event_type in purge_types for e in events_998), (
+        "Expected a task.sync.purged event for reconciled task 998"
+    )
+
+
+def test_pull_sync_json_output_includes_reconciled_count(tmp_store: SqliteStore) -> None:
+    """PullSyncAdapter.pull() returns a PullResult with separate upserted and
+    reconciled lists so the CLI can report them independently."""
+    stale = normalize_github_issue(_STALE_CLOSED_ISSUE)
+    tmp_store.upsert_task(stale)
+
+    source = _mock_source([SAMPLE_ISSUE_HIGH])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    result = adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    assert isinstance(result, PullResult), "pull() must return a PullResult"
+    assert len(result.upserted) == 1, "upserted should contain only the fresh issue"
+    assert result.upserted[0].issue_number == 101
+    assert len(result.reconciled) == 1, "reconciled should contain the stale task"
+    assert result.reconciled[0].issue_number == 999

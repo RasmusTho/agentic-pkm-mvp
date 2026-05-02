@@ -10,13 +10,23 @@ Design constraints (from #625):
 
 from __future__ import annotations
 
+import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from app.dispatcher.models import SyncState, TaskRecord
+from app.dispatcher.models import EventRecord, SyncState, TaskRecord
 from app.dispatcher.store import DispatcherStore
 
 PROVIDER_IDENTITY = "github"
+
+
+@dataclass
+class PullResult:
+    """Result of a pull-sync operation."""
+
+    upserted: list[TaskRecord] = field(default_factory=list)
+    reconciled: list[TaskRecord] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -271,11 +281,12 @@ class PullSyncAdapter:
         self._source = source
         self._provider = provider
 
-    def pull(self, repo: str, **kwargs: Any) -> list[TaskRecord]:
-        """Pull open issues from *repo* and upsert normalised task records.
+    def pull(self, repo: str, **kwargs: Any) -> PullResult:
+        """Pull open issues from *repo*, upsert normalised task records, and
+        purge stale local ready tasks no longer in the agent:ready set.
 
-        Returns the list of upserted :class:`TaskRecord` objects.
-        Raises nothing; on error, records failure metadata and returns ``[]``.
+        Returns a :class:`PullResult` with ``upserted`` and ``reconciled`` lists.
+        Raises nothing; on error, records failure metadata and returns an empty result.
         """
         pull_at = datetime.now(timezone.utc).isoformat()
         rate_limit: dict[str, Any] | None = None
@@ -288,7 +299,7 @@ class PullSyncAdapter:
             issues = self._source.list_issues(repo, **kwargs)
         except Exception as exc:
             record_sync_failure(self._store, self._provider, pull_at, str(exc))
-            return []
+            return PullResult()
 
         _ACTIVE_STATUSES = frozenset({"blocked", "claimed", "in_progress"})
 
@@ -310,6 +321,28 @@ class PullSyncAdapter:
             except Exception as exc:
                 skipped.append(f"issue={issue.get('number', '?')}: {exc}")
 
+        # Reconciliation: demote local ready tasks not in the fresh agent:ready set.
+        fresh_issue_numbers = {t.issue_number for t in upserted}
+        reconciled: list[TaskRecord] = []
+        for stale in self._store.list_tasks(status="ready"):
+            if stale.task_id.startswith("_"):
+                continue  # skip internal meta rows
+            if stale.issue_number in fresh_issue_numbers:
+                continue
+            stale.status = "blocked"
+            stale.blocked_reason = "pull-sync: no longer in agent:ready set"
+            stale.updated_at = pull_at
+            self._store.upsert_task(stale)
+            self._store.append_event(EventRecord(
+                event_id=f"evt-{uuid.uuid4().hex[:8]}",
+                timestamp=pull_at,
+                task_id=stale.task_id,
+                event_type="task.sync.purged",
+                actor="pull-sync",
+                payload={"reason": "no longer in agent:ready set"},
+            ))
+            reconciled.append(stale)
+
         rl_remaining: int | None = None
         rl_reset: str | None = None
         if rate_limit:
@@ -320,6 +353,8 @@ class PullSyncAdapter:
         if skipped:
             extra["skipped_count"] = len(skipped)
             extra["skipped_notes"] = skipped[:10]
+        if reconciled:
+            extra["reconciled_count"] = len(reconciled)
 
         record_sync_success(
             self._store,
@@ -329,4 +364,4 @@ class PullSyncAdapter:
             rate_limit_reset=rl_reset,
             extra=extra,
         )
-        return upserted
+        return PullResult(upserted=upserted, reconciled=reconciled)

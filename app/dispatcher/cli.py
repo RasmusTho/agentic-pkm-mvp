@@ -252,10 +252,11 @@ def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
     source = GhCliIssueSource()
     adapter = PullSyncAdapter(store=store, source=source)
     try:
-        upserted = adapter.pull(repo)
+        result = adapter.pull(repo)
         _emit({
             "ok": True,
-            "upserted": len(upserted),
+            "upserted": len(result.upserted),
+            "reconciled": len(result.reconciled),
             "skipped": 0,
             "provider": "github",
         }, args.json)
