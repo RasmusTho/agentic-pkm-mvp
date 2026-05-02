@@ -193,7 +193,7 @@ def apply_commitment_mutation(
         "transition_family": "commitment_state",
     }
     for field in _REQUIRED_RECEIPT_FIELDS:
-        receipt_metadata[field] = str(receipt_request[field])
+        receipt_metadata[field] = verb if field == "verb" else str(receipt_request[field])
     return CommitmentTransitionResult(updated=updated, receipt_metadata=receipt_metadata)
 
 
