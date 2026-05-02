@@ -14,7 +14,7 @@ related_docs:
   - app/knowledge/write_ops.py
 ---
 
-State: Active specification. Bounded implementation scaffolding is shipped through #598/#599/#600/#601, but owner-doc promotion and baseline acceptance remain open on parent issue #597. Spec source is docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md (merged via PR #533).
+State: Active specification with bounded implementation shipped behind `CANVAS_ENABLED`. Session logs, in-place body editing, governance-routing, and API/CLI session lifecycle landed via PRs #605/#618/#619/#626; owner-doc promotion now records the surface as materially supported while hybrid Panel/Chat behavior remains future work.
 Owner: v6.0 architecture owner
 Last reviewed: 2026-04-30
 
@@ -71,15 +71,15 @@ No task in this capability is parallel-safe with another within this capability;
 
 The parent capability is accepted when all of the following are true:
 
-- [ ] A canvas session can be opened on a vault note and body edits apply in place without a diff-review gate.
-- [ ] Session logs are written to `vault/.chats/<note-slug>/<timestamp>-<label>.md` with correct `type: chat-session` frontmatter.
-- [ ] Governance-bearing mutations (frontmatter, cross-note, lifecycle) from a canvas session route through the gated-execution pipeline — not through the co-authoring path.
-- [ ] The co-authoring path is blocked from writing frontmatter classification fields, creating/deleting/renaming notes, or writing to notes other than the currently-open one.
-- [ ] A bounded API surface exists for session open, body edit, and session close.
-- [ ] The existing read-only cognition scaffold (`app/chat/read_only_cognition.py`) is not broken.
-- [ ] Focused tests cover each of the four surfaces above.
-- [ ] `docs/HUMAN-FLOWS.md` §14 moves canvas-Chat from "Emerging but not yet fully realized" to the "Already materially supported" list.
-- [ ] `docs/STATUS.md` records the delivery receipt.
+- [x] A canvas session can be opened on a vault note and body edits apply in place without a diff-review gate.
+- [x] Session logs are written to `vault/.chats/<note-slug>/<timestamp>-<label>.md` with correct `type: chat-session` frontmatter.
+- [x] Governance-bearing mutations (frontmatter, cross-note, lifecycle) from a canvas session route through the gated-execution pipeline — not through the co-authoring path.
+- [x] The co-authoring path is blocked from writing frontmatter classification fields, creating/deleting/renaming notes, or writing to notes other than the currently-open one.
+- [x] A bounded API surface exists for session open, body edit, and session close.
+- [x] The existing read-only cognition scaffold (`app/chat/read_only_cognition.py`) is not broken.
+- [x] Focused tests cover each of the four surfaces above.
+- [x] `docs/HUMAN-FLOWS.md` §14 moves canvas-Chat from "Emerging but not yet fully realized" to the "Already materially supported" list.
+- [x] `docs/STATUS.md` records the delivery receipt.
 
 ## Pointer to Parent Feature Issue
 
