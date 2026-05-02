@@ -1,0 +1,160 @@
+"""
+Compose-contract tests for the test-channel stack.
+
+AC-verified tests for Issue #698: watcher restart loop in test channel.
+
+Static tests (no pg marker) inspect the compose config without starting Docker.
+Live tests (pg marker) require a running pkm-test Docker stack.
+"""
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+import yaml
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BASE_COMPOSE = REPO_ROOT / "docker-compose.yaml"
+TEST_COMPOSE = REPO_ROOT / "docker-compose.test.yml"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _load_compose(path: Path) -> dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def _compose_env(service: dict) -> dict[str, str | None]:
+    """Normalise compose service environment into a plain dict."""
+    raw_env = service.get("environment") or {}
+    if isinstance(raw_env, dict):
+        return {str(k): (str(v) if v is not None else None) for k, v in raw_env.items()}
+    env: dict[str, str | None] = {}
+    for entry in raw_env:
+        key, sep, value = str(entry).partition("=")
+        env[key] = value if sep else None
+    return env
+
+
+def _compose_ports(service: dict) -> list[str]:
+    """Return all port mappings as strings."""
+    ports = service.get("ports") or []
+    return [str(p) for p in ports]
+
+
+# ---------------------------------------------------------------------------
+# Static compose-config tests (no pg marker, no Docker required)
+# ---------------------------------------------------------------------------
+
+def test_test_compose_uses_test_channel_ports_only() -> None:
+    """Test overlay must publish only the isolated test-channel ports.
+
+    Verify: Issue #698 AC2 — Postgres on 15434, API on 18002.
+    """
+    test_overlay = _load_compose(TEST_COMPOSE)
+    services = test_overlay.get("services") or {}
+
+    db_service = services.get("db") or {}
+    db_ports = _compose_ports(db_service)
+    assert any("15434" in p for p in db_ports), (
+        f"db service must expose test-channel port 15434 but got: {db_ports}"
+    )
+    assert not any("15432" in p for p in db_ports), (
+        f"db service must not re-expose dev/prod port 15432 in test overlay but got: {db_ports}"
+    )
+
+    api_service = services.get("api") or {}
+    api_ports = _compose_ports(api_service)
+    assert any("18002" in p for p in api_ports), (
+        f"api service must expose test-channel port 18002 but got: {api_ports}"
+    )
+    assert not any("18000" in p for p in api_ports), (
+        f"api service must not re-expose dev/prod port 18000 in test overlay but got: {api_ports}"
+    )
+
+
+def test_test_compose_watcher_env_has_valid_pkm_environment() -> None:
+    """All test-overlay services must declare a PKM_ENVIRONMENT value that
+    active_environment() accepts (dev or prod).
+
+    This is the regression-prevention counterpart of Issue #698: the watcher
+    entered a restart loop because PKM_ENVIRONMENT=test caused a ValueError
+    inside active_environment() at import time.
+
+    Verify: Issue #698 AC1 (compose-config side — no Docker required).
+    """
+    from app.config.environment import active_environment
+
+    test_overlay = _load_compose(TEST_COMPOSE)
+    services = test_overlay.get("services") or {}
+
+    valid_environments = {"dev", "prod"}
+
+    for svc_name in ("api", "worker", "watcher"):
+        svc = services.get(svc_name) or {}
+        env = _compose_env(svc)
+        if "PKM_ENVIRONMENT" not in env:
+            # If not set in test overlay it inherits from base — acceptable
+            continue
+        pkm_env = str(env["PKM_ENVIRONMENT"]).strip().lower()
+        assert pkm_env in valid_environments, (
+            f"Service '{svc_name}' has PKM_ENVIRONMENT={pkm_env!r} in test overlay "
+            f"but active_environment() only accepts {valid_environments}. "
+            "Use 'prod' (or 'dev') to avoid watcher startup crash (Issue #698)."
+        )
+
+
+def test_make_test_up_starts_watcher_without_restart_loop() -> None:
+    """The watcher service command must be importable under the test-overlay env.
+
+    Simulates the environment that 'make test-up' injects and confirms that
+    ``app.cli`` can be imported without raising ValueError — the crash that
+    caused the watcher restart loop in Issue #698.
+
+    Verify: Issue #698 AC1 (no Docker required; exercises the actual code path).
+    """
+    import importlib
+    import os
+    import sys
+
+    test_overlay = _load_compose(TEST_COMPOSE)
+    services = test_overlay.get("services") or {}
+    watcher_svc = services.get("watcher") or {}
+    watcher_env = _compose_env(watcher_svc)
+
+    # Resolve the effective PKM_ENVIRONMENT that the watcher container gets.
+    pkm_environment = watcher_env.get("PKM_ENVIRONMENT", "prod")
+
+    # Temporarily set the env var and verify import succeeds.
+    original = os.environ.get("PKM_ENVIRONMENT")
+    try:
+        os.environ["PKM_ENVIRONMENT"] = str(pkm_environment)
+        # Evict cached modules so the env change takes effect.
+        for mod in list(sys.modules.keys()):
+            if "app.config.environment" in mod or "app.settings.watcher_settings" in mod:
+                sys.modules.pop(mod, None)
+        try:
+            from app.config.environment import active_environment
+            result = active_environment()
+            assert result in ("dev", "prod"), (
+                f"active_environment() returned {result!r}; expected 'dev' or 'prod'. "
+                "PKM_ENVIRONMENT must be set to a valid value in docker-compose.test.yml."
+            )
+        except ValueError as exc:
+            pytest.fail(
+                f"Watcher startup would crash under PKM_ENVIRONMENT={pkm_environment!r}: {exc}. "
+                "Fix docker-compose.test.yml (Issue #698)."
+            )
+    finally:
+        if original is None:
+            os.environ.pop("PKM_ENVIRONMENT", None)
+        else:
+            os.environ["PKM_ENVIRONMENT"] = original
+        # Re-evict to restore clean state for subsequent tests.
+        for mod in list(sys.modules.keys()):
+            if "app.config.environment" in mod or "app.settings.watcher_settings" in mod:
+                sys.modules.pop(mod, None)

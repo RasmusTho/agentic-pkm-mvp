@@ -9,18 +9,18 @@ services:
     ports:
       - "18002:8000"
     environment:
-      PKM_ENVIRONMENT: test
+      PKM_ENVIRONMENT: prod
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
 
   worker:
     environment:
-      PKM_ENVIRONMENT: test
+      PKM_ENVIRONMENT: prod
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
 
   watcher:
     environment:
-      PKM_ENVIRONMENT: test
+      PKM_ENVIRONMENT: prod
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
