@@ -37,6 +37,7 @@ mappings:
   - id: "promote.evergreen"
     label: "Gör denna anteckning evergreen"
     intent_type: "promotion"
+    trust_verb: "APPLY"
     downstream_event: "review.promote.evergreen"
     params:
       maturity: "evergreen"
@@ -110,6 +111,7 @@ def test_plan_panel_actions_creates_ordered_step_chain() -> None:
                 mapping=PanelActionMapping(
                     id="promote.evergreen",
                     intent_type="promotion",
+                    trust_verb="APPLY",
                     downstream_event="review.promote.evergreen",
                     params={"maturity": "evergreen"},
                 ),

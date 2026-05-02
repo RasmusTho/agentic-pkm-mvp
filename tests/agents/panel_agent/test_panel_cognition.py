@@ -72,6 +72,7 @@ def _promotion_action(*, checked: bool = True) -> PanelIntentAction:
     mapping = PanelActionMapping(
         id="promote.evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
         params={"maturity": "evergreen"},
     )

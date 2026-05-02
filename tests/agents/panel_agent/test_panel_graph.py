@@ -67,6 +67,7 @@ def test_panel_graph_emits_promotion_and_log_events() -> None:
     mapping = PanelActionMapping(
         id="promote.evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
         params={"maturity": "evergreen"},
     )
@@ -106,6 +107,7 @@ def test_panel_graph_logs_unknown_mapping_as_unresolved() -> None:
             PanelActionDescriptor(
                 id="promote.evergreen",
                 intent_type="promotion",
+                trust_verb="APPLY",
                 downstream_event="review.promote.evergreen",
                 labels=["Promote"],
             )
@@ -118,6 +120,7 @@ def test_panel_graph_logs_unknown_mapping_as_unresolved() -> None:
         mapping=PanelActionMapping(
             id="orphan.action",
             intent_type="promotion",
+            trust_verb="APPLY",
             downstream_event="review.promote.evergreen",
             params={"maturity": "evergreen"},
         ),
@@ -177,6 +180,7 @@ def test_panel_graph_marks_ambiguous_label_as_ambiguous() -> None:
             PanelActionDescriptor(
                 id="promote.evergreen",
                 intent_type="promotion",
+                trust_verb="APPLY",
                 downstream_event="review.promote.evergreen",
                 labels=["Shared Label"],
             ),
@@ -205,6 +209,7 @@ def test_panel_graph_llm_selects_subset(monkeypatch) -> None:
     promote_mapping = PanelActionMapping(
         id="promote.evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
         params={"maturity": "evergreen"},
     )
@@ -217,6 +222,7 @@ def test_panel_graph_llm_selects_subset(monkeypatch) -> None:
             PanelActionDescriptor(
                 id="promote.evergreen",
                 intent_type="promotion",
+                trust_verb="APPLY",
                 downstream_event="review.promote.evergreen",
                 labels=["Gör denna anteckning evergreen", "Promote"],
                 description="Promote note to evergreen",
@@ -253,6 +259,7 @@ def test_panel_graph_llm_falls_back_on_malformed(monkeypatch) -> None:
     mapping = PanelActionMapping(
         id="promote.evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
         params={"maturity": "evergreen"},
     )
@@ -263,6 +270,7 @@ def test_panel_graph_llm_falls_back_on_malformed(monkeypatch) -> None:
             PanelActionDescriptor(
                 id="promote.evergreen",
                 intent_type="promotion",
+                trust_verb="APPLY",
                 downstream_event="review.promote.evergreen",
                 labels=["Promote"],
                 description="Promote note to evergreen",
@@ -286,6 +294,7 @@ def test_panel_graph_llm_can_select_unchecked(monkeypatch) -> None:
     mapping = PanelActionMapping(
         id="promote.evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
         params={"maturity": "evergreen"},
     )
@@ -296,6 +305,7 @@ def test_panel_graph_llm_can_select_unchecked(monkeypatch) -> None:
             PanelActionDescriptor(
                 id="promote.evergreen",
                 intent_type="promotion",
+                trust_verb="APPLY",
                 downstream_event="review.promote.evergreen",
                 labels=["Gör denna anteckning evergreen", "Make evergreen"],
                 description="Promote note to evergreen",
@@ -320,6 +330,7 @@ def test_panel_graph_llm_empty_selection_uses_instruction_hint_for_single_promot
     mapping = PanelActionMapping(
         id="promote.evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
         params={"maturity": "evergreen"},
     )
@@ -337,6 +348,7 @@ def test_panel_graph_llm_empty_selection_uses_instruction_hint_for_single_promot
             PanelActionDescriptor(
                 id="promote.evergreen",
                 intent_type="promotion",
+                trust_verb="APPLY",
                 downstream_event="review.promote.evergreen",
                 labels=["Make this note evergreen", "Promote to evergreen"],
                 description="Promote note to evergreen",
@@ -393,6 +405,7 @@ def test_panel_graph_llm_empty_selection_honors_negated_promotion_instruction(mo
     mapping = PanelActionMapping(
         id="promote.evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
         params={"maturity": "evergreen"},
     )
@@ -410,6 +423,7 @@ def test_panel_graph_llm_empty_selection_honors_negated_promotion_instruction(mo
             PanelActionDescriptor(
                 id="promote.evergreen",
                 intent_type="promotion",
+                trust_verb="APPLY",
                 downstream_event="review.promote.evergreen",
                 labels=["Make this note evergreen", "Promote to evergreen"],
                 description="Promote note to evergreen",
@@ -454,6 +468,7 @@ def test_panel_graph_freeform_proposes_catalog_action_without_checkboxes(monkeyp
             PanelActionDescriptor(
                 id="promote.evergreen",
                 intent_type="promotion",
+                trust_verb="APPLY",
                 downstream_event="review.promote.evergreen",
                 labels=["Make this note evergreen"],
                 description="Promote note to evergreen",
@@ -485,6 +500,7 @@ def test_panel_graph_freeform_rejects_out_of_catalog_id(monkeypatch) -> None:
             PanelActionDescriptor(
                 id="promote.evergreen",
                 intent_type="promotion",
+                trust_verb="APPLY",
                 downstream_event="review.promote.evergreen",
                 labels=["Make this note evergreen"],
                 description="Promote note to evergreen",
@@ -527,6 +543,7 @@ def test_panel_graph_freeform_falls_back_to_rule_on_llm_error(monkeypatch) -> No
             PanelActionDescriptor(
                 id="promote.evergreen",
                 intent_type="promotion",
+                trust_verb="APPLY",
                 downstream_event="review.promote.evergreen",
                 labels=["Make this note evergreen"],
                 description="Promote note to evergreen",
@@ -550,6 +567,7 @@ def test_panel_graph_skips_idempotent_duplicate() -> None:
     mapping = PanelActionMapping(
         id="promote.evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
         params={"maturity": "evergreen"},
     )
@@ -574,6 +592,7 @@ def test_panel_graph_cognition_mode_in_emitted_events_rule() -> None:
     mapping = PanelActionMapping(
         id="promote.evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
         params={"maturity": "evergreen"},
     )
@@ -599,6 +618,7 @@ def test_panel_graph_cognition_mode_in_emitted_events_llm(monkeypatch: pytest.Mo
     mapping = PanelActionMapping(
         id="promote.evergreen",
         intent_type="promotion",
+        trust_verb="APPLY",
         downstream_event="review.promote.evergreen",
         params={"maturity": "evergreen"},
     )
