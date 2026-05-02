@@ -109,17 +109,84 @@ def make_commitment_handle(
     )
 
 
+def _salience_rank_score(
+    commitment_id: str,
+    salience_scores: dict[str, float] | None,
+    staleness_scores: dict[str, float] | None,
+) -> float:
+    """Derive a composite ranking score from optional salience and staleness inputs.
+
+    Both signals are optional and may be absent or partial.  When a signal is
+    missing for a given commitment_id the contribution of that signal is treated
+    as 0.0 so the function never raises.  Higher scores sort earlier.
+
+    Ranking formula: salience_score + staleness_score (equally weighted).
+    Neither signal is required; an absent signal contributes 0.0.
+    """
+    salience = (salience_scores or {}).get(commitment_id, 0.0)
+    staleness = (staleness_scores or {}).get(commitment_id, 0.0)
+    return salience + staleness
+
+
 def query_next_and_waiting_commitments(
     commitments: tuple[CommitmentRecord, ...] | list[CommitmentRecord],
+    *,
+    salience_scores: dict[str, float] | None = None,
+    staleness_scores: dict[str, float] | None = None,
 ) -> CommitmentQueryResult:
-    next_items = tuple(item for item in commitments if item.state == "next")
-    waiting_items = tuple(item for item in commitments if item.state == "waiting")
+    """Return next and waiting commitments, optionally ranked by salience/staleness.
+
+    Parameters
+    ----------
+    commitments:
+        All commitment records to surface from.
+    salience_scores:
+        Optional mapping of commitment_id -> salience score (0.0–1.0).
+        When present, higher-salience next-items rank earlier.
+        Absent or partial maps degrade gracefully; no error is raised.
+    staleness_scores:
+        Optional mapping of commitment_id -> staleness score (0.0–1.0).
+        When present, higher-staleness next-items rank earlier, and staleness
+        metadata is included in operator_summary for waiting items.
+        Absent or partial maps degrade gracefully; no error is raised.
+
+    Returns
+    -------
+    CommitmentQueryResult
+        Results are commitment-typed (CommitmentRecord).  States remain within
+        the commitment state vocabulary and are never collapsed into note-state
+        axes (review_state / maturity).
+    """
+    raw_next = [item for item in commitments if item.state == "next"]
+    raw_waiting = [item for item in commitments if item.state == "waiting"]
+
+    # Rank next items when any signal is present; Python's sort is stable so
+    # items with equal scores (no signal → 0.0) retain their insertion order.
+    signals_present = salience_scores is not None or staleness_scores is not None
+    if signals_present:
+        raw_next.sort(
+            key=lambda c: _salience_rank_score(c.commitment_id, salience_scores, staleness_scores),
+            reverse=True,
+        )
+
+    next_items = tuple(raw_next)
+    waiting_items = tuple(raw_waiting)
+
     operator_summary: dict[str, object] = {
         "next_count": len(next_items),
         "waiting_count": len(waiting_items),
         "next_ids": [item.commitment_id for item in next_items],
         "waiting_ids": [item.commitment_id for item in waiting_items],
     }
+
+    # Expose staleness metadata for waiting items when staleness scores are present.
+    if staleness_scores is not None:
+        waiting_staleness: dict[str, float] = {
+            item.commitment_id: staleness_scores.get(item.commitment_id, 0.0)
+            for item in waiting_items
+        }
+        operator_summary["waiting_staleness"] = waiting_staleness
+
     return CommitmentQueryResult(
         next_items=next_items,
         waiting_items=waiting_items,
