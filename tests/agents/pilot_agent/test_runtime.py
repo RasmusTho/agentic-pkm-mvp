@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import pytest
 from unittest.mock import patch
@@ -134,8 +135,7 @@ class TestRuntimeEventProcessing:
 class TestRuntimeErrorHandling:
     """Test runtime error handling."""
 
-    @pytest.mark.asyncio
-    async def test_runtime_handles_graph_invocation_error(self):
+    def test_runtime_handles_graph_invocation_error(self):
         """Runtime handles graph invocation errors gracefully."""
         original = os.environ.get("LANGGRAPH_PILOT_AGENT")
         try:
@@ -147,14 +147,14 @@ class TestRuntimeErrorHandling:
                 payload={"note_uuid": "n1"},
             )
             with patch(
-                "app.agents.pilot_agent.runtime.build_promotion_graph"
+                "app.agents.pilot_agent.runtime.run_promotion_graph"
             ) as mock_build:
                 mock_build.side_effect = Exception("Graph build failed")
                 with patch(
                     "app.agents.pilot_agent.runtime.append_jsonl_outbox_event"
                 ) as mock_emit:
                     # Should not raise
-                    await run_promotion_agent(event)
+                    asyncio.run(run_promotion_agent(event))
                     # Should still emit error event
                     assert mock_emit.called
         finally:
@@ -191,8 +191,7 @@ class TestRuntimeErrorHandling:
 class TestDeterministicFallback:
     """Test deterministic fallback when LLM is disabled."""
 
-    @pytest.mark.asyncio
-    async def test_fallback_high_confidence_promotes(self):
+    def test_fallback_high_confidence_promotes(self):
         """Fallback: high confidence → promote."""
         original = os.environ.get("LANGGRAPH_PILOT_AGENT")
         try:
@@ -205,10 +204,10 @@ class TestDeterministicFallback:
             with patch(
                 "app.agents.pilot_agent.runtime.append_jsonl_outbox_event"
             ) as mock_emit:
-                await run_promotion_agent(event)
+                asyncio.run(run_promotion_agent(event))
                 assert mock_emit.called
                 call_args = mock_emit.call_args
-                emitted_event = call_args[0][2]  # Third argument is the event
+                emitted_event = call_args[0][1]  # Second positional arg is the event
                 assert emitted_event.event == "promotion.approved"
         finally:
             if original:
@@ -216,8 +215,7 @@ class TestDeterministicFallback:
             else:
                 os.environ.pop("LANGGRAPH_PILOT_AGENT", None)
 
-    @pytest.mark.asyncio
-    async def test_fallback_medium_confidence_evergreen(self):
+    def test_fallback_medium_confidence_evergreen(self):
         """Fallback: medium confidence → evergreen."""
         original = os.environ.get("LANGGRAPH_PILOT_AGENT")
         try:
@@ -230,10 +228,10 @@ class TestDeterministicFallback:
             with patch(
                 "app.agents.pilot_agent.runtime.append_jsonl_outbox_event"
             ) as mock_emit:
-                await run_promotion_agent(event)
+                asyncio.run(run_promotion_agent(event))
                 assert mock_emit.called
                 call_args = mock_emit.call_args
-                emitted_event = call_args[0][2]
+                emitted_event = call_args[0][1]
                 assert emitted_event.event == "promotion.deferred"
         finally:
             if original:
@@ -241,8 +239,7 @@ class TestDeterministicFallback:
             else:
                 os.environ.pop("LANGGRAPH_PILOT_AGENT", None)
 
-    @pytest.mark.asyncio
-    async def test_fallback_low_confidence_skips(self):
+    def test_fallback_low_confidence_skips(self):
         """Fallback: low confidence → skip."""
         original = os.environ.get("LANGGRAPH_PILOT_AGENT")
         try:
@@ -255,10 +252,10 @@ class TestDeterministicFallback:
             with patch(
                 "app.agents.pilot_agent.runtime.append_jsonl_outbox_event"
             ) as mock_emit:
-                await run_promotion_agent(event)
+                asyncio.run(run_promotion_agent(event))
                 assert mock_emit.called
                 call_args = mock_emit.call_args
-                emitted_event = call_args[0][2]
+                emitted_event = call_args[0][1]
                 assert emitted_event.event == "promotion.skipped"
         finally:
             if original:
@@ -266,8 +263,7 @@ class TestDeterministicFallback:
             else:
                 os.environ.pop("LANGGRAPH_PILOT_AGENT", None)
 
-    @pytest.mark.asyncio
-    async def test_fallback_preserves_trace_id(self):
+    def test_fallback_preserves_trace_id(self):
         """Fallback preserves trace_id."""
         original = os.environ.get("LANGGRAPH_PILOT_AGENT")
         try:
@@ -281,10 +277,10 @@ class TestDeterministicFallback:
             with patch(
                 "app.agents.pilot_agent.runtime.append_jsonl_outbox_event"
             ) as mock_emit:
-                await run_promotion_agent(event)
+                asyncio.run(run_promotion_agent(event))
                 assert mock_emit.called
                 call_args = mock_emit.call_args
-                emitted_event = call_args[0][2]
+                emitted_event = call_args[0][1]
                 assert emitted_event.trace_id == "trace-fallback-123"
         finally:
             if original:
