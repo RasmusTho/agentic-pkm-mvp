@@ -2,11 +2,11 @@ services:
   db:
     environment:
       POSTGRES_DB: app_test
-    ports:
+    ports: !override
       - "15434:5432"
 
   api:
-    ports:
+    ports: !override
       - "18002:8000"
     environment:
       PKM_ENVIRONMENT: prod
