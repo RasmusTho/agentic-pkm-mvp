@@ -1,4 +1,4 @@
-State: Active capability specification directory. Docs-only breakdown is present; implementation and owner-doc promotion remain future work.
+State: Delivered capability specification directory. Docs/spec breakdown is complete (parent issue #645 and slice issues #651-#654 are closed); implementation and owner-doc promotion remain future work.
 
 # Scope, Sphere, and Situated Identity
 
@@ -34,9 +34,9 @@ This capability is accepted when:
 
 ## Validation / Acceptance Path
 
-- Keep parent feature issue open as the validation hub while task issues merge.
-- After all task issues merge, run cross-surface acceptance checks from `VALIDATE_SCOPE_SPHERE_IDENTITY_SEPARATION.md`.
-- Promote owner-doc claims only after validation receipts show the capability is supported truthfully.
+- Parent feature issue #645 is closed as delivered for docs/spec work; this README remains the canonical local capability reference.
+- Implementation-stage acceptance checks remain defined in `VALIDATE_SCOPE_SPHERE_IDENTITY_SEPARATION.md`.
+- Promote owner-doc claims only after implementation receipts show the capability is supported truthfully.
 
 ## Dependency Notes (Priority 3-5)
 
@@ -55,5 +55,5 @@ This capability gates later priorities in `docs/plans/V60_COGNITIVE_SUPPORT_PRIO
 
 ## Related GitHub Issues
 
-- Parent feature issue: `PARENT_FEATURE_ISSUE.md` in this directory; open as GitHub issue #645.
-- Slice issues created from task files: #651 (SSI-01, delivered PR #660), #652 (SSI-02), #653 (SSI-03), #654 (SSI-04).
+- Parent feature issue: `PARENT_FEATURE_ISSUE.md` in this directory; closed as GitHub issue #645 (2026-04-26).
+- Slice issues from task files: #651 (closed via PR #660), #652 (closed via PR #666), #653 (closed via PR #671), #654 (closed via PR #675).

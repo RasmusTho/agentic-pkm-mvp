@@ -76,6 +76,6 @@ This parent issue source defines the capability-level contract and acceptance pa
 
 ## Validation / Acceptance Path
 
-- Parent issue remains open while task slices land.
-- Cross-surface validation scenarios are executed per `VALIDATE_SCOPE_SPHERE_IDENTITY_SEPARATION.md`.
-- Owner-doc promotion occurs only after parent acceptance criteria and validation receipts are complete.
+- Parent issue #645 is closed as delivered at the docs/spec layer (closed 2026-04-26).
+- Cross-surface validation scenarios are tracked in `VALIDATE_SCOPE_SPHERE_IDENTITY_SEPARATION.md` as the implementation-stage acceptance reference.
+- Owner-doc promotion remains gated on implementation-stage acceptance and validation receipts.
