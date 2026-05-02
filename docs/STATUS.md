@@ -81,10 +81,14 @@ governed by
 - Retrieval capability seam: salience/staleness signal payload exists as an optional diagnostics
   seam and is emitted only on explicit opt-in. Runtime does not source staleness from persisted
   state-axis labels in artifact payload (`review_state`, `maturity`).
-- Commitment-runtime minimal slice: bounded `next`/`waiting` commitment query surfacing is present
-  in the domain layer, commitment state values remain distinct from note state axes, and
-  commitment-state transitions now carry receipt-linkage metadata through the governed transition
-  path.
+<!-- commitment-runtime-baseline -->
+- Commitment-runtime baseline: bounded `next`/`waiting` commitment query surfacing is present in
+  the domain layer; commitment state values remain distinct from note state axes; commitment-state
+  transitions carry receipt-linkage metadata and are gated through the receipt-governed APPLY path
+  — state mutations not on the APPLY path are rejected (PR #703, issue #694); and the commitment
+  query surface consumes optional salience/staleness signals for priority surfacing (PR #705,
+  issue #695). Verification: `tests/commitments/test_commitment_receipt_gate.py`,
+  `tests/commitments/test_commitment_salience_queries.py`.
 - Minimal concurrency guarantees: DedupTaskQueue + event_id dedup guard watcher runs, optimistic writes protect note updates, and the promotion consumer uses an EventDedupStore to skip duplicate intents (`docs/CONCURRENCY.md`, `app/promotion/consumer.py`).
 - Settings compiler scope: panel action catalog, watcher settings, and outbox paths now compile with provenance (path/mtime/sha) via `vault/@Settings/watchers.md`, `docs/settings/panel-actions.md`, `python -m app.cli settings-validate`, and `python -m app.cli settings-explain`.
 - Operator enablement signals: `python -m app.cli settings-explain` surfaces watcher auto-exec state, allowlist validity, provenance, and write-guard context; `python -m app.cli status` exposes the same gate, watcher automation counters, last tick skips, last-run skip reasons, and panel-action/compiler provenance (source paths, mtimes, combined digest). Treat `allowlist`, `dedup/skipped_*`, `panel_skipped_policy`, and `writes_allowed` as the safe-to-enable checklist, not just the raw `WATCHER_AUTO_EXEC` value.
