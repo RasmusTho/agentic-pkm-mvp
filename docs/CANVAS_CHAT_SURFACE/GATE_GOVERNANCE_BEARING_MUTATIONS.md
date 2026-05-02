@@ -9,7 +9,7 @@ depends_on: [WRITE_SESSION_LOGS.md, CO_AUTHOR_NOTE_BODY.md]
 can_parallelize_with: []
 ---
 
-State: Specification. Not yet implemented.
+State: Implemented. Delivered by issue #685 (2026-04-29).
 
 # Gate Governance-Bearing Mutations
 

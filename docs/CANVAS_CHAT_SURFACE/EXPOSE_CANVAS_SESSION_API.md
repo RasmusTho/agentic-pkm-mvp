@@ -9,7 +9,7 @@ depends_on: [WRITE_SESSION_LOGS.md, CO_AUTHOR_NOTE_BODY.md, GATE_GOVERNANCE_BEAR
 can_parallelize_with: []
 ---
 
-State: Specification. Not yet implemented.
+State: Implemented. Delivered by issue #686 (2026-04-29).
 
 # Expose Canvas Session API
 

@@ -9,7 +9,7 @@ depends_on: [WRITE_SESSION_LOGS.md]
 can_parallelize_with: []
 ---
 
-State: Specification. Not yet implemented.
+State: Implemented. Delivered by issue #684 (2026-04-29).
 
 # Co-Author Note Body
 
