@@ -1,3 +1,4 @@
+State: Created on GitHub as Issue #646 and closed on 2026-04-26. This file is the local source for the delivered parent feature issue; GitHub is the authoritative backlog and validation record.
 ---
 name: Parent Feature Issue — Commitments as a distinct semantic family
 description: Parent feature issue contract for the v6.0 commitment-first-class capability
@@ -9,9 +10,9 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Parent feature issue contract for the v6.0 "commitments as a distinct semantic family" capability. Docs-only scope.
-
 # [Feature] Commitments as a distinct semantic family
+
+> **Created and delivered.** GitHub Issue #646: https://github.com/RasmusTho/agentic-pkm-mvp/issues/646. Keep this file aligned with the issue contract and delivered capability history; the live GitHub issue remains the authoritative backlog and validation surface.
 
 ## Context
 

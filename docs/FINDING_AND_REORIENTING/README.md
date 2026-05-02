@@ -13,7 +13,7 @@ related_docs:
   - docs/DESIGN_PRINCIPLES.md
 ---
 
-State: Docs-only specification lane for v6.0. No code in scope. Finding 2 (zone-read-as-stored) is referenced as cautionary context only; its fix lives in the v5.x enablement lane, not here.
+State: Delivered docs/specification lane for v6.0 capability framing. The parent feature was filed as GitHub Issue #392 and closed on 2026-04-18. This directory remains the local spec/source surface; GitHub is the authoritative backlog and validation record. Finding 2 (zone-read-as-stored) is referenced as cautionary context only; its fix lives in the v5.x enablement lane, not here.
 
 # Finding, Reorienting, and Resurfacing
 
@@ -68,20 +68,20 @@ Read the task files in this order. The order is conceptual, not a runtime depend
 
 ## Relationship to the parent feature issue
 
-The draft of the parent feature issue lives at [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). It is a draft for review, not an issue that has been created on GitHub. Phase 3 of the feature-breakdown workflow may create the actual GitHub issue from this draft.
+The local parent feature issue source lives at [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). It was filed as GitHub Issue #392 and closed on 2026-04-18. Keep the local source aligned with the delivered GitHub issue contract; GitHub remains the authoritative backlog and validation record.
 
 ## Acceptance criteria for the capability as a whole
 
 The capability FINDING_AND_REORIENTING is accepted when all of the following are true at the docs level. These are capability-level criteria; each task has its own narrower acceptance.
 
-- [ ] The three sub-capabilities — retrieval, orientation, resurfacing — are named separately in the target architecture docs, and each sub-capability's doc states what it uniquely does for the user that the other two cannot.
-- [ ] The docs explicitly reject reducing any of the three to the other two. Specifically: retrieval is not orientation, resurfacing is not ranking, and orientation is not Q&A.
-- [ ] Salience is documented as derived in every place this capability references it, and no spec task proposes a durable salience field.
-- [ ] ASK's de-centering is framed in text, with a clear statement of what ASK stops being as an architectural center and what stays as a runtime/API compatibility concern.
-- [ ] A human returning to work after an interruption could read the three contracts and correctly articulate which of the three capabilities applies to their situation.
-- [ ] The system's future explanation differs correctly between the retrieval case ("this matched your request because…"), the orientation case ("when you left, you were here; these threads were active; these remain open; this changed while you were away"), and the resurfacing case ("this is back in view now because…").
-- [ ] All tasks in this directory are deliverable by editing `docs/` only; no task requires code, runtime, or schema change to be considered complete.
-- [ ] The boundary is internally consistent: no task contradicts another, and no task takes authority that belongs to `INTERACTION_SURFACES_AND_AUTHORITY`.
+- [x] The three sub-capabilities — retrieval, orientation, resurfacing — are named separately in the target architecture docs, and each sub-capability's doc states what it uniquely does for the user that the other two cannot.
+- [x] The docs explicitly reject reducing any of the three to the other two. Specifically: retrieval is not orientation, resurfacing is not ranking, and orientation is not Q&A.
+- [x] Salience is documented as derived in every place this capability references it, and no spec task proposes a durable salience field.
+- [x] ASK's de-centering is framed in text, with a clear statement of what ASK stops being as an architectural center and what stays as a runtime/API compatibility concern.
+- [x] A human returning to work after an interruption could read the three contracts and correctly articulate which of the three capabilities applies to their situation.
+- [x] The system's future explanation differs correctly between the retrieval case ("this matched your request because…"), the orientation case ("when you left, you were here; these threads were active; these remain open; this changed while you were away"), and the resurfacing case ("this is back in view now because…").
+- [x] All tasks in this directory are deliverable by editing `docs/` only; no task requires code, runtime, or schema change to be considered complete.
+- [x] The boundary is internally consistent: no task contradicts another, and no task takes authority that belongs to `INTERACTION_SURFACES_AND_AUTHORITY`.
 
 When all of these are true, the parent feature issue can be closed and the three capability contracts may be promoted into the stable architecture docs in a separate, narrower PR (that owner-doc promotion is out of scope for this directory).
 
@@ -96,4 +96,4 @@ When all of these are true, the parent feature issue can be closed and the three
 
 ---
 
-**Status:** Specification draft. Docs-only lane. Does not touch retrieval runtime, ASK runtime, payload shapes, or migrations.
+**Status:** Docs/spec lane delivered and parent feature issue #392 closed. This directory does not itself claim the broader runtime rollout; bounded runtime seams for retrieval/orientation/resurfacing were delivered separately and are tracked in current-state owner docs and GitHub issue history.

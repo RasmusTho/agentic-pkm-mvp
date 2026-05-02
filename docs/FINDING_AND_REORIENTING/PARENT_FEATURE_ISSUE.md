@@ -1,7 +1,7 @@
-State: Draft parent feature issue body for a v6.0 docs-only capability specification; not created on GitHub.
+State: Created on GitHub as Issue #392 and closed on 2026-04-18. This file is the local source for the delivered parent feature issue; GitHub is the authoritative backlog and validation record.
 # [Feature] Finding, reorienting, and resurfacing as distinct cognitive capabilities
 
-> **Draft.** This file is the draft of the GitHub parent feature issue for FINDING_AND_REORIENTING. It has not been created on GitHub. Do not create it from this document without the Phase 3 review pass. Keep the shape of this draft aligned with the repo issue contract so the `gh issue create` step can copy the body with minimal edits.
+> **Created and delivered.** GitHub Issue #392: https://github.com/RasmusTho/agentic-pkm-mvp/issues/392. Keep this file aligned with the issue contract and with the delivered capability history; the live GitHub issue remains the authoritative backlog and validation surface.
 
 ## Context
 

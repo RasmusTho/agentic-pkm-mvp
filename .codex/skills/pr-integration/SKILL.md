@@ -139,25 +139,70 @@ gh pr view <PR_NUMBER> --json mergeable
 
 ### 3) CI Attachment Gate
 
+**Critical: branch truth must be established before you trust CI attachment state.**
+
 **Action: Verify Checks Attached to Current Head**
 
 ```bash
 # Get current head SHA
 HEAD_SHA=$(git rev-parse HEAD)
 
+# Get tracked remote branch SHA
+BRANCH_NAME=$(git branch --show-current)
+REMOTE_HEAD_SHA=$(git rev-parse origin/$BRANCH_NAME)
+
 # Get PR head SHA from GitHub
 PR_HEAD_SHA=$(gh pr view <PR_NUMBER> --json headRefOid --jq '.headRefOid')
 
-# Verify they match
-if [ "$HEAD_SHA" = "$PR_HEAD_SHA" ]; then
-  echo "✅ Local HEAD matches PR head SHA"
+# Verify all three match
+if [ "$HEAD_SHA" = "$REMOTE_HEAD_SHA" ] && [ "$HEAD_SHA" = "$PR_HEAD_SHA" ]; then
+  echo "✅ Local HEAD, origin branch head, and PR head SHA all match"
 else
-  echo "❌ HEAD mismatch: local $HEAD_SHA != PR $PR_HEAD_SHA"
+  echo "❌ HEAD mismatch:"
+  echo "   local  $HEAD_SHA"
+  echo "   origin $REMOTE_HEAD_SHA"
+  echo "   pr     $PR_HEAD_SHA"
 fi
 
 # Check for attached checks
 gh pr checks <PR_NUMBER>
 ```
+
+**If the three SHAs do not match, stop CI interpretation and repair branch truth first.**
+
+Common causes:
+- local branch contains unpublished commits
+- remote PR branch moved since local validation
+- unrelated local drift was left on the PR branch
+
+**Action: Isolate unrelated local drift before repairing branch truth**
+
+```bash
+# Inspect working tree first
+git status -sb
+
+# If unexpected local changes exist, preserve them explicitly
+git stash push -u -m "preserve-local-drift-before-pr-integration"
+
+# Optional: preserve local divergent history before resetting the PR branch name
+git switch -c <branch-name>-local-backup
+
+# Re-point the PR branch name at the remote branch tip and switch back
+git branch -f <branch-name> origin/<branch-name>
+git switch <branch-name>
+
+# Re-check truth
+git branch --show-current
+git status -sb
+git rev-parse HEAD
+git rev-parse origin/<branch-name>
+gh pr view <PR_NUMBER> --json headRefOid --jq '.headRefOid'
+```
+
+If branch truth still cannot be re-established without mixing unrelated changes into the PR, hand off as:
+- `blocked-contract-drift`
+
+Do not continue to CI result evaluation on a branch whose local `HEAD`, tracked remote branch, and PR head SHA disagree.
 
 **If checks missing on current head, retry with exponential backoff:**
 

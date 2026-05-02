@@ -14,7 +14,7 @@ related_docs:
   - docs/HUMAN-FLOWS.md
 ---
 
-State: Active specification for the v6.0 capability "Commitments as a distinct semantic family". Docs-only; no runtime changes are in scope.
+State: Delivered docs/specification lane for the v6.0 capability "Commitments as a distinct semantic family". The parent feature was filed as GitHub Issue #646 and closed on 2026-04-26. This directory remains the local spec/source surface; GitHub is the authoritative backlog and validation record. Docs-only; no runtime changes are in scope.
 
 # Commitments as a First-Class Semantic Family
 
@@ -100,7 +100,7 @@ This capability is accepted when all of the following are true:
 
 ## Relationship to GitHub issues
 
-Each task file may later map to one or more GitHub issues under the `feature-breakdown` skill contract. Those issues are downstream of this directory. This directory does not create them.
+The local parent feature issue source lives at [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). It was filed as GitHub Issue #646 and closed on 2026-04-26. Additional runtime and follow-up implementation issues remain downstream of this directory, including the still-open commitment-runtime parent Issue #688.
 
 ## Navigation
 
@@ -114,4 +114,4 @@ Each task file may later map to one or more GitHub issues under the `feature-bre
 
 ---
 
-**Status:** Specification active. Task-level authoring and v5.6 reconciliation are complete at the docs layer; runtime commitment implementation remains downstream work.
+**Status:** Docs/spec lane delivered and parent feature issue #646 closed. Task-level authoring and v5.6 reconciliation are complete at the docs layer; runtime commitment implementation remains downstream work and is tracked separately, including open parent issue #688.

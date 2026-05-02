@@ -132,6 +132,13 @@ If any of the above is ambiguous, do not code. Keep the Issue `agent:needs-human
   - `agent:blocked`
   - `agent:needs-human`
 
+When closing stale or duplicate open issues:
+
+- leave an explicit maintenance receipt comment naming the canonical delivered Issue/PR replacing the open backlog item
+- if an equivalent slice already shipped under a different Issue number, say so directly (`superseded by delivered canonical issue #...`)
+- after closure, re-read the issue labels and remove any lingering `agent:*` label that automation did not clear
+- do not leave an issue closed-but-blocked or closed-but-ready
+
 ## Lifecycle correction rules
 
 **All state corrections must be executed using explicit commands, not just recommended.**
@@ -156,6 +163,29 @@ If an Issue is closed (already delivered):
    ```bash
    gh issue view #<N> --json state,labels,projectItems
    ```
+
+### Action: Close Stale Duplicate or Superseded Issue
+
+If an open issue is no longer the truthful backlog item because an equivalent slice already shipped under a canonical replacement issue/PR:
+
+1. **Leave a maintenance receipt comment:**
+   ```bash
+   gh issue comment #<N> --body "Maintenance reconciliation: this issue is superseded by delivered canonical issue #<M> / PR #<P> ..."
+   ```
+
+2. **Close the stale issue:**
+   ```bash
+   gh issue close #<N> --reason completed
+   ```
+
+3. **Re-check terminal truth and strip lingering agent labels if needed:**
+   ```bash
+   gh issue view #<N> --json state,labels
+   gh issue edit #<N> --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
+   gh issue view #<N> --json state,labels
+   ```
+
+4. **Only then treat the dedupe as complete.**
 
 ### Action: Malformed or Stale Open Issue
 
@@ -234,6 +264,7 @@ Child slice issues may become `agent:ready` only when their executable contract 
 - ensure roadmap/plan wording no longer reads as pending
 - ensure Project status and labels are terminal and truthful
 - produce a delivery receipt
+- for duplicate/superseded closures, ensure the delivery receipt points to the canonical delivered issue/PR rather than only saying “duplicate”
 
 ## Required Issue contract shape
 
