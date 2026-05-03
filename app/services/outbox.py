@@ -180,6 +180,7 @@ def _coerce_event(event: Event | OutboxEvent) -> Event:
     return new_event(
         event_type=event.event,
         payload=dict(payload),
+        context_dimensions=getattr(event, "context_dimensions", None),
         trace_id=event.trace_id,
         source=event_source_name(getattr(event, "source", None), default="app"),
         event_id=event.event_id,

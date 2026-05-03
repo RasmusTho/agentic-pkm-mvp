@@ -120,6 +120,12 @@ class InstanceProvenanceStatus(BaseModel):
     environment: str
 
 
+class ContextDimensionsStatus(BaseModel):
+    scope: str
+    sphere_memberships: list[str] = Field(default_factory=list)
+    situated_identity: str | None = None
+
+
 class WatcherAutomationStatus(BaseModel):
     auto_exec_enabled: bool = False
     mode: str = "emit-only"
@@ -170,6 +176,7 @@ class SystemStatus(BaseModel):
     view_freshness: Optional[ViewFreshnessStatus] = None
     watcher_automation: Optional[WatcherAutomationStatus] = None
     instance_provenance: Optional[InstanceProvenanceStatus] = None
+    context_dimensions: Optional[ContextDimensionsStatus] = None
 
 
 __all__ = [
@@ -189,5 +196,6 @@ __all__ = [
     "ViewFreshnessStatus",
     "InstanceProvenanceStatus",
     "WatcherAutomationStatus",
+    "ContextDimensionsStatus",
     "SystemStatus",
 ]

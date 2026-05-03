@@ -40,6 +40,24 @@ def _build_meta(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return resolved
 
 
+def _normalize_context_dimensions(value: Any) -> Dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    if "scope" not in value or "sphere_memberships" not in value:
+        return None
+    scope = value.get("scope")
+    spheres = value.get("sphere_memberships")
+    if scope is None or not isinstance(scope, str):
+        return None
+    if not isinstance(spheres, list):
+        return None
+    return {
+        "scope": scope.strip() or "default",
+        "sphere_memberships": [str(item) for item in spheres],
+        "situated_identity": value.get("situated_identity", None),
+    }
+
+
 class OutboxEvent(BaseModel):
     """Canonical outbox event envelope."""
 
@@ -51,6 +69,7 @@ class OutboxEvent(BaseModel):
     source: str
     timestamp: str = Field(default_factory=_now_iso)
     payload: Dict[str, Any] = Field(default_factory=dict)
+    context_dimensions: Dict[str, Any] | None = None
     meta: Dict[str, Any] = Field(default_factory=_default_meta)
 
     @property
@@ -64,16 +83,22 @@ def make_outbox_event(
     *,
     source: str,
     payload: Optional[Dict[str, Any]] = None,
+    context_dimensions: Optional[Dict[str, Any]] = None,
     trace_id: Optional[str] = None,
     timestamp: Optional[str] = None,
     meta: Optional[Dict[str, Any]] = None,
 ) -> OutboxEvent:
+    resolved_payload = payload or {}
+    resolved_context = _normalize_context_dimensions(context_dimensions)
+    if resolved_context is None:
+        resolved_context = _normalize_context_dimensions(resolved_payload.get("context_dimensions"))
     return OutboxEvent(
         event=event,
         trace_id=trace_id or uuid4().hex,
         source=source,
         timestamp=timestamp or _now_iso(),
-        payload=payload or {},
+        payload=resolved_payload,
+        context_dimensions=resolved_context,
         meta=_build_meta(meta),
     )
 
