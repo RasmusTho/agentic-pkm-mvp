@@ -250,6 +250,16 @@ def _ingest_agent_stub(request: AgentRequest):
     )
 
 
+def _ingest_agent_stub(request: AgentRequest):
+    return new_response(
+        sender="ingest-agent",
+        recipient="orchestrator.runtime",
+        payload={"summary": "Summaries from ingest-agent", "request_id": str(request.id)},
+        correlation_id=str(request.id),
+        trace_id=request.trace_id,
+    )
+
+
 def _extract_note_path(results: list[dict[str, Any]]) -> str | None:
     for entry in results:
         result_payload = entry.get("result")

@@ -241,7 +241,6 @@ def _handle_promotion_payload(
         },
         trace_id,
     )
-    summary["emitted"] += 1
     return summary
 
 
