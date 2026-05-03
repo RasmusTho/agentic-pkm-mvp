@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Companion UI Converse Layout Shell</title>
+    <link rel="stylesheet" href="./converse_layout.css" />
+  </head>
+  <body>
+    <div class="converse-shell">
+      <header class="top-bar" data-testid="top-bar">
+        <strong>Converse</strong>
+        <div class="vault-status" data-testid="vault-status">
+          <span class="vault-status-dot" aria-label="Vault online"></span>
+          <span>Vault online</span>
+        </div>
+      </header>
+
+      <section class="main-landscape" data-testid="main-landscape" data-rail-state="collapsed">
+        <main class="document-pane" data-testid="document-pane">
+          <article class="document-column" data-testid="document-column">
+            <h1>Decision capture scaffold</h1>
+            <p>The document remains visually primary while the rail changes state.</p>
+          </article>
+        </main>
+
+        <aside class="rail rail--collapsed" data-testid="margin-rail" aria-label="Hugin rail"></aside>
+      </section>
+    </div>
+  </body>
+</html>
