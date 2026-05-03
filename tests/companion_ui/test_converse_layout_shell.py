@@ -72,3 +72,15 @@ def test_thinking_indicator_row_present_and_distinct() -> None:
     assert 'data-testid="thinking-indicator"' in html_text
     assert 'data-thinking="active"' in html_text
     assert "thinking-dot" in html_text
+
+
+def test_collapsed_rail_uses_compact_strip_affordances() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    html_text = (repo_root / "companion-ui" / "src" / "converse_layout.html").read_text(encoding="utf-8")
+    css_text = (repo_root / "companion-ui" / "src" / "converse_layout.css").read_text(encoding="utf-8")
+
+    assert 'data-testid="rail-collapsed-strip"' in html_text
+    assert 'data-rail-state="collapsed"' in html_text
+    assert '.main-landscape[data-rail-state="collapsed"] .conversation-thread' in css_text
+    assert '.main-landscape[data-rail-state="collapsed"] .composer-stack' in css_text
+    assert "display: none;" in css_text

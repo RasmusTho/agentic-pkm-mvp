@@ -89,6 +89,44 @@ body {
   width: 288px;
 }
 
+.rail-collapsed-strip {
+  display: none;
+}
+
+.main-landscape[data-rail-state="collapsed"] .rail-collapsed-strip {
+  display: grid;
+  align-content: space-between;
+  justify-items: center;
+  padding: 10px 4px;
+  height: 100%;
+}
+
+.main-landscape[data-rail-state="collapsed"] .rail-header,
+.main-landscape[data-rail-state="collapsed"] .conversation-thread,
+.main-landscape[data-rail-state="collapsed"] .composer-stack {
+  display: none;
+}
+
+.collapsed-unread {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+
+.collapsed-expand-handle {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--fg-2);
+  font-size: 11px;
+  padding: 0;
+  line-height: 1;
+}
+
 .rail-header {
   display: flex;
   align-items: center;
