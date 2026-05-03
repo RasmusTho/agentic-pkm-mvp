@@ -122,14 +122,17 @@ class TestBootstrapStartContract:
         )
 
     def test_make_start_test_system_uses_test_vault_root(self) -> None:
-        """make start-test-system passes TEST_VAULT_ROOT as VAULT_ROOT."""
-        result = subprocess.run(
-            ["make", "--dry-run", "start-test-system"],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0
-        combined = result.stdout + result.stderr
-        assert "vault-test" in combined, (
-            f"Expected vault-test path in dry-run output; got: {combined[:500]}"
-        )
+        """make start-test-system and make test-up both pass TEST_VAULT_ROOT as VAULT_ROOT."""
+        for target in ("start-test-system", "test-up"):
+            result = subprocess.run(
+                ["make", "--dry-run", target],
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, (
+                f"make --dry-run {target} failed: {result.stderr}"
+            )
+            combined = result.stdout + result.stderr
+            assert "vault-test" in combined, (
+                f"Expected vault-test path in make --dry-run {target} output; got: {combined[:500]}"
+            )

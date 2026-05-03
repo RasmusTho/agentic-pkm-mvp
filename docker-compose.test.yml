@@ -12,15 +12,24 @@ services:
       PKM_ENVIRONMENT: prod
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+      VAULT_SYSTEM_DIR_REL: "⚙️ System"
+      VAULT_INBOX_DIR_REL: "📥 Inbox"
+      VAULT_DESK_DIR_REL: "🛠️ Workbench"
 
   worker:
     environment:
       PKM_ENVIRONMENT: prod
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+      VAULT_SYSTEM_DIR_REL: "⚙️ System"
+      VAULT_INBOX_DIR_REL: "📥 Inbox"
+      VAULT_DESK_DIR_REL: "🛠️ Workbench"
 
   watcher:
     environment:
       PKM_ENVIRONMENT: prod
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+      VAULT_SYSTEM_DIR_REL: "⚙️ System"
+      VAULT_INBOX_DIR_REL: "📥 Inbox"
+      VAULT_DESK_DIR_REL: "🛠️ Workbench"
