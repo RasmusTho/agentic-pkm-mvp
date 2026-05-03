@@ -78,8 +78,16 @@ class PanelRuntimeResult(BaseModel):
     log_entry: PanelLogEntry | None = None
 
 
-def execute_panel_intent(intent_event: PanelIntentEvent, *, outbox_path: Path | None = None) -> PanelRuntimeResult:
-    policy_flags = {"execution_mode": "watcher" if intent_event.source.trigger == "watcher" else "manual"}
+def execute_panel_intent(
+    intent_event: PanelIntentEvent,
+    *,
+    outbox_path: Path | None = None,
+    allow_legacy_promotion_without_trust_verb: bool = False,
+) -> PanelRuntimeResult:
+    policy_flags = {
+        "execution_mode": "watcher" if intent_event.source.trigger == "watcher" else "manual",
+        "allow_legacy_promotion_without_trust_verb": allow_legacy_promotion_without_trust_verb,
+    }
     resolved_outbox = _resolve_outbox_path(outbox_path)
     catalog = load_panel_action_catalog()
     wiring = get_default_action_wiring()

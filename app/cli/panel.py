@@ -28,7 +28,9 @@ def run_panels_for_uuids(
         if emit_only:
             continue
 
-        runtime_results = [execute_panel_intent(event) for event in events]
+        runtime_results = [
+            execute_panel_intent(event, allow_legacy_promotion_without_trust_verb=True) for event in events
+        ]
         for res in runtime_results:
             for emitted in res.emitted_events:
                 name = getattr(emitted, "event", None) or (emitted.get("event") if isinstance(emitted, dict) else None)
@@ -62,7 +64,9 @@ def panel_run(note_uuid: str, emit_only: bool) -> None:
 
     runtime_results = []
     if not emit_only:
-        runtime_results = [execute_panel_intent(event) for event in events]
+        runtime_results = [
+            execute_panel_intent(event, allow_legacy_promotion_without_trust_verb=True) for event in events
+        ]
         click.echo(f"Runtime executed: {len(runtime_results)}")
     else:
         click.echo("Runtime execution skipped (--emit-only).")

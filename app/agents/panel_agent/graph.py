@@ -85,6 +85,10 @@ def _action_resolution_reason(
 
     # Mutation-capable actions must be explicitly trust-verb classified and admitted as APPLY.
     if (mapping.intent_type or "").strip().lower() == "promotion":
+        if not str(mapping.trust_verb or "").strip():
+            if state.policy_flags.get("allow_legacy_promotion_without_trust_verb"):
+                return None
+            return "trust_verb_missing"
         trust_verb = str(mapping.trust_verb or "").strip().upper()
         if not trust_verb:
             return "trust_verb_missing"

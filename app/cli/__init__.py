@@ -57,6 +57,8 @@ from app.index.outbox import append_jsonl
 from app.services.outbox import write_outbox_event
 from app.orchestrator.handler import OrchestratorContext, handle_event
 from app.orchestrator.runtime import Orchestrator
+from app.orchestrator.executor import MockPlanExecutor
+from app.a2a.schema import AgentRequest, new_response
 from app.media.transcribe import transcribe_source
 from app.obs.log import with_trace_id
 from app.cli.health import run_health
@@ -220,6 +222,16 @@ class _RecordingOrchestrator(Orchestrator):
         results = super().run_plan(plan)
         self.last_results = results
         return results
+
+
+def _ingest_agent_stub(request: AgentRequest):
+    return new_response(
+        sender="ingest-agent",
+        recipient="orchestrator.runtime",
+        payload={"summary": "Summaries from ingest-agent", "request_id": str(request.id)},
+        correlation_id=str(request.id),
+        trace_id=request.trace_id,
+    )
 
 
 def _extract_note_path(results: list[dict[str, Any]]) -> str | None:
@@ -857,7 +869,8 @@ def ask(question: str, vault_root: Path | None, enable_mcp_vault: bool) -> None:
     else:
         tool_settings["mcp_vault_enable"] = False
 
-    orchestrator = _RecordingOrchestrator(tool_settings=tool_settings)
+    executor = MockPlanExecutor(handlers={"ingest-agent": _ingest_agent_stub})
+    orchestrator = _RecordingOrchestrator(executor=executor, tool_settings=tool_settings)
     settings: Dict[str, Any] = {"event_orchestrator_enable": True, "origin": "cli.ask"}
     planner_profiles_env = os.getenv("PLANNER_PROFILES_ENABLE")
     if planner_profiles_env is not None:
@@ -891,7 +904,13 @@ def ask(question: str, vault_root: Path | None, enable_mcp_vault: bool) -> None:
         label = step.description if step else entry.get("step_id")
         click.echo(f"- {label}: {entry.get('status')}")
         if entry.get("status") == "error":
-            exit_code = 1
+            # In mock mode, unimplemented mutation tools are expected and should not
+            # fail dry-run planning/preview flows.
+            error_type = entry.get("error_type")
+            if not writes_enabled and error_type == "not_implemented":
+                pass
+            else:
+                exit_code = 1
             if entry.get("error_type"):
                 click.echo(f"  error_type: {entry['error_type']}")
             if entry.get("error"):
