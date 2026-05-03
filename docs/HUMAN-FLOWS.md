@@ -861,8 +861,3 @@ document should continue to hold.
 - Zhang, J. & Norman, D. A. (1994). [Representations in Distributed Cognitive Tasks](https://pages.ucsd.edu/~scoulson/203/zhang.pdf)
 - Kirsh, D. & Maglio, P. (1994). [On Distinguishing Epistemic from Pragmatic Action](https://philpapers.org/archive/KIRODE.pdf)
 - Zimmerman, B. J. (2002). [Becoming a Self-Regulated Learner: An Overview](https://mathedseminar.pbworks.com/w/file/fetch/94760840/Zimmerman_-_2002_-_Becoming_a_SelfRegulated_Learner_An_Overview.pdf)
-
-## Companion UI converse handoff update (2026-05-03)
-
-Converse interaction design handoff materials are now available at `companion-ui/design-handoff/2026-05-03-converse/`.
-The handoff reinforces the document-first Converse behavior: vault note remains primary, dialogue operates as a secondary rail/sheet, and suggestion moments are staged for explicit user action.

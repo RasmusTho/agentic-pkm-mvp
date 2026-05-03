@@ -148,9 +148,3 @@ Normalization note:
 - the active runtime still compresses `promote_to_evergreen` and `update_review_state` toward the
   same mutation path, which is precisely why promotion/review/maturity remain distinct in the
   ontology work.
-
-## Companion UI design handoff (2026-05-03)
-
-- Imported handoff package path: `companion-ui/design-handoff/2026-05-03-converse/`.
-- Treat `companion-ui/design-handoff/2026-05-03-converse/README.md` as the current converse-surface implementation spec.
-- Included HTML/CSS/JSX files are design reference artifacts and should not be shipped as production runtime code.

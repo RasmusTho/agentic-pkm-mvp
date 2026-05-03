@@ -616,13 +616,3 @@ The channel layer is orthogonal to the existing `dev`/`prod` environment layer:
 - Downstream features (promotion, rollback, DB isolation) resolve channel identity through `app.config.channel` rather than scattering individual env-var lookups.
 
 See [`docs/RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md`](RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md) for the full contract spec.
-
-## Companion UI design handoff reference (2026-05-03)
-
-A new Companion UI converse-surface design handoff was added at `companion-ui/design-handoff/2026-05-03-converse/`.
-This handoff is a design reference package (wireframe HTML, style tokens, and prototype JSX) for implementation inside the companion UI module, not production runtime code.
-
-Architecture boundary reminder:
-- the companion UI remains a client of the existing FastAPI runtime,
-- vault markdown remains the durable source of truth,
-- chat/session/suggestion durability should continue to map to vault-compatible markdown contracts.
