@@ -221,6 +221,29 @@ def _auto_exec_enabled(vault_root: Path) -> bool:
     return resolve_auto_exec_enabled(vault_root=vault_root)
 
 
+def _resolve_note_scope(frontmatter: dict[str, object], global_scope: str | None) -> str | None:
+    for key in ("scope", "domain"):
+        value = frontmatter.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return global_scope
+
+
+def extract_context_dimensions_for_note(frontmatter: dict[str, object], *, global_scope: str | None = None) -> dict[str, object]:
+    scope = _resolve_note_scope(frontmatter, global_scope)
+    spheres = frontmatter.get("sphere_memberships")
+    if not isinstance(spheres, list):
+        spheres = []
+    identity = frontmatter.get("situated_identity")
+    if not isinstance(identity, str):
+        identity = None
+    return {
+        "scope": scope,
+        "sphere_memberships": [str(item) for item in spheres],
+        "situated_identity": identity,
+    }
+
+
 def compute_changes(
     vault_root: Path, snapshot: Snapshot
 ) -> tuple[list[Path], list[Path], Snapshot]:

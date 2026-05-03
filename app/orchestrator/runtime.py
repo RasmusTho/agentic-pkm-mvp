@@ -42,6 +42,16 @@ def _default_agent_id_for_flow(flow_id: str | None) -> str | None:
     return None
 
 
+def _context_dimensions_from_plan_context(plan_context: Mapping[str, Any] | None) -> tuple[str | None, list[str], str | None]:
+    if not isinstance(plan_context, Mapping):
+        return None, [], None
+    return (
+        plan_context.get("scope") if isinstance(plan_context.get("scope"), str) else None,
+        [str(item) for item in (plan_context.get("sphere_memberships") or [])] if isinstance(plan_context.get("sphere_memberships"), list) else [],
+        plan_context.get("situated_identity") if isinstance(plan_context.get("situated_identity"), str) or plan_context.get("situated_identity") is None else None,
+    )
+
+
 def _resolve_step_agent_id(step: PlanStep, flow_id: str | None, plan_context: Mapping[str, Any] | None) -> str | None:
     if getattr(step, "agent_id", None):
         return step.agent_id
@@ -145,6 +155,7 @@ class Orchestrator:
             budget_state["steps"] = budget_state.get("steps", 0) + 1
 
             agent_id = _resolve_step_agent_id(step, plan_flow_id, plan.context)
+            scope, sphere_memberships, situated_identity = _context_dimensions_from_plan_context(plan.context)
             context = StepContext(
                 plan_id=plan.id,
                 object_id=object_id,
@@ -156,6 +167,9 @@ class Orchestrator:
                 tool_settings=context_tool_settings,
                 budget_state=budget_state,
                 agent_id=agent_id,
+                scope=scope,
+                sphere_memberships=sphere_memberships,
+                situated_identity=situated_identity,
             )
             try:
                 output = self._executor.execute_step(step, context)
