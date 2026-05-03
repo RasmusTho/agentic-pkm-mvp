@@ -24,7 +24,43 @@
           </article>
         </main>
 
-        <aside class="rail rail--collapsed" data-testid="margin-rail" aria-label="Hugin rail"></aside>
+        <aside class="rail rail--collapsed" data-testid="margin-rail" aria-label="Hugin rail">
+          <header class="rail-header">
+            <span class="hugin-dot" aria-hidden="true"></span>
+            <span class="hugin-label">HUGIN</span>
+            <span class="turn-count">18 turns</span>
+          </header>
+
+          <section class="conversation-thread" data-testid="conversation-thread" aria-label="Conversation thread">
+            <article class="message message--agent" data-testid="message-agent">
+              <p class="agent-context-label" data-testid="agent-context-label">RE: Decision record</p>
+              <p>We can keep this bounded to visual state and thread rendering.</p>
+              <p class="agent-source-line" data-testid="agent-source-line">↳ Projects/Q2-arch.md</p>
+            </article>
+
+            <article class="message message--human" data-testid="message-human">
+              <p>Show me the proposed thread and composer states.</p>
+            </article>
+
+            <div class="thinking-indicator" data-testid="thinking-indicator" data-thinking="active" aria-label="Hugin thinking">
+              <span class="thinking-label">HUGIN</span>
+              <span class="thinking-dot"></span>
+              <span class="thinking-dot"></span>
+              <span class="thinking-dot"></span>
+            </div>
+          </section>
+
+          <footer class="composer-stack">
+            <div class="composer" data-testid="composer" data-composer-state="enabled">
+              <input type="text" value="Draft response..." aria-label="Compose message" readonly />
+              <button type="button" data-testid="composer-send-enabled">Send</button>
+            </div>
+            <div class="composer" data-composer-state="disabled">
+              <input type="text" value="apply or discard to continue" aria-label="Compose message disabled" readonly disabled />
+              <button type="button" data-testid="composer-send-disabled" disabled>Send</button>
+            </div>
+          </footer>
+        </aside>
       </section>
     </div>
   </body>

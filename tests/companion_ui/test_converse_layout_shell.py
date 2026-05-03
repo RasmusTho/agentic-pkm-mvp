@@ -40,3 +40,35 @@ def test_landscape_shell_contains_top_bar_document_and_rail_container() -> None:
     assert 'data-testid="document-pane"' in html_text
     assert 'data-testid="margin-rail"' in html_text
     assert 'data-rail-state="collapsed"' in html_text
+
+
+def test_thread_contains_human_and_agent_message_variants() -> None:
+    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.html"
+    html_text = html_path.read_text(encoding="utf-8")
+
+    assert 'data-testid="conversation-thread"' in html_text
+    assert 'data-testid="message-human"' in html_text
+    assert 'data-testid="message-agent"' in html_text
+    assert 'data-testid="agent-context-label"' in html_text
+    assert 'data-testid="agent-source-line"' in html_text
+
+
+def test_composer_exposes_enabled_and_disabled_state_hooks() -> None:
+    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.html"
+    html_text = html_path.read_text(encoding="utf-8")
+
+    assert 'data-testid="composer"' in html_text
+    assert 'data-composer-state="enabled"' in html_text
+    assert 'data-composer-state="disabled"' in html_text
+    assert 'data-testid="composer-send-enabled"' in html_text
+    assert 'data-testid="composer-send-disabled"' in html_text
+    assert 'disabled' in html_text
+
+
+def test_thinking_indicator_row_present_and_distinct() -> None:
+    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.html"
+    html_text = html_path.read_text(encoding="utf-8")
+
+    assert 'data-testid="thinking-indicator"' in html_text
+    assert 'data-thinking="active"' in html_text
+    assert "thinking-dot" in html_text
