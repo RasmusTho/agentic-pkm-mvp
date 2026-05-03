@@ -103,6 +103,7 @@ mappings:
   - id: promote.evergreen
     label: "{label}"
     intent_type: promotion
+    trust_verb: APPLY
     downstream_event: review.promote.evergreen
     params:
       maturity: evergreen

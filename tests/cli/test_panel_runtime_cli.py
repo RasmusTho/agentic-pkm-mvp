@@ -40,6 +40,7 @@ mappings:
   - id: promote.evergreen
     label: "Gör denna anteckning evergreen"
     intent_type: promotion
+    trust_verb: APPLY
     downstream_event: review.promote.evergreen
     params:
       maturity: evergreen
@@ -83,6 +84,7 @@ mappings:
   - id: promote.evergreen
     label: "Gör denna anteckning evergreen"
     intent_type: promotion
+    trust_verb: APPLY
     downstream_event: review.promote.evergreen
 ---
 """,
@@ -131,12 +133,14 @@ mappings:
   - id: promote.evergreen
     label: "Gör denna anteckning evergreen"
     intent_type: promotion
+    trust_verb: APPLY
     downstream_event: review.promote.evergreen
     params:
       maturity: evergreen
   - id: log.only
     label: "Do nothing special"
     intent_type: log
+    downstream_event: panel.log.only
 ---
 """,
         encoding="utf-8",
@@ -186,6 +190,7 @@ mappings:
   - id: promote.evergreen
     label: "Gör denna anteckning evergreen"
     intent_type: promotion
+    trust_verb: APPLY
     downstream_event: review.promote.evergreen
     params:
       maturity: evergreen
@@ -233,6 +238,7 @@ mappings:
   - id: promote.evergreen
     label: "Gör denna anteckning evergreen"
     intent_type: promotion
+    trust_verb: APPLY
     downstream_event: review.promote.evergreen
     params:
       maturity: evergreen
