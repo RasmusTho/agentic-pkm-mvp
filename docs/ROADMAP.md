@@ -304,3 +304,9 @@ All six task specs are complete and closed; promotion and rollback skills are au
 ### Outstanding follow-up
 
 **Operational acceptance** — running a stable build against the real vault with a recorded promotion and rehearsed rollback. This is the remaining step before the channel model is treated as fully live in production.
+
+## Companion UI design artifact intake (2026-05-03)
+
+- Converse wireframe/package intake completed at `companion-ui/design-handoff/2026-05-03-converse/`.
+- Package includes implementation-spec README plus reference HTML/CSS/JSX prototypes.
+- Next delivery work should map this handoff into the `companion-ui` implementation while preserving current architecture constraints (runtime-client model, vault-first durability).
