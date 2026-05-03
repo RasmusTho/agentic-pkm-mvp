@@ -60,3 +60,15 @@ This lets `learning-retrospective` scope its next read to entries since the last
 **Source:** verification-and-closure
 **Diverged:** All three remaining canvas slices (#684 co-author body, #685 governance gate, #686 API/CLI) were filed as unimplemented, but `app/chat/canvas_writer.py`, `app/chat/governance_router.py`, API routes, and CLI commands already existed with 19 passing tests. All four spec files had `State: Specification. Not yet implemented.` despite the whole canvas surface having shipped via PRs #605/#618/#619/#626.
 **Upstream artifact:** `docs-to-issue` pre-flight check (now patched in PR #701) + spec-state writeback in `verification-and-closure` (PR #701) — confirms the governance repair was correctly scoped; the three previously-untracked spec State: lines are now promoted in the follow-up docs PR.
+
+## 2026-05-03 — #748 (Dispatcher wrapper docs fix)
+**Source:** human
+**Diverged:** I performed PR creation and local-memory updates ad hoc before explicitly routing through the repo workflow skill boundary, while the expected process is to use the matching in-repo skill for each workflow step.
+**Upstream artifact:** `AGENTS.md` + `.codex/skills/publish-pr/SKILL.md` / `.codex/skills/pr-integration/SKILL.md` usage discipline in agent execution.
+
+## 2026-05-03 — #748 (PR workflow skill routing)
+**Source:** human
+**Diverged:** The process question clarified that PR creation should have been routed explicitly through `publish-pr` as the publication boundary instead of being treated as a generic git/gh step.
+**Upstream artifact:** `.codex/skills/publish-pr/SKILL.md` (canonical PR creation workflow) and `AGENTS.md` workflow sequencing discipline.
+
+--- retro 2026-05-03: applied 4/4 proposals ---
