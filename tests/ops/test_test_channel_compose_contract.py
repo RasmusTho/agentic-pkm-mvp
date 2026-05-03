@@ -25,7 +25,21 @@ TEST_COMPOSE = REPO_ROOT / "docker-compose.test.yml"
 # ---------------------------------------------------------------------------
 
 def _load_compose(path: Path) -> dict:
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    class _ComposeLoader(yaml.SafeLoader):
+        pass
+
+    def _passthrough(loader: yaml.SafeLoader, node: yaml.Node):  # type: ignore[name-defined]
+        if isinstance(node, yaml.ScalarNode):
+            return loader.construct_scalar(node)
+        if isinstance(node, yaml.SequenceNode):
+            return loader.construct_sequence(node)
+        if isinstance(node, yaml.MappingNode):
+            return loader.construct_mapping(node)
+        return None
+
+    _ComposeLoader.add_constructor("!override", _passthrough)
+    _ComposeLoader.add_constructor("!reset", _passthrough)
+    return yaml.load(path.read_text(encoding="utf-8"), Loader=_ComposeLoader) or {}
 
 
 def _compose_env(service: dict) -> dict[str, str | None]:
@@ -75,6 +89,17 @@ def test_test_compose_uses_test_channel_ports_only() -> None:
     assert not any("18000" in p for p in api_ports), (
         f"api service must not re-expose dev/prod port 18000 in test overlay but got: {api_ports}"
     )
+
+
+def test_test_compose_uses_prod_runtime_selector_for_test_channel() -> None:
+    """Regression contract for Issue #717: test overlay replaces published ports.
+
+    Verify: tests/ops/test_compose_override.py::test_test_compose_uses_prod_runtime_selector_for_test_channel
+    """
+    test_overlay = _load_compose(TEST_COMPOSE)
+    services = test_overlay.get("services") or {}
+    assert (services.get("db") or {}).get("ports") == ["15434:5432"]
+    assert (services.get("api") or {}).get("ports") == ["18002:8000"]
 
 
 def test_test_compose_watcher_env_has_valid_pkm_environment() -> None:
