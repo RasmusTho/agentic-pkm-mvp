@@ -250,6 +250,16 @@ def _ingest_agent_stub(request: AgentRequest):
     )
 
 
+def _ingest_agent_stub(request: AgentRequest):
+    return new_response(
+        sender="ingest-agent",
+        recipient="orchestrator.runtime",
+        payload={"summary": "Summaries from ingest-agent", "request_id": str(request.id)},
+        correlation_id=str(request.id),
+        trace_id=request.trace_id,
+    )
+
+
 def _extract_note_path(results: list[dict[str, Any]]) -> str | None:
     for entry in results:
         result_payload = entry.get("result")
@@ -920,13 +930,7 @@ def ask(question: str, vault_root: Path | None, enable_mcp_vault: bool) -> None:
         label = step.description if step else entry.get("step_id")
         click.echo(f"- {label}: {entry.get('status')}")
         if entry.get("status") == "error":
-            # In mock mode, unimplemented mutation tools are expected and should not
-            # fail dry-run planning/preview flows.
-            error_type = entry.get("error_type")
-            if not writes_enabled and error_type == "not_implemented":
-                pass
-            else:
-                exit_code = 1
+            exit_code = 1
             if entry.get("error_type"):
                 click.echo(f"  error_type: {entry['error_type']}")
             if entry.get("error"):

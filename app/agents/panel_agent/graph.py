@@ -85,17 +85,16 @@ def _action_resolution_reason(
 
     # Mutation-capable actions must be explicitly trust-verb classified and admitted as APPLY.
     if (mapping.intent_type or "").strip().lower() == "promotion":
-        if not str(mapping.trust_verb or "").strip():
-            if state.policy_flags.get("allow_legacy_promotion_without_trust_verb"):
-                return None
-            return "trust_verb_missing"
-        trust_verb = str(mapping.trust_verb or "").strip().upper()
-        if not trust_verb:
-            return "trust_verb_missing"
-        if trust_verb not in _TRUST_VERBS:
-            return "trust_verb_invalid"
-        if trust_verb != "APPLY":
-            return "admission_required"
+        trust_verb_raw = str(mapping.trust_verb or "").strip()
+        if not trust_verb_raw:
+            if not state.policy_flags.get("allow_legacy_promotion_without_trust_verb"):
+                return "trust_verb_missing"
+        else:
+            trust_verb = trust_verb_raw.upper()
+            if trust_verb not in _TRUST_VERBS:
+                return "trust_verb_invalid"
+            if trust_verb != "APPLY":
+                return "admission_required"
 
     if catalog and catalog.actions and catalog.get(mapping.id) is None:
         return "unknown_mapping"
