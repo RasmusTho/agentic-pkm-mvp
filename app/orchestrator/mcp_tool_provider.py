@@ -193,14 +193,20 @@ def _load_registry_descriptors() -> Dict[str, ToolDescriptor]:
     registry_tools = load_tools()
     descriptors: Dict[str, ToolDescriptor] = {}
     for tool_name, source in registry_tools.items():
+        canonical = MCP_TOOL_DESCRIPTORS.get(tool_name)
         allowed_args = _extract_allowed_arg_types(source.allowed_args)
         required = _extract_required_args(source.allowed_args)
+        mock_result = dict(source.mock_result or {"status": "ok"})
+        # Keep runtime parity with MockPlanExecutor/get_tool_descriptor so
+        # provider and direct executor produce identical mock payloads.
+        if canonical is not None and isinstance(canonical.mock_result, Mapping):
+            mock_result = dict(canonical.mock_result)
         descriptors[tool_name] = ToolDescriptor(
             name=tool_name,
             kind=_normalize_kind(source.protocol),
             schema={"type": "object", "required": required},
             allowed_args=allowed_args,
-            mock_result=dict(source.mock_result or {"status": "ok"}),
+            mock_result=mock_result,
         )
     return descriptors
 
