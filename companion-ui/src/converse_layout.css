@@ -1,0 +1,86 @@
+:root {
+  --bg-surface: #121820;
+  --bg-raised: #17212b;
+  --fg-1: #e7edf3;
+  --fg-2: #c7d4de;
+  --fg-3: #8d9cab;
+  --border: #2c3a46;
+  --vault-online: #3fb37f;
+  --agent: #4a9eff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #0d131a;
+  color: var(--fg-1);
+  font-family: "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+.converse-shell {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: 38px 1fr;
+  background: radial-gradient(circle at 20% 0%, rgba(74, 158, 255, 0.08), transparent 35%), #0d131a;
+}
+
+.top-bar {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+}
+
+.vault-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.vault-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vault-online);
+}
+
+.main-landscape {
+  display: grid;
+  grid-template-columns: 1fr 32px;
+  min-height: 0;
+}
+
+.main-landscape[data-rail-state="expanded"] {
+  grid-template-columns: 1fr 288px;
+}
+
+.document-pane {
+  overflow: auto;
+  padding: 44px 24px;
+}
+
+.document-column {
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.rail {
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+}
+
+.rail--collapsed {
+  width: 32px;
+}
+
+.rail--expanded {
+  width: 288px;
+}
