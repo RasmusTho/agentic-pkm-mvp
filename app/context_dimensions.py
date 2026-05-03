@@ -15,19 +15,19 @@ class ContextDimensions(BaseModel):
     def _normalize_scope(cls, value: object) -> str:
         if value is None:
             return "default"
-        if isinstance(value, str):
-            stripped = value.strip()
-            return stripped or "default"
-        return str(value)
+        if not isinstance(value, str):
+            raise TypeError("scope must be a string")
+        stripped = value.strip()
+        return stripped or "default"
 
     @field_validator("sphere_memberships", mode="before")
     @classmethod
     def _normalize_spheres(cls, value: object) -> list[str]:
         if value is None:
-            return []
+            raise TypeError("sphere_memberships must be a list")
         if isinstance(value, list):
             return [str(item) for item in value]
-        raise TypeError("sphere_memberships must be a list or null")
+        raise TypeError("sphere_memberships must be a list")
 
 
 def from_legacy_domain(domain: str | None) -> ContextDimensions:

@@ -1,3 +1,5 @@
+import pytest
+
 from app.context_dimensions import ContextDimensions, from_legacy_domain
 
 
@@ -16,10 +18,16 @@ def test_domain_to_scope_migration() -> None:
 
 
 def test_context_dimensions_invariants() -> None:
-    defaulted_scope = ContextDimensions(scope=None, sphere_memberships=None, situated_identity=None)
+    defaulted_scope = ContextDimensions(scope=None, sphere_memberships=[], situated_identity=None)
     assert defaulted_scope.scope == "default"
     assert defaulted_scope.sphere_memberships == []
     assert defaulted_scope.situated_identity is None
+
+    with pytest.raises(TypeError):
+        ContextDimensions(scope={"bad": "scope"}, sphere_memberships=[], situated_identity=None)
+
+    with pytest.raises(TypeError):
+        ContextDimensions(scope="default", sphere_memberships=None, situated_identity=None)
 
 
 def test_context_dimensions_importable() -> None:
