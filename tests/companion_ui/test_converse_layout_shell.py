@@ -84,3 +84,40 @@ def test_collapsed_rail_uses_compact_strip_affordances() -> None:
     assert '.main-landscape[data-rail-state="collapsed"] .conversation-thread' in css_text
     assert '.main-landscape[data-rail-state="collapsed"] .composer-stack' in css_text
     assert "display: none;" in css_text
+
+
+def test_suggestion_state_dimming_and_proposed_insertion_block() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    html_text = (repo_root / "companion-ui" / "src" / "converse_layout.html").read_text(encoding="utf-8")
+    css_text = (repo_root / "companion-ui" / "src" / "converse_layout.css").read_text(encoding="utf-8")
+
+    assert 'data-suggestion-state="active"' in html_text
+    assert 'data-testid="document-dimmed-region"' in html_text
+    assert 'data-testid="suggested-insertion-block"' in html_text
+    assert 'data-testid="suggested-insertion-label"' in html_text
+    assert "opacity: 0.35;" in css_text
+    assert "border-left: 3px solid #f09030;" in css_text
+
+
+def test_suggestion_card_mirrors_proposal_identity_cues() -> None:
+    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.html"
+    html_text = html_path.read_text(encoding="utf-8")
+
+    assert 'data-testid="suggestion-card"' in html_text
+    assert 'data-testid="suggestion-card-label"' in html_text
+    assert "HUGIN · PROPOSED ADDITION" in html_text
+    assert 'data-testid="suggestion-card-diff-hint"' in html_text
+    assert 'data-suggestion-id="suggestion-001"' in html_text
+    assert 'data-proposal-id="suggestion-001"' in html_text
+
+
+def test_apply_discard_controls_emit_bounded_ui_intents() -> None:
+    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.html"
+    html_text = html_path.read_text(encoding="utf-8")
+
+    assert 'data-testid="apply-suggestion"' in html_text
+    assert 'data-testid="discard-suggestion"' in html_text
+    assert 'data-intent="suggestion.apply"' in html_text
+    assert 'data-intent="suggestion.discard"' in html_text
+    assert 'data-target-suggestion-id="suggestion-001"' in html_text
+    assert 'data-persistence="none"' in html_text

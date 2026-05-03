@@ -16,11 +16,20 @@
         </div>
       </header>
 
-      <section class="main-landscape" data-testid="main-landscape" data-rail-state="collapsed">
+      <section class="main-landscape" data-testid="main-landscape" data-rail-state="collapsed" data-suggestion-state="active">
         <main class="document-pane" data-testid="document-pane">
           <article class="document-column" data-testid="document-column">
             <h1>Decision capture scaffold</h1>
-            <p>The document remains visually primary while the rail changes state.</p>
+            <p class="document-dimmed-region" data-testid="document-dimmed-region">The document remains visually primary while the rail changes state.</p>
+            <section
+              class="suggested-insertion-block"
+              data-testid="suggested-insertion-block"
+              data-suggestion-id="suggestion-001"
+              data-proposal-id="suggestion-001"
+            >
+              <p class="suggested-insertion-label" data-testid="suggested-insertion-label">PROPOSED ADDITION</p>
+              <p>Introduce explicit staged suggestion actions with no direct persistence side effects.</p>
+            </section>
           </article>
         </main>
 
@@ -46,6 +55,37 @@
 
             <article class="message message--human" data-testid="message-human">
               <p>Show me the proposed thread and composer states.</p>
+            </article>
+
+            <article
+              class="suggestion-card"
+              data-testid="suggestion-card"
+              data-suggestion-id="suggestion-001"
+              data-proposal-id="suggestion-001"
+            >
+              <p class="suggestion-card-label" data-testid="suggestion-card-label">HUGIN · PROPOSED ADDITION</p>
+              <p>Add a staged insertion for explicit user-controlled apply/discard flow.</p>
+              <p class="suggestion-card-diff-hint" data-testid="suggestion-card-diff-hint">+3 lines after ## Current state</p>
+              <div class="suggestion-actions">
+                <button
+                  type="button"
+                  data-testid="apply-suggestion"
+                  data-intent="suggestion.apply"
+                  data-target-suggestion-id="suggestion-001"
+                  data-persistence="none"
+                >
+                  Apply to note
+                </button>
+                <button
+                  type="button"
+                  data-testid="discard-suggestion"
+                  data-intent="suggestion.discard"
+                  data-target-suggestion-id="suggestion-001"
+                  data-persistence="none"
+                >
+                  Discard
+                </button>
+              </div>
             </article>
 
             <div class="thinking-indicator" data-testid="thinking-indicator" data-thinking="active" aria-label="Hugin thinking">
