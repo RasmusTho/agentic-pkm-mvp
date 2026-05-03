@@ -89,7 +89,7 @@ prod-down:
 	@$(COMPOSE_PROD) down --remove-orphans
 
 test-up:
-	@$(COMPOSE_TEST) up -d --build
+	@VAULT_ROOT="$(TEST_VAULT_ROOT)" $(COMPOSE_TEST) up -d --build
 
 test-down:
 	@$(COMPOSE_TEST) down --remove-orphans

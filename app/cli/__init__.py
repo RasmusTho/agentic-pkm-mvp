@@ -215,6 +215,9 @@ def _render_mermaid_sequence(seq: LLMSequence) -> str:
 
 class _RecordingOrchestrator(Orchestrator):
     def __init__(self, *args, **kwargs) -> None:
+        executor = MockPlanExecutor()
+        executor.register_handler("ingest-agent", self._mock_ingest_agent)
+        kwargs.setdefault("executor", executor)
         super().__init__(*args, **kwargs)
         self.last_results: list[dict[str, Any]] | None = None
 
@@ -222,6 +225,19 @@ class _RecordingOrchestrator(Orchestrator):
         results = super().run_plan(plan)
         self.last_results = results
         return results
+
+    @staticmethod
+    def _mock_ingest_agent(request):
+        return new_response(
+            sender="ingest-agent",
+            recipient=request.sender,
+            payload={
+                "summary": "Summaries from ingest-agent",
+                "status": "ok",
+            },
+            correlation_id=str(request.id),
+            trace_id=request.trace_id,
+        )
 
 
 def _ingest_agent_stub(request: AgentRequest):
