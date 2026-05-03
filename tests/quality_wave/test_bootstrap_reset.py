@@ -1,10 +1,16 @@
 """Test suite for bootstrap reset functionality."""
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
 
+import pytest
+
+
+if not shutil.which("docker"):
+    pytestmark = pytest.mark.skip(reason="docker is required for reset-zero-force tests")
 
 def test_reset_zero_force_exits_zero():
     """Test that make reset-zero-force exits with code 0."""

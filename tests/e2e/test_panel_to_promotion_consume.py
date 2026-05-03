@@ -67,6 +67,7 @@ mappings:
     label: "Gör denna anteckning evergreen"
     intent_type: promotion
     downstream_event: review.promote.evergreen
+    trust_verb: APPLY
     params:
       maturity: evergreen
 ---
