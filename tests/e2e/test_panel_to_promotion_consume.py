@@ -68,6 +68,7 @@ mappings:
     intent_type: promotion
     trust_verb: APPLY
     downstream_event: review.promote.evergreen
+    trust_verb: APPLY
     params:
       maturity: evergreen
 ---
