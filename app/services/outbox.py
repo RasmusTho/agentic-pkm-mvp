@@ -131,6 +131,7 @@ def coerce_outbox_event(event: Any, *, default_source: str = "app") -> OutboxEve
             source=event_source_name(event.source, default=default_source),
             timestamp=event.created_at,
             payload=event_payload_dict(event.payload),
+            context_dimensions=getattr(event, "context_dimensions", None),
         )
     event_name = getattr(event, "event", None) or getattr(event, "event_type", None)
     if not event_name:
