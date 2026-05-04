@@ -10,6 +10,13 @@
     <div class="converse-shell">
       <header class="top-bar" data-testid="top-bar">
         <strong>Converse</strong>
+        <button
+          class="session-pill"
+          type="button"
+          data-testid="session-pill"
+          data-intent="session-drawer.open"
+          aria-label="Open session list"
+        >Decision capture scaffold ▾</button>
         <div class="vault-status" data-testid="vault-status">
           <span class="vault-status-dot" aria-label="Vault online"></span>
           <span>Vault online</span>
@@ -108,6 +115,76 @@
           </footer>
         </aside>
       </section>
+    </div>
+
+    <!-- C.4 — Session drawer overlay -->
+    <div class="session-drawer-overlay" data-testid="session-drawer" data-drawer-state="closed">
+      <div
+        class="session-drawer-scrim"
+        data-testid="session-drawer-scrim"
+        data-intent="session-drawer.dismiss"
+        aria-hidden="true"
+      ></div>
+      <nav class="session-drawer" aria-label="Sessions">
+        <header class="session-drawer-header">
+          <span class="session-drawer-title">SESSIONS</span>
+          <button class="session-drawer-new" type="button" data-testid="session-drawer-new" aria-label="New session">
+            + New
+          </button>
+          <button
+            class="session-drawer-close"
+            type="button"
+            data-testid="session-drawer-close"
+            data-intent="session-drawer.close"
+            aria-label="Close session drawer"
+          >✕</button>
+        </header>
+        <div class="session-drawer-search" data-testid="session-drawer-search">
+          <input type="search" placeholder="Search sessions…" aria-label="Search sessions" />
+        </div>
+        <ul class="session-list" data-testid="session-list" role="list">
+          <li class="session-list-item session-list-item--active" data-testid="session-list-item-active" role="listitem">
+            <span class="session-title">Decision capture scaffold</span>
+            <span class="session-path">Projects/Q2-arch.md</span>
+            <span class="session-meta">2h · 18 turns</span>
+          </li>
+          <li class="session-list-item" data-testid="session-list-item" role="listitem">
+            <span class="session-title">Architecture review</span>
+            <span class="session-path">Projects/arch-review.md</span>
+            <span class="session-meta">1d · 7 turns</span>
+          </li>
+        </ul>
+        <footer class="session-drawer-footer" data-testid="session-drawer-footer">
+          <span class="vault-status-dot" aria-hidden="true"></span>
+          <span>Vault online · 2 sessions</span>
+        </footer>
+      </nav>
+    </div>
+
+    <!-- C.5 — Portrait bottom sheet (replaces margin rail in portrait/narrow viewports) -->
+    <div
+      class="bottom-sheet"
+      data-testid="bottom-sheet"
+      data-sheet-snap="peek"
+      aria-label="Conversation bottom sheet"
+    >
+      <div class="bottom-sheet-handle" data-testid="bottom-sheet-handle" aria-hidden="true"></div>
+      <header class="rail-header">
+        <span class="hugin-dot" aria-hidden="true"></span>
+        <span class="hugin-label">HUGIN</span>
+        <span class="turn-count">18 turns ›</span>
+      </header>
+      <section class="conversation-thread" aria-label="Conversation thread">
+        <article class="message message--agent">
+          <p>We can keep this bounded to visual state and thread rendering.</p>
+        </article>
+      </section>
+      <footer class="composer-stack">
+        <div class="composer" data-composer-state="enabled">
+          <input type="text" placeholder="Message Hugin…" aria-label="Compose message" />
+          <button type="button" data-testid="bottom-sheet-composer-send">Send</button>
+        </div>
+      </footer>
     </div>
   </body>
 </html>
