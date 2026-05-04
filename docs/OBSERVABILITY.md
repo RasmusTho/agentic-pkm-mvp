@@ -59,6 +59,10 @@ Architectural reading note:
   operator-facing honesty signal for stale or partial runtime views; it is not distributed
   consensus, replica conflict resolution, or a guarantee that every retrieval result is globally
   fresh.
+- **`context_dimensions`** (optional): present when a separated-dimension context is active;
+  contains `scope`, `sphere_memberships`, and `situated_identity` with SSI-01 canonical semantics.
+  Omitted entirely when no separated-dimension context is active — a block of all-null values is
+  not permitted. See `docs/SCOPE_SPHERE_SITUATED_IDENTITY/EXPOSE_CONTEXT_DIMENSIONS_IN_STATUS_AND_RECEIPTS.md` (SSI-03) for field semantics and guardrail notes.
 
 ## Feature-line and Event Counters
 - **SoT baseline vs forward line**: `sot_baseline_version` is the locked baseline (v5.5). `sot_forward_line_version` / `feature_line_version` represent the active forward line (v5.6: LangGraph/Reasoning rollouts on top of the v5.5 baseline). `active_features` enumerates which forward-line capabilities are present (PanelAgent runtime, watcher snapshot/policy track, config-driven panel wiring).

@@ -39,6 +39,11 @@ All outbox records MUST include this minimal envelope:
 - `timestamp` (`string`, ISO-8601 UTC): emission time.
 - `payload` (`object`): event-specific content.
 - `meta` (`object`, optional): non-semantic metadata; when omitted it is treated as `{}`.
+- `context_dimensions` (`object`, optional): named optional top-level field carrying separated
+  scope/sphere/identity dimensions with SSI-01 canonical shape (`scope`, `sphere_memberships`,
+  `situated_identity`). Omit entirely when the invocation had no separated-dimension context; do
+  not emit an all-null block. Distinct from generic unknown additionals — this field has a defined
+  contract. See `docs/SCOPE_SPHERE_SITUATED_IDENTITY/EXPOSE_CONTEXT_DIMENSIONS_IN_STATUS_AND_RECEIPTS.md` (SSI-03) for field semantics and guardrail notes.
 
 Notes:
 
