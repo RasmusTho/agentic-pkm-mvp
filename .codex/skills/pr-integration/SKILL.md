@@ -73,6 +73,28 @@ gh pr checks <PR_NUMBER>
 
 **If contract fails:** Stop and route through issue-maintenance with explicit contract-drift context.
 
+### 1.5) Conflict Marker Gate (Changed Files)
+
+**Action: scan changed files for unresolved merge-conflict markers before CI interpretation**
+
+```bash
+# Prefer PR base ref when available; default to origin/main
+PR_BASE_REF=$(gh pr view <PR_NUMBER> --json baseRefName --jq '.baseRefName' 2>/dev/null || echo "main")
+git fetch origin "$PR_BASE_REF"
+
+git diff --name-only --diff-filter=ACMRT "origin/$PR_BASE_REF...HEAD" > /tmp/pr_files.txt
+if [ -s /tmp/pr_files.txt ]; then
+  if xargs -a /tmp/pr_files.txt rg -n '^(<<<<<<<|>>>>>>>)'; then
+    echo "❌ BLOCKED: unresolved merge-conflict markers present"
+    echo "Handoff decision: blocked-merge-conflict"
+    exit 1
+  fi
+fi
+echo "✅ No conflict markers detected in changed files"
+```
+
+If markers are found, resolve them, re-run focused validation, push, and restart from mergeability checks.
+
 ### 2) Mergeability Gate
 
 **Critical: Never trust the GitHub API `mergeable` field alone.** GitHub returns `null` while computing and `dirty` for multiple unrelated reasons. Always verify locally.

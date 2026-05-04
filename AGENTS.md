@@ -53,6 +53,12 @@ For GitHub implementation work, loading `.codex/skills/issue-to-code/SKILL.md` i
 That skill owns the pickup rule:
 when active work begins, move the governing Issue/Project state to `In Progress` and remove `agent:ready` before local edits so another agent does not pick up the same task.
 
+Execution discipline:
+
+- When a task clearly matches a repo-local workflow skill, load that skill before workflow-boundary actions in that lane.
+- Publication actions (branch creation, commit creation, push, PR creation/update) route through `.codex/skills/publish-pr/SKILL.md` as the canonical publication boundary.
+- Do not perform ad hoc publication flow first and retroactively map it to a skill; route through the matching skill before executing boundary actions.
+
 Workflow state model:
 
 - Issue state is for claim/active/block/closure flow: `Ready`, `In Progress`, `Blocked`, `Done`.
@@ -140,6 +146,9 @@ Builder-agent rules:
 - Prefer Issues plus truthful agent labels and linked PR state as harder authority than Project state if they drift.
 - Use Project `Status` as the pickup and coordination projection. `agent:ready` is only the pickup qualifier for `Status=Ready`; blocked labels belong on non-active work, and closed issues must not retain `agent:*` labels.
 - When a PR delivers a tracked backlog item, update the owner doc to describe shipped reality and rewrite roadmap/plan wording so it no longer reads as pending work.
+- Prefer GitHub REST endpoints for routine issue/label/PR operations; use GraphQL when REST does not express the required operation.
+- When GraphQL is required, resolve stable identifiers once per run and reuse cached values instead of repeating lookup queries.
+- Batch project-field GraphQL mutations into one bounded pass near workflow completion, rather than interleaving repeated mutations throughout intake.
 
 ## Dispatcher policy
 
