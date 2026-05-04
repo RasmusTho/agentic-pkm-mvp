@@ -108,6 +108,7 @@ def claim(
     )
 
     task = store.get_task(task_id)
+    assert task is not None, f"task {task_id} missing after successful claim"
 
     event = EventRecord(
         event_id=_make_event_id(),

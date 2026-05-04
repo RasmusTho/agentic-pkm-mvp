@@ -158,7 +158,7 @@ class MCPToolProvider:
                     step_id=step_id,
                     description=description,
                 )
-                return dict(response.get("result") if isinstance(response, Mapping) and "result" in response else response)
+                return dict(response["result"] if isinstance(response, Mapping) and "result" in response else response)
             except Exception:
                 route["provider_route"] = "local_registry"
                 route["provider_route_reason"] = "remote_provider_error"

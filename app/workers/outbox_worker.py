@@ -236,6 +236,8 @@ def _outbox_audit_path() -> Path:
 
 def _payload_retry_count(payload: Mapping[str, Any]) -> int:
     raw = payload.get("_worker_retry_count")
+    if raw is None:
+        return 0
     try:
         return max(int(raw), 0)
     except (TypeError, ValueError):
