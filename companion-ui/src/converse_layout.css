@@ -8,6 +8,7 @@
   --vault-online: #3fb37f;
   --agent: #4a9eff;
   --cyan: #6edbff;
+  --amber: #f09030;
 }
 
 * {
@@ -93,7 +94,7 @@ body {
   display: none;
 }
 
-.main-landscape[data-rail-state="collapsed"] .rail-collapsed-strip {
+.main-landscape[data-rail-state="collapsed"]:not([data-suggestion-state="active"]) .rail-collapsed-strip {
   display: grid;
   align-content: space-between;
   justify-items: center;
@@ -101,10 +102,27 @@ body {
   height: 100%;
 }
 
-.main-landscape[data-rail-state="collapsed"] .rail-header,
+.main-landscape[data-rail-state="collapsed"]:not([data-suggestion-state="active"]) .rail-header,
+.main-landscape[data-rail-state="collapsed"]:not([data-suggestion-state="active"]) .conversation-thread,
+.main-landscape[data-rail-state="collapsed"]:not([data-suggestion-state="active"]) .composer-stack {
+  display: none;
+}
+
 .main-landscape[data-rail-state="collapsed"] .conversation-thread,
 .main-landscape[data-rail-state="collapsed"] .composer-stack {
   display: none;
+}
+
+.main-landscape[data-rail-state="collapsed"][data-suggestion-state="active"] {
+  grid-template-columns: 1fr 288px;
+}
+
+.main-landscape[data-rail-state="collapsed"][data-suggestion-state="active"] .conversation-thread {
+  display: flex;
+}
+
+.main-landscape[data-rail-state="collapsed"][data-suggestion-state="active"] .composer-stack {
+  display: grid;
 }
 
 .collapsed-unread {
@@ -160,6 +178,73 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.main-landscape[data-suggestion-state="active"] .document-dimmed-region,
+.main-landscape[data-suggestion-state="active"] .message {
+  opacity: 0.35;
+}
+
+.suggested-insertion-block {
+  margin-top: 10px;
+  border-left: 3px solid #f09030;
+  background: rgba(240, 144, 48, 0.07);
+  border-radius: 0 2px 2px 0;
+  padding: 10px 12px;
+  position: relative;
+}
+
+.suggested-insertion-label {
+  margin: 0 0 6px;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: var(--amber);
+}
+
+.suggestion-card {
+  opacity: 1;
+  border: 1px solid rgba(240, 144, 48, 0.3);
+  border-left: 3px solid #f09030;
+  background: rgba(240, 144, 48, 0.07);
+  border-radius: 2px;
+  padding: 8px 10px;
+}
+
+.suggestion-card-label {
+  margin: 0 0 5px;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: var(--amber);
+}
+
+.suggestion-card-diff-hint {
+  margin: 6px 0 0;
+  font-size: 8px;
+  color: var(--fg-3);
+}
+
+.suggestion-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.suggestion-actions button {
+  padding: 4px 12px;
+  border-radius: 2px;
+  background: rgba(240, 144, 48, 0.08);
+  font-size: 11px;
+}
+
+[data-testid="apply-suggestion"] {
+  border: 1px solid var(--amber);
+  color: var(--amber);
+}
+
+[data-testid="discard-suggestion"] {
+  border: 1px solid var(--border);
+  color: var(--fg-3);
+  background: transparent;
 }
 
 .message {
