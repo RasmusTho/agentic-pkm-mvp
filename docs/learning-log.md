@@ -72,3 +72,13 @@ This lets `learning-retrospective` scope its next read to entries since the last
 **Upstream artifact:** `.codex/skills/publish-pr/SKILL.md` (canonical PR creation workflow) and `AGENTS.md` workflow sequencing discipline.
 
 --- retro 2026-05-03: applied 4/4 proposals ---
+
+## 2026-05-04 — CI baseline audit (ruff + mypy drift on main)
+**Source:** backlog-reconciliation-drift-audit
+**Diverged:** `docs/development/DEV_WORKFLOW.md` states that `ruff check app tests` and `mypy app` must be run before merging code-affecting changes, but 34 ruff violations (F401/F841/F811, predominantly test files) and 7 mypy errors exist on main today — no CI gate prevents them from landing.
+**Upstream artifact:** `docs/development/DEV_WORKFLOW.md` — add a hard pre-merge requirement note, or wire ruff + mypy as blocking CI checks so the policy is enforced rather than advisory.
+
+## 2026-05-04 — v2_runtime duplicate _load_checkpoint (orchestrator V2)
+**Source:** backlog-reconciliation-drift-audit
+**Diverged:** `app/orchestrator/v2_runtime.py` defines `_load_checkpoint` twice (lines 616 and 625); the second definition silently shadows the first and survived merge because mypy is not a blocking CI gate.
+**Upstream artifact:** `app/orchestrator/v2_runtime.py` — remove the duplicate definition; one of the two `_load_checkpoint` bodies is unreachable.
