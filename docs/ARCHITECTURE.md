@@ -620,7 +620,7 @@ See [`docs/RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md`](RELEASE_CHANNELS/DEFINE
 ## Companion UI design handoff reference (2026-05-03)
 
 A new Companion UI converse-surface design handoff was added at `companion-ui/design-handoff/2026-05-03-converse/`.
-This handoff remains a design reference package (wireframe HTML, style tokens, and prototype JSX), and the first bounded implementation slice now exists in `companion-ui/src/` as a document-first layout shell with deterministic rail-state geometry. These assets remain companion-UI reference code, not production runtime code.
+This handoff remains a design reference package (wireframe HTML, style tokens, and prototype JSX), and a bounded implementation now exists in `companion-ui/src/` covering rail-state geometry, thread/composer states, and a staged suggestion moment with apply/discard intents (delivered by PR #750). These assets remain companion-UI reference code, not production runtime code.
 
 Architecture boundary reminder:
 - the companion UI remains a client of the existing FastAPI runtime,

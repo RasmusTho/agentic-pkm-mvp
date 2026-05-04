@@ -866,4 +866,4 @@ document should continue to hold.
 
 Converse interaction design handoff materials are now available at `companion-ui/design-handoff/2026-05-03-converse/`.
 The handoff reinforces the document-first Converse behavior: vault note remains primary, dialogue operates as a secondary rail/sheet, and suggestion moments are staged for explicit user action.
-That direction is no longer handoff-only: a first bounded shell implementation now exists in `companion-ui/src/`, while the richer thread/composer, staged-suggestion, and portrait/session-drawer interaction slices remain tracked follow-up work.
+That direction is no longer handoff-only: a bounded shell implementation now exists in `companion-ui/src/` with rail-state geometry, thread/composer states, and a staged suggestion moment (apply/discard intents, mirrored proposal identity cues, and dimmed non-focused region — delivered by PR #750). The portrait/session-drawer interaction slices remain tracked follow-up work.
