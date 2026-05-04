@@ -86,3 +86,24 @@ def test_coerce_outbox_event_uses_typed_payload_not_full_event_envelope(tmp_path
     assert append_jsonl_outbox_event(outbox_path, event, default_source="panel_agent.runtime") is True
     records = [json.loads(line) for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert records[0]["payload"]["panel"]["panel_id"] == "panel-1"
+
+
+def test_coerce_outbox_event_preserves_context_dimensions_from_event() -> None:
+    event = new_event(
+        event_type=INGEST_OBJECT_CREATED,
+        payload={"uuid": "abc-123"},
+        trace_id="trace-ctx",
+        context_dimensions={
+            "scope": "work",
+            "sphere_memberships": ["team"],
+            "situated_identity": "maker",
+        },
+    )
+
+    outbox_event = coerce_outbox_event(event)
+
+    assert outbox_event is not None
+    assert outbox_event.context_dimensions is not None
+    assert outbox_event.context_dimensions["scope"] == "work"
+    assert outbox_event.context_dimensions["sphere_memberships"] == ["team"]
+    assert outbox_event.context_dimensions["situated_identity"] == "maker"

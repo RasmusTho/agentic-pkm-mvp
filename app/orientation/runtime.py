@@ -26,6 +26,15 @@ def _iso(dt: datetime | None) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
+def pass_through_context_dimensions(record: dict[str, object]) -> dict[str, object]:
+    payload = dict(record.get("context_dimensions") or {})
+    return {
+        "scope": payload.get("scope"),
+        "sphere_memberships": list(payload.get("sphere_memberships") or []),
+        "situated_identity": payload.get("situated_identity"),
+    }
+
+
 def build_orientation_frame() -> OrientationFrame:
     signals = get_orientation_signals()
     events = signals.events
@@ -72,4 +81,4 @@ def build_orientation_frame() -> OrientationFrame:
     )
 
 
-__all__ = ["OrientationExplanation", "OrientationFrame", "build_orientation_frame"]
+__all__ = ["OrientationExplanation", "OrientationFrame", "build_orientation_frame", "pass_through_context_dimensions"]

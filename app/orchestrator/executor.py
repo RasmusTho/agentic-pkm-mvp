@@ -76,6 +76,9 @@ class StepContext:
     tool_settings: Mapping[str, Any] | None = None
     budget_state: MutableMapping[str, int] | None = None
     agent_id: str | None = None
+    scope: str | None = None
+    sphere_memberships: list[str] = field(default_factory=list)
+    situated_identity: str | None = None
 
 
 class PlanExecutor(Protocol):
