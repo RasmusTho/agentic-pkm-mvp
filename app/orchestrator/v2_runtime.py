@@ -636,15 +636,6 @@ class OrchestratorV2:
         checkpoint_data = self._checkpoint_store.load_checkpoint(checkpoint_key)
         return checkpoint_data
 
-    def _load_checkpoint(self, plan: Plan) -> Optional[Dict[str, Any]]:
-        """Load a checkpoint for plan resume."""
-        if not self._checkpoint_store:
-            return None
-
-        checkpoint_key = f"checkpoint-{plan.id}"
-        checkpoint_data = self._checkpoint_store.load_checkpoint(checkpoint_key)
-        return checkpoint_data
-
     def _save_checkpoint(self, plan: Plan, completed_steps: set[str], plan_results: Dict[str, Any]) -> None:
         """Save a checkpoint for recovery."""
         if not self._checkpoint_store:

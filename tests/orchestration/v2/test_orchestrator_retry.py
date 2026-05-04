@@ -333,7 +333,7 @@ class TestRetryObservability:
             outbox=mock_outbox,
         )
 
-        results = orchestrator.run_plan(plan)
+        orchestrator.run_plan(plan)
 
         # Verify retry event has all expected metadata
         retry_events = mock_outbox.list_events("orchestrator.step.retry")
@@ -381,7 +381,7 @@ class TestRetryObservability:
             outbox=mock_outbox,
         )
 
-        results = orchestrator.run_plan(plan)
+        orchestrator.run_plan(plan)
 
         # Verify no retry events were emitted
         retry_events = mock_outbox.list_events("orchestrator.step.retry")
