@@ -39,6 +39,7 @@ class Event(BaseModel):
     event_id: str = Field(default_factory=new_event_id)
     trace_id: str | None = None
     payload: Dict[str, Any] = Field(default_factory=dict)
+    context_dimensions: Dict[str, Any] | None = None
     created_at: str = Field(default_factory=_now_iso)
     source: str | None = None
     instance_id: str = Field(default_factory=_default_instance_id)
@@ -48,6 +49,7 @@ def new_event(
     *,
     event_type: str,
     payload: Dict[str, Any] | None = None,
+    context_dimensions: Dict[str, Any] | None = None,
     trace_id: str | None = None,
     source: str | None = None,
     event_id: str | None = None,
@@ -60,6 +62,7 @@ def new_event(
         event_id=event_id or new_event_id(),
         trace_id=trace_id,
         payload=data,
+        context_dimensions=context_dimensions,
         created_at=created_at or _now_iso(),
         source=source,
     )

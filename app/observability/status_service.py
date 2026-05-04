@@ -36,6 +36,7 @@ from app.observability.status_model import (
     WatcherAutomationStatus,
     WorkerQueueStatus,
     WriteGuardStatus,
+    ContextDimensionsStatus,
 )
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
@@ -753,6 +754,47 @@ def _get_instance_provenance_status() -> InstanceProvenanceStatus | None:
     )
 
 
+def _normalize_context_dimensions(value: object) -> ContextDimensionsStatus | None:
+    if not isinstance(value, dict):
+        return None
+    if "scope" not in value or "sphere_memberships" not in value:
+        return None
+    scope = value.get("scope")
+    spheres = value.get("sphere_memberships")
+    if not isinstance(scope, str) or scope is None:
+        return None
+    if not isinstance(spheres, list):
+        return None
+    return ContextDimensionsStatus(
+        scope=scope.strip() or "default",
+        sphere_memberships=[str(item) for item in spheres],
+        situated_identity=value.get("situated_identity", None),
+    )
+
+
+def _status_context_dimensions(outbox_path: Path) -> ContextDimensionsStatus | None:
+    try:
+        lines = outbox_path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return None
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except Exception:
+            continue
+        top_level = _normalize_context_dimensions(record.get("context_dimensions"))
+        if top_level is not None:
+            return top_level
+        payload = record.get("payload")
+        if isinstance(payload, dict):
+            nested = _normalize_context_dimensions(payload.get("context_dimensions"))
+            if nested is not None:
+                return nested
+    return None
+
+
 def get_system_status() -> SystemStatus:
     sot_meta = get_sot_metadata()
     ingestion = get_ingestion_status()
@@ -794,6 +836,7 @@ def get_system_status() -> SystemStatus:
         ),
         watcher_automation=_get_watcher_automation_status(),
         instance_provenance=_get_instance_provenance_status(),
+        context_dimensions=_status_context_dimensions(Path(INDEX_OUTBOX_PATH)),
     )
 
 
