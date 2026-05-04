@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from app.sync.base import FileChange, FileOperation
+from app.sync.base import FileChange, FileOperation, SyncLayer, SyncResult, SyncStatus  # noqa: F401
 
 
 @pytest.fixture
