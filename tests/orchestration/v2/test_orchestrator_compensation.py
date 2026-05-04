@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.orchestrator.v2_runtime import OrchestratorV2
 from app.orchestrator.executor import StepContext, StepExecutionError
-from app.planner.schema import Plan, PlanMetadata, PlanStep, PlanTrigger
+from app.planner.schema import Plan, PlanMetadata, PlanStep
 
 from .conftest import (
     MockOutbox,

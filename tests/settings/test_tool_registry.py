@@ -26,7 +26,6 @@ def test_tools_load_and_match_manifest() -> None:
 def test_tool_descriptors_have_required_fields() -> None:
     """Validate that all active tool descriptors have the minimum required fields documented in TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT."""
     tools = load_tools()
-    required_fields = {"id", "status", "protocol", "server", "description"}
     for tool_id, tool in tools.items():
         assert tool.id == tool_id, f"Tool id mismatch for {tool_id}"
         assert tool.status, f"Tool {tool_id} missing status field"

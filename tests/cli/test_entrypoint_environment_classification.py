@@ -14,10 +14,8 @@ from __future__ import annotations
 
 import pytest
 from click.testing import CliRunner
-from pathlib import Path
 
 from app.cli import cli
-from app.cli.watcher import watcher_group
 from app.config.environment import (
     ENV_DEV,
     ENV_PROD,

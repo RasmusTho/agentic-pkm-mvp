@@ -55,7 +55,7 @@ def normalize_github_issue(payload: dict[str, Any], now: str | None = None) -> T
     task_id = f"github-issue-{number}"
 
     labels: list[str] = [
-        (lbl.get("name") or lbl) if isinstance(lbl, dict) else str(lbl)
+        str(lbl.get("name") or lbl) if isinstance(lbl, dict) else str(lbl)
         for lbl in payload.get("labels", [])
     ]
 
@@ -394,7 +394,7 @@ class PullSyncAdapter:
             if not isinstance(number, int):
                 continue
             labels = {
-                (lbl.get("name") if isinstance(lbl, dict) else str(lbl))
+                str(lbl.get("name") or lbl) if isinstance(lbl, dict) else str(lbl)
                 for lbl in issue.get("labels", [])
             }
             open_issue_labels[number] = labels
@@ -404,8 +404,8 @@ class PullSyncAdapter:
             if task.issue_number in ready_issue_numbers:
                 continue
 
-            labels = open_issue_labels.get(task.issue_number)
-            if labels is None:
+            task_labels = open_issue_labels.get(task.issue_number)
+            if task_labels is None:
                 next_status = "completed"
                 reason = "closed-or-missing-from-open-issues"
             else:

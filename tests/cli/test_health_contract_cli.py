@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from click.testing import CliRunner
 
-from app.cli import health, cli
+from app.cli import health
 from app.health_contract import reset_state_machine
 
 

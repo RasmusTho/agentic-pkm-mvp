@@ -8,7 +8,6 @@ Live tests (pg marker) require a running pkm-test Docker stack.
 """
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -112,7 +111,6 @@ def test_test_compose_watcher_env_has_valid_pkm_environment() -> None:
 
     Verify: Issue #698 AC1 (compose-config side — no Docker required).
     """
-    from app.config.environment import active_environment
 
     test_overlay = _load_compose(TEST_COMPOSE)
     services = test_overlay.get("services") or {}
@@ -142,7 +140,6 @@ def test_make_test_up_starts_watcher_without_restart_loop() -> None:
 
     Verify: Issue #698 AC1 (no Docker required; exercises the actual code path).
     """
-    import importlib
     import os
     import sys
 
