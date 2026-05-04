@@ -1,10 +1,8 @@
 """Integration tests for environment in SettingsBundle."""
 
 import os
-from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 from app.settings.runtime import _build_bundle
 from app.settings.models import InstanceSettings

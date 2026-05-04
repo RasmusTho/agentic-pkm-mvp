@@ -6,7 +6,6 @@ import json
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 
-import pytest
 
 from app.events.sync import (
     SyncChainCorrelationData,

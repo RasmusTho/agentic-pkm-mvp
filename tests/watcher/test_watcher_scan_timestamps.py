@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-import tempfile
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
-from app.watcher.watcher import _emit_scan_event, _now_iso_from_timestamp
+from app.watcher.watcher import _emit_scan_event
 
 
 class TestWatcherScanEventTimestamps:

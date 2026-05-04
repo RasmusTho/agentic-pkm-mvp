@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -116,7 +115,7 @@ class TestLatencySummaryEventSerialization:
     def test_latency_calculation_is_monotonic(self) -> None:
         """Latency calculations don't produce negative values."""
         from app.events.sync import SyncChainCorrelationData
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timezone
 
         trace_id = uuid4().hex
         base_time = datetime(2025, 3, 5, 14, 30, 0, tzinfo=timezone.utc)
