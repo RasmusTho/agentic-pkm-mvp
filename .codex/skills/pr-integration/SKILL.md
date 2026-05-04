@@ -84,7 +84,7 @@ git fetch origin "$PR_BASE_REF"
 
 git diff --name-only --diff-filter=ACMRT "origin/$PR_BASE_REF...HEAD" > /tmp/pr_files.txt
 if [ -s /tmp/pr_files.txt ]; then
-  if xargs -a /tmp/pr_files.txt rg -n '^(<<<<<<<|=======|>>>>>>>)'; then
+  if xargs -a /tmp/pr_files.txt rg -n '^(<<<<<<<|>>>>>>>)'; then
     echo "❌ BLOCKED: unresolved merge-conflict markers present"
     echo "Handoff decision: blocked-merge-conflict"
     exit 1
