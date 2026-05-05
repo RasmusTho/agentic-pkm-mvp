@@ -154,13 +154,13 @@ def serialize_outbox_record(event: Any, *, default_source: str = "app") -> dict[
     if isinstance(event, dict):
         return dict(event)
     if hasattr(event, "model_dump"):
-        dumped = event.model_dump(mode="json")
+        dumped = event.model_dump(mode="json", exclude_none=True)
         if isinstance(dumped, dict):
             return dumped
     coerced = coerce_outbox_event(event, default_source=default_source)
     if coerced is None:
         return None
-    return coerced.model_dump(mode="json")
+    return coerced.model_dump(mode="json", exclude_none=True)
 
 
 def append_jsonl_outbox_event(outbox_path: Path, event: Any, *, default_source: str = "app") -> bool:
