@@ -76,11 +76,13 @@ def test_session_drawer_state_model_resolves_open_and_closed() -> None:
     state = _load_state_module()
     closed = state.resolve_session_drawer_state(drawer_open=False)
     assert closed.drawer_open is False
-    assert closed.drawer_class == "session-drawer-overlay session-drawer-overlay--closed"
+    assert closed.drawer_state == "closed"   # must match CSS [data-drawer-state="closed"]
+    assert closed.drawer_class == "session-drawer-overlay"
 
     open_ = state.resolve_session_drawer_state(drawer_open=True)
     assert open_.drawer_open is True
-    assert closed.drawer_class != open_.drawer_class
+    assert open_.drawer_state == "open"      # must match CSS [data-drawer-state="open"]
+    assert open_.drawer_class == closed.drawer_class  # same base class; state carried by drawer_state
 
 
 # ---------------------------------------------------------------------------
@@ -108,12 +110,14 @@ def test_portrait_css_hides_margin_rail_and_shows_bottom_sheet() -> None:
 def test_portrait_layout_state_resolves_snap_points() -> None:
     state = _load_state_module()
     peek = state.resolve_portrait_layout_state(sheet_snap="peek")
-    assert peek.sheet_snap == "peek"
+    assert peek.sheet_snap == "peek"         # value for data-sheet-snap attribute
     assert peek.sheet_height_px == 240
+    assert peek.sheet_class == "bottom-sheet"  # base class only; snap state via sheet_snap
 
     collapsed = state.resolve_portrait_layout_state(sheet_snap="collapsed")
     assert collapsed.sheet_snap == "collapsed"
     assert collapsed.sheet_height_px == 32
+    assert collapsed.sheet_class == "bottom-sheet"
 
 
 # ---------------------------------------------------------------------------

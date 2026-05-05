@@ -26,8 +26,10 @@ class ConverseLayoutState:
 
 
 class SessionDrawerState:
-    def __init__(self, *, drawer_open: bool, drawer_class: str) -> None:
+    def __init__(self, *, drawer_open: bool, drawer_state: str, drawer_class: str) -> None:
         self.drawer_open = drawer_open
+        # data-drawer-state attribute value: "open" | "closed" — CSS selectors target this
+        self.drawer_state = drawer_state
         self.drawer_class = drawer_class
 
 
@@ -38,49 +40,51 @@ class BottomSheetState:
         sheet_snap: str,
         sheet_height_px: int | None,
         sheet_height_vh: int | None,
-        sheet_class: str,
     ) -> None:
-        self.sheet_snap = sheet_snap
+        self.sheet_snap = sheet_snap          # data-sheet-snap attribute value — CSS selectors target this
         self.sheet_height_px = sheet_height_px
         self.sheet_height_vh = sheet_height_vh
-        self.sheet_class = sheet_class
+        self.sheet_class = "bottom-sheet"     # base class only; snap state is carried by sheet_snap
 
 
 def resolve_session_drawer_state(*, drawer_open: bool) -> SessionDrawerState:
-    """Map drawer open/closed boolean to class tokens."""
+    """Map drawer open/closed boolean to data-attribute value and base class token."""
     if drawer_open:
         return SessionDrawerState(
             drawer_open=True,
-            drawer_class="session-drawer-overlay session-drawer-overlay--open",
+            drawer_state="open",
+            drawer_class="session-drawer-overlay",
         )
     return SessionDrawerState(
         drawer_open=False,
-        drawer_class="session-drawer-overlay session-drawer-overlay--closed",
+        drawer_state="closed",
+        drawer_class="session-drawer-overlay",
     )
 
 
 def resolve_portrait_layout_state(*, sheet_snap: str) -> BottomSheetState:
-    """Map a portrait bottom-sheet snap point to geometry and class tokens."""
+    """Map a portrait bottom-sheet snap point to geometry tokens.
+
+    sheet_snap is the value for the data-sheet-snap attribute; CSS height
+    selectors (.bottom-sheet[data-sheet-snap="peek"] etc.) target it directly.
+    """
     if sheet_snap == "collapsed":
         return BottomSheetState(
             sheet_snap=sheet_snap,
             sheet_height_px=PORTRAIT_SHEET_COLLAPSED_HEIGHT_PX,
             sheet_height_vh=None,
-            sheet_class="bottom-sheet bottom-sheet--collapsed",
         )
     if sheet_snap == "peek":
         return BottomSheetState(
             sheet_snap=sheet_snap,
             sheet_height_px=PORTRAIT_SHEET_PEEK_HEIGHT_PX,
             sheet_height_vh=None,
-            sheet_class="bottom-sheet bottom-sheet--peek",
         )
     if sheet_snap == "full":
         return BottomSheetState(
             sheet_snap=sheet_snap,
             sheet_height_px=None,
             sheet_height_vh=PORTRAIT_SHEET_FULL_HEIGHT_VH,
-            sheet_class="bottom-sheet bottom-sheet--full",
         )
     raise ValueError(f"Unsupported sheet_snap: {sheet_snap!r}")
 
