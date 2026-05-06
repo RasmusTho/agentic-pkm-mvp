@@ -5,6 +5,8 @@ on:
     - cron: "0 2 * * *"
   workflow_dispatch:
 
+permissions: read-all
+
 jobs:
   quality-wave-acceptance:
     runs-on: ubuntu-latest

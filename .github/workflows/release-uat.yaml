@@ -5,6 +5,8 @@ on:
   push:
     tags: ['v*']
 
+permissions: read-all
+
 jobs:
   uat-gate:
     runs-on: ubuntu-latest
