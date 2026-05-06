@@ -167,6 +167,7 @@ State model for lane-based delivery:
 - Open PR is the default publication mode. Draft PR is opt-in and requires an explicit reason.
 - `Review` is the agent-review gate before verification, not a generic waiting state.
 - `pr-integration` is conditional and should be used when mergeability/CI attachment/reviewability needs repair; it is not required after every publication.
+- Workspace isolation is mandatory for multi-agent work: one active Codex session per worktree/branch checkout.
 - Prefer automation for PR/project-item projection (especially `Done` on terminal PR state) and use manual skill writes as fallback correction when drift is detected.
 
 Execution rule:
@@ -221,6 +222,16 @@ Enforcement surfaces:
 - Creation: `docs-to-issue`, `feature-breakdown`, and `bug-to-issue` must produce ACs with `Verify:` lines.
 - Repair: `issue-maintenance-change-control` treats missing `Verify:` as malformed contract shape.
 - Consumption: `issue-to-code` gates on `Verify:` presence and implements test-first for behavioral ACs, writeback-first for non-behavioral ACs.
+
+## Multi-Agent Workspace Guardrails
+
+- Preflight before claim/integration:
+  - `scripts/agent_workspace_preflight.sh --expected-branch "$(git branch --show-current)" --expected-worktree "$(git rev-parse --show-toplevel)"`
+- Safe cleanup report:
+  - `scripts/agent_workspace_cleanup.sh --report`
+- Safe cleanup apply (clean tree required):
+  - `scripts/agent_workspace_cleanup.sh --apply`
+- Cleanup apply only removes merged `codex/` branches/worktrees and old `preserve-local-drift` stashes; it skips the current checkout.
 - Closure: `verification-and-closure` resolves every AC's `Verify:` target and blocks merge if any behavioral test is missing, skipped, or xfailed.
 
 The builder-agent effect: test-first discipline emerges automatically for behavioral work — the failing test is the AC's declared proof, so the agent writes or confirms it before code, then implements the smallest change to turn it green.
