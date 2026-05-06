@@ -289,6 +289,8 @@ jobs:
           trap cleanup EXIT
 
           docker compose $compose_files up -d --build db api watcher worker
+          LOG_PATH="/tmp/verify_vaultwide_panel.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.log" \
+          REPORT_PATH="/tmp/verify_vaultwide_panel.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.report" \
           bash scripts/verify_vaultwide_panel.sh
 
       - name: Skip docker smoke for docs-only PR
