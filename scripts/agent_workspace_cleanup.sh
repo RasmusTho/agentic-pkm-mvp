@@ -52,7 +52,7 @@ CURRENT_TOP="$(git rev-parse --show-toplevel)"
 # 1) Prune stale worktree metadata.
 git worktree prune
 
-# 2) Remove local worktrees whose branch is already merged to origin/main.
+# 2) Remove only codex-owned local worktrees whose branch is already merged to origin/main.
 #    Never remove current worktree.
 while IFS= read -r wt; do
   [[ -z "$wt" ]] && continue
@@ -60,10 +60,15 @@ while IFS= read -r wt; do
   WT_BRANCH="$(awk '{print $2}' <<<"$wt")"
   [[ "$WT_PATH" == "$CURRENT_TOP" ]] && continue
   [[ "$WT_BRANCH" == "$CURRENT_BRANCH" ]] && continue
+  [[ "$WT_BRANCH" != codex/* ]] && continue
 
   if git show-ref --verify --quiet "refs/heads/$WT_BRANCH"; then
     if git merge-base --is-ancestor "$WT_BRANCH" origin/main; then
-      git worktree remove "$WT_PATH" --force || true
+      if [[ -n "$(git -C "$WT_PATH" status --porcelain 2>/dev/null || true)" ]]; then
+        echo "Skipping dirty worktree: $WT_PATH ($WT_BRANCH)"
+        continue
+      fi
+      git worktree remove "$WT_PATH" || true
       git branch -d "$WT_BRANCH" || true
     fi
   fi
