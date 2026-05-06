@@ -67,11 +67,13 @@ jobs:
   issue-source-anchors:
     if: github.event_name == 'issues' && (contains(github.event.issue.labels.*.name, 'agent:ready') || contains(github.event.issue.labels.*.name, 'agent:blocked'))
     runs-on: ubuntu-latest
+    env:
+      BODY: ${{ github.event.issue.body }}
     steps:
       - uses: actions/checkout@v4
       - name: Validate Source Anchors
         run: |
-          python3 scripts/validate_source_anchors.py "${{ github.event.issue.body }}"
+          python3 scripts/validate_source_anchors.py "$BODY"
 
   pr-contract:
     if: github.event_name == 'pull_request'
