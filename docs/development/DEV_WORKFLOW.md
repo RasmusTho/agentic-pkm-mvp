@@ -69,6 +69,13 @@ Practical rule:
 
 Run narrower or broader suites when the touched area requires it.
 
+Enforcement note:
+- The command list above is a required pre-merge gate, not advisory.
+- If CI is not currently blocking these checks, treat merge as blocked until either:
+  - the checks pass locally and evidence is attached to the PR, or
+  - blocking CI coverage is added for the missing check and enabled.
+- For `ruff --fix` in `conftest.py` or known re-export modules, review F401 removals manually and preserve intentional re-exports with `# noqa: F401` where needed.
+
 ## Documentation rules
 
 - Update the owner doc first.

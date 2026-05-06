@@ -82,8 +82,16 @@ This lets `learning-retrospective` scope its next read to entries since the last
 **Source:** backlog-reconciliation-drift-audit
 **Diverged:** `app/orchestrator/v2_runtime.py` defines `_load_checkpoint` twice (lines 616 and 625); the second definition silently shadows the first and survived merge because mypy is not a blocking CI gate.
 **Upstream artifact:** `app/orchestrator/v2_runtime.py` — remove the duplicate definition; one of the two `_load_checkpoint` bodies is unreachable.
+Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now contains a single `_load_checkpoint` definition; no further upstream edit required from this entry.
 
 ## 2026-05-04 — ruff --fix conftest re-export breakage (sync test suite)
 **Source:** backlog-reconciliation-drift-audit
 **Diverged:** `ruff --fix` removed F401 imports from `tests/sync/conftest.py` that were locally unused but served as re-exports consumed by 4 other test modules, breaking their collection.
 **Upstream artifact:** `docs/development/DEV_WORKFLOW.md` — add a caution: review F401 removals manually in conftest files and re-export modules, or mark intentional re-exports with `# noqa: F401` before running `--fix`.
+
+## 2026-05-05 — PR #765 (Backlog drift audit 2026-05-05)
+**Source:** pr-integration
+**Diverged:** The plan said PR body should be compliant with the PR template's "Change Lane" section, reality was the PR body lacked the required lane classification checkbox (Fixes #/Closes #/Resolves # OR Docs authoring lane OR Governance lane), causing pr-contract CI to fail and requiring manual repair during pr-integration.
+**Upstream artifact:** `.codex/skills/publish-pr/SKILL.md` — add pre-publication validation gate to verify PR body includes required lane classification before pushing; currently only `.github/workflows/issue-pr-governance.yml` enforces it post-push. For docs/governance lane PRs, template sections should be auto-populated or validation should occur at publish-time.
+
+--- retro 2026-05-06: applied 3/3 proposals ---
