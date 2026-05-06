@@ -126,6 +126,7 @@ jobs:
               "scripts/install_skills.sh",
               "scripts/agent_workspace_preflight.sh",
               "scripts/agent_workspace_cleanup.sh",
+              "scripts/issue_pickup_claim.sh",
               "scripts/reconcile_project_status.py",
               "scripts/validate_source_anchors.py",
               "tests/architecture/test_agent_skill_entrypoints.py",

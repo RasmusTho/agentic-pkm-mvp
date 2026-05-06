@@ -100,11 +100,13 @@ python -m app.dispatcher status --json
 **If dispatcher is available (db_exists: true):**
 
 1. **Get next task:** `python -m app.dispatcher next --json --agent <agent_id>` — returns a candidate task.
-2. **Claim with dispatcher:** `python -m app.dispatcher claim <task_id> --agent <agent_id> --ttl-minutes 90 --json` — acquire 90-minute lease.
-3. **Confirm in GitHub:** `gh issue edit #<ISSUE_NUMBER> --remove-label agent:ready` — confirmation step (unchanged current behaviour).
-4. **Mid-work heartbeat** (~every 30 min of active execution): `python -m app.dispatcher heartbeat <task_id> --agent <agent_id> --json` — renew lease before 90-min expiry.
-5. **On closure:** `python -m app.dispatcher complete <task_id> --agent <agent_id> --json` (successful) or `python -m app.dispatcher release <task_id> --agent <agent_id> --json` (abandoned).
-6. **Fallback on dispatcher failure:** If any dispatcher command fails (non-zero exit) during work, log the failure and continue with local work (do not retry dispatcher commands in a loop). At closure, attempt `dispatcher complete`; if it fails, continue with PR closure via GitHub.
+2. **Run pickup preflight before lease acquisition:** `scripts/issue_pickup_claim.sh --issue <ISSUE_NUMBER> --preflight-only`
+3. **Claim with dispatcher:** `python -m app.dispatcher claim <task_id> --agent <agent_id> --ttl-minutes 90 --json` — acquire 90-minute lease.
+4. **Confirm in GitHub (label mutation after successful preflight):** `scripts/issue_pickup_claim.sh --issue <ISSUE_NUMBER> --skip-preflight`
+5. **If step 4 fails, immediately release lease:** `python -m app.dispatcher release <task_id> --agent <agent_id> --json`
+6. **Mid-work heartbeat** (~every 30 min of active execution): `python -m app.dispatcher heartbeat <task_id> --agent <agent_id> --json` — renew lease before 90-min expiry.
+7. **On closure:** `python -m app.dispatcher complete <task_id> --agent <agent_id> --json` (successful) or `python -m app.dispatcher release <task_id> --agent <agent_id> --json` (abandoned).
+8. **Fallback on dispatcher failure:** If any dispatcher command fails (non-zero exit) during work, log the failure and continue with local work (do not retry dispatcher commands in a loop). At closure, attempt `dispatcher complete`; if it fails, continue with PR closure via GitHub.
 
 **If dispatcher is unavailable (db_exists: false or dispatcher status fails):**
 
@@ -118,9 +120,9 @@ python -m app.dispatcher status --json
    gh api graphql -f query='query { repository(owner:"OWNER", name:"REPO") { issue(number:N) { projectItems(first:1) { nodes { id } } } } }'
    ```
 
-2. **Fast-claim the Issue by removing `agent:ready`:**
+2. **Fast-claim the Issue via mandatory preflight wrapper:**
    ```bash
-   gh issue edit #<N> --remove-label agent:ready
+   scripts/issue_pickup_claim.sh --issue <N>
    ```
 
 3. **Set Issue Project Status to In Progress:**
@@ -253,8 +255,9 @@ When continuing through anchor drift:
 ## Implementation workflow
 
 1. Select the Issue according to priority and readiness rules.
-2. Run workspace isolation preflight before claim:
-   - `scripts/agent_workspace_preflight.sh --expected-branch "$(git branch --show-current)" --expected-worktree "$(git rev-parse --show-toplevel)"`
+2. Run mandatory pickup claim wrapper before any lifecycle mutation:
+   - `scripts/issue_pickup_claim.sh --issue <N>`
+   - This wrapper enforces workspace isolation preflight before removing `agent:ready`.
    - If preflight fails, stop and resolve branch/worktree collisions before claiming.
 3. Run delivered-state preflight before claim when target implementation paths are explicit:
    - Verify whether referenced target modules already exist in the repo.

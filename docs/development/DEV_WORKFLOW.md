@@ -164,6 +164,7 @@ State model for lane-based delivery:
 - PR/Project-item state supports review/integration projection: `Review`, `In Progress`, `Blocked`, `Done`.
 - Keep issue and PR state separate in multi-slice lanes where several implementation issues can feed the same lane PR.
 - `issue-to-code` owns fast issue claim (`Ready` -> `In Progress` and remove `agent:ready`) to prevent double-pick.
+  - Claim must run through `scripts/issue_pickup_claim.sh --issue <N>` so workspace preflight is enforced before label mutation.
 - Open PR is the default publication mode. Draft PR is opt-in and requires an explicit reason.
 - `Review` is the agent-review gate before verification, not a generic waiting state.
 - `pr-integration` is conditional and should be used when mergeability/CI attachment/reviewability needs repair; it is not required after every publication.
