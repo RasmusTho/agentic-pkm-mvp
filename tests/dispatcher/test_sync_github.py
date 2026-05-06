@@ -487,3 +487,24 @@ def test_reconcile_blocked_task_closes_when_issue_closed(tmp_store: SqliteStore)
     assert stored is not None
     assert stored.status == "completed"
     assert stored.blocked_reason is None
+
+
+def test_reconcile_keeps_blocked_when_open_issue_lookup_fails(tmp_store: SqliteStore) -> None:
+    """Blocked tasks must not complete when open-issue snapshot is unavailable."""
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    task.status = "blocked"
+    task.blocked_reason = "waiting for upstream"
+    tmp_store.upsert_task(task)
+
+    source = MagicMock(spec=GitHubIssueSource)
+    source.list_issues.return_value = []
+    source.list_open_issues.side_effect = RuntimeError("gh issue list failed")
+    source.get_rate_limit.return_value = None
+
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    stored = tmp_store.get_task("github-issue-101")
+    assert stored is not None
+    assert stored.status == "blocked"
+    assert stored.blocked_reason == "waiting for upstream"

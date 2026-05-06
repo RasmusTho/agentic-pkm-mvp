@@ -323,11 +323,13 @@ class PullSyncAdapter:
             record_sync_failure(self._store, self._provider, pull_at, str(exc))
             return []
 
+        open_issues_available = True
         try:
             open_issues = self._source.list_open_issues(repo, **kwargs)
         except Exception:
             # If open-issues lookup fails, still preserve current upsert behavior.
             open_issues = []
+            open_issues_available = False
 
         upserted: list[TaskRecord] = []
         skipped: list[str] = []
@@ -357,6 +359,7 @@ class PullSyncAdapter:
             pull_at=pull_at,
             ready_issue_numbers=ready_issue_numbers,
             open_issues=open_issues,
+            open_issues_available=open_issues_available,
         )
         self.last_reconciled_count = reconciled
 
@@ -387,6 +390,7 @@ class PullSyncAdapter:
         pull_at: str,
         ready_issue_numbers: set[int],
         open_issues: list[dict[str, Any]],
+        open_issues_available: bool = True,
     ) -> int:
         open_issue_labels: dict[int, set[str]] = {}
         for issue in open_issues:
@@ -422,6 +426,9 @@ class PullSyncAdapter:
                     continue
 
                 task_labels = open_issue_labels.get(task.issue_number)
+                if task_labels is None and task.status == "blocked" and not open_issues_available:
+                    # Keep blocked tasks stable when open-issue snapshot is unavailable.
+                    continue
                 if task_labels is None:
                     next_status = "completed"
                     reason = "closed-or-missing-from-open-issues"
