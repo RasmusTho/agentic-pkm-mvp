@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Any, Sequence
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.config.database import resolve_runtime_database_url
 from app.config.environment import active_environment
@@ -12,18 +13,33 @@ from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_
 
 
 def mask_dsn(dsn: str) -> str:
-    if "@" not in dsn or "://" not in dsn:
+    if "://" not in dsn:
         return dsn
-    prefix, rest = dsn.split("://", 1)
-    if "@" not in rest:
-        return f"{prefix}://***@"
-    credentials, host_part = rest.split("@", 1)
-    if ":" in credentials:
-        user, _ = credentials.split(":", 1)
-        masked_credentials = f"{user}:***"
+    parsed = urlsplit(dsn)
+    netloc = parsed.netloc
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+
+    if "@" in netloc:
+        credentials, host_part = netloc.rsplit("@", 1)
+        if ":" in credentials:
+            user, _ = credentials.split(":", 1)
+            masked_credentials = f"{user}:***"
+        else:
+            masked_credentials = "***"
+        netloc = f"{masked_credentials}@{host_part}"
+
+    if query_pairs:
+        masked_pairs: list[tuple[str, str]] = []
+        for key, value in query_pairs:
+            if "password" in key.lower() or key.lower() in {"pwd", "pass"}:
+                masked_pairs.append((key, "***"))
+            else:
+                masked_pairs.append((key, value))
+        query = urlencode(masked_pairs, doseq=True)
     else:
-        masked_credentials = "***"
-    return f"{prefix}://{masked_credentials}@{host_part}"
+        query = parsed.query
+
+    return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
 
 
 def build_settings_explain_payload() -> dict[str, Any]:
