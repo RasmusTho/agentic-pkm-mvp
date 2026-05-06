@@ -95,3 +95,8 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Upstream artifact:** `.codex/skills/publish-pr/SKILL.md` — add pre-publication validation gate to verify PR body includes required lane classification before pushing; currently only `.github/workflows/issue-pr-governance.yml` enforces it post-push. For docs/governance lane PRs, template sections should be auto-populated or validation should occur at publish-time.
 
 --- retro 2026-05-06: applied 3/3 proposals ---
+
+## 2026-05-06 — #783 (Smoke/e2e feedback loop parallelization)
+**Source:** pr-integration
+**Diverged:** The plan assumed installing `pytest-xdist` was sufficient for `-n/--dist`, but CI still failed because `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` prevented xdist from loading unless explicitly added with `-p xdist.plugin`.
+**Upstream artifact:** `docs/TESTING.md` + `.codex/skills/pr-integration/SKILL.md` — add a note that plugin-provided pytest flags require explicit plugin loading when autoload is disabled, and verify this in CI failure triage before dependency changes.
