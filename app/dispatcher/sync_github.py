@@ -404,8 +404,14 @@ class PullSyncAdapter:
             open_issue_labels[number] = labels
 
         reconciled = 0
+        # Snapshot candidate tasks before mutating statuses to avoid double-processing
+        # across ready/blocked passes during one reconciliation run.
+        tasks_to_reconcile: dict[str, Any] = {}
         for status in ("ready", "blocked"):
             for task in self._store.list_tasks(status=status):
+                tasks_to_reconcile[task.task_id] = task
+
+        for task in tasks_to_reconcile.values():
                 if task.issue_number in ready_issue_numbers:
                     if task.status == "blocked":
                         task.status = "ready"
@@ -440,6 +446,8 @@ class PullSyncAdapter:
                     reason = "agent-ready-label-removed"
 
                 from_status = task.status
+                if next_status == from_status:
+                    continue
                 task.status = next_status
                 if next_status != "blocked":
                     task.blocked_reason = None
