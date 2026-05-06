@@ -4,11 +4,13 @@ Validate that GitHub Issues have a Source Anchors section with valid references.
 
 Usage:
   python3 scripts/validate_source_anchors.py "issue body text"
+  BODY="issue body text" python3 scripts/validate_source_anchors.py
   python3 scripts/validate_source_anchors.py < issue_body.txt
 
 Exits with code 0 if valid, 1 if invalid.
 """
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -128,11 +130,13 @@ def validate_issue_body(body: str) -> Tuple[bool, List[str]]:
 
 
 def main():
-    # Read input from arguments or stdin
+    # Read input from args, then env var (for workflow-safe injection), then stdin.
     if len(sys.argv) > 1:
         body = sys.argv[1]
     else:
-        body = sys.stdin.read()
+        body = os.getenv("BODY", "")
+        if not body:
+            body = sys.stdin.read()
 
     if not body.strip():
         print("Error: No issue body provided")
