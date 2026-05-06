@@ -52,6 +52,18 @@ If any exit condition is not met, do not hand off. Loop or block.
 
 ## Required gates (all executable)
 
+### 0) Workspace Isolation Gate
+
+**Action: enforce clean single-session workspace before integration**
+
+```bash
+scripts/agent_workspace_preflight.sh \
+  --expected-branch "$(git branch --show-current)" \
+  --expected-worktree "$(git rev-parse --show-toplevel)"
+```
+
+If this gate fails, stop immediately. Resolve concurrent-session drift before continuing.
+
 ### 1) Contract and Metadata Gate
 
 **Action: Verify PR Contract**

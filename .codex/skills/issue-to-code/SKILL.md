@@ -253,26 +253,29 @@ When continuing through anchor drift:
 ## Implementation workflow
 
 1. Select the Issue according to priority and readiness rules.
-2. Run delivered-state preflight before claim when target implementation paths are explicit:
+2. Run workspace isolation preflight before claim:
+   - `scripts/agent_workspace_preflight.sh --expected-branch "$(git branch --show-current)" --expected-worktree "$(git rev-parse --show-toplevel)"`
+   - If preflight fails, stop and resolve branch/worktree collisions before claiming.
+3. Run delivered-state preflight before claim when target implementation paths are explicit:
    - Verify whether referenced target modules already exist in the repo.
    - If core implementation already exists, do not proceed as fresh implementation; route to `issue-maintenance-change-control` to correct stale or drifted contract state.
    - Treat passing acceptance tests as supporting evidence, not the sole gate for delivered classification.
    - If source specs still say "Not yet implemented" while shipped code exists, route the spec-state writeback through docs/governance repair rather than opening duplicate implementation work.
-3. **Execute Action: Begin Implementation Work** (update labels, Issue Project Status, verify).
-4. Restate the bounded outcome from the Issue.
-5. Read source-anchored docs and owning code paths.
-6. If anchor drift exists, resolve it using the rules above before coding.
-7. **Verify acceptance verifiability**: every Acceptance Criterion must carry a resolvable `Verify:` target. If any AC lacks one, stop implementation and route through `issue-maintenance-change-control` to repair the contract before coding.
-8. **Test-first for behavioral ACs**: for each AC whose `Verify:` names a test, ensure that test exists in the repo and currently fails against the unchanged code path. If the test is missing, write it first from the AC; if it is present but does not fail, either the AC is already satisfied (stop and validate) or the test does not actually exercise the AC (fix the test).
-9. Implement the smallest complete change that turns every behavioral `Verify:` test green without breaking unrelated tests.
-10. **Writeback for non-behavioral ACs**: perform each non-behavioral `Verify:` target in the same change (doc anchor writeback, roadmap wording cleanup, runtime receipt, etc.).
-11. Update owner docs if shipped behavior/contracts changed.
-12. Rewrite roadmap/plan wording if the delivered work was previously listed as pending.
-13. Run `Suggested Validation` plus any obviously necessary focused checks. Confirm every AC's `Verify:` target now resolves green.
-14. Run `.codex/skills/publish-pr/SKILL.md` to create or update the implementation PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
-15. Run `.codex/skills/pr-integration/SKILL.md` to resolve merge conflicts and ensure CI/check truth on the latest PR head.
-16. **Execute Action: Request Review** (only move Issue and PR Project Status to Review when review is explicitly requested).
-17. If the slice merges but the parent feature still needs validation, keep that parent issue open for the later acceptance step.
+4. **Execute Action: Begin Implementation Work** (update labels, Issue Project Status, verify).
+5. Restate the bounded outcome from the Issue.
+6. Read source-anchored docs and owning code paths.
+7. If anchor drift exists, resolve it using the rules above before coding.
+8. **Verify acceptance verifiability**: every Acceptance Criterion must carry a resolvable `Verify:` target. If any AC lacks one, stop implementation and route through `issue-maintenance-change-control` to repair the contract before coding.
+9. **Test-first for behavioral ACs**: for each AC whose `Verify:` names a test, ensure that test exists in the repo and currently fails against the unchanged code path. If the test is missing, write it first from the AC; if it is present but does not fail, either the AC is already satisfied (stop and validate) or the test does not actually exercise the AC (fix the test).
+10. Implement the smallest complete change that turns every behavioral `Verify:` test green without breaking unrelated tests.
+11. **Writeback for non-behavioral ACs**: perform each non-behavioral `Verify:` target in the same change (doc anchor writeback, roadmap wording cleanup, runtime receipt, etc.).
+12. Update owner docs if shipped behavior/contracts changed.
+13. Rewrite roadmap/plan wording if the delivered work was previously listed as pending.
+14. Run `Suggested Validation` plus any obviously necessary focused checks. Confirm every AC's `Verify:` target now resolves green.
+15. Run `.codex/skills/publish-pr/SKILL.md` to create or update the implementation PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
+16. Run `.codex/skills/pr-integration/SKILL.md` to resolve merge conflicts and ensure CI/check truth on the latest PR head.
+17. **Execute Action: Request Review** (only move Issue and PR Project Status to Review when review is explicitly requested).
+18. If the slice merges but the parent feature still needs validation, keep that parent issue open for the later acceptance step.
 
 ## PR handoff requirements
 
