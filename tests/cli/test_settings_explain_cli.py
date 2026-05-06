@@ -103,4 +103,6 @@ def test_settings_explain_respects_explicit_database_override(monkeypatch, tmp_p
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://custom:pw@db:5432/custom_db")
 
     payload = build_settings_explain_payload()
+    assert payload["database_url"] == "postgresql+psycopg://custom:***@db:5432/custom_db"
+    assert "pw" not in payload["database_url"]
     assert payload["database_url"].endswith("/custom_db")

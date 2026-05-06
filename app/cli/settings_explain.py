@@ -11,6 +11,21 @@ from app.settings.panel_actions_settings import load_panel_actions_settings, pan
 from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_settings, resolve_auto_exec_state
 
 
+def mask_dsn(dsn: str) -> str:
+    if "@" not in dsn or "://" not in dsn:
+        return dsn
+    prefix, rest = dsn.split("://", 1)
+    if "@" not in rest:
+        return f"{prefix}://***@"
+    credentials, host_part = rest.split("@", 1)
+    if ":" in credentials:
+        user, _ = credentials.split(":", 1)
+        masked_credentials = f"{user}:***"
+    else:
+        masked_credentials = "***"
+    return f"{prefix}://{masked_credentials}@{host_part}"
+
+
 def build_settings_explain_payload() -> dict[str, Any]:
     db_url = resolve_runtime_database_url(os.environ)
     panel_settings = load_panel_actions_settings()
@@ -21,7 +36,7 @@ def build_settings_explain_payload() -> dict[str, Any]:
     write_guard = DEFAULT_CONTRACT.evaluate()
     return {
         "environment": active_environment(),
-        "database_url": db_url,
+        "database_url": mask_dsn(db_url),
         "panel_actions": {
             "action_count": len(panel_settings.catalog.actions),
             "action_ids": sorted(panel_settings.catalog.ids()),
