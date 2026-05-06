@@ -60,6 +60,9 @@ def run_gh(*args: str) -> str:
 
 
 def run_gh_project(owner: str, *args: str) -> str:
+    # gh project item-edit does not accept --owner on some gh versions.
+    if args and args[0] == "item-edit":
+        return run_gh("project", *args)
     return run_gh("project", *args, "--owner", owner)
 
 
