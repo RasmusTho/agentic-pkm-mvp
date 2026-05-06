@@ -16,6 +16,8 @@ on:
       - "app/events/bus.py"
       - ".github/workflows/settings-ci.yaml"
 
+permissions: read-all
+
 jobs:
   settings:
     runs-on: ubuntu-latest

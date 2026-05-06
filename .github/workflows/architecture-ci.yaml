@@ -4,6 +4,8 @@ name: architecture-ci
 on:
   workflow_dispatch:
 
+permissions: read-all
+
 jobs:
   validate-contracts:
     runs-on: ubuntu-latest

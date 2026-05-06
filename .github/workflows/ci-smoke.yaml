@@ -12,6 +12,8 @@ concurrency:
   group: ci-smoke-${{ github.ref }}
   cancel-in-progress: true
 
+permissions: read-all
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
