@@ -379,8 +379,8 @@ def test_pull_upserts_tasks_into_store(tmp_store: SqliteStore) -> None:
 # AC: Pull-sync preserves local operational state (issue #669)
 # ---------------------------------------------------------------------------
 
-def test_pull_does_not_clobber_blocked_status(tmp_store: SqliteStore) -> None:
-    """A locally-blocked task is NOT reset to ready when GitHub still shows agent:ready."""
+def test_pull_reopens_blocked_task_when_github_ready(tmp_store: SqliteStore) -> None:
+    """A locally-blocked task transitions to ready when GitHub shows agent:ready."""
     # Pre-seed task as blocked locally
     task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
     task.status = "blocked"
@@ -394,8 +394,8 @@ def test_pull_does_not_clobber_blocked_status(tmp_store: SqliteStore) -> None:
 
     stored = tmp_store.get_task("github-issue-101")
     assert stored is not None
-    assert stored.status == "blocked", "pull-sync must not clobber local blocked status"
-    assert stored.blocked_reason == "dependency on #200"
+    assert stored.status == "ready", "pull-sync must reopen blocked task when upstream is agent:ready"
+    assert stored.blocked_reason is None
 
 
 def test_pull_does_not_clobber_active_lease_status(tmp_store: SqliteStore) -> None:
@@ -444,7 +444,7 @@ def test_pull_creates_new_task_from_github(tmp_store: SqliteStore) -> None:
 
 
 def test_pull_updates_metadata_for_blocked_task(tmp_store: SqliteStore) -> None:
-    """Metadata (title, priority, sync_state) is updated from GitHub even when local status is preserved."""
+    """Metadata is updated from GitHub when blocked task is reopened by agent:ready."""
     old_now = "2026-04-23T00:00:00+00:00"
     task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now=old_now)
     task.status = "blocked"
@@ -464,9 +464,47 @@ def test_pull_updates_metadata_for_blocked_task(tmp_store: SqliteStore) -> None:
 
     stored = tmp_store.get_task("github-issue-101")
     assert stored is not None
-    assert stored.status == "blocked", "local operational status must be preserved"
-    assert stored.blocked_reason == "waiting on infra"
+    assert stored.status == "ready"
+    assert stored.blocked_reason is None
     assert stored.title == "Fix critical bug in queue selection (updated)", "title must be refreshed"
     assert stored.priority == "high"
     assert stored.sync_state is not None
     assert stored.sync_state["sync_result"] == "ok"
+
+
+def test_reconcile_blocked_task_closes_when_issue_closed(tmp_store: SqliteStore) -> None:
+    """Blocked task transitions to completed when issue is closed/missing from open issues."""
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    task.status = "blocked"
+    task.blocked_reason = "waiting for upstream"
+    tmp_store.upsert_task(task)
+
+    source = _mock_source([], open_issues=[])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    stored = tmp_store.get_task("github-issue-101")
+    assert stored is not None
+    assert stored.status == "completed"
+    assert stored.blocked_reason is None
+
+
+def test_reconcile_keeps_blocked_when_open_issue_lookup_fails(tmp_store: SqliteStore) -> None:
+    """Blocked tasks must not complete when open-issue snapshot is unavailable."""
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    task.status = "blocked"
+    task.blocked_reason = "waiting for upstream"
+    tmp_store.upsert_task(task)
+
+    source = MagicMock(spec=GitHubIssueSource)
+    source.list_issues.return_value = []
+    source.list_open_issues.side_effect = RuntimeError("gh issue list failed")
+    source.get_rate_limit.return_value = None
+
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    stored = tmp_store.get_task("github-issue-101")
+    assert stored is not None
+    assert stored.status == "blocked"
+    assert stored.blocked_reason == "waiting for upstream"

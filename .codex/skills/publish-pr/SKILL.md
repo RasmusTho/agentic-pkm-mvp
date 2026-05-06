@@ -182,6 +182,13 @@ EOF
 )"
 ```
 
+Pre-push PR-body contract gate:
+- Before `gh pr create` or `gh pr edit`, verify the body includes exactly one lane classifier:
+  - implementation lane: `Fixes #<id>` or `Closes #<id>` or `Resolves #<id>`
+  - docs lane: `- [x] Docs authoring lane`
+  - governance lane: `- [x] Governance lane`
+- If none is present, stop and repair the PR body before publication.
+
 ### Step 7: Hand Off to pr-integration
 
 After PR is created/updated, use pr-integration only when the PR still needs readiness/repair work before verification:

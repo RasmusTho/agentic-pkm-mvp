@@ -323,11 +323,13 @@ class PullSyncAdapter:
             record_sync_failure(self._store, self._provider, pull_at, str(exc))
             return []
 
+        open_issues_available = True
         try:
             open_issues = self._source.list_open_issues(repo, **kwargs)
         except Exception:
             # If open-issues lookup fails, still preserve current upsert behavior.
             open_issues = []
+            open_issues_available = False
 
         upserted: list[TaskRecord] = []
         skipped: list[str] = []
@@ -335,7 +337,7 @@ class PullSyncAdapter:
             try:
                 task = normalize_github_issue(issue, now=pull_at)
                 existing = self._store.get_task(task.task_id)
-                if existing is not None and existing.status in {"blocked", "claimed", "in_progress"}:
+                if existing is not None and existing.status in {"claimed", "in_progress"}:
                     task.status = existing.status
                     task.claimed_by = existing.claimed_by
                     task.lease_id = existing.lease_id
@@ -357,6 +359,7 @@ class PullSyncAdapter:
             pull_at=pull_at,
             ready_issue_numbers=ready_issue_numbers,
             open_issues=open_issues,
+            open_issues_available=open_issues_available,
         )
         self.last_reconciled_count = reconciled
 
@@ -387,6 +390,7 @@ class PullSyncAdapter:
         pull_at: str,
         ready_issue_numbers: set[int],
         open_issues: list[dict[str, Any]],
+        open_issues_available: bool = True,
     ) -> int:
         open_issue_labels: dict[int, set[str]] = {}
         for issue in open_issues:
@@ -400,30 +404,56 @@ class PullSyncAdapter:
             open_issue_labels[number] = labels
 
         reconciled = 0
-        for task in self._store.list_tasks(status="ready"):
-            if task.issue_number in ready_issue_numbers:
-                continue
+        for status in ("ready", "blocked"):
+            for task in self._store.list_tasks(status=status):
+                if task.issue_number in ready_issue_numbers:
+                    if task.status == "blocked":
+                        task.status = "ready"
+                        task.blocked_reason = None
+                        task.updated_at = pull_at
+                        self._store.upsert_task(task)
+                        self._store.append_event(
+                            EventRecord(
+                                event_id=str(uuid.uuid4()),
+                                timestamp=pull_at,
+                                task_id=task.task_id,
+                                event_type="sync.reconciled",
+                                actor=f"sync:{self._provider}",
+                                payload={"from": "blocked", "to": "ready", "reason": "agent-ready-label-present"},
+                            )
+                        )
+                        reconciled += 1
+                    continue
 
-            task_labels = open_issue_labels.get(task.issue_number)
-            if task_labels is None:
-                next_status = "completed"
-                reason = "closed-or-missing-from-open-issues"
-            else:
-                next_status = "blocked"
-                reason = "agent-ready-label-removed"
+                task_labels = open_issue_labels.get(task.issue_number)
+                if task_labels is None and task.status == "blocked" and not open_issues_available:
+                    # Keep blocked tasks stable when open-issue snapshot is unavailable.
+                    continue
+                if task_labels is None:
+                    next_status = "completed"
+                    reason = "closed-or-missing-from-open-issues"
+                elif "agent:ready" in task_labels:
+                    next_status = "ready"
+                    reason = "agent-ready-label-present"
+                else:
+                    next_status = "blocked"
+                    reason = "agent-ready-label-removed"
 
-            task.status = next_status
-            task.updated_at = pull_at
-            self._store.upsert_task(task)
-            self._store.append_event(
-                EventRecord(
-                    event_id=str(uuid.uuid4()),
-                    timestamp=pull_at,
-                    task_id=task.task_id,
-                    event_type="sync.reconciled",
-                    actor=f"sync:{self._provider}",
-                    payload={"from": "ready", "to": next_status, "reason": reason},
+                from_status = task.status
+                task.status = next_status
+                if next_status != "blocked":
+                    task.blocked_reason = None
+                task.updated_at = pull_at
+                self._store.upsert_task(task)
+                self._store.append_event(
+                    EventRecord(
+                        event_id=str(uuid.uuid4()),
+                        timestamp=pull_at,
+                        task_id=task.task_id,
+                        event_type="sync.reconciled",
+                        actor=f"sync:{self._provider}",
+                        payload={"from": from_status, "to": next_status, "reason": reason},
+                    )
                 )
-            )
-            reconciled += 1
+                reconciled += 1
         return reconciled
