@@ -232,6 +232,7 @@ First-green definition:
 
 For fast local runs that bypass workspace/global pytest configuration, prefer:
 - `STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg" -c /dev/null`
+- `make smoke` (parallel by default via `pytest-xdist`; override workers with `SMOKE_WORKERS=<n|auto>`, and include e2e lane with `SMOKE_E2E_WORKERS=<n>`)
 
 ## Concurrency Tests (docs-only)
 These regression suites live in `docs/CONCURRENCY.md` and the new watcher/promotion/test libraries.

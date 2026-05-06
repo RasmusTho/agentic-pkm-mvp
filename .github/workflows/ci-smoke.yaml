@@ -48,6 +48,7 @@ jobs:
           python -m pip install -U pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
+          pip install pytest-xdist
 
       - name: Validate docs guardrails
         shell: bash
@@ -103,7 +104,7 @@ jobs:
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         timeout-minutes: 12
         run: |
-          pytest -c /dev/null -m "not pg and not alpha_llm" \
+          pytest -p xdist.plugin -c /dev/null -m "not pg and not alpha_llm" \
             tests/smoke \
             tests/agents/test_indexer.py::test_indexer_builds_embeddings_and_fts \
             tests/watcher/test_fs_watcher.py \
@@ -114,15 +115,15 @@ jobs:
             tests/ports/test_vault_port_contract.py \
             tests/services/test_filesystem_vault_adapter.py \
             tests/services/test_vault_sync_lifecycle.py \
-            --maxfail=1 -ra --durations=20
+            --maxfail=1 -ra --durations=20 -n auto --dist=loadfile
 
       - name: Pytest Quality Wave smoke (memory, fail-fast)
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         timeout-minutes: 8
         run: |
-          pytest -c /dev/null -m "not pg and not alpha_llm" \
+          pytest -p xdist.plugin -c /dev/null -m "not pg and not alpha_llm" \
             tests/quality_wave/test_uat_harness.py \
-            --maxfail=1 -ra --durations=20
+            --maxfail=1 -ra --durations=20 -n auto --dist=loadfile
 
       - name: Skip heavy pytest smoke for docs-only PR
         if: github.event_name == 'pull_request' && steps.changes.outputs.heavy_smoke != 'true'

@@ -3,6 +3,8 @@
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 TEST_VAULT_ROOT ?= $(PWD)/vault-test
 TEST_DATABASE_URL ?= postgresql+psycopg://app:app@db:5432/app_test
+SMOKE_WORKERS ?= auto
+SMOKE_E2E_WORKERS ?= 0
 COMPOSE_BASE := docker compose -f docker-compose.yaml
 COMPOSE_DEV := $(COMPOSE_BASE) -f docker-compose.dev.yml -p pkm-dev
 COMPOSE_TEST := $(COMPOSE_BASE) -f docker-compose.test.yml -p pkm-test
@@ -56,8 +58,20 @@ persist-runtime-repairs:
 	@bash scripts/persist_runtime_repairs.sh
 
 smoke:
+	@XDIST_ARGS=""; \
+	if $(PYTHON) -m pytest -p xdist.plugin --help 2>/dev/null | rg -q -- "^-n "; then \
+		XDIST_ARGS="-n $(SMOKE_WORKERS) --dist=loadfile"; \
+	fi; \
 	PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
-	$(PYTHON) -m pytest -q -c /dev/null -k "not slow"
+	$(PYTHON) -m pytest -p xdist.plugin -q -c /dev/null -k "not slow and not e2e" $$XDIST_ARGS
+	@if [ "$(SMOKE_E2E_WORKERS)" != "0" ]; then \
+		XDIST_E2E_ARGS=""; \
+		if $(PYTHON) -m pytest -p xdist.plugin --help 2>/dev/null | rg -q -- "^-n "; then \
+			XDIST_E2E_ARGS="-n $(SMOKE_E2E_WORKERS) --dist=loadfile"; \
+		fi; \
+		PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
+		$(PYTHON) -m pytest -p xdist.plugin -q -c /dev/null -k "e2e and not slow" $$XDIST_E2E_ARGS ; \
+	fi
 
 test-vault-init:
 	@PYTHON="$(PYTHON)" bash scripts/init_test_vault.sh
