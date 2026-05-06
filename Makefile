@@ -59,18 +59,18 @@ persist-runtime-repairs:
 
 smoke:
 	@XDIST_ARGS=""; \
-	if $(PYTHON) -m pytest --help 2>/dev/null | rg -q -- "^-n "; then \
+	if $(PYTHON) -m pytest -p xdist.plugin --help 2>/dev/null | rg -q -- "^-n "; then \
 		XDIST_ARGS="-n $(SMOKE_WORKERS) --dist=loadfile"; \
 	fi; \
 	PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
-	$(PYTHON) -m pytest -q -c /dev/null -k "not slow and not e2e" $$XDIST_ARGS
+	$(PYTHON) -m pytest -p xdist.plugin -q -c /dev/null -k "not slow and not e2e" $$XDIST_ARGS
 	@if [ "$(SMOKE_E2E_WORKERS)" != "0" ]; then \
 		XDIST_E2E_ARGS=""; \
-		if $(PYTHON) -m pytest --help 2>/dev/null | rg -q -- "^-n "; then \
+		if $(PYTHON) -m pytest -p xdist.plugin --help 2>/dev/null | rg -q -- "^-n "; then \
 			XDIST_E2E_ARGS="-n $(SMOKE_E2E_WORKERS) --dist=loadfile"; \
 		fi; \
 		PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
-		$(PYTHON) -m pytest -q -c /dev/null -k "e2e and not slow" $$XDIST_E2E_ARGS ; \
+		$(PYTHON) -m pytest -p xdist.plugin -q -c /dev/null -k "e2e and not slow" $$XDIST_E2E_ARGS ; \
 	fi
 
 test-vault-init:

@@ -104,7 +104,7 @@ jobs:
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         timeout-minutes: 12
         run: |
-          pytest -c /dev/null -m "not pg and not alpha_llm" \
+          pytest -p xdist.plugin -c /dev/null -m "not pg and not alpha_llm" \
             tests/smoke \
             tests/agents/test_indexer.py::test_indexer_builds_embeddings_and_fts \
             tests/watcher/test_fs_watcher.py \
@@ -121,7 +121,7 @@ jobs:
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         timeout-minutes: 8
         run: |
-          pytest -c /dev/null -m "not pg and not alpha_llm" \
+          pytest -p xdist.plugin -c /dev/null -m "not pg and not alpha_llm" \
             tests/quality_wave/test_uat_harness.py \
             --maxfail=1 -ra --durations=20 -n auto --dist=loadfile
 
