@@ -15,7 +15,7 @@ concurrency:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     env:
       PYTHONPATH: ${{ github.workspace }}
       STORE_BACKEND: memory
@@ -169,7 +169,39 @@ jobs:
           python -m app.cli --help >/dev/null
           python -m app.cli health --json || true
 
+  smoke-docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LLM_PROVIDER: mock
+      REASONING_PROVIDER: mock
+      PLANNER_PROVIDER: mock
+      REASONING_ENABLE: "1"
+      KNOWLEDGE_PRIMARY_ADAPTER: fs_vault
+      KNOWLEDGE_FALLBACK_ADAPTER: obsidian_cli
+      KNOWLEDGE_STRICT_STARTUP: "0"
+      KNOWLEDGE_ALLOW_FALLBACK: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect docker smoke surface
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            docker_smoke:
+              - 'app/**'
+              - 'scripts/**'
+              - '.github/workflows/**'
+              - 'Dockerfile'
+              - 'docker-compose*.yaml'
+              - 'docker-compose*.yml'
+              - 'requirements*.txt'
+              - 'pyproject.toml'
+
       - name: "Docker smoke: worker emits startup log"
+        if: github.event_name != 'pull_request' || steps.changes.outputs.docker_smoke == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -213,10 +245,11 @@ jobs:
           exit 1
 
       - name: "CI gate: vaultwide panel verifier"
+        if: github.event_name != 'pull_request' || steps.changes.outputs.docker_smoke == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          export VAULT_ROOT="${GITHUB_WORKSPACE}/tmp/ci-vault"
+          export VAULT_ROOT="/tmp/ci-vault"
           rm -rf "$VAULT_ROOT"
           mkdir -p "$VAULT_ROOT/System"
           cat > "$VAULT_ROOT/System/vault.layout.md" <<'EOF'
@@ -256,11 +289,18 @@ jobs:
           trap cleanup EXIT
 
           docker compose $compose_files up -d --build db api watcher worker
+          LOG_PATH="/tmp/verify_vaultwide_panel.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.log" \
+          REPORT_PATH="/tmp/verify_vaultwide_panel.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.report" \
           bash scripts/verify_vaultwide_panel.sh
+
+      - name: Skip docker smoke for docs-only PR
+        if: github.event_name == 'pull_request' && steps.changes.outputs.docker_smoke != 'true'
+        run: |
+          echo "Docs-only PR detected; skipping docker smoke gates."
 
   panel-llm-e2e:
     runs-on: ubuntu-latest
-    needs: smoke
+    needs: [smoke, smoke-docker]
     env:
       PYTHONPATH: ${{ github.workspace }}
       STORE_BACKEND: memory
