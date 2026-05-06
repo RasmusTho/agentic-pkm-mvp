@@ -249,7 +249,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export VAULT_ROOT="${GITHUB_WORKSPACE}/tmp/ci-vault"
+          export VAULT_ROOT="/tmp/ci-vault"
           rm -rf "$VAULT_ROOT"
           mkdir -p "$VAULT_ROOT/System"
           cat > "$VAULT_ROOT/System/vault.layout.md" <<'EOF'
