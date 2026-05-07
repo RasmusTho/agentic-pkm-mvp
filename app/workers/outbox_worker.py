@@ -15,6 +15,8 @@ from app.agents.panel_agent.execution import refresh_panel_note_object, run_pane
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.sync import SyncChainCorrelationData, SyncLatencySummaryEvent
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED, PROMOTE_INTENT_CREATED
+from app.indexer.consumer import process_event as process_indexer_event
+from app.outbox.events import INDEX_EMBEDDING_REQUESTED
 from app.observability.tracer import start_span
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
 from app.services.indexer import handle_ingest_object_created
@@ -591,6 +593,14 @@ def run(
                                 payload,
                                 trace_id=trace_id,
                                 event_id=event_id,
+                            )
+                        elif topic == INDEX_EMBEDDING_REQUESTED:
+                            process_indexer_event(
+                                {
+                                    "event": INDEX_EMBEDDING_REQUESTED,
+                                    "payload": dict(payload),
+                                    "trace_id": trace_id,
+                                }
                             )
                         else:
                             logger.debug("worker skipping unsupported topic=%s trace_id=%s", topic, trace_id)
