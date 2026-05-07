@@ -1,23 +1,38 @@
-# Companion UI
+# Companion UI Workspace
 
-A user-facing module for the agentic PKM system. A PWA client that runs on iPhone, iPad, and Mac, connected to the existing FastAPI runtime over a personal network (Tailscale).
+`companion-ui/` is the workspace for evolving the Agentic PKM companion experience from isolated UI experiments into a structured cognitive interaction architecture.
 
-This module does not replace or modify the core system. Obsidian remains the canonical human writing surface. The companion UI is the assisted-thinking shell for cognitive acts that are awkward in Obsidian: canvas-mode conversation with agents, orientation in active cognition, and synthesis workspaces.
+## Workspace role
+- Design workspace: preserves and organizes handoff artifacts and interaction design inputs.
+- Cognitive architecture workspace: defines principles, modes, runtime boundaries, and overlay grammar.
+- Implementation staging area: hosts prototype app-layer artifacts before production promotion.
 
-## v0 scope
+## Architectural posture
+- Obsidian/vault remains canonical for durable semantic truth.
+- Companion UI augments cognition rather than replacing the vault.
+- Human remains cognitively centered; AI is assistive and accountable.
+- Overlay-first interactions are preferred to hard navigation.
+- Chat is subordinate to the active document.
+- Runtime state is ephemeral unless explicitly persisted.
+- Avoid dashboard-style AI UX and hidden semantic state.
+- Preserve compatibility with event-driven runtime, AgentState, staged proposal workflows, provenance overlays, and cognitive continuity.
 
-The first build is the **Converse surface** — externalized thinking with an agent, with optional durable output. See `DESIGN_BRIEF.md` for the full context, constraints, and open design questions.
+## Structure
+- `docs/` — foundational architecture and cognitive interaction contracts.
+- `design_handoff/` — preserved Claude/other design handoff packages.
+- `exploration/` — bounded experiments by cognitive mode (`orientation`, `resurfacing`, `synthesis`, `review`, `exploration`).
+- `companion-app/` — UI implementation staging files and prototypes.
+- `prompts/` — prompt scaffolds (`claude-design/`, `codex/`).
 
-## Design
+## Current scope
+This workspace phase is architecture and interaction focused.
 
-`DESIGN_BRIEF.md` — the specification and design constraints for this module. This document does not prescribe UI/UX patterns; it defines what the module must accomplish and the hard constraints it must respect. Designers should use this as the starting point for the interaction design.
+Out of scope in this lane:
+- production backend integration work,
+- hidden app-specific persistence layers,
+- replacing the current overlay-first interaction model.
 
-## Architecture
-
-The companion UI is a client of the existing runtime. It reads from and writes to the vault through the runtime API. All durable state is persisted as markdown files in the vault (chat sessions, staged suggestions, etc.) with documented frontmatter schemas.
-
-Vault compatibility is non-negotiable: markdown must open cleanly in Obsidian without this module present.
-
-## Status
-
-Design stage. Awaiting interaction design and wireframes.
+## Preserved artifacts
+- Design brief moved to `docs/DESIGN_BRIEF.md`.
+- Existing converse handoff preserved under `design_handoff/2026-05-03-converse/`.
+- Existing converse layout prototype preserved under `companion-app/`.

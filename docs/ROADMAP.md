@@ -307,7 +307,7 @@ All six task specs are complete and closed; promotion and rollback skills are au
 
 ## Companion UI design artifact intake (2026-05-03)
 
-- Converse wireframe/package intake completed at `companion-ui/design-handoff/2026-05-03-converse/`.
+- Converse wireframe/package intake completed at `companion-ui/design_handoff/2026-05-03-converse/`.
 - Package includes implementation-spec README plus reference HTML/CSS/JSX prototypes.
 - Initial implementation delivered in `companion-ui/src/` across four bounded slices: layout shell + rail geometry (PR #745), rail thread/composer states (PR #746), staged suggestion moment (PR #750), and session drawer + portrait bottom-sheet (PR #762).
 - All Converse interaction slices from the 2026-05-03 handoff (Issues #740–#743) are now delivered. A follow-up data-attribute token alignment fix (Issue #764, PR #763) is also delivered. The runtime-client boundary and vault-first durability constraints were preserved throughout.

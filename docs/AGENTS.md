@@ -151,6 +151,6 @@ Normalization note:
 
 ## Companion UI design handoff (2026-05-03)
 
-- Imported handoff package path: `companion-ui/design-handoff/2026-05-03-converse/`.
-- Treat `companion-ui/design-handoff/2026-05-03-converse/README.md` as the current converse-surface implementation spec.
+- Imported handoff package path: `companion-ui/design_handoff/2026-05-03-converse/`.
+- Treat `companion-ui/design_handoff/2026-05-03-converse/README.md` as the current converse-surface implementation spec.
 - Included HTML/CSS/JSX files are design reference artifacts and should not be shipped as production runtime code.
