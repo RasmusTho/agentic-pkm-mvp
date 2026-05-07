@@ -6,6 +6,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from app.agents.panel.integration import handle_panel_update
+from app.agents.panel.writeback import upsert_executed_ids
 from app.components.concurrency import OptimisticWriteGuard
 from app.domain.state_axes import resolve_promotion_axes
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
@@ -121,6 +122,8 @@ def process_note_update(
     else:
         old_markdown = raw_markdown
 
+    DEFAULT_WRITE_GUARD.assert_writes_allowed("panel runtimes")
+
     panel_result = handle_panel_update(
         note_id=note_uuid,
         old_markdown=old_markdown,
@@ -131,7 +134,6 @@ def process_note_update(
 
     changed = panel_result.panel.updated_markdown != raw_markdown
     if changed:
-        DEFAULT_WRITE_GUARD.assert_writes_allowed("panel runtimes")
         current_version = _WRITE_GUARD.read_version(resolved_path)
         if current_version != expected_version:
             return NoteUpdateResult(
@@ -144,6 +146,7 @@ def process_note_update(
                 dispatch_count=panel_result.dispatch_count,
             )
         _write_note_via_knowledge_port(resolved_path, panel_result.panel.updated_markdown)
+        upsert_executed_ids(note_uuid, panel_result.panel.executed_action_ids)
 
     snapshot_path = _snapshot_path(snapshot_dir, note_uuid, ensure_parent=True)
     if snapshot_path is not None:
