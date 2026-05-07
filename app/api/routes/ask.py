@@ -3,11 +3,12 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import AliasChoices, BaseModel, Field
 
 from app.agents.ask.graph import run_ask_graph
 from app.agents.ask.utils import get_ask_settings
+from app.events.models import new_trace_id
 from app.observability.status_service import record_ask_error, record_ask_query
 from app.retrieval.hybrid import get_store as get_hybrid_store
 from app.stores import get_object_store
@@ -101,13 +102,14 @@ def _to_source(hit: Any) -> AskSource:
 
 
 @router.post("/ask", response_model=AskResponse)
-async def ask(req: AskRequest) -> AskResponse:
+async def ask(req: AskRequest, request: Request) -> AskResponse:
     if not _HYBRID_WARMED:
         _ensure_hybrid_store_loaded()
     start = time.perf_counter()
     ask_settings = get_ask_settings()
+    trace_id = getattr(request.state, "trace_id", None) or request.headers.get("x-trace-id") or new_trace_id()
     try:
-        state = run_ask_graph(req.question, ask_settings=ask_settings)
+        state = run_ask_graph(req.question, trace_id=trace_id, ask_settings=ask_settings)
     except Exception:
         record_ask_error()
         raise

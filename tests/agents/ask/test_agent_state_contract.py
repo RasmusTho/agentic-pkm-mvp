@@ -5,7 +5,9 @@ public `/api/ask` product contracts.
 """
 
 from app.agents.ask.graph import _to_retrieved_hit
+from app.agents.ask.graph import run_ask_graph
 from app.agents.ask.state import AgentState
+from app.retrieval.capability import RetrievalResponse
 
 
 def test_agent_state_minimal_valid_shape_and_documented_fields() -> None:
@@ -52,3 +54,19 @@ def test_retrieved_hit_fields_and_trace_id_carry_through_behavior() -> None:
     state = AgentState(trace_id="trace-ask-1", query="ask query", hits=[mapped])
     assert state.trace_id == "trace-ask-1"
     assert state.hits[0].object_id == "doc-123"
+
+
+def test_ask_trace_id_forwards_into_retrieval_request(monkeypatch) -> None:
+    """Verify run_ask_graph propagates trace_id into retrieval capability input."""
+    captured: dict[str, str | None] = {"trace_id": None}
+
+    def _fake_retrieve(request):
+        captured["trace_id"] = request.trace_id
+        return RetrievalResponse(query=request.query, hits=[], trace_id=request.trace_id)
+
+    monkeypatch.setattr("app.agents.ask.graph.retrieve", _fake_retrieve)
+
+    state = run_ask_graph("trace contract", trace_id="trace-ask-propagation-1")
+
+    assert captured["trace_id"] == "trace-ask-propagation-1"
+    assert state.trace_id == "trace-ask-propagation-1"
