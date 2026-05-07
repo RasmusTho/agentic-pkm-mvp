@@ -7,6 +7,7 @@ import pytest
 
 from app.orchestrator.handler import OrchestratorContext
 from app.services.note_update import apply_promotion_frontmatter, process_note_update
+from app.agents.panel.writeback import EXECUTED_FALLBACK
 from app.write_guard import WritesBlockedError
 
 
@@ -66,6 +67,7 @@ def test_panel_runtime_write_is_blocked_before_file_mutation(
         "app.services.note_update.DEFAULT_WRITE_GUARD.snapshot_fn",
         lambda: {"state": "unhealthy", "reason": "probe failing"},
     )
+    EXECUTED_FALLBACK.pop(note_uuid, None)
     ctx = OrchestratorContext(settings={"panel_events_enable": False, "origin": "test.note_update"})
 
     with pytest.raises(WritesBlockedError) as exc:
@@ -75,4 +77,4 @@ def test_panel_runtime_write_is_blocked_before_file_mutation(
     assert exc.value.state == "unhealthy"
     assert exc.value.reason == "probe failing"
     assert note_path.read_text(encoding="utf-8") == before
-
+    assert note_uuid not in EXECUTED_FALLBACK
