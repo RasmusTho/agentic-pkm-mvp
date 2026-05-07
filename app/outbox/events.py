@@ -106,12 +106,7 @@ def emit_index_embedding_requested(event: Dict[str, Any]) -> None:
     )
 
     record: Dict[str, Any] = dict(envelope.model_dump())
-    try:
-        write_outbox_event(envelope, idempotency_key=str(record.get("event_id") or ""))
-    except Exception:
-        # Compatibility fallback: keep audit emission even when DB outbox is unavailable
-        # (e.g. unit tests or local flows without Postgres).
-        pass
+    write_outbox_event(envelope, idempotency_key=str(record.get("event_id") or ""))
     _append_record(record)
 
 

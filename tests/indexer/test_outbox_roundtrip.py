@@ -5,6 +5,8 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
+import pytest
+
 from app.components.embeddings import get_embedding_client
 from app.outbox import events
 from app.stores import get_vector_index, reset_store_backends
@@ -23,6 +25,17 @@ def test_emit_index_embedding_requested_writes_db_outbox_and_audit(tmp_path, mon
     assert fake_path.exists()
 
 
+def test_emit_index_embedding_requested_raises_when_db_outbox_write_fails(tmp_path, monkeypatch) -> None:
+    fake_path = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setattr(events, "INDEX_OUTBOX_PATH", fake_path, raising=False)
+    monkeypatch.setattr(events, "write_outbox_event", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db down")))
+
+    with pytest.raises(RuntimeError, match="db down"):
+        events.emit_index_embedding_requested({"object_id": uuid4(), "trace_id": "trace-db-fail", "source": "test"})
+
+    assert not fake_path.exists()
+
+
 def test_indexer_runner_does_not_consume_jsonl_outbox_queue(tmp_path, monkeypatch, capsys) -> None:
     reset_store_backends()
 
@@ -32,6 +45,7 @@ def test_indexer_runner_does_not_consume_jsonl_outbox_queue(tmp_path, monkeypatc
 
     fake_path = tmp_path / "index-outbox.jsonl"
     monkeypatch.setattr(events, "INDEX_OUTBOX_PATH", fake_path, raising=False)
+    monkeypatch.setattr(events, "write_outbox_event", lambda evt, idempotency_key=None: "1")
 
     import app.store.object_store as legacy_object_store
 
