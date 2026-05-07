@@ -48,6 +48,14 @@ class WorkerPanelSummary:
     deferred: bool = False
 
 
+def _trace_id_from_envelope(envelope: object) -> str | None:
+    if isinstance(envelope, dict):
+        raw = envelope.get("trace_id")
+        return str(raw) if raw else None
+    raw = getattr(envelope, "trace_id", None)
+    return str(raw) if raw else None
+
+
 def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
     # Explicit no-op cleanup hook for delete events. Downstream index cleanup can
     # be added here later without changing worker dispatch contracts.
@@ -565,8 +573,12 @@ def run(
                     continue
 
                 payload = message.get("payload") or {}
-                envelope = message.get("event") if isinstance(message.get("event"), dict) else {}
-                trace_id = payload.get("trace_id") or message.get("trace_id") or envelope.get("trace_id") or "-"
+                trace_id = (
+                    payload.get("trace_id")
+                    or message.get("trace_id")
+                    or _trace_id_from_envelope(message.get("event"))
+                    or "-"
+                )
 
                 handler_note_path: str | None = None
                 if topic == INGEST_VAULT_CHANGED:
