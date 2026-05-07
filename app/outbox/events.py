@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict
@@ -11,6 +12,8 @@ from app.events.schema import make_outbox_event
 from app.llm.embeddings import EMBED_MODEL
 from app.services.outbox import write_outbox_event
 from app.settings.watcher_settings import load_watcher_settings
+
+logger = logging.getLogger(__name__)
 
 def _try_writable_path(path: Path) -> bool:
     try:
@@ -88,6 +91,13 @@ def _append_record(record: Dict[str, Any]) -> None:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def _append_record_best_effort(record: Dict[str, Any], *, event_name: str) -> None:
+    try:
+        _append_record(record)
+    except Exception:
+        logger.warning("outbox audit append failed event=%s path=%s", event_name, INDEX_OUTBOX_PATH, exc_info=True)
+
+
 def emit_index_embedding_requested(event: Dict[str, Any]) -> None:
     if "object_id" not in event:
         raise ValueError("index.embedding.requested missing field: object_id")
@@ -107,7 +117,7 @@ def emit_index_embedding_requested(event: Dict[str, Any]) -> None:
 
     record: Dict[str, Any] = dict(envelope.model_dump())
     write_outbox_event(envelope, idempotency_key=str(record.get("event_id") or ""))
-    _append_record(record)
+    _append_record_best_effort(record, event_name=INDEX_EMBEDDING_REQUESTED)
 
 
 def _build_index_record(
@@ -138,7 +148,7 @@ def emit_index_embedding_created(*, object_id: UUID, trace_id: str | None = None
     metrics = {"vectors": 1, "dim": get_embed_dim(), "view": DEFAULT_EMBEDDING_VIEW}
     provenance = {"model": EMBED_MODEL, "version": "1.0"}
     record = _build_index_record(envelope, object_id=str(object_id), metrics=metrics, provenance=provenance)
-    _append_record(record)
+    _append_record_best_effort(record, event_name=INDEX_EMBEDDING_CREATED)
 
 
 def emit_index_object_embedded(
@@ -171,7 +181,7 @@ def emit_index_object_embedded(
     )
     if source_ref is not None:
         record.setdefault("meta", {})["source_ref"] = source_ref
-    _append_record(record)
+    _append_record_best_effort(record, event_name=INDEX_OBJECT_EMBEDDED)
 
 
 def emit_index_embedding_failed(
@@ -209,7 +219,7 @@ def emit_index_embedding_failed(
         metrics={"vectors": 0, "dim": expected_dim if expected_dim is not None else actual_dim or get_embed_dim(), "view": DEFAULT_EMBEDDING_VIEW},
         provenance={"model": model or EMBED_MODEL, "provider": provider or "indexer"},
     )
-    _append_record(record)
+    _append_record_best_effort(record, event_name=INDEX_EMBEDDING_FAILED)
 
 
 __all__ = [
