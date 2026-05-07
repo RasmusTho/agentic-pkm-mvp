@@ -3,6 +3,9 @@
 ## What this is
 A user-facing module for a personal agentic PKM system. The system already exists: vault-backed (markdown + frontmatter), FastAPI runtime, agents, ingestion, companion notes, receipts. Obsidian is the canonical human writing surface. This module is a new client onto the existing runtime — it does not replace or modify core components.
 
+## Terminology note (current architecture)
+This brief is preserved as a source artifact from earlier exploration. Where it says "modes," the current canonical term in this workspace is **cognitive postures**.
+
 ## Who uses it
 One user: a senior software architect who lives in the vault daily across iPhone, iPad, and Mac. Thinks at system level. Uses the vault for capture, synthesis, decision tracking, and long-running thought. Already fluent with Obsidian, markdown, and agent tooling. Not a consumer; not a novice.
 
@@ -10,7 +13,7 @@ One user: a senior software architect who lives in the vault daily across iPhone
 Obsidian is excellent for durable writing and reading but structurally weak for certain cognitive acts: externalized thinking with an agent, orienting within one's own active cognition, agent-assisted synthesis with staged suggestions, and lightweight mobile interaction with the vault. This module is the *assisted-thinking surface* where those acts happen. The vault remains the source of truth; this module renders, manipulates, and contributes to vault artifacts through documented contracts.
 
 ## Cognitive surfaces in scope
-The module is expected to eventually support these distinct cognitive acts. Each one names a mode of thought, not a UI pattern:
+The module is expected to eventually support these distinct cognitive acts. Each one names a posture of thought, not a UI pattern:
 
 - **Capture** — getting material into the system with minimal friction, especially from mobile.
 - **Orient** — situating oneself in active cognition: open loops, active threads, commitments to future-self, stale decisions. Pulled by the user when sitting down to think.
@@ -54,7 +57,7 @@ Not all surfaces ship in v0. The taxonomy exists so design decisions don't forec
 - Direct APPLY mutation from chat into arbitrary vault notes.
 - Multi-agent orchestration as a UI concern.
 
-**Orient is prototyped vault-natively first** (as a generated markdown dashboard note rendered in Obsidian). It enters this module only after its markdown contract is validated.
+**Orient is prototyped vault-natively first** (as a generated markdown orientation note rendered in Obsidian). It enters this module only after its markdown contract is validated.
 
 ## What the design should produce
 
@@ -70,7 +73,7 @@ Chat sessions, staged suggestions, and any derived artifacts will be persisted a
 
 ## Open questions the design process should resolve
 
-- How Converse expresses exploratory-thinking vs. artifact-producing modes of work without making users feel they've picked wrong.
+- How Converse expresses exploratory-thinking vs. artifact-producing postures of work without making users feel they've picked wrong.
 - How agent contributions are visually distinguished from human content and from system state, across desktop and mobile.
 - How the mobile surface handles the subset of Converse that makes sense on a phone (likely: reading, lightweight continuation, new session capture) without pretending to be the desktop.
 - How session history, context, and sources are surfaced during a session without dominating the thinking surface.
@@ -78,4 +81,4 @@ Chat sessions, staged suggestions, and any derived artifacts will be persisted a
 
 ## Non-goals
 
-This brief does not prescribe: shell structure, sidebar presence, command palette, spatial vs. linear layout, artifact-pane placement, whether modes are toggles or separate views, color, type, or component library. Those are design decisions.
+This brief does not prescribe: shell structure, sidebar presence, command palette, spatial vs. linear layout, artifact-pane placement, whether posture controls are toggles or separate views, color, type, or component library. Those are design decisions.

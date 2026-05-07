@@ -1,15 +1,26 @@
-# Cognitive Modes
+# Cognitive Postures
 
-The companion workspace supports distinct modes of thought. These are cognitive intents, not required page types.
+This file keeps the historical filename `COGNITIVE_MODES.md`, but the canonical term is now **cognitive posture** (not hard mode).
 
-## Modes
-- Orientation: recover where I am, what is active, and what matters now.
-- Resurfacing: bring relevant but latent material back into view.
-- Synthesis: assemble higher-order output from multiple artifacts.
-- Review: inspect commitments, proposals, and transitions before acceptance.
-- Exploration: branch, test, and question ideas without forced persistence.
-- Converse (v0 anchor): externalize reasoning with AI while keeping the document primary.
+## Canonical postures
+- Orientation: recover current context, active threads, and immediate relevance.
+- Exploration: branch ideas safely without forcing premature persistence.
+- Synthesis: compose higher-order artifacts from multiple cognitive objects.
+- Review: evaluate proposals, commitments, and unresolved tension before acceptance.
+- Recovery: re-enter after interruption while preserving continuity.
 
-## Mode transitions
-- Transitions should be lightweight and overlay-compatible.
-- Switching modes must preserve document/thread context where possible.
+## Posture semantics
+- Postures are cognitive emphasis patterns, not route-level locks.
+- Multiple postures may coexist inside one document-centered session.
+- Resurfacing is a cross-posture operation, not a separate posture.
+
+## Transition constraints
+- Transitions must preserve document anchoring and provenance visibility.
+- Transition friction should be low, but semantic state must stay explicit.
+- No transition may require hidden app-only semantic state.
+
+## Related docs
+- `POSTURE_TRANSITIONS.md`
+- `ATTENTION_MODEL.md`
+- `TEMPORAL_COGNITION.md`
+- `SALIENCE_AND_TENSION.md`

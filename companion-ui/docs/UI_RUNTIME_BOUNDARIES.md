@@ -11,7 +11,19 @@
 - Do not add hidden app databases for meaning-bearing artifacts.
 - Do not implement production backend integration inside this workspace lane.
 
+## Cognitive boundary constraints
+- Document remains the cognitive anchor.
+- Overlays preserve continuity and provenance visibility.
+- AI remains contextual rather than dominant.
+- No runtime contract should require chat-centric or dashboard-centric interaction.
+
 ## Integration boundary (future-safe)
 - Keep transport and event contracts explicit.
 - Keep proposal workflows staged-first.
 - Keep provenance visible at interaction time, not only in audit trails.
+- Keep interruption and re-entry semantics explicit at the interface boundary.
+
+## Related docs
+- `SYSTEM_OVERVIEW.md`
+- `EVENT_MODEL_SUMMARY.md`
+- `TEMPORAL_PROVENANCE.md`
