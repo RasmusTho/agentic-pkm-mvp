@@ -619,7 +619,7 @@ See [`docs/RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md`](RELEASE_CHANNELS/DEFINE
 
 ## Companion UI design handoff reference (2026-05-03)
 
-A new Companion UI converse-surface design handoff was added at `companion-ui/design-handoff/2026-05-03-converse/`.
+A new Companion UI converse-surface design handoff was added at `companion-ui/design_handoff/2026-05-03-converse/`.
 This handoff remains a design reference package (wireframe HTML, style tokens, and prototype JSX), and a bounded implementation now exists in `companion-ui/src/` covering rail-state geometry, thread/composer states, the staged suggestion moment, and the session-drawer/portrait-sheet interaction slices (delivered by PRs #745, #746, #750, and #762). These assets remain companion-UI reference code, not production runtime code.
 
 Architecture boundary reminder:
