@@ -5,7 +5,7 @@ import importlib.util
 
 def _load_state_module():
     repo_root = Path(__file__).resolve().parents[2]
-    module_path = repo_root / "companion-ui" / "src" / "converse_layout_state.py"
+    module_path = repo_root / "companion-ui" / "companion-app" / "converse_layout_state.py"
     spec = importlib.util.spec_from_file_location("converse_layout_state", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
@@ -14,12 +14,12 @@ def _load_state_module():
 
 
 def _html() -> str:
-    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.html"
+    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "companion-app" / "converse_layout.html"
     return html_path.read_text(encoding="utf-8")
 
 
 def _css() -> str:
-    css_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.css"
+    css_path = Path(__file__).resolve().parents[2] / "companion-ui" / "companion-app" / "converse_layout.css"
     return css_path.read_text(encoding="utf-8")
 
 

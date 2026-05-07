@@ -4,7 +4,7 @@ import importlib.util
 
 def _load_state_module():
     repo_root = Path(__file__).resolve().parents[2]
-    module_path = repo_root / "companion-ui" / "src" / "converse_layout_state.py"
+    module_path = repo_root / "companion-ui" / "companion-app" / "converse_layout_state.py"
     spec = importlib.util.spec_from_file_location("converse_layout_state", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
@@ -25,7 +25,7 @@ def test_layout_state_switch_and_geometry_tokens() -> None:
 
 
 def test_document_column_is_constrained_and_centered() -> None:
-    css_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.css"
+    css_path = Path(__file__).resolve().parents[2] / "companion-ui" / "companion-app" / "converse_layout.css"
     css_text = css_path.read_text(encoding="utf-8")
 
     assert "max-width: 640px;" in css_text
@@ -33,7 +33,7 @@ def test_document_column_is_constrained_and_centered() -> None:
 
 
 def test_landscape_shell_contains_top_bar_document_and_rail_container() -> None:
-    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.html"
+    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "companion-app" / "converse_layout.html"
     html_text = html_path.read_text(encoding="utf-8")
 
     assert 'data-testid="top-bar"' in html_text
@@ -43,7 +43,7 @@ def test_landscape_shell_contains_top_bar_document_and_rail_container() -> None:
 
 
 def test_thread_contains_human_and_agent_message_variants() -> None:
-    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.html"
+    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "companion-app" / "converse_layout.html"
     html_text = html_path.read_text(encoding="utf-8")
 
     assert 'data-testid="conversation-thread"' in html_text
@@ -54,7 +54,7 @@ def test_thread_contains_human_and_agent_message_variants() -> None:
 
 
 def test_composer_exposes_enabled_and_disabled_state_hooks() -> None:
-    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.html"
+    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "companion-app" / "converse_layout.html"
     html_text = html_path.read_text(encoding="utf-8")
 
     assert 'data-testid="composer"' in html_text
@@ -66,7 +66,7 @@ def test_composer_exposes_enabled_and_disabled_state_hooks() -> None:
 
 
 def test_thinking_indicator_row_present_and_distinct() -> None:
-    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.html"
+    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "companion-app" / "converse_layout.html"
     html_text = html_path.read_text(encoding="utf-8")
 
     assert 'data-testid="thinking-indicator"' in html_text
@@ -76,8 +76,8 @@ def test_thinking_indicator_row_present_and_distinct() -> None:
 
 def test_collapsed_rail_uses_compact_strip_affordances() -> None:
     repo_root = Path(__file__).resolve().parents[2]
-    html_text = (repo_root / "companion-ui" / "src" / "converse_layout.html").read_text(encoding="utf-8")
-    css_text = (repo_root / "companion-ui" / "src" / "converse_layout.css").read_text(encoding="utf-8")
+    html_text = (repo_root / "companion-ui" / "companion-app" / "converse_layout.html").read_text(encoding="utf-8")
+    css_text = (repo_root / "companion-ui" / "companion-app" / "converse_layout.css").read_text(encoding="utf-8")
 
     assert 'data-testid="rail-collapsed-strip"' in html_text
     assert 'data-rail-state="collapsed"' in html_text
@@ -88,8 +88,8 @@ def test_collapsed_rail_uses_compact_strip_affordances() -> None:
 
 def test_suggestion_state_dimming_and_proposed_insertion_block() -> None:
     repo_root = Path(__file__).resolve().parents[2]
-    html_text = (repo_root / "companion-ui" / "src" / "converse_layout.html").read_text(encoding="utf-8")
-    css_text = (repo_root / "companion-ui" / "src" / "converse_layout.css").read_text(encoding="utf-8")
+    html_text = (repo_root / "companion-ui" / "companion-app" / "converse_layout.html").read_text(encoding="utf-8")
+    css_text = (repo_root / "companion-ui" / "companion-app" / "converse_layout.css").read_text(encoding="utf-8")
 
     assert 'data-suggestion-state="active"' in html_text
     assert 'data-testid="document-dimmed-region"' in html_text
@@ -100,7 +100,7 @@ def test_suggestion_state_dimming_and_proposed_insertion_block() -> None:
 
 
 def test_suggestion_card_mirrors_proposal_identity_cues() -> None:
-    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.html"
+    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "companion-app" / "converse_layout.html"
     html_text = html_path.read_text(encoding="utf-8")
 
     assert 'data-testid="suggestion-card"' in html_text
@@ -112,7 +112,7 @@ def test_suggestion_card_mirrors_proposal_identity_cues() -> None:
 
 
 def test_apply_discard_controls_emit_bounded_ui_intents() -> None:
-    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "src" / "converse_layout.html"
+    html_path = Path(__file__).resolve().parents[2] / "companion-ui" / "companion-app" / "converse_layout.html"
     html_text = html_path.read_text(encoding="utf-8")
 
     assert 'data-testid="apply-suggestion"' in html_text
