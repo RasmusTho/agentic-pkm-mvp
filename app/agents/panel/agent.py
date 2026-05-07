@@ -22,7 +22,6 @@ from .writeback import (
     annotate_action_ids as _annotate_action_ids,
     remove_actions_from_markdown as _remove_actions_from_markdown,
     stable_action_id as _stable_action_id,
-    upsert_executed_ids as _upsert_executed_ids,
     write_receipts as _write_receipts,
 )
 
@@ -48,6 +47,7 @@ class PanelAgentResult(BaseModel):
     intents: list[PanelIntent]
     updated_markdown: str
     events: list[OutboxEvent] = Field(default_factory=list)
+    executed_action_ids: list[str] = Field(default_factory=list)
 
 
 def _split_frontmatter(markdown: str) -> tuple[list[str], list[str]]:
@@ -384,9 +384,13 @@ def handle_note_update(
         preferred_index=preferred_index,
     )
 
-    _upsert_executed_ids(note_id, executed_now)
-
-    return PanelAgentResult(state=new_state, intents=intents, updated_markdown=updated_markdown, events=events)
+    return PanelAgentResult(
+        state=new_state,
+        intents=intents,
+        updated_markdown=updated_markdown,
+        events=events,
+        executed_action_ids=executed_now,
+    )
 
 
 __all__ = ["handle_note_update", "PanelAgentResult"]
