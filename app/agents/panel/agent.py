@@ -386,9 +386,7 @@ def handle_note_update(
     if executed_now:
         # Keep legacy direct callers idempotent even when markdown writeback is skipped.
         from .writeback import upsert_executed_ids
-
         upsert_executed_ids(note_id, executed_now)
-
     return PanelAgentResult(
         state=new_state,
         intents=intents,

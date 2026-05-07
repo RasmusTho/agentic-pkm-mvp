@@ -100,3 +100,13 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Source:** pr-integration
 **Diverged:** The plan assumed installing `pytest-xdist` was sufficient for `-n/--dist`, but CI still failed because `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` prevented xdist from loading unless explicitly added with `-p xdist.plugin`.
 **Upstream artifact:** `docs/TESTING.md` + `.codex/skills/pr-integration/SKILL.md` — add a note that plugin-provided pytest flags require explicit plugin loading when autoload is disabled, and verify this in CI failure triage before dependency changes.
+
+## 2026-05-07 — #775 (Outbox contract reconcile branch drift during review-fix loop)
+**Source:** issue-to-code / pr-integration
+**Diverged:** The plan was to apply Codex review fixes directly on PR #796 branch (`codex/issue-775-outbox-contract-reconcile`), but commits repeatedly landed on unrelated local branches because edits/commits were run from the shared root worktree where active branch context had changed.
+**Upstream artifact:** `.codex/skills/issue-to-code/SKILL.md` + `.codex/skills/pr-integration/SKILL.md` — require a hard branch-truth gate before any `git add/commit/push` (`git branch --show-current` must equal PR head branch and `git rev-parse HEAD == gh pr view <PR> --json headRefOid`). For multi-agent parallel work, require a dedicated per-issue worktree for the full lifecycle (implementation through review-fix), and prohibit committing from the shared root worktree for active PRs.
+
+## 2026-05-07 — PR #800 (merge-ref drift causing CI-only NameError)
+**Source:** pr-integration
+**Diverged:** CI `smoke` failed on PR merge-ref with `NameError: _upsert_executed_ids is not defined` even though branch HEAD had the alias import locally. The merge-ref carried the call site while import context diverged during conflict churn, creating a CI-only failure mode.
+**Upstream artifact:** `.codex/skills/pr-integration/SKILL.md` — add a merge-ref validation step after review-fix pushes: fetch `pull/<id>/merge`, inspect touched symbols in that tree (not only branch HEAD), and run at least one target test against the same path before declaring PR ready.
