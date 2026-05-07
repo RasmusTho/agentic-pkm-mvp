@@ -1,8 +1,11 @@
 from pathlib import Path
+import textwrap
 
 import pytest
 
-from app.services.note_update import apply_promotion_frontmatter
+from app.orchestrator.handler import OrchestratorContext
+from app.services.note_update import apply_promotion_frontmatter, process_note_update
+from app.agents.panel.writeback import EXECUTED_FALLBACK
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
 
@@ -57,3 +60,50 @@ def test_apply_promotion_writes_via_knowledge_port(monkeypatch, tmp_path: Path) 
     result = apply_promotion_frontmatter(path, "note-uuid", "evergreen")
     assert result is True
     assert writes
+
+
+def _panel_markdown(note_uuid: str, *, checked: bool) -> str:
+    checkbox = "x" if checked else " "
+    return textwrap.dedent(
+        f"""
+        ---
+        uuid: {note_uuid}
+        title: Sample
+        ---
+
+        ## AI-åtgärder
+        - [{checkbox}] Skapa en separat sammanfattningsanteckning
+        """
+    ).strip() + "\n"
+
+
+def test_panel_runtime_blocked_has_no_file_or_executed_ids_side_effects(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    note_uuid = "panel-note-1"
+    note_path = tmp_path / "note.md"
+    old_markdown = _panel_markdown(note_uuid, checked=False)
+    new_markdown = _panel_markdown(note_uuid, checked=True)
+    note_path.write_text(new_markdown, encoding="utf-8")
+    snapshot_dir = tmp_path / "snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    (snapshot_dir / f"{note_uuid}.md").write_text(old_markdown, encoding="utf-8")
+    before = note_path.read_text(encoding="utf-8")
+    prior_fallback_ids = set(EXECUTED_FALLBACK.get(note_uuid, set()))
+
+    monkeypatch.setattr("app.settings.panel_actions.load_panel_action_mappings", lambda: {})
+    monkeypatch.setattr(
+        DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        lambda: {"state": "unhealthy", "reason": "probe failing"},
+    )
+    ctx = OrchestratorContext(settings={"panel_events_enable": False, "origin": "test.note_update"})
+
+    with pytest.raises(WritesBlockedError) as exc:
+        process_note_update(note_path, ctx, snapshot_dir=snapshot_dir)
+
+    assert exc.value.action == "panel runtimes"
+    assert exc.value.state == "unhealthy"
+    assert exc.value.reason == "probe failing"
+    assert note_path.read_text(encoding="utf-8") == before
+    assert set(EXECUTED_FALLBACK.get(note_uuid, set())) == prior_fallback_ids
