@@ -15,7 +15,8 @@
 - Document remains the cognitive anchor.
 - Overlays preserve continuity and provenance visibility.
 - AI remains contextual rather than dominant.
-- No runtime contract should require chat-centric or dashboard-centric interaction.
+- No runtime contract should require chat-centric, dashboard-centric, or notification-centric interaction.
+- No interface contract should depend on hidden semantic state for continuity recovery.
 
 ## Integration boundary (future-safe)
 - Keep transport and event contracts explicit.
@@ -26,4 +27,5 @@
 ## Related docs
 - `SYSTEM_OVERVIEW.md`
 - `EVENT_MODEL_SUMMARY.md`
+- `CONTINUITY_AND_DECAY.md`
 - `TEMPORAL_PROVENANCE.md`
