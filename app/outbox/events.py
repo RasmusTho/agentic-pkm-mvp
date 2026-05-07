@@ -9,6 +9,7 @@ from uuid import UUID
 from app.embedding_config import get_embed_dim
 from app.events.schema import make_outbox_event
 from app.llm.embeddings import EMBED_MODEL
+from app.services.outbox import write_outbox_event
 from app.settings.watcher_settings import load_watcher_settings
 
 def _try_writable_path(path: Path) -> bool:
@@ -105,6 +106,12 @@ def emit_index_embedding_requested(event: Dict[str, Any]) -> None:
     )
 
     record: Dict[str, Any] = dict(envelope.model_dump())
+    try:
+        write_outbox_event(envelope, idempotency_key=str(record.get("event_id") or ""))
+    except Exception:
+        # Compatibility fallback: keep audit emission even when DB outbox is unavailable
+        # (e.g. unit tests or local flows without Postgres).
+        pass
     _append_record(record)
 
 

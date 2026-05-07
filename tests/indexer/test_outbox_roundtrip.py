@@ -11,6 +11,18 @@ from app.stores import get_vector_index, reset_store_backends
 from app.store.object_store import DomainObject, ObjectStore
 
 
+def test_emit_index_embedding_requested_writes_db_outbox_and_audit(tmp_path, monkeypatch) -> None:
+    fake_path = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setattr(events, "INDEX_OUTBOX_PATH", fake_path, raising=False)
+    db_writes: list[object] = []
+    monkeypatch.setattr(events, "write_outbox_event", lambda evt, idempotency_key=None: db_writes.append((evt, idempotency_key)) or "1")
+
+    events.emit_index_embedding_requested({"object_id": uuid4(), "trace_id": "trace-db-audit", "source": "test"})
+
+    assert db_writes
+    assert fake_path.exists()
+
+
 def test_indexer_runner_does_not_consume_jsonl_outbox_queue(tmp_path, monkeypatch, capsys) -> None:
     reset_store_backends()
 
