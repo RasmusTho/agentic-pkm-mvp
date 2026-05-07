@@ -26,7 +26,7 @@ def _pg_available() -> bool:
 
 
 @pytest.mark.pg
-def test_indexer_runner_consumes_outbox_pg_without_vectors(tmp_path, monkeypatch) -> None:
+def test_indexer_runner_pg_does_not_consume_jsonl_outbox_queue(tmp_path, monkeypatch, capsys) -> None:
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
@@ -64,12 +64,13 @@ def test_indexer_runner_consumes_outbox_pg_without_vectors(tmp_path, monkeypatch
         events.emit_index_embedding_requested({"object_id": oid, "trace_id": "trace-123", "source": "test"})
 
     runner.main()
+    output = capsys.readouterr().out
+    assert "JSONL queue consumption disabled" in output
 
     idx = get_vector_index()
     query = get_embedding_client().embed_text("payload-0")
     hits = idx.search(query, k=2)
 
-    assert hits
-    assert hits[0].payload.get("text") == "payload-0"
+    assert not hits
 
     reset_store_backends()

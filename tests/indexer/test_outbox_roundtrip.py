@@ -3,10 +3,9 @@ from __future__ import annotations
 import importlib
 import json
 from datetime import datetime, timezone
-from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
-from jsonschema import validate
+import pytest
 
 from app.components.embeddings import get_embedding_client
 from app.outbox import events
@@ -14,12 +13,47 @@ from app.stores import get_vector_index, reset_store_backends
 from app.store.object_store import DomainObject, ObjectStore
 
 
-def _load_schema(name: str) -> dict:
-    schema_path = Path("app/events/schemas") / f"{name}.schema.json"
-    return json.loads(schema_path.read_text(encoding="utf-8"))
+def test_emit_index_embedding_requested_writes_db_outbox_and_audit(tmp_path, monkeypatch) -> None:
+    fake_path = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setattr(events, "INDEX_OUTBOX_PATH", fake_path, raising=False)
+    db_writes: list[object] = []
+    monkeypatch.setattr(events, "write_outbox_event", lambda evt, idempotency_key=None: db_writes.append((evt, idempotency_key)) or "1")
+
+    events.emit_index_embedding_requested({"object_id": uuid4(), "trace_id": "trace-db-audit", "source": "test"})
+
+    assert db_writes
+    assert fake_path.exists()
 
 
-def test_indexer_runner_consumes_outbox_without_vectors(tmp_path, monkeypatch) -> None:
+def test_emit_index_embedding_requested_raises_when_db_outbox_write_fails(tmp_path, monkeypatch) -> None:
+    fake_path = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setattr(events, "INDEX_OUTBOX_PATH", fake_path, raising=False)
+    monkeypatch.setattr(events, "write_outbox_event", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db down")))
+
+    with pytest.raises(RuntimeError, match="db down"):
+        events.emit_index_embedding_requested({"object_id": uuid4(), "trace_id": "trace-db-fail", "source": "test"})
+
+    assert not fake_path.exists()
+
+
+def test_emit_index_embedding_requested_tolerates_audit_append_failure(tmp_path, monkeypatch) -> None:
+    fake_path = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setattr(events, "INDEX_OUTBOX_PATH", fake_path, raising=False)
+    db_writes: list[object] = []
+    monkeypatch.setattr(events, "write_outbox_event", lambda evt, idempotency_key=None: db_writes.append((evt, idempotency_key)) or "1")
+    monkeypatch.setattr(events, "_append_record", lambda record: (_ for _ in ()).throw(OSError("disk full")))
+
+    events.emit_index_embedding_requested({"object_id": uuid4(), "trace_id": "trace-db-audit-fail", "source": "test"})
+
+    assert db_writes
+
+
+def test_emit_index_embedding_created_tolerates_audit_append_failure(monkeypatch) -> None:
+    monkeypatch.setattr(events, "_append_record", lambda record: (_ for _ in ()).throw(OSError("audit sink unavailable")))
+    events.emit_index_embedding_created(object_id=UUID("11111111-1111-1111-1111-111111111111"), trace_id="trace-created")
+
+
+def test_indexer_runner_does_not_consume_jsonl_outbox_queue(tmp_path, monkeypatch, capsys) -> None:
     reset_store_backends()
 
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -28,6 +62,7 @@ def test_indexer_runner_consumes_outbox_without_vectors(tmp_path, monkeypatch) -
 
     fake_path = tmp_path / "index-outbox.jsonl"
     monkeypatch.setattr(events, "INDEX_OUTBOX_PATH", fake_path, raising=False)
+    monkeypatch.setattr(events, "write_outbox_event", lambda evt, idempotency_key=None: "1")
 
     import app.store.object_store as legacy_object_store
 
@@ -63,25 +98,18 @@ def test_indexer_runner_consumes_outbox_without_vectors(tmp_path, monkeypatch) -
         events.emit_index_embedding_requested({"object_id": oid, "trace_id": "trace-123", "source": "test"})
 
     runner.main()
+    output = capsys.readouterr().out
+    assert "JSONL queue consumption disabled" in output
 
     idx = get_vector_index()
     embedder = get_embedding_client()
     query = embedder.embed_text("payload-0")
     results = idx.search(query, k=2)
 
-    assert results
-    assert results[0].payload["text"] == "payload-0"
-
-    # Indexer emitted a schema-aligned index.embedding.created record (no embedding vectors).
+    assert not results
     lines = fake_path.read_text(encoding="utf-8").splitlines()
-    assert lines
     records = [json.loads(line) for line in lines if line.strip()]
+    requested = [rec for rec in records if rec.get("event") == "index.embedding.requested"]
     created = [rec for rec in records if rec.get("event") == "index.embedding.created"]
-    assert created, "Expected an index.embedding.created record"
-
-    rec = created[-1]
-    assert "embedding" not in rec
-    assert "embedding" not in rec.get("payload", {})
-
-    schema = _load_schema("index.embedding.created")
-    validate(instance=rec, schema=schema)
+    assert requested, "Expected request records in JSONL audit log"
+    assert not created, "Runner must not process JSONL request records into created events"
