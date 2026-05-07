@@ -5,9 +5,17 @@
 
 ## Core posture
 - Obsidian vault remains canonical for durable knowledge artifacts.
-- Companion UI is an augmentation layer for orientation, dialogue, synthesis, and review.
-- The human remains cognitively centered; AI assists, proposes, and cites.
-- Interaction is document-first and overlay-first.
+- Companion UI augments human cognition; it does not replace human reasoning.
+- AI remains contextual, provenance-aware, and subordinate to document-centered work.
+- Interaction stays document-first and overlay-first.
+
+## Cognitive architecture baseline
+- Document is the cognitive anchor.
+- Overlays are continuity surfaces, not separate semantic worlds.
+- Cognitive postures replace hard mode framing.
+- Resurfacing is contextual and provenance-aware.
+- Attention and interruption semantics are explicit.
+- Hidden semantic state is prohibited.
 
 ## System boundary
 - In scope: interaction architecture, design artifacts, UI prototyping, prompts, and implementation staging.
@@ -16,11 +24,18 @@
 ## Runtime relationship
 - Companion UI is a client to the existing runtime (FastAPI + event surfaces).
 - Runtime state in the UI is ephemeral unless explicitly persisted to vault-compatible artifacts.
-- Event-driven compatibility is required so future AgentState/LangGraph flows can plug in without rewriting interaction primitives.
+- Event-driven compatibility is required so future runtime/event coordination can plug in without rewriting interaction primitives.
 
 ## Workspace roles
 - `docs/`: architecture and cognitive interaction contracts.
 - `design_handoff/`: preserved external design handoffs and wireframes.
-- `exploration/`: bounded experiments by cognitive mode.
+- `exploration/`: bounded experiments by cognitive posture.
 - `companion-app/`: implementation staging area for UI prototypes.
 - `prompts/`: reusable design/coding prompt scaffolds.
+
+## Related docs
+- `COGNITIVE_PRINCIPLES.md`
+- `INTERACTION_PRINCIPLES.md`
+- `TEMPORAL_COGNITION.md`
+- `ATTENTION_MODEL.md`
+- `COGNITIVE_OBJECTS.md`
