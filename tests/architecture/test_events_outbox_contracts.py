@@ -110,6 +110,7 @@ def test_outbox_event_envelope_has_required_fields(tmp_path: Path, monkeypatch) 
     outbox_path = tmp_path / "index-outbox.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     monkeypatch.setattr("app.outbox.events.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+    monkeypatch.setattr("app.outbox.events.write_outbox_event", lambda *args, **kwargs: "1")
 
     emit_index_embedding_requested(
         {
