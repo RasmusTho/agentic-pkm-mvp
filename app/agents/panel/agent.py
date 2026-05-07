@@ -22,6 +22,7 @@ from .writeback import (
     annotate_action_ids as _annotate_action_ids,
     remove_actions_from_markdown as _remove_actions_from_markdown,
     stable_action_id as _stable_action_id,
+    upsert_executed_ids as _upsert_executed_ids,
     write_receipts as _write_receipts,
 )
 
@@ -383,6 +384,8 @@ def handle_note_update(
         clear=clear_status,
         preferred_index=preferred_index,
     )
+    if executed_now:
+        _upsert_executed_ids(note_id, executed_now)
 
     return PanelAgentResult(
         state=new_state,
