@@ -52,6 +52,23 @@ jobs:
           if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
           pip install pytest-xdist
 
+      - name: Lint (ruff)
+        run: |
+          ruff check app tests
+
+      - name: Validate settings
+        run: |
+          mkdir -p tmp
+          python -m app.cli settings-validate --json | tee tmp/settings-validate.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("tmp/settings-validate.json").read_text(encoding="utf-8"))
+          if not payload.get("ok", False):
+              raise SystemExit(f"settings-validate failed: {payload}")
+          PY
+
       - name: Validate docs guardrails
         shell: bash
         run: |
