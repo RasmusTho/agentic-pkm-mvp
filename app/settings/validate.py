@@ -35,6 +35,8 @@ class ValidationIssue:
 
 _ACTION_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 _MEASUREMENT_ONLY_ACTIONS = {"ingest.summary.create"}
+_MISSING_SECRET_PREFIX = "missing:"
+COMPILED_RUNTIME_DIR = Path("runtime/settings")
 
 
 def _panel_action_catalog_paths() -> list[Path]:
@@ -182,6 +184,53 @@ def _validate_panel_action_wiring() -> list[ValidationIssue]:
         return [ValidationIssue(code="panel_wiring.invalid", message=str(exc), ref="panel_wiring")]
 
 
+def _iter_missing_secret_refs(payload: Any, *, prefix: str = "") -> list[tuple[str, str]]:
+    hits: list[tuple[str, str]] = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            child = f"{prefix}.{key}" if prefix else str(key)
+            hits.extend(_iter_missing_secret_refs(value, prefix=child))
+        return hits
+    if isinstance(payload, list):
+        for idx, value in enumerate(payload):
+            child = f"{prefix}[{idx}]"
+            hits.extend(_iter_missing_secret_refs(value, prefix=child))
+        return hits
+    if isinstance(payload, str) and payload.startswith(_MISSING_SECRET_PREFIX):
+        hits.append((prefix or "<root>", payload))
+    return hits
+
+
+def _validate_compiled_runtime_settings() -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    if not COMPILED_RUNTIME_DIR.exists():
+        return issues
+    for path in sorted(COMPILED_RUNTIME_DIR.rglob("*.yaml")):
+        try:
+            payload = load_wiring_yaml(path)
+        except Exception as exc:
+            issues.append(
+                ValidationIssue(
+                    code="runtime_settings.invalid_yaml",
+                    message=f"{path}: failed to load compiled runtime settings: {exc}",
+                    ref=f"runtime_settings:{path.name}",
+                )
+            )
+            continue
+        for keypath, value in _iter_missing_secret_refs(payload):
+            issues.append(
+                ValidationIssue(
+                    code="runtime_settings.missing_secret",
+                    message=(
+                        f"{path}: unresolved secret placeholder at {keypath} -> {value}. "
+                        "Missing secrets must not silently become active credentials."
+                    ),
+                    ref=f"runtime_settings:{path.name}:{keypath}",
+                )
+            )
+    return issues
+
+
 def validate_settings() -> List[ValidationIssue]:
     issues: List[ValidationIssue] = []
 
@@ -320,6 +369,7 @@ def validate_settings() -> List[ValidationIssue]:
                     ref="watcher_settings:auto_run",
                 )
             )
+    issues.extend(_validate_compiled_runtime_settings())
     return issues
 
 

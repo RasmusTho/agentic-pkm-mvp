@@ -28,7 +28,9 @@ Primary source folder:
 Compiler:
 - `python -m app.cli settings compile`
 
-Runtime settings cover the panel action catalog and watcher policy; provenance (path/mtime/sha) and precedence follow the vault-first compiler plus `python -m app.cli settings-validate` / `python -m app.cli settings-explain` and are also surfaced in `python -m app.cli status --json` under `panel_diagnostics` and `watcher_automation`.
+Runtime settings cover the panel action catalog, watcher policy, and compiled runtime bundles under `runtime/settings/`.
+Today, `python -m app.cli settings-explain` is a narrow operator-facing diagnostics surface for environment/database state plus panel-action and watcher provenance/gating; it is not a full dump of every compiled runtime YAML.
+Compiled bundle files such as `runtime/settings/llm_routing.yaml` remain the direct artifact for the broader runtime payload, while `python -m app.cli settings-validate` checks registries, panel/watcher source artifacts, and any compiled-runtime unresolved-secret sentinels visible locally.
 They also include task-specific LLM routing policy via `vault/@Settings/llm_routing.md` -> `runtime/settings/llm_routing.yaml`.
 
 Settings tiering guidance (operator-facing vs dev/lab-only), inventory, and migration targets are described below.
@@ -43,7 +45,7 @@ The active settings model separates:
 Core rules:
 - normal runtime defaults to `PKM_SETTINGS_PROFILE=operator`
 - lab/experimental controls require explicit `PKM_SETTINGS_PROFILE=lab`
-- provenance and precedence should remain visible through `settings-validate` and `settings-explain`
+- provenance and precedence should remain inspectable, with `settings-explain` focused on watcher/panel operator diagnostics and `settings-validate` covering registry/source consistency plus local unresolved-secret checks
 
 High-impact examples:
 - Operator-facing:
@@ -144,7 +146,7 @@ Events are settings-backed artifacts:
 The registry lists canonical event IDs, producers/consumers, and optional schema refs. Other registries (e.g., graphs) must reference these IDs.
 
 ## Operational guidance
-- Use `python -m app.cli settings-validate --json` to validate compiled settings and registry consistency.
-- Use `python -m app.cli settings-explain --json` to inspect precedence and provenance.
+- Use `python -m app.cli settings-validate --json` to validate registries, panel/watcher source artifacts, and locally compiled unresolved-secret sentinels.
+- Use `python -m app.cli settings-explain --json` to inspect environment/database resolution plus watcher/panel provenance and gate state.
 - When changing a registry or settings artifact, update the owning doc and validation expectations in the same change.
 - Treat `vault/@Settings/llm_routing.md` as the user-facing source of truth for chat, reasoning, embedding, and eval model choices. The compiler derives providers from the model registry.

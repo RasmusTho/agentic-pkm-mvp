@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import app.settings.validate as validate_module
 from app.settings.validate import validate_settings
 
 
@@ -23,3 +24,20 @@ def test_validate_settings_includes_watcher_unknown_action(tmp_path: Path, monke
 
     issues = validate_settings()
     assert any(issue.code == "watcher_settings.unknown_action" for issue in issues)
+
+
+def test_validate_settings_flags_missing_secret_in_compiled_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime_dir = tmp_path / "runtime" / "settings"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "global.yaml").write_text(
+        "secrets:\n  api_token: missing:API_TOKEN\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(validate_module, "COMPILED_RUNTIME_DIR", runtime_dir)
+
+    issues = validate_settings()
+
+    assert any(issue.code == "runtime_settings.missing_secret" for issue in issues)
