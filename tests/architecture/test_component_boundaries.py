@@ -21,7 +21,6 @@ FORBIDDEN_MODULE_PREFIXES = (
 # Intentional seams that may import low-level modules directly.
 ALLOWLISTED_IMPORTERS = {
     "app/components/",
-    "app/services/indexer.py",
 }
 
 
@@ -80,7 +79,6 @@ def test_high_level_layers_do_not_import_forbidden_low_level_modules_directly() 
 def test_allowlist_scope_covers_component_adapter_seams_only() -> None:
     assert ALLOWLISTED_IMPORTERS == {
         "app/components/",
-        "app/services/indexer.py",
     }
 
 
