@@ -313,3 +313,10 @@ All six task specs are complete and closed; promotion and rollback skills are au
 - Initial implementation delivered in `companion-ui/src/` across four bounded slices: layout shell + rail geometry (PR #745), rail thread/composer states (PR #746), staged suggestion moment (PR #750), and session drawer + portrait bottom-sheet (PR #762).
 - All Converse interaction slices from the 2026-05-03 handoff (Issues #740–#743) are now delivered. A follow-up data-attribute token alignment fix (Issue #764, PR #763) is also delivered. The runtime-client boundary and vault-first durability constraints were preserved throughout.
 - Open follow-up: Issue #756 (outbox null-omission bug, Status=Ready) and Issue #761 (dispatcher blocked-task reconciliation, Status=Backlog).
+
+## Companion UI design artifact intake (2026-05-08)
+
+- Cognitive-temporal design exploration committed at `companion-ui/design_handoff/2026-05-08-cognitive-temporal/`.
+- Package covers: cognitive modes, temporal cognition canvas, and re-entry mist variant exploration (21 files — HTML canvases, JSX source, CSS).
+- Five vocabulary docs grounded in the package: EXPERIENTIAL_PATTERNS, ATTENTIONAL_PHYSICS, CONTINUITY_AND_DECAY, RESURFACING_HEURISTICS, TEMPORAL_OVERLAYS (PR #823, Issue #824).
+- Implementation slices for the 2026-05-08 interaction model are not yet opened.
