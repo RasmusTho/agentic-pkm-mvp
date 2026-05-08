@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Companion UI — Temporal Cognition</title>
+<link rel="stylesheet" href="colors_and_type.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Kalam:wght@300;400;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+  html, body, #root { height: 100%; margin: 0; }
+  body { background: var(--bg-base); overflow: hidden; }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="temporal-primitives.jsx"></script>
+<script type="text/babel" src="temporal-s1.jsx"></script>
+<script type="text/babel" src="temporal-s2.jsx"></script>
+<script type="text/babel" src="temporal-s3.jsx"></script>
+<script type="text/babel" src="temporal-s4.jsx"></script>
+<script type="text/babel" src="temporal-s5.jsx"></script>
+<script type="text/babel" src="temporal-s6.jsx"></script>
+
+<script type="text/babel">
+
+function App() {
+  return (
+    <DesignCanvas>
+
+      {/* ── frame ─────────────────────────────────────────── */}
+      <DCSection id="frame" title="Temporal Cognition — Companion UI"
+        subtitle="continuity of thought across interruption · ambient, document-anchored, non-disruptive">
+        <DCArtboard id="premise" label="Premise" width={520} height={460}>
+          <S0_Premise />
+        </DCArtboard>
+        <DCArtboard id="hierarchy" label="Semantic overlay hierarchy"
+          width={620} height={520}>
+          <S6_OverlayHierarchy />
+        </DCArtboard>
+        <DCArtboard id="rules" label="Attention rules · invariants"
+          width={520} height={520}>
+          <S6_AttentionRules />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── 1 · Interrupted trajectories ─────────────────── */}
+      <DCSection id="trajectories" title="1 · Interrupted trajectories"
+        subtitle="how thought is preserved when the user steps away">
+        <DCArtboard id="traj-states" label="Trajectory states"
+          width={620} height={460}>
+          <S1_Model />
+        </DCArtboard>
+        <DCArtboard id="traj-preserved" label="Continuity payload"
+          width={520} height={460}>
+          <S1_Preserved />
+        </DCArtboard>
+        <DCArtboard id="traj-wire" label="Wireframe — moment of interruption"
+          width={880} height={580}>
+          <S1_InterruptWire />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── 2 · Re-entry ergonomics ──────────────────────── */}
+      <DCSection id="reentry" title="2 · Re-entry ergonomics"
+        subtitle="the mist · the four questions · how absence scales">
+        <DCArtboard id="reentry-wire" label="Wireframe — re-entry mist"
+          width={880} height={580}>
+          <S2_MistWire />
+        </DCArtboard>
+        <DCArtboard id="reentry-questions" label="Four questions, four shapes"
+          width={520} height={520}>
+          <S2_FourQuestions />
+        </DCArtboard>
+        <DCArtboard id="reentry-ladder" label="Latency ladder"
+          width={620} height={480}>
+          <S2_LatencyLadder />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── 3 · Temporal resurfacing ─────────────────────── */}
+      <DCSection id="resurfacing" title="3 · Temporal resurfacing"
+        subtitle="ambient marginalia · decay envelopes · non-disruptive triggers">
+        <DCArtboard id="resurf-wire" label="Wireframe — marginalia field"
+          width={880} height={620}>
+          <S3_MarginaliaWire />
+        </DCArtboard>
+        <DCArtboard id="resurf-decay" label="Decay envelope"
+          width={620} height={460}>
+          <S3_DecayEnvelope />
+        </DCArtboard>
+        <DCArtboard id="resurf-triggers" label="Resurfacing triggers"
+          width={620} height={460}>
+          <S3_Triggers />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── 4 · Cognitive tension ────────────────────────── */}
+      <DCSection id="tension" title="4 · Cognitive tension"
+        subtitle="unresolvedness · conflict · incomplete synthesis · dormant pressure">
+        <DCArtboard id="tension-topology" label="Tension topology"
+          width={680} height={520}>
+          <S4_Topology />
+        </DCArtboard>
+        <DCArtboard id="tension-wire" label="Wireframe — tension inline"
+          width={880} height={580}>
+          <S4_InlineWire />
+        </DCArtboard>
+        <DCArtboard id="tension-dial" label="Pressure dial"
+          width={520} height={520}>
+          <S4_PressureDial />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── 5 · Temporal provenance ──────────────────────── */}
+      <DCSection id="provenance" title="5 · Temporal provenance"
+        subtitle="how understanding evolved · what changed · where uncertainty moved">
+        <DCArtboard id="prov-genealogy" label="Wireframe — paragraph genealogy"
+          width={920} height={580}>
+          <S5_GenealogyWire />
+        </DCArtboard>
+        <DCArtboard id="prov-uncertainty" label="Uncertainty trace"
+          width={620} height={420}>
+          <S5_UncertaintyTrace />
+        </DCArtboard>
+        <DCArtboard id="prov-diff" label="Wireframe — diff lens"
+          width={780} height={520}>
+          <S5_DiffLens />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── 6 · Composition ──────────────────────────────── */}
+      <DCSection id="composition" title="End-to-end"
+        subtitle="one open loop, from interruption to resolution">
+        <DCArtboard id="flow" label="Composition flow"
+          width={680} height={560}>
+          <S6_CompositionFlow />
+        </DCArtboard>
+      </DCSection>
+
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+</script>
+</body>
+</html>

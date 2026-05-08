@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Companion UI — Cognitive Modes</title>
+<link rel="stylesheet" href="colors_and_type.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Kalam:wght@300;400;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+  html, body, #root { height: 100%; margin: 0; }
+  body { background: var(--bg-base); overflow: hidden; }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+  @keyframes dotpulse {
+    0%,100% { opacity: 0.3; transform: scale(0.85); }
+    50% { opacity: 1; transform: scale(1); }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="cognitive-primitives.jsx"></script>
+<script type="text/babel" src="mode-orientation.jsx"></script>
+<script type="text/babel" src="mode-exploration.jsx"></script>
+<script type="text/babel" src="mode-synthesis.jsx"></script>
+<script type="text/babel" src="mode-review.jsx"></script>
+<script type="text/babel" src="mode-resurfacing.jsx"></script>
+<script type="text/babel" src="mode-transitions.jsx"></script>
+
+<script type="text/babel">
+
+/* Title postit */
+function ModeTitle({ tone='var(--accent)', name, subtitle, body }) {
+  return (
+    <div style={{ width:'100%', height:'100%', background:'var(--bg-base)',
+      padding:'18px 22px', display:'flex', flexDirection:'column', gap:8 }}>
+      <div style={{ display:'flex', alignItems:'baseline', gap:10 }}>
+        <span style={{ ...T.disp, fontSize:32, color:'var(--fg-1)',
+          letterSpacing:'-0.02em', lineHeight:1 }}>{name}</span>
+      </div>
+      <div style={{ ...T.mono, fontSize:9, color:tone,
+        letterSpacing:'0.12em', textTransform:'uppercase' }}>
+        {subtitle}
+      </div>
+      <div style={{ height:1, background:tone, opacity:0.5,
+        width:60, marginTop:2 }} />
+      <div style={{ ...T.ui, fontSize:12.5, color:'var(--fg-2)',
+        lineHeight:1.55, marginTop:6 }}>
+        {body}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <DesignCanvas>
+
+      {/* ── Section: header / system frame ──────────────── */}
+      <DCSection id="frame" title="Cognitive Modes — Companion UI"
+        subtitle="extending the structural model with cognitive interaction semantics">
+
+        <DCArtboard id="readme" label="Premise" width={520} height={420}>
+          <div style={{ width:'100%', height:'100%', background:'var(--bg-base)',
+            padding:'22px 24px', display:'flex', flexDirection:'column', gap:10 }}>
+            <div style={{ ...T.disp, fontSize:24, color:'var(--fg-1)',
+              letterSpacing:'-0.02em', lineHeight:1.15, marginBottom:2 }}>
+              Five modes, one document.
+            </div>
+            <div style={{ ...T.mono, fontSize:9, color:'var(--accent)',
+              textTransform:'uppercase', letterSpacing:'0.1em' }}>
+              cognitive prosthesis · vault-native · low attention load
+            </div>
+            <div style={{ height:1, background:'var(--border)', margin:'8px 0' }} />
+            <div style={{ ...T.ui, fontSize:12, color:'var(--fg-1)', lineHeight:1.6 }}>
+              The document is the cognitive anchor. Modes are <i>not</i> screens
+              — they are <strong style={{color:'var(--accent)'}}>postures</strong>
+              over the same document, expressed as overlays with predictable
+              grammar.
+            </div>
+            <div style={{ ...T.ui, fontSize:11, color:'var(--fg-2)',
+              lineHeight:1.55, marginTop:6 }}>
+              Each mode answers nine questions: overlay class · density ·
+              persistence · provenance · sources · AI visibility · spatial
+              behavior · interruption · transitions out.
+            </div>
+            <div style={{ flex:1 }} />
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr',
+              gap:5 }}>
+              {[
+                { c:'var(--accent)', n:'Orientation' },
+                { c:'var(--cyan)',   n:'Exploration' },
+                { c:'var(--vault)',  n:'Synthesis' },
+                { c:'var(--amber)',  n:'Review' },
+                { c:'var(--vault)',  n:'Resurfacing' },
+              ].map(m => (
+                <div key={m.n} style={{ display:'flex', alignItems:'center',
+                  gap:6, padding:'4px 8px', background:'var(--bg-raised)',
+                  borderLeft:`2px solid ${m.c}`, borderRadius:2 }}>
+                  <IconDot size={5} color={m.c} />
+                  <span style={{ ...T.ui, fontSize:11, color:'var(--fg-1)' }}>{m.n}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </DCArtboard>
+
+        <DCArtboard id="overlay-hierarchy" label="Overlay hierarchy"
+          width={620} height={420}>
+          <OverlayHierarchy />
+        </DCArtboard>
+
+        <DCArtboard id="transitions" label="Mode transition map"
+          width={840} height={460}>
+          <ModeTransitionMap />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── 1. Orientation ──────────────────────────────── */}
+      <DCSection id="orient" title="1 · Orientation"
+        subtitle="user returns after interruption · reduce re-entry cost">
+        <DCArtboard id="orient-title" label="Posture" width={420} height={300}>
+          <ModeTitle tone="var(--accent)" name="Orientation"
+            subtitle="reconstruct active context · recover mental state"
+            body={<>
+              When the user sits down, the system answers
+              <strong style={{color:'var(--fg-1)'}}> "where was I?"</strong> —
+              not with a dashboard, but with a quiet mist over the document
+              that names the open loops, the last trace of thought, and one
+              suggested point of resumption. It clears on first interaction.
+            </>} />
+        </DCArtboard>
+        <DCArtboard id="orient-wire" label="Wireframe — re-entry overlay"
+          width={880} height={560}>
+          <ModeOrientation_Wire />
+        </DCArtboard>
+        <DCArtboard id="orient-spec" label="Semantic spec"
+          width={520} height={460}>
+          <ModeOrientation_Spec />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── 2. Exploration ──────────────────────────────── */}
+      <DCSection id="explore" title="2 · Exploration"
+        subtitle="divergent thinking · ephemeral cognition · low governance">
+        <DCArtboard id="explore-title" label="Posture" width={420} height={300}>
+          <ModeTitle tone="var(--cyan)" name="Exploration"
+            subtitle="divergent · speculative · transient"
+            body={<>
+              A canvas blooms beside the document, anchored to a phrase. Branches
+              are <em>cheap</em> — they cost nothing, persist nothing, vanish if
+              ignored. The document remains the gravitational center; exploration
+              is what happens at the edge before things crystallize.
+            </>} />
+        </DCArtboard>
+        <DCArtboard id="explore-wire" label="Wireframe — adjacent canvas"
+          width={880} height={560}>
+          <ModeExploration_Wire />
+        </DCArtboard>
+        <DCArtboard id="explore-spec" label="Semantic spec"
+          width={520} height={460}>
+          <ModeExploration_Spec />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── 3. Synthesis ────────────────────────────────── */}
+      <DCSection id="synth" title="3 · Synthesis"
+        subtitle="convergence · candidate evergreen · attributed claims">
+        <DCArtboard id="synth-title" label="Posture" width={420} height={300}>
+          <ModeTitle tone="var(--vault)" name="Synthesis"
+            subtitle="compare · converge · attribute"
+            body={<>
+              Multiple notes lay side-by-side. A draft assembles below. Every
+              paragraph carries flecks pointing back to the sources that
+              support it. Where sources <em>disagree</em>, an amber break
+              refuses to flatten the disagreement. Output is a candidate
+              evergreen — not yet canonical.
+            </>} />
+        </DCArtboard>
+        <DCArtboard id="synth-wire" label="Wireframe — comparison + draft"
+          width={880} height={560}>
+          <ModeSynthesis_Wire />
+        </DCArtboard>
+        <DCArtboard id="synth-spec" label="Semantic spec"
+          width={520} height={460}>
+          <ModeSynthesis_Spec />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── 4. Review ───────────────────────────────────── */}
+      <DCSection id="review" title="4 · Review / Governance"
+        subtitle="staged proposals · provenance · explicit human apply">
+        <DCArtboard id="review-title" label="Posture" width={420} height={300}>
+          <ModeTitle tone="var(--amber)" name="Review"
+            subtitle="suggest / apply / reject · with receipts"
+            body={<>
+              Proposals appear <em>where they would land</em>, never in a
+              separate inspector. Each carries diff, evidence chips, confidence,
+              and a receipt id linking to the vault audit trail. The agent
+              proposes; only the human applies. A bottom dock walks the queue
+              without disturbing the page.
+            </>} />
+        </DCArtboard>
+        <DCArtboard id="review-wire" label="Wireframe — inline staged + dock"
+          width={880} height={560}>
+          <ModeReview_Wire />
+        </DCArtboard>
+        <DCArtboard id="review-spec" label="Semantic spec"
+          width={520} height={460}>
+          <ModeReview_Spec />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── 5. Resurfacing ──────────────────────────────── */}
+      <DCSection id="resurf" title="5 · Resurfacing"
+        subtitle="ambient re-attentioning · salience without notifications">
+        <DCArtboard id="resurf-title" label="Posture" width={420} height={300}>
+          <ModeTitle tone="var(--vault)" name="Resurfacing"
+            subtitle="ambient · faint · never demanding"
+            body={<>
+              Latent knowledge appears as faint marks at the right edge of the
+              document — sized by salience, dimmed by recency, anchored to
+              passages. No popups, no badges, no chime. The user notices only
+              when their eye is ready; that is the correct latency for re-attentioning.
+            </>} />
+        </DCArtboard>
+        <DCArtboard id="resurf-wire" label="Wireframe — marginalia + tray"
+          width={880} height={560}>
+          <ModeResurfacing_Wire />
+        </DCArtboard>
+        <DCArtboard id="resurf-spec" label="Semantic spec"
+          width={520} height={460}>
+          <ModeResurfacing_Spec />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── Example flows ───────────────────────────────── */}
+      <DCSection id="flows" title="Example cognitive flows"
+        subtitle="four traces showing modes composed across a real session">
+        <DCArtboard id="flow-recover" label="Recovery: interrupt → review"
+          width={620} height={420}>
+          <FlowOrientationToReview />
+        </DCArtboard>
+        <DCArtboard id="flow-explore" label="Probe → durable evergreen"
+          width={620} height={460}>
+          <FlowExploreToEvergreen />
+        </DCArtboard>
+        <DCArtboard id="flow-resurf" label="Ambient resurfacing pattern"
+          width={620} height={420}>
+          <FlowResurfacingPattern />
+        </DCArtboard>
+        <DCArtboard id="flow-prov" label="Provenance interaction pattern"
+          width={620} height={400}>
+          <FlowProvenancePattern />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── Component responsibilities ──────────────────── */}
+      <DCSection id="components" title="Component responsibilities"
+        subtitle="who owns what · matched to overlay grammar">
+        <DCArtboard id="component-table" label="Responsibility table"
+          width={1000} height={520}>
+          <div style={{ width:'100%', height:'100%', background:'var(--bg-base)',
+            padding:'16px 22px', overflow:'auto' }}>
+            <div style={{ ...T.disp, fontSize:18, color:'var(--fg-1)',
+              letterSpacing:'-0.01em', marginBottom:10 }}>
+              Component responsibilities
+            </div>
+            {[
+              { c:'Document surface', tone:'var(--fg-1)',
+                role:'Holds attention. Renders markdown + frontmatter + inline staged blocks. Source of truth for cursor position, scroll, and selection. Never replaced — only overlaid.',
+                modes:'all' },
+              { c:'Margin rail', tone:'var(--agent)',
+                role:'Conversation thread, anchored to passages. Collapses to 28px strip showing only Hugin dot + unread count. Same proposal-card shape as inline staged blocks.',
+                modes:'orient · review · converse' },
+              { c:'Re-entry overlay', tone:'var(--accent)',
+                role:'Floating card surfaced once on session start. Lists open loops + last cognitive trace. Self-dismisses on first document interaction.',
+                modes:'orient' },
+              { c:'Adjacent canvas', tone:'var(--cyan)',
+                role:'Splits the stage horizontally. Holds branches with dashed edges. State cached locally, never written to vault until promoted.',
+                modes:'explore' },
+              { c:'Comparison strip', tone:'var(--vault)',
+                role:'Three-column source view across the top. Tracks alignments and divergences. Drives provenance flecks in the draft below.',
+                modes:'synth' },
+              { c:'Provenance rail', tone:'var(--vault)',
+                role:'Right-side list of source notes with line numbers. Updates live as the draft references them. Click any source → SourcePeek.',
+                modes:'synth · review' },
+              { c:'Staged block (inline)', tone:'var(--amber)',
+                role:'Amber border-left, diff body, evidence chips, receipt id. Apply / Apply-with-edits / Defer / Reject. Lives in the document where it would land.',
+                modes:'review' },
+              { c:'Governance dock', tone:'var(--amber)',
+                role:'42px bottom strip. Walks queue with ←/→. Never obscures content. Closes with Esc.',
+                modes:'review' },
+              { c:'SourcePeek', tone:'var(--cyan)',
+                role:'Anchored card near its trigger. Shows source snippet, line, confidence. Click outside dismisses.',
+                modes:'all' },
+              { c:'Marginalia (right edge)', tone:'var(--vault)',
+                role:'Faint dots anchored to passages. Size = salience, opacity = recency. No tooltip until hover.',
+                modes:'resurf' },
+              { c:'Resurface tray', tone:'var(--vault)',
+                role:'Optional 200px sidebar listing latent items with reasons. Always optional, always dismissible.',
+                modes:'resurf' },
+              { c:'Bottom sheet (portrait)', tone:'var(--accent)',
+                role:'Mobile equivalent of margin rail + governance dock. Same content, different geometry.',
+                modes:'all (portrait)' },
+            ].map((r,i) => (
+              <div key={i} style={{ display:'grid',
+                gridTemplateColumns:'170px 1fr 130px',
+                gap:14, padding:'9px 0',
+                borderTop: i===0 ? '1px solid var(--border)' : '1px solid var(--border)' }}>
+                <div style={{ display:'flex', alignItems:'flex-start', gap:6 }}>
+                  <div style={{ width:3, alignSelf:'stretch', background:r.tone,
+                    marginTop:3 }} />
+                  <span style={{ ...T.ui, fontSize:11.5, color:'var(--fg-1)',
+                    fontWeight:500 }}>{r.c}</span>
+                </div>
+                <div style={{ ...T.ui, fontSize:11, color:'var(--fg-2)',
+                  lineHeight:1.5 }}>{r.role}</div>
+                <div style={{ ...T.mono, fontSize:9, color:'var(--fg-3)',
+                  letterSpacing:'0.06em' }}>{r.modes}</div>
+              </div>
+            ))}
+          </div>
+        </DCArtboard>
+
+        <DCArtboard id="grammar" label="Interaction semantics — invariants"
+          width={520} height={520}>
+          <div style={{ width:'100%', height:'100%', background:'var(--bg-base)',
+            padding:'18px 22px', display:'flex', flexDirection:'column', gap:0 }}>
+            <div style={{ ...T.disp, fontSize:18, color:'var(--fg-1)',
+              letterSpacing:'-0.01em', marginBottom:2 }}>
+              Interaction invariants
+            </div>
+            <div style={{ ...T.mono, fontSize:9, color:'var(--fg-3)',
+              letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:10 }}>
+              true across all five modes
+            </div>
+            {[
+              ['anchor preservation', 'Mode changes never alter scroll position, cursor, or selection.'],
+              ['reversibility',       'Every overlay can be dismissed without data loss.'],
+              ['no hard navigation',  'Mode transitions are overlay swaps, not route changes.'],
+              ['proposal duality',    'Any object shown in chat appears identically in the document with the same actions.'],
+              ['vault-canonical',     'Persisted state lives in the vault as markdown/receipts. App-local state is recoverable if deleted.'],
+              ['agent voice = one of many', 'Agent contributions are visually distinguished but never structurally privileged.'],
+              ['low attention default','Resurfacing and orientation never produce notifications; salience expresses itself through visual weight.'],
+              ['portrait equivalence','Bottom sheet preserves the same cognitive semantics as the margin rail.'],
+            ].map(([k,v], i) => (
+              <div key={k} style={{ padding:'8px 0',
+                borderTop: i===0 ? 'none' : '1px solid var(--border)' }}>
+                <div style={{ ...T.mono, fontSize:9, color:'var(--accent)',
+                  letterSpacing:'0.1em', textTransform:'uppercase', marginBottom:3 }}>
+                  {k}
+                </div>
+                <div style={{ ...T.ui, fontSize:11.5, color:'var(--fg-1)',
+                  lineHeight:1.5 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+        </DCArtboard>
+      </DCSection>
+
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+</script>
+</body>
+</html>

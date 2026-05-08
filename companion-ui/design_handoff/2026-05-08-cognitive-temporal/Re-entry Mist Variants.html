@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Re-entry Mist — Three Variants</title>
+<link rel="stylesheet" href="colors_and_type.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Kalam:wght@300;400;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+  html, body, #root { height: 100%; margin: 0; }
+  body { background: var(--bg-base); overflow: hidden; }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="temporal-primitives.jsx"></script>
+<script type="text/babel" src="reentry-variants.jsx"></script>
+<script type="text/babel" src="reentry-analysis.jsx"></script>
+
+<script type="text/babel">
+function App() {
+  return (
+    <DesignCanvas>
+
+      <DCSection id="frame" title="Re-entry mist · phenomenology refinement"
+        subtitle="returning to an interrupted thought after ~3 days · three variants">
+        <DCArtboard id="premise" label="Premise" width={560} height={520}>
+          <RM_Premise />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="variants" title="Three variants"
+        subtitle="A · margin whisper   B · resumption breath   C · atmospheric recall">
+        <DCArtboard id="variant-a" label="A · margin whisper — wireframe"
+          width={920} height={580}>
+          <VariantA_Wire />
+        </DCArtboard>
+        <DCArtboard id="variant-b" label="B · resumption breath — wireframe"
+          width={920} height={580}>
+          <VariantB_Wire />
+        </DCArtboard>
+        <DCArtboard id="variant-c" label="C · atmospheric recall — wireframe"
+          width={920} height={580}>
+          <VariantC_Wire />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="cadence" title="Attentional cadence"
+        subtitle="what surfaces when · what fades first · what persists longest">
+        <DCArtboard id="cadence" label="Cadence comparison"
+          width={920} height={560}>
+          <RM_Cadence />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="density" title="Density &amp; dissolve"
+        subtitle="payload weight · how each variant lets go">
+        <DCArtboard id="density" label="Density comparison"
+          width={780} height={520}>
+          <RM_Density />
+        </DCArtboard>
+        <DCArtboard id="dissolve" label="Dissolve semantics"
+          width={920} height={520}>
+          <RM_Dissolve />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="persistence" title="Ambient persistence &amp; recommendation"
+        subtitle="what remains · which variant to ship">
+        <DCArtboard id="persistence" label="Ambient persistence"
+          width={780} height={560}>
+          <RM_Persistence />
+        </DCArtboard>
+        <DCArtboard id="recommendation" label="Recommendation"
+          width={680} height={560}>
+          <RM_Recommendation />
+        </DCArtboard>
+      </DCSection>
+
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
