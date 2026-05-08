@@ -70,6 +70,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
     - Clarify authority across writing, retention, system, runtime, and execution-record surfaces so receipt-bearing actions remain inspectable.
     - Treat current domain/zone/mirror/promotion findings as current-state bug fixes or enabling changes unless a later implementation slice explicitly realizes the v6 target state.
   - `docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md` remains the active sequencing plan for turning the v6 capability specs into cognitive-support work. Priority 1 (salience/staleness), Priority 2 (scope/sphere/identity), Priority 3 (receipts plus SUGGEST/APPLY gating), and Priority 4 (retrieval capability extraction) are now closed on GitHub; Priority 5 (minimal commitment runtime) is now closed on GitHub (#688).
+  - **v6.x — Knowledge Compilation and Memory Curation** (follow-up after v6.0 structural separation): a bounded planning line for how the system supports knowledge compilation and memory curation over time, grounded in the `Capture -> clarify -> place`, `Retrieve -> orient -> act`, and `Review -> reclassify -> promote/archive` human loops from `docs/HUMAN-FLOWS.md`. Semantic boundaries, artifact classes, review/promotion posture, and suggested event families are defined in `docs/plans/V6X_KNOWLEDGE_COMPILATION_AND_MEMORY_CURATION.md` under parent feature #803. Implementation and test slices are not yet filed; no runtime behavior is claimed.
 
 ## Capability-Based Architecture & Agent Evolution
 
