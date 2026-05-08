@@ -38,6 +38,7 @@ The broader target operating model lives in `docs/plans/V60_ARCHITECTURE_TARGET.
 - `docs/ROADMAP.md` — high-level migration sequence.
 - `docs/STATUS.md` — present-tense operational posture.
 - `docs/plans/V60_ARCHITECTURE_TARGET.md` — broader v6 target operating model context.
+- `docs/plans/V6X_KNOWLEDGE_COMPILATION_AND_MEMORY_CURATION.md` — v6.x follow-up planning line for knowledge compilation and memory curation; not part of the v6.0 baseline, but a post-separation capability lane grounded in the human flows and retrieval/orientation/resurfacing capability split established here.
 
 ## Reading Order
 
