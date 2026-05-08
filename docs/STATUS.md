@@ -1,4 +1,4 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard); v5.6 delivery line closed; v6 is the active design and planning direction. Post-v5.6 follow-ups are tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
+State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard); v5.6 delivery line closed; v6.0 seams baseline shipped at capability-seam level (closed capability spec directories plus minimal orientation/resurfacing/commitment-domain/context-dimensions runtimes and read-only Chat cognition scaffold); broader v6.0 runtime consumption is deferred as v6.1+. Post-v5.6 follow-ups are tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
 Doc role: Core SoT
 Authority: Current operational snapshot for the active baseline; subordinate to concept contracts for normative semantics, but authoritative for current runtime status and rollout posture.
 Owner: Runtime / current-state SoT
@@ -43,7 +43,8 @@ Validation posture note:
 | --- | --- | --- |
 | v5.5 (SoT baseline locked) | Current operational runtime; no new feature scope | `docs/ARCHITECTURE.md`, `docs/STATUS.md` |
 | v5.6 (delivered/closed) | Historical delivery line; read as shipped invariants | `docs/ROADMAP.md#closed-v56-delivery-line`, `docs/STATUS.md#v56-closure` |
-| v6 (active design/planning direction) | Target operating model under active design; not yet baseline | `docs/ROADMAP.md`, `docs/plans/V60_ARCHITECTURE_TARGET.md`, `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`, `docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md` |
+| v6.0 seams (baseline shipped) | Capability-seam baseline on top of v5.5/v5.6: closed capability spec dirs plus minimal orientation/resurfacing/commitment-domain/context-dimensions runtimes and read-only Chat cognition scaffold. Safe for production. | `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`, capability spec dirs under `docs/FINDING_AND_REORIENTING/`, `docs/INTERACTION_SURFACES_AND_AUTHORITY/`, `docs/SEPARATING_PERSISTENCE_SURFACES/`, `docs/COMMITMENT_AS_FIRST_CLASS/`, `docs/SCOPE_SPHERE_SITUATED_IDENTITY/` |
+| v6.1+ (planned, post-seams) | Broader target-state runtime work the seams enable; not yet baseline | `docs/plans/V60_ARCHITECTURE_TARGET.md`, `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`, `docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md` |
 
 Use `docs/ARCHITECTURE.md` for current-state runtime questions. Use `docs/ROADMAP.md` and the v6 plans for target-state design direction questions. Do not read v5.5 as an active work queue; new implementation work is sliced against v6 target-state docs.
 
