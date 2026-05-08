@@ -42,4 +42,30 @@ The command is wrapped with `@span("health.check")`, so health check runs are re
 ## CI behavior
 - `.github/workflows/smoke.yml` runs the dependency check with `LLM_PROVIDER=mock`.
 - Run `python -m app.cli health status --json` after manual ingestion to confirm `state` is `running` and that `catch_up_progress["processing_mode"]` is `idle` (or `replay` while the worker catches up).
+## Health threshold env-var overrides (lab profile only)
+
+The four `HEALTH_THRESHOLDS_*` environment variables can override the threshold
+values that are normally read from the vault settings file:
+
+| Variable | Field | Type |
+| --- | --- | --- |
+| `HEALTH_THRESHOLDS_OUTBOX_DEGRADE_OLDEST_AGE_S` | `outbox_degrade_oldest_age_s` | `float` |
+| `HEALTH_THRESHOLDS_OUTBOX_RECOVER_OLDEST_AGE_S` | `outbox_recover_oldest_age_s` | `float` |
+| `HEALTH_THRESHOLDS_DEGRADE_SAMPLES` | `degrade_samples` | `int` |
+| `HEALTH_THRESHOLDS_RECOVER_SAMPLES` | `recover_samples` | `int` |
+
+**These overrides are only applied when `PKM_SETTINGS_PROFILE=lab`.**
+In operator/prod profiles (the default) the variables are silently ignored,
+so accidental environment state cannot alter production thresholds.
+
+To use threshold overrides locally:
+
+```bash
+export PKM_SETTINGS_PROFILE=lab
+export HEALTH_THRESHOLDS_OUTBOX_DEGRADE_OLDEST_AGE_S=5.0
+python -m app.cli health status --json
+```
+
+An invalid value for any override (e.g. non-numeric string) causes the load to
+fail with `status: "fail"` and the runtime falls back to built-in defaults.
 <!-- SECTION:HEALTH:END -->
