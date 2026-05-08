@@ -66,13 +66,14 @@ Crucially, "Chat as canvas" is not a revival of the ASK-style question-answering
 1. [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md) — capability-level context, scope, constraints, acceptance.
 2. [NAME_THE_THREE_INTERACTION_SURFACES.md](NAME_THE_THREE_INTERACTION_SURFACES.md) — the three surfaces and why they are not collapsible.
 3. [DEFINE_PANEL_AUTHORITY_BOUNDARY.md](DEFINE_PANEL_AUTHORITY_BOUNDARY.md) — Panel's current authority and mutation path.
-4. [DEFINE_CHAT_AUTHORITY_BOUNDARY.md](DEFINE_CHAT_AUTHORITY_BOUNDARY.md) — Chat as canvas-shaped thinking surface, with future mutation constrained by the recorded Candidate A decision.
-5. [DEFINE_AUTOMATION_SURFACE_AUTHORITY.md](DEFINE_AUTOMATION_SURFACE_AUTHORITY.md) — Automation as a distinct authority lane.
-6. [RECONCILE_CHAT_MUTATION_AUTHORITY.md](RECONCILE_CHAT_MUTATION_AUTHORITY.md) — the keystone decision task.
-7. [STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md](STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md) — the invariant that no surface mutates durable state without governance.
-8. [DEFINE_CANVAS_COEDITING_MODEL.md](DEFINE_CANVAS_COEDITING_MODEL.md) — the co-editing posture, co-authoring vs governance-bearing split, note-as-artifact / session-as-provenance, `.chats/` and `type:` conventions.
-9. [DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md](DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md) — compatibility note that Panel is the primary command-oriented surface, not the exclusive authoritative intent surface.
-10. [HYBRID_CHAT_INTEGRATION_SCHEMA.md](HYBRID_CHAT_INTEGRATION_SCHEMA.md) — docs-only schema for how canvas Chat integrates with Panel, session provenance, and governed execution without becoming a second Panel.
+4. [CHAT_FAMILY_TAXONOMY.md](CHAT_FAMILY_TAXONOMY.md) — names the chat-family interaction surfaces (Panel command dialogue, Canvas co-authoring, Retrieval dialogue, Workspace synthesis, Operator console) and the modularity requirement that prevents collapse into a generic chat product.
+5. [DEFINE_CHAT_AUTHORITY_BOUNDARY.md](DEFINE_CHAT_AUTHORITY_BOUNDARY.md) — Chat as canvas-shaped thinking surface, with future mutation constrained by the recorded Candidate A decision.
+6. [DEFINE_AUTOMATION_SURFACE_AUTHORITY.md](DEFINE_AUTOMATION_SURFACE_AUTHORITY.md) — Automation as a distinct authority lane.
+7. [RECONCILE_CHAT_MUTATION_AUTHORITY.md](RECONCILE_CHAT_MUTATION_AUTHORITY.md) — the keystone decision task.
+8. [STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md](STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md) — the invariant that no surface mutates durable state without governance.
+9. [DEFINE_CANVAS_COEDITING_MODEL.md](DEFINE_CANVAS_COEDITING_MODEL.md) — the co-editing posture, co-authoring vs governance-bearing split, note-as-artifact / session-as-provenance, `.chats/` and `type:` conventions.
+10. [DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md](DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md) — compatibility note that Panel is the primary command-oriented surface, not the exclusive authoritative intent surface.
+11. [HYBRID_CHAT_INTEGRATION_SCHEMA.md](HYBRID_CHAT_INTEGRATION_SCHEMA.md) — docs-only schema for how canvas Chat integrates with Panel, session provenance, and governed execution without becoming a second Panel.
 
 Tasks 2, 3, 4, 5, and 7 may proceed in parallel as docs drafts. Task 6 (reconcile) depends on tasks 2–5 naming the surfaces consistently and on task 7 stating the gated-execution invariant, because the reconcile task evaluates options against those contracts.
 
