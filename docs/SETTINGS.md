@@ -61,6 +61,7 @@ High-impact examples:
   - `STORE_BACKEND`
   - watcher performance-tuning knobs
   - pipeline/decider/orchestrator/reasoning feature flags
+  - `HEALTH_THRESHOLDS_*` env-var threshold overrides (see `docs/HEALTH.md`)
 
 Target behavior:
 - operator mode should read/apply only operator-facing settings

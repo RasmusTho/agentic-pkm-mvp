@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from app.settings.source import SettingsSource, build_source
+from app.settings.tiering import is_lab_profile
 
 import yaml
 
@@ -105,7 +106,22 @@ def load_health_settings(
     *,
     vault_root: Path | None = None,
     env_getter: Callable[[str], str | None] | None = None,
+    profile_env: Mapping[str, str] | None = None,
 ) -> HealthSettingsLoadResult:
+    """Load health settings from vault-backed Markdown.
+
+    Env-var threshold overrides (``HEALTH_THRESHOLDS_*``) are only applied when
+    the active settings profile is ``lab`` (``PKM_SETTINGS_PROFILE=lab``).  In
+    operator/prod profiles the overrides are silently ignored so that accidental
+    env vars cannot alter production thresholds.
+
+    Args:
+        vault_root: Optional vault root path (resolved automatically when omitted).
+        env_getter: Callable used to look up environment variables (defaults to
+            ``os.getenv``).  Inject a custom mapping in tests.
+        profile_env: Mapping used to determine the active settings profile
+            (defaults to ``os.environ``).  Inject a custom mapping in tests.
+    """
     vault_root = vault_root or resolve_vault_root()
     target = vault_root / _settings_rel_path(vault_root)
     source = build_source(target)
@@ -129,15 +145,27 @@ def load_health_settings(
         status = "fail"
         active_settings = HealthSettingsV1.defaults()
     else:
-        overrides, override_errors = _apply_env_overrides(thresholds_candidate, env_getter)
-        if override_errors:
-            errors.extend(override_errors)
-            status = "fail"
-            active_settings = HealthSettingsV1.defaults()
+        # Env-var threshold overrides are a lab/dev-only capability.
+        # In operator/prod profiles they are suppressed unconditionally so that
+        # stray environment variables cannot silently alter production thresholds.
+        if is_lab_profile(profile_env):
+            overrides, override_errors = _apply_env_overrides(thresholds_candidate, env_getter)
+            if override_errors:
+                errors.extend(override_errors)
+                status = "fail"
+                active_settings = HealthSettingsV1.defaults()
+            else:
+                status = "ok"
+                active_settings = HealthSettingsV1(
+                    thresholds=overrides,
+                    incident_capture=incident_capture,
+                    policy=policy,
+                    incident_log_path=incident_log_path,
+                )
         else:
             status = "ok"
             active_settings = HealthSettingsV1(
-                thresholds=overrides,
+                thresholds=thresholds_candidate,
                 incident_capture=incident_capture,
                 policy=policy,
                 incident_log_path=incident_log_path,
