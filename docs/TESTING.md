@@ -184,7 +184,7 @@ Human-need acceptance scenarios should map onto those roles explicitly instead o
 Older overlapping workflows may still exist while the surface is being consolidated, but new coverage should map to these roles instead of adding more partial gates.
 
 Current implementation:
-- `.github/workflows/ci-smoke.yaml` — PR smoke with explicit system dependency parity (`ffmpeg`, `ripgrep`), split baseline pytest and deterministic Quality Wave UAT harness steps, and path-based skipping of the heavy pytest slices for docs-only PRs that do not touch code, tests, scripts, workflow, Docker, dependency, or Makefile surfaces.
+- `.github/workflows/ci-smoke.yaml` — PR smoke with explicit system dependency parity (`ffmpeg`, `ripgrep`), required `ruff check app tests` and `settings-validate` checks, split baseline pytest and deterministic Quality Wave UAT harness steps, and path-based skipping of the heavy pytest slices for docs-only PRs that do not touch code, tests, scripts, workflow, Docker, dependency, or Makefile surfaces.
 - `.github/workflows/integration-nightly.yaml` — full suite nightly at 02:00 UTC, explicit deterministic acceptance harness coverage via `tests/quality_wave/test_uat_harness.py`, first bounded PG contracts lane (`tests/int/test_pg_backend.py`, `tests/api/test_status_store_pg.py`, `tests/indexer/test_outbox_roundtrip_pg.py`), runtime contract regressions, and fitness gates.
 - `.github/workflows/release-uat.yaml` — UAT harness + golden vault + full QW suite + fitness gates; triggered on version tags and manual dispatch.
 
