@@ -174,6 +174,12 @@ This includes:
 Knowledge development is one function among several.
 It must not erase the existence of creative, reflective, or commitment-oriented material.
 
+### Compile and curate memory
+
+The system should help the human compile and curate memory by weaving together `Source -> interpret -> stabilize`, `Capture -> clarify -> place`, `Review -> reclassify -> promote/archive`, and `Retrieve -> orient -> act`.
+Compilation should reduce cognitive load while preserving human authorship, provenance, uncertainty, and review posture across the resulting working artifacts.
+Generated compiled artifacts are not automatically canonical truth; they remain reviewable outputs until the human decides what to keep, promote, revise, or archive.
+
 ### Support commitments and action
 
 The system must help the human manage open loops, commitments, projects, waiting states, and next
