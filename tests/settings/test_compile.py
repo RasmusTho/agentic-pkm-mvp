@@ -70,3 +70,53 @@ def test_compile_includes_panel_and_watcher_metadata(tmp_path: Path, monkeypatch
     source = watchers_yaml["source"]
     assert source.get("path", "").endswith("watchers.md")
     assert source.get("sha256")
+
+
+def test_compile_marks_missing_secret_placeholders_explicitly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    vault = tmp_path / "vault" / "@Settings"
+    runtime_dir = tmp_path / "runtime" / "settings"
+    vault.mkdir(parents=True, exist_ok=True)
+
+    (vault / "global.md").write_text(
+        "---\n"
+        "uuid: global\n"
+        "---\n"
+        "## Runtime\n"
+        "```yaml settings\n"
+        "secrets:\n"
+        "  api_token: ${SECRET:API_TOKEN}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    (vault / "providers.md").write_text(
+        "---\n"
+        "uuid: providers\n"
+        "---\n"
+        "## Providers\n"
+        "```yaml settings\n"
+        "llm: {}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    (vault / "llm_routing.md").write_text(
+        "---\n"
+        "uuid: routing\n"
+        "---\n"
+        "## Routing\n"
+        "```yaml settings\n"
+        "default_chat:\n"
+        "  primary:\n"
+        "    model_id: openai.chat.gpt_5_4_mini\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("API_TOKEN", raising=False)
+    monkeypatch.setattr(compiler, "VAULT", vault)
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+
+    bundle = compiler.compile_all(auto_heal=False)
+
+    assert bundle.global_.secrets["api_token"] == "missing:API_TOKEN"
+    global_yaml = yaml.safe_load((runtime_dir / "global.yaml").read_text(encoding="utf-8"))
+    assert global_yaml["secrets"]["api_token"] == "missing:API_TOKEN"
