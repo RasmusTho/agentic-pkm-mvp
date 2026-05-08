@@ -3,6 +3,10 @@
 ## Why grammar
 Overlay behavior needs a shared contract so interaction remains predictable across cognitive postures.
 
+## Boundary note
+- Overlay is an architectural surface, not a synonym for notification.
+- `TEMPORAL_OVERLAYS.md` owns the temporal semantics for overlays used in re-entry, resurfacing, and decay mitigation.
+
 ## Overlay classes
 - Margin rail: conversation context and composer.
 - Session drawer: session switching and history.
@@ -17,6 +21,7 @@ Overlay behavior needs a shared contract so interaction remains predictable acro
 - Trigger and dismiss actions should be explicit and reversible.
 - If an overlay is unavailable (viewport/runtime limits), fallback must keep the same cognitive semantics.
 - Overlay content must never become hidden semantic state.
+- Overlays should preserve low attentional load and avoid notification-centric escalation patterns.
 
 ## Continuity rules
 - Any proposal object shown in chat must map to the same object in document context with identical status and actions.
@@ -26,5 +31,6 @@ Overlay behavior needs a shared contract so interaction remains predictable acro
 ## Related docs
 - `COGNITIVE_OBJECTS.md`
 - `TEMPORAL_PROVENANCE.md`
+- `TEMPORAL_OVERLAYS.md`
 - `ATTENTION_MODEL.md`
 - `SALIENCE_AND_TENSION.md`

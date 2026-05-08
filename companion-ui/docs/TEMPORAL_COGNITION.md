@@ -3,10 +3,17 @@
 ## Purpose
 Define how cognition is preserved across time in a document-first, interruption-prone workflow.
 
+## Boundary note
+- This document is the top-level temporal contract.
+- `COGNITIVE_TRAJECTORIES.md` defines trajectory states and transitions.
+- `CONTINUITY_AND_DECAY.md` defines continuity payloads, interruption cost, decay, and reconstruction effort.
+- `EPISTEMIC_EVOLUTION.md` defines how understanding changes across time.
+
 ## Temporal cognition model
 - Cognition unfolds as a trajectory, not isolated sessions.
 - Each trajectory moves through active, latent, and resurfaced phases.
 - Time changes meaning: relevance, urgency, and interpretation evolve.
+- Temporal cognition is about continuity of understanding, not just continuity of session state.
 
 ## Core concepts
 - **Active thread:** currently attended trajectory.
@@ -14,6 +21,7 @@ Define how cognition is preserved across time in a document-first, interruption-
 - **Re-entry window:** period where minimal cues can recover full context.
 - **Cognitive decay:** loss of context fidelity over time when cues are weak.
 - **Continuity residue:** preserved traces (anchors, provenance, tension markers) that support recovery.
+- **Continuity payload:** the minimal reconstructive package required for low-cost re-entry.
 
 ## Temporal invariants
 - Document remains the cognitive anchor across all temporal phases.
@@ -33,7 +41,10 @@ Define how cognition is preserved across time in a document-first, interruption-
 
 ## Related docs
 - `ATTENTION_MODEL.md`
+- `COGNITIVE_TRAJECTORIES.md`
+- `CONTINUITY_AND_DECAY.md`
 - `POSTURE_TRANSITIONS.md`
 - `SALIENCE_AND_TENSION.md`
+- `EPISTEMIC_EVOLUTION.md`
 - `TEMPORAL_PROVENANCE.md`
 - `COGNITIVE_FAILURE_MODES.md`

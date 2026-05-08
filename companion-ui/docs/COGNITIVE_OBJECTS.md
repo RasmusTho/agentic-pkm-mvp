@@ -10,6 +10,8 @@ Define the meaning-bearing objects used across document, overlays, and temporal 
 - **Provenance card:** compact lineage object describing source and rationale.
 - **Tension marker:** explicit unresolved pressure in a thread.
 - **Resurfacing cue:** contextual signal to re-open a dormant thread.
+- **Continuity payload:** bounded re-entry package carrying the minimum context needed to restore a trajectory.
+- **Temporal overlay:** a continuity-preserving overlay that exposes time-sensitive context without becoming notification UI.
 
 ## Object-level invariants
 - Every object must be inspectable in context.
@@ -27,9 +29,12 @@ Define the meaning-bearing objects used across document, overlays, and temporal 
 - Threads are anchored to documents.
 - Tension markers can attach to proposals, threads, or anchor documents.
 - Resurfacing cues should reference provenance and prior tension.
+- Continuity payloads bundle anchor, trajectory, provenance, and unresolved tension context for re-entry.
 
 ## Related docs
 - `TEMPORAL_PROVENANCE.md`
 - `TEMPORAL_COGNITION.md`
+- `CONTINUITY_AND_DECAY.md`
+- `TEMPORAL_OVERLAYS.md`
 - `SALIENCE_AND_TENSION.md`
 - `OVERLAY_GRAMMAR.md`

@@ -13,6 +13,7 @@ This file keeps the historical filename `COGNITIVE_MODES.md`, but the canonical 
 - Postures are cognitive emphasis patterns, not route-level locks.
 - Multiple postures may coexist inside one document-centered session.
 - Resurfacing is a cross-posture operation, not a separate posture.
+- Trajectories persist across posture shifts; posture describes emphasis, not temporal identity.
 
 ## Transition constraints
 - Transitions must preserve document anchoring and provenance visibility.
@@ -23,4 +24,5 @@ This file keeps the historical filename `COGNITIVE_MODES.md`, but the canonical 
 - `POSTURE_TRANSITIONS.md`
 - `ATTENTION_MODEL.md`
 - `TEMPORAL_COGNITION.md`
+- `COGNITIVE_TRAJECTORIES.md`
 - `SALIENCE_AND_TENSION.md`

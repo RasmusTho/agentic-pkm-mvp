@@ -14,6 +14,7 @@ Formalize how cognitive postures change while preserving continuity.
 - Transitions are explicit shifts in cognitive emphasis, not page-level locks.
 - Any transition must preserve anchor document, provenance context, and unresolved tension.
 - Recovery can enter from any posture and should restore prior trajectory before new branching.
+- Transition cost should stay low enough that postures do not fragment trajectories.
 
 ## Minimal transition contract
 - **From posture:** current emphasis context.
@@ -30,4 +31,5 @@ Formalize how cognitive postures change while preserving continuity.
 - `COGNITIVE_MODES.md`
 - `ATTENTION_MODEL.md`
 - `TEMPORAL_COGNITION.md`
+- `COGNITIVE_TRAJECTORIES.md`
 - `COGNITIVE_FAILURE_MODES.md`
