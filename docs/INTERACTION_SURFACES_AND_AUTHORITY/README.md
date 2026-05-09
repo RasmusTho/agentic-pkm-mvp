@@ -75,7 +75,7 @@ Crucially, "Chat as canvas" is not a revival of the ASK-style question-answering
 10. [DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md](DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md) — compatibility note that Panel is the primary command-oriented surface, not the exclusive authoritative intent surface.
 11. [HYBRID_CHAT_INTEGRATION_SCHEMA.md](HYBRID_CHAT_INTEGRATION_SCHEMA.md) — docs-only schema for how canvas Chat integrates with Panel, session provenance, and governed execution without becoming a second Panel.
 
-Tasks 2, 3, 4, 5, and 7 may proceed in parallel as docs drafts. Task 6 (reconcile) depends on tasks 2–5 naming the surfaces consistently and on task 7 stating the gated-execution invariant, because the reconcile task evaluates options against those contracts.
+Tasks 2, 3, 4, 5, 6, and 8 may proceed in parallel as docs drafts. Task 7 (reconcile) depends on tasks 2–6 naming the surfaces consistently and on task 8 stating the gated-execution invariant, because the reconcile task evaluates options against those contracts.
 
 ## Capability-level acceptance criteria
 
