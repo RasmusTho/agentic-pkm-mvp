@@ -6,7 +6,7 @@ source_anchor: docs/learning-log.md :: 2026-05-07 — #775
 parent_capability: PR_INTEGRATION_HARDENING
 prerequisites: []
 depends_on: []
-can_parallelize_with: [ADD_PLUGIN_LOAD_GUARD]
+can_parallelize_with: []
 ---
 
 # Add Branch Truth Gate
@@ -17,10 +17,10 @@ During PR #796/#775 delivery, commits repeatedly landed on unrelated local branc
 
 ## What This Task Does
 
-1. Adds a mandatory **branch-truth gate** step to `.codex/skills/issue-to-code/SKILL.md` (before any `git add/commit/push` action) that requires:
-   - `git branch --show-current` must equal the expected PR head branch name.
-   - `git rev-parse HEAD` must equal the head SHA reported by `gh pr view <PR> --json headRefOid`.
-   If either check fails, the agent must stop and switch to the correct worktree before continuing.
+1. Adds a **branch-truth gate** to `.codex/skills/issue-to-code/SKILL.md` in two phases:
+   - **Pre-commit** (before `git add/commit`): verify `git branch --show-current` equals the expected PR head branch name. A local commit advances HEAD beyond the remote PR ref, so the SHA-equality check does not apply here.
+   - **Pre-push** (after local commit, before `git push`): verify both that `git branch --show-current` still equals the expected branch AND that `git rev-parse HEAD` is the commit intended for the PR branch.
+   If the branch-name check fails at either phase, the agent must stop and switch to the correct worktree before continuing.
 
 2. Adds the same gate as a required preflight step to `.codex/skills/pr-integration/SKILL.md` (in its existing "Workspace Isolation Gate" section or as an addition to it), with the additional rule: **for active PRs in multi-agent parallel work, a dedicated per-issue worktree is mandatory for the full issue lifecycle (implementation through review-fix); committing from the shared root worktree for an active PR is prohibited.**
 
@@ -29,22 +29,35 @@ During PR #796/#775 delivery, commits repeatedly landed on unrelated local branc
 **issue-to-code/SKILL.md** addition (before the first commit action):
 
 ```
-### Branch-Truth Gate (mandatory before any git add/commit/push)
+### Branch-Truth Gate — Phase 1: Pre-Commit (mandatory before git add/commit)
 
 ```bash
 EXPECTED_BRANCH="<PR head branch name>"
 ACTUAL_BRANCH=$(git branch --show-current)
-PR_HEAD_SHA=$(gh pr view <PR_NUMBER> --json headRefOid --jq '.headRefOid')
-LOCAL_HEAD=$(git rev-parse HEAD)
 
-if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ] || [ "$LOCAL_HEAD" != "$PR_HEAD_SHA" ]; then
-  echo "BRANCH-TRUTH GATE FAILED: on $ACTUAL_BRANCH (expected $EXPECTED_BRANCH), HEAD=$LOCAL_HEAD (PR head=$PR_HEAD_SHA)"
+if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ]; then
+  echo "BRANCH-TRUTH GATE FAILED (pre-commit): on $ACTUAL_BRANCH (expected $EXPECTED_BRANCH)"
   echo "Switch to the correct worktree before committing."
   exit 1
 fi
 ```
 
-Both conditions must pass. If either fails: stop, switch worktree, re-run gate.
+Branch name must match. Do not check the remote PR head SHA here — a new local commit will advance HEAD past the remote ref before push.
+
+### Branch-Truth Gate — Phase 2: Pre-Push (mandatory before git push)
+
+```bash
+EXPECTED_BRANCH="<PR head branch name>"
+ACTUAL_BRANCH=$(git branch --show-current)
+
+if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ]; then
+  echo "BRANCH-TRUTH GATE FAILED (pre-push): on $ACTUAL_BRANCH (expected $EXPECTED_BRANCH)"
+  exit 1
+fi
+echo "Branch-truth gate passed — pushing to origin/$EXPECTED_BRANCH"
+```
+
+If branch name fails at pre-push: stop, switch worktree, re-run both phases.
 
 For multi-agent parallel work: use a dedicated per-issue worktree (via `git worktree add`) for the full lifecycle — from initial implementation through every review-fix push. Do NOT commit to an active PR from the shared root worktree.
 [branch-truth-gate]
@@ -54,8 +67,8 @@ For multi-agent parallel work: use a dedicated per-issue worktree (via `git work
 
 ```
 Additionally, before any review-fix commit or push:
-- Confirm `git branch --show-current` equals the PR head branch.
-- Confirm `git rev-parse HEAD` equals the PR `headRefOid` reported by `gh pr view`.
+- Before committing: confirm `git branch --show-current` equals the PR head branch.
+- Before pushing: confirm `git branch --show-current` still equals the PR head branch (do not compare HEAD SHA to the remote PR headRefOid here — the local commit has already advanced HEAD past the remote ref).
 - For multi-agent parallel work, a per-issue worktree is mandatory. The shared root worktree must not be used to commit to an active PR.
 [branch-truth-gate]
 ```
@@ -66,7 +79,7 @@ Commits landing on the wrong branch are hard to detect until CI fails on the int
 
 ## Acceptance Criteria
 
-- [ ] `.codex/skills/issue-to-code/SKILL.md` contains a branch-truth gate block with both the `git branch --show-current` and `git rev-parse HEAD` equality checks, labeled `[branch-truth-gate]`.
+- [ ] `.codex/skills/issue-to-code/SKILL.md` contains a two-phase branch-truth gate block (pre-commit: branch name check; pre-push: branch name check), labeled `[branch-truth-gate]`.
   Verify: doc writeback at `.codex/skills/issue-to-code/SKILL.md :: branch-truth-gate`
 - [ ] `.codex/skills/issue-to-code/SKILL.md` states that per-issue worktrees are mandatory for multi-agent parallel work.
   Verify: doc writeback at `.codex/skills/issue-to-code/SKILL.md :: branch-truth-gate`
@@ -81,7 +94,7 @@ grep -n "branch-truth-gate" .codex/skills/pr-integration/SKILL.md
 grep -n "per-issue worktree" .codex/skills/issue-to-code/SKILL.md
 ```
 
-All commands must return hits. Confirm the gate block contains both equality checks.
+All commands must return hits. Confirm the gate block contains the two-phase split (pre-commit: branch name only; pre-push: branch name).
 
 ## Out of Scope
 

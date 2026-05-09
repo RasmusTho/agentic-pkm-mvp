@@ -38,21 +38,20 @@ Branch HEAD may be clean while the merge-ref carries a divergent context that ca
 ```bash
 PR_NUMBER=<PR_NUMBER>
 git fetch origin refs/pull/${PR_NUMBER}/merge:refs/merge_validation
-git checkout refs/merge_validation -- . 2>/dev/null || git show refs/merge_validation:<changed_file> | head -50
+
+# Inspect touched symbols using git show — do NOT checkout into the active worktree
+git show refs/merge_validation:app/<changed_module>.py | grep -n "<changed_symbol>"
 ```
 
-Then run a targeted smoke check against the merge-ref tree:
+Do not use `git checkout refs/merge_validation -- .`: that mutates the active working tree and index, leaving the PR branch dirty and risking accidental commits.
+
+Then run a targeted smoke check in a **temporary separate worktree** to avoid touching the active branch state:
 
 ```bash
-# Example: confirm the key symbol exists and is importable in the merge-ref tree
-git show refs/merge_validation:app/<changed_module>.py | grep -n "<changed_symbol>"
-
-# Run at least one target test against the merge-ref
-git stash  # preserve branch HEAD
-git checkout refs/merge_validation
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/<relevant_test_file>.py -k "<key_test>"
-git checkout -  # return to branch HEAD
-git stash pop
+MERGE_WORKTREE=$(mktemp -d)
+git worktree add --detach "$MERGE_WORKTREE" refs/merge_validation
+(cd "$MERGE_WORKTREE" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/<relevant_test_file>.py -k "<key_test>")
+git worktree remove --force "$MERGE_WORKTREE"
 ```
 
 If the test fails or the symbol is absent in the merge-ref:

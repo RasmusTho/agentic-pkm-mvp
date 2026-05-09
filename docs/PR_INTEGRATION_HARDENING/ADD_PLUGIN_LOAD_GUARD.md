@@ -6,7 +6,7 @@ source_anchor: docs/learning-log.md :: 2026-05-06 — #783
 parent_capability: PR_INTEGRATION_HARDENING
 prerequisites: []
 depends_on: []
-can_parallelize_with: [ADD_BRANCH_TRUTH_GATE]
+can_parallelize_with: []
 ---
 
 # Add Plugin Load Guard
@@ -74,6 +74,11 @@ python scripts/docs_guard.py 2>/dev/null || echo "no docs guard"
 - Changing any pytest invocation in CI workflows.
 - Adding `-p xdist.plugin` to any existing test commands.
 - Documenting any plugins other than xdist as the concrete example.
+
+## Constraints
+
+- Touch only `docs/TESTING.md` and `.codex/skills/pr-integration/SKILL.md`.
+- Must complete and merge before PIH-02 begins — all three tasks touch `pr-integration/SKILL.md` and must be serialized.
 
 ## Related Docs
 

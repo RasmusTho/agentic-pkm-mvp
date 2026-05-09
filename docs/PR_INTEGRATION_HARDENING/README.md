@@ -32,13 +32,13 @@ Add three concrete hardening steps to the integration and implementation lane sk
 
 ## Execution order
 
-Tasks are independent and can be parallelized. Suggested order to avoid skill file conflicts:
+All three tasks touch `.codex/skills/pr-integration/SKILL.md` and must be serialized to avoid diff conflicts:
 
-1. `ADD_PLUGIN_LOAD_GUARD` (touches `docs/TESTING.md` only — no skill overlap)
-2. `ADD_BRANCH_TRUTH_GATE` (touches `issue-to-code/SKILL.md` + `pr-integration/SKILL.md`)
-3. `ADD_MERGE_REF_VALIDATION` (touches `pr-integration/SKILL.md` only — sequence after 2 to avoid conflict)
+1. `ADD_PLUGIN_LOAD_GUARD` — touches `docs/TESTING.md` + `pr-integration/SKILL.md`
+2. `ADD_BRANCH_TRUTH_GATE` — touches `issue-to-code/SKILL.md` + `pr-integration/SKILL.md`; sequence after 1
+3. `ADD_MERGE_REF_VALIDATION` — touches `pr-integration/SKILL.md` only; sequence after 2
 
-Tasks 1 and 2 can run in parallel. Task 3 should follow task 2 to avoid diff conflicts in the same skill file.
+No two tasks may be worked in parallel. Each must merge before the next is picked up.
 
 ## GitHub issues
 
