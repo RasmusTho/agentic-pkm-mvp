@@ -31,12 +31,12 @@ extract_json_payload() {
   python3 -c '
 import sys
 
-text = sys.stdin.read()
-start = text.find("{")
-end = text.rfind("}")
-if start == -1 or end == -1 or end < start:
-    raise SystemExit("health json payload not found in output")
-print(text[start : end + 1])
+lines = [line.strip() for line in sys.stdin.read().splitlines() if line.strip()]
+for line in reversed(lines):
+    if line.startswith("{") and line.endswith("}"):
+        print(line)
+        raise SystemExit(0)
+raise SystemExit("health json payload not found in output")
 '
 }
 
