@@ -27,9 +27,9 @@ def _open_conn():
             pass
     import psycopg
 
-    url = os.environ.get("DATABASE_URL")
+    url = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
     if not url:
-        raise RuntimeError("DATABASE_URL not set")
+        raise RuntimeError("DATABASE_URL or DB_DSN not set")
     try:
         from app.db.dsn import resolve_dsn
 
