@@ -204,8 +204,7 @@ Observed before this change:
 - recent PR practice showed inconsistent Issue-linking and branch naming conventions
 - no dedicated repo workflow enforced the Issue/PR contract
 
-Known remaining gap:
-- branch protection/rules were not adopted in this change
+Known remaining gaps: none — branch protection with required status checks (`smoke`, `smoke-docker`, `pr-contract`) was added to `stable` on 2026-05-10 (issue #844, PR #853).
 
 Target delivery model:
 - Issues = canonical task contract
