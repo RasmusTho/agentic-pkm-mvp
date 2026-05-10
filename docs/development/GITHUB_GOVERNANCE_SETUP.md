@@ -293,11 +293,12 @@ Applied successfully:
 GitHub platform limitations observed in this session:
 - Project views and built-in Project workflows were completed manually in the GitHub UI because the exposed CLI/GraphQL surface did not provide a supported creation path for those resources
 - repo-local automation may not have durable write authority to a personal Project v2 board, so Project reconciliation should be treated as best effort unless stronger credentials or an org-owned Project surface are adopted
-- branch protection was not adopted in this change; if enabled later, the required checks should be documented together with that rollout
+- branch protection was not adopted in the initial rollout; required status checks were added later (see delivery receipt below)
 
 ## Required follow-up outside the repo
 
-1. Optionally add branch protection or repository rules that require the governance workflow to pass before merge.
+~~1. Optionally add branch protection or repository rules that require the governance workflow to pass before merge.~~
+Branch protection with required status checks is now active on `stable` (delivered 2026-05-10, issue #844).
 
 ## Governance receipts
 
@@ -310,4 +311,4 @@ Delivery receipt:
 - On 2026-03-30, the owner-doc migration from `docs/development/GITHUB_GOVERNANCE_PATCHES.md` was applied, so builder/runtime governance wording now lives in the owning docs instead of only in the staging patch document.
 - On 2026-03-30, the repository labels, Project v2 board, linked repository, required status taxonomy, custom `Agent State` field, and initial item states were applied on the GitHub platform.
 - On 2026-03-30, the required `Kanban` and `Agent Queue` views plus the built-in Project lifecycle automation were completed manually in the GitHub UI after the repo and field baseline was applied.
-- Branch protection remains optional follow-up work because it is a separate repository policy decision.
+- On 2026-05-10, required status checks (`smoke`, `smoke-docker`, `pr-contract`, `strict=true`) were added to `stable` branch protection via issue #844. A PR targeting `stable` now requires all three checks to pass before merge is permitted.
