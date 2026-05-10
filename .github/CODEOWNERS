@@ -3,7 +3,7 @@
 docker-compose.yaml               @RasmusTho
 docker-compose.prod.yml           @RasmusTho
 docker-compose.test.yml           @RasmusTho
-/alembic/versions/                @RasmusTho
+/app/alembic/versions/            @RasmusTho
 /.codex/skills/execute-promotion/ @RasmusTho
 /.codex/skills/prepare-promotion/ @RasmusTho
 /.codex/skills/rollback-promotion/ @RasmusTho
