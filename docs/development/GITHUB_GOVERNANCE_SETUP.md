@@ -11,7 +11,7 @@ Owner contract:
   - `.github/pull_request_template.md`
   - `.github/workflows/issue-pr-governance.yml`
   - `.github/workflows/project-status-reconcile.yml`
-- Platform-side pieces are now applied for labels, Project fields, required views, and lifecycle automation. Branch protection remains an optional follow-up because it is a separate repository policy decision.
+- Platform-side pieces are now applied for labels, Project fields, required views, lifecycle automation, and branch protection. Required status checks (`smoke`, `smoke-docker`, `pr-contract`) were added to `stable` on 2026-05-10 (issue #844, PR #853).
 
 ## Exact label set
 
