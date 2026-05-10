@@ -324,6 +324,10 @@ fi
 **If any check fails:**
 
 1. **Analyze failure:** Review log URLs and determine if fixable within Issue scope
+   - If CI reports "unrecognised option" or "no such option" for a pytest flag that corresponds to
+     an installed plugin, check whether `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is set and the plugin
+     is not explicitly loaded. Add `-p <plugin_name>` to the pytest invocation.
+     [plugin-load-guard]
 2. **If fixable:** Fix code/config, push, **restart from Mergeability Gate** (head SHA changed)
 3. **If not fixable:** Mark as `blocked-ci-failure` with failing job names and log links
 
