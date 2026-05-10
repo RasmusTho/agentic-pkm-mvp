@@ -275,6 +275,38 @@ When continuing through anchor drift:
 12. Update owner docs if shipped behavior/contracts changed.
 13. Rewrite roadmap/plan wording if the delivered work was previously listed as pending.
 14. Run `Suggested Validation` plus any obviously necessary focused checks. Confirm every AC's `Verify:` target now resolves green.
+14a. **Branch-Truth Gate — Phase 1: Pre-Commit (mandatory before `git add`/`git commit`)** [branch-truth-gate]
+
+    For multi-agent parallel work, a dedicated per-issue worktree (via `git worktree add`) is mandatory for the full issue lifecycle — from initial implementation through every review-fix push. Do NOT commit to an active PR from the shared root worktree.
+
+    ```bash
+    EXPECTED_BRANCH="<PR head branch name>"
+    ACTUAL_BRANCH=$(git branch --show-current)
+
+    if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ]; then
+      echo "BRANCH-TRUTH GATE FAILED (pre-commit): on $ACTUAL_BRANCH (expected $EXPECTED_BRANCH)"
+      echo "Switch to the correct worktree before committing."
+      exit 1
+    fi
+    ```
+
+    Branch name must match. Do not check the remote PR head SHA here — a new local commit will advance HEAD past the remote ref before push.
+
+14b. **Branch-Truth Gate — Phase 2: Pre-Push (mandatory before `git push`)** [branch-truth-gate]
+
+    ```bash
+    EXPECTED_BRANCH="<PR head branch name>"
+    ACTUAL_BRANCH=$(git branch --show-current)
+
+    if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ]; then
+      echo "BRANCH-TRUTH GATE FAILED (pre-push): on $ACTUAL_BRANCH (expected $EXPECTED_BRANCH)"
+      exit 1
+    fi
+    echo "Branch-truth gate passed — pushing to origin/$EXPECTED_BRANCH"
+    ```
+
+    If branch name fails at pre-push: stop, switch to the correct worktree, and re-run both phases.
+
 15. Run `.codex/skills/publish-pr/SKILL.md` to create or update the implementation PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
 16. Run `.codex/skills/pr-integration/SKILL.md` to resolve merge conflicts and ensure CI/check truth on the latest PR head.
 17. **Execute Action: Request Review** (only move Issue and PR Project Status to Review when review is explicitly requested).
