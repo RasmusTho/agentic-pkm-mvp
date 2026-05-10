@@ -64,6 +64,12 @@ scripts/agent_workspace_preflight.sh \
 
 If this gate fails, stop immediately. Resolve concurrent-session drift before continuing.
 
+Additionally, before any review-fix commit or push: [branch-truth-gate]
+
+- **Before committing:** confirm `git branch --show-current` equals the PR head branch. If it does not, stop — do not commit. Switch to the correct worktree first.
+- **Before pushing:** confirm `git branch --show-current` still equals the PR head branch. Do not compare HEAD SHA to the remote PR `headRefOid` here — the local commit has already advanced HEAD past the remote ref.
+- **For multi-agent parallel work:** a per-issue worktree is mandatory for the full issue lifecycle (implementation through review-fix). The shared root worktree must not be used to commit to an active PR.
+
 ### 1) Contract and Metadata Gate
 
 **Action: Verify PR Contract**
