@@ -230,6 +230,15 @@ First-green definition:
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`
 - `python -m app.cli settings-validate --json`
 
+> **Plugin-load guard:** <!-- plugin-load-guard --> When `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is set, flags provided by
+> plugins are not available unless the plugin is also explicitly loaded with `-p <plugin_name>`.
+> For example, to use `pytest-xdist` with autoload disabled:
+> ```
+> PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -p xdist.plugin -n auto ...
+> ```
+> Do not assume installing a plugin is sufficient — verify the flag resolves with an explicit
+> `-p` load if autoload is disabled.
+
 For fast local runs that bypass workspace/global pytest configuration, prefer:
 - `STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg" -c /dev/null`
 - `make smoke` (parallel by default via `pytest-xdist`; override workers with `SMOKE_WORKERS=<n|auto>`, and include e2e lane with `SMOKE_E2E_WORKERS=<n>`)
