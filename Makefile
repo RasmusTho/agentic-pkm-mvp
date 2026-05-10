@@ -8,7 +8,8 @@ SMOKE_E2E_WORKERS ?= 0
 COMPOSE_BASE := docker compose -f docker-compose.yaml
 COMPOSE_DEV := $(COMPOSE_BASE) -f docker-compose.dev.yml -p pkm-dev
 COMPOSE_TEST := $(COMPOSE_BASE) -f docker-compose.test.yml -p pkm-test
-COMPOSE_PROD := $(COMPOSE_BASE) -p pkm-prod
+COMPOSE_PROD := $(COMPOSE_BASE) -f docker-compose.prod.yml -p pkm-prod
+TEST_COMPOSE_ENV := COMPOSE_FILE=docker-compose.yaml:docker-compose.test.yml COMPOSE_PROJECT_NAME=pkm-test
 
 fmt:
 	rufflehog --version >/dev/null 2>&1 || true

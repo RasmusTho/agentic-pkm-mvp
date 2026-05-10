@@ -2,6 +2,10 @@
 # `docker compose down` (even without -v) cannot destroy prod data.
 # Usage: docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod up -d
 services:
+  api:
+    environment:
+      API_HEALTHCHECK_URL: http://host.docker.internal:18000/healthz
+
   db:
     volumes:
       - pgdata_prod:/var/lib/postgresql/data
