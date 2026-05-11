@@ -84,6 +84,25 @@ git status
 
 Do not use `git add -A` or `git add .`—stage only intended files.
 
+### Branch-Truth Gate — Pre-Commit (mandatory before Step 4) [branch-truth-gate]
+
+For multi-agent parallel work, a dedicated per-issue worktree (via `git worktree add`) is mandatory for the full issue lifecycle — from initial implementation through every review-fix push. Do NOT commit to an active PR from the shared root worktree.
+
+Verify the branch context before committing:
+
+```bash
+EXPECTED_BRANCH="<branch-name from Step 2>"
+ACTUAL_BRANCH=$(git branch --show-current)
+
+if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ]; then
+  echo "BRANCH-TRUTH GATE FAILED (pre-commit): on $ACTUAL_BRANCH (expected $EXPECTED_BRANCH)"
+  echo "Switch to the correct worktree before committing."
+  exit 1
+fi
+```
+
+Branch name must match. Do not check the remote PR head SHA here — a new local commit will advance HEAD past the remote ref before push.
+
 ### Step 4: Create Commit
 
 ```bash
@@ -101,6 +120,23 @@ Commit message must:
 - Start with imperative verb (Fix, Add, Update, Rebuild, etc.)
 - Summarize the bounded outcome, not the mechanical changes
 - Be truthful about scope
+
+### Branch-Truth Gate — Pre-Push (mandatory before Step 5) [branch-truth-gate]
+
+Verify the branch context is still correct before pushing:
+
+```bash
+EXPECTED_BRANCH="<branch-name from Step 2>"
+ACTUAL_BRANCH=$(git branch --show-current)
+
+if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ]; then
+  echo "BRANCH-TRUTH GATE FAILED (pre-push): on $ACTUAL_BRANCH (expected $EXPECTED_BRANCH)"
+  exit 1
+fi
+echo "Branch-truth gate passed — pushing to origin/$EXPECTED_BRANCH"
+```
+
+If branch name fails at pre-push: stop, switch to the correct worktree, and re-run both gates.
 
 ### Step 5: Push Branch
 
