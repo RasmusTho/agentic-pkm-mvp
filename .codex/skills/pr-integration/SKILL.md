@@ -458,6 +458,46 @@ echo "New PR head SHA: $NEW_HEAD"
 
 **Do not carry forward check results from a previous SHA.**
 
+### 6) Merge-Ref Validation (mandatory after any review-fix push) [merge-ref-validation]
+
+After pushing a review-fix, GitHub assembles a merge-ref at `refs/pull/<PR_NUMBER>/merge`.
+Branch HEAD may be clean while the merge-ref carries a divergent context that causes CI-only failures (learning-log 2026-05-07 — PR #800).
+
+**Action: Fetch and inspect the merge-ref tree**
+
+```bash
+PR_NUMBER=<PR_NUMBER>
+git fetch origin refs/pull/${PR_NUMBER}/merge:refs/merge_validation
+
+# Inspect touched symbols using git show — do NOT checkout into the active worktree
+git show refs/merge_validation:app/<changed_module>.py | grep -n "<changed_symbol>"
+```
+
+Do not use `git checkout refs/merge_validation -- .`: that mutates the active working tree and index, leaving the PR branch dirty and risking accidental commits.
+
+**Action: Run a targeted smoke check against the merge-ref in a temporary worktree**
+
+```bash
+MERGE_WORKTREE=$(mktemp -d)
+git worktree add --detach "$MERGE_WORKTREE" refs/merge_validation
+(cd "$MERGE_WORKTREE" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/<relevant_test_file>.py -k "<key_test>")
+git worktree remove --force "$MERGE_WORKTREE"
+```
+
+**If the symbol is absent in the merge-ref or any test fails:**
+
+- Do NOT declare `ready-for-verification`.
+- Report `blocked-ci-failure` with the merge-ref tree context.
+- Push a corrective fix to the branch and repeat this section from the fetch step.
+
+**If both checks pass:**
+
+```bash
+echo "✅ Merge-ref validation passed — merge-ref tree consistent with branch HEAD"
+```
+
+Proceed to the Handoff Decision.
+
 ## Quick Reference: Integration Outcomes
 
 | Gate | Condition | Action | Outcome |
