@@ -1,0 +1,1797 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Canvas Suggestion Flow — Companion UI Spec</title>
+<link rel="stylesheet" href="./colors_and_type.css" />
+<style>
+  /* ---- Page chrome ---- */
+  html, body { background: var(--bg-base); }
+  body {
+    background-image:
+      linear-gradient(rgba(0,212,232,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,232,0.025) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: var(--space-12) var(--space-8) var(--space-16);
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: var(--space-12);
+  }
+
+  /* ---- Sidebar TOC ---- */
+  .toc {
+    position: sticky;
+    top: var(--space-8);
+    align-self: start;
+    font-size: var(--text-sm);
+    border-left: 1px solid var(--border);
+    padding-left: var(--space-4);
+    max-height: calc(100vh - var(--space-12));
+    overflow-y: auto;
+  }
+  .toc-label {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    margin-bottom: var(--space-3);
+  }
+  .toc ol { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .toc a {
+    color: var(--fg-2);
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    display: block;
+    line-height: 1.4;
+  }
+  .toc a:hover { color: var(--cyan); text-decoration: none; }
+  .toc-num {
+    font-family: var(--font-mono);
+    color: var(--fg-3);
+    margin-right: 6px;
+    font-size: var(--text-xs);
+  }
+
+  /* ---- Header ---- */
+  .doc-header {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: var(--space-6);
+    margin-bottom: var(--space-10);
+  }
+  .doc-eyebrow {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--cyan);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    margin-bottom: var(--space-3);
+  }
+  .doc-title {
+    font-family: var(--font-display);
+    font-size: var(--text-3xl);
+    line-height: 1.1;
+    margin-bottom: var(--space-4);
+    color: var(--fg-1);
+  }
+  .doc-meta {
+    display: flex;
+    gap: var(--space-6);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+  }
+  .doc-meta span strong {
+    color: var(--fg-2);
+    font-weight: var(--weight-regular);
+    margin-right: 6px;
+  }
+
+  /* ---- Sections ---- */
+  section.spec {
+    margin-bottom: var(--space-12);
+    scroll-margin-top: var(--space-6);
+  }
+  section.spec > h2 {
+    font-family: var(--font-display);
+    font-size: var(--text-2xl);
+    font-weight: var(--weight-regular);
+    color: var(--fg-1);
+    margin-bottom: var(--space-2);
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+  }
+  section.spec > h2 .secnum {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--cyan);
+    letter-spacing: var(--tracking-wide);
+  }
+  section.spec > .lede {
+    color: var(--fg-2);
+    font-size: var(--text-base);
+    margin-bottom: var(--space-5);
+    max-width: 70ch;
+  }
+  section.spec h3 {
+    font-family: var(--font-ui);
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
+    color: var(--fg-1);
+    margin: var(--space-6) 0 var(--space-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    font-size: var(--text-sm);
+  }
+  section.spec p { color: var(--fg-1); margin-bottom: var(--space-3); max-width: 72ch; }
+  section.spec p + p { margin-top: var(--space-2); }
+  section.spec ul, section.spec ol {
+    color: var(--fg-1);
+    margin: 0 0 var(--space-4) var(--space-5);
+    max-width: 72ch;
+  }
+  section.spec li { margin-bottom: 6px; line-height: 1.55; }
+  section.spec li code, section.spec p code { font-size: 0.9em; }
+
+  /* ---- Tables ---- */
+  table.spec {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+    margin: var(--space-3) 0 var(--space-5);
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+  }
+  table.spec th, table.spec td {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  table.spec th {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-2);
+    background: var(--bg-raised);
+    font-weight: var(--weight-medium);
+    border-bottom: 1px solid var(--border-strong);
+  }
+  table.spec tr:last-child td { border-bottom: none; }
+  table.spec td code { font-size: 0.9em; }
+  table.spec td.mono, table.spec th.mono { font-family: var(--font-mono); }
+
+  /* ---- Callouts ---- */
+  .callout {
+    border-left: 2px solid var(--cyan);
+    background: rgba(0,212,232,0.04);
+    padding: var(--space-3) var(--space-4);
+    margin: var(--space-4) 0;
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    max-width: 72ch;
+  }
+  .callout.warn { border-left-color: var(--amber); background: rgba(240,144,48,0.05); }
+  .callout.invariant { border-left-color: var(--accent); background: rgba(212,168,67,0.04); }
+  .callout-label {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--cyan);
+    display: block;
+    margin-bottom: 4px;
+  }
+  .callout.warn .callout-label { color: var(--amber); }
+  .callout.invariant .callout-label { color: var(--accent); }
+
+  /* ---- Tag chips ---- */
+  .chip {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wide);
+    padding: 1px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--bg-raised);
+    color: var(--fg-2);
+  }
+  .chip.design { color: var(--cyan); border-color: rgba(0,212,232,0.3); }
+  .chip.impl   { color: var(--accent); border-color: rgba(212,168,67,0.3); }
+  .chip.gated  { color: var(--amber); border-color: rgba(240,144,48,0.3); }
+  .chip.agent  { color: var(--agent); border-color: rgba(74,158,255,0.3); }
+  .chip.vault  { color: var(--vault); border-color: rgba(57,232,125,0.3); }
+
+  /* ---- Code blocks ---- */
+  pre.code {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    overflow-x: auto;
+    margin: var(--space-3) 0 var(--space-5);
+    line-height: 1.55;
+  }
+  pre.code .k { color: var(--cyan); }
+  pre.code .s { color: var(--vault); }
+  pre.code .c { color: var(--fg-3); font-style: italic; }
+  pre.code .n { color: var(--accent); }
+
+  /* ============================================================
+     STATE GALLERY (Section 5 visual states)
+     ============================================================ */
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-5);
+    margin: var(--space-4) 0 var(--space-6);
+  }
+  .gallery-card {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .gallery-card header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    border-bottom: 1px dashed var(--border);
+    padding-bottom: 10px;
+  }
+  .gallery-card h4 {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-2);
+  }
+  .gallery-card p.note {
+    font-size: var(--text-sm);
+    color: var(--fg-2);
+    margin: 0;
+  }
+
+  /* ----- Rail viz primitives shared by all gallery cards ----- */
+  .rail-mock {
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-height: 220px;
+    font-size: var(--text-sm);
+  }
+  .rail-mock .hdr {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    color: var(--fg-3);
+    text-transform: uppercase;
+  }
+  .rail-mock .hdr .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--agent);
+    box-shadow: 0 0 6px rgba(74,158,255,0.6);
+  }
+  .rail-mock .turn-meta { margin-left: auto; color: var(--fg-3); }
+
+  .msg {
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    color: var(--fg-1);
+    max-width: 92%;
+  }
+  .msg.agent {
+    background: var(--agent-muted);
+    border-left: 2px solid var(--agent);
+  }
+  .msg.user {
+    background: var(--bg-raised);
+    border-left: 2px solid var(--fg-3);
+    align-self: flex-end;
+  }
+  .msg .ctx-label {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  /* Suggestion card variants */
+  .sugg {
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    line-height: 1.55;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .sugg .sugg-label {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+  .sugg .diff-hint {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+  }
+  .sugg.body {
+    background: rgba(240,144,48,0.06);
+    border: 1px solid rgba(240,144,48,0.35);
+  }
+  .sugg.body .sugg-label { color: var(--amber); }
+  .sugg.governance {
+    background: rgba(212,168,67,0.05);
+    border: 1px solid rgba(212,168,67,0.4);
+  }
+  .sugg.governance .sugg-label { color: var(--accent); }
+  .sugg.applied {
+    background: rgba(57,232,125,0.04);
+    border: 1px solid rgba(57,232,125,0.3);
+    opacity: 0.85;
+  }
+  .sugg.applied .sugg-label { color: var(--vault); }
+  .sugg.discarded {
+    background: var(--bg-raised);
+    border: 1px dashed var(--border-strong);
+    opacity: 0.55;
+    text-decoration: line-through;
+    text-decoration-color: var(--fg-3);
+  }
+  .sugg.blocked {
+    background: rgba(255,61,61,0.04);
+    border: 1px solid rgba(255,61,61,0.35);
+  }
+  .sugg.blocked .sugg-label { color: var(--destructive); }
+
+  .sugg-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 2px;
+  }
+  .btn {
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    padding: 5px 10px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-raised);
+    color: var(--fg-1);
+    border: 1px solid var(--border-strong);
+    cursor: pointer;
+  }
+  .btn:hover { border-color: var(--cyan); color: var(--cyan); }
+  .btn.primary {
+    background: var(--amber-muted);
+    color: var(--amber);
+    border-color: rgba(240,144,48,0.5);
+  }
+  .btn.primary:hover { background: rgba(240,144,48,0.12); border-color: var(--amber); color: var(--amber); }
+  .btn.governance {
+    background: rgba(212,168,67,0.06);
+    color: var(--accent);
+    border-color: rgba(212,168,67,0.5);
+  }
+  .btn.governance:hover { background: rgba(212,168,67,0.12); border-color: var(--accent); }
+  .btn.ghost { background: transparent; }
+  .btn[disabled], .btn.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    color: var(--fg-3);
+  }
+  .btn .kbd {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    color: var(--fg-3);
+    margin-left: 6px;
+  }
+
+  /* Thinking dots */
+  .thinking {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--agent);
+  }
+  .thinking .ddot {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--agent);
+    animation: tdot 1.2s ease-in-out infinite;
+    box-shadow: 0 0 4px rgba(74,158,255,0.7);
+  }
+  .thinking .ddot:nth-child(3) { animation-delay: 0.15s; }
+  .thinking .ddot:nth-child(4) { animation-delay: 0.3s; }
+  @keyframes tdot {
+    0%, 70%, 100% { opacity: 0.2; transform: scale(0.7); }
+    35% { opacity: 1; transform: scale(1); }
+  }
+
+  /* Receipt pill */
+  .receipt {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border-radius: var(--radius-full);
+    background: var(--bg-raised);
+    border: 1px solid var(--border-strong);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-2);
+    letter-spacing: var(--tracking-wide);
+  }
+  .receipt.queued { color: var(--accent); border-color: rgba(212,168,67,0.4); }
+  .receipt.applied { color: var(--vault); border-color: rgba(57,232,125,0.4); }
+  .receipt.pending { color: var(--amber); border-color: rgba(240,144,48,0.4); }
+  .receipt .recdot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 6px currentColor;
+  }
+  .receipt.queued .recdot { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+
+  .doc-note-mock {
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    font-size: var(--text-sm);
+    color: var(--fg-2);
+    line-height: 1.55;
+  }
+  .doc-note-mock .h {
+    font-family: var(--font-display);
+    color: var(--fg-1);
+    font-size: 1.05rem;
+    margin-bottom: 6px;
+  }
+  .doc-note-mock .ins {
+    background: rgba(240,144,48,0.08);
+    border-left: 2px solid var(--amber);
+    padding: 4px 8px;
+    margin: 6px 0;
+    color: var(--fg-1);
+  }
+  .doc-note-mock .ins-applied {
+    background: rgba(57,232,125,0.06);
+    border-left: 2px solid var(--vault);
+    padding: 4px 8px;
+    margin: 6px 0;
+    color: var(--fg-1);
+  }
+  .doc-note-mock .ins-ghost {
+    background: transparent;
+    border-left: 2px dashed var(--fg-3);
+    padding: 4px 8px;
+    margin: 6px 0;
+    color: var(--fg-3);
+    font-style: italic;
+  }
+
+  /* Composer */
+  .composer-mock {
+    margin-top: auto;
+    display: flex;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+  .composer-mock input {
+    flex: 1;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    color: var(--fg-1);
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+  }
+  .composer-mock input[disabled] { color: var(--fg-3); }
+  .composer-mock input::placeholder { color: var(--fg-3); }
+
+  /* ============================================================
+     INTERACTIVE PROTOTYPE
+     ============================================================ */
+  .proto-frame {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    margin: var(--space-4) 0 var(--space-6);
+    overflow: hidden;
+  }
+  .proto-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-raised);
+  }
+  .proto-tab {
+    padding: 10px 16px;
+    background: transparent;
+    border: none;
+    color: var(--fg-2);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .proto-tab[aria-selected="true"] {
+    color: var(--cyan);
+    border-bottom-color: var(--cyan);
+    background: var(--bg-surface);
+  }
+  .proto-stage {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    min-height: 460px;
+  }
+  .proto-doc {
+    padding: var(--space-5) var(--space-6);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    max-height: 540px;
+  }
+  .proto-doc h1 {
+    font-family: var(--font-display);
+    font-size: var(--text-2xl);
+    margin-bottom: var(--space-3);
+  }
+  .proto-doc h2 {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    margin: var(--space-5) 0 var(--space-2);
+    color: var(--fg-1);
+  }
+  .proto-doc p, .proto-doc li { font-size: var(--text-sm); color: var(--fg-1); line-height: 1.65; }
+  .proto-doc .note-path {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    margin-bottom: var(--space-4);
+  }
+  .proto-doc .frontmatter {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-2);
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+    margin-bottom: var(--space-4);
+    white-space: pre;
+  }
+  .proto-doc .insertion {
+    display: block;
+    margin: var(--space-3) 0;
+    padding: 8px 12px;
+    border-left: 2px solid var(--amber);
+    background: rgba(240,144,48,0.06);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    position: relative;
+    transition: all var(--duration-slow) var(--ease);
+  }
+  .proto-doc .insertion::before {
+    content: 'PROPOSED · UNCOMMITTED';
+    position: absolute;
+    top: -8px;
+    left: 8px;
+    background: var(--bg-surface);
+    padding: 0 6px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: var(--tracking-wider);
+    color: var(--amber);
+  }
+  .proto-doc .insertion[data-state="applied"] {
+    border-left-color: var(--vault);
+    background: rgba(57,232,125,0.04);
+  }
+  .proto-doc .insertion[data-state="applied"]::before {
+    content: 'APPLIED · ' attr(data-receipt);
+    color: var(--vault);
+  }
+  .proto-doc .insertion[data-state="discarded"] {
+    display: none;
+  }
+
+  .proto-rail {
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-4);
+    gap: var(--space-3);
+    background: var(--bg-surface);
+    max-height: 540px;
+    overflow-y: auto;
+  }
+  .proto-rail .hdr {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px;
+  }
+  .proto-rail .hdr .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--agent);
+    box-shadow: 0 0 6px rgba(74,158,255,0.6);
+  }
+  .proto-rail .turn-meta { margin-left: auto; color: var(--fg-3); }
+
+  .receipts-strip {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .receipts-strip .rlbl {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+  .receipts-strip .empty {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    font-style: italic;
+  }
+
+  .proto-controls {
+    display: flex;
+    gap: 8px;
+    padding: var(--space-3) var(--space-5);
+    background: var(--bg-base);
+    border-top: 1px solid var(--border);
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .proto-controls .label {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    margin-right: 8px;
+  }
+
+  /* responsive: collapse columns */
+  @media (max-width: 900px) {
+    .page { grid-template-columns: 1fr; padding: var(--space-6) var(--space-4); }
+    .toc { position: static; max-height: none; border-left: none; border-bottom: 1px solid var(--border); padding: 0 0 var(--space-4); }
+    .gallery { grid-template-columns: 1fr; }
+    .proto-stage { grid-template-columns: 1fr; }
+    .proto-doc { border-right: none; border-bottom: 1px solid var(--border); max-height: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- =========================== TOC =========================== -->
+  <nav class="toc" aria-label="Section index">
+    <div class="toc-label">Spec sections</div>
+    <ol>
+      <li><a href="#s1"><span class="toc-num">01</span>Context interpretation</a></li>
+      <li><a href="#s2"><span class="toc-num">02</span>Interaction sequence</a></li>
+      <li><a href="#s3"><span class="toc-num">03</span>UI state model</a></li>
+      <li><a href="#s4"><span class="toc-num">04</span>Component inventory</a></li>
+      <li><a href="#s5"><span class="toc-num">05</span>Data-intent &amp; testid</a></li>
+      <li><a href="#s6"><span class="toc-num">06</span>API concept mapping</a></li>
+      <li><a href="#s7"><span class="toc-num">07</span>Body-edit lane</a></li>
+      <li><a href="#s8"><span class="toc-num">08</span>Governance lane</a></li>
+      <li><a href="#s9"><span class="toc-num">09</span>Receipts &amp; provenance</a></li>
+      <li><a href="#s10"><span class="toc-num">10</span>Responsive behavior</a></li>
+      <li><a href="#s11"><span class="toc-num">11</span>Accessibility</a></li>
+      <li><a href="#s12"><span class="toc-num">12</span>Prototype</a></li>
+      <li><a href="#s13"><span class="toc-num">13</span>Design vs contract</a></li>
+      <li><a href="#s14"><span class="toc-num">14</span>Open questions</a></li>
+    </ol>
+  </nav>
+
+  <!-- =========================== MAIN =========================== -->
+  <main>
+    <header class="doc-header">
+      <div class="doc-eyebrow">Companion UI · Design Handoff · Canvas / Hugin</div>
+      <h1 class="doc-title">Canvas Suggestion Flow</h1>
+      <p style="color: var(--fg-2); font-size: var(--text-md); max-width: 70ch; margin-bottom: var(--space-5);">
+        A narrow, implementation-ready slice covering the moment Hugin proposes a change to the active note,
+        the user previews it, and the system either co-authors the body in place or routes the intent into
+        the governed pipeline. Document is the artifact; chat is the canvas; mutation is gated.
+      </p>
+      <div class="doc-meta">
+        <span><strong>Capability:</strong> CANVAS_CHAT_SURFACE</span>
+        <span><strong>Gate:</strong> CANVAS_ENABLED</span>
+        <span><strong>Owner-docs:</strong> INTERACTION_SURFACES_AND_AUTHORITY</span>
+        <span><strong>Status:</strong> Design handoff · v1</span>
+      </div>
+    </header>
+
+    <!-- ============== SECTION 1 ============== -->
+    <section class="spec" id="s1">
+      <h2><span class="secnum">01 ·</span>Context interpretation</h2>
+      <p class="lede">
+        What this slice is asked to design — and explicitly what it is not.
+      </p>
+
+      <h3>What is being designed</h3>
+      <p>
+        A document-first co-authoring moment inside the Companion UI rail (or, in portrait, a bottom sheet)
+        anchored to an active vault note. Hugin proposes a change. The user previews it. The user accepts or
+        rejects. The outcome is one of two paths:
+      </p>
+      <ul>
+        <li><strong>Body-edit lane.</strong> A scoped insertion inside the open note's body during a
+          user-present canvas session. Applied in place by <code>canvas_writer</code>; audited in the
+          subordinate <code>.chats/</code> session log; reversible by undo.</li>
+        <li><strong>Governance lane.</strong> Anything outside the active note's body — frontmatter,
+          tags, maturity, ontology, cross-note links, file moves, multi-note ops. Routed through
+          <code>GovernanceRouter</code> as a queued intent. Returns a receipt; never mutates from chat.</li>
+      </ul>
+
+      <h3>Surface boundaries we are honoring</h3>
+      <ul>
+        <li><strong>Obsidian / vault</strong> remains the canonical durable knowledge surface. The note is the artifact.</li>
+        <li><strong>AI Panel</strong> remains the primary command-oriented governance surface. Receipt locality lives there.</li>
+        <li><strong>Companion UI / Canvas Chat</strong> is the thinking and co-authoring surface. It is not a second source of truth.</li>
+      </ul>
+
+      <div class="callout invariant">
+        <span class="callout-label">Floor invariant (quoted from STATE_EXECUTION_AUTHORITY_REMAINS_GATED)</span>
+        No interaction surface mutates durable state except through the existing governed path: policy,
+        validation, event pipeline, and the deterministic note writer. LLM reasoning alone never triggers
+        execution. This slice expresses the invariant; it does not loosen it.
+      </div>
+
+      <h3>What this slice is not</h3>
+      <ul>
+        <li>Not a redesign of the Companion UI shell. The converse layout, session drawer, and rail
+          collapse states stay as shipped.</li>
+        <li>Not a dashboard, not a chat-as-primary-artifact, not a separate semantic store.</li>
+        <li>Not a new governance pipeline. Governance-bearing intents enter the existing pipeline as
+          a queued request.</li>
+        <li>Not a runtime spec for the writer, router, or session log — those are already specified in
+          <code>CANVAS_CHAT_SURFACE/</code>.</li>
+      </ul>
+    </section>
+
+    <!-- ============== SECTION 2 ============== -->
+    <section class="spec" id="s2">
+      <h2><span class="secnum">02 ·</span>Interaction sequence</h2>
+      <p class="lede">
+        The two flows side-by-side. Each row is a discrete UI state with a single allowed user action set.
+      </p>
+
+      <h3>Flow A · Body-edit (co-authoring)</h3>
+      <table class="spec">
+        <thead>
+          <tr><th>Step</th><th>System</th><th>UI state</th><th>User action set</th><th>Resulting state</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>A0</td><td>Note open; canvas session attached</td><td><code>idle</code></td><td>Type in composer · open session drawer</td><td><code>thinking</code></td></tr>
+          <tr><td>A1</td><td>Hugin reasoning</td><td><code>thinking</code></td><td>Cancel · keep typing</td><td><code>suggestion-staged · body</code></td></tr>
+          <tr><td>A2</td><td>Body proposal emitted</td><td><code>suggestion-staged · body</code></td><td><strong>Apply</strong> · <strong>Discard</strong> · Inspect diff · Edit before applying</td><td><code>apply-pending</code> / <code>discarded</code></td></tr>
+          <tr><td>A3</td><td><code>canvas_writer.apply_edit()</code></td><td><code>apply-pending</code></td><td>—</td><td><code>applied</code></td></tr>
+          <tr><td>A4</td><td>Session log appended; in-note marker flips to applied</td><td><code>applied</code></td><td>Undo · continue session</td><td><code>idle</code></td></tr>
+        </tbody>
+      </table>
+
+      <h3>Flow B · Governance-bearing</h3>
+      <table class="spec">
+        <thead>
+          <tr><th>Step</th><th>System</th><th>UI state</th><th>User action set</th><th>Resulting state</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>B0</td><td>Note open; canvas session attached</td><td><code>idle</code></td><td>Same as A0</td><td><code>thinking</code></td></tr>
+          <tr><td>B1</td><td>Hugin reasoning</td><td><code>thinking</code></td><td>Cancel</td><td><code>suggestion-staged · governance</code></td></tr>
+          <tr><td>B2</td><td>Proposal classified as governance-bearing</td><td><code>suggestion-staged · governance</code></td><td><strong>Queue for governance</strong> · Discard · Inspect classification</td><td><code>governance-pending</code> / <code>discarded</code></td></tr>
+          <tr><td>B3</td><td><code>GovernanceRouter.request_governance_action()</code> returns receipt</td><td><code>governance-pending</code></td><td>Open receipt in Panel · continue session</td><td><code>idle</code> (with pending receipt visible)</td></tr>
+          <tr><td>B*</td><td>If <code>CANVAS_ENABLED=0</code> or write-guard fires</td><td><code>blocked</code></td><td>Acknowledge · open Panel</td><td><code>idle</code></td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <span class="callout-label">Classification authority</span>
+        Classification (body vs governance) is determined by <code>GovernanceRouter</code> on the server,
+        not by the UI. The UI renders whichever class the server returned on the proposal payload. The UI
+        never <em>upgrades</em> a body edit into a governance action or <em>downgrades</em> a governance
+        action into a body edit.
+      </div>
+    </section>
+
+    <!-- ============== SECTION 3 ============== -->
+    <section class="spec" id="s3">
+      <h2><span class="secnum">03 ·</span>UI state model</h2>
+      <p class="lede">
+        Eight states. Two orthogonal axes: <em>session activity</em> (idle / thinking) and
+        <em>proposal lifecycle</em> (staged / pending / resolved / blocked).
+      </p>
+
+      <h3>State enum</h3>
+      <pre class="code"><span class="c">// canvas-rail state machine, one-of:</span>
+<span class="k">type</span> <span class="n">RailState</span> =
+  | <span class="s">"idle"</span>                    <span class="c">// no proposal; composer enabled</span>
+  | <span class="s">"thinking"</span>                <span class="c">// agent generating; composer disabled</span>
+  | <span class="s">"suggestion-staged:body"</span>  <span class="c">// preview ready; apply/discard enabled</span>
+  | <span class="s">"suggestion-staged:gov"</span>   <span class="c">// preview ready; queue/discard enabled</span>
+  | <span class="s">"apply-pending"</span>           <span class="c">// canvas_writer in flight</span>
+  | <span class="s">"governance-pending"</span>      <span class="c">// router accepted; receipt returned</span>
+  | <span class="s">"applied"</span>                 <span class="c">// terminal-success for body lane</span>
+  | <span class="s">"discarded"</span>               <span class="c">// terminal-reject for either lane</span>
+  | <span class="s">"blocked"</span>;                <span class="c">// gated / not allowed</span></pre>
+
+      <h3>Allowed transitions</h3>
+      <table class="spec">
+        <thead>
+          <tr><th>From</th><th>Trigger</th><th>To</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>idle</code></td><td>user.send or agent-initiated turn</td><td><code>thinking</code></td></tr>
+          <tr><td><code>thinking</code></td><td>proposal.received (class = body)</td><td><code>suggestion-staged:body</code></td></tr>
+          <tr><td><code>thinking</code></td><td>proposal.received (class = governance)</td><td><code>suggestion-staged:gov</code></td></tr>
+          <tr><td><code>thinking</code></td><td>turn.completed (no proposal)</td><td><code>idle</code></td></tr>
+          <tr><td><code>thinking</code></td><td>cancel</td><td><code>idle</code></td></tr>
+          <tr><td><code>suggestion-staged:body</code></td><td>suggestion.apply</td><td><code>apply-pending</code></td></tr>
+          <tr><td><code>suggestion-staged:body</code></td><td>suggestion.discard</td><td><code>discarded</code> → <code>idle</code></td></tr>
+          <tr><td><code>suggestion-staged:gov</code></td><td>governance.queue</td><td><code>governance-pending</code></td></tr>
+          <tr><td><code>suggestion-staged:gov</code></td><td>suggestion.discard</td><td><code>discarded</code> → <code>idle</code></td></tr>
+          <tr><td><code>apply-pending</code></td><td>canvas-writer.success</td><td><code>applied</code> → <code>idle</code></td></tr>
+          <tr><td><code>apply-pending</code></td><td>canvas-writer.error</td><td><code>blocked</code></td></tr>
+          <tr><td><code>governance-pending</code></td><td>router.receipt-accepted</td><td><code>idle</code> (receipt visible)</td></tr>
+          <tr><td><code>governance-pending</code></td><td>router.write-guard-denied</td><td><code>blocked</code></td></tr>
+          <tr><td>any</td><td><code>CANVAS_ENABLED=0</code></td><td><code>blocked</code></td></tr>
+        </tbody>
+      </table>
+
+      <h3>Composer enablement</h3>
+      <p>
+        The composer is enabled in <code>idle</code> only. In every other state the input is read-only
+        with state-appropriate placeholder copy (e.g. <em>"Hugin is thinking…"</em>,
+        <em>"Apply or discard to continue"</em>, <em>"Queue or discard to continue"</em>,
+        <em>"Canvas disabled in this environment"</em>).
+      </p>
+    </section>
+
+    <!-- ============== SECTION 4 ============== -->
+    <section class="spec" id="s4">
+      <h2><span class="secnum">04 ·</span>Component inventory</h2>
+      <p class="lede">
+        One tree. Components map 1:1 to the existing converse layout where possible — new components
+        are introduced only for the suggestion lifecycle.
+      </p>
+
+      <table class="spec">
+        <thead>
+          <tr><th>Component</th><th>Role</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>&lt;CanvasShell&gt;</code></td><td>Landscape rail / portrait sheet container; carries <code>data-rail-state</code> and <code>data-suggestion-state</code></td><td>existing</td></tr>
+          <tr><td><code>&lt;DocumentPane&gt;</code></td><td>Read-only render of the active note. Hosts <code>&lt;SuggestedInsertion&gt;</code> in place.</td><td>existing</td></tr>
+          <tr><td><code>&lt;SuggestedInsertion&gt;</code></td><td>The in-document preview marker (orange tint, "PROPOSED" label) that flips to applied (vault green, "APPLIED · &lt;receipt&gt;") or removes itself on discard</td><td><span class="chip impl">new</span></td></tr>
+          <tr><td><code>&lt;HuginRail&gt;</code></td><td>Conversation thread + composer; mounts <code>&lt;SuggestionCard&gt;</code></td><td>existing</td></tr>
+          <tr><td><code>&lt;ConversationThread&gt;</code></td><td>Ordered list of <code>&lt;Message&gt;</code>, <code>&lt;SuggestionCard&gt;</code>, <code>&lt;ThinkingIndicator&gt;</code>, <code>&lt;ReceiptPill&gt;</code></td><td>existing</td></tr>
+          <tr><td><code>&lt;SuggestionCard variant="body"&gt;</code></td><td>Body-edit proposal card with <em>Apply</em> / <em>Discard</em></td><td><span class="chip impl">new variant</span></td></tr>
+          <tr><td><code>&lt;SuggestionCard variant="governance"&gt;</code></td><td>Governance proposal card with <em>Queue for governance</em> / <em>Discard</em> and an explicit "cannot be applied here" sub-label</td><td><span class="chip impl">new variant</span></td></tr>
+          <tr><td><code>&lt;SuggestionCard variant="blocked"&gt;</code></td><td>Not-allowed card (CANVAS_ENABLED off, write-guard denied, or unknown class)</td><td><span class="chip impl">new variant</span></td></tr>
+          <tr><td><code>&lt;ReceiptPill&gt;</code></td><td>Compact pill rendered inline in thread when an action is queued / applied; links to Panel for governance receipts</td><td><span class="chip impl">new</span></td></tr>
+          <tr><td><code>&lt;ReceiptsStrip&gt;</code></td><td>Sticky footer strip in the rail that lists the session's outstanding pending governance receipts (so they remain visible after scroll)</td><td><span class="chip impl">new</span></td></tr>
+          <tr><td><code>&lt;ThinkingIndicator&gt;</code></td><td>Three-dot pulse; <code>data-thinking="active"</code></td><td>existing</td></tr>
+          <tr><td><code>&lt;Composer&gt;</code></td><td>Input + send; respects <code>data-composer-state</code></td><td>existing</td></tr>
+          <tr><td><code>&lt;SessionDrawer&gt;</code></td><td>Existing session list overlay; unchanged by this slice</td><td>existing</td></tr>
+          <tr><td><code>&lt;ProvenanceFooter&gt;</code></td><td>One-line footer showing session log path and turn count; clickable to open <code>.chats/&lt;slug&gt;/…</code> in Obsidian</td><td><span class="chip impl">new</span></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== SECTION 5 ============== -->
+    <section class="spec" id="s5">
+      <h2><span class="secnum">05 ·</span>Data-intent &amp; data-testid</h2>
+      <p class="lede">
+        Every interactive node carries a <code>data-intent</code> (semantic action name) and a
+        <code>data-testid</code> (stable selector). Names extend the prototype convention already in
+        <code>converse_layout.html</code>.
+      </p>
+
+      <h3>Intent vocabulary</h3>
+      <table class="spec">
+        <thead><tr><th class="mono">data-intent</th><th>Surface</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">suggestion.apply</td><td>SuggestionCard · body</td><td>POST <code>/canvas/sessions/:id/edits</code> via <code>canvas_writer</code></td></tr>
+          <tr><td class="mono">suggestion.discard</td><td>SuggestionCard · any</td><td>Local-only: removes preview, appends discard turn to session log</td></tr>
+          <tr><td class="mono">suggestion.inspect</td><td>SuggestionCard · any</td><td>Expands diff / classification rationale (no side effect)</td></tr>
+          <tr><td class="mono">suggestion.edit</td><td>SuggestionCard · body</td><td>Opens inline editor on the proposed text before apply (no side effect until apply)</td></tr>
+          <tr><td class="mono">governance.queue</td><td>SuggestionCard · governance</td><td>POST <code>GovernanceRouter.request_governance_action</code>; returns receipt</td></tr>
+          <tr><td class="mono">governance.openReceipt</td><td>ReceiptPill · queued</td><td>Hands off to AI Panel anchored to the receipt id</td></tr>
+          <tr><td class="mono">canvas.cancelTurn</td><td>ThinkingIndicator</td><td>Aborts in-flight reasoning; returns to <code>idle</code></td></tr>
+          <tr><td class="mono">canvas.undoLastEdit</td><td>ProvenanceFooter</td><td>Inverse of the last applied body edit; appends undo turn to session log</td></tr>
+          <tr><td class="mono">provenance.openSessionLog</td><td>ProvenanceFooter</td><td>Opens the <code>.chats/&lt;slug&gt;/&lt;ts&gt;.md</code> note in Obsidian</td></tr>
+          <tr><td class="mono">blocked.acknowledge</td><td>SuggestionCard · blocked</td><td>Dismisses the blocked card; logs the denial reason</td></tr>
+          <tr><td class="mono">session-drawer.open</td><td>top-bar</td><td>Existing; unchanged</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Testid map</h3>
+      <table class="spec">
+        <thead><tr><th class="mono">data-testid</th><th>Node</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">canvas-shell</td><td>Outer container; carries <code>data-rail-state</code>, <code>data-suggestion-state</code></td></tr>
+          <tr><td class="mono">document-pane</td><td>Active-note render</td></tr>
+          <tr><td class="mono">suggested-insertion-block</td><td>In-document preview; carries <code>data-suggestion-id</code></td></tr>
+          <tr><td class="mono">suggestion-card</td><td>Rail card; carries <code>data-suggestion-id</code> and <code>data-variant</code></td></tr>
+          <tr><td class="mono">suggestion-card-classification</td><td>Sub-label declaring body vs governance</td></tr>
+          <tr><td class="mono">apply-suggestion</td><td>Primary action button (body lane)</td></tr>
+          <tr><td class="mono">queue-governance</td><td>Primary action button (governance lane)</td></tr>
+          <tr><td class="mono">discard-suggestion</td><td>Secondary action button (either lane)</td></tr>
+          <tr><td class="mono">receipt-pill</td><td>Inline pill in thread; carries <code>data-receipt-id</code></td></tr>
+          <tr><td class="mono">receipts-strip</td><td>Sticky strip with pending governance receipts</td></tr>
+          <tr><td class="mono">provenance-footer</td><td>Session-log path + turn count</td></tr>
+          <tr><td class="mono">thinking-indicator</td><td>Three-dot pulse; carries <code>data-thinking</code></td></tr>
+          <tr><td class="mono">blocked-card</td><td>Not-allowed variant</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Data attributes on the shell</h3>
+      <pre class="code">&lt;section
+  data-testid=<span class="s">"canvas-shell"</span>
+  data-rail-state=<span class="s">"expanded | collapsed"</span>
+  data-suggestion-state=<span class="s">"idle | thinking | staged-body | staged-gov | pending-apply | pending-gov | applied | discarded | blocked"</span>
+  data-canvas-enabled=<span class="s">"true | false"</span>
+  data-session-id=<span class="s">"&lt;uuid&gt;"</span>
+  data-active-note-path=<span class="s">"Projects/Q2-arch.md"</span>&gt;</pre>
+    </section>
+
+    <!-- ============== SECTION 6 ============== -->
+    <section class="spec" id="s6">
+      <h2><span class="secnum">06 ·</span>API / backend concept mapping</h2>
+      <p class="lede">
+        UI affordances bound to existing backend concepts. The UI does not invent new endpoints; it
+        renders the existing canvas-session surface.
+      </p>
+
+      <table class="spec">
+        <thead><tr><th>UI affordance</th><th>Backend concept</th><th>Module / contract</th></tr></thead>
+        <tbody>
+          <tr><td>Open note → start session</td><td>Canvas session lifecycle (open)</td><td><code>SessionLogWriter.open_session</code> via <code>/canvas/sessions</code></td></tr>
+          <tr><td>Apply body suggestion</td><td>Canvas edit</td><td><code>canvas_writer.apply_edit</code></td></tr>
+          <tr><td>Queue governance suggestion</td><td>Governance routing</td><td><code>GovernanceRouter.request_governance_action(GovernanceActionType, …)</code></td></tr>
+          <tr><td>Receipt pill / receipts strip</td><td>Receipts &amp; status</td><td>Receipt id returned by the router; status polled from Panel locality</td></tr>
+          <tr><td>Provenance footer</td><td>Session log / provenance</td><td><code>SessionLogWriter.append_turn</code>; path <code>vault/.chats/&lt;slug&gt;/&lt;ts&gt;.md</code></td></tr>
+          <tr><td>Blocked variant</td><td>Feature gating &amp; write-guard</td><td><code>CANVAS_ENABLED</code> env gate; <code>governance_router</code> write-guard</td></tr>
+          <tr><td>End session</td><td>Session close</td><td><code>SessionLogWriter.close_session</code></td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <span class="callout-label">Server is the classifier</span>
+        Whether a proposal is body-class or governance-class is set by the server on the proposal payload
+        — derived by <code>GovernanceRouter</code> classification. The UI's job is to render the variant
+        the server declared and offer only the actions valid for that variant. Re-classification in the
+        UI is forbidden.
+      </div>
+    </section>
+
+    <!-- ============== SECTION 7 ============== -->
+    <section class="spec" id="s7">
+      <h2><span class="secnum">07 ·</span>Body-edit lane</h2>
+      <p class="lede">
+        User-present, in-place co-authoring of the open note's body. Authorized by presence. Audited by
+        session log. Reversible by undo.
+      </p>
+
+      <h3>Preview semantics</h3>
+      <ul>
+        <li>The proposed text is shown <em>inline at the insertion point</em> in the document pane
+          (orange marker, "PROPOSED · UNCOMMITTED" label) and as a mirrored card in the rail thread.</li>
+        <li>Both visualizations share a <code>data-suggestion-id</code> so DOM events on one can drive
+          highlight states on the other.</li>
+        <li>The user may <em>Inspect diff</em> (expands the rail card) or <em>Edit before applying</em>
+          (inline edit on the proposed text in the rail). Edits do not mutate the note until <em>Apply</em>.</li>
+      </ul>
+
+      <h3>Apply semantics</h3>
+      <ul>
+        <li>Single round-trip: UI calls <code>canvas_writer.apply_edit(session_id, edit)</code>. On
+          success, the in-document marker flips to vault green with the applied receipt id;
+          the rail card collapses to a one-line "applied" log entry.</li>
+        <li>The session log gains a turn entry: <code>kind: body_edit_applied</code>,
+          <code>note_path</code>, <code>anchor</code>, <code>byte_range</code>, <code>preview_hash</code>.</li>
+        <li>Apply is <em>not</em> a governance event; no receipt is queued in the Panel pipeline.</li>
+      </ul>
+
+      <h3>Discard semantics</h3>
+      <ul>
+        <li>Local-only. The preview is removed from the document pane and the rail card is rendered
+          struck-through and dimmed.</li>
+        <li>A turn entry <code>kind: body_edit_discarded</code> is appended to the session log so
+          provenance still captures the proposed-but-rejected suggestion.</li>
+      </ul>
+
+      <h3>Undo semantics</h3>
+      <ul>
+        <li>The provenance footer exposes <code>data-intent="canvas.undoLastEdit"</code>. Undo inverts
+          the last applied body edit by calling <code>canvas_writer.apply_edit</code> with the inverse
+          patch; the session log records <code>kind: body_edit_undone</code>.</li>
+        <li>Undo is bounded to the active session. Cross-session undo is out of scope and explicitly
+          deferred to a later capability.</li>
+      </ul>
+    </section>
+
+    <!-- ============== SECTION 8 ============== -->
+    <section class="spec" id="s8">
+      <h2><span class="secnum">08 ·</span>Governance-bearing lane</h2>
+      <p class="lede">
+        Anything outside the active note's body. Cannot be applied from chat. Must enter the governed
+        pipeline as a queued intent.
+      </p>
+
+      <h3>What qualifies as governance-bearing (UI surface copy)</h3>
+      <ul>
+        <li>Frontmatter changes (tags, maturity, type, ontology).</li>
+        <li>Note lifecycle (rename, move, archive, delete, promote).</li>
+        <li>Cross-note operations (link, merge, split, create-and-link).</li>
+        <li>System-owned artifacts (automations, watchers, scheduled jobs, agent instructions).</li>
+        <li>Edits to notes other than the active one.</li>
+      </ul>
+
+      <div class="callout warn">
+        <span class="callout-label">Hard UI rule</span>
+        The governance variant has <strong>no Apply button</strong>. The primary action is
+        <em>Queue for governance</em>. The card carries a visible classification label —
+        <em>"Cannot be applied from chat — must be queued"</em> — anchored to a help target that opens
+        the Panel governance docs.
+      </div>
+
+      <h3>Queue semantics</h3>
+      <ul>
+        <li>UI calls <code>GovernanceRouter.request_governance_action(action_type, payload, session_id)</code>.</li>
+        <li>On success: the router returns a receipt id; the rail renders a queued
+          <code>&lt;ReceiptPill&gt;</code> inline, and adds it to <code>&lt;ReceiptsStrip&gt;</code> at the
+          bottom of the rail. Session log gains <code>kind: governance_intent_queued</code> with the receipt
+          id and action type.</li>
+        <li>On write-guard denial (e.g. <code>CANVAS_ENABLED=0</code>, policy refusal): the card
+          transitions to <code>blocked</code>; the session log gains <code>kind: governance_intent_blocked</code>
+          with a <code>reason</code> field.</li>
+      </ul>
+
+      <h3>Status after queue</h3>
+      <ul>
+        <li>The pending receipt remains visible in the rail's receipts strip until status changes upstream.</li>
+        <li>Status transitions (<em>queued → in-review → applied</em> or <em>rejected</em>) are read-only in
+          the canvas — the user inspects and acts on them in <strong>AI Panel</strong>.
+          <code>data-intent="governance.openReceipt"</code> hands off to Panel.</li>
+        <li>The Companion UI never auto-applies or auto-rejects a governance receipt.</li>
+      </ul>
+    </section>
+
+    <!-- ============== SECTION 9 ============== -->
+    <section class="spec" id="s9">
+      <h2><span class="secnum">09 ·</span>Receipts &amp; provenance behavior</h2>
+      <p class="lede">
+        Two distinct artifacts: in-pipeline <em>receipts</em> (Panel locality) and the per-session
+        <em>session log</em> (subordinate vault artifact).
+      </p>
+
+      <h3>Receipts</h3>
+      <ul>
+        <li>Lifecycle: <code>queued → in-review → applied | rejected</code>.</li>
+        <li>Locality: Panel's receipt store, unchanged. Companion UI <em>mirrors</em> but never owns.</li>
+        <li>Rendered as a <code>&lt;ReceiptPill&gt;</code> inline in the thread at the moment of queue, and
+          as a row in <code>&lt;ReceiptsStrip&gt;</code> for as long as the receipt is non-terminal.</li>
+        <li>Body-edit applies do <em>not</em> generate a receipt. They are not governance events.</li>
+      </ul>
+
+      <h3>Session log</h3>
+      <ul>
+        <li>Path: <code>vault/.chats/&lt;note-slug&gt;/&lt;timestamp&gt;.md</code> (per <code>WRITE_SESSION_LOGS</code>).</li>
+        <li>Frontmatter: <code>type: chat-session</code>, <code>note_path</code>, <code>opened_at</code>,
+          <code>closed_at</code>.</li>
+        <li>Append-only. Turns are appended via <code>SessionLogWriter.append_turn</code>. The UI never
+          rewrites prior content.</li>
+        <li>Subordinate, not canonical. The active note remains the artifact. The session log is
+          provenance.</li>
+      </ul>
+
+      <h3>Turn kinds emitted from this slice</h3>
+      <table class="spec">
+        <thead><tr><th class="mono">kind</th><th>Emitted when</th><th>Required fields</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">turn.user</td><td>User sends a composer message</td><td><code>text</code>, <code>ts</code></td></tr>
+          <tr><td class="mono">turn.agent</td><td>Hugin reply (incl. proposals)</td><td><code>text</code>, <code>proposal?</code>, <code>ts</code></td></tr>
+          <tr><td class="mono">body_edit_applied</td><td>Body suggestion accepted</td><td><code>suggestion_id</code>, <code>anchor</code>, <code>preview_hash</code></td></tr>
+          <tr><td class="mono">body_edit_discarded</td><td>Body suggestion discarded</td><td><code>suggestion_id</code>, <code>preview_hash</code></td></tr>
+          <tr><td class="mono">body_edit_undone</td><td>User undoes last apply</td><td><code>suggestion_id</code>, <code>inverse_of</code></td></tr>
+          <tr><td class="mono">governance_intent_queued</td><td>User queues a governance proposal</td><td><code>suggestion_id</code>, <code>action_type</code>, <code>receipt_id</code></td></tr>
+          <tr><td class="mono">governance_intent_blocked</td><td>Write-guard denied or CANVAS_ENABLED=0</td><td><code>suggestion_id</code>, <code>action_type</code>, <code>reason</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== SECTION 10 ============== -->
+    <section class="spec" id="s10">
+      <h2><span class="secnum">10 ·</span>Responsive behavior</h2>
+      <p class="lede">
+        Two layouts, one state model. The rail collapses to a bottom sheet at portrait widths; the
+        suggestion-card lives in whichever container is mounted.
+      </p>
+
+      <h3>Landscape (≥ 900 px wide)</h3>
+      <ul>
+        <li>Two columns. Document pane primary; rail on the right (collapsed strip / expanded).</li>
+        <li><code>&lt;SuggestedInsertion&gt;</code> renders inline in the document pane.</li>
+        <li><code>&lt;SuggestionCard&gt;</code> renders in the rail thread.</li>
+        <li><code>&lt;ReceiptsStrip&gt;</code> sticks to the bottom of the rail, above the composer.</li>
+      </ul>
+
+      <h3>Portrait / narrow (&lt; 900 px wide)</h3>
+      <ul>
+        <li>Document pane fills viewport; rail replaced by <code>&lt;BottomSheet&gt;</code> with three snap points:
+          <code>peek</code> (60 px, shows hugin dot + turn count), <code>half</code> (50vh), <code>full</code> (calc(100vh - 64px)).</li>
+        <li>When a proposal arrives the sheet auto-snaps from <code>peek</code> → <code>half</code>; never
+          to <code>full</code> (so the document is still visible at the insertion point).</li>
+        <li><code>&lt;SuggestedInsertion&gt;</code> in the document pane is the user's primary read of
+          the change; the sheet card is the action surface.</li>
+        <li><code>&lt;ReceiptsStrip&gt;</code> renders at the top of the sheet (sticky) so pending
+          governance items remain visible when the user scrolls the thread.</li>
+      </ul>
+
+      <h3>Cross-cutting</h3>
+      <ul>
+        <li>Hit targets ≥ 44 px in portrait. <em>Apply</em> and <em>Queue</em> are always the primary
+          (color-distinct) action; <em>Discard</em> is always secondary.</li>
+        <li>Sheet snap state is persisted to <code>localStorage</code> per session id so refresh keeps
+          context.</li>
+        <li>Reduced-motion users skip the thinking pulse and the sheet auto-snap; the proposal still
+          arrives, just statically.</li>
+      </ul>
+    </section>
+
+    <!-- ============== SECTION 11 ============== -->
+    <section class="spec" id="s11">
+      <h2><span class="secnum">11 ·</span>Accessibility requirements</h2>
+
+      <h3>Keyboard</h3>
+      <ul>
+        <li>Composer focused by default in <code>idle</code>. <kbd>Esc</kbd> from the composer collapses
+          the rail (landscape) or snaps the sheet to <code>peek</code> (portrait).</li>
+        <li>On <code>suggestion-staged</code>, focus moves to the primary action of the suggestion card
+          (Apply or Queue). <kbd>A</kbd> applies (body lane only); <kbd>Q</kbd> queues (governance lane
+          only); <kbd>D</kbd> discards; <kbd>I</kbd> inspects; <kbd>E</kbd> edits-before-applying (body
+          only). Composer is removed from the tab order while staged.</li>
+        <li>The receipts strip is reachable from the rail header with a single tab; pills expose
+          <code>aria-label</code> with action type and receipt status.</li>
+      </ul>
+
+      <h3>Live regions</h3>
+      <ul>
+        <li><code>&lt;ConversationThread&gt;</code> has <code>aria-live="polite"</code> with relevant
+          updates announcing only new messages and proposals (suppress the thinking pulse).</li>
+        <li><code>&lt;ReceiptsStrip&gt;</code> has <code>aria-live="polite"</code> on its row list so
+          status transitions from upstream are announced even when focus is on the document.</li>
+      </ul>
+
+      <h3>Labels &amp; semantics</h3>
+      <ul>
+        <li><code>&lt;SuggestedInsertion&gt;</code> is a <code>&lt;ins&gt;</code> in the DOM with a
+          <code>data-state</code> attribute and an <code>aria-label</code> announcing
+          <em>"Proposed insertion, &lt;n&gt; lines after &lt;anchor&gt;"</em>.</li>
+        <li><code>&lt;SuggestionCard variant="governance"&gt;</code> has
+          <code>aria-describedby</code> pointing at the classification label so screen readers always
+          announce the "must be queued" constraint.</li>
+        <li><code>&lt;SuggestionCard variant="blocked"&gt;</code> has <code>role="alert"</code> and an
+          <code>aria-describedby</code> for the denial reason.</li>
+      </ul>
+
+      <h3>Contrast &amp; reduced motion</h3>
+      <ul>
+        <li>All state colors (amber staged, vault applied, accent governance, destructive blocked) meet
+          ≥ 4.5:1 against the surface they sit on. The Yggdrasil tokens already satisfy this.</li>
+        <li><code>@media (prefers-reduced-motion)</code> disables the thinking dot pulse and the
+          receipt-pill pulse; transitions resolve to instantaneous.</li>
+      </ul>
+    </section>
+
+    <!-- ============== SECTION 12 ============== -->
+    <section class="spec" id="s12">
+      <h2><span class="secnum">12 ·</span>Prototype</h2>
+      <p class="lede">
+        Two artifacts: a state gallery covering all eight states, and a small live demo of the flow
+        end-to-end. Both render with the Yggdrasil tokens; no framework. This is design-only — the
+        layout, hierarchy, and state machine are contract; the styling is a reference render.
+      </p>
+
+      <h3>State gallery</h3>
+      <div class="gallery" data-testid="state-gallery">
+
+        <!-- idle -->
+        <div class="gallery-card">
+          <header>
+            <h4>① idle</h4>
+            <span class="chip">composer enabled</span>
+          </header>
+          <p class="note">No proposal. Composer ready. Provenance footer shows session log path.</p>
+          <div class="rail-mock">
+            <div class="hdr"><span class="dot"></span><span>HUGIN</span><span class="turn-meta">12 turns</span></div>
+            <div class="msg agent"><div class="ctx-label">RE: Q2-arch.md</div>Picked up where you left off — the decision capture scaffold.</div>
+            <div class="msg user">What should go after "Current state"?</div>
+            <div class="composer-mock">
+              <input placeholder="Message Hugin…" />
+              <button class="btn primary">Send</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- thinking -->
+        <div class="gallery-card">
+          <header>
+            <h4>② thinking</h4>
+            <span class="chip agent">composer locked</span>
+          </header>
+          <p class="note">Agent reasoning. Composer disabled with state placeholder. Cancellable.</p>
+          <div class="rail-mock">
+            <div class="hdr"><span class="dot"></span><span>HUGIN</span><span class="turn-meta">12 turns</span></div>
+            <div class="msg user">What should go after "Current state"?</div>
+            <div class="thinking"><span>HUGIN</span><span class="ddot"></span><span class="ddot"></span><span class="ddot"></span></div>
+            <div class="composer-mock">
+              <input value="Hugin is thinking…" disabled />
+              <button class="btn" disabled>Send</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- staged body -->
+        <div class="gallery-card">
+          <header>
+            <h4>③ suggestion staged · body</h4>
+            <span class="chip" style="color: var(--amber); border-color: rgba(240,144,48,0.4);">co-author</span>
+          </header>
+          <p class="note">Body-class proposal. Apply / Discard offered. In-document preview is amber.</p>
+          <div class="rail-mock">
+            <div class="hdr"><span class="dot"></span><span>HUGIN</span><span class="turn-meta">13 turns</span></div>
+            <div class="doc-note-mock">
+              <div class="h">## Current state</div>
+              <div class="ins">Introduce explicit staged-suggestion actions with no direct persistence side effects.</div>
+            </div>
+            <div class="sugg body">
+              <div class="sugg-label">HUGIN · PROPOSED ADDITION</div>
+              Add a staged insertion for explicit user-controlled apply/discard flow.
+              <div class="diff-hint">+3 lines after ## Current state</div>
+              <div class="sugg-actions">
+                <button class="btn primary">Apply <span class="kbd">A</span></button>
+                <button class="btn">Discard <span class="kbd">D</span></button>
+                <button class="btn ghost">Inspect <span class="kbd">I</span></button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- apply pending -->
+        <div class="gallery-card">
+          <header>
+            <h4>④ apply pending</h4>
+            <span class="chip agent">writer in flight</span>
+          </header>
+          <p class="note">canvas_writer.apply_edit() in flight. Buttons disabled. No receipt — body lane.</p>
+          <div class="rail-mock">
+            <div class="hdr"><span class="dot"></span><span>HUGIN</span><span class="turn-meta">13 turns</span></div>
+            <div class="sugg body">
+              <div class="sugg-label">HUGIN · APPLYING…</div>
+              Add a staged insertion for explicit user-controlled apply/discard flow.
+              <div class="diff-hint">writing to Projects/Q2-arch.md</div>
+              <div class="sugg-actions">
+                <button class="btn primary" disabled>Apply</button>
+                <button class="btn" disabled>Discard</button>
+              </div>
+            </div>
+            <div class="thinking"><span>CANVAS_WRITER</span><span class="ddot"></span><span class="ddot"></span><span class="ddot"></span></div>
+          </div>
+        </div>
+
+        <!-- applied -->
+        <div class="gallery-card">
+          <header>
+            <h4>⑤ applied</h4>
+            <span class="chip vault">in note</span>
+          </header>
+          <p class="note">In-document marker flips to vault green with applied tag. Session log gains <code>body_edit_applied</code>.</p>
+          <div class="rail-mock">
+            <div class="hdr"><span class="dot"></span><span>HUGIN</span><span class="turn-meta">14 turns</span></div>
+            <div class="doc-note-mock">
+              <div class="h">## Current state</div>
+              <div class="ins-applied">Introduce explicit staged-suggestion actions with no direct persistence side effects.</div>
+            </div>
+            <div class="sugg applied">
+              <div class="sugg-label">✓ APPLIED · body_edit#a4f2</div>
+              <div class="diff-hint">.chats/q2-arch/2026-05-11T1442.md · turn 14</div>
+            </div>
+            <div class="composer-mock">
+              <input placeholder="Message Hugin…" />
+              <button class="btn primary">Send</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- discarded -->
+        <div class="gallery-card">
+          <header>
+            <h4>⑥ discarded</h4>
+            <span class="chip">no mutation</span>
+          </header>
+          <p class="note">Local-only. Preview removed from document. Card dims and strikes. Audit kept.</p>
+          <div class="rail-mock">
+            <div class="hdr"><span class="dot"></span><span>HUGIN</span><span class="turn-meta">14 turns</span></div>
+            <div class="doc-note-mock">
+              <div class="h">## Current state</div>
+              <div class="ins-ghost">— proposal discarded —</div>
+            </div>
+            <div class="sugg discarded">
+              <div class="sugg-label">DISCARDED · 2s ago</div>
+              Add a staged insertion for explicit user-controlled apply/discard flow.
+            </div>
+            <div class="composer-mock">
+              <input placeholder="Message Hugin…" />
+              <button class="btn primary">Send</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- governance pending -->
+        <div class="gallery-card">
+          <header>
+            <h4>⑦ governance action pending</h4>
+            <span class="chip" style="color: var(--accent); border-color: rgba(212,168,67,0.4);">queued</span>
+          </header>
+          <p class="note">Frontmatter / cross-note / lifecycle. No Apply button — only <em>Queue for governance</em>. Receipt returned and surfaced.</p>
+          <div class="rail-mock">
+            <div class="hdr"><span class="dot"></span><span>HUGIN</span><span class="turn-meta">15 turns</span></div>
+            <div class="sugg governance">
+              <div class="sugg-label">HUGIN · GOVERNANCE-BEARING PROPOSAL</div>
+              Promote maturity from <code>draft</code> → <code>committed</code>; add tag <code>#arch/decision</code>.
+              <div class="diff-hint" style="color: var(--accent);">Cannot be applied from chat — must be queued.</div>
+              <div class="sugg-actions">
+                <button class="btn governance">Queue for governance <span class="kbd">Q</span></button>
+                <button class="btn">Discard <span class="kbd">D</span></button>
+                <button class="btn ghost">Inspect classification <span class="kbd">I</span></button>
+              </div>
+            </div>
+            <span class="receipt queued"><span class="recdot"></span>queued · gov#7b1c · open in panel ›</span>
+          </div>
+        </div>
+
+        <!-- blocked -->
+        <div class="gallery-card">
+          <header>
+            <h4>⑧ blocked / not allowed</h4>
+            <span class="chip" style="color: var(--destructive); border-color: rgba(255,61,61,0.4);">denied</span>
+          </header>
+          <p class="note">CANVAS_ENABLED=0 or write-guard denied. No primary action. Reason explicit. Logged.</p>
+          <div class="rail-mock">
+            <div class="hdr"><span class="dot"></span><span>HUGIN</span><span class="turn-meta">15 turns</span></div>
+            <div class="sugg blocked" role="alert">
+              <div class="sugg-label">⚠ NOT ALLOWED IN THIS ENVIRONMENT</div>
+              Canvas mutations are disabled (<code>CANVAS_ENABLED=0</code>). Open this intent in the AI Panel to proceed.
+              <div class="sugg-actions">
+                <button class="btn">Acknowledge</button>
+                <button class="btn ghost">Open in Panel ›</button>
+              </div>
+            </div>
+            <div class="composer-mock">
+              <input value="Canvas disabled in this environment" disabled />
+              <button class="btn" disabled>Send</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <h3>Live demo</h3>
+      <p>
+        Walk the flow end-to-end. The buttons drive a small in-page state machine that mirrors the
+        contract in §3 and emits the same session-log turn kinds enumerated in §9. Open the browser
+        console to see the would-be backend calls and turn-log entries; no network or storage side
+        effects fire.
+      </p>
+
+      <div class="proto-frame" data-testid="canvas-shell" id="proto">
+        <div class="proto-tabs" role="tablist">
+          <button class="proto-tab" role="tab" aria-selected="true" data-tab="body">Body-edit lane</button>
+          <button class="proto-tab" role="tab" aria-selected="false" data-tab="gov">Governance lane</button>
+          <button class="proto-tab" role="tab" aria-selected="false" data-tab="blocked">Blocked (CANVAS_ENABLED=0)</button>
+        </div>
+
+        <div class="proto-stage">
+          <article class="proto-doc" data-testid="document-pane">
+            <div class="note-path">Projects/Q2-arch.md · session #s_4f81</div>
+            <div class="frontmatter">---
+type: decision
+maturity: draft
+tags: [arch, q2-planning]
+---</div>
+            <h1>Decision capture scaffold</h1>
+            <h2>Context</h2>
+            <p>We need a way for Hugin to propose body edits in this note without violating the gated
+              execution invariant. Anything beyond the note body must enter the governance pipeline.</p>
+            <h2>Current state</h2>
+            <p>The rail can stage proposals but doesn't yet route classification or render receipts.</p>
+            <div id="proto-insertion" class="insertion" data-state="staged"
+                 data-testid="suggested-insertion-block"
+                 data-suggestion-id="suggestion-001">
+              Introduce explicit staged-suggestion actions with no direct persistence side effects;
+              classification (body vs governance) is server-set on the proposal payload.
+            </div>
+            <h2>Open questions</h2>
+            <p>How are governance-bearing proposals surfaced when the user is mid-thought?</p>
+          </article>
+
+          <aside class="proto-rail">
+            <div class="hdr"><span class="dot"></span><span>HUGIN</span><span class="turn-meta" id="proto-turns">14 turns</span></div>
+
+            <div class="msg agent">
+              <div class="ctx-label">RE: Q2-arch.md</div>
+              I have a proposal for the <em>Current state</em> section. Preview is staged below.
+            </div>
+
+            <div id="proto-card-body" class="sugg body" data-testid="suggestion-card" data-variant="body" data-suggestion-id="suggestion-001">
+              <div class="sugg-label">HUGIN · PROPOSED ADDITION</div>
+              <span>Introduce explicit staged-suggestion actions with no direct persistence side effects.</span>
+              <div class="diff-hint">+3 lines after <code>## Current state</code></div>
+              <div class="sugg-actions">
+                <button class="btn primary" data-intent="suggestion.apply" data-testid="apply-suggestion" id="btn-apply">Apply <span class="kbd">A</span></button>
+                <button class="btn" data-intent="suggestion.discard" data-testid="discard-suggestion" id="btn-discard">Discard <span class="kbd">D</span></button>
+                <button class="btn ghost" data-intent="suggestion.inspect">Inspect <span class="kbd">I</span></button>
+              </div>
+            </div>
+
+            <div id="proto-card-gov" class="sugg governance" data-testid="suggestion-card" data-variant="governance" data-suggestion-id="suggestion-002" style="display:none;">
+              <div class="sugg-label">HUGIN · GOVERNANCE-BEARING PROPOSAL</div>
+              <span>Promote <code>maturity: draft → committed</code> and add tag <code>#arch/decision</code>.</span>
+              <div class="diff-hint" style="color: var(--accent);">Cannot be applied from chat — must be queued.</div>
+              <div class="sugg-actions">
+                <button class="btn governance" data-intent="governance.queue" data-testid="queue-governance" id="btn-queue">Queue for governance <span class="kbd">Q</span></button>
+                <button class="btn" data-intent="suggestion.discard" id="btn-discard-gov">Discard <span class="kbd">D</span></button>
+                <button class="btn ghost" data-intent="suggestion.inspect">Inspect classification</button>
+              </div>
+            </div>
+
+            <div id="proto-card-blocked" class="sugg blocked" data-testid="blocked-card" role="alert" style="display:none;">
+              <div class="sugg-label">⚠ NOT ALLOWED IN THIS ENVIRONMENT</div>
+              <span><code>CANVAS_ENABLED=0</code>. Canvas mutations are gated off in this environment. The proposed intent has been logged as <code>governance_intent_blocked</code>.</span>
+              <div class="sugg-actions">
+                <button class="btn" data-intent="blocked.acknowledge" id="btn-ack">Acknowledge</button>
+                <button class="btn ghost">Open in Panel ›</button>
+              </div>
+            </div>
+
+            <div id="proto-thinking" class="thinking" style="display:none;"><span>CANVAS_WRITER</span><span class="ddot"></span><span class="ddot"></span><span class="ddot"></span></div>
+
+            <div class="receipts-strip" data-testid="receipts-strip" id="proto-receipts">
+              <div class="rlbl">Pending receipts</div>
+              <div class="empty" id="receipts-empty">— none —</div>
+            </div>
+          </aside>
+        </div>
+
+        <div class="proto-controls">
+          <span class="label">Provenance</span>
+          <span class="receipt" id="proto-prov" data-testid="provenance-footer">
+            <span class="recdot" style="background: var(--vault); box-shadow: 0 0 6px var(--vault);"></span>
+            .chats/q2-arch/2026-05-11T1442.md · <span id="proto-turncount">14</span> turns
+          </span>
+          <button class="btn ghost" data-intent="canvas.undoLastEdit" id="btn-undo" disabled>Undo last edit</button>
+          <button class="btn ghost" data-intent="provenance.openSessionLog">Open session log</button>
+          <span style="margin-left: auto; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3);" id="proto-state">state: <strong style="color: var(--cyan);">suggestion-staged:body</strong></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============== SECTION 13 ============== -->
+    <section class="spec" id="s13">
+      <h2><span class="secnum">13 ·</span>Design-only vs implementation contract</h2>
+      <p class="lede">
+        Codex should normalize the contract chips into repo docs / implementation tasks. The design
+        chips are reference renders — sober defaults, not constraints.
+      </p>
+
+      <table class="spec">
+        <thead><tr><th>Element</th><th>Classification</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>UI state enum (§3) and allowed transitions</td><td><span class="chip impl">contract</span></td><td>Implementations must enumerate exactly these states; new states require an INTERACTION-* task.</td></tr>
+          <tr><td>Two-lane split: body-edit vs governance-bearing</td><td><span class="chip impl">contract</span></td><td>Derived from <code>DEFINE_CANVAS_COEDITING_MODEL</code>. UI must surface both lanes distinctly.</td></tr>
+          <tr><td>Server-set classification on proposals</td><td><span class="chip impl">contract</span></td><td>UI must not re-classify or upgrade/downgrade lanes.</td></tr>
+          <tr><td><code>data-intent</code> vocabulary (§5)</td><td><span class="chip impl">contract</span></td><td>Stable names; new intents go through this table.</td></tr>
+          <tr><td><code>data-testid</code> map (§5)</td><td><span class="chip impl">contract</span></td><td>Stable selectors for tests and future automation.</td></tr>
+          <tr><td>Session-log turn kinds (§9)</td><td><span class="chip impl">contract</span></td><td>Must round-trip through <code>SessionLogWriter.append_turn</code>; backend owns the schema, this slice just enumerates which kinds this UI emits.</td></tr>
+          <tr><td>Governance card has no Apply button (§8)</td><td><span class="chip impl">contract</span></td><td>Hard rule. Removing the constraint would breach the gated-execution invariant in the UI.</td></tr>
+          <tr><td>Apply does not generate a Panel receipt (§7, §9)</td><td><span class="chip impl">contract</span></td><td>Body edits are co-authoring, not governance events.</td></tr>
+          <tr><td>Three sheet snap points; auto-snap to half on proposal (§10)</td><td><span class="chip impl">contract</span></td><td>Auto-full is forbidden — must leave anchor visible.</td></tr>
+          <tr><td>Keyboard shortcuts (§11 A/Q/D/I/E)</td><td><span class="chip impl">contract</span></td><td>Bind only when a suggestion is staged. Globals would conflict with composer typing.</td></tr>
+          <tr><td>Composer disabled outside <code>idle</code> (§3)</td><td><span class="chip impl">contract</span></td><td>Sends from non-idle would race the in-flight proposal.</td></tr>
+          <tr><td>Yggdrasil token palette &amp; type</td><td><span class="chip design">design-only</span></td><td>Visual tone; can evolve without changing contracts.</td></tr>
+          <tr><td>Tron-grid background, glow effects</td><td><span class="chip design">design-only</span></td><td>Aesthetic. Reduced-motion overrides take precedence.</td></tr>
+          <tr><td>Specific copy in state placeholders</td><td><span class="chip design">design-only</span></td><td>Tone is sober; exact wording is a string-table concern.</td></tr>
+          <tr><td>State gallery presentation</td><td><span class="chip design">design-only</span></td><td>Documentation artifact; not shipped in product.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== SECTION 14 ============== -->
+    <section class="spec" id="s14">
+      <h2><span class="secnum">14 ·</span>Open questions &amp; risks</h2>
+
+      <h3>Open questions</h3>
+      <ol>
+        <li><strong>Multi-suggestion threading.</strong> If a turn returns more than one proposal,
+          does the UI batch them into one card or stack independent cards? Defaulting to stacked,
+          one-at-a-time apply; needs confirmation.</li>
+        <li><strong>Receipt status freshness.</strong> Polling vs push from Panel for governance receipt
+          status. Polling is fine for the v1 slice; push is deferred.</li>
+        <li><strong>Inline edit-before-apply provenance.</strong> If the user edits the proposed text
+          before applying, is the original proposal still logged, the final text logged, or both?
+          Recommended: both (with <code>proposal_hash</code> and <code>applied_hash</code>).</li>
+        <li><strong>Undo scope.</strong> Confirmed bounded to the active session. Cross-session undo
+          is explicitly deferred — needs a follow-up capability.</li>
+        <li><strong>Sheet behavior on incoming proposal mid-composer-typing.</strong> Auto-snap risks
+          stealing focus. Recommendation: surface a non-stealing indicator in the peek strip and let
+          the user choose to expand. Needs UX validation.</li>
+        <li><strong>Concurrent edits.</strong> If the active note is edited in Obsidian during a canvas
+          session, what happens to staged suggestions whose anchors moved? Recommendation: invalidate
+          and re-stage from server; needs confirmation with <code>canvas_writer</code> semantics.</li>
+      </ol>
+
+      <h3>Risks</h3>
+      <ol>
+        <li><strong>Surface drift.</strong> If the UI ever offers an Apply button on a governance
+          proposal — even as a "shortcut" — the gated-execution invariant breaks. Lint the component:
+          governance variant must never render an apply intent.</li>
+        <li><strong>Session-log inflation.</strong> Discarded proposals are appended to provenance.
+          Verbose sessions could bloat <code>.chats/</code>. Mitigation: <code>append_turn</code> writes
+          summaries, not full proposal bodies, when the proposal was rejected.</li>
+        <li><strong>Receipt orphaning.</strong> A receipt queued from canvas whose Panel record is
+          dismissed elsewhere leaves a stale pill in the rail. Mitigation: receipts strip reads from
+          Panel locality, not from a canvas-local cache.</li>
+        <li><strong>Classification drift.</strong> If the server's classifier and the UI's lane
+          rendering diverge in vocabulary, blocked-card reasons become unparseable. Mitigation: share
+          a single enum <code>GovernanceActionType</code> across both sides.</li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<!-- =========================== PROTOTYPE SCRIPT =========================== -->
+<script>
+(function() {
+  const $ = (id) => document.getElementById(id);
+  const stateLabel = $('proto-state').querySelector('strong');
+  const insertion = $('proto-insertion');
+  const cardBody = $('proto-card-body');
+  const cardGov = $('proto-card-gov');
+  const cardBlocked = $('proto-card-blocked');
+  const thinking = $('proto-thinking');
+  const receiptsStrip = $('proto-receipts');
+  const receiptsEmpty = $('receipts-empty');
+  const turnCount = $('proto-turncount');
+  const btnApply = $('btn-apply');
+  const btnDiscard = $('btn-discard');
+  const btnQueue = $('btn-queue');
+  const btnDiscardGov = $('btn-discard-gov');
+  const btnAck = $('btn-ack');
+  const btnUndo = $('btn-undo');
+
+  let turns = 14;
+  let state = 'suggestion-staged:body';
+  let lastApplied = null;
+
+  function setState(s) {
+    state = s;
+    stateLabel.textContent = s;
+    document.querySelector('.proto-frame').setAttribute('data-suggestion-state', s);
+    console.log('[canvas-shell] state →', s);
+  }
+
+  function logTurn(kind, fields) {
+    turns += 1;
+    turnCount.textContent = turns;
+    const entry = { ts: new Date().toISOString(), kind, ...fields };
+    console.log('[session-log:append_turn]', entry);
+  }
+
+  function setTab(tab) {
+    document.querySelectorAll('.proto-tab').forEach(t => {
+      t.setAttribute('aria-selected', t.dataset.tab === tab ? 'true' : 'false');
+    });
+    cardBody.style.display = tab === 'body' ? 'flex' : 'none';
+    cardGov.style.display = tab === 'gov' ? 'flex' : 'none';
+    cardBlocked.style.display = tab === 'blocked' ? 'flex' : 'none';
+
+    if (tab === 'body') {
+      insertion.style.display = 'block';
+      insertion.dataset.state = 'staged';
+      insertion.removeAttribute('data-receipt');
+      setState('suggestion-staged:body');
+      btnApply.disabled = false;
+      btnDiscard.disabled = false;
+      btnUndo.disabled = lastApplied === null;
+    } else if (tab === 'gov') {
+      insertion.style.display = 'none';
+      setState('suggestion-staged:gov');
+    } else {
+      insertion.style.display = 'none';
+      setState('blocked');
+    }
+  }
+
+  document.querySelectorAll('.proto-tab').forEach(t => {
+    t.addEventListener('click', () => setTab(t.dataset.tab));
+  });
+
+  // BODY LANE — apply
+  btnApply.addEventListener('click', () => {
+    setState('apply-pending');
+    btnApply.disabled = true; btnDiscard.disabled = true;
+    thinking.style.display = 'inline-flex';
+    console.log('[canvas_writer.apply_edit]', { session_id: 's_4f81', suggestion_id: 'suggestion-001' });
+    setTimeout(() => {
+      thinking.style.display = 'none';
+      const receiptId = 'body_edit#a' + Math.random().toString(16).slice(2, 6);
+      lastApplied = receiptId;
+      insertion.dataset.state = 'applied';
+      insertion.setAttribute('data-receipt', receiptId);
+      cardBody.classList.remove('body');
+      cardBody.classList.add('applied');
+      cardBody.querySelector('.sugg-label').textContent = '✓ APPLIED · ' + receiptId;
+      cardBody.querySelector('.sugg-actions').style.display = 'none';
+      logTurn('body_edit_applied', { suggestion_id: 'suggestion-001', receipt: receiptId, anchor: '## Current state' });
+      btnUndo.disabled = false;
+      setState('applied');
+      setTimeout(() => setState('idle'), 1200);
+    }, 900);
+  });
+
+  // BODY LANE — discard
+  btnDiscard.addEventListener('click', () => {
+    insertion.dataset.state = 'discarded';
+    cardBody.classList.remove('body');
+    cardBody.classList.add('discarded');
+    cardBody.querySelector('.sugg-actions').style.display = 'none';
+    cardBody.querySelector('.sugg-label').textContent = 'DISCARDED · just now';
+    logTurn('body_edit_discarded', { suggestion_id: 'suggestion-001' });
+    setState('discarded');
+    setTimeout(() => setState('idle'), 1200);
+  });
+
+  // UNDO
+  btnUndo.addEventListener('click', () => {
+    if (!lastApplied) return;
+    insertion.dataset.state = 'staged';
+    insertion.removeAttribute('data-receipt');
+    cardBody.classList.remove('applied');
+    cardBody.classList.add('body');
+    cardBody.querySelector('.sugg-label').textContent = 'HUGIN · PROPOSED ADDITION';
+    cardBody.querySelector('.sugg-actions').style.display = 'flex';
+    btnApply.disabled = false; btnDiscard.disabled = false;
+    logTurn('body_edit_undone', { inverse_of: lastApplied });
+    lastApplied = null;
+    btnUndo.disabled = true;
+    setState('suggestion-staged:body');
+  });
+
+  // GOVERNANCE LANE — queue
+  let pendingReceipts = 0;
+  btnQueue.addEventListener('click', () => {
+    setState('governance-pending');
+    btnQueue.disabled = true; btnDiscardGov.disabled = true;
+    console.log('[GovernanceRouter.request_governance_action]', {
+      action_type: 'PROMOTE_MATURITY',
+      session_id: 's_4f81',
+      payload: { from: 'draft', to: 'committed', tag_add: ['arch/decision'] }
+    });
+    setTimeout(() => {
+      const rid = 'gov#' + Math.random().toString(16).slice(2, 6);
+      logTurn('governance_intent_queued', { suggestion_id: 'suggestion-002', action_type: 'PROMOTE_MATURITY', receipt_id: rid });
+      pendingReceipts += 1;
+      receiptsEmpty.style.display = 'none';
+      const pill = document.createElement('span');
+      pill.className = 'receipt queued';
+      pill.setAttribute('data-testid', 'receipt-pill');
+      pill.setAttribute('data-receipt-id', rid);
+      pill.innerHTML = '<span class="recdot"></span>queued · ' + rid + ' · PROMOTE_MATURITY · open in panel ›';
+      receiptsStrip.appendChild(pill);
+      cardGov.classList.remove('governance');
+      cardGov.classList.add('applied');
+      cardGov.querySelector('.sugg-label').textContent = '✓ QUEUED · ' + rid;
+      cardGov.querySelector('.diff-hint').textContent = 'awaiting governance review in AI Panel';
+      cardGov.querySelector('.sugg-actions').style.display = 'none';
+      setState('idle');
+    }, 700);
+  });
+
+  btnDiscardGov.addEventListener('click', () => {
+    cardGov.classList.remove('governance');
+    cardGov.classList.add('discarded');
+    cardGov.querySelector('.sugg-actions').style.display = 'none';
+    cardGov.querySelector('.sugg-label').textContent = 'DISCARDED · just now';
+    logTurn('governance_intent_discarded', { suggestion_id: 'suggestion-002' });
+    setState('discarded');
+    setTimeout(() => setState('idle'), 1200);
+  });
+
+  btnAck.addEventListener('click', () => {
+    logTurn('governance_intent_blocked', {
+      suggestion_id: 'suggestion-003',
+      action_type: 'PROMOTE_MATURITY',
+      reason: 'CANVAS_ENABLED=0'
+    });
+    cardBlocked.style.opacity = '0.5';
+    btnAck.disabled = true;
+  });
+
+  // keyboard shortcuts on staged
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (state === 'suggestion-staged:body') {
+      if (e.key === 'a' || e.key === 'A') { e.preventDefault(); btnApply.click(); }
+      if (e.key === 'd' || e.key === 'D') { e.preventDefault(); btnDiscard.click(); }
+    } else if (state === 'suggestion-staged:gov') {
+      if (e.key === 'q' || e.key === 'Q') { e.preventDefault(); btnQueue.click(); }
+      if (e.key === 'd' || e.key === 'D') { e.preventDefault(); btnDiscardGov.click(); }
+    }
+  });
+
+  setTab('body');
+})();
+</script>
+</body>
+</html>

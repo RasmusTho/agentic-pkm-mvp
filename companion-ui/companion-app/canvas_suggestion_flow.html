@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Canvas Suggestion Flow — Companion UI Staging</title>
+  <!--
+    Staging prototype for the Canvas Suggestion Flow.
+    Design spec: companion-ui/design_handoff/2026-05-11-canvas-suggestion-flow/
+    State machine from §3; components from §4; intents from §5.
+    This file is non-production until explicitly promoted.
+  -->
+  <link rel="stylesheet" href="./colors_and_type.css" />
+  <link rel="stylesheet" href="./canvas_suggestion_flow.css" />
+</head>
+<body>
+
+<!-- ================================================================
+     CANVAS SHELL
+     data-suggestion-state drives all per-component visibility rules.
+     data-rail-state drives the rail collapse geometry.
+     ================================================================ -->
+<div class="canvas-shell"
+     data-testid="canvas-shell"
+     data-rail-state="expanded"
+     data-suggestion-state="idle"
+     data-canvas-enabled="true"
+     data-session-id="s_4f81"
+     data-active-note-path="Projects/Q2-arch.md"
+     id="shell">
+
+  <!-- ---- Top bar ---- -->
+  <header class="canvas-top-bar">
+    <strong style="font-family:var(--font-display); font-size:var(--text-base); color:var(--fg-1);">Converse</strong>
+    <button class="session-pill"
+            type="button"
+            data-testid="session-pill"
+            data-intent="session-drawer.open"
+            aria-label="Open session list">
+      Decision capture scaffold ▾
+    </button>
+    <div class="vault-status" style="margin-left:auto; display:flex; align-items:center; gap:6px;">
+      <span class="vault-dot" aria-label="Vault online"></span>
+      <span style="font-family:var(--font-mono); font-size:var(--text-xs); letter-spacing:var(--tracking-wide); color:var(--fg-3);">Vault online</span>
+    </div>
+  </header>
+
+  <!-- ---- Stage: document + rail ---- -->
+  <div class="canvas-stage">
+
+    <!-- ===========================================================
+         DOCUMENT PANE — active note render
+         =========================================================== -->
+    <main class="document-pane" data-testid="document-pane" aria-label="Active note">
+
+      <div class="doc-note-path">Projects/Q2-arch.md · session #s_4f81</div>
+
+      <div class="doc-frontmatter">---
+type: decision
+maturity: draft
+tags: [arch, q2-planning]
+---</div>
+
+      <h1>Decision capture scaffold</h1>
+
+      <h2>Context</h2>
+      <p>We need a way for Hugin to propose body edits in this note without violating the gated
+         execution invariant. Anything beyond the note body must enter the governance pipeline.</p>
+
+      <!-- SuggestedInsertion — in-document preview marker -->
+      <div class="suggested-insertion-zone">
+        <h2>Current state</h2>
+        <p>The rail can stage proposals but doesn't yet route classification or render receipts.</p>
+
+        <ins class="suggested-insertion"
+             data-testid="suggested-insertion-block"
+             data-suggestion-id="suggestion-001"
+             data-state="staged"
+             aria-label="Proposed insertion, 3 lines after ## Current state"
+             id="doc-insertion">
+          Introduce explicit staged-suggestion actions with no direct persistence side effects;
+          classification (body vs governance) is server-set on the proposal payload.
+        </ins>
+      </div>
+
+      <h2>Open questions</h2>
+      <p>How are governance-bearing proposals surfaced when the user is mid-thought?</p>
+    </main>
+
+    <!-- ===========================================================
+         HUGIN RAIL — conversation thread + action surface
+         =========================================================== -->
+    <aside class="hugin-rail"
+           data-testid="margin-rail"
+           data-sheet="peek"
+           aria-label="Hugin conversation rail"
+           id="rail">
+
+      <!-- Collapsed strip (landscape) -->
+      <div class="rail-collapsed-strip"
+           aria-label="Expand Hugin rail"
+           role="button"
+           tabindex="0"
+           id="collapsed-strip">
+        <span class="collapsed-dot" aria-hidden="true"></span>
+        <span class="collapsed-count" aria-label="3 new messages">3</span>
+      </div>
+
+      <!-- Rail header -->
+      <div class="rail-header">
+        <span class="hugin-dot" aria-hidden="true"></span>
+        <span style="color:var(--fg-2); letter-spacing:var(--tracking-wider);">HUGIN</span>
+        <span class="turn-meta" id="turn-count">14 turns</span>
+      </div>
+
+      <!-- ---- Conversation thread ---- -->
+      <div class="conversation-thread"
+           data-testid="conversation-thread"
+           aria-live="polite"
+           id="thread">
+
+        <div class="message agent">
+          <span class="ctx-label">RE: Q2-arch.md</span>
+          I have a proposal for the <em>Current state</em> section. Preview is staged in the document.
+        </div>
+
+        <div class="message user">What should go after "Current state"?</div>
+
+        <!-- ThinkingIndicator — hidden by default, shown in thinking state -->
+        <div class="thinking-indicator"
+             data-testid="thinking-indicator"
+             data-thinking="inactive"
+             aria-label="Hugin is thinking"
+             id="thinking"
+             style="display:none;">
+          <span>HUGIN</span>
+          <span class="ddot" aria-hidden="true"></span>
+          <span class="ddot" aria-hidden="true"></span>
+          <span class="ddot" aria-hidden="true"></span>
+          <button class="thinking-cancel"
+                  type="button"
+                  data-intent="canvas.cancelTurn"
+                  aria-label="Cancel Hugin reasoning"
+                  id="btn-cancel">Cancel</button>
+        </div>
+
+        <!-- ---- SuggestionCard · body variant ---- -->
+        <div class="suggestion-card"
+             data-testid="suggestion-card"
+             data-variant="body"
+             data-suggestion-id="suggestion-001"
+             id="card-body">
+          <span class="card-label">HUGIN · PROPOSED ADDITION</span>
+          <span>Introduce explicit staged-suggestion actions with no direct persistence side effects.</span>
+          <span class="diff-hint">+3 lines after <code>## Current state</code></span>
+          <div class="card-actions">
+            <button class="btn primary"
+                    type="button"
+                    data-intent="suggestion.apply"
+                    data-testid="apply-suggestion"
+                    data-target-suggestion-id="suggestion-001"
+                    id="btn-apply"
+                    aria-keyshortcuts="a">
+              Apply <span class="kbd">A</span>
+            </button>
+            <button class="btn"
+                    type="button"
+                    data-intent="suggestion.discard"
+                    data-testid="discard-suggestion"
+                    data-target-suggestion-id="suggestion-001"
+                    id="btn-discard"
+                    aria-keyshortcuts="d">
+              Discard <span class="kbd">D</span>
+            </button>
+            <button class="btn ghost"
+                    type="button"
+                    data-intent="suggestion.inspect"
+                    id="btn-inspect"
+                    aria-keyshortcuts="i">
+              Inspect <span class="kbd">I</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- ---- SuggestionCard · governance variant (hidden by default) ---- -->
+        <div class="suggestion-card"
+             data-testid="suggestion-card"
+             data-variant="governance"
+             data-suggestion-id="suggestion-002"
+             id="card-gov"
+             style="display:none;">
+          <span class="card-label">HUGIN · GOVERNANCE-BEARING PROPOSAL</span>
+          <span>Promote <code>maturity: draft → committed</code> and add tag <code>#arch/decision</code>.</span>
+          <span class="card-classification"
+                data-testid="suggestion-card-classification"
+                aria-describedby="gov-classification-help"
+                id="gov-classification">
+            Cannot be applied from chat — must be queued.
+          </span>
+          <div class="card-actions">
+            <button class="btn governance"
+                    type="button"
+                    data-intent="governance.queue"
+                    data-testid="queue-governance"
+                    data-target-suggestion-id="suggestion-002"
+                    id="btn-queue"
+                    aria-keyshortcuts="q"
+                    aria-describedby="gov-classification">
+              Queue for governance <span class="kbd">Q</span>
+            </button>
+            <button class="btn"
+                    type="button"
+                    data-intent="suggestion.discard"
+                    data-target-suggestion-id="suggestion-002"
+                    id="btn-discard-gov"
+                    aria-keyshortcuts="d">
+              Discard <span class="kbd">D</span>
+            </button>
+            <button class="btn ghost"
+                    type="button"
+                    data-intent="suggestion.inspect"
+                    id="btn-inspect-gov"
+                    aria-keyshortcuts="i">
+              Inspect classification <span class="kbd">I</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- ---- SuggestionCard · blocked variant (hidden by default) ---- -->
+        <div class="suggestion-card"
+             data-testid="blocked-card"
+             data-variant="blocked"
+             data-suggestion-id="suggestion-003"
+             id="card-blocked"
+             role="alert"
+             style="display:none;">
+          <span class="card-label">⚠ NOT ALLOWED IN THIS ENVIRONMENT</span>
+          <span id="blocked-reason">
+            <code>CANVAS_ENABLED=0</code>. Canvas mutations are gated off in this environment.
+            The proposed intent has been logged as <code>governance_intent_blocked</code>.
+          </span>
+          <div class="card-actions">
+            <button class="btn"
+                    type="button"
+                    data-intent="blocked.acknowledge"
+                    id="btn-ack">
+              Acknowledge
+            </button>
+            <button class="btn ghost"
+                    type="button"
+                    data-intent="blocked.openPanel">
+              Open in Panel ›
+            </button>
+          </div>
+        </div>
+
+      </div><!-- /thread -->
+
+      <!-- ---- ReceiptsStrip — pending governance receipts ---- -->
+      <div class="receipts-strip"
+           data-testid="receipts-strip"
+           aria-live="polite"
+           id="receipts-strip">
+        <span class="strip-label">Pending receipts</span>
+        <span class="strip-empty" id="receipts-empty">— none —</span>
+      </div>
+
+      <!-- ---- Composer ---- -->
+      <div class="composer-wrap">
+        <input type="text"
+               placeholder="Message Hugin…"
+               aria-label="Message Hugin"
+               data-testid="composer-input"
+               id="composer-input" />
+        <button class="btn primary"
+                type="button"
+                id="btn-send"
+                data-intent="composer.send"
+                aria-label="Send message">
+          Send
+        </button>
+      </div>
+
+    </aside><!-- /hugin-rail -->
+
+  </div><!-- /canvas-stage -->
+
+  <!-- ================================================================
+       PROVENANCE FOOTER
+       ================================================================ -->
+  <footer class="provenance-footer"
+          data-testid="provenance-footer"
+          aria-label="Session provenance">
+
+    <span class="prov-session">
+      <span class="prov-dot" aria-hidden="true"></span>
+      <button class="btn ghost"
+              type="button"
+              data-intent="provenance.openSessionLog"
+              aria-label="Open session log in Obsidian"
+              style="padding:0; border:none; font-size:var(--text-xs); font-family:var(--font-mono); letter-spacing:var(--tracking-wide); color:var(--fg-2); cursor:pointer; text-decoration:underline; text-decoration-color:var(--border-strong);">
+        .chats/q2-arch/2026-05-11T1442.md
+      </button>
+      · <span id="prov-turns">14</span> turns
+    </span>
+
+    <button class="btn ghost"
+            type="button"
+            data-intent="canvas.undoLastEdit"
+            data-testid="undo-last-edit"
+            aria-label="Undo last body edit"
+            id="btn-undo"
+            disabled
+            style="font-size:var(--text-xs); font-family:var(--font-mono);">
+      Undo last edit
+    </button>
+
+    <span class="prov-state" id="prov-state">
+      state: <strong id="prov-state-label">idle</strong>
+    </span>
+
+  </footer>
+
+</div><!-- /canvas-shell -->
+
+<!-- Demo controls: lane switcher (would not be in production) -->
+<div style="position:fixed; top:46px; left:0; right:0; background:rgba(7,11,18,0.92); border-bottom:1px solid var(--border); display:flex; gap:0; z-index:var(--z-sticky); backdrop-filter:blur(4px);" role="tablist" aria-label="Demo: switch proposal lane">
+  <button class="btn" role="tab" aria-selected="true"  data-tab="body"    id="tab-body"    style="border-radius:0; border-top:none; border-left:none; font-size:10px;">Body-edit lane</button>
+  <button class="btn" role="tab" aria-selected="false" data-tab="gov"     id="tab-gov"     style="border-radius:0; border-top:none; font-size:10px;">Governance lane</button>
+  <button class="btn" role="tab" aria-selected="false" data-tab="blocked" id="tab-blocked" style="border-radius:0; border-top:none; font-size:10px;">Blocked (CANVAS_ENABLED=0)</button>
+  <button class="btn" role="tab" aria-selected="false" data-tab="idle"    id="tab-idle"    style="border-radius:0; border-top:none; font-size:10px;">Idle</button>
+  <button class="btn" role="tab" aria-selected="false" data-tab="thinking" id="tab-thinking" style="border-radius:0; border-top:none; border-right:none; font-size:10px;">Thinking</button>
+</div>
+
+<!-- ================================================================
+     STATE MACHINE
+     Implements §3 state enum and transitions.
+     Logs would-be backend calls to console per §9 turn kinds.
+     ================================================================ -->
+<script>
+(function () {
+  'use strict';
+
+  /* --- element refs --- */
+  const shell        = document.getElementById('shell');
+  const thread       = document.getElementById('thread');
+  const thinking     = document.getElementById('thinking');
+  const cardBody     = document.getElementById('card-body');
+  const cardGov      = document.getElementById('card-gov');
+  const cardBlocked  = document.getElementById('card-blocked');
+  const insertion    = document.getElementById('doc-insertion');
+  const receiptsStrip = document.getElementById('receipts-strip');
+  const receiptsEmpty = document.getElementById('receipts-empty');
+  const composerInput = document.getElementById('composer-input');
+  const btnSend      = document.getElementById('btn-send');
+  const btnApply     = document.getElementById('btn-apply');
+  const btnDiscard   = document.getElementById('btn-discard');
+  const btnQueue     = document.getElementById('btn-queue');
+  const btnDiscardGov = document.getElementById('btn-discard-gov');
+  const btnAck       = document.getElementById('btn-ack');
+  const btnUndo      = document.getElementById('btn-undo');
+  const btnCancel    = document.getElementById('btn-cancel');
+  const provState    = document.getElementById('prov-state-label');
+  const provTurns    = document.getElementById('prov-turns');
+  const turnCount    = document.getElementById('turn-count');
+
+  /* --- state --- */
+  let state       = 'idle';
+  let turns       = 14;
+  let lastApplied = null;
+
+  /* --- state machine --- */
+  function setState(s) {
+    state = s;
+    shell.dataset.suggestionState = s;
+    provState.textContent = s;
+
+    // map to CSS-friendly alias
+    const cssState = {
+      'idle':                    'idle',
+      'thinking':                'thinking',
+      'suggestion-staged:body':  'staged-body',
+      'suggestion-staged:gov':   'staged-gov',
+      'apply-pending':           'pending-apply',
+      'governance-pending':      'pending-gov',
+      'applied':                 'applied',
+      'discarded':               'discarded',
+      'blocked':                 'blocked',
+    }[s] || s;
+    shell.dataset.suggestionState = cssState;
+
+    // composer enablement: enabled only in idle
+    const composerEnabled = s === 'idle';
+    composerInput.disabled = !composerEnabled;
+    btnSend.disabled = !composerEnabled;
+    composerInput.placeholder = {
+      'idle':                   'Message Hugin…',
+      'thinking':               'Hugin is thinking…',
+      'suggestion-staged:body': 'Apply or discard to continue',
+      'suggestion-staged:gov':  'Queue or discard to continue',
+      'apply-pending':          'Applying edit…',
+      'governance-pending':     'Routing to governance…',
+      'applied':                'Message Hugin…',
+      'discarded':              'Message Hugin…',
+      'blocked':                'Canvas disabled in this environment',
+    }[s] || 'Message Hugin…';
+
+    console.log('[canvas-shell] state →', s);
+  }
+
+  function logTurn(kind, fields) {
+    turns += 1;
+    turnCount.textContent = turns + ' turns';
+    provTurns.textContent = turns;
+    const entry = { ts: new Date().toISOString(), kind, ...fields };
+    console.log('[session-log:append_turn]', entry);
+  }
+
+  /* --- lane switcher (demo only) --- */
+  function setTab(tab) {
+    document.querySelectorAll('[role="tab"][data-tab]').forEach(t => {
+      t.setAttribute('aria-selected', t.dataset.tab === tab ? 'true' : 'false');
+      t.style.borderBottomColor = t.dataset.tab === tab ? 'var(--cyan)' : 'transparent';
+      t.style.color = t.dataset.tab === tab ? 'var(--cyan)' : '';
+    });
+
+    // reset card states first
+    cardBody.style.display    = 'none';
+    cardGov.style.display     = 'none';
+    cardBlocked.style.display = 'none';
+    thinking.style.display    = 'none';
+    thinking.dataset.thinking = 'inactive';
+
+    if (tab === 'body') {
+      cardBody.style.display = 'flex';
+      cardBody.dataset.variant = 'body';
+      cardBody.querySelector('.card-label').textContent = 'HUGIN · PROPOSED ADDITION';
+      cardBody.querySelector('.card-actions').style.display = 'flex';
+      btnApply.disabled = false;
+      btnDiscard.disabled = false;
+      insertion.style.display = 'block';
+      insertion.dataset.state = 'staged';
+      insertion.removeAttribute('data-receipt');
+      btnUndo.disabled = lastApplied === null;
+      setState('suggestion-staged:body');
+
+    } else if (tab === 'gov') {
+      cardGov.style.display = 'flex';
+      insertion.style.display = 'none';
+      setState('suggestion-staged:gov');
+
+    } else if (tab === 'blocked') {
+      cardBlocked.style.display = 'flex';
+      insertion.style.display = 'none';
+      setState('blocked');
+
+    } else if (tab === 'thinking') {
+      thinking.style.display = 'inline-flex';
+      thinking.dataset.thinking = 'active';
+      insertion.style.display = 'block';
+      insertion.dataset.state = 'staged';
+      setState('thinking');
+
+    } else { // idle
+      insertion.style.display = 'none';
+      setState('idle');
+    }
+  }
+
+  document.querySelectorAll('[role="tab"][data-tab]').forEach(t => {
+    t.addEventListener('click', () => setTab(t.dataset.tab));
+  });
+
+  /* --- BODY LANE: apply --- */
+  btnApply.addEventListener('click', () => {
+    setState('apply-pending');
+    btnApply.disabled = true;
+    btnDiscard.disabled = true;
+    thinking.style.display = 'inline-flex';
+    thinking.dataset.thinking = 'active';
+    thinking.querySelector('.thinking-cancel').style.display = 'none';
+    thinking.querySelector('span').textContent = 'CANVAS_WRITER';
+
+    console.log('[canvas_writer.apply_edit]', {
+      session_id: 's_4f81',
+      suggestion_id: 'suggestion-001',
+      note_path: 'Projects/Q2-arch.md',
+    });
+
+    setTimeout(() => {
+      thinking.style.display = 'none';
+      thinking.querySelector('.thinking-cancel').style.display = '';
+      thinking.querySelector('span').textContent = 'HUGIN';
+
+      const receiptId = 'body_edit#a' + Math.random().toString(16).slice(2, 6);
+      lastApplied = receiptId;
+
+      // flip in-document marker to applied
+      insertion.dataset.state = 'applied';
+      insertion.setAttribute('data-receipt', receiptId);
+
+      // collapse rail card to one-line log
+      cardBody.dataset.variant = 'applied';
+      cardBody.querySelector('.card-label').textContent = '✓ APPLIED · ' + receiptId;
+      cardBody.querySelector('.card-actions').style.display = 'none';
+
+      logTurn('body_edit_applied', {
+        suggestion_id: 'suggestion-001',
+        receipt: receiptId,
+        anchor: '## Current state',
+        note_path: 'Projects/Q2-arch.md',
+      });
+
+      btnUndo.disabled = false;
+      setState('applied');
+      setTimeout(() => setState('idle'), 1400);
+    }, 900);
+  });
+
+  /* --- BODY LANE: discard --- */
+  btnDiscard.addEventListener('click', () => {
+    insertion.dataset.state = 'discarded';
+    cardBody.dataset.variant = 'discarded';
+    cardBody.querySelector('.card-label').textContent = 'DISCARDED · just now';
+    cardBody.querySelector('.card-actions').style.display = 'none';
+    logTurn('body_edit_discarded', { suggestion_id: 'suggestion-001' });
+    setState('discarded');
+    setTimeout(() => setState('idle'), 1400);
+  });
+
+  /* --- BODY LANE: undo --- */
+  btnUndo.addEventListener('click', () => {
+    if (!lastApplied) return;
+    insertion.dataset.state = 'staged';
+    insertion.removeAttribute('data-receipt');
+    cardBody.dataset.variant = 'body';
+    cardBody.querySelector('.card-label').textContent = 'HUGIN · PROPOSED ADDITION';
+    cardBody.querySelector('.card-actions').style.display = 'flex';
+    btnApply.disabled = false;
+    btnDiscard.disabled = false;
+    logTurn('body_edit_undone', { inverse_of: lastApplied });
+    lastApplied = null;
+    btnUndo.disabled = true;
+    setState('suggestion-staged:body');
+  });
+
+  /* --- GOVERNANCE LANE: queue --- */
+  btnQueue.addEventListener('click', () => {
+    setState('governance-pending');
+    btnQueue.disabled = true;
+    btnDiscardGov.disabled = true;
+
+    console.log('[GovernanceRouter.request_governance_action]', {
+      action_type: 'PROMOTE_MATURITY',
+      session_id: 's_4f81',
+      payload: { from: 'draft', to: 'committed', tag_add: ['arch/decision'] },
+    });
+
+    setTimeout(() => {
+      const rid = 'gov#' + Math.random().toString(16).slice(2, 6);
+
+      logTurn('governance_intent_queued', {
+        suggestion_id: 'suggestion-002',
+        action_type: 'PROMOTE_MATURITY',
+        receipt_id: rid,
+      });
+
+      // add receipt pill inline
+      const pillInline = document.createElement('span');
+      pillInline.className = 'receipt-pill';
+      pillInline.setAttribute('data-testid', 'receipt-pill');
+      pillInline.setAttribute('data-receipt-id', rid);
+      pillInline.setAttribute('data-status', 'queued');
+      pillInline.setAttribute('data-intent', 'governance.openReceipt');
+      pillInline.setAttribute('aria-label', 'Governance receipt ' + rid + ', queued. Open in Panel.');
+      pillInline.innerHTML = '<span class="recdot"></span>queued · ' + rid + ' · PROMOTE_MATURITY · open in panel ›';
+      thread.appendChild(pillInline);
+
+      // add to receipts strip
+      receiptsEmpty.style.display = 'none';
+      const pillStrip = pillInline.cloneNode(true);
+      receiptsStrip.appendChild(pillStrip);
+
+      // collapse gov card
+      cardGov.dataset.variant = 'applied';
+      cardGov.querySelector('.card-label').textContent = '✓ QUEUED · ' + rid;
+      const classEl = cardGov.querySelector('.card-classification');
+      if (classEl) classEl.textContent = 'awaiting governance review in AI Panel';
+      cardGov.querySelector('.card-actions').style.display = 'none';
+
+      setState('idle');
+    }, 700);
+  });
+
+  /* --- GOVERNANCE LANE: discard --- */
+  btnDiscardGov.addEventListener('click', () => {
+    cardGov.dataset.variant = 'discarded';
+    cardGov.querySelector('.card-label').textContent = 'DISCARDED · just now';
+    cardGov.querySelector('.card-actions').style.display = 'none';
+    logTurn('governance_intent_discarded', { suggestion_id: 'suggestion-002' });
+    setState('discarded');
+    setTimeout(() => setState('idle'), 1400);
+  });
+
+  /* --- BLOCKED: acknowledge --- */
+  btnAck.addEventListener('click', () => {
+    logTurn('governance_intent_blocked', {
+      suggestion_id: 'suggestion-003',
+      action_type: 'PROMOTE_MATURITY',
+      reason: 'CANVAS_ENABLED=0',
+    });
+    cardBlocked.style.opacity = '0.5';
+    btnAck.disabled = true;
+    setTimeout(() => setState('idle'), 2000);
+  });
+
+  /* --- CANCEL thinking --- */
+  btnCancel.addEventListener('click', () => {
+    thinking.style.display = 'none';
+    thinking.dataset.thinking = 'inactive';
+    setState('idle');
+  });
+
+  /* --- Rail collapse toggle --- */
+  document.getElementById('collapsed-strip').addEventListener('click', () => {
+    shell.dataset.railState = 'expanded';
+  });
+
+  /* --- Keyboard shortcuts — bound only in staged states (§11) --- */
+  document.addEventListener('keydown', (e) => {
+    if (e.target === composerInput) return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+    if (state === 'suggestion-staged:body') {
+      if (e.key === 'a' || e.key === 'A') { e.preventDefault(); btnApply.click(); }
+      if (e.key === 'd' || e.key === 'D') { e.preventDefault(); btnDiscard.click(); }
+      if (e.key === 'i' || e.key === 'I') { e.preventDefault(); console.log('[suggestion.inspect] diff expansion — UI-only'); }
+      if (e.key === 'e' || e.key === 'E') { e.preventDefault(); console.log('[suggestion.edit] inline edit before apply — UI-only'); }
+    } else if (state === 'suggestion-staged:gov') {
+      if (e.key === 'q' || e.key === 'Q') { e.preventDefault(); btnQueue.click(); }
+      if (e.key === 'd' || e.key === 'D') { e.preventDefault(); btnDiscardGov.click(); }
+      if (e.key === 'i' || e.key === 'I') { e.preventDefault(); console.log('[suggestion.inspect] classification rationale — UI-only'); }
+    }
+  });
+
+  /* --- Portrait bottom-sheet behavior --- */
+  function applySheetSnap(snap) {
+    const rail = document.getElementById('rail');
+    if (!rail) return;
+    rail.dataset.sheet = snap;
+    try { sessionStorage.setItem('canvas-sheet-' + shell.dataset.sessionId, snap); } catch (_) {}
+  }
+
+  function initSheet() {
+    const saved = (() => {
+      try { return sessionStorage.getItem('canvas-sheet-' + shell.dataset.sessionId); } catch (_) { return null; }
+    })();
+    applySheetSnap(saved || 'peek');
+  }
+
+  // auto-snap to half when a proposal arrives in portrait
+  function onProposalArrived() {
+    if (window.matchMedia('(max-width: 899px)').matches) {
+      applySheetSnap('half');
+    }
+  }
+
+  // hook proposal arrival to auto-snap
+  const _origSetState = setState;
+  function setState(s) {
+    _origSetState(s);
+    if (s === 'suggestion-staged:body' || s === 'suggestion-staged:gov') {
+      onProposalArrived();
+    }
+  }
+
+  initSheet();
+
+  /* --- initial state --- */
+  setTab('body');
+
+})();
+</script>
+
+</body>
+</html>
