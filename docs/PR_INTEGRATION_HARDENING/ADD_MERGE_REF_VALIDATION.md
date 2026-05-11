@@ -67,10 +67,12 @@ Declaring a PR ready based only on branch HEAD is insufficient when the merge-re
 
 ## Acceptance Criteria
 
-- [ ] `.codex/skills/pr-integration/SKILL.md` contains a merge-ref validation section, labeled `[merge-ref-validation]`, after the review-fix push section.
+- [x] `.codex/skills/pr-integration/SKILL.md` contains a merge-ref validation section, labeled `[merge-ref-validation]`, after the review-fix push section.
   Verify: doc writeback at `.codex/skills/pr-integration/SKILL.md :: merge-ref-validation`
-- [ ] The section specifies: fetch `refs/pull/<PR>/merge`, inspect touched symbols in that tree, run at least one target test against it, and block on failure.
+- [x] The section specifies: fetch `refs/pull/<PR>/merge`, inspect touched symbols in that tree, run at least one target test against it, and block on failure.
   Verify: doc writeback at `.codex/skills/pr-integration/SKILL.md :: merge-ref-validation`
+
+Delivered by PR #861 (merged 2026-05-11).
 
 ## How to Verify (Pre-Merge)
 
