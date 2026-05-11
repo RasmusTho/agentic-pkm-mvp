@@ -467,7 +467,7 @@ Branch HEAD may be clean while the merge-ref carries a divergent context that ca
 
 ```bash
 PR_NUMBER=<PR_NUMBER>
-git fetch origin refs/pull/${PR_NUMBER}/merge:refs/merge_validation
+git fetch origin +refs/pull/${PR_NUMBER}/merge:refs/merge_validation
 
 # Inspect touched symbols using git show — do NOT checkout into the active worktree
 git show refs/merge_validation:app/<changed_module>.py | grep -n "<changed_symbol>"
@@ -481,7 +481,9 @@ Do not use `git checkout refs/merge_validation -- .`: that mutates the active wo
 MERGE_WORKTREE=$(mktemp -d)
 git worktree add --detach "$MERGE_WORKTREE" refs/merge_validation
 (cd "$MERGE_WORKTREE" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/<relevant_test_file>.py -k "<key_test>")
+SMOKE_EXIT=$?
 git worktree remove --force "$MERGE_WORKTREE"
+[ $SMOKE_EXIT -ne 0 ] && echo "❌ Merge-ref smoke test failed (exit $SMOKE_EXIT)" && exit $SMOKE_EXIT
 ```
 
 **If the symbol is absent in the merge-ref or any test fails:**
