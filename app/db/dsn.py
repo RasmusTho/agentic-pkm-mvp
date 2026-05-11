@@ -3,14 +3,14 @@ import typing as t
 
 
 def resolve_dsn(conninfo: t.Optional[str] = None) -> str:
-    url = (conninfo or os.getenv("DATABASE_URL", "")).strip()
+    url = (conninfo or os.getenv("DATABASE_URL") or os.getenv("DB_DSN") or "").strip()
     if url.startswith("postgresql+psycopg://"):
         url = "postgresql://" + url.split("postgresql+psycopg://", 1)[1]
     return url
 
 
 def resolve_sqlalchemy_url(conninfo: t.Optional[str] = None) -> str:
-    url = (conninfo or os.getenv("DATABASE_URL", "")).strip()
+    url = (conninfo or os.getenv("DATABASE_URL") or os.getenv("DB_DSN") or "").strip()
     if not url:
         return ""
     if url.startswith("postgresql+psycopg://"):
