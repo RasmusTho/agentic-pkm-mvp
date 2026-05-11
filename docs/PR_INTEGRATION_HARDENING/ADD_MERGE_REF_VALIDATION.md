@@ -98,6 +98,4 @@ Confirm the section appears after any review-fix section and before the exit-con
 
 ## Related GitHub Issues
 
-Create one bounded governance issue: `[PR-Integration-Hardening] add-merge-ref-validation: verify merge-ref tree after review-fix push`.
-Label: `lane:governance`, `agent:ready`, `Status=Ready`.
-Sequence after PIH-02 issue closes to avoid `pr-integration/SKILL.md` diff conflicts.
+Delivered. Governing issue: [#838](https://github.com/RasmusTho/agentic-pkm-mvp/issues/838) — closed by PR [#861](https://github.com/RasmusTho/agentic-pkm-mvp/pull/861) (merged 2026-05-11). No further issue creation needed.
