@@ -86,9 +86,9 @@ Do not use `git add -A` or `git add .`—stage only intended files.
 
 ### Branch-Truth Gate — Pre-Commit (mandatory before Step 4) [branch-truth-gate]
 
-For multi-agent parallel work, a dedicated per-issue worktree (via `git worktree add`) is mandatory for the full issue lifecycle — from initial implementation through every review-fix push. Do NOT commit to an active PR from the shared root worktree.
+**Worktree policy (doctrinal):** For multi-agent parallel work, a dedicated per-issue worktree (via `git worktree add`) is mandatory for the full issue lifecycle — from initial implementation through every review-fix push. Do NOT commit to an active PR from the shared root worktree. This mandate is enforced by policy; the branch-name check below does not verify worktree isolation.
 
-Verify the branch context before committing:
+**Branch-name check (scriptable):** Verify the branch context before committing:
 
 ```bash
 EXPECTED_BRANCH="<branch-name from Step 2>"
