@@ -24,7 +24,7 @@ Scope boundary: this spec covers the UI state machine, component contracts, inte
 The Canvas Suggestion Flow operates within the companion UI overlay surface (margin rail, portrait bottom sheet). It augments the active document — the document pane remains the primary cognitive anchor.
 
 - **Design reference:** `companion-ui/design_handoff/2026-05-11-canvas-suggestion-flow/` — 14-section Claude Design handoff. Use for visual intent, rationale, and edge-case notes. Not an implementation contract by itself.
-- **Staging prototype:** `companion-ui/companion-app/canvas_suggestion_flow.html` — interactive browser demo, no network side effects, no durable mutations. Explicitly non-production.
+- **Staging prototype:** `companion-ui/companion-app/canvas_suggestion_flow.html` — interactive browser demo, no network side effects, no durable mutations. Not production runtime. Explicitly non-production until formally promoted.
 - **Implementation contract:** this file (`CANVAS_SUGGESTION_FLOW.md`) — the normalized spec that implementation issues reference.
 
 ---
