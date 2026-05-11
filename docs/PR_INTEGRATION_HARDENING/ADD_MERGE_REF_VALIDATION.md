@@ -67,10 +67,12 @@ Declaring a PR ready based only on branch HEAD is insufficient when the merge-re
 
 ## Acceptance Criteria
 
-- [ ] `.codex/skills/pr-integration/SKILL.md` contains a merge-ref validation section, labeled `[merge-ref-validation]`, after the review-fix push section.
+- [x] `.codex/skills/pr-integration/SKILL.md` contains a merge-ref validation section, labeled `[merge-ref-validation]`, after the review-fix push section.
   Verify: doc writeback at `.codex/skills/pr-integration/SKILL.md :: merge-ref-validation`
-- [ ] The section specifies: fetch `refs/pull/<PR>/merge`, inspect touched symbols in that tree, run at least one target test against it, and block on failure.
+- [x] The section specifies: fetch `refs/pull/<PR>/merge`, inspect touched symbols in that tree, run at least one target test against it, and block on failure.
   Verify: doc writeback at `.codex/skills/pr-integration/SKILL.md :: merge-ref-validation`
+
+Delivered by PR #861 (merged 2026-05-11).
 
 ## How to Verify (Pre-Merge)
 
@@ -96,6 +98,4 @@ Confirm the section appears after any review-fix section and before the exit-con
 
 ## Related GitHub Issues
 
-Create one bounded governance issue: `[PR-Integration-Hardening] add-merge-ref-validation: verify merge-ref tree after review-fix push`.
-Label: `lane:governance`, `agent:ready`, `Status=Ready`.
-Sequence after PIH-02 issue closes to avoid `pr-integration/SKILL.md` diff conflicts.
+Delivered. Governing issue: [#838](https://github.com/RasmusTho/agentic-pkm-mvp/issues/838) — closed by PR [#861](https://github.com/RasmusTho/agentic-pkm-mvp/pull/861) (merged 2026-05-11). No further issue creation needed.

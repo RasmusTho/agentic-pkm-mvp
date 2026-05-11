@@ -45,19 +45,19 @@ No two tasks may be worked in parallel. Each must merge before the next is picke
 | Task | Issue |
 |---|---|
 | Parent feature | [#835](https://github.com/RasmusTho/agentic-pkm-mvp/issues/835) |
-| PIH-01: Add Plugin Load Guard | [#836](https://github.com/RasmusTho/agentic-pkm-mvp/issues/836) — `agent:ready` |
-| PIH-02: Add Branch Truth Gate | [#837](https://github.com/RasmusTho/agentic-pkm-mvp/issues/837) — `agent:ready` |
-| PIH-03: Add Merge-Ref Validation | [#838](https://github.com/RasmusTho/agentic-pkm-mvp/issues/838) — blocked on #837 |
+| PIH-01: Add Plugin Load Guard | [#836](https://github.com/RasmusTho/agentic-pkm-mvp/issues/836) — merged |
+| PIH-02: Add Branch Truth Gate | [#837](https://github.com/RasmusTho/agentic-pkm-mvp/issues/837) — merged |
+| PIH-03: Add Merge-Ref Validation | [#838](https://github.com/RasmusTho/agentic-pkm-mvp/issues/838) — merged (PR [#861](https://github.com/RasmusTho/agentic-pkm-mvp/pull/861), 2026-05-11) |
 
 ## Acceptance criteria
 
-- [ ] `docs/TESTING.md` contains a caution about explicit plugin loading under `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`.
+- [x] `docs/TESTING.md` contains a caution about explicit plugin loading under `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`.
   Verify: doc writeback at `docs/TESTING.md :: plugin-load-guard`
-- [ ] `pr-integration/SKILL.md` contains a CI triage note about plugin-provided flags requiring explicit load.
+- [x] `pr-integration/SKILL.md` contains a CI triage note about plugin-provided flags requiring explicit load.
   Verify: doc writeback at `.codex/skills/pr-integration/SKILL.md :: plugin-load-guard`
-- [ ] `issue-to-code/SKILL.md` contains a branch-truth gate step before any commit action.
+- [x] `issue-to-code/SKILL.md` contains a branch-truth gate step before any commit action.
   Verify: doc writeback at `.codex/skills/issue-to-code/SKILL.md :: branch-truth-gate`
-- [ ] `pr-integration/SKILL.md` contains a merge-ref fetch-and-verify step after review-fix pushes.
+- [x] `pr-integration/SKILL.md` contains a merge-ref fetch-and-verify step after review-fix pushes.
   Verify: doc writeback at `.codex/skills/pr-integration/SKILL.md :: merge-ref-validation`
 - [ ] `docs/learning-log.md` retro marker appended after all three tasks merge.
   Verify: retro marker entry in `docs/learning-log.md` referencing this capability.
