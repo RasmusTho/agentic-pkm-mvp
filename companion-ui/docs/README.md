@@ -13,6 +13,9 @@ Foundational documents for cognitive interaction architecture.
 - `FUTURE_RESEARCH.md`
 - `DESIGN_BRIEF.md` (preserved source brief)
 
+## Feature implementation specs
+- `CANVAS_SUGGESTION_FLOW.md` — normalized implementation spec for the Canvas Suggestion Flow: state machine, component inventory, intent vocabulary, backend mapping, invariants. Derived from design handoff `companion-ui/design_handoff/2026-05-11-canvas-suggestion-flow/`. Implementation contracts for #868–#874.
+
 ## Cognitive architecture consolidation set
 - `TEMPORAL_COGNITION.md`
 - `COGNITIVE_TRAJECTORIES.md`
