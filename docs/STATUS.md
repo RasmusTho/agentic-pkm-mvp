@@ -214,3 +214,35 @@ Target delivery model:
 - agents = execution layer
 - PR = implementation artifact
 - CI = validation gate
+
+## Documentation follow-up (2026-05-12)
+
+The cognitive prosthesis documentation spine added on 2026-05-12 introduces:
+
+- `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — product thesis.
+- `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md` — human-flow to runtime bridge.
+- `docs/READING_PATHS.md` — practical reading paths.
+
+These docs frame intent; they do not change runtime behavior and do not assert that all
+target-state capabilities are implemented. The following companion docs are *recommended
+follow-up PRs* — they are **not** delivered by the spine PR and should be authored later when
+their owning surface needs the contract:
+
+- `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` — bounded, inspectable agent memory
+  and its relationship to human-authored knowledge.
+- `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` — what a context bundle is, how it is assembled,
+  and what it must carry as provenance.
+- `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md` — consolidating contract over vault layout,
+  catalog projection, context/artifact dimensions, and persistence-surface separation; should
+  reference rather than duplicate `docs/CONCEPTS/CATALOG_PROJECTION_PRINCIPLES.md`,
+  `docs/CONCEPTS/CONTEXT_AND_ARTIFACT_DIMENSIONS.md`, and the
+  `docs/SEPARATING_PERSISTENCE_SURFACES/` spec.
+- `docs/COMPANION_UI_PRODUCT_SPEC.md` — companion UI product spec defining the Find/Reorient/
+  Resurface/Act product model while preserving Panel/Chat/Automation as the canonical authority
+  surfaces.
+
+These follow-ups are not implemented by the spine PR and should be picked up via the normal
+docs-authoring or docs-to-issue path when scheduled.
+
+Update (2026-05-12): `docs/COMPANION_UI_PRODUCT_SPEC.md` is now added in this docs-only PR.
+It is a target-state product specification and does not change runtime behavior.
