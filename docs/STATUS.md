@@ -236,8 +236,12 @@ their owning surface needs the contract:
   reference rather than duplicate `docs/CONCEPTS/CATALOG_PROJECTION_PRINCIPLES.md`,
   `docs/CONCEPTS/CONTEXT_AND_ARTIFACT_DIMENSIONS.md`, and the
   `docs/SEPARATING_PERSISTENCE_SURFACES/` spec.
-- `docs/COMPANION_UI_PRODUCT_SPEC.md` — companion UI product spec consolidating Chat, Panel,
-  Canvas, and rail surfaces under the charter.
+- `docs/COMPANION_UI_PRODUCT_SPEC.md` — companion UI product spec defining the Find/Reorient/
+  Resurface/Act product model while preserving Panel/Chat/Automation as the canonical authority
+  surfaces.
 
 These follow-ups are not implemented by the spine PR and should be picked up via the normal
 docs-authoring or docs-to-issue path when scheduled.
+
+Update (2026-05-12): `docs/COMPANION_UI_PRODUCT_SPEC.md` is now added in this docs-only PR.
+It is a target-state product specification and does not change runtime behavior.

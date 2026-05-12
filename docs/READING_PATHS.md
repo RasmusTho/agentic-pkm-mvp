@@ -53,11 +53,11 @@ defines intent; later docs add detail.
 
 ## Changing companion UI
 
-1. `docs/CANVAS_CHAT_SURFACE/README.md` — canvas/chat surface design.
-2. `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md` — authority boundaries between Chat, Panel, and Canvas.
-3. `docs/HUMAN-FLOWS.md` — flows the surface serves.
-4. `companion-ui/` source and design handoffs — current implementation surface.
-5. `docs/STATUS.md` — what has shipped.
+1. `docs/COMPANION_UI_PRODUCT_SPEC.md` — Companion UI product shell and mode model.
+2. `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` — context-bundle contract used across modes.
+3. `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` — memory/knowledge boundary and promotion posture.
+4. `docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md` — canonical authority surfaces (Panel, Chat, Automation).
+5. `docs/FINDING_AND_REORIENTING/README.md` — find/orient/resurface capability boundary.
 
 ## Changing vault topology / persistence surfaces
 
