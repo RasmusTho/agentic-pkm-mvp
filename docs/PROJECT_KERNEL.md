@@ -4,6 +4,8 @@ Authority: Product-kernel contract for purpose, principles, and long-lived stabi
 
 # PROJECT_KERNEL — agentic-pkm-mvp
 
+> Product-level thesis: see `docs/COGNITIVE_PROSTHESIS_CHARTER.md` for the framing of Yggdrasil as a local-first cognitive prosthesis, second-brain environment, and governed memory/runtime substrate for agents. This kernel holds the stability contracts that thesis depends on.
+
 ## 1. North Star
 
 **Purpose.** Build a local-first, cross-platform (macOS + Windows) human-first cognitive work environment that helps a human capture, recall, create, learn, reflect, manage commitments, and ship work across distinct life spheres and contexts without giving up authorship, privacy, contextual integrity, or control. The human writing surface stays canonical; automation operates through explicit, auditable intents and produces reversible changes. The system treats both the writing surface and the retention surface for source-rich material (media, docs, projects, hobby material, and other source artifacts) as first-class cognitive surfaces, with clear boundaries for trust and exposure. Central human artifacts must remain understandable beyond the lifespan of any one implementation.
