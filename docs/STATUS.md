@@ -230,8 +230,11 @@ their owning surface needs the contract:
   and its relationship to human-authored knowledge.
 - `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` — what a context bundle is, how it is assembled,
   and what it must carry as provenance.
-- `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md` — vault layout, catalog projection, and
-  persistence-surface separation as a single contract surface.
+- `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md` — consolidating contract over vault layout,
+  catalog projection, context/artifact dimensions, and persistence-surface separation; should
+  reference rather than duplicate `docs/CONCEPTS/CATALOG_PROJECTION_PRINCIPLES.md`,
+  `docs/CONCEPTS/CONTEXT_AND_ARTIFACT_DIMENSIONS.md`, and the
+  `docs/SEPARATING_PERSISTENCE_SURFACES/` spec.
 - `docs/COMPANION_UI_PRODUCT_SPEC.md` — companion UI product spec consolidating Chat, Panel,
   Canvas, and rail surfaces under the charter.
 
