@@ -28,6 +28,8 @@ The canonical interaction surfaces are **Panel**, **Chat**, and **Automation**
 (`docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md`).
 The Companion UI is the product/UI shell that *hosts* those surfaces, not a fourth surface;
 where the "Surface" column mentions Companion UI it refers to the hosting shell.
+For the product-mode interpretation of this shell (Find, Reorient, Resurface, Act), see
+`docs/COMPANION_UI_PRODUCT_SPEC.md`.
 
 ## Mapping
 
