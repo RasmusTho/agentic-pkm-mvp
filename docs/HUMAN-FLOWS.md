@@ -35,6 +35,29 @@ For the broader ontology of the system as a second-brain environment, see:
 - `docs/plans/USER_STORIES_AND_REQUIREMENTS.md`
 - `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md`
 
+## 0. Product thesis: cognitive prosthesis, second brain, and agent memory
+
+Yggdrasil is three things at once, held together by design:
+
+- **A cognitive prosthesis for the human.** It supports cognitive functions a human cannot
+  reliably do unaided — durable capture, reorientation, retrieval, commitment tracking,
+  reflection, source-anchored interpretation — without taking authorship away.
+- **A second-brain environment.** Human-authored Markdown artifacts in the vault are the
+  primary durable knowledge surface, meant to remain readable and editable directly, with or
+  without the system running.
+- **A governed memory and runtime substrate for agents.** System agents act as bounded
+  delegates over the vault and over supporting machine surfaces (databases, indexes, events,
+  receipts), under explicit authority contracts. Their memory and writes are first-class
+  inspectable objects, not hidden model state.
+
+Runtime behavior — watchers, indexes, agents, APIs — remains subordinate to human-readable
+artifacts and to the authority contracts that govern machine action. When the two come into
+tension, the human-authored surface and the authority contract win.
+
+The full product-level statement of this thesis, including the failure modes that would
+violate it, lives in `docs/COGNITIVE_PROSTHESIS_CHARTER.md`. The bridge from these human flows
+to the runtime substrate lives in `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md`.
+
 ## 1. What the system is meant to do
 
 The system is meant to function as a human-first cognitive work environment.
