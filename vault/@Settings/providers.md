@@ -25,7 +25,11 @@ reranker:
 
 ## Förklaringar & möjliga värden
 <!-- BEGIN:settings:reference -->
+### Reference — Providers
+
 | key | type | default | allowed | description |
 |-----|------|---------|---------|-------------|
-| _pending | _ | _ | _ | Run `python -m app.cli settings compile --auto-heal` to update this table. |
+| `llm` | `Dict` | `PydanticUndefined` | `` | Named chat/LLM providers. |
+| `embedding` | `Dict` | `PydanticUndefined` | `` | Embedding model providers. |
+| `reranker` | `Dict` | `PydanticUndefined` | `` | Cross-encoder/rerank providers. |
 <!-- END:settings:reference -->

@@ -26,7 +26,15 @@ labels: ["agent:qa","stage:answer"]
 
 ## Förklaringar & möjliga värden
 <!-- BEGIN:settings:reference -->
+### Reference — Qa
+
 | key | type | default | allowed | description |
 |-----|------|---------|---------|-------------|
-| _pending | _ | _ | _ | Run `python -m app.cli settings compile --auto-heal` to update this table. |
+| `enable` | `bool` | `True` | `` | Enable this agent. |
+| `dry_run` | `bool` | `False` | `` | Disable writes for this agent. |
+| `timeout_ms` | `int` | `8000` | `100-120000` | Agent-specific timeout in milliseconds. |
+| `labels` | `List` | `PydanticUndefined` | `` | Tag this agent with capability labels. |
+| `search_k` | `int` | `8` | `` | Documents retrieved before filtering. |
+| `context_docs` | `int` | `5` | `` | Documents kept in the final answer context. |
+| `llm` | `QaLLMSettings` | `PydanticUndefined` | `` |  |
 <!-- END:settings:reference -->

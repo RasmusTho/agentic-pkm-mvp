@@ -27,7 +27,18 @@ labels: ["agent:classifier","stage:ingest"]
 
 ## Förklaringar & möjliga värden
 <!-- BEGIN:settings:reference -->
+### Reference — Classifier
+
 | key | type | default | allowed | description |
 |-----|------|---------|---------|-------------|
-| _pending | _ | _ | _ | Run `python -m app.cli settings compile --auto-heal` to update this table. |
+| `enable` | `bool` | `True` | `` | Enable this agent. |
+| `dry_run` | `bool` | `False` | `` | Disable writes for this agent. |
+| `timeout_ms` | `int` | `8000` | `100-120000` | Agent-specific timeout in milliseconds. |
+| `labels` | `List` | `PydanticUndefined` | `` | Tag this agent with capability labels. |
+| `min_confidence` | `float` | `0.5` | `` | Minimum confidence for positive classifications. |
+| `retry_policy` | `RetryPolicy` | `PydanticUndefined` | `` |  |
+| `model` | `Optional` | `` | `` | Preferred LLM model for classifier prompts. |
+| `embedding` | `Optional` | `` | `` | Embedding provider override. |
+| `reranker` | `Optional` | `` | `` | Reranker provider override. |
+| `rules` | `Dict` | `PydanticUndefined` | `` | Additional policy flags for classifier runs. |
 <!-- END:settings:reference -->

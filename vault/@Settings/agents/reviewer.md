@@ -24,7 +24,15 @@ labels: ["agent:reviewer","stage:curation"]
 
 ## Förklaringar & möjliga värden
 <!-- BEGIN:settings:reference -->
+### Reference — Reviewer
+
 | key | type | default | allowed | description |
 |-----|------|---------|---------|-------------|
-| _pending | _ | _ | _ | Run `python -m app.cli settings compile --auto-heal` to update this table. |
+| `enable` | `bool` | `True` | `` | Enable this agent. |
+| `dry_run` | `bool` | `False` | `` | Disable writes for this agent. |
+| `timeout_ms` | `int` | `8000` | `100-120000` | Agent-specific timeout in milliseconds. |
+| `labels` | `List` | `PydanticUndefined` | `` | Tag this agent with capability labels. |
+| `threshold` | `float` | `0.75` | `` | Score threshold to auto-approve. |
+| `escalation_channel` | `str` | `audit` | `` | Audit or notification channel for escalations. |
+| `rules` | `ReviewerRules` | `PydanticUndefined` | `` |  |
 <!-- END:settings:reference -->
