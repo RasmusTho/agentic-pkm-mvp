@@ -1,7 +1,7 @@
 """
 Companion note service — system-owned identity file per vault note.
 
-Path: vault/_system/companions/<uuid>.md
+Path: vault/<system_dir>/companions/<uuid>.md
 Contract: docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md
 Plan: docs/plans/COMPANION_NOTE_AND_NOTE_CONTEXT.md
 
@@ -10,7 +10,7 @@ Bounded field set (must NOT include review_state, maturity, kind, origin):
   last_ingested, created_by_instance, attachments[],
   identity_history[] (bounded to IDENTITY_HISTORY_MAX entries)
 
-Healing log: vault/_system/heal_log.jsonl — append-only, conservative,
+Healing log: vault/<system_dir>/heal_log.jsonl — append-only, conservative,
   one line per healing event with before/after and reason.
 """
 from __future__ import annotations
@@ -21,10 +21,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.vault.paths import get_vault_system_dir_rel
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
-_COMPANIONS_DIR = Path("_system/companions")
-_HEAL_LOG_PATH = Path("_system/heal_log.jsonl")
+_LEGACY_COMPANIONS_DIR = Path("_system/companions")
+_LEGACY_HEAL_LOG_PATH = Path("_system/heal_log.jsonl")
 
 # Matches ![[...]] embed syntax only — NOT plain [[note]] wiki-links.
 _EMBED_RE = re.compile(r"!\[\[([^\]]+)\]\]")
@@ -100,9 +101,21 @@ class ArtifactIdentity:
 # Path helper
 # ---------------------------------------------------------------------------
 
-def companion_path(uuid: str) -> Path:
-    """Return the vault-relative path for a companion file: _system/companions/<uuid>.md"""
-    return _COMPANIONS_DIR / f"{uuid}.md"
+def _companions_dir(vault_root: Path | None = None) -> Path:
+    if vault_root is None:
+        return _LEGACY_COMPANIONS_DIR
+    return Path(get_vault_system_dir_rel(vault_root)) / "companions"
+
+
+def _heal_log_path(vault_root: Path | None = None) -> Path:
+    if vault_root is None:
+        return _LEGACY_HEAL_LOG_PATH
+    return Path(get_vault_system_dir_rel(vault_root)) / "heal_log.jsonl"
+
+
+def companion_path(uuid: str, vault_root: Path | None = None) -> Path:
+    """Return the vault-relative path for a companion file."""
+    return _companions_dir(vault_root) / f"{uuid}.md"
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +124,7 @@ def companion_path(uuid: str) -> Path:
 
 def read_companion(vault_root: Path, uuid: str) -> CompanionNote | None:
     """Read companion note for uuid. Returns None if missing or unparseable."""
-    path = vault_root / companion_path(uuid)
+    path = vault_root / companion_path(uuid, vault_root)
     if not path.exists():
         return None
     try:
@@ -124,7 +137,7 @@ def read_companion(vault_root: Path, uuid: str) -> CompanionNote | None:
 
 def write_companion(vault_root: Path, companion: CompanionNote) -> None:
     """Write companion note to disk. Creates parent directories as needed."""
-    path = vault_root / companion_path(companion.uuid)
+    path = vault_root / companion_path(companion.uuid, vault_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = _companion_to_fm(companion)
     content = dump_frontmatter(fm, "")
@@ -137,7 +150,7 @@ def write_companion(vault_root: Path, companion: CompanionNote) -> None:
 
 def find_companion_by_content_hash(vault_root: Path, sha256: str) -> CompanionNote | None:
     """Scan all companions for one whose content_hash matches sha256."""
-    companions_dir = vault_root / _COMPANIONS_DIR
+    companions_dir = vault_root / _companions_dir(vault_root)
     if not companions_dir.exists():
         return None
     for cand in companions_dir.glob("*.md"):
@@ -235,7 +248,7 @@ def repair_companion(
     Conservative repair: valid existing fields are preserved; only missing/invalid
     required fields are filled with safe defaults.  Always writes the result to disk.
     """
-    path = vault_root / companion_path(uuid)
+    path = vault_root / companion_path(uuid, vault_root)
     existing_fm: dict = {}
 
     if path.exists():

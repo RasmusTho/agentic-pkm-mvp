@@ -29,6 +29,15 @@ def test_export_runtime_env_emits_uid_gid(tmp_path: Path) -> None:
     assert re.search(r"^LOCAL_GID=\d+$", text, re.M)
 
 
+def test_export_runtime_env_emits_watcher_runtime_env_file(tmp_path: Path) -> None:
+    repo_root, out_path, env = _runtime_env_base(tmp_path)
+
+    subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
+
+    text = out_path.read_text(encoding="utf-8")
+    assert f"WATCHER_RUNTIME_ENV_FILE={out_path}\n" in text
+
+
 def test_export_runtime_env_derives_ollama_host_from_ollama_url(tmp_path: Path) -> None:
     repo_root, out_path, env = _runtime_env_base(tmp_path)
     env["LLM_PROVIDER"] = "ollama"

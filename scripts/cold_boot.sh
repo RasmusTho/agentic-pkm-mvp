@@ -5,7 +5,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 startup_status_path="$ROOT/tmp/startup_status.json"
-runtime_env_path="${RUNTIME_ENV_PATH:-tmp/runtime.env}"
+runtime_env_path="${RUNTIME_ENV_PATH:-}"
+if [ -z "$runtime_env_path" ]; then
+  case "${COMPOSE_PROJECT_NAME:-}" in
+    pkm-test) runtime_env_path="tmp-test/runtime.env" ;;
+    *) runtime_env_path="tmp/runtime.env" ;;
+  esac
+fi
 
 log() {
   printf "[cold-start] %s\n" "$*"

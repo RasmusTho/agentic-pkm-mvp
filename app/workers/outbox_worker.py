@@ -200,6 +200,37 @@ def _maybe_heal_uuid(note_path: Path, vault_root: Path) -> str:
             return ""
 
     return ""
+
+
+def _ensure_uuid_with_backoff(note_path: Path) -> str:
+    max_attempts = 5
+    base_sleep = 0.2
+
+    for attempt in range(max_attempts):
+        try:
+            healed = ensure_note_uuid(note_path)
+            if healed:
+                logger.info("ensured uuid for note note_path=%s", note_path)
+            return healed
+        except OSError as exc:
+            if exc.errno in {errno.EPERM, errno.EACCES, errno.EROFS}:
+                if attempt + 1 < max_attempts:
+                    time.sleep(base_sleep * (2**attempt))
+                    continue
+                _warn_once(
+                    f"uuid_ensure_perm:{note_path}",
+                    "uuid ensure skipped (permission) note_path=%s errno=%s",
+                    note_path,
+                    exc.errno,
+                )
+                return ""
+            logger.warning("failed to ensure uuid for %s: %s", note_path, exc)
+            return ""
+        except Exception as exc:
+            logger.warning("failed to ensure uuid for %s: %s", note_path, exc)
+            return ""
+
+    return ""
 def _write_markdown_if_changed(note_path: Path, original: str, updated: str) -> bool:
     if original == updated:
         return False
@@ -252,6 +283,10 @@ def _payload_retry_count(payload: Mapping[str, Any]) -> int:
         return max(int(raw), 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _retry_exhausted(payload: Mapping[str, Any]) -> bool:
+    return _payload_retry_count(payload) >= _MAX_TRANSIENT_RETRY_ATTEMPTS
 
 
 def _queue_transient_retry(
@@ -329,6 +364,9 @@ def handle_panel_scan_requested(
             reason="file_unstable",
             trace_id=trace_id,
         ):
+            if _retry_exhausted(payload):
+                logger.warning("panel scan dropped after exhausted retries (file unstable) note_path=%s", note_path)
+                return WorkerPanelSummary(emitted=0, deferred=False)
             raise TransientRetryEnqueueError(f"failed to queue retry for unstable panel note: {note_path}")
         logger.info("panel scan deferred (file unstable) note_path=%s", note_path)
         return WorkerPanelSummary(emitted=0, deferred=True)
@@ -350,6 +388,9 @@ def handle_panel_scan_requested(
             reason="missing_uuid",
             trace_id=trace_id,
         ):
+            if _retry_exhausted(payload):
+                logger.warning("panel scan dropped after exhausted retries (missing uuid) note_path=%s", note_path)
+                return WorkerPanelSummary(emitted=0, deferred=False)
             raise TransientRetryEnqueueError(f"failed to queue retry for missing panel note uuid: {note_path}")
         logger.info("panel scan skipped (missing uuid) note_path=%s", note_path)
         return WorkerPanelSummary(emitted=0, deferred=True)
@@ -436,6 +477,9 @@ def handle_ingest_vault_changed(
             reason="missing_or_unstable_note",
             trace_id=trace_id,
         ):
+            if _retry_exhausted(payload):
+                logger.warning("ingest dropped after exhausted retries note_path=%s", note_path)
+                return WorkerIngestSummary(ingested=0)
             raise TransientRetryEnqueueError(f"failed to queue retry for missing or unstable note: {note_path}")
         logger.warning("ingest skipped (missing note) note_path=%s", note_path)
         return WorkerIngestSummary(ingested=0)
@@ -446,6 +490,11 @@ def handle_ingest_vault_changed(
     note_uuid = _normalize_uuid_value(frontmatter.get("uuid") or frontmatter.get("id"))
     if not note_uuid and healed_uuid:
         note_uuid = healed_uuid
+    if not note_uuid:
+        note_uuid = _ensure_uuid_with_backoff(note_path)
+        if note_uuid:
+            raw_text = _stabilized_note_text(note_path) or raw_text
+            frontmatter, body = load_frontmatter(raw_text)
 
     if not note_uuid:
         logger.debug("note missing uuid after heal attempt note_path=%s", note_path)

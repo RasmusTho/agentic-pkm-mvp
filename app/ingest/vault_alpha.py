@@ -23,6 +23,7 @@ from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
 from app.services.companion_note import (
     CompanionNote,
+    companion_path,
     read_companion,
     scan_attachments,
     write_companion,
@@ -629,7 +630,7 @@ def _ingest_candidates(
     store = get_object_store()
 
     store_count = _store_object_count(store)
-    companions_dir = vault_root / "_system/companions"
+    companions_dir = (vault_root / companion_path("sentinel", vault_root)).parent
     has_companions = companions_dir.exists() and any(companions_dir.glob("*.md"))
     cold_rebuild = not force and store_count == 0 and has_companions
     if cold_rebuild:

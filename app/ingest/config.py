@@ -83,6 +83,13 @@ def _append_universal_ignores(ignore_glob: List[str]) -> List[str]:
     return merged
 
 
+def _append_companion_ignore(ignore_glob: List[str], system_folder: str) -> List[str]:
+    pattern = f"{system_folder}/companions/**"
+    if pattern not in ignore_glob:
+        ignore_glob.append(pattern)
+    return ignore_glob
+
+
 def _fallback_include_folders(layout: VaultLayout) -> List[str]:
     values = [layout.inbox_folder, layout.desk_folder]
     values = [value for value in values if value]
@@ -129,6 +136,7 @@ def resolve_ingest_config(vault_root: Path) -> IngestConfig:
         ignore = _normalize_list(ignore_glob)
 
     ignore = _append_universal_ignores(ignore)
+    ignore = _append_companion_ignore(ignore, layout.system_folder)
 
     return IngestConfig(include_folders=include, ignore_glob=ignore)
 

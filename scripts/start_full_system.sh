@@ -699,7 +699,13 @@ if [ -z "${VAULT_LAYOUT_NOTE_REL:-}" ]; then
   fi
 fi
 
-runtime_env_path="${RUNTIME_ENV_PATH:-tmp/runtime.env}"
+runtime_env_path="${RUNTIME_ENV_PATH:-}"
+if [ -z "$runtime_env_path" ]; then
+  case "${COMPOSE_PROJECT_NAME:-}" in
+    pkm-test) runtime_env_path="tmp-test/runtime.env" ;;
+    *) runtime_env_path="tmp/runtime.env" ;;
+  esac
+fi
 RUNTIME_ENV_PATH="$runtime_env_path"
 bash scripts/export_runtime_env.sh
 scope_glob_raw="${WATCHER_SCOPE_GLOB:-}"

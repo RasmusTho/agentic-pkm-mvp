@@ -13,9 +13,22 @@ if [ -z "${VAULT_ROOT:-}" ]; then
   exit 2
 fi
 
-runtime_env_path="${RUNTIME_ENV_PATH:-tmp/runtime.env}"
+runtime_env_path="${RUNTIME_ENV_PATH:-}"
+if [ -z "$runtime_env_path" ]; then
+  case "${COMPOSE_PROJECT_NAME:-}" in
+    pkm-test) runtime_env_path="tmp-test/runtime.env" ;;
+    *) runtime_env_path="tmp/runtime.env" ;;
+  esac
+fi
 runtime_env_dir="$(dirname "$runtime_env_path")"
 mkdir -p "$runtime_env_dir"
+
+watcher_runtime_env_file="$runtime_env_path"
+case "$watcher_runtime_env_file" in
+  /*) ;;
+  ./*) ;;
+  *) watcher_runtime_env_file="./$watcher_runtime_env_file" ;;
+esac
 
 local_uid="${LOCAL_UID:-$(id -u)}"
 local_gid="${LOCAL_GID:-$(id -g)}"
@@ -33,6 +46,7 @@ fi
 export DATABASE_URL DB_DSN
 
 cat > "$runtime_env_path" <<ENV
+WATCHER_RUNTIME_ENV_FILE=$watcher_runtime_env_file
 VAULT_ROOT=$VAULT_ROOT
 LOCAL_UID=$local_uid
 LOCAL_GID=$local_gid

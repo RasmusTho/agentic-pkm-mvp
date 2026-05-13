@@ -49,6 +49,20 @@ def _make_companion(
     )
 
 
+def _write_layout(vault_root: Path) -> None:
+    system = vault_root / "⚙️ System"
+    system.mkdir(parents=True, exist_ok=True)
+    (system / "vault.layout.md").write_text(
+        "---\n"
+        "version: '1'\n"
+        "system_folder: '⚙️ System'\n"
+        "inbox_folder: '📥 Inbox'\n"
+        "desk_folder: '🛠️ Workbench'\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Part 2 — companion_path
 # ---------------------------------------------------------------------------
@@ -57,6 +71,11 @@ class TestCompanionPath:
     def test_is_flat_uuid_path(self) -> None:
         p = companion_path("abc-123")
         assert p == Path("_system/companions/abc-123.md")
+
+    def test_uses_layout_aware_system_folder_when_vault_root_is_provided(self, tmp_path: Path) -> None:
+        _write_layout(tmp_path)
+        p = companion_path("abc-123", tmp_path)
+        assert p == Path("⚙️ System/companions/abc-123.md")
 
     def test_no_subdirectories(self) -> None:
         p = companion_path("some-uuid")
@@ -85,9 +104,10 @@ class TestReadWriteRoundtrip:
         assert result.created_by_instance == companion.created_by_instance
 
     def test_creates_parent_directories(self, tmp_path: Path) -> None:
+        _write_layout(tmp_path)
         companion = _make_companion()
         write_companion(tmp_path, companion)
-        expected = tmp_path / "_system" / "companions" / f"{companion.uuid}.md"
+        expected = tmp_path / "⚙️ System" / "companions" / f"{companion.uuid}.md"
         assert expected.exists()
 
     def test_roundtrip_with_attachments(self, tmp_path: Path) -> None:
@@ -116,9 +136,10 @@ class TestReadWriteRoundtrip:
 
     def test_written_file_has_no_forbidden_fields(self, tmp_path: Path) -> None:
         """review_state and maturity must never appear in a companion file."""
+        _write_layout(tmp_path)
         companion = _make_companion()
         write_companion(tmp_path, companion)
-        file_path = tmp_path / companion_path(companion.uuid)
+        file_path = tmp_path / companion_path(companion.uuid, tmp_path)
         text = file_path.read_text(encoding="utf-8")
         assert "review_state" not in text
         assert "maturity" not in text
@@ -320,6 +341,7 @@ class TestRepairCompanion:
 
     def test_repair_preserves_valid_fields(self, tmp_path: Path) -> None:
         """Conservative repair: valid fields are kept, only missing ones filled."""
+        _write_layout(tmp_path)
         companion = _make_companion(
             uuid="preserve-uuid",
             content_hash="original-hash",
@@ -327,7 +349,7 @@ class TestRepairCompanion:
         )
         write_companion(tmp_path, companion)
         # Corrupt the file slightly but keep uuid
-        p = tmp_path / companion_path("preserve-uuid")
+        p = tmp_path / companion_path("preserve-uuid", tmp_path)
         text = p.read_text(encoding="utf-8")
         # Simulate a field going missing by rewriting without last_ingested
         p.write_text(text.replace("last_ingested:", "# last_ingested:"), encoding="utf-8")

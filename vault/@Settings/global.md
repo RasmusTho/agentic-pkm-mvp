@@ -18,13 +18,19 @@ trust: internal
 ```yaml settings
 log_level: INFO
 profile: default
-secrets:
-  telemetry_token: ${SECRET:OTEL_TOKEN}
 ```
 
 ## Förklaringar & möjliga värden
 <!-- BEGIN:settings:reference -->
+### Reference — Global
+
 | key | type | default | allowed | description |
 |-----|------|---------|---------|-------------|
-| _pending | _ | _ | _ | Run `python -m app.cli settings compile --auto-heal` to update this table. |
+| `enable` | `bool` | `True` | `` | Enable this component for runtime pipelines. |
+| `dry_run` | `bool` | `False` | `` | Skip persistence and side-effects when true. |
+| `note_moves_enable` | `bool` | `False` | `` | Allow agents to move or rename notes as part of ingestion and promotion. |
+| `timeout_ms` | `int` | `8000` | `100-60000` | Per-operation timeout in milliseconds. |
+| `log_level` | `str` | `INFO` | `DEBUG, INFO, WARNING, ERROR` | Log level for agents (DEBUG|INFO|WARNING|ERROR). |
+| `profile` | `str` | `default` | `` | Active configuration profile name. |
+| `secrets` | `Dict` | `PydanticUndefined` | `` | Secret references resolved at compile time. |
 <!-- END:settings:reference -->
