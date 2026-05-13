@@ -51,6 +51,22 @@ defines intent; later docs add detail.
 4. `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md` — receipt expectations.
 5. `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md` — agent-produced companion artifacts.
 
+## Implementing context bundles
+
+1. `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` — semantic contract and boundary.
+2. `docs/CONTEXT_BUNDLES/README.md` — implementation breakdown and acceptance path.
+3. `docs/CONTEXT_BUNDLES/PARENT_FEATURE_ISSUE.md` — local parent issue draft and execution order.
+4. `docs/FINDING_AND_REORIENTING/README.md` plus retrieval/orientation/resurfacing capability contracts — downstream consumers.
+5. `docs/COMPANION_UI_PRODUCT_SPEC.md` — product-mode expectations for find, reorient, resurface, and act.
+
+## Implementing agent memory
+
+1. `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` — semantic contract and boundary.
+2. `docs/AGENT_MEMORY/README.md` — implementation breakdown and acceptance path.
+3. `docs/AGENT_MEMORY/PARENT_FEATURE_ISSUE.md` — local parent issue draft and execution order.
+4. `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` and `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md` — authority and guardrails.
+5. `docs/COMPANION_UI_PRODUCT_SPEC.md` and `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md` — recall, review, and explanation expectations.
+
 ## Changing companion UI
 
 1. `docs/COMPANION_UI_PRODUCT_SPEC.md` — Companion UI product shell and mode model.
@@ -82,3 +98,11 @@ defines intent; later docs add detail.
 3. `docs/DOCS_INDEX.md` — confirm the source doc is an active spec surface, not a historical or planning-only doc.
 4. `docs/development/DEV_WORKFLOW.md` — the working loop and validation expectations.
 5. `.github/ISSUE_TEMPLATE/*.yml` and `.github/pull_request_template.md` — the contract any extracted issue must satisfy.
+
+## Future docs-to-issue extraction for context bundles and agent memory
+
+1. `docs/CONTEXT_BUNDLES/PARENT_FEATURE_ISSUE.md` and `docs/AGENT_MEMORY/PARENT_FEATURE_ISSUE.md` — local parent issue drafts to file first.
+2. `docs/CONTEXT_BUNDLES/README.md` and `docs/AGENT_MEMORY/README.md` — capability acceptance and execution order.
+3. Child task specs in `docs/CONTEXT_BUNDLES/` and `docs/AGENT_MEMORY/` — bounded issue sources with `Verify:` targets.
+4. `.codex/skills/feature-breakdown/SKILL.md` — issue-creation policy and parent/child workflow.
+5. `.codex/skills/docs-to-issue/SKILL.md` — later extraction once the parent issues are filed and the repo is ready to execute implementation slices.

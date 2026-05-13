@@ -245,3 +245,8 @@ docs-authoring or docs-to-issue path when scheduled.
 
 Update (2026-05-12): `docs/COMPANION_UI_PRODUCT_SPEC.md` is now added in this docs-only PR.
 It is a target-state product specification and does not change runtime behavior.
+
+Update (2026-05-13): context bundle and agent memory work has now moved from contract-definition
+only into docs-first feature-breakdown preparation via `docs/CONTEXT_BUNDLES/` and
+`docs/AGENT_MEMORY/`. These directories define bounded implementation-ready specs and local draft
+parent feature issues. No runtime behavior changed; implementation remains future work.
