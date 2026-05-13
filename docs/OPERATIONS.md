@@ -174,6 +174,7 @@ Watcher auto-exec enablement rule:
 - `WATCHER_AUTO_EXEC=1` arms panel auto-exec; per-note opt-out remains `ai_panel_auto_run: never`.
 - `PANEL_PROACTIVE_ASSIST=0|1` controls proactive panel creation.
 - `WATCHER_STOP_FILE` pauses scanning when present.
+- Registry watcher state is pruned back to the active scope on each tick so stale file history does not accumulate indefinitely.
 
 ### Watcher caveats
 - The registry watcher remains polling/snapshot-based; no OS file-event hooks are used.

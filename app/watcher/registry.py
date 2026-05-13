@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import errno
-from app.watcher.scope import matches_scope
 import hashlib
 import json
 import logging
@@ -28,6 +27,7 @@ from app.settings.watcher_settings import load_watcher_settings, resolve_auto_ex
 from app.vault.layout import load_layout
 from app.watcher.events import emit_watcher_run_event
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
+from app.watcher.scope import derive_scope_roots, matches_scope
 from app.watcher.state import WatcherState
 from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import load_frontmatter
@@ -109,29 +109,36 @@ def _scan_markdown(vault_root: Path, scan_root: Path, scope_glob: str) -> Iterab
         yield rel, mtime, path
 
 
-def _scope_prefix(scope_glob: str) -> str:
-    wildcard_chars = {"*", "?", "["}
-    limit = len(scope_glob)
-    for idx, char in enumerate(scope_glob):
-        if char in wildcard_chars:
-            limit = idx
-            break
-    prefix = scope_glob[:limit].rstrip("/")
-    return prefix
-
-
 def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
-    prefix = _scope_prefix(scope_glob)
-    if not prefix:
-        return vault_root
-    candidate = vault_root / prefix
-    if not candidate.exists() or not candidate.is_dir():
-        raise FileNotFoundError(f"Scan root missing: {candidate}")
-    resolved_vault = vault_root.resolve()
-    resolved_candidate = candidate.resolve()
-    if not resolved_candidate.is_relative_to(resolved_vault):
-        raise ValueError(f"Scan root {resolved_candidate} must live under vault root {resolved_vault}")
-    return candidate
+    return derive_scope_roots(vault_root, scope_glob)[0]
+
+
+def _scan_markdown_many(
+    vault_root: Path,
+    scan_roots: Iterable[Path],
+    scope_glob: str,
+) -> Iterable[tuple[Path, float, Path]]:
+    seen: set[Path] = set()
+    for scan_root in scan_roots:
+        for path in sorted(scan_root.rglob("*.md")):
+            try:
+                rel = path.relative_to(vault_root)
+            except Exception:
+                continue
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+            if rel in seen or not _matches_scope(rel, scope_glob):
+                continue
+            try:
+                mtime = path.stat().st_mtime
+            except Exception:
+                continue
+            seen.add(rel)
+            yield rel, mtime, path
+
+
+def _scan_markdown(vault_root: Path, scan_root: Path, scope_glob: str) -> Iterable[tuple[Path, float, Path]]:
+    yield from _scan_markdown_many(vault_root, [scan_root], scope_glob)
 
 
 def _now_iso_from_timestamp(value: float) -> str:
@@ -819,12 +826,14 @@ def _collect_changed_entries(
     state: WatcherState,
     summary: dict[str, object],
     *,
-    scan_root: Path,
-) -> list[ChangedEntry]:
+    scan_roots: Iterable[Path],
+) -> tuple[list[ChangedEntry], list[str]]:
     changed_entries: list[ChangedEntry] = []
-    for rel, mtime, path in _scan_markdown(cfg.vault_path, scan_root, spec.scope_glob):
+    scanned_paths: list[str] = []
+    for rel, mtime, path in _scan_markdown_many(cfg.vault_path, scan_roots, spec.scope_glob):
         summary["scanned_files"] = int(summary["scanned_files"]) + 1
         rel_str = str(rel)
+        scanned_paths.append(rel_str)
         last_mtime = state.last_mtime(rel_str)
         previous_hash = state.last_hash(rel_str)
         if last_mtime is not None and last_mtime == mtime:
@@ -840,7 +849,7 @@ def _collect_changed_entries(
             state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
             continue
         changed_entries.append(ChangedEntry(rel_path=rel, mtime=mtime, digest=digest))
-    return changed_entries
+    return changed_entries, scanned_paths
 
 
 def _should_skip_changed_entry(
@@ -1084,8 +1093,8 @@ def _run_spec_tick(
         state.save(_state_path(cfg.state_dir, spec.name))
         raise FileNotFoundError(f"Vault path not found: {cfg.vault_path}")
 
-    scan_root = _derive_scan_root(cfg.vault_path, spec.scope_glob)
-    changed_entries = _collect_changed_entries(cfg, spec, state, summary, scan_root=scan_root)
+    scan_roots = derive_scope_roots(cfg.vault_path, spec.scope_glob)
+    changed_entries, scanned_paths = _collect_changed_entries(cfg, spec, state, summary, scan_roots=scan_roots)
 
     summary["changed_in_tick"] = len(changed_entries)
     state.changed_detected += len(changed_entries)
@@ -1128,14 +1137,15 @@ def _run_spec_tick(
     summary["errors_in_tick"] = state.errors - errors_before
     summary["rate_limited"] = state.rate_limited
     summary["enqueue_failures_total"] = state.enqueue_failures_total
-    summary["scan_root"] = str(scan_root)
+    summary["scan_root"] = ",".join(str(root) for root in scan_roots)
     summary["scope_glob"] = spec.scope_glob
 
     elapsed_ms = max(int((time.time() - tick_start) * 1000), 0)
     summary["tick_ms"] = elapsed_ms
     _apply_guardrails_registry(cfg, state, summary)
+    state.prune_files(scanned_paths)
 
-    return _finalize_spec_tick(cfg, state, summary, tick_start, scan_root, spec.name)
+    return _finalize_spec_tick(cfg, state, summary, tick_start, scan_roots[0] if scan_roots else None, spec.name)
 
 
 def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:

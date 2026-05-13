@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 
 _MIN_VALID_TS = 1_000_000_000
@@ -143,6 +144,13 @@ class WatcherState:
         if emitted_at is not None:
             entry["last_emitted"] = emitted_at
         self.files[rel_path] = entry
+
+    def prune_files(self, keep_paths: Iterable[str]) -> None:
+        keep = {path for path in keep_paths if path}
+        if not keep:
+            self.files.clear()
+            return
+        self.files = {path: entry for path, entry in self.files.items() if path in keep}
 
     def last_seen(self, rel_path: str) -> float | None:
         entry = self.files.get(rel_path) or {}
