@@ -55,7 +55,7 @@ def _to_domain(row: dict[str, Any]) -> DomainObject:
 
 
 class ObjectStore:
-    def get_object(self, object_id: str) -> DomainObject | None:
+    def get_object(self, object_id: str, *, strict_backend: bool = False) -> DomainObject | None:
         if object_id in _MEMORY_STORE:
             return _MEMORY_STORE[object_id]
 
@@ -70,6 +70,8 @@ class ObjectStore:
             _MEMORY_STORE[domain.uuid] = domain
             return domain
         except Exception:
+            if strict_backend:
+                raise
             return _MEMORY_STORE.get(object_id)
 
     def save_object(

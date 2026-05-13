@@ -1583,31 +1583,28 @@ fi
 
 
 
-if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ "$llm_requires_ollama" -eq 1 ]; then
-  optional_check "Ollama preflight" run_ollama_preflight
-fi
-
-services_to_start=()
-if [ "$START_WATCHERS" -eq 1 ]; then
-  services_to_start+=("watcher")
-fi
-if [ "$START_WORKER" -eq 1 ]; then
-  services_to_start+=("worker")
-fi
-if [ "${#services_to_start[@]}" -gt 0 ]; then
-  compose_up --build "${services_to_start[@]}"
-fi
-
-if [ "$START_WORKER" -eq 1 ]; then
-  run_worker_probe
-fi
-
 reset_runtime_state="${RESET_RUNTIME_STATE:-1}"
 if [ "$reset_runtime_state" -eq 1 ] && { [ "$START_WATCHERS" -eq 1 ] || [ "$START_WORKER" -eq 1 ]; }; then
   run_docker_compose exec -T api sh -c 'rm -f /app/tmp/index-outbox.jsonl /app/tmp/watcher_heartbeat.json /app/tmp/worker_heartbeat.json'
   if [ "$START_WATCHERS" -eq 1 ]; then
     run_docker_compose exec -T watcher sh -c 'rm -f /app/tmp/watcher_heartbeat.json' || true
   fi
+fi
+
+if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ "$llm_requires_ollama" -eq 1 ]; then
+  optional_check "Ollama preflight" run_ollama_preflight
+fi
+
+# Colima on demerzel previously needed more than 2 GB to keep worker and watcher
+# startup from OOM-killing each other. Keep the startup order staggered and
+# leave the host configured with at least 4 GB for this wrapper.
+if [ "$START_WORKER" -eq 1 ]; then
+  compose_up --build worker
+  run_worker_probe
+fi
+
+if [ "$START_WATCHERS" -eq 1 ]; then
+  compose_up --build watcher
 fi
 
 if [ "$START_WATCHERS" -eq 1 ]; then
