@@ -30,7 +30,7 @@ def derive_scope_roots(vault_root: Path, scope_glob: str) -> list[Path]:
         return [vault_root]
 
     prefixes = [_scope_prefix(pattern) for pattern in patterns]
-    if not any(prefixes):
+    if any(not prefix for prefix in prefixes):
         return [vault_root]
 
     unique_prefixes: list[str] = []
