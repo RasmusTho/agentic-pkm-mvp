@@ -133,3 +133,18 @@ def test_hot_reload_keeps_last_good_bundle_on_invalid_update(tmp_path, monkeypat
     assert after.global_.log_level == before.global_.log_level
     assert after.llm_routing.default_chat.primary.provider == before.llm_routing.default_chat.primary.provider
     assert seen == []
+
+
+def test_runtime_preserves_instance_yaml_environment(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime/settings"
+    _write_yaml(runtime_dir / "global.yaml", {})
+    _write_yaml(runtime_dir / "providers.yaml", {})
+    _write_yaml(runtime_dir / "llm_routing.yaml", {})
+    _write_yaml(runtime_dir / "instance.yaml", {"id": "laptop", "role": "satellite", "environment": "dev"})
+
+    _reset_runtime(monkeypatch, runtime_dir)
+    monkeypatch.setenv("PKM_ENVIRONMENT", "prod")
+
+    bundle = runtime.reload_settings_bundle(notify=False)
+
+    assert bundle.instance.environment == "dev"
