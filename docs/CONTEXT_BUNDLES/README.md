@@ -1,4 +1,6 @@
-State: Draft specification. Not implemented. Docs-only feature-breakdown surface; no runtime behavior changes are claimed here.
+State: Filed specification. Parent feature issue #894 and the first two child implementation issues
+#895/#896 are filed on GitHub. Runtime implementation has not shipped; no runtime behavior changes
+are claimed here.
 
 # Context Bundles
 
@@ -39,12 +41,15 @@ surface for that contract.
 
 ## Task List
 
-1. [DEFINE_CONTEXT_BUNDLE_SCHEMA.md](DEFINE_CONTEXT_BUNDLE_SCHEMA.md)
-2. [EMIT_CONTEXT_BUNDLE_FROM_RETRIEVAL.md](EMIT_CONTEXT_BUNDLE_FROM_RETRIEVAL.md)
-3. [USE_CONTEXT_BUNDLE_FOR_ORIENTATION.md](USE_CONTEXT_BUNDLE_FOR_ORIENTATION.md)
-4. [USE_CONTEXT_BUNDLE_FOR_RESURFACING.md](USE_CONTEXT_BUNDLE_FOR_RESURFACING.md)
-5. [CONNECT_CONTEXT_BUNDLE_TO_WRITE_PROPOSALS.md](CONNECT_CONTEXT_BUNDLE_TO_WRITE_PROPOSALS.md)
-6. [RECORD_CONTEXT_BUNDLE_RECEIPTS.md](RECORD_CONTEXT_BUNDLE_RECEIPTS.md)
+1. [DEFINE_CONTEXT_BUNDLE_SCHEMA.md](DEFINE_CONTEXT_BUNDLE_SCHEMA.md) — filed as
+   [#895](https://github.com/RasmusTho/agentic-pkm-mvp/issues/895).
+2. [EMIT_CONTEXT_BUNDLE_FROM_RETRIEVAL.md](EMIT_CONTEXT_BUNDLE_FROM_RETRIEVAL.md) — filed as
+   [#896](https://github.com/RasmusTho/agentic-pkm-mvp/issues/896); depends on #895.
+3. [USE_CONTEXT_BUNDLE_FOR_ORIENTATION.md](USE_CONTEXT_BUNDLE_FOR_ORIENTATION.md) — not yet filed.
+4. [USE_CONTEXT_BUNDLE_FOR_RESURFACING.md](USE_CONTEXT_BUNDLE_FOR_RESURFACING.md) — not yet filed.
+5. [CONNECT_CONTEXT_BUNDLE_TO_WRITE_PROPOSALS.md](CONNECT_CONTEXT_BUNDLE_TO_WRITE_PROPOSALS.md) —
+   not yet filed.
+6. [RECORD_CONTEXT_BUNDLE_RECEIPTS.md](RECORD_CONTEXT_BUNDLE_RECEIPTS.md) — not yet filed.
 
 ## Flat Execution Order
 
@@ -79,10 +84,10 @@ surface for that contract.
 
 ## Validation / Acceptance Path
 
-- This directory is accepted at the docs/spec layer when the README, parent feature draft, and all
-  six task specs are merged and internally consistent.
-- Runtime acceptance remains future work and should be recorded on a parent feature issue plus child
-  implementation issues after those are filed.
+- This directory is accepted at the docs/spec layer when the README, parent feature reference, and
+  all six task specs are merged and internally consistent.
+- Runtime acceptance remains future work and should be recorded on parent feature issue
+  [#894](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894) plus child implementation issues.
 - Owner-doc promotion is gated on implementation evidence that the runtime actually emits, consumes,
   and receipts context bundles truthfully.
 
@@ -90,18 +95,24 @@ surface for that contract.
 
 - Local task specs in this directory define the implementation contract.
 - Future child PRs provide slice verification receipts.
-- The parent feature issue, once filed, should hold validation evidence and acceptance tracking.
+- Parent feature issue [#894](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894) is the
+  authoritative backlog and validation surface for this capability.
 - Owner docs such as `docs/STATUS.md` and `docs/ARCHITECTURE.md` should change only when runtime
   support is actually delivered.
 
 ## Relationship to GitHub Issues
 
-No GitHub issues are created in this PR.
+GitHub issue state:
 
-The local source for a future parent feature issue is
-[PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). Child implementation issues should be created
-later from these task specs using the repo's `feature-breakdown` and `docs-to-issue` workflows when
-the contracts are ready to enter execution.
+- Parent feature issue: [#894](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894).
+- `CONTEXT-BUNDLES-01`: [#895](https://github.com/RasmusTho/agentic-pkm-mvp/issues/895).
+- `CONTEXT-BUNDLES-02`: [#896](https://github.com/RasmusTho/agentic-pkm-mvp/issues/896).
+- `CONTEXT-BUNDLES-03` through `CONTEXT-BUNDLES-06`: not yet filed.
+
+The local source/reference copy for the parent feature issue is
+[PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). GitHub Issue #894 is the authoritative
+backlog/validation surface. Child implementation issues should continue to be created from these
+task specs using the repo's `feature-breakdown` and `docs-to-issue` workflows.
 
 ## Owner-Doc Promotion Trigger
 
@@ -111,3 +122,5 @@ Promote current-state owner docs only after implementation receipts show all of 
 - orientation and resurfacing consume it without silently turning it into authority,
 - write proposals carry bundle linkage without bypassing write guards,
 - and receipts expose bundle provenance and exclusions truthfully.
+
+No owner-doc promotion is warranted until capability validation is complete on #894.

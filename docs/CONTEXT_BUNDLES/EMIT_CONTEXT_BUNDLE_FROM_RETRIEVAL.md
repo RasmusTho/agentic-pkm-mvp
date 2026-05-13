@@ -78,5 +78,6 @@ explanation or reinvent bundle assembly in inconsistent ways.
 
 ## Related GitHub Issues
 
-Not created in this PR. When filed later, use this task spec as the child implementation issue
-contract for retrieval-side bundle emission.
+Filed as GitHub Issue [#896](https://github.com/RasmusTho/agentic-pkm-mvp/issues/896).
+Parent feature issue: [#894](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894).
+Depends on schema issue [#895](https://github.com/RasmusTho/agentic-pkm-mvp/issues/895).

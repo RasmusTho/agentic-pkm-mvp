@@ -250,3 +250,11 @@ Update (2026-05-13): context bundle and agent memory work has now moved from con
 only into docs-first feature-breakdown preparation via `docs/CONTEXT_BUNDLES/` and
 `docs/AGENT_MEMORY/`. These directories define bounded implementation-ready specs and local draft
 parent feature issues. No runtime behavior changed; implementation remains future work.
+
+Update (2026-05-13): Context Bundles now have filed GitHub backlog surfaces: parent feature issue
+#894 plus the first two child implementation issues #895 (`CONTEXT-BUNDLES-01`) and #896
+(`CONTEXT-BUNDLES-02`). No runtime behavior changed; implementation remains future work until
+those issues are delivered and validated. Agent Memory remains local spec-only unless later issue
+searches find or create active implementation issues. The bridge-map reference to the agent-memory
+contract was corrected from a local stale "future" reference to the active
+`docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` contract.
