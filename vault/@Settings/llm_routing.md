@@ -99,3 +99,19 @@ tasks:
 ## Notes
 - Chat/reasoning tasks may choose a local fallback.
 - Embeddings must keep a compatible identity. Endpoint repair is allowed; incompatible model fallback is not.
+
+<!-- BEGIN:settings:reference -->
+### Reference — LLM routing
+
+| key | type | default | allowed | description |
+|-----|------|---------|---------|-------------|
+| `default_provider` | `str | None` | `` | `` | Default LLM provider override for router (vault-configurable). |
+| `default_chat_model` | `str | None` | `` | `` | Default chat model override for routed LLM tasks. |
+| `default_embed_model` | `str | None` | `` | `` | Default embedding model override for routed tasks. |
+| `task_overrides` | `Dict` | `PydanticUndefined` | `` | Per task_kind provider/model overrides (future use). |
+| `default_chat` | `TaskPolicy` | `PydanticUndefined` | `` | Default task policy for chat/completion work. |
+| `default_reasoning` | `TaskPolicy` | `PydanticUndefined` | `` | Default task policy for reasoning-heavy work. |
+| `default_embedding` | `TaskPolicy` | `PydanticUndefined` | `` | Default task policy for embeddings and retrieval/index identity. |
+| `default_eval` | `TaskPolicy` | `PydanticUndefined` | `` | Default task policy for eval tooling. |
+| `tasks` | `Dict` | `PydanticUndefined` | `` | Per task_kind routing policies. |
+<!-- END:settings:reference -->

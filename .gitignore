@@ -53,3 +53,8 @@ vaults/
 tests/__init__.py
 tests/orientation/__init__.py
 tests/retrieval/__init__.py
+
+# Local vault recovery artifacts
+vault/Test fil1.md
+vault/Workbench/Test fil 2.md
+vault/System/companions/
