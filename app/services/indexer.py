@@ -82,7 +82,6 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
         )
     store.save_object(domain, emit_outbox=False, trace_id=trace_id)
 
-    client = get_embedding_client()
     identity = get_embedding_identity()
     embedding: list[float] | None = None
     actual_dim: int | None = None
