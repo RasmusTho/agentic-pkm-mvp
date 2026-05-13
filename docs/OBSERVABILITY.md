@@ -42,6 +42,8 @@ Logs are the primary tracing surface; no external APM is required for the curren
 - Retry/poison-message posture is current-state and bounded: transient missing or unstable note
   failures are requeued with retry metadata, duplicate `event_id` values are skipped, and exhausted
   or failed retry enqueue paths are observable through worker logs plus undelivered DB outbox rows.
+  Missing-object `index.embedding.requested` events are logged as warnings and recorded with
+  `index.embedding.failed` receipts rather than crashing the worker.
   The active runtime does not claim a dedicated DLQ service.
 
 Architectural reading note:

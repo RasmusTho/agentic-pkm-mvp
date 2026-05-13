@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict
 from uuid import UUID
 
@@ -11,6 +12,8 @@ from app.llm.embeddings import EMBED_MODEL
 from app.outbox import events as outbox_events
 from app.store.object_store import ObjectStore
 from app.stores import get_vector_index
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_object_id(evt: Dict[str, Any]) -> str | None:
@@ -80,7 +83,18 @@ def process_event(evt: Dict[str, Any]) -> None:
     store = ObjectStore()
     obj = store.get_object(object_id_raw)
     if obj is None:
-        raise FileNotFoundError(f"Object not found for embedding request: {object_id_raw}")
+        trace_id = str(evt.get("trace_id") or "").strip() or None
+        logger.warning(
+            "index embedding request dropped (missing object) object_id=%s trace_id=%s",
+            object_id_raw,
+            trace_id or "-",
+        )
+        outbox_events.emit_index_embedding_failed(
+            object_id=object_id_raw,
+            trace_id=trace_id,
+            error=f"missing object for embedding request: {object_id_raw}",
+        )
+        return
 
     obj_uuid = UUID(str(obj.uuid))
     obj_payload = dict(obj.payload or {})
