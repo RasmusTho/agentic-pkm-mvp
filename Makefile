@@ -98,6 +98,7 @@ dev-down:
 	@$(COMPOSE_DEV) down --remove-orphans
 
 prod-up:
+	@docker volume inspect pkm-prod_pgdata >/dev/null 2>&1 || docker volume create pkm-prod_pgdata >/dev/null
 	@$(COMPOSE_PROD) up -d --build
 
 prod-down:
