@@ -84,3 +84,43 @@ Capture evidence as operational receipts suitable for later comparison runs.
 - Creating new runtime-proof scripts in this slice.
 - Performing dynamic proof-of-non-use analysis for legacy deletion.
 - Refactoring or deleting runtime code paths.
+
+## Runnable proof command
+
+Run:
+
+```bash
+python3 scripts/runtime_proof_smoke.py
+```
+
+This command generates two receipts under `tmp/runtime-proof/`:
+
+- `runtime-proof-receipt-<timestamp>.json` (machine-readable)
+- `runtime-proof-receipt-<timestamp>.md` (human-readable)
+
+The receipt always contains baseline coverage for all required checkpoints and one explicit gate line for #867:
+
+- `UNBLOCK LEGACY CLEANUP AUDIT: #867`
+- `KEEP LEGACY CLEANUP AUDIT BLOCKED: #867`
+
+## How to run
+
+1. Optional: start local runtime first for live endpoint checks:
+
+```bash
+scripts/start_full_system.sh
+```
+
+2. Execute the smoke proof command:
+
+```bash
+python3 scripts/runtime_proof_smoke.py
+```
+
+3. Open the generated markdown receipt and confirm:
+
+- every baseline checkpoint is `pass`, `fail`, or `skip` with reason
+- overall status is clearly `PASS` or `FAIL`
+- the #867 gate line is present exactly once
+
+By default, skipped checks are blocking and keep the overall receipt at `FAIL`. Use `--allow-skips-to-pass` only when you intentionally want a non-gating informational run.
