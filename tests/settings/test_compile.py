@@ -13,7 +13,6 @@ pytestmark = pytest.mark.not_pg
 
 def test_compile_roundtrip_writes_artifacts(tmp_path, monkeypatch):
     runtime_dir = tmp_path / "runtime/settings"
-    monkeypatch.setenv("OTEL_TOKEN", "test-token")
     monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
     bus.clear("settings.changed")
     captured = []
@@ -32,7 +31,7 @@ def test_compile_roundtrip_writes_artifacts(tmp_path, monkeypatch):
     global_yaml = yaml.safe_load((runtime_dir / "global.yaml").read_text())
     assert global_yaml["timeout_ms"] == 8000
     assert global_yaml["note_moves_enable"] is False
-    assert global_yaml["secrets"]["telemetry_token"] == "test-token"
+    assert global_yaml["secrets"] == {}
     assert (runtime_dir / "agents" / "qa.yaml").exists()
     assert (runtime_dir / "agents" / "reviewer.yaml").exists()
 

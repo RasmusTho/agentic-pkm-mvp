@@ -144,6 +144,17 @@ def test_start_full_system_runs_runtime_verification_and_endpoint_probe() -> Non
     assert 'API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"' in script
 
 
+def test_runtime_scripts_default_test_project_to_tmp_test_runtime_env() -> None:
+    for path in (
+        "scripts/start_full_system.sh",
+        "scripts/export_runtime_env.sh",
+        "scripts/verify_runtime_stack.sh",
+        "scripts/cold_boot.sh",
+    ):
+        script = Path(path).read_text(encoding="utf-8")
+        assert 'pkm-test) runtime_env_path="tmp-test/runtime.env"' in script
+
+
 def test_verify_runtime_stack_waits_for_service_health_transitions() -> None:
     script = Path("scripts/verify_runtime_stack.sh").read_text(encoding="utf-8")
     assert "wait_for_service_ok()" in script

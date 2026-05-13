@@ -144,3 +144,32 @@ def test_companion_notes_excluded_from_full_ingest(tmp_path: Path, _mock_env: No
     )
     # The real note should be ingested
     assert summary.ingested >= 1
+
+
+def test_layout_system_companion_dir_added_to_ignore_glob(tmp_path: Path, _mock_env: None) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    _write_layout(vault_root)
+
+    note_uuid = "dddd4444-eeee-ffff-aaaa-bbbbbbbbbbbb"
+    note_path = vault_root / "Notes" / "real.md"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(
+        f"---\nuuid: {note_uuid}\ntitle: Real Note\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    companion = CompanionNote(
+        uuid=note_uuid,
+        source_ref="Notes/real.md",
+        title="Real Note",
+        content_hash="fakehash",
+        ingest_state="tracked",
+        last_ingested="2025-01-01T00:00:00+00:00",
+        created_by_instance="",
+    )
+    write_companion(vault_root, companion)
+
+    summary = run_vault_alpha_ingest(vault_root, max_notes=100, force=True)
+
+    assert f"⚙️ System/companions/{note_uuid}.md" not in summary.processed_notes

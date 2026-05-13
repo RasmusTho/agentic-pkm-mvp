@@ -117,6 +117,7 @@ Environment separation MUST be explicit across the following surfaces.
 **Implementation Status (Issue #266)**:
 - Watcher heartbeat, state files, and event logs are now environment-scoped.
 - Default behavior: `prod` uses base artifact paths (`tmp/watcher_state.json`), `dev` uses `-dev` subdirectories (`tmp-dev/watcher_state.json`).
+- The local `test` Compose/bootstrap lane uses `tmp-test/runtime.env` so regenerated service env does not leak into the default `prod` runtime env file.
 - Incidents and audit surfaces respect environment separation to prevent cross-environment contamination.
 - The `test` bootstrap path resets runtime state explicitly before startup and verification.
 

@@ -45,7 +45,7 @@ API and worker share the same Python image built from the repo.
 
 ## Startup Flow
 1. Ensure Colima/Docker is running.
-2. `make start` is the supported local startup path. It writes `tmp/runtime.env`, brings up the core services, auto-selects a Docker-reachable Ollama endpoint when needed, and verifies the live runtime from inside the `api` container before exiting `0`.
+2. `make start` is the supported local startup path. It writes `tmp/runtime.env` for the default/prod local stack, brings up the core services, auto-selects a Docker-reachable Ollama endpoint when needed, and verifies the live runtime from inside the `api` container before exiting `0`. The `pkm-test` Compose/bootstrap lane writes `tmp-test/runtime.env` instead.
 3. `docker compose up -d` remains available for low-level debugging, but it skips the startup wrapper's endpoint repair, vault probes, and authoritative runtime verification.
 3. `scripts/start_api.sh` (container entrypoint):
    - Normalizes the DSN from `DATABASE_URL` / `DB_DSN`.
@@ -67,7 +67,7 @@ API and worker share the same Python image built from the repo.
 - The check exits non-zero when required runtime health is not green, even if optional health checks still report warnings.
 
 ### Ollama endpoint selection
-- For `LLM_PROVIDER=ollama`, startup now probes candidate endpoints from inside the containerized runtime and persists the working endpoint into `tmp/runtime.env`.
+- For `LLM_PROVIDER=ollama`, startup now probes candidate endpoints from inside the containerized runtime and persists the working endpoint into the active runtime env file (`tmp/runtime.env` by default, `tmp-test/runtime.env` for `pkm-test`).
 - Candidate order:
   - configured endpoint
   - `DOCKER_OLLAMA_BASE_URL` when set

@@ -152,6 +152,45 @@ def test_handle_ingest_vault_changed_creates_companion_for_existing_uuid(
     assert companion.source_ref == "📥 Inbox/existing-uuid.md"
 
 
+def test_handle_ingest_vault_changed_heals_uuid_outside_inbox(
+    tmp_path: Path, monkeypatch
+) -> None:
+    reset_memory_stores()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    vault_root = tmp_path / "vault"
+    workbench = vault_root / "🛠️ Workbench"
+    workbench.mkdir(parents=True, exist_ok=True)
+
+    note_path = workbench / "uuidless.md"
+    note_path.write_text(
+        "---\n"
+        "title: uuidless-workbench\n"
+        "---\n\n"
+        "Body\n",
+        encoding="utf-8",
+    )
+
+    payload = {
+        "vault_path": str(note_path),
+        "relative_path": "🛠️ Workbench/uuidless.md",
+        "hash": "test-hash",
+        "mtime": 123.0,
+    }
+
+    summary = outbox_worker.handle_ingest_vault_changed(payload, vault_root=vault_root)
+    assert summary.ingested == 1
+
+    healed_raw = note_path.read_text(encoding="utf-8")
+    frontmatter, _ = load_frontmatter(healed_raw)
+    assert isinstance(frontmatter, dict)
+    healed_uuid = str(frontmatter.get("uuid") or "").strip()
+    assert healed_uuid
+    companion = read_companion(vault_root, healed_uuid)
+    assert companion is not None
+    assert companion.source_ref == "🛠️ Workbench/uuidless.md"
+
+
 def test_handle_ingest_vault_changed_uses_relative_path_when_payload_path_is_host_absolute(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -397,6 +436,36 @@ def test_handle_panel_scan_requested_aborts_when_retry_enqueue_fails(
 
     with pytest.raises(outbox_worker.TransientRetryEnqueueError):
         outbox_worker.handle_panel_scan_requested(payload, vault_root=vault_root, trace_id="trace-panel-envelope")
+
+
+def test_handle_panel_scan_requested_drops_missing_uuid_after_retry_budget_exhausted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reset_memory_stores()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+
+    vault_root = tmp_path / "vault"
+    inbox = vault_root / "📥 Inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+
+    note_path = inbox / "panel-note.md"
+    note_path.write_text("---\ntitle: No UUID\n---\nbody\n", encoding="utf-8")
+
+    monkeypatch.setattr(outbox_worker, "_maybe_heal_uuid", lambda *_args, **_kwargs: "")
+
+    payload = {
+        "vault_path": str(note_path),
+        "relative_path": "📥 Inbox/panel-note.md",
+        "hash": "test-hash",
+        "mtime": 123.0,
+        "_worker_retry_count": 3,
+    }
+
+    summary = outbox_worker.handle_panel_scan_requested(payload, vault_root=vault_root, trace_id="trace-panel-envelope")
+    assert summary.emitted == 0
+    assert summary.deferred is False
 
 
 def test_handle_ingest_vault_changed_queues_retry_for_missing_note(

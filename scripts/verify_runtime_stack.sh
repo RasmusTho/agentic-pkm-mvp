@@ -13,7 +13,13 @@ source "scripts/lib/load_env_defaults.sh"
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"
 
-runtime_env_path="${RUNTIME_ENV_PATH:-${WATCHER_RUNTIME_ENV_FILE:-tmp/runtime.env}}"
+runtime_env_path="${RUNTIME_ENV_PATH:-${WATCHER_RUNTIME_ENV_FILE:-}}"
+if [ -z "$runtime_env_path" ]; then
+  case "${COMPOSE_PROJECT_NAME:-}" in
+    pkm-test) runtime_env_path="tmp-test/runtime.env" ;;
+    *) runtime_env_path="tmp/runtime.env" ;;
+  esac
+fi
 runtime_env=""
 if [ -f "$runtime_env_path" ]; then
   runtime_env="--env-file $runtime_env_path"
