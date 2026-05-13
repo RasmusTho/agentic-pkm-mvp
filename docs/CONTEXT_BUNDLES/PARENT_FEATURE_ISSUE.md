@@ -1,28 +1,34 @@
-State: Local draft parent feature issue. Not yet filed on GitHub as of 2026-05-13. This file is
-the local source for later filing and validation tracking.
+State: Filed parent feature issue. GitHub Issue #894 is the authoritative backlog and validation
+surface for Context Bundles. This file remains the local source/reference copy for source anchors,
+implementation task order, and validation path.
 
 # [Feature] Context Bundles
 
-> **Local draft only.** Do not treat this file as a live GitHub issue until it is filed.
+Live GitHub parent issue:
+[`#894`](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894).
+
+GitHub is the authoritative backlog and validation surface. Keep validation receipts, child issue
+state, and owner-doc promotion decisions on the GitHub issue; keep this local file aligned as the
+source-anchor and verification-path reference.
 
 ## Context
 
 `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` defines the context bundle as the inspectable bridge
 between retrieval, orientation, resurfacing, companion UI, governed write proposals, provenance,
-and write guards. The contract is now authored, but the repository does not yet have an
-implementation-ready breakdown that says how the bundle should be shaped, emitted, consumed, and
-receipted in bounded steps.
+and write guards. The implementation-ready breakdown now lives in `docs/CONTEXT_BUNDLES/`.
 
-This feature exists to create that breakdown without claiming shipped runtime behavior. It is a
-docs-only capability-preparation slice.
+This feature issue exists to validate the runtime capability through bounded child issues without
+claiming shipped runtime behavior before those issues are delivered.
 
 ## Scope
 
-- define one specification directory at `docs/CONTEXT_BUNDLES/`,
-- break the context-bundle contract into bounded implementation tasks,
-- define verification targets for schema, retrieval emission, orientation usage, resurfacing usage,
-  write-proposal linkage, and receipts,
-- and define the parent-level validation and acceptance path for later implementation issues.
+- deliver the context-bundle capability through bounded child issues derived from
+  `docs/CONTEXT_BUNDLES/`,
+- validate schema, retrieval emission, orientation usage, resurfacing usage, write-proposal linkage,
+  and receipt recording in dependency order,
+- keep initial implementation single-vault/local-scope until
+  `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md` exists,
+- and keep parent-level validation and acceptance evidence on GitHub Issue #894.
 
 ## Source Anchors
 
@@ -37,43 +43,57 @@ docs-only capability-preparation slice.
 
 ## Constraints
 
-- Docs-only in this PR. No runtime, schema, or API implementation changes.
+- Do not implement runtime behavior from this parent issue; implement only from bounded child issues.
 - Do not claim that context bundles are already emitted or consumed unless `docs/STATUS.md` already
   says so.
 - Preserve the contract distinction that a context bundle is not memory, not chat context, and not
   a new source of truth.
 - Preserve write-guard and trust-semantics boundaries.
 - Keep every task independently mergeable and independently verifiable.
+- Keep initial implementation single-vault/local-scope until
+  `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md` exists.
 
 ## Acceptance Criteria
 
-- [ ] `docs/CONTEXT_BUNDLES/README.md` exists and defines capability boundary, non-goals, task list,
-  execution order, verification path, validation path, evidence surface, relationship to GitHub
-  issues, and owner-doc promotion trigger.
-  Verify: `docs/CONTEXT_BUNDLES/README.md`
-- [ ] `docs/CONTEXT_BUNDLES/PARENT_FEATURE_ISSUE.md` exists as a local draft with the full parent
-  feature issue contract shape.
-  Verify: `docs/CONTEXT_BUNDLES/PARENT_FEATURE_ISSUE.md`
-- [ ] The six context-bundle implementation tasks exist with required frontmatter, required
-  sections, and explicit `Verify:` targets.
-  Verify: `rg -n "^task_id: CONTEXT-BUNDLES-|^## (Purpose|What This Task Does|Concretely|Why This Matters|Acceptance Criteria|How to Verify \\(Pre-Merge\\)|Out of Scope|Related Docs|Related GitHub Issues)$|Verify:" docs/CONTEXT_BUNDLES/*.md`
-- [ ] The breakdown preserves the contract boundary that context bundles may support answers,
-  orientation, resurfacing, and proposals without silently authorizing writeback.
-  Verify: doc review of `docs/CONTEXT_BUNDLES/README.md` and `docs/CONTEXT_BUNDLES/CONNECT_CONTEXT_BUNDLE_TO_WRITE_PROPOSALS.md`
+- [ ] Schema slice delivered: a minimal inspectable context bundle schema exists with required
+  fields, included/excluded item structure, distinct authority flags, and expiry posture.
+  Verify: child issue #895 closes with PR validation resolving
+  `tests/context_bundles/test_context_bundle_schema.py` targets.
+- [ ] Retrieval emission slice delivered: retrieval can emit a bundle or stable bundle reference
+  while preserving ranked candidates, selected context, exclusions, and `may_write=false` by
+  default.
+  Verify: child issue #896 closes with PR validation resolving
+  `tests/retrieval/test_context_bundle_emission.py` targets.
+- [ ] Orientation and resurfacing usage slices are delivered without treating bundles as memory or
+  write authority.
+  Verify: future child issues for `USE_CONTEXT_BUNDLE_FOR_ORIENTATION.md` and
+  `USE_CONTEXT_BUNDLE_FOR_RESURFACING.md` close with validation receipts on #894.
+- [ ] Write-proposal linkage and receipt slices are delivered without bypassing write guards.
+  Verify: future child issues for `CONNECT_CONTEXT_BUNDLE_TO_WRITE_PROPOSALS.md` and
+  `RECORD_CONTEXT_BUNDLE_RECEIPTS.md` close with validation receipts on #894.
+- [ ] Owner-doc promotion decision is recorded only after runtime evidence proves bundles are
+  emitted, consumed, and receipted truthfully.
+  Verify: final validation comment on #894 links delivered child PRs and either opens an
+  owner-doc promotion PR or states why no owner-doc promotion is warranted yet.
 
 ## Out of Scope
 
-- Implementing any runtime schema or service for context bundles.
-- Creating child GitHub implementation issues in this PR.
+- Implementing Context Bundles directly from this parent issue.
+- Implementing agent memory.
+- Promoting retrieved context into memory or durable knowledge.
+- Cross-vault, multi-vault, or vault-topology assumptions before
+  `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md` exists.
 - Claiming current runtime support in `docs/STATUS.md` beyond docs/spec preparation.
 - Defining companion UI behavior beyond the bundle's implementation contract.
 
 ## Suggested Validation
 
-- `rg -n "^task_id: CONTEXT-BUNDLES-|^source_anchor:|^parent_capability: Context Bundles" docs/CONTEXT_BUNDLES/*.md`
-- `rg -n "^## (Purpose|What This Task Does|Concretely|Why This Matters|Acceptance Criteria|How to Verify \\(Pre-Merge\\)|Out of Scope|Related Docs|Related GitHub Issues)$" docs/CONTEXT_BUNDLES/*.md`
-- `rg -n "Verify:" docs/CONTEXT_BUNDLES/*.md`
-- `rg -n "^## (Context|Scope|Source Anchors|Constraints|Acceptance Criteria|Out of Scope|Suggested Validation|Source Docs|Implementation Tasks|Verification Path|Validation / Acceptance Path)$" docs/CONTEXT_BUNDLES/PARENT_FEATURE_ISSUE.md`
+- Review every child issue for the repo issue contract and inline `Verify:` targets before marking
+  it `agent:ready`.
+- After each child PR merges, add a short validation receipt to #894 with issue number, PR number,
+  tests/commands run, and any remaining capability gaps.
+- Before owner-doc promotion, confirm `docs/STATUS.md`, `docs/ROADMAP.md`, and relevant owner docs
+  do not claim unsupported runtime behavior.
 
 ## Source Docs
 
@@ -88,8 +108,8 @@ docs-only capability-preparation slice.
 
 ## Implementation Tasks
 
-1. `docs/CONTEXT_BUNDLES/DEFINE_CONTEXT_BUNDLE_SCHEMA.md`
-2. `docs/CONTEXT_BUNDLES/EMIT_CONTEXT_BUNDLE_FROM_RETRIEVAL.md`
+1. `docs/CONTEXT_BUNDLES/DEFINE_CONTEXT_BUNDLE_SCHEMA.md` — filed as #895.
+2. `docs/CONTEXT_BUNDLES/EMIT_CONTEXT_BUNDLE_FROM_RETRIEVAL.md` — filed as #896; depends on #895.
 3. `docs/CONTEXT_BUNDLES/USE_CONTEXT_BUNDLE_FOR_ORIENTATION.md`
 4. `docs/CONTEXT_BUNDLES/USE_CONTEXT_BUNDLE_FOR_RESURFACING.md`
 5. `docs/CONTEXT_BUNDLES/CONNECT_CONTEXT_BUNDLE_TO_WRITE_PROPOSALS.md`
@@ -97,15 +117,15 @@ docs-only capability-preparation slice.
 
 ## Verification Path
 
-- Each future task PR resolves the named `Verify:` targets in the task spec it implements.
+- Each child task PR resolves the named `Verify:` targets in the task spec it implements.
 - Schema and emission tasks verify structure before downstream usage tasks are treated as complete.
 - Parent-level verification checks that every implementation surface preserves provenance,
   exclusions, and authority flags.
 
 ## Validation / Acceptance Path
 
-- File the parent issue when the repository is ready to convert this directory into execution work.
+- Use GitHub Issue #894 as the parent feature validation hub.
 - Create child implementation issues from the task files in dependency order.
-- Keep validation evidence on the future parent issue until runtime support is accepted.
+- Keep validation evidence on #894 until runtime support is accepted.
 - Promote owner-doc truth only after receipts show bundles are emitted, consumed, and bounded by
   write authority in the shipped runtime.

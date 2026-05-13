@@ -86,5 +86,5 @@ will quietly drop exclusions, provenance, or authority flags and the bundle stop
 
 ## Related GitHub Issues
 
-Not created in this PR. When filed later, use this task spec as the child implementation issue
-contract for schema work.
+Filed as GitHub Issue [#895](https://github.com/RasmusTho/agentic-pkm-mvp/issues/895).
+Parent feature issue: [#894](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894).
