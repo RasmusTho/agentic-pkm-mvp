@@ -1,4 +1,4 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard); v5.6 delivery line closed; v6.0 seams baseline shipped at capability-seam level (closed capability spec directories plus minimal orientation/resurfacing/commitment-domain/context-dimensions runtimes and read-only Chat cognition scaffold); broader v6.0 runtime consumption is deferred as v6.1+. Post-v5.6 follow-ups are tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening.
+State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard); v5.6 delivery line closed; v6.0 seams baseline shipped at capability-seam level (closed capability spec directories plus minimal orientation/resurfacing/commitment-domain/context-dimensions runtimes and read-only Chat cognition scaffold); broader v6.0 runtime consumption is deferred as v6.1+. Post-v5.6 follow-ups are tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening. This PR adds target-state contract docs for context bundles and agent memory/knowledge; it does not change runtime behavior.
 Doc role: Core SoT
 Authority: Current operational snapshot for the active baseline; subordinate to concept contracts for normative semantics, but authoritative for current runtime status and rollout posture.
 Owner: Runtime / current-state SoT
@@ -111,6 +111,7 @@ Delivered v5.6 receipts include:
 - Low-risk autonomy + automated sync validation: parent Issue #355 closed COMPLETED with a final acceptance receipt on 2026-04-13; #432 and #433 remain follow-up/infra/statistical timing work, not blockers for #355 closure.
 
 Post-v5.6 follow-up truth:
+- This PR adds two target-state contract docs: `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` and `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`. It does not change runtime behavior.
 - Orchestrator V2 remains flagged; checkpoint/resume has been hardened (Issue #444): `_save_checkpoint()` is now called at the configured interval (default every 3 steps), checkpoints are persisted in CheckpointStore, and resume-on-load is implemented to skip already-completed steps and restore execution state.
 - Retry/backoff observability has shipped for the flagged V2 path (Issue #445 / PR #452), including retry events, backoff diagnostics, and terminal retry-exhausted tracking. The follow-up timeout discriminator mismatch where documented executor `tool_timeout` errors could retry in V2 was fixed by Issue #456 / PR #458.
 - A2A in-process handler routing exists, the current traceability test passes, and parent lifecycle issue #359 is now closed.
@@ -213,3 +214,35 @@ Target delivery model:
 - agents = execution layer
 - PR = implementation artifact
 - CI = validation gate
+
+## Documentation follow-up (2026-05-12)
+
+The cognitive prosthesis documentation spine added on 2026-05-12 introduces:
+
+- `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — product thesis.
+- `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md` — human-flow to runtime bridge.
+- `docs/READING_PATHS.md` — practical reading paths.
+
+These docs frame intent; they do not change runtime behavior and do not assert that all
+target-state capabilities are implemented. The following companion docs are *recommended
+follow-up PRs* — they are **not** delivered by the spine PR and should be authored later when
+their owning surface needs the contract:
+
+- `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` — bounded, inspectable agent memory
+  and its relationship to human-authored knowledge.
+- `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` — what a context bundle is, how it is assembled,
+  and what it must carry as provenance.
+- `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md` — consolidating contract over vault layout,
+  catalog projection, context/artifact dimensions, and persistence-surface separation; should
+  reference rather than duplicate `docs/CONCEPTS/CATALOG_PROJECTION_PRINCIPLES.md`,
+  `docs/CONCEPTS/CONTEXT_AND_ARTIFACT_DIMENSIONS.md`, and the
+  `docs/SEPARATING_PERSISTENCE_SURFACES/` spec.
+- `docs/COMPANION_UI_PRODUCT_SPEC.md` — companion UI product spec defining the Find/Reorient/
+  Resurface/Act product model while preserving Panel/Chat/Automation as the canonical authority
+  surfaces.
+
+These follow-ups are not implemented by the spine PR and should be picked up via the normal
+docs-authoring or docs-to-issue path when scheduled.
+
+Update (2026-05-12): `docs/COMPANION_UI_PRODUCT_SPEC.md` is now added in this docs-only PR.
+It is a target-state product specification and does not change runtime behavior.

@@ -19,6 +19,8 @@ State: Delivered docs/specification lane for v6.0 capability framing. The parent
 
 This directory is the specification surface for one v6.0 capability: the separation of three distinct cognitive prosthetics that the current architecture conflates under ASK-style question answering.
 
+For bridge-object handling between these prosthetics and inspectable downstream use, see `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md`. The context bundle is the auditable envelope around selected retrieval/orientation/resurfacing material; it is not a new source of truth.
+
 The capability name deliberately foregrounds the human verbs — finding, reorienting — rather than a mechanism name. The third verb, resurfacing, is added in the spec body because it is the one the user least articulates for themselves, yet it is the one the system must do without being asked.
 
 These documents are not issue templates. Each task specification is the source of truth for what needs to be specified in the docs tree; the GitHub issues that implement these specs are execution artifacts derived from them.
