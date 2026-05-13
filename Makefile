@@ -98,7 +98,13 @@ dev-down:
 	@$(COMPOSE_DEV) down --remove-orphans
 
 prod-up:
-	@docker volume inspect pkm-prod_pgdata >/dev/null 2>&1 || docker volume create pkm-prod_pgdata >/dev/null
+	@docker volume inspect pkm-prod_pgdata >/dev/null 2>&1 || { \
+		echo "ERROR: Missing required external Docker volume: pkm-prod_pgdata"; \
+		echo "Refusing to auto-create an empty prod volume."; \
+		echo "If migrating from legacy pkm-prod without a DB volume mount, copy/export data first."; \
+		echo "After migration, create the volume explicitly: docker volume create pkm-prod_pgdata"; \
+		exit 1; \
+	}
 	@$(COMPOSE_PROD) up -d --build
 
 prod-down:
