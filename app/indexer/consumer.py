@@ -81,7 +81,12 @@ def process_event(evt: Dict[str, Any]) -> None:
         raise ValueError("index.embedding.requested missing payload.object_id")
 
     store = ObjectStore()
-    obj = store.get_object(object_id_raw)
+    try:
+        obj = store.get_object(object_id_raw, strict_backend=True)
+    except Exception as exc:
+        raise RuntimeError(
+            f"transient object-store lookup failure for embedding request: {object_id_raw}"
+        ) from exc
     if obj is None:
         trace_id = str(evt.get("trace_id") or "").strip() or None
         logger.warning(
