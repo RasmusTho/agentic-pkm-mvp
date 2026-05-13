@@ -25,7 +25,7 @@ def test_missing_object_embedding_request_is_dropped_without_worker_crash(
     acked: list[str] = []
     dropped: list[dict] = []
 
-    monkeypatch.setattr(consumer.ObjectStore, "get_object", lambda self, _object_id: None)
+    monkeypatch.setattr(consumer.ObjectStore, "get_object", lambda self, _object_id, strict_backend=False: None)
     monkeypatch.setattr(
         consumer.outbox_events,
         "emit_index_embedding_failed",
@@ -65,7 +65,7 @@ def test_missing_object_embedding_request_records_drop_receipt(
     object_id = str(uuid4())
     trace_id = "trace-missing-record"
 
-    monkeypatch.setattr(consumer.ObjectStore, "get_object", lambda self, _object_id: None)
+    monkeypatch.setattr(consumer.ObjectStore, "get_object", lambda self, _object_id, strict_backend=False: None)
     monkeypatch.setattr(
         consumer.outbox_events,
         "emit_index_embedding_failed",
@@ -102,9 +102,30 @@ def test_transient_embedding_failure_still_retries(
         def embed_text(self, _text: str) -> list[float]:
             raise RuntimeError("provider unavailable")
 
-    monkeypatch.setattr(consumer.ObjectStore, "get_object", lambda self, _object_id: target)
+    monkeypatch.setattr(consumer.ObjectStore, "get_object", lambda self, _object_id, strict_backend=False: target)
     monkeypatch.setattr(consumer, "get_embeddings_client", lambda _intent: FakeEmbedder())
 
     with pytest.raises(RuntimeError, match="provider unavailable"):
         consumer.process_event(_missing_object_event(object_id=object_id, trace_id=trace_id))
 
+
+def test_transient_object_store_failure_bubbles_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    object_id = str(uuid4())
+
+    def fail_lookup(self, _object_id, strict_backend=False):
+        raise ConnectionError("db unavailable")
+
+    dropped: list[dict] = []
+    monkeypatch.setattr(consumer.ObjectStore, "get_object", fail_lookup)
+    monkeypatch.setattr(
+        consumer.outbox_events,
+        "emit_index_embedding_failed",
+        lambda **kwargs: dropped.append(kwargs),
+    )
+
+    with pytest.raises(RuntimeError, match="transient object-store lookup failure"):
+        consumer.process_event(_missing_object_event(object_id=object_id))
+
+    assert dropped == []
