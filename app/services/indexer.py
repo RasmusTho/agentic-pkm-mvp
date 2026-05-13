@@ -7,13 +7,22 @@ from datetime import datetime, timezone
 from typing import Dict
 
 from app.components.embeddings import get_embedding_client, get_embedding_identity
-from app.llm.embeddings import embed_text as llm_embed_text
 from app.observability.tracer import start_span
 from app.outbox.events import DEFAULT_EMBEDDING_VIEW, emit_index_embedding_failed, emit_index_object_embedded
 from app.store.object_store import DomainObject, ObjectStore
 from app.stores import get_vector_index
 
 logger = logging.getLogger(__name__)
+
+
+def llm_embed_text(*, text: str, provider: str, model: str, dim: int, normalize: bool) -> list[float]:
+    client = get_embedding_client(override_provider=provider, override_model=model)
+    vector = client.embed_text(text)
+    if len(vector) != dim:
+        raise ValueError(f"expected {dim} got {len(vector)}")
+    if normalize:
+        return list(vector)
+    return list(vector)
 
 
 def _is_valid_uuid(value: str | None) -> bool:

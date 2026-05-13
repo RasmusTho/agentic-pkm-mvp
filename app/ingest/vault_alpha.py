@@ -32,6 +32,7 @@ from app.services.note_uuid import ensure_note_uuid
 from app.store.object_store import DomainObject, ObjectStore
 from app.stores import get_object_store
 from app.vault.layout import ensure_vault_layout
+from app.vault.paths import get_vault_system_dir_rel
 
 
 @dataclass
@@ -340,6 +341,9 @@ def _select_candidates(
                 continue
             rel_display = str(rel_path)
             if rel_display.startswith("."):
+                continue
+            system_root = Path(get_vault_system_dir_rel(vault_root))
+            if rel_path.parts[:2] == ("_system", "companions") or rel_path.parts[:2] == (*system_root.parts[:1], "companions"):
                 continue
             if not path.is_file():
                 continue
@@ -668,6 +672,9 @@ def _ingest_candidates(
         try:
             rel_path = path.relative_to(vault_root)
             rel_display = str(rel_path)
+            system_root = Path(get_vault_system_dir_rel(vault_root))
+            if rel_path.parts[:2] == ("_system", "companions") or rel_path.parts[:2] == (*system_root.parts[:1], "companions"):
+                continue
             if rel_display in processed:
                 continue
             try:

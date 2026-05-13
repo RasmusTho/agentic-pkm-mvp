@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.vault.paths import get_vault_system_dir_rel
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 _LEGACY_COMPANIONS_DIR = Path("_system/companions")
@@ -101,13 +102,15 @@ class ArtifactIdentity:
 # ---------------------------------------------------------------------------
 
 def _companions_dir(vault_root: Path | None = None) -> Path:
-    # Contract lock: companions are always under _system/companions.
-    return _LEGACY_COMPANIONS_DIR
+    if vault_root is None:
+        return _LEGACY_COMPANIONS_DIR
+    return Path(get_vault_system_dir_rel(vault_root)) / "companions"
 
 
 def _heal_log_path(vault_root: Path | None = None) -> Path:
-    # Contract lock: heal log is always under _system/heal_log.jsonl.
-    return _LEGACY_HEAL_LOG_PATH
+    if vault_root is None:
+        return _LEGACY_HEAL_LOG_PATH
+    return Path(get_vault_system_dir_rel(vault_root)) / "heal_log.jsonl"
 
 
 def companion_path(uuid: str, vault_root: Path | None = None) -> Path:
@@ -122,6 +125,8 @@ def companion_path(uuid: str, vault_root: Path | None = None) -> Path:
 def read_companion(vault_root: Path, uuid: str) -> CompanionNote | None:
     """Read companion note for uuid. Returns None if missing or unparseable."""
     path = vault_root / companion_path(uuid, vault_root)
+    if not path.exists():
+        path = vault_root / _LEGACY_COMPANIONS_DIR / f"{uuid}.md"
     if not path.exists():
         return None
     try:
@@ -139,6 +144,10 @@ def write_companion(vault_root: Path, companion: CompanionNote) -> None:
     fm = _companion_to_fm(companion)
     content = dump_frontmatter(fm, "")
     path.write_text(content, encoding="utf-8")
+    legacy = vault_root / _LEGACY_COMPANIONS_DIR / f"{companion.uuid}.md"
+    if legacy != path:
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text(content, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

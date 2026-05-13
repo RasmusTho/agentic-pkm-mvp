@@ -338,9 +338,11 @@ class LLMRouter:
                         reason="deterministic",
                         degraded=cand.degraded,
                     )
-        selected = candidates[0]
-        if self._llm_provider_env is not None and intent.task_kind != "embed":
+        routing = getattr(self._settings, "llm_routing", None) if self._settings is not None else None
+        has_explicit_task_policy = bool(routing and intent.task_kind in routing.tasks)
+        if self._llm_provider_env is not None and intent.task_kind != "embed" and not has_explicit_task_policy:
             provider, degraded, reason = _resolve_provider(self._llm_provider_env)
+            selected = candidates[0]
             return LLMRoute(
                 provider=provider,
                 model=selected.model,
@@ -348,7 +350,7 @@ class LLMRouter:
                 reason=reason if degraded else selected.reason,
                 degraded=selected.degraded or degraded,
             )
-        return selected
+        return candidates[0]
 
     def default_routes(self, intents: Iterable[LLMTaskIntent]) -> dict[str, LLMRoute]:
         routes: dict[str, LLMRoute] = {}
