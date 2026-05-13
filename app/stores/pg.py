@@ -357,6 +357,11 @@ class PgVectorIndex(VectorIndex):
 
         with _connect() as conn:
             with conn.cursor() as cur:
+                cur.execute("SELECT count(*) AS total FROM store_vector_index")
+                total_row = cur.fetchone() or {}
+                total = int(total_row.get("total") or 0) if isinstance(total_row, dict) else int(total_row[0] or 0)
+                if total == 0:
+                    return []
                 requested_identity = identity or get_embedding_identity()
                 stored_identity = _ensure_index_identity(cur, requested_identity, allow_create=False)
                 if stored_identity.normalize:

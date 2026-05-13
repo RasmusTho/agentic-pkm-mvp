@@ -25,6 +25,7 @@ from app.agents.panel_agent.state import PanelAgentState
 from app.agents.panel_agent.wiring import get_default_action_wiring
 from app.components.settings.panel_actions_loader import load_panel_action_catalog
 from app.events.panel import NoteRef, PanelIntentEvent, PanelLogEntry, PanelRuntimeActionResult
+from app.events.schema import make_outbox_event
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.outbox import append_jsonl_outbox_event, coerce_outbox_event, write_outbox_event
 from app.store.object_store import ObjectStore
@@ -146,6 +147,51 @@ def execute_panel_intent(
             plan_panel_actions(state.panel_action_intent, event_id=intent_event.event_id, trace_id=intent_event.trace_id)
 
     emitted_events = list(state.emitted_events or [])
+    existing_topics = {
+        getattr(event, "event", None) or getattr(event, "event_type", None)
+        for event in emitted_events
+    }
+    for action in intent_event.payload.actions:
+        if not action.checked:
+            continue
+        mapping = getattr(action, "mapping", None)
+        downstream = getattr(mapping, "downstream_event", None) if mapping is not None else None
+        if not downstream or downstream in existing_topics:
+            continue
+        emitted_events.append(
+            make_outbox_event(
+                event=downstream,
+                payload={
+                    "note_uuid": intent_event.payload.note.uuid,
+                    "note_path": intent_event.payload.note.path,
+                    "action_id": action.id,
+                    "params": dict(getattr(mapping, "params", {}) or {}),
+                },
+                trace_id=intent_event.trace_id,
+                source="panel_agent.runtime",
+            )
+        )
+    if not emitted_events:
+        for action in intent_event.payload.actions:
+            if not action.checked:
+                continue
+            mapping = getattr(action, "mapping", None)
+            downstream = getattr(mapping, "downstream_event", None) if mapping is not None else None
+            if not downstream:
+                continue
+            emitted_events.append(
+                make_outbox_event(
+                    event=downstream,
+                    payload={
+                        "note_uuid": intent_event.payload.note.uuid,
+                        "note_path": intent_event.payload.note.path,
+                        "action_id": action.id,
+                        "params": dict(getattr(mapping, "params", {}) or {}),
+                    },
+                    trace_id=intent_event.trace_id,
+                    source="panel_agent.runtime",
+                )
+            )
     _write_db_outbox_events(emitted_events)
     for event in emitted_events:
         append_jsonl_outbox_event(resolved_outbox, event, default_source="panel_agent.runtime")

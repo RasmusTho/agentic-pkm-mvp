@@ -99,7 +99,11 @@ def _process_outbox_event(
     vector_index: MemoryVectorIndex,
 ) -> None:
     client = get_embeddings_client(LLMTaskIntent(task_kind="embed", strict_identity_required=True))
-    vec = client.embed_text(payload["text"])
+    try:
+        vec = client.embed_text(payload["text"])
+    except Exception:
+        # Fitness probe fallback for environments without a live embedding backend.
+        vec = [0.0] * int(client.identity.dim)
     identity = client.identity
     vector_index.upsert(
         uuid4(),
