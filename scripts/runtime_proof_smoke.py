@@ -106,7 +106,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-base", default=os.environ.get("RUNTIME_PROOF_API_BASE", "http://127.0.0.1:8000"))
     parser.add_argument("--output-dir", default="tmp/runtime-proof")
     parser.add_argument("--timestamp", default=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
-    parser.add_argument("--strict", action="store_true", help="Treat skipped checks as failures")
+    parser.add_argument(
+        "--allow-skips-to-pass",
+        action="store_true",
+        help="Allow PASS with skipped checks; default behavior keeps skips as blocking",
+    )
     return parser.parse_args()
 
 
@@ -233,11 +237,10 @@ def main() -> int:
     for check in checks:
         counts[check.status] += 1
 
-    if args.strict and counts["skip"] > 0:
-        counts["fail"] += counts["skip"]
-        counts["skip"] = 0
-
-    overall_status = "FAIL" if counts["fail"] > 0 else "PASS"
+    if counts["skip"] > 0 and not args.allow_skips_to_pass:
+        overall_status = "FAIL"
+    else:
+        overall_status = "FAIL" if counts["fail"] > 0 else "PASS"
     gate_line = KEEP_BLOCKED_LINE if overall_status == "FAIL" else UNBLOCK_LINE
 
     receipt = {

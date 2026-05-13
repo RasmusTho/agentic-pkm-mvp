@@ -123,4 +123,4 @@ python3 scripts/runtime_proof_smoke.py
 - overall status is clearly `PASS` or `FAIL`
 - the #867 gate line is present exactly once
 
-Use `--strict` if you want skipped checks to be treated as failures.
+By default, skipped checks are blocking and keep the overall receipt at `FAIL`. Use `--allow-skips-to-pass` only when you intentionally want a non-gating informational run.
