@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Any
 
 from app.components.embeddings import EmbeddingClientProtocol, get_embedding_client
@@ -43,6 +44,8 @@ def get_chat_client(intent: LLMTaskIntent) -> ChatClient:
 def get_embeddings_client(intent: LLMTaskIntent) -> EmbeddingClientProtocol:
     router = LLMRouter()
     route = router.route(intent)
+    if os.getenv("LLM_PROVIDER") and not os.getenv("EMBED_PROVIDER") and not os.getenv("EMBED_MODEL"):
+        return get_embedding_client(override_provider=os.getenv("LLM_PROVIDER"))
     return get_embedding_client(override_model=route.model, override_provider=route.provider)
 
 

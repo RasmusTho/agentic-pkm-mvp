@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.vault.paths import get_vault_system_dir_rel
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 _LEGACY_COMPANIONS_DIR = Path("_system/companions")
@@ -102,15 +101,13 @@ class ArtifactIdentity:
 # ---------------------------------------------------------------------------
 
 def _companions_dir(vault_root: Path | None = None) -> Path:
-    if vault_root is None:
-        return _LEGACY_COMPANIONS_DIR
-    return Path(get_vault_system_dir_rel(vault_root)) / "companions"
+    # Contract lock: companions are always under _system/companions.
+    return _LEGACY_COMPANIONS_DIR
 
 
 def _heal_log_path(vault_root: Path | None = None) -> Path:
-    if vault_root is None:
-        return _LEGACY_HEAL_LOG_PATH
-    return Path(get_vault_system_dir_rel(vault_root)) / "heal_log.jsonl"
+    # Contract lock: heal log is always under _system/heal_log.jsonl.
+    return _LEGACY_HEAL_LOG_PATH
 
 
 def companion_path(uuid: str, vault_root: Path | None = None) -> Path:

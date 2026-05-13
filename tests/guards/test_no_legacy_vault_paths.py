@@ -10,6 +10,7 @@ ALLOWED_PREFIXES = (
 )
 ALLOWED_FILES = (
     "tests/guards/test_no_legacy_vault_paths.py",
+    "tests/settings/test_health_settings.py",
 )
 SKIP_DIRS = {"__pycache__"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}

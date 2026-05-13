@@ -6,7 +6,8 @@ import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Dict
 
-from app.components.embeddings import get_embedding_client
+from app.components.embeddings import get_embedding_client, get_embedding_identity
+from app.llm.embeddings import embed_text as llm_embed_text
 from app.observability.tracer import start_span
 from app.outbox.events import DEFAULT_EMBEDDING_VIEW, emit_index_embedding_failed, emit_index_object_embedded
 from app.store.object_store import DomainObject, ObjectStore
@@ -73,12 +74,20 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     store.save_object(domain, emit_outbox=False, trace_id=trace_id)
 
     client = get_embedding_client()
-    identity = client.identity
+    identity = get_embedding_identity()
     embedding: list[float] | None = None
     actual_dim: int | None = None
 
     try:
-        embedding = client.embed_text(content)
+        embedding = list(
+            llm_embed_text(
+                text=content,
+                provider=identity.provider,
+                model=identity.model,
+                dim=identity.dim,
+                normalize=identity.normalize,
+            )
+        )
         actual_dim = len(embedding)
     except Exception as exc:
         actual_dim = _infer_dim_from_error(exc)
