@@ -165,6 +165,8 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 
 ## System-of-systems view
 
+The architecture spine for Yggdrasil as a system-of-systems with a stable kernel and replaceable extension fabric lives in `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`. That document owns the kernel/extension-fabric framing and the eight-subsystem map (Human Surface, Knowledge & Artifact, Runtime Projection, Capability, Agent/Orchestration, Governance/Authority, Integration Fabric, Observability/Fitness). This document remains authoritative for the current runtime baseline and current-vs-planned status.
+
 The current runtime should be read as a small system-of-systems arrangement:
 - Obsidian/human editing is the human-surface environment
 - system-owned companion artifacts preserve continuity and repair state in the system surface
