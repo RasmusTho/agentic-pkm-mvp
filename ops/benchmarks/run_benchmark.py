@@ -107,6 +107,7 @@ def _bench_index_write(
     warnings: List[str] = []
 
     try:
+        from app.components.embeddings import EmbeddingIdentity, get_embedding_identity  # noqa: E402
         from app.components.llm.fabric import LLMTaskIntent, get_embeddings_client  # noqa: E402
         from app.stores.memory import MemoryVectorIndex  # noqa: E402
     except ImportError as exc:
@@ -128,11 +129,18 @@ def _bench_index_write(
             model_name = identity.model
         except Exception as exc:
             # Keep benchmark contract stable in offline/local environments.
+            base_identity = get_embedding_identity()
             warnings.append(
                 f"{METRIC_INDEX_WRITE} embeddings provider unavailable; using synthetic vector: {exc}"
             )
-            vec = [0.0] * 1536
-            model_name = "mock-embedding"
+            identity = EmbeddingIdentity(
+                provider=base_identity.provider,
+                model=base_identity.model,
+                dim=base_identity.dim,
+                normalize=base_identity.normalize,
+            )
+            vec = [0.0] * identity.dim
+            model_name = identity.model
 
         try:
             index.upsert(
@@ -142,7 +150,7 @@ def _bench_index_write(
                 payload={"title": f"bench-{i}"},
                 embedding=list(vec),
                 model=model_name,
-                identity=None,
+                identity=identity,
             )
         except Exception as exc:
             warnings.append(f"{METRIC_INDEX_WRITE} failed on sample {i}: {exc}")
