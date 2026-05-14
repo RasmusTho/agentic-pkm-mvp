@@ -223,7 +223,10 @@ Pre-push PR-body contract gate:
   - implementation lane: `Fixes #<id>` or `Closes #<id>` or `Resolves #<id>`
   - docs lane: `- [x] Docs authoring lane`
   - governance lane: `- [x] Governance lane`
+  - direct repair: a complete `## Direct Repair` block with `Type:`, `Reason:`, `Validation:`, and `Issue required: no`
 - If none is present, stop and repair the PR body before publication.
+
+Direct Repair block placement: prefer placing the `## Direct Repair` block as the first section of the PR body (before `## Summary`). The governance check accepts the block in any position — first, middle, or last — but first placement is preferred for reviewer clarity.
 
 ### Step 7: Hand Off to pr-integration
 

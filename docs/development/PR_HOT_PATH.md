@@ -96,6 +96,8 @@ This block is the contract for bounded direct repair PRs.
 - The merge receipt may reference this block instead of restating it.
 - If the repair expands beyond bounded scope, create or link an issue.
 
+Placement: prefer placing the `## Direct Repair` block first in the PR body (before `## Summary`) so it is immediately visible to reviewers. The governance check accepts the block in any position — first, middle, or last — regardless of whether a trailing newline follows.
+
 ## Governance Lane vs Direct Repair for Workflow Files
 
 The Governance lane checkbox (`- [x] Governance lane`) has a narrow allowed-file set in `issue-pr-governance.yml`. It covers `docs/`, `.codex/skills/`, and a small set of exact files. It does **not** cover `.github/workflows/*.yml` files broadly — only `issue-pr-governance.yml` itself is in the exact-file allowlist.

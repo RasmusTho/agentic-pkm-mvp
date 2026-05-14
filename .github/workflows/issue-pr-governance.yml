@@ -92,7 +92,12 @@ jobs:
             if (issueLinkPattern.test(body)) {
               return;
             }
-            const directRepairSectionMatch = body.match(/## Direct Repair[\s\S]*?(?=\n## |\n---|\n$)/i);
+            // Regex handles Direct Repair block in any position:
+            //   - First: block followed by another ## section or --- separator
+            //   - Middle: block between two ## sections or separators
+            //   - Last: block at end of string with no trailing newline (GitHub strips trailing newlines)
+            // The alternation tries the bounded match first; if no following ## or --- exists, falls back to match to end.
+            const directRepairSectionMatch = body.match(/## Direct Repair[\s\S]*?(?=\n##\s|\n---)|## Direct Repair[\s\S]*/i);
             const directRepairSection = directRepairSectionMatch ? directRepairSectionMatch[0] : "";
             const isDirectRepair =
               Boolean(directRepairSection) &&
