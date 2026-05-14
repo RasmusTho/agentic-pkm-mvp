@@ -1,22 +1,61 @@
-"""Vault Action Layer — bounded, governed note mutations.
+"""Vault Action Layer — governed artifact placement and lifecycle actions.
 
-This module is the first Tier-2 write surface for panel-driven vault actions.
-Every mutation passes through:
-  1. Zone validation (only inbox → workbench is permitted in this slice)
-  2. Source zone check (note must be in the expected source zone)
-  3. Idempotency check (already-moved notes return skipped=True)
-  4. Write guard (system health contract)
-  5. Collision-safe rename if the destination already has a note of the same name
-  6. Atomic move (shutil.move)
-  7. Durable receipt appended to the moved note
+This module is the **first slice** of a broader Vault Action Layer for
+Yggdrasil.  The current implementation supports only one bounded action:
+Markdown note placement from the inbox zone to the workbench zone.
 
-No hardcoded folder names are used — all paths resolve through VaultLayout.
+Long-term direction
+-------------------
+Agents should not receive raw filesystem powers.  Agents should request
+governed artifact lifecycle actions.  The Vault Action Layer decides
+whether, where, how, and with what receipt an artifact changes place,
+state, relation, or derivative form.
+
+Future artifact kinds this layer must eventually cover:
+
+- Markdown notes (this slice)
+- images / screenshots / whiteboards
+- PDFs / receipts / invoices
+- voice recordings and transcripts
+- videos
+- email exports / attachments
+- generated companion / system artifacts
+- source archives and retained raw material
+
+Future action model:
+
+- place / move / route
+- attach / link
+- derive / transcribe / OCR / summarize
+- classify / enrich metadata
+- archive / retain / expire
+- promote / reject / quarantine
+
+All future actions must pass through the same governed chain::
+
+    policy gate → write guard → idempotency check
+    → collision/placement handling → mutation
+    → receipt → mirror/outbox event
+
+``move_note_to_zone()`` is a narrow first-slice helper, not the full
+long-term abstraction.  A future generalisation (e.g.
+``place_artifact_in_zone()``) should supersede it once the artifact model
+is defined and multiple kinds are supported.
+
+Panel-writeback note
+--------------------
+The panel runtime writes a human-visible "✅ {label}" receipt to the note
+as soon as the downstream ``note.move.workbench`` event is *queued* — not
+after the worker successfully executes the move.  The Vault Action Layer
+receipt (HTML comment appended to the moved note) is the authoritative
+execution receipt.  A future slice should align panel-receipt semantics
+with execution reality (e.g. "🔄 queued" vs "✅ done").
 """
 from __future__ import annotations
 
 import logging
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -32,14 +71,24 @@ _ALLOWED_ZONES: dict[str, str] = {
 }
 
 _RECEIPT_ACTION = "move_note_to_zone"
+_RECEIPT_EVENT = "note.move.workbench"
 
 
 @dataclass
 class MoveResult:
-    """Result of a move_note_to_zone call."""
+    """Result of a move_note_to_zone call.
+
+    ``success`` reflects whether the caller's intent was satisfied.
+    ``mutation_applied`` indicates whether a filesystem move actually occurred.
+    ``receipt_written`` indicates whether the durable receipt was persisted.
+    Callers must not treat ``success=True`` as evidence that both mutation
+    and receipt succeeded — inspect each field independently.
+    """
 
     success: bool
-    skipped: bool  # True when idempotency check short-circuited (already moved)
+    skipped: bool  # True when idempotency check short-circuited
+    mutation_applied: bool
+    receipt_written: bool
     source_path: Path
     destination_path: Path
     collision_resolved: bool
@@ -80,24 +129,49 @@ def _append_receipt(
     note_path: Path,
     *,
     action: str,
+    event: str,
     actor: str,
+    source_zone: str,
+    destination_zone: str,
     source_path: Path,
     destination_path: Path,
-    zone: str,
+    vault_root: Path,
     ts: str,
+    write_guard_decision: str,
     intent_id: Optional[str],
+    trace_id: Optional[str],
 ) -> None:
-    """Append a receipt HTML comment block to the moved note."""
-    intent_part = f" | intent: {intent_id}" if intent_id else ""
-    receipt = (
-        f"\n<!-- vault-action-receipt: {action}"
-        f" | actor: {actor}"
-        f" | from: {source_path}"
-        f" | to: {destination_path}"
-        f" | zone: {zone}"
-        f" | ts: {ts}"
-        f"{intent_part} -->\n"
-    )
+    """Append a receipt HTML comment block to the moved note.
+
+    Paths are written as vault-relative strings to avoid encoding machine-
+    specific absolute paths into durable Markdown artifacts.
+    """
+    try:
+        from_rel = source_path.relative_to(vault_root).as_posix()
+    except ValueError:
+        from_rel = source_path.name
+    try:
+        to_rel = destination_path.relative_to(vault_root).as_posix()
+    except ValueError:
+        to_rel = destination_path.name
+
+    parts = [
+        f"vault-action-receipt: {action}",
+        f"actor: {actor}",
+        f"event: {event}",
+        f"source_zone: {source_zone}",
+        f"destination_zone: {destination_zone}",
+        f"from: {from_rel}",
+        f"to: {to_rel}",
+        f"write_guard: {write_guard_decision}",
+        f"ts: {ts}",
+    ]
+    if intent_id:
+        parts.append(f"intent: {intent_id}")
+    if trace_id:
+        parts.append(f"trace: {trace_id}")
+
+    receipt = f"\n<!-- {' | '.join(parts)} -->\n"
     existing = note_path.read_text(encoding="utf-8")
     note_path.write_text(existing + receipt, encoding="utf-8")
 
@@ -112,10 +186,13 @@ def move_note_to_zone(
     trace_id: Optional[str] = None,
     write_guard=None,
 ) -> MoveResult:
-    """Move a note from one vault zone to another.
+    """Move a Markdown note from one vault zone to another.
 
     Only inbox → workbench is supported in this slice.  All other
     source/destination pairs are rejected with success=False.
+
+    This is a narrow first-slice implementation of the Vault Action Layer.
+    See module docstring for the intended long-term abstraction.
 
     Args:
         note_path: Absolute path to the note to move.
@@ -128,12 +205,15 @@ def move_note_to_zone(
         write_guard: Optional WriteGuard to use (defaults to DEFAULT_WRITE_GUARD).
 
     Returns:
-        MoveResult with outcome details.
+        MoveResult with outcome details.  Inspect ``mutation_applied`` and
+        ``receipt_written`` independently; ``success=True`` alone does not
+        guarantee both succeeded.
     """
     if write_guard is None:
         write_guard = DEFAULT_WRITE_GUARD
 
     source_path = note_path.resolve()
+    vault_root = vault_root.resolve()
 
     # 1. Zone validation — determine source zone from the note's location.
     inbox_dir = (vault_root / layout.inbox_folder).resolve()
@@ -147,13 +227,15 @@ def move_note_to_zone(
 
     if source_zone is None:
         reason = (
-            f"Note is not in inbox zone (inbox_folder={layout.inbox_folder!r}); "
-            f"note_path={source_path}"
+            f"source_zone_invalid: note is not in inbox zone "
+            f"(inbox_folder={layout.inbox_folder!r})"
         )
         logger.warning("move_note_to_zone rejected: %s", reason)
         return MoveResult(
             success=False,
             skipped=False,
+            mutation_applied=False,
+            receipt_written=False,
             source_path=source_path,
             destination_path=source_path,
             collision_resolved=False,
@@ -164,13 +246,16 @@ def move_note_to_zone(
     allowed_destination = _ALLOWED_ZONES.get(source_zone)
     if destination_zone != allowed_destination:
         reason = (
-            f"Zone transition not allowed: {source_zone!r} → {destination_zone!r}. "
-            f"Only inbox → workbench is supported in this slice."
+            f"destination_zone_invalid: transition {source_zone!r} → "
+            f"{destination_zone!r} is not allowed; only inbox → workbench "
+            f"is supported in this slice"
         )
         logger.warning("move_note_to_zone rejected: %s", reason)
         return MoveResult(
             success=False,
             skipped=False,
+            mutation_applied=False,
+            receipt_written=False,
             source_path=source_path,
             destination_path=source_path,
             collision_resolved=False,
@@ -178,13 +263,43 @@ def move_note_to_zone(
             reason=reason,
         )
 
-    # 2. Idempotency check — if the note no longer exists at source, it was already moved.
+    # 2. Idempotency check.
+    #    "Source missing" alone is not proof of a successful prior move — the
+    #    note may have been deleted, manually moved, or the path may be stale.
+    #    Check whether the note appears at the expected destination before
+    #    claiming a verified idempotent skip.
     if not source_path.exists():
-        reason = f"Note not found at source path (already moved or deleted): {source_path}"
-        logger.info("move_note_to_zone skipped (idempotent): %s", reason)
+        expected_dest = workbench_dir / source_path.name
+        if expected_dest.exists():
+            logger.info(
+                "move_note_to_zone skipped (already_moved_verified): "
+                "source=%s dest=%s",
+                source_path,
+                expected_dest,
+            )
+            return MoveResult(
+                success=True,
+                skipped=True,
+                mutation_applied=False,
+                receipt_written=False,
+                source_path=source_path,
+                destination_path=expected_dest,
+                collision_resolved=False,
+                receipt_path=None,
+                reason="already_moved_verified",
+            )
+        # Source gone but destination also absent — cannot verify.
+        reason = (
+            f"source_missing_unverified: note not found at source path "
+            f"and not found at expected destination {expected_dest}; "
+            f"may have been deleted, manually moved, or path is stale"
+        )
+        logger.warning("move_note_to_zone: %s", reason)
         return MoveResult(
-            success=True,
+            success=False,
             skipped=True,
+            mutation_applied=False,
+            receipt_written=False,
             source_path=source_path,
             destination_path=source_path,
             collision_resolved=False,
@@ -196,11 +311,13 @@ def move_note_to_zone(
     try:
         write_guard.assert_writes_allowed(_RECEIPT_ACTION)
     except WritesBlockedError as exc:
-        reason = f"Write guard denied: {exc}"
+        reason = f"write_guard_denied: {exc}"
         logger.warning("move_note_to_zone blocked by write guard: %s", reason)
         return MoveResult(
             success=False,
             skipped=False,
+            mutation_applied=False,
+            receipt_written=False,
             source_path=source_path,
             destination_path=source_path,
             collision_resolved=False,
@@ -208,17 +325,16 @@ def move_note_to_zone(
             reason=reason,
         )
 
-    # 4. Destination resolution.
-    destination_dir = workbench_dir
-    destination_dir.mkdir(parents=True, exist_ok=True)
+    # 4. Destination resolution + collision handling.
+    workbench_dir.mkdir(parents=True, exist_ok=True)
+    final_destination, collision_resolved = _collision_safe_path(
+        workbench_dir, source_path.name
+    )
 
-    # 5. Collision handling.
-    final_destination, collision_resolved = _collision_safe_path(destination_dir, source_path.name)
-
-    # 6. Atomic move.
+    # 5. Atomic move.
     shutil.move(str(source_path), str(final_destination))
     logger.info(
-        "move_note_to_zone: moved note actor=%s from=%s to=%s collision_resolved=%s trace_id=%s",
+        "move_note_to_zone: actor=%s from=%s to=%s collision_resolved=%s trace_id=%s",
         actor,
         source_path,
         final_destination,
@@ -226,35 +342,46 @@ def move_note_to_zone(
         trace_id or "-",
     )
 
-    # 7. Durable receipt.
+    # 6. Durable receipt.
     ts = datetime.now(timezone.utc).isoformat()
+    receipt_written = False
+    receipt_path: Optional[Path] = None
     try:
         _append_receipt(
             final_destination,
             action=_RECEIPT_ACTION,
+            event=_RECEIPT_EVENT,
             actor=actor,
+            source_zone=source_zone,
+            destination_zone=destination_zone,
             source_path=source_path,
             destination_path=final_destination,
-            zone=destination_zone,
+            vault_root=vault_root,
             ts=ts,
+            write_guard_decision="allowed",
             intent_id=intent_id,
+            trace_id=trace_id,
         )
+        receipt_written = True
         receipt_path = final_destination
-    except OSError:
+    except OSError as exc:
         logger.warning(
-            "move_note_to_zone: receipt write failed (note already moved) note=%s",
+            "move_note_to_zone: receipt write failed note=%s error=%s",
             final_destination,
+            exc,
         )
-        receipt_path = None
 
+    reason = "ok" if receipt_written else "moved_without_receipt"
     return MoveResult(
         success=True,
         skipped=False,
+        mutation_applied=True,
+        receipt_written=receipt_written,
         source_path=source_path,
         destination_path=final_destination,
         collision_resolved=collision_resolved,
         receipt_path=receipt_path,
-        reason="ok",
+        reason=reason,
     )
 
 

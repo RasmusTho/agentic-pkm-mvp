@@ -616,6 +616,79 @@ def handle_ingest_vault_changed(
     return WorkerIngestSummary(ingested=1)
 
 
+def handle_note_move_workbench(
+    payload: Mapping[str, Any],
+    *,
+    vault_root: Path | None = None,
+    trace_id: str | None = None,
+) -> None:
+    """Handle a note.move.workbench event from the panel agent.
+
+    Delegates to the Vault Action Layer (app.vault.actions.move_note_to_zone).
+    This is the first Tier-2 vault action handler; see app/vault/actions.py for
+    the full governed mutation chain and the long-term artifact model.
+    """
+    from app.vault.actions import move_note_to_zone
+    from app.vault.layout import load_layout
+
+    note_path_str = payload.get("note_path")
+    if not note_path_str:
+        logger.warning(
+            "handle_note_move_workbench: missing note_path in payload trace_id=%s",
+            trace_id or "-",
+        )
+        return
+
+    resolved_root = _resolve_vault_root(vault_root)
+    try:
+        layout = load_layout(resolved_root)
+    except Exception as exc:
+        logger.warning(
+            "handle_note_move_workbench: cannot load vault layout vault_root=%s error=%s trace_id=%s",
+            resolved_root,
+            exc,
+            trace_id or "-",
+        )
+        return
+
+    params = payload.get("params") or {}
+    destination_zone = params.get("destination_zone") or "workbench"
+    intent_id = payload.get("action_id") or payload.get("intent_id")
+    note_path = Path(str(note_path_str))
+
+    result = move_note_to_zone(
+        note_path=note_path,
+        destination_zone=destination_zone,
+        vault_root=resolved_root,
+        layout=layout,
+        actor="panel_agent",
+        intent_id=str(intent_id) if intent_id else None,
+        trace_id=trace_id,
+    )
+
+    if result.skipped:
+        logger.info(
+            "handle_note_move_workbench: skipped reason=%s note_path=%s trace_id=%s",
+            result.reason,
+            note_path,
+            trace_id or "-",
+        )
+    elif result.mutation_applied:
+        logger.info(
+            "handle_note_move_workbench: moved from=%s to=%s receipt_written=%s trace_id=%s",
+            result.source_path,
+            result.destination_path,
+            result.receipt_written,
+            trace_id or "-",
+        )
+    else:
+        logger.warning(
+            "handle_note_move_workbench: move failed reason=%s trace_id=%s",
+            result.reason,
+            trace_id or "-",
+        )
+
+
 def run(
     interval: float = 0.2,
     startup_retries: int = 30,
@@ -735,6 +808,8 @@ def run(
                                     "trace_id": trace_id,
                                 }
                             )
+                        elif topic == NOTE_MOVE_WORKBENCH:
+                            handle_note_move_workbench(payload, trace_id=trace_id)
                         else:
                             logger.debug("worker skipping unsupported topic=%s trace_id=%s", topic, trace_id)
                     except Exception:
