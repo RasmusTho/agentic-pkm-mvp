@@ -26,7 +26,7 @@ If this document conflicts with any of the owner docs above on their respective 
 - Subsystems below are conceptual decompositions of the same single local-first runtime. They are not separate deployments, services, or processes.
 - "Kernel" describes the stable surfaces and contracts that newer agents, capabilities, integrations, and UI surfaces must not violate. "Extension fabric" describes the surfaces that are expected to evolve, be replaced, or grow over time.
 - Where a subsystem already has a shipped owner doc, that doc remains authoritative for current behavior. Where it does not, the subsystem entry is target-state framing and explicitly says so.
-- This document does not introduce new lower-level contracts. Detailed contracts for integration fabric, capabilities, agent memory, context bundles, and companion-UI/vault topology are owned by the later phase issues in initiative #877.
+- This document does not introduce new lower-level contracts. Detailed contracts for integration fabric and capabilities are owned by `docs/INTEGRATION_FABRIC_CONTRACT.md` and `docs/CAPABILITY_CONTRACT_MODEL.md` (Phase 2 of initiative #877, slice #879). Agent memory, context bundles, and companion-UI/vault topology contracts remain owned by the later phase issues in initiative #877.
 
 ## Kernel and extension fabric
 
@@ -95,8 +95,8 @@ Yggdrasil's system-of-systems decomposition has eight subsystems. Each subsystem
 
 - **Concern:** Reusable, composable, surface-independent functions that any interaction surface or agent can invoke — retrieval, reranking, orientation, resurfacing, summarization, planning support, and similar. Capabilities have explicit typed contracts; they are not agents and are not surface-specific.
 - **Kernel binding:** Authority separation (a capability returns information, it does not decide meaning or mutate the durable surface); event/outbox compatibility for any side effects that do cross into execution.
-- **Owner docs:** `docs/ARCHITECTURE.md` (`Capability Model`), `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`, `docs/FINDING_AND_REORIENTING/README.md`, `docs/RETRIEVAL.md`.
-- **Status:** Retrieval is a shipped typed-capability seam consumed by ASK. Orientation and resurfacing exist as minimal read-only runtime seams. Broader capability-contract work and capability registry are phase-issue work (#879).
+- **Owner docs:** `docs/CAPABILITY_CONTRACT_MODEL.md` (capability definition, standard contract shape, canonical examples), `docs/ARCHITECTURE.md` (`Capability Model`), `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`, `docs/FINDING_AND_REORIENTING/README.md`, `docs/RETRIEVAL.md`.
+- **Status:** Capability contract model is docs-only authority (`docs/CAPABILITY_CONTRACT_MODEL.md`, delivered by #879). Retrieval is a shipped typed-capability seam consumed by ASK. Orientation and resurfacing exist as minimal read-only runtime seams. A runtime capability registry remains out of scope and is later phase-issue work.
 
 ### 5. Agent / Orchestration
 
@@ -116,8 +116,8 @@ Yggdrasil's system-of-systems decomposition has eight subsystems. Each subsystem
 
 - **Concern:** External integrations that provide capability, transport, inference, or interface — LLM and embedding providers, cloud connectors, watcher transports (filesystem, sync replicas), MCP/tool descriptors, A2A routing, remote multiplex seams, future external surfaces.
 - **Kernel binding:** Local-first operation (external integrations must not be required for the system to function); external integrations are never semantic authority without an explicit Yggdrasil contract; event/outbox compatibility for any side effects.
-- **Owner docs:** `docs/ARCHITECTURE.md` (`Abstraction boundaries`, `Operational topology`, MCP/tools and A2A sections), `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`, `docs/contracts/A2A_CONTRACT_AND_TRACE.md`, `docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md`, `docs/LLM.md`, `docs/EMBEDDINGS.md`.
-- **Status:** Mixed. MCP descriptor registry, registry-backed ToolProvider, flagged remote multiplex seam with deterministic local fallback, bounded in-process A2A routing, watcher abstractions, and provider boundaries are shipped. A unified integration-fabric contract is phase-issue work (#879).
+- **Owner docs:** `docs/INTEGRATION_FABRIC_CONTRACT.md` (integration-class taxonomy, contract fields, authority rule), `docs/ARCHITECTURE.md` (`Abstraction boundaries`, `Operational topology`, MCP/tools and A2A sections), `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`, `docs/contracts/A2A_CONTRACT_AND_TRACE.md`, `docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md`, `docs/LLM.md`, `docs/EMBEDDINGS.md`.
+- **Status:** Mixed. Unified integration-fabric contract is docs-only authority (`docs/INTEGRATION_FABRIC_CONTRACT.md`, delivered by #879). MCP descriptor registry, registry-backed ToolProvider, flagged remote multiplex seam with deterministic local fallback, bounded in-process A2A routing, watcher abstractions, and provider boundaries are shipped. A runtime integration registry remains out of scope.
 
 ### 8. Observability / Fitness
 
@@ -137,7 +137,7 @@ Yggdrasil's system-of-systems decomposition has eight subsystems. Each subsystem
 
 This document is the spine. The following are intentionally not defined here and are owned elsewhere or by later phase issues in initiative #877:
 
-- Detailed integration-fabric contract and capability-contract schema — phase issue #879.
+- Detailed integration-fabric contract and capability-contract schema — owned by `docs/INTEGRATION_FABRIC_CONTRACT.md` and `docs/CAPABILITY_CONTRACT_MODEL.md` (delivered by #879).
 - Agent memory and context-bundle contracts — phase issue #880.
 - Emergent feature composition model — phase issue #881.
 - Companion-UI onboarding and vault-topology alignment — phase issue #882.

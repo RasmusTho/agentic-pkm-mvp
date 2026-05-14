@@ -29,7 +29,9 @@ This document is target-state framing. Several integration classes already have 
 
 ## Integration classes
 
-Yggdrasil composes with ten integration classes. Each class is a category of external component that crosses a Yggdrasil boundary. A given concrete integration (for example, a specific LLM vendor SDK) is an instance of one of these classes.
+Yggdrasil composes with ten integration classes. Each class is a category of external component that crosses a Yggdrasil boundary. A given concrete integration is typically an instance of one class (for example, a specific LLM vendor SDK is a Model provider).
+
+A concrete integration may legitimately participate in **more than one class** when it plays more than one role at the same Yggdrasil boundary. Obsidian is the canonical example: it is both the **Human surface** the human writes in (the durable surface where vault Markdown is authored) and the **External UI shell** that hosts Yggdrasil's in-note Panel surface and consumes the runtime API. When an integration spans classes this way, every applicable class's contract fields (allowed role, authority limits, persistence class, provenance requirement, event boundary, health/observability expectation, replacement strategy) must be answered for the integration's behavior in that role. The classes do not blend; the integration answers each contract surface in turn.
 
 The ten integration classes are:
 
