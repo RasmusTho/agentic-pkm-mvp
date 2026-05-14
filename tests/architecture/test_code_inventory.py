@@ -20,19 +20,37 @@ def test_code_inventory_declares_canonical_runtime_paths() -> None:
         )
 
 
+def _section_lines(text: str, heading: str) -> list[str]:
+    """Return lines belonging to the markdown section starting with '## {heading}'."""
+    lines = text.splitlines()
+    in_section = False
+    result: list[str] = []
+    for line in lines:
+        if line.startswith(f"## {heading}"):
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if in_section:
+            result.append(line)
+    return result
+
+
 def test_code_inventory_classifies_known_legacy_candidates() -> None:
-    """app/agent, app/plugins, and app/store are classified as deprecated."""
+    """app/agent, app/plugins, and app/store are each a distinct row in the Deprecated section."""
     assert CODE_INVENTORY.exists(), "docs/CODE_INVENTORY.md is missing"
     text = CODE_INVENTORY.read_text(encoding="utf-8")
-    # The deprecated section must be present
     assert "Deprecated" in text, (
         "docs/CODE_INVENTORY.md must contain a 'Deprecated' section"
     )
+    deprecated_lines = _section_lines(text, "Deprecated Packages")
+    # Match backtick-quoted cells so `app/store` cannot falsely match inside `app/stores`
     for pkg in ("app/agent", "app/plugins", "app/store"):
-        assert pkg in text, (
-            f"docs/CODE_INVENTORY.md must classify {pkg} under the deprecated section"
+        cell = f"`{pkg}`"
+        assert any(cell in line for line in deprecated_lines), (
+            f"docs/CODE_INVENTORY.md must have a '{cell}' row in the Deprecated section "
+            f"(substring match on '{pkg}' is insufficient — it would match app/stores)"
         )
-    # Confirm the word 'deprecated' appears in relation to these packages in the doc
     lower = text.lower()
     assert "deprecated" in lower, (
         "docs/CODE_INVENTORY.md must use the word 'deprecated' for legacy packages"

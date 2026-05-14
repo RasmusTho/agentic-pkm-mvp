@@ -67,3 +67,11 @@ Production-support packages active in the runtime but not on the primary data pa
 Notable support packages include: `app/auth`, `app/capture`, `app/chat`, `app/components`, `app/config`, `app/context_dimensions`, `app/deps`, `app/diarization`, `app/domain`, `app/eval`, `app/fitness`, `app/guardrails`, `app/io`, `app/jobs`, `app/knowledge`, `app/langgraph`, `app/llm`, `app/mcp`, `app/media`, `app/memory`, `app/middleware`, `app/obs`, `app/observability`, `app/orchestrator`, `app/planner`, `app/policy`, `app/ports`, `app/promotion`, `app/quality`, `app/reasoning`, `app/release_channels`, `app/runtime`, `app/schemas`, `app/services`, `app/tracing`, `app/web`, `app/write_guard`.
 
 Agent surfaces: `app/agents`, `app/a2a`.
+
+Infrastructure packages (not on the primary data path; extend only under their named concern):
+
+| Package | Role |
+| --- | --- |
+| `app/alembic` | Database migration scripts managed by Alembic. |
+| `app/scripts` | Operational scripts for local and production administration. |
+| `app/testing` | Shared test fixtures, factories, and helpers used across the test suite. |
