@@ -29,7 +29,7 @@ Primary runtime packages that form the active data path. These are the packages 
 | `app/outbox` | DB outbox: write, consume, and ack |
 | `app/settings` | Settings compiler and registry |
 | `app/health` | Health check surface |
-| `app/vault` | Vault abstraction (path resolution, UUID, companion notes) |
+| `app/vault` | Vault abstraction (path resolution, UUID, companion notes) and Vault Action Layer (governed artifact placement and lifecycle) |
 | `app/ingest` | Note ingestion pipeline |
 | `app/search` | Hybrid search surface |
 | `app/db` | Database session and migration bootstrap |
