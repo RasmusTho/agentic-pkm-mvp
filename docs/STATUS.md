@@ -258,3 +258,10 @@ those issues are delivered and validated. Agent Memory remains local spec-only u
 searches find or create active implementation issues. The bridge-map reference to the agent-memory
 contract was corrected from a local stale "future" reference to the active
 `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` contract.
+
+Update (2026-05-14): `CONTEXT-BUNDLES-01` (#895) delivered by PR #931. Adds the minimal
+`ContextBundle` pydantic schema (`app/context_bundles/schema.py`) covering identity, trigger,
+intended use, scope, included/excluded items with per-item provenance and trust posture, distinct
+authority flags, stale/expiry posture, and receipt linkage. No runtime behavior changed; the schema
+is a typed contract surface only. The broader context-bundle capability (#894) and remaining child
+slices (#896 and later) remain future work.
