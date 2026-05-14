@@ -620,9 +620,9 @@ An authority boundary defines what the system may:
 
 A trust boundary defines when the human may rely on system outputs without losing control, understanding, or the ability to audit what happened.
 
-## 8. Memory, knowledge, and context companions
+## Companion contracts: memory, knowledge, and context bundles
 
-The ontology names actors, artifacts, commitments, provenance, and authority. Two companion contracts extend it for agent operational memory and for the inspectable envelope used when selected context drives orientation, resurfacing, or action. They are pointers, not new sources of truth — the ontology rules above remain authoritative.
+This section is not an additional ontology layer. The canonical ontology remains the seven layers above (and as restated in `docs/PROJECT_KERNEL.md`). The pointers below name companion contracts that extend the ontology for agent operational memory and for the inspectable envelope used when selected context drives orientation, resurfacing, or action. They are pointers only — the ontology rules above remain authoritative.
 
 - `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` separates human second-brain memory from agent operational memory, distinguishes semantic knowledge from episodic, prospective, procedural, working, preference, policy, and reflective memory classes, and defines candidate/review/promotion semantics so generated or inferred memory is not automatically trusted knowledge.
 - `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` defines the inspectable bridge object that records what context was selected, why, for what intended use, with what authority limits and provenance, across retrieval, orientation, resurfacing, and write-proposal use cases. Semantic similarity alone is not authority; context that drives writeback or action must still pass authority and provenance constraints recorded here.
