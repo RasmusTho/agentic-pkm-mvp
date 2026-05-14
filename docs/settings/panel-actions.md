@@ -31,6 +31,20 @@ mappings:
     llm_hint: "Choose this when the instruction asks to summarize the note into a separate document."
     intent_type: "ingest"
     downstream_event: "ingest.summary.create"
+  - id: "note.move.workbench"
+    kind: "zone"
+    labels:
+      - "Flytta den här anteckningen till Workbench"
+      - "Move this note to Workbench"
+      - "Move this note to the workbench folder"
+    description: "Move the note from Inbox to Workbench logical zone."
+    llm_hint: "Choose this when the instruction asks to move the note to Workbench or the workbench folder."
+    intent_type: "zone_move"
+    trust_verb: "APPLY"
+    downstream_event: "note.move.workbench"
+    params:
+      source_zone: "inbox"
+      destination_zone: "workbench"
 ---
 
 PanelAgent action catalog (canonical source for AI panel actions).

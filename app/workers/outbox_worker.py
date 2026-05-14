@@ -14,7 +14,7 @@ from typing import Any, Mapping
 from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.sync import SyncChainCorrelationData, SyncLatencySummaryEvent
-from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED, PROMOTE_INTENT_CREATED
+from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, NOTE_MOVE_WORKBENCH, PANEL_SCAN_REQUESTED, PROMOTE_INTENT_CREATED
 from app.indexer.consumer import process_event as process_indexer_event
 from app.outbox.events import INDEX_EMBEDDING_REQUESTED
 from app.observability.tracer import start_span
@@ -65,6 +65,75 @@ def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
         payload.get("path"),
         payload.get("deleted"),
     )
+
+
+def handle_note_move_workbench(payload: Mapping[str, Any], *, trace_id: str | None = None) -> None:
+    """Handle a note.move.workbench downstream event emitted by the panel agent.
+
+    Resolves vault layout from environment, then delegates to
+    app.vault.actions.move_note_to_zone for the governed mutation chain.
+    """
+    from app.vault.actions import move_note_to_zone
+    from app.vault.layout import load_layout
+
+    note_path_raw = payload.get("note_path") or ""
+    if not note_path_raw:
+        logger.warning("handle_note_move_workbench: missing note_path in payload trace_id=%s", trace_id or "-")
+        return
+
+    vault_root_raw = os.getenv("VAULT_ROOT") or os.getenv("WATCHER_VAULT_PATH") or "vault"
+    vault_root = Path(vault_root_raw).expanduser().resolve()
+
+    try:
+        layout = load_layout(vault_root)
+    except Exception as exc:
+        logger.error(
+            "handle_note_move_workbench: cannot load vault layout vault_root=%s error=%s trace_id=%s",
+            vault_root,
+            exc,
+            trace_id or "-",
+        )
+        return
+
+    note_path = Path(note_path_raw)
+    if not note_path.is_absolute():
+        note_path = vault_root / note_path
+    note_path = note_path.resolve()
+
+    params = payload.get("params") or {}
+    destination_zone = params.get("destination_zone") or "workbench"
+    intent_id = payload.get("action_id") or payload.get("intent_id")
+
+    result = move_note_to_zone(
+        note_path=note_path,
+        destination_zone=destination_zone,
+        vault_root=vault_root,
+        layout=layout,
+        actor="panel_agent",
+        intent_id=str(intent_id) if intent_id else None,
+        trace_id=trace_id,
+    )
+
+    if result.skipped:
+        logger.info(
+            "handle_note_move_workbench: skipped (idempotent) note_path=%s trace_id=%s",
+            note_path,
+            trace_id or "-",
+        )
+    elif result.success:
+        logger.info(
+            "handle_note_move_workbench: moved note from=%s to=%s collision_resolved=%s trace_id=%s",
+            result.source_path,
+            result.destination_path,
+            result.collision_resolved,
+            trace_id or "-",
+        )
+    else:
+        logger.warning(
+            "handle_note_move_workbench: move failed reason=%s trace_id=%s",
+            result.reason,
+            trace_id or "-",
+        )
 
 
 def _ensure_logging_configured() -> None:
@@ -656,6 +725,8 @@ def run(
                                 trace_id=trace_id,
                                 event_id=event_id,
                             )
+                        elif topic == NOTE_MOVE_WORKBENCH:
+                            handle_note_move_workbench(payload, trace_id=trace_id)
                         elif topic == INDEX_EMBEDDING_REQUESTED:
                             process_indexer_event(
                                 {
