@@ -455,3 +455,82 @@ def test_note_move_workbench_downstream_event_is_wired() -> None:
     assert hasattr(worker_module, "handle_note_move_workbench"), (
         "outbox_worker must export handle_note_move_workbench"
     )
+
+
+def test_execute_panel_intent_emits_note_move_workbench(tmp_path: Path) -> None:
+    """execute_panel_intent must emit note.move.workbench when a zone_move action is checked.
+
+    Addresses Codex review concern: the graph logs 'unhandled_action' for zone_move intent
+    types, but the runtime's downstream-event emission loop must still produce the outbox
+    message so the worker handler and Vault Action Layer are reachable.
+    """
+    import uuid
+    from unittest.mock import patch, MagicMock as _MagicMock
+
+    from app.agents.panel_agent import execute_panel_intent
+    from app.components.settings.panel_actions_loader import (
+        PanelActionCatalog,
+        PanelActionDescriptor,
+    )
+    from app.events.panel import (
+        NoteRef,
+        PanelEventSource,
+        PanelInfo,
+        PanelIntentAction,
+        PanelIntentEvent,
+        PanelIntentPayload,
+        PanelActionMapping,
+    )
+
+    note_uuid = uuid.uuid4().hex
+    note_ref = NoteRef(uuid=note_uuid, path="/vault/inbox/test-note.md")
+    action = PanelIntentAction(
+        id="note.move.workbench",
+        label="Move this note to Workbench",
+        checked=True,
+        mapping=PanelActionMapping(
+            id="note.move.workbench",
+            intent_type="zone_move",
+            downstream_event="note.move.workbench",
+            trust_verb="APPLY",
+            params={"source_zone": "inbox", "destination_zone": "workbench"},
+        ),
+    )
+    panel = PanelInfo(panel_id="panel-1", instruction="", raw_block="")
+    payload = PanelIntentPayload(note=note_ref, panel=panel, actions=[action])
+    intent_event = PanelIntentEvent(
+        payload=payload,
+        trace_id="test-trace",
+        source=PanelEventSource(trigger="watcher", component="panel_agent_test", sot="test"),
+    )
+
+    outbox_file = tmp_path / "outbox.jsonl"
+
+    # Stub out side-effecting I/O (ObjectStore, DB outbox write).
+    dummy_store = _MagicMock()
+    dummy_store.get_object.return_value = None
+
+    with (
+        patch("app.agents.panel_agent.runtime.ObjectStore", return_value=dummy_store),
+        patch("app.agents.panel_agent.runtime._write_db_outbox_events"),
+        patch("app.agents.panel_agent.runtime._persist_log"),
+        patch("app.agents.panel_agent.runtime._apply_note_writeback"),
+        patch("app.agents.panel_agent.runtime.load_panel_action_catalog", return_value=PanelActionCatalog.from_descriptors([
+            PanelActionDescriptor(
+                id="note.move.workbench",
+                intent_type="zone_move",
+                downstream_event="note.move.workbench",
+                labels=["Move this note to Workbench"],
+                description="Move inbox note to workbench",
+            )
+        ])),
+    ):
+        result = execute_panel_intent(intent_event, outbox_path=outbox_file)
+
+    emitted_topics = [
+        getattr(ev, "event", None) or getattr(ev, "event_type", None)
+        for ev in result.emitted_events
+    ]
+    assert "note.move.workbench" in emitted_topics, (
+        f"execute_panel_intent must emit note.move.workbench; got: {emitted_topics}"
+    )
