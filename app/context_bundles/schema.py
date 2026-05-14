@@ -31,6 +31,9 @@ class IncludedItem(BaseModel):
 class ExcludedItem(BaseModel):
     artifact_id: str
     reason: str
+    trust_state: Optional[str] = None
+    review_state: Optional[str] = None
+    provenance: Optional[ItemProvenance] = None
 
 
 class AuthorityFlags(BaseModel):

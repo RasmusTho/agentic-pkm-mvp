@@ -50,13 +50,20 @@ def test_context_bundle_items_preserve_reason_and_provenance():
         trust_state="reviewed",
         provenance=ItemProvenance(origin="vault note", transformed_by="retrieval"),
     )
-    excluded = ExcludedItem(artifact_id="art_999", reason="out of scope")
+    excluded = ExcludedItem(
+        artifact_id="art_999",
+        reason="out of scope for active sphere",
+        trust_state="unreviewed",
+        provenance=ItemProvenance(origin="vault note", transformed_by="retrieval"),
+    )
     bundle = _minimal_bundle(included=[item], excluded=[excluded])
 
     assert bundle.included[0].reason == "direct evidence"
     assert bundle.included[0].trust_state == "reviewed"
     assert bundle.included[0].provenance.origin == "vault note"
-    assert bundle.excluded[0].reason == "out of scope"
+    assert bundle.excluded[0].reason == "out of scope for active sphere"
+    assert bundle.excluded[0].trust_state == "unreviewed"
+    assert bundle.excluded[0].provenance.origin == "vault note"
 
 
 def test_context_bundle_authority_flags_are_distinct():
