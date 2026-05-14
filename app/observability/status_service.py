@@ -795,6 +795,14 @@ def _status_context_dimensions(outbox_path: Path) -> ContextDimensionsStatus | N
     return None
 
 
+def _get_v6_seams() -> dict | None:
+    try:
+        from app.cli.health import _check_v6_seams  # lazy to avoid circular import
+        return _check_v6_seams()
+    except Exception:
+        return None
+
+
 def get_system_status() -> SystemStatus:
     sot_meta = get_sot_metadata()
     ingestion = get_ingestion_status()
@@ -837,6 +845,7 @@ def get_system_status() -> SystemStatus:
         watcher_automation=_get_watcher_automation_status(),
         instance_provenance=_get_instance_provenance_status(),
         context_dimensions=_status_context_dimensions(Path(INDEX_OUTBOX_PATH)),
+        v6_0_seams=_get_v6_seams(),
     )
 
 

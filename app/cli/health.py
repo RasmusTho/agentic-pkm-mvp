@@ -578,6 +578,23 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
     return actions
 
 
+def _check_v6_seams() -> Dict[str, str]:
+    def _seam(module: str) -> str:
+        try:
+            importlib.import_module(module)
+            return "enabled"
+        except Exception:
+            return "disabled"
+
+    canvas_raw = os.getenv("CANVAS_ENABLED", "0").strip().lower()
+    return {
+        "orientation": _seam("app.api.routes.orientation"),
+        "resurfacing": _seam("app.resurfacing"),
+        "commitments": _seam("app.domain.commitments"),
+        "canvas": "enabled" if canvas_raw in _TRUE_VALUES else "disabled",
+    }
+
+
 @span("health.check")
 def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     trace_id = with_trace_id(trace_id)
@@ -605,5 +622,5 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     ok = bool(checks_ok and runtime_ok)
     required_ok = bool(_required_checks_ok(checks) and runtime_ok)
     suggested_actions = _suggested_actions(checks, runtime)
-    return {"environment": active_environment(), "ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions}
+    return {"environment": active_environment(), "ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions, "v6_0_seams": _check_v6_seams()}
 __all__ = ["run_health"]
