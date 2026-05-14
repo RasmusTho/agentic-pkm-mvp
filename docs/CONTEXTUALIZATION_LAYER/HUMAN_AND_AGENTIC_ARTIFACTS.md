@@ -160,7 +160,8 @@ Different artifact classes have legitimately different durability expectations. 
 | Human-authored source knowledge (notes, concepts, source notes) | High |
 | Decisions, design notes, and other settled-record artifacts | Very high |
 | Agentic task snapshots | Medium |
-| Context bundles and activation traces | Low to medium |
+| Activation traces | Low to medium |
+| Context bundles (bridge / assembly) | Per-use / rebuildable |
 | Machine mirrors (chunks, embeddings, indexes, caches, search projections) | Low / rebuildable |
 
 Interpretation:
