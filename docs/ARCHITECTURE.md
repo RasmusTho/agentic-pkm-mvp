@@ -170,8 +170,9 @@ The architecture spine for Yggdrasil as a system-of-systems with a stable kernel
 Lower-level contracts that attach to the spine:
 - `docs/INTEGRATION_FABRIC_CONTRACT.md` owns the integration-class taxonomy (human surface, model provider, embedding provider, storage backend, sync transport, parser/OCR, tool/MCP provider, external UI shell, observer/telemetry source, agent runtime), the per-class contract fields, and the authority rule that external components may provide capability, transport, inference, or interface but must not become semantic authority unless promoted through Yggdrasil contracts.
 - `docs/CAPABILITY_CONTRACT_MODEL.md` owns the capability definition (distinct from agents, UIs, services, and tools), the standard capability contract shape, and the canonical capability examples (retrieval, orientation, resurfacing, context building, citation checking, memory candidate extraction, note patch proposal, archive exposure, commitment surfacing).
+- `docs/EMERGENT_FEATURES_MODEL.md` owns the composition pattern that new emergent features must follow on top of the kernel and extension fabric (`trigger + context bundle + capability composition + policy evaluation + proposal/action + receipt + feedback signal`), and the rule that emergent features must remain observable and must not bypass governance, write guards, provenance, or authority boundaries. Docs-only; does not introduce a runtime composition engine or orchestration framework.
 
-Those two contract docs are docs-only architectural framing; current runtime capability and integration behavior remain owned here and in the narrower adapter contracts.
+Those contract docs are docs-only architectural framing; current runtime capability, integration, and composition behavior remain owned here and in the narrower adapter contracts.
 
 The current runtime should be read as a small system-of-systems arrangement:
 - Obsidian/human editing is the human-surface environment
