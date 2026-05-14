@@ -96,6 +96,17 @@ This block is the contract for bounded direct repair PRs.
 - The merge receipt may reference this block instead of restating it.
 - If the repair expands beyond bounded scope, create or link an issue.
 
+## Governance Lane vs Direct Repair for Workflow Files
+
+The Governance lane checkbox (`- [x] Governance lane`) has a narrow allowed-file set in `issue-pr-governance.yml`. It covers `docs/`, `.codex/skills/`, and a small set of exact files. It does **not** cover `.github/workflows/*.yml` files broadly — only `issue-pr-governance.yml` itself is in the exact-file allowlist.
+
+Rule: any PR that changes `.github/workflows/` files other than `issue-pr-governance.yml` must use **Direct Repair** (not the Governance lane checkbox). Direct Repair bypasses the file restriction and is the correct path for bounded CI/workflow repairs.
+
+Summary:
+- `issue-pr-governance.yml` change → Governance lane or Direct Repair both work
+- Any other `.github/workflows/*.yml` change → Direct Repair required
+- `docs/**` or `.codex/skills/**` change → Governance lane or Direct Repair both work
+
 ## Escalation Triggers
 
 Read [`PR_ESCALATION_PATHS.md`](PR_ESCALATION_PATHS.md) when any of these apply:
