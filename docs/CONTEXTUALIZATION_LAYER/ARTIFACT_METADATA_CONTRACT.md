@@ -168,7 +168,8 @@ These examples are illustrative. The final on-disk shape (field names, file nami
 ### Recommended metadata
 
 - `artifact_class: agentic_memory`
-- `memory_type`
+- `memory_type` — the cognitive class (see below)
+- `artifact_type` — the form the memory artifact takes (see below)
 - `title`
 - `purpose`
 - `source_refs` or `derived_from`
@@ -181,18 +182,34 @@ These examples are illustrative. The final on-disk shape (field names, file nami
 - `last_activated`
 - `activation_count`
 
-### Allowed `memory_type` values
+`memory_type` and `artifact_type` capture two independent dimensions: *what kind of memory this is* and *what shape the memory artifact takes*. The same form can carry different cognitive classes; the same cognitive class can be expressed in several forms.
 
-- `semantic_memory`
-- `episodic_memory`
-- `procedural_memory`
-- `preference_memory`
+### Allowed `memory_type` values (canonical cognitive classes)
+
+These mirror the memory classes defined in `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`:
+
+- `working_context` — short-lived recall used during an active task or interaction.
+- `episodic_memory` — that something happened, when, and in what situation.
+- `semantic_memory` — stabilized meaning the system can reuse across situations (the canonical contract calls this "semantic knowledge"; named `semantic_memory` here for symmetry with the other classes).
+- `prospective_memory` — future-oriented obligations or intentions (commitment, reminder, waiting state, candidate action).
+- `procedural_memory` — repeated ways of doing something, versioned or traceable when used to drive repeated action.
+- `preference_memory` — stable or semi-stable user preferences, defaults, and styles.
+- `policy_memory` — boundaries, permissions, and safety rules that govern what the system may do (the canonical contract calls this "policy / authority memory").
+
+`context_bundle` is **not** a `memory_type`. See Section 7.
+
+### Common `artifact_type` values for agentic memory artifact forms
+
+These are common forms an agentic memory artifact may take. The list is illustrative, not closed:
+
 - `task_snapshot`
 - `synthetic_summary`
 - `reflection_record`
 - `activation_trace`
+- `preference_candidate`
+- `procedural_hint`
 
-`context_bundle` is **not** an agentic memory type. See Section 7.
+Form is orthogonal to cognitive class. A `task_snapshot` may carry `working_context` (active task state), `episodic_memory` (what happened so far), or `prospective_memory` (what is still owed) depending on the intent of the snapshot.
 
 ### Required properties of any agentic memory artifact
 
@@ -216,19 +233,33 @@ Bridge / assembly artifacts assemble or carry context between memory / knowledge
 
 ### Recommended metadata
 
+When the bridge artifact is a `context_bundle`, the metadata shape below tracks the required field set in `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` so bundles produced under this contract remain inspectable *and* governable.
+
 - `artifact_class: bridge_artifact`
 - `artifact_type` (one of the examples above, or a later-named subtype)
-- `purpose`
+- `artifact_id` (from Section 4 — the bundle's stable identity)
+- `purpose` / `intended_use`
+- `trigger` (what caused the bundle to be assembled)
+- `scope` (the operational scope, sphere, or task the bundle applies to)
 - `assembled_for` (the task, surface, or agent this bundle was built for)
-- `assembled_at`
+- `assembled_at` (creation time)
 - `source_refs`
 - `included_artifacts`
-- `excluded_artifacts` *(optional)*
+- `excluded_artifacts` *(optional, but treated as part of provenance when present — see the contract)*
 - `construction_method` (how the bundle was assembled — retrieval, orientation, resurfacing, hand-built, etc.)
 - `validity`
-- `stale_after`
+- `stale_after` / `expiry`
+- `authority_flags` — a map declaring what the bundle may support. At minimum:
+  - `may_answer`
+  - `may_orient`
+  - `may_resurface`
+  - `may_propose`
+  - `may_write`
 - `consumed_by`
+- `receipts` (why the bundle exists and how it was used; see `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` "Relation to provenance and receipts")
 - `outcome_ref` *(optional — pointer to what the bundle was used to produce)*
+
+These authority flags are separate permissions: a bundle may support an answer without supporting writeback. Omitting them produces an inspectable bundle that no longer records what authority the selected context carries, which the canonical contract treats as non-conformant.
 
 ### Boundary rules
 
@@ -371,7 +402,8 @@ candidate_memories: []
 ```yaml
 ---
 artifact_class: agentic_memory
-memory_type: task_snapshot
+memory_type: working_context
+artifact_type: task_snapshot
 title: Drafting Contextualization Layer metadata contract
 purpose: Resume drafting work without re-deriving context.
 source_refs:
@@ -394,7 +426,10 @@ activation_count: 0
 ---
 artifact_class: bridge_artifact
 artifact_type: context_bundle
+artifact_id: ctxb_2026-05-14_draft-metadata-contract
 purpose: Provide focused context for the metadata-contract drafting task.
+trigger: task_start:draft_metadata_contract
+scope: contextualization_layer.docs_authoring
 assembled_for: task:draft_metadata_contract
 assembled_at: 2026-05-14T18:25:00Z
 source_refs:
@@ -407,12 +442,20 @@ excluded_artifacts: []
 construction_method: retrieval+orientation
 validity: current
 stale_after: 2026-05-14T20:00:00Z
+authority_flags:
+  may_answer: true
+  may_orient: true
+  may_resurface: true
+  may_propose: true
+  may_write: false
 consumed_by: drafting_agent
+receipts:
+  - bundle_created:2026-05-14T18:25:00Z
 outcome_ref:
 ---
 ```
 
-The bundle references agentic memory and human knowledge artifacts but does not become an agentic memory artifact itself.
+The bundle references agentic memory and human knowledge artifacts but does not become an agentic memory artifact itself. The `authority_flags` block makes the bundle governable: in this example the bundle is allowed to support answering, orientation, resurfacing, and proposing, but is **not** allowed to authorize a writeback.
 
 ## 13. Non-goals
 
