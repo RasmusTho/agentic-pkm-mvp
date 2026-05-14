@@ -99,6 +99,10 @@ jobs:
           grep -q "Fitness Functions Enforced in CI" docs/ROADMAP.md
           grep -q "CI & Test Markers" docs/STATUS.md
 
+      - name: Hot path governance architecture test
+        run: |
+          pytest -c /dev/null tests/architecture/test_pr_hot_path_governance.py -ra
+
       - name: Prepare tmp dir
         run: mkdir -p tmp
 
