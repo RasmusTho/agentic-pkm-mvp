@@ -80,9 +80,10 @@ When all prerequisites are met:
 5. complete or release the dispatcher task if applicable
 6. remove all agent labels from the Issue
 7. set Issue and PR Project Status to `Done` if automation has not already projected it
-8. verify final state
-9. invoke `post-merge-owner-doc` on the merged PR
-10. assert the receipt exists before emitting a delivery receipt
+8. for each spec file named in the Issue's `Source Anchors`, restore any stale `State: Not yet implemented` line to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
+9. verify final state
+10. invoke `post-merge-owner-doc` on the merged PR
+11. assert the receipt exists before emitting a delivery receipt
 
 ## When Not to Merge
 
