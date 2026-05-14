@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.vault.actions import MoveResult, move_note_to_zone
+from app.vault.actions import move_note_to_zone
 from app.vault.layout import VaultLayout
 from app.write_guard import WriteGuard, WritesBlockedError
 
@@ -383,8 +383,6 @@ def test_receipt_failure_not_reported_as_ok(tmp_path: Path, monkeypatch: pytest.
     note = _write_note(inbox / "my-note.md")
 
     import app.vault.actions as actions_module
-
-    original = actions_module._append_receipt
 
     def _failing_receipt(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise OSError("simulated receipt write failure")
