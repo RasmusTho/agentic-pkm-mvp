@@ -110,3 +110,13 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Source:** pr-integration
 **Diverged:** CI `smoke` failed on PR merge-ref with `NameError: _upsert_executed_ids is not defined` even though branch HEAD had the alias import locally. The merge-ref carried the call site while import context diverged during conflict churn, creating a CI-only failure mode.
 **Upstream artifact:** `.codex/skills/pr-integration/SKILL.md` — add a merge-ref validation step after review-fix pushes: fetch `pull/<id>/merge`, inspect touched symbols in that tree (not only branch HEAD), and run at least one target test against the same path before declaring PR ready.
+
+## 2026-05-14 — PR #922 (path-filter legacy smoke workflow)
+**Source:** pr-integration
+**Diverged:** The plan said a `## Direct Repair` block in the PR body is sufficient for `pr-contract` to pass; reality was that the block must not be the last section — the detection regex `## Direct Repair[\s\S]*?(?=\n## |\n---|\n$)` requires a following `\n##` or `\n---` lookahead, and the `\n$` alternative only fires if GitHub stores a trailing newline (it does not). Placing `## Direct Repair` last silently returns null and `isDirectRepair = false`.
+**Upstream artifact:** `.codex/skills/publish-pr/SKILL.md` — require `## Direct Repair` to be the first section of the PR body (not the last), matching the passing pattern in PR #921 and matching the regex contract in `.github/workflows/issue-pr-governance.yml`.
+
+## 2026-05-14 — PR #922 (governance lane file allowlist excludes most workflow files)
+**Source:** pr-integration
+**Diverged:** The governance lane's allowed-file set in `issue-pr-governance.yml` includes only `.github/workflows/issue-pr-governance.yml` by exact match; other workflow files (e.g. `smoke.yml`, `ci-smoke.yaml`) are not included. A PR that classifies as `Governance lane` but touches these files will fail the file-restriction check. The Direct Repair path bypasses file restrictions entirely and is the correct route for workflow-file repairs.
+**Upstream artifact:** `docs/development/PR_HOT_PATH.md` — add a note that workflow-file repairs (other than `issue-pr-governance.yml`) must use `Direct Repair`, not the `Governance lane` checkbox, because the governance lane allowlist is narrower than `.github/workflows/**`.
