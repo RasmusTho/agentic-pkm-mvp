@@ -84,12 +84,10 @@ def _build_bundle() -> SettingsBundle:
         except Exception:
             instance_settings = InstanceSettings()
 
-    # Runtime env/profile overrides take precedence; otherwise preserve
-    # instance.yaml if present and default model behavior if absent.
+    # Resolve and apply runtime environment (dev/prod) from explicit override
+    # or settings profile mapping, unless already set in instance.yaml.
     env_map = dict(os.environ)
-    if env_map.get("PKM_ENVIRONMENT") or env_map.get("PKM_SETTINGS_PROFILE"):
-        instance_settings.environment = active_environment(env_map)  # type: ignore
-    elif "environment" not in instance_yaml:
+    if "environment" not in instance_yaml:
         instance_settings.environment = active_environment(env_map)  # type: ignore
 
     bundle = SettingsBundle(
