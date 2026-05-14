@@ -136,6 +136,14 @@ def _bench_index_write(
             )
         except Exception as exc:
             warnings.append(f"{METRIC_INDEX_WRITE} failed on sample {i}: {exc}")
+            metrics.append(
+                {
+                    "name": METRIC_INDEX_WRITE,
+                    "value_ms": 0.0,
+                    "tags": _make_tags(scenario, samples=str(samples), status="failed"),
+                    "timestamp": _now_iso(),
+                }
+            )
             return metrics, warnings
         timings.append(_ms_since(start))
 
