@@ -141,6 +141,7 @@ jobs:
               "scripts/reconcile_project_status.py",
               "scripts/validate_source_anchors.py",
               "tests/architecture/test_agent_skill_entrypoints.py",
+              "tests/architecture/test_pr_hot_path_governance.py",
               "tests/ops/test_project_status_reconcile.py",
             ]);
             const governanceAllowedPrefixes = [

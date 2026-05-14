@@ -81,6 +81,7 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
         "includes a complete `Direct Repair` block",
         "Docs authoring lane",
         "Governance lane",
+        "tests/architecture/test_pr_hot_path_governance.py",
     ):
         assert fragment in text, fragment
 
