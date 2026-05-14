@@ -64,11 +64,13 @@ Read [`PR_ESCALATION_PATHS.md`](PR_ESCALATION_PATHS.md) when any of these apply:
 
 - CI or test failure
 - blocking review feedback
-- runtime, CI, skill, migration, API, or public contract changes
+- runtime, CI, migration, API, public contract, or behavior-changing skill changes
 - large or mixed-scope PR
 - stale SHA, branch drift, or merge conflict
 - missing issue or PR traceability
 - final child slice of a parent issue
+
+Low-risk wording or reference-only skill edits may stay on the hot path if safety invariants remain intact.
 
 ## Safety Invariants
 
@@ -79,4 +81,3 @@ Read [`PR_ESCALATION_PATHS.md`](PR_ESCALATION_PATHS.md) when any of these apply:
 - failing required tests or checks must be classified before merge
 - minimal delivery receipt is required
 - issue and PR traceability must be preserved
-

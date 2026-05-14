@@ -314,7 +314,7 @@ When continuing through anchor drift:
 16. For a normal PR, hand off to `docs/development/PR_HOT_PATH.md` through `pr-integration` only as needed.
 17. If any hot-path trigger applies, read `docs/development/PR_ESCALATION_PATHS.md` and use the relevant escalation procedure.
 18. **Execute Action: Request Review** only when review is explicitly requested.
-19. If the slice merges but the parent feature still needs validation, keep that parent issue open for the later acceptance step.
+19. If the slice merges and this is not the final child slice, keep the parent issue open for later acceptance.
 20. If this is the final child slice, route post-merge parent closure through `docs/development/PARENT_ISSUE_CLOSURE.md`.
 
 ## PR handoff requirements
