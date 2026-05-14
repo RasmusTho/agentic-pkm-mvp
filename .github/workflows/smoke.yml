@@ -29,6 +29,23 @@ jobs:
           python -m pip install -U pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
+      - name: Detect heavy smoke surface
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            heavy_smoke:
+              - 'app/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - '.github/workflows/**'
+              - 'pyproject.toml'
+              - 'requirements*.txt'
+              - 'Makefile'
+              - 'Dockerfile'
+              - 'docker-compose*.yaml'
+              - 'docker-compose*.yml'
+
       - name: Validate docs guardrails
         run: |
           python - <<'PY'
@@ -51,6 +68,7 @@ jobs:
           PY
 
       - name: Run smoke tests (mock LLM, no PG, fail-fast)
+        if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         timeout-minutes: 12
         env:
           LLM_PROVIDER: mock
@@ -79,6 +97,10 @@ jobs:
             tests/services/test_vault_sync_lifecycle.py \
             --maxfail=1 -ra --durations=20
 
+      - name: Skip heavy smoke for docs-only PR
+        if: github.event_name == 'pull_request' && steps.changes.outputs.heavy_smoke != 'true'
+        run: echo "Docs-only PR detected; skipping heavy runtime smoke."
+
       - name: Ensure persisted vector index artifact exists
         env:
           INDEX_PERSIST_PATH: tmp/index.jsonl
@@ -88,6 +110,7 @@ jobs:
             echo '{"event":"smoke.index.persist.seed"}' > "$INDEX_PERSIST_PATH"
           fi
       - name: CLI smoke commands
+        if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         env:
           PYTHONPATH: ${{ github.workspace }}
           STORE_BACKEND: memory
