@@ -67,7 +67,7 @@ If an AC cannot carry a resolvable `Verify:` target, refine or split before mark
 
 ## Allowed labels (canonical only)
 
-Only these labels are allowed. Do not create or use ad hoc labels (e.g., `governance`, `ci`, `maintenance` are not canonical):
+Only these delivery-control-plane labels are allowed. Governance-lane learning issues may additionally use `lane:governance` because that label drives the governance Project filter and relaxed verification routing:
 
 | Label | When |
 |-------|------|
@@ -80,6 +80,8 @@ Only these labels are allowed. Do not create or use ad hoc labels (e.g., `govern
 | `agent:ready` | bounded, testable, unblocked - safe for agent execution |
 | `agent:blocked` | dependency unresolved, including parent validation hubs waiting on child slices |
 | `agent:needs-human` | requires a named human decision, tradeoff, missing input, or authority question before work can proceed |
+
+Governance-lane learning issues are the exception to the delivery-control-plane-only rule: when the item belongs in the governance lane, add `lane:governance` in addition to the canonical delivery label set so Project filtering and verification routing stay aligned with `AGENTS.md` and `docs/development/DELIVERY_FEEDBACK_LOOP.md`.
 
 ## Creating the issue
 
@@ -94,6 +96,7 @@ gh issue create \
   --body "..."
 # Then set Project Status=Ready
 ```
+For governance-lane learning issues, also add `--label "lane:governance"` so the issue is visible in the governance lane filter and keeps the relaxed governance verification path.
 
 **Dependency unresolved -> `agent:blocked`, Status=Backlog:**
 ```bash
