@@ -44,6 +44,8 @@ Conditional / maintenance path:
   - micro-skill: append one structured divergence entry to `docs/learning-log.md` when a plan divergence occurs; invoke on divergence, not on normal work
 - `learning-retrospective`
   - cadence-triggered: read `docs/learning-log.md` since last retro marker, cluster by upstream artifact, propose concrete edits for human review, append retro marker after human response
+- `learning-to-issue`
+  - convert retrospective learnings (learning-log entries, live PR/CI divergences) into canonical bounded GitHub Issues; also normalizes raw-intake issues created outside the standard contract
 - `prepare-promotion`
   - release-channel operator skill: produce a promotion plan diffing `main` against `stable` with code delta, migration delta (reversible vs forward-only), config delta, and risk notes; always runs before `execute-promotion`; governed by `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md`
 - `execute-promotion`
@@ -61,6 +63,8 @@ Conditional / maintenance path:
   `issue-maintenance-change-control -> issue-to-code` when the Issue becomes executable again
 - Docs backlog path:
   `docs-authoring -> docs-to-issue`
+- Maintenance-learning intake path:
+  `capture-learning -> learning-to-issue` (when the signal is ready for the backlog) or `learning-retrospective -> learning-to-issue` (when batched retro signals mature into bounded issues)
 - Temporal audit path:
   `temporal-doc-governance` and, when GitHub state is involved, `backlog-reconciliation-drift-audit`
 - Release-channel promotion path:
