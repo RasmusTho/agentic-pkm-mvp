@@ -322,11 +322,16 @@ def _apply_note_writeback(
             if action_id_hash not in executed_ids:
                 proposed_labels.append((action.id, action.label))
 
+    queued_labels: list[str] = []  # async actions (zone_move): queued, not yet executed
+
     for result in state.action_results:
         if result.checked and result.status in {"triggered", "logged"}:
-            executed_labels.append(result.label)
+            if (result.intent_type or "").lower() == "zone_move":
+                queued_labels.append(result.label)
+            else:
+                executed_labels.append(result.label)
 
-    if not executed_labels and not proposed_labels:
+    if not executed_labels and not queued_labels and not proposed_labels:
         return
 
     note_uuid = state.note.uuid
@@ -362,8 +367,12 @@ def _apply_note_writeback(
     annotated = annotate_action_ids(current_text)
 
     # Build the set of ai:id annotation IDs to remove, mapping from label -> stable hash.
+    # Both synchronously executed and async-queued (zone_move) checkboxes are removed;
+    # only their receipt text differs.
     ids_to_remove: set[str] = set()
     for label in executed_labels:
+        ids_to_remove.add(stable_action_id(label))
+    for label in queued_labels:
         ids_to_remove.add(stable_action_id(label))
 
     updated = remove_actions_from_markdown(annotated, ids_to_remove)
@@ -373,8 +382,11 @@ def _apply_note_writeback(
         updated = _write_proposals_to_panel(updated, proposed_labels)
 
     # Build receipt lines.
+    # zone_move actions are asynchronous: the Vault Action Layer is the authoritative
+    # execution receipt.  Write "queued" here so the panel receipt never claims completion.
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     receipts = [f"\u2705 {label} ({now_str})" for label in executed_labels]
+    receipts += [f"\u23f3 {label} (queued, {now_str})" for label in queued_labels]
 
     # Find preferred insert position (after last panel fence).
     parsed = parse_panel(updated)
@@ -392,8 +404,9 @@ def _apply_note_writeback(
         logger.warning("panel writeback failed (write error) note_path=%s", note_file)
         return
 
-    # Persist executed IDs so reruns are idempotent.
-    upsert_executed_ids(note_uuid, [stable_action_id(label) for label in executed_labels])
+    # Persist executed/queued IDs so reruns are idempotent.
+    all_done_labels = executed_labels + queued_labels
+    upsert_executed_ids(note_uuid, [stable_action_id(label) for label in all_done_labels])
 
     # Refresh companion content_hash so it reflects the post-writeback content.
     _refresh_companion_hash(note_uuid, updated, vault_root, note_file)

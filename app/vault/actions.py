@@ -44,12 +44,11 @@ is defined and multiple kinds are supported.
 
 Panel-writeback note
 --------------------
-The panel runtime writes a human-visible "✅ {label}" receipt to the note
-as soon as the downstream ``note.move.workbench`` event is *queued* — not
-after the worker successfully executes the move.  The Vault Action Layer
-receipt (HTML comment appended to the moved note) is the authoritative
-execution receipt.  A future slice should align panel-receipt semantics
-with execution reality (e.g. "🔄 queued" vs "✅ done").
+The panel runtime writes a human-visible "⏳ {label} (queued, …)" receipt
+to the note as soon as the downstream ``note.move.workbench`` event is
+*queued*.  The Vault Action Layer receipt (HTML comment appended to the
+moved note) is the authoritative execution receipt — written only after
+the worker successfully completes the move.
 """
 from __future__ import annotations
 
