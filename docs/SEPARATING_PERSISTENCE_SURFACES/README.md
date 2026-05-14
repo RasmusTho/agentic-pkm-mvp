@@ -119,6 +119,7 @@ See [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md) for the full feature-issu
 - **Companion note contract:** `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`
 - **Creative process contract:** `docs/CONCEPTS/CREATIVE_PROCESS_CONTRACT.md`
 - **Human flows:** `docs/HUMAN-FLOWS.md`
+- **Vault topology contract:** `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md` — names which vault layouts (single vault with internal surfaces, human vault plus retention/system surfaces, master/satellite vaults) the three persistence surfaces may be distributed across, and the rules every topology must satisfy. This spec stays at the surface-identity level; the topology contract is the layout layer on top of it.
 
 ---
 
