@@ -51,6 +51,7 @@ Set `agent:ready` when all are true:
 - The bug is a real defect, not a low-signal maintenance correction that should be batched into audit or retrospective work.
 
 Force `agent:needs-human` when:
+- a named human decision, tradeoff, missing input, or authority question is required before work can proceed
 - It is a Core Runtime ↔ Agentic Lab boundary move without explicit direction and module paths.
 - The change would alter operator-facing defaults without explicit posture and validation plan.
 

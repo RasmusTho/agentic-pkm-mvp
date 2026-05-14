@@ -27,7 +27,7 @@ Do not use this skill for:
 - **Specification directory**: a `docs/` directory that is the system-level source of truth for what needs to be built. Contains a README and one file per implementation task. This is not a plan — it is a specification.
 - **Implementation task**: a specification document describing a discrete capability, its acceptance criteria, verification approach, and completion criteria. One task specification can map to one or many GitHub issues depending on implementation choices.
 - **GitHub issues**: execution artifacts that reference the specification. The spec is the source of truth; the issues track backlog state and agent pickup.
-- **Parent feature issue**: optional parent issue for the target outcome. Used as the live validation hub when the capability spans multiple tasks.
+- **Parent feature issue**: optional parent issue for the target outcome. Used as the live validation hub when the capability spans multiple tasks; while child slices are outstanding it is a blocked validation hub, not a direct pickup issue.
 - **PRs**: task verification receipts.
 - **Owner docs**: promoted only when accepted truth changes.
 
@@ -119,8 +119,10 @@ AC verifiability rule for task specs:
 ## Real-life operating rules
 
 - Use the parent feature issue as the live validation hub after the first task merges.
+- Each delivered child posts a validation receipt to the parent issue before the next child is picked up.
 - After creating or closing the parent feature issue on GitHub, update the local `docs/{CAPABILITY}/PARENT_FEATURE_ISSUE.md` header so it reflects the live issue number and lifecycle state instead of remaining a pre-filing draft.
 - In the same pass, update the capability `README.md` so it does not continue to read as an unfiled draft/spec-only lane when the parent issue has already been filed or closed.
+- Child issues should form an execution chain: each child should leave the capability closer to acceptance, and the final child must include a parent-closure handoff or create/link an explicit parent-closure issue.
 - When the parent issue closes, reconcile all three local surfaces together:
   - `PARENT_FEATURE_ISSUE.md` header/body state
   - `README.md` state/status lines
@@ -182,9 +184,10 @@ Trigger this skill when any of the following are true:
    - When closing, also update the capability `README.md` so it no longer reads as an active pre-delivery lane and so any now-satisfied acceptance checklist truthfully reflects the delivered docs/spec state.
 9. Create or update GitHub issues from the task specifications, in dependency order.
 10. Keep labels and Project status truthful:
-    - parent feature issue normally starts as `Backlog` plus `agent:needs-human`
+    - parent feature issue normally starts as `Backlog` plus `agent:blocked`
     - ready tasks use `Status=Ready` plus `agent:ready`
-    - blocked or decision-dependent tasks use `agent:blocked` or `agent:needs-human`
+    - blocked tasks use `agent:blocked`
+    - decision-dependent tasks use `agent:needs-human` only when a named human decision, tradeoff, missing input, or authority question is still open
 11. Emit one clear breakdown receipt showing the parent feature issue, implementation tasks, evidence surface, and execution order.
 
 ## Parent feature issue requirements

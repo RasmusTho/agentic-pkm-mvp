@@ -45,8 +45,8 @@ Status meanings:
 
 Agent-label meanings:
 - `agent:ready`: queue-eligible work; use only with `Status=Ready`
-- `agent:blocked`: blocked by dependency or setup; normally pair with a non-active status such as `Backlog`
-- `agent:needs-human`: blocked on human decision or missing authority; normally pair with a non-active status such as `Backlog`
+- `agent:blocked`: blocked by dependency waiting, including parent validation hubs waiting on child slices; normally pair with a non-active status such as `Backlog`
+- `agent:needs-human`: blocked on a named human decision, tradeoff, missing input, or authority question; normally pair with a non-active status such as `Backlog`
 - open implementation Issues should normally carry exactly one truthful agent-state label
 
 Interpretation rule:
@@ -79,6 +79,8 @@ Lifecycle guardrails:
 - normal open PRs should default to `Review`; draft is opt-in and should be used only with an explicit reason
 - closed issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`
 - merged or otherwise closed terminal PR items must not remain unset or non-terminal in the Project; they should reconcile to `Done`
+- parent feature issues are validation hubs, not direct pickup issues; while child slices remain outstanding they normally live in `Backlog` with `agent:blocked`
+- use `agent:needs-human` only when the blocker is a named human decision, tradeoff, missing input, or authority question
 
 Projection rule:
 - When Project state disagrees with Issue state, PR state, or merged delivery reality, treat the Issue/PR state as authoritative and correct the Project opportunistically.

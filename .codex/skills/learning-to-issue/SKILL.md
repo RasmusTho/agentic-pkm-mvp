@@ -20,7 +20,7 @@ Invoke when:
 Do NOT invoke when:
 - The signal is vague or cannot name a concrete upstream artifact.
 - The work is already tracked in an open issue (dedupe check first).
-- The fix is a one-line doc correction — use `docs-authoring` or a direct repair PR instead.
+- The fix is a one-line doc correction - use `docs-authoring` or a direct repair PR instead.
 - The learning-log entry itself is the right artifact (no backlog item needed yet).
 
 ## Pre-flight: dedupe check (required before creating any issue)
@@ -39,7 +39,7 @@ gh issue list --repo <owner/repo> --state closed --search "<keyword>" --limit 10
 ```
 
 If a matching open issue exists: add evidence as a comment, do not create a duplicate.
-If a matching closed issue or merged PR exists: the repair may already be delivered — verify before proceeding.
+If a matching closed issue or merged PR exists: the repair may already be delivered - verify before proceeding.
 
 ## Issue contract shape
 
@@ -49,25 +49,25 @@ Every issue created by this skill must use the same contract as `docs-to-issue`:
 
 **Required sections (in order):**
 
-- `## Context` — background from the learning-log entry or observed divergence; link the source entry or PR
-- `## Scope` — what changes, what files/artifacts are touched
-- `## Source Anchors` — the named upstream artifact(s) that absorb the fix; use the most local actionable item
-- `## Constraints` — what must not change; what approaches are excluded
-- `## Acceptance Criteria` — checkboxes with `Verify:` markers (see below)
-- `## Out of Scope` — what this issue deliberately excludes
-- `## Suggested Validation` — commands that execute the `Verify:` targets
-- `## Source Docs` — paths to referenced docs
-- `## Applies learning (optional)` — link to the learning-log entry or retro marker that produced this issue
+- `## Context` - background from the learning-log entry or observed divergence; link the source entry or PR
+- `## Scope` - what changes, what files/artifacts are touched
+- `## Source Anchors` - the named upstream artifact(s) that absorb the fix; use the most local actionable item
+- `## Constraints` - what must not change; what approaches are excluded
+- `## Acceptance Criteria` - checkboxes with `Verify:` markers (see below)
+- `## Out of Scope` - what this issue deliberately excludes
+- `## Suggested Validation` - commands that execute the `Verify:` targets
+- `## Source Docs` - paths to referenced docs
+- `## Applies learning (optional)` - link to the learning-log entry or retro marker that produced this issue
 
 **Every AC must carry a `Verify:` line:**
-- Behavioral AC → test pointer: `Verify: \`tests/<path>::<test_name>\``
-- Non-behavioral AC → doc/artifact writeback: `Verify: doc writeback at \`<path> :: <anchor>\``
+- Behavioral AC -> test pointer: `Verify: \`tests/<path>::<test_name>\``
+- Non-behavioral AC -> doc/artifact writeback: `Verify: doc writeback at \`<path> :: <anchor>\``
 
 If an AC cannot carry a resolvable `Verify:` target, refine or split before marking `agent:ready`.
 
 ## Allowed labels (canonical only)
 
-Only these labels are allowed. Do not create or use ad hoc labels (e.g., `governance`, `ci`, `maintenance` are not canonical):
+Only these delivery-control-plane labels are allowed. Governance-lane learning issues may additionally use `lane:governance` because that label drives the governance Project filter and relaxed verification routing:
 
 | Label | When |
 |-------|------|
@@ -77,15 +77,17 @@ Only these labels are allowed. Do not create or use ad hoc labels (e.g., `govern
 | `prio:high` | blocks other work or has active regression |
 | `prio:med` | normal maintenance priority |
 | `prio:low` | nice-to-have, no urgency |
-| `agent:ready` | bounded, testable, unblocked — safe for agent execution |
-| `agent:blocked` | dependency unresolved |
-| `agent:needs-human` | requires a human decision before work can proceed |
+| `agent:ready` | bounded, testable, unblocked - safe for agent execution |
+| `agent:blocked` | dependency unresolved, including parent validation hubs waiting on child slices |
+| `agent:needs-human` | requires a named human decision, tradeoff, missing input, or authority question before work can proceed |
+
+Governance-lane learning issues are the exception to the delivery-control-plane-only rule: when the item belongs in the governance lane, add `lane:governance` in addition to the canonical delivery label set so Project filtering and verification routing stay aligned with `AGENTS.md` and `docs/development/DELIVERY_FEEDBACK_LOOP.md`.
 
 ## Creating the issue
 
 Choose the label set based on readiness before running `gh issue create`:
 
-**Bounded, testable, and unblocked → `agent:ready`, Status=Ready:**
+**Bounded, testable, and unblocked -> `agent:ready`, Status=Ready:**
 ```bash
 gh issue create \
   --repo <owner/repo> \
@@ -94,8 +96,9 @@ gh issue create \
   --body "..."
 # Then set Project Status=Ready
 ```
+For governance-lane learning issues, also add `--label "lane:governance"` so the issue is visible in the governance lane filter and keeps the relaxed governance verification path.
 
-**Dependency unresolved → `agent:blocked`, Status=Backlog:**
+**Dependency unresolved -> `agent:blocked`, Status=Backlog:**
 ```bash
 gh issue create \
   --repo <owner/repo> \
@@ -105,7 +108,7 @@ gh issue create \
 # Then set Project Status=Backlog
 ```
 
-**Requires human decision → `agent:needs-human`, Status=Backlog:**
+**Requires human decision -> `agent:needs-human`, Status=Backlog:**
 ```bash
 gh issue create \
   --repo <owner/repo> \
@@ -145,7 +148,7 @@ Do not apply `agent:ready` unless every AC has a resolvable `Verify:` target and
 - `<path>`
 
 ## Applies learning (optional)
-Applies learning from `docs/learning-log.md :: YYYY-MM-DD — <entry title>`.
+Applies learning from `docs/learning-log.md :: YYYY-MM-DD - <entry title>`.
 ```
 
 After creation, add to Project `Agent Delivery Control Plane` and verify Status matches the chosen readiness state.
@@ -171,7 +174,7 @@ Signs a raw-intake issue needs normalization:
    EOF
    )"
    ```
-4. Fix labels — remove non-canonical, add correct ones:
+4. Fix labels - remove non-canonical, add correct ones:
    ```bash
    gh issue edit <N> --repo <owner/repo> \
      --remove-label "governance,ci,maintenance" \
@@ -186,18 +189,18 @@ Signs a raw-intake issue needs normalization:
    gh issue view <N> --repo <owner/repo> --json title,labels,body
    ```
 
-**Example:** Issues #923–#925 (created during PR #922 follow-up) used labels `governance,ci,maintenance` which are not in the canonical taxonomy. Normalization would replace those with `type:task,prio:med,agent:ready` and verify all AC sections have `Verify:` markers.
+**Example:** Issues #923-#925 (created during PR #922 follow-up) used labels `governance`, `ci`, `maintenance` which are not in the canonical taxonomy. Normalization would replace those with `type:task,prio:med,agent:ready` and verify all AC sections have `Verify:` markers.
 
 ## Receipt format
 
 **Backlog receipt (new issue):**
 ```
-BACKLOG RECEIPT: Issue #N created — "<title>", labeled type:task/prio:med/agent:ready, added to Project "Agent Delivery Control Plane", Status=Ready. Source: docs/learning-log.md :: YYYY-MM-DD entry.
+BACKLOG RECEIPT: Issue #N created - "<title>", labeled type:task/prio:med/agent:ready, added to Project "Agent Delivery Control Plane", Status=Ready. Source: docs/learning-log.md :: YYYY-MM-DD entry.
 ```
 
 **Normalization receipt (existing issue updated):**
 ```
-NORMALIZATION RECEIPT: Issue #N normalized to canonical contract. Sections added: <list>. Labels corrected: <old> → <new>. Verify: markers added to N ACs.
+NORMALIZATION RECEIPT: Issue #N normalized to canonical contract. Sections added: <list>. Labels corrected: <old> -> <new>. Verify: markers added to N ACs.
 ```
 
 **Delivery receipt template (filled by verification-and-closure at merge):**
@@ -207,4 +210,4 @@ DELIVERY RECEIPT: Issue #N delivered by PR #M. Merge commit: <sha>. CI: passed. 
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task. Only log if you can name an upstream artifact that could absorb the fix.
+**Capturing learning:** if during this work you notice a divergence from plan - you did something you did not expect to do, or discovered an earlier artifact was wrong - invoke `capture-learning` before continuing. Do not batch to end of task. Only log if you can name an upstream artifact that could absorb the fix.
