@@ -64,38 +64,52 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 - For direct repair PRs, verify the PR body contract and validation instead of issue closure.
 - Do not create an Issue after the fact solely for a bounded direct repair.
 
+## Verification Modes
+
+- Issue-backed PR:
+  - verify governing issue ACs
+  - close/update the governing Issue after merge
+- Direct repair PR:
+  - verify the PR body contract, `Direct PR Rationale`, and `Validation`
+  - do not require issue ACs
+  - do not close or mutate a governing Issue
+  - write a direct repair delivery receipt instead
+
 ## Merge Rules
 
 Verification owns the merge decision.
 
 Prerequisites for merge:
 
-- all acceptance criteria from the governing Issue are satisfied
-- every AC's `Verify:` target resolves green on the current head SHA
-- CI is green on the current head SHA
+- current SHA truth is intact
+- required checks are green on the current head SHA
 - no unresolved blocking review comments remain
 - no scope drift remains
-- owner docs and roadmap or plan wording are updated if shipped reality changed
+- the PR fits one of the two verification modes above
+- if issue-backed, all acceptance criteria from the governing Issue are satisfied and every AC's `Verify:` target resolves green on the current head SHA
+- if direct repair, the PR body contract, `Direct PR Rationale`, and `Validation` are satisfied on the current head SHA
+- if the direct repair expands beyond bounded scope, stop and require, create, or link an issue before merge
 
 When all prerequisites are met:
 
 1. confirm the PR head SHA has not changed since verification started
 2. merge the PR
 3. verify merge succeeded
-4. close the Issue
-5. complete or release the dispatcher task if applicable
-6. remove all agent labels from the Issue
-7. set Issue and PR Project Status to `Done` if automation has not already projected it
-8. for each spec file named in the Issue's `Source Anchors`, restore any stale `State: Not yet implemented` line to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
+4. if issue-backed, close the Issue
+5. if issue-backed, complete or release the dispatcher task if applicable
+6. if issue-backed, remove all agent labels from the Issue
+7. if issue-backed, set Issue and PR Project Status to `Done` if automation has not already projected it
+8. if issue-backed, for each spec file named in the Issue's `Source Anchors`, restore any stale `State: Not yet implemented` line to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
 9. verify final state
-10. invoke `post-merge-owner-doc` on the merged PR
+10. if issue-backed, invoke `post-merge-owner-doc` on the merged PR
 11. assert the receipt exists before emitting a delivery receipt
+12. if direct repair, write a direct repair delivery receipt instead of issue-closure state changes
 
 ## When Not to Merge
 
-- any acceptance criterion is not met -> create a follow-up Issue instead
-- any behavioral AC `Verify:` test is missing, skipped, xfailed, or excluded from CI -> do not merge
-- any non-behavioral AC `Verify:` target is absent -> do not merge
+- any issue-backed acceptance criterion is not met -> create a follow-up Issue instead
+- any issue-backed behavioral AC `Verify:` test is missing, skipped, xfailed, or excluded from CI -> do not merge
+- any issue-backed non-behavioral AC `Verify:` target is absent -> do not merge
 - CI has regressed since PR integration handoff -> route back to PR integration
 - scope drift detected -> route through issue maintenance
 - work is only partial -> do not merge, keep the Issue open, create follow-up Issue(s)
@@ -130,7 +144,8 @@ Do not leave state updates as recommendations when you can execute them directly
 
 - do not validate code only; validate delivery state
 - detect and correct false status where possible
-- if work is truly delivered, confirm or recommend Issue closure and Project Status = `Done`
+- if issue-backed work is truly delivered, confirm or recommend Issue closure and Project Status = `Done`
+- if direct repair work is truly delivered, write the direct repair delivery receipt and do not create or mutate a governing Issue
 - require owner-doc writeback only when acceptance changed supported truth
 - require roadmap or plan cleanup
 - produce a delivery receipt

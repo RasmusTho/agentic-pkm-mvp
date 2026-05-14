@@ -29,11 +29,13 @@ Conditional readiness-repair path:
 
 ## Entry conditions
 
-- A bounded governing slice implementation Issue exists.
+- Either:
+  - an issue-backed PR exists with a bounded governing slice Issue, or
+  - a bounded direct repair PR exists whose body contains `Direct PR Rationale` and `Validation`.
 - A PR exists and links the governing branch.
 - The PR was just created or updated by `publish-pr` or equivalent truthful publication flow.
 - Implementation changes are already in place.
-- Use this skill when the PR still needs mergeability, CI attachment, or review-feedback repair before verification.
+- Use this skill when the PR still needs mergeability, CI attachment, branch drift repair, review-feedback repair, or other triggered integration work before verification.
 
 ## Exit conditions
 
@@ -55,7 +57,7 @@ If any condition fails, stop and use the relevant escalation path.
 - Triage review feedback into blocking, cheap fix, out-of-scope, or incorrect/not-applicable.
 - Write the minimal delivery receipt before handoff.
 - A governing issue is required for normal planned workflow; a bounded direct repair PR may proceed without one if the PR body includes direct repair rationale and validation.
-- Missing issue traceability is an escalation trigger only when the PR is not a valid direct repair PR.
+- Missing issue traceability is an escalation trigger only when the PR is neither issue-backed nor a valid direct repair PR.
 - If CI fails, review blocks, branch drifts, or the PR is large or mixed-scope, stop and read `PR_ESCALATION_PATHS.md`.
 
 ## Escalation References
