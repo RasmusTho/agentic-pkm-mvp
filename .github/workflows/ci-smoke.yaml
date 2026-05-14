@@ -40,7 +40,27 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Detect heavy smoke surface
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            heavy_smoke:
+              - 'app/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - 'config/**'
+              - 'configs/**'
+              - '.github/workflows/**'
+              - 'pyproject.toml'
+              - 'requirements*.txt'
+              - 'Makefile'
+              - 'Dockerfile'
+              - 'docker-compose*.yaml'
+              - 'docker-compose*.yml'
+
       - name: Install system deps (ffmpeg, ripgrep)
+        if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg ripgrep
@@ -105,25 +125,6 @@ jobs:
 
       - name: Prepare tmp dir
         run: mkdir -p tmp
-
-      - name: Detect heavy smoke surface
-        id: changes
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
-            heavy_smoke:
-              - 'app/**'
-              - 'tests/**'
-              - 'scripts/**'
-              - 'config/**'
-              - 'configs/**'
-              - '.github/workflows/**'
-              - 'pyproject.toml'
-              - 'requirements*.txt'
-              - 'Makefile'
-              - 'Dockerfile'
-              - 'docker-compose*.yaml'
-              - 'docker-compose*.yml'
 
       - name: Pytest smoke baseline (memory, fail-fast)
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'

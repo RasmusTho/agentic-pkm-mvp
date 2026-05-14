@@ -91,6 +91,79 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
     assert text.index("if (isDirectRepair) {") < text.index("const docsAuthoringPattern =")
 
 
+import re as _re
+
+
+_REQUIRED_FIELDS_PATTERNS = [
+    _re.compile(r"(?:^|\n)Type:\s*(docs|governance|code)\s*(?:\n|$)", _re.IGNORECASE),
+    _re.compile(r"(?:^|\n)Reason:\s*\S", _re.IGNORECASE),
+    _re.compile(r"(?:^|\n)Validation:\s*\S", _re.IGNORECASE),
+    _re.compile(r"(?:^|\n)Issue required:\s*no\b", _re.IGNORECASE),
+]
+
+_DIRECT_REPAIR_REGEX = _re.compile(
+    r"## Direct Repair[\s\S]*?(?=\n##\s|\n---)|## Direct Repair[\s\S]*",
+    _re.IGNORECASE,
+)
+
+
+def _is_direct_repair(body: str) -> bool:
+    """Python port of the JavaScript `isDirectRepair` logic in issue-pr-governance.yml."""
+    m = _DIRECT_REPAIR_REGEX.search(body)
+    if not m:
+        return False
+    section = m.group(0)
+    return all(p.search(section) for p in _REQUIRED_FIELDS_PATTERNS)
+
+
+_VALID_DIRECT_REPAIR_FIELDS = (
+    "Type: governance\nReason: bounded fix\nValidation: git diff --check\nIssue required: no"
+)
+
+
+def test_direct_repair_accepted_when_block_is_first_section() -> None:
+    """AC1: Direct Repair block followed by another section."""
+    body = f"## Direct Repair\n{_VALID_DIRECT_REPAIR_FIELDS}\n\n## Summary\nSome summary here."
+    assert _is_direct_repair(body), "Expected direct repair to be accepted when block is first"
+
+
+def test_direct_repair_accepted_when_block_is_last_section_no_trailing_newline() -> None:
+    """AC2: Direct Repair block at end with no trailing newline (GitHub strips trailing whitespace)."""
+    body = f"## Summary\nSome summary here.\n\n## Direct Repair\n{_VALID_DIRECT_REPAIR_FIELDS}"
+    # No trailing newline — this was the failing case before the regex fix
+    assert not body.endswith("\n"), "Fixture must have no trailing newline to reproduce the bug"
+    assert _is_direct_repair(body), "Expected direct repair to be accepted when block is last with no trailing newline"
+
+
+def test_direct_repair_accepted_when_block_is_middle_section() -> None:
+    """AC3: Direct Repair block surrounded by other sections."""
+    body = (
+        "## Summary\nSome summary.\n\n"
+        f"## Direct Repair\n{_VALID_DIRECT_REPAIR_FIELDS}\n\n"
+        "## Runtime behavior\nNo change."
+    )
+    assert _is_direct_repair(body), "Expected direct repair to be accepted when block is in the middle"
+
+
+def test_direct_repair_rejected_when_fields_incomplete() -> None:
+    """AC4: Body with Direct Repair block but missing required fields is rejected."""
+    # Missing 'Issue required: no'
+    body = "## Direct Repair\nType: governance\nReason: bounded fix\nValidation: git diff --check"
+    assert not _is_direct_repair(body), "Expected direct repair to be rejected when fields are incomplete"
+
+    # Missing 'Validation:'
+    body2 = "## Direct Repair\nType: governance\nReason: bounded fix\nIssue required: no"
+    assert not _is_direct_repair(body2), "Expected direct repair to be rejected when Validation is missing"
+
+    # Missing 'Reason:'
+    body3 = "## Direct Repair\nType: governance\nValidation: git diff\nIssue required: no"
+    assert not _is_direct_repair(body3), "Expected direct repair to be rejected when Reason is missing"
+
+    # Invalid Type value
+    body4 = "## Direct Repair\nType: feature\nReason: fix\nValidation: git diff\nIssue required: no"
+    assert not _is_direct_repair(body4), "Expected direct repair to be rejected when Type value is invalid"
+
+
 def test_parent_issue_closure_keeps_delivery_scope_above_future_adoption() -> None:
     text = _read("docs/development/PARENT_ISSUE_CLOSURE.md")
 

@@ -13,22 +13,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install system deps (ffmpeg, ripgrep)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg ripgrep
-
-      - name: Install Python deps
-        run: |
-          python -m pip install -U pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
       - name: Detect heavy smoke surface
         id: changes
         uses: dorny/paths-filter@v3
@@ -48,26 +32,36 @@ jobs:
               - 'docker-compose*.yaml'
               - 'docker-compose*.yml'
 
-      - name: Validate docs guardrails
+      - name: Set up Python 3.12
+        if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install system deps (ffmpeg, ripgrep)
+        if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg ripgrep
 
-          diagrams = Path('docs/DIAGRAMS.md').read_text(encoding='utf-8')
-          readme = Path('README.md').read_text(encoding='utf-8')
+      - name: Install Python deps
+        if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
+        run: |
+          python -m pip install -U pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
 
-          if '```mermaid' not in diagrams:
-              raise SystemExit('docs/DIAGRAMS.md must contain at least one ```mermaid block')
-          if '<!-- DOCS-LINKS:BEGIN -->' not in readme or '<!-- DOCS-LINKS:END -->' not in readme:
-              raise SystemExit('README.md missing DOCS-LINKS markers')
-          if re.search(r"\\n", diagrams):
-              raise SystemExit('docs/DIAGRAMS.md must not contain literal \n sequences')
-          if re.search(r"^[ \t]+```mermaid", diagrams, re.MULTILINE):
-              raise SystemExit('Mermaid fences must not be indented')
-          if re.search(r"->\|[^|]*\$begin:math:text\$[^|]*\$end:math:text\$\|", diagrams, re.MULTILINE):
-              raise SystemExit('Forbidden math fence syntax inside table detected')
-          PY
+      - name: Validate docs guardrails
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '```mermaid' docs/DIAGRAMS.md || { echo "docs/DIAGRAMS.md must contain at least one \`\`\`mermaid block"; exit 1; }
+          grep -q '<!-- DOCS-LINKS:BEGIN -->' README.md || { echo "README.md missing DOCS-LINKS:BEGIN marker"; exit 1; }
+          grep -q '<!-- DOCS-LINKS:END -->' README.md || { echo "README.md missing DOCS-LINKS:END marker"; exit 1; }
+          grep -qF '\n' docs/DIAGRAMS.md && { echo "docs/DIAGRAMS.md must not contain literal \\n sequences"; exit 1; } || true
+          grep -qE '^[[:space:]]+```mermaid' docs/DIAGRAMS.md && { echo "Mermaid fences must not be indented"; exit 1; } || true
+          grep -qF '$begin:math:text$' docs/DIAGRAMS.md && { echo "Forbidden math fence syntax inside table detected"; exit 1; } || true
 
       - name: Run smoke tests (mock LLM, no PG, fail-fast)
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
