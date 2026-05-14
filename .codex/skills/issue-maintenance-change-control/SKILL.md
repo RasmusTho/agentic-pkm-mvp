@@ -228,20 +228,21 @@ Parent feature issues are validation hubs, not direct pickup issues. Unless expl
 
 1. **Keep them non-active:**
    ```bash
-   gh issue edit #<PARENT> --add-label agent:needs-human --remove-label agent:ready --remove-label agent:blocked
+   gh issue edit #<PARENT> --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human
    gh api graphql ... (set Project Status to Backlog)
    ```
 
-2. **Use them to track child slice delivery** in comments and body updates
+2. **Use them to track child slice delivery** in comments and body updates, including validation receipts posted by each delivered child
 3. **When the parent is fully repo-verifiable and only future observation remains, close it and move that observation to a follow-up issue or learning-log item**
 
 ### Child Slice Issues
 
 Child slice issues may become `agent:ready` only when their executable contract is concrete and available:
 
-1. **If contract lives in an open spec PR:** keep the child issue non-active (`agent:needs-human` or `agent:blocked`) until the spec merges or the issue is rewritten with required local contract sections
+1. **If contract lives in an open spec PR:** keep the child issue non-active (`agent:blocked` or `agent:needs-human`) until the spec merges or the issue is rewritten with required local contract sections
 
 2. **If contract is concrete and merged:** can label as `agent:ready` with `Status=Ready`
+3. **Child issues should form an execution chain**: each delivered child should post a validation receipt to the parent issue, and the final child must include a parent-closure handoff or create/link an explicit parent-closure issue before the parent is closed.
 
 ## Quick Reference: Maintenance State Corrections
 
@@ -250,8 +251,8 @@ Child slice issues may become `agent:ready` only when their executable contract 
 | Issue closed | Execute Close Delivered | -agent:* | Done | Remove all agent labels |
 | Malformed/stale open | Execute Malformed/Stale | +agent:needs-human | Backlog | Non-active state |
 | Delivered but open | Execute Delivered Open | +agent:needs-human | Backlog | Comment explaining next step |
-| Parent feature | Keep non-active | +agent:needs-human | Backlog | Validation hub, not direct pickup |
-| Child with spec in PR | Keep non-active | +agent:needs-human | Backlog | Wait for spec merge |
+| Parent feature | Keep non-active | +agent:blocked | Backlog | Validation hub, waiting on child chain |
+| Child with spec in PR | Keep non-active | +agent:blocked | Backlog | Wait for spec merge |
 | Child with concrete contract | Can label ready | +agent:ready | Ready | Only when merged and clear |
 
 ## When splitting
@@ -270,7 +271,7 @@ Child slice issues may become `agent:ready` only when their executable contract 
 - produce a delivery receipt
 - for duplicate/superseded closures, ensure the delivery receipt points to the canonical delivered issue/PR rather than only saying “duplicate”
 - do not keep a delivered parent issue open solely for future adoption or retro observation
-- if the parent is the final child slice, follow `docs/development/PARENT_ISSUE_CLOSURE.md`
+- if the parent is the final child slice, follow `docs/development/PARENT_ISSUE_CLOSURE.md` and ensure the final child includes a parent-closure handoff or explicit parent-closure issue
 
 ## Required Issue contract shape
 

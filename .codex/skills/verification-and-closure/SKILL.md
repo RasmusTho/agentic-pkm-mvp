@@ -126,8 +126,8 @@ When all prerequisites are met:
 Use [`docs/development/PARENT_ISSUE_CLOSURE.md`](../../../docs/development/PARENT_ISSUE_CLOSURE.md) only when closure is actually relevant.
 
 - if a slice issue is fully delivered, merge the PR and deliver the Issue
-- if the parent feature still needs validation, keep it open
-- if the parent feature is the final child slice or an explicit closure task, close the parent after repo-verifiable acceptance is satisfied
+- if the parent feature still needs validation, keep it open and record the child validation receipt on the parent issue
+- if the parent feature is the final child slice or an explicit closure task, close the parent after repo-verifiable acceptance is satisfied and the parent-closure handoff or explicit parent-closure issue is resolved
 - future adoption or retro work should move to a follow-up Issue or learning-log item, not block delivered repo-verifiable scope
 
 ## Dependent Issue Unblocking

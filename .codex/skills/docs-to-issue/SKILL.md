@@ -124,6 +124,7 @@ Issue body must contain exactly these sections:
 - Every new implementation Issue should leave creation with exactly one truthful agent-state label.
 - Use `agent:ready` only with `Status=Ready`.
 - Use `agent:blocked` or `agent:needs-human` only for non-active work, normally with `Status=Backlog`.
+- Use `agent:blocked` for dependency waiting, including parent issues waiting on child slices; use `agent:needs-human` only for a named human decision, tradeoff, missing input, or authority question.
 - Do not leave delivered or closed work with any `agent:*` label.
 
 
@@ -147,4 +148,4 @@ For each created Issue, include:
 
 If no Issue should be created, say so explicitly and explain why.
 
-If the item should become a parent feature issue plus child slices, say that explicitly and hand off to `feature-breakdown` instead of creating a flat backlog shape.
+If the item should become a parent feature issue plus child slices, say that explicitly and hand off to `feature-breakdown` instead of creating a flat backlog shape. Parent feature issues are validation hubs, not direct pickup issues.
