@@ -99,7 +99,12 @@ def test_panel_instruction_moves_inbox_note_to_workbench(tmp_path: Path) -> None
 
 
 def test_workbench_move_action_is_idempotent(tmp_path: Path) -> None:
-    """Re-running the move returns a verified skip when note is in workbench."""
+    """Re-running with the original source path returns source_missing_unverified.
+
+    Without receipt/uuid evidence we cannot distinguish a prior successful move
+    from a deletion or manual relocation, so the conservative result is
+    source_missing_unverified with success=False.
+    """
     vault_root = tmp_path / "vault"
     layout = _make_layout(vault_root)
     inbox = vault_root / layout.inbox_folder
@@ -120,7 +125,7 @@ def test_workbench_move_action_is_idempotent(tmp_path: Path) -> None:
     assert result1.success is True
     assert result1.mutation_applied is True
 
-    # Second call: source gone, destination present → verified idempotent skip.
+    # Second call: source gone — conservative rule; cannot verify without receipt/uuid.
     result2 = move_note_to_zone(
         note_path=note,  # original inbox path (already gone)
         destination_zone="workbench",
@@ -129,13 +134,13 @@ def test_workbench_move_action_is_idempotent(tmp_path: Path) -> None:
         actor="panel_agent",
         write_guard=guard,
     )
-    assert result2.success is True
     assert result2.skipped is True
     assert result2.mutation_applied is False
-    assert result2.reason == "already_moved_verified"
+    assert result2.reason == "source_missing_unverified"
+    assert result2.success is False  # conservative: cannot verify without evidence
 
-    workbench_note = workbench / "my-note.md"
-    assert workbench_note.exists()
+    # Note is still in workbench from the first move.
+    assert (workbench / "my-note.md").exists()
     assert not note.exists()
 
 
@@ -174,6 +179,59 @@ def test_workbench_move_action_handles_name_collision(tmp_path: Path) -> None:
     assert expected_collision.exists()
     assert "Incoming" in expected_collision.read_text(encoding="utf-8")
     assert not note.exists()
+
+
+def test_collision_rerun_does_not_falsely_verify_idempotency(tmp_path: Path) -> None:
+    """Rerun after a collision move must NOT return already_moved_verified.
+
+    Scenario:
+    - workbench/my-note.md already exists (pre-existing unrelated file).
+    - inbox/my-note.md is moved to workbench/my-note_2.md (collision resolved).
+    - Rerun with original source path: source gone, workbench/my-note.md present.
+    - Must NOT return already_moved_verified — that file is not the moved artifact.
+    """
+    vault_root = tmp_path / "vault"
+    layout = _make_layout(vault_root)
+    inbox = vault_root / layout.inbox_folder
+    workbench = vault_root / layout.desk_folder
+    workbench.mkdir(parents=True, exist_ok=True)
+
+    # Pre-existing file with the same name in workbench.
+    _write_note(workbench / "my-note.md", content="# Pre-existing\n")
+    note = _write_note(inbox / "my-note.md", content="# Incoming\n")
+    guard = _permissive_write_guard()
+
+    # First move — lands at my-note_2.md due to collision.
+    result1 = move_note_to_zone(
+        note_path=note,
+        destination_zone="workbench",
+        vault_root=vault_root,
+        layout=layout,
+        actor="panel_agent",
+        write_guard=guard,
+    )
+    assert result1.success is True
+    assert result1.collision_resolved is True
+    assert (workbench / "my-note_2.md").exists()
+    assert not note.exists()
+
+    # Rerun: source missing, workbench/my-note.md present (pre-existing, not our artifact).
+    result2 = move_note_to_zone(
+        note_path=note,  # original path, no longer exists
+        destination_zone="workbench",
+        vault_root=vault_root,
+        layout=layout,
+        actor="panel_agent",
+        write_guard=guard,
+    )
+    # Must not falsely claim the pre-existing workbench/my-note.md is our moved artifact.
+    assert result2.reason != "already_moved_verified", (
+        "Collision rerun must not return already_moved_verified based solely on "
+        "workbench/my-note.md presence — that file is a pre-existing artifact, "
+        "not the collision-resolved my-note_2.md"
+    )
+    assert result2.skipped is True
+    assert result2.mutation_applied is False
 
 
 # ---------------------------------------------------------------------------

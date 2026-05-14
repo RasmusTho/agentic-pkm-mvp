@@ -263,38 +263,26 @@ def move_note_to_zone(
             reason=reason,
         )
 
-    # 2. Idempotency check.
-    #    "Source missing" alone is not proof of a successful prior move — the
-    #    note may have been deleted, manually moved, or the path may be stale.
-    #    Check whether the note appears at the expected destination before
-    #    claiming a verified idempotent skip.
+    # 2. Idempotency check (conservative).
+    #    Source missing is NOT sufficient evidence of a prior successful move.
+    #    The note may have been deleted, manually relocated, or the call may
+    #    carry a stale path.  Filename presence in the workbench is also
+    #    unreliable: a pre-existing file with the same name would produce a
+    #    false positive after a collision-resolved move (which lands at
+    #    my-note_2.md, not my-note.md).
+    #
+    #    Verified idempotency requires receipt-level evidence (intent_id,
+    #    note uuid, or stored destination path).  That is deferred to a
+    #    follow-up slice.  For now, any missing-source case is reported as
+    #    source_missing_unverified so the caller can decide what to do.
     if not source_path.exists():
-        expected_dest = workbench_dir / source_path.name
-        if expected_dest.exists():
-            logger.info(
-                "move_note_to_zone skipped (already_moved_verified): "
-                "source=%s dest=%s",
-                source_path,
-                expected_dest,
-            )
-            return MoveResult(
-                success=True,
-                skipped=True,
-                mutation_applied=False,
-                receipt_written=False,
-                source_path=source_path,
-                destination_path=expected_dest,
-                collision_resolved=False,
-                receipt_path=None,
-                reason="already_moved_verified",
-            )
-        # Source gone but destination also absent — cannot verify.
-        reason = (
-            f"source_missing_unverified: note not found at source path "
-            f"and not found at expected destination {expected_dest}; "
-            f"may have been deleted, manually moved, or path is stale"
+        reason = "source_missing_unverified"
+        logger.warning(
+            "move_note_to_zone: source_missing_unverified — note not found at "
+            "source path; may have been already moved, deleted, manually relocated, "
+            "or path is stale. Cannot verify without receipt/uuid evidence. source=%s",
+            source_path,
         )
-        logger.warning("move_note_to_zone: %s", reason)
         return MoveResult(
             success=False,
             skipped=True,
