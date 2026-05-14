@@ -1,8 +1,6 @@
 """Tests for retrieval-side context bundle emission (CONTEXT-BUNDLES-02, #896)."""
 from __future__ import annotations
 
-import pytest
-
 from app.context_bundles.schema import ContextBundle, ExcludedItem
 from app.retrieval.capability import RetrievalHit, RetrievalResponse
 from app.retrieval.bundle_emission import emit_retrieval_bundle, RetrievalBundleResult
