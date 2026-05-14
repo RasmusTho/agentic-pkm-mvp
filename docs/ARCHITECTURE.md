@@ -167,6 +167,12 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 
 The architecture spine for Yggdrasil as a system-of-systems with a stable kernel and replaceable extension fabric lives in `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`. That document owns the kernel/extension-fabric framing and the eight-subsystem map (Human Surface, Knowledge & Artifact, Runtime Projection, Capability, Agent/Orchestration, Governance/Authority, Integration Fabric, Observability/Fitness). This document remains authoritative for the current runtime baseline and current-vs-planned status.
 
+Lower-level contracts that attach to the spine:
+- `docs/INTEGRATION_FABRIC_CONTRACT.md` owns the integration-class taxonomy (human surface, model provider, embedding provider, storage backend, sync transport, parser/OCR, tool/MCP provider, external UI shell, observer/telemetry source, agent runtime), the per-class contract fields, and the authority rule that external components may provide capability, transport, inference, or interface but must not become semantic authority unless promoted through Yggdrasil contracts.
+- `docs/CAPABILITY_CONTRACT_MODEL.md` owns the capability definition (distinct from agents, UIs, services, and tools), the standard capability contract shape, and the canonical capability examples (retrieval, orientation, resurfacing, context building, citation checking, memory candidate extraction, note patch proposal, archive exposure, commitment surfacing).
+
+Those two contract docs are docs-only architectural framing; current runtime capability and integration behavior remain owned here and in the narrower adapter contracts.
+
 The current runtime should be read as a small system-of-systems arrangement:
 - Obsidian/human editing is the human-surface environment
 - system-owned companion artifacts preserve continuity and repair state in the system surface
