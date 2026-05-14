@@ -84,11 +84,10 @@ def _build_bundle() -> SettingsBundle:
         except Exception:
             instance_settings = InstanceSettings()
 
-    # Resolve and apply runtime environment (dev/prod) from explicit override
-    # or settings profile mapping, unless already set in instance.yaml.
-    env_map = dict(os.environ)
-    if "environment" not in instance_yaml:
-        instance_settings.environment = active_environment(env_map)  # type: ignore
+    # Resolve runtime environment from process env/profile mapping.
+    # Environment variables are runtime controls and intentionally override
+    # config-file defaults when present.
+    instance_settings.environment = active_environment(dict(os.environ))  # type: ignore
 
     bundle = SettingsBundle(
         global_=GlobalSettings(**global_yaml),
