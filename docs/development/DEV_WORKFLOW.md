@@ -3,6 +3,8 @@ State: Development reference. Not an auto-loaded instruction file.
 
 Use this document for the builder-agent working loop and validation expectations after reading `AGENTS.md`.
 
+For normal PR delivery, read [`PR_HOT_PATH.md`](PR_HOT_PATH.md) first. It is the default short path for routine PR work. Read [`PR_ESCALATION_PATHS.md`](PR_ESCALATION_PATHS.md) only when the hot-path classification finds a risk trigger, stale SHA, blocking review feedback, CI failure, or another escalation condition.
+
 This document applies to development-time contributors. It does not define runtime/system-agent behavior.
 
 ## Working loop
