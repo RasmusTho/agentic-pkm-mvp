@@ -38,6 +38,7 @@ jobs:
               - 'app/**'
               - 'tests/**'
               - 'scripts/**'
+              - 'config/**'
               - '.github/workflows/**'
               - 'pyproject.toml'
               - 'requirements*.txt'
