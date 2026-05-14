@@ -58,6 +58,42 @@ These are follow-up tasks, not default PR blockers:
 - board or project polish
 - parent issue closure, unless this PR is the final child slice
 
+## Issue-Backed vs Direct Repair PRs
+
+Issue-backed PRs are required for normal planned work, delegated agent work, feature slices, runtime behavior changes, architecture changes, multi-step refactors, dependency-bearing work, and anything needing backlog tracking or parent/child acceptance.
+
+Direct repair PRs are allowed without a governing issue when the change is bounded, immediate, and the PR body can serve as the full contract.
+
+Direct repair examples:
+
+- typo or wording fix
+- small docs correction
+- broken link
+- minor skill routing clarification
+- small review-fix
+- small governance friction fix
+- obvious cleanup discovered during current work
+
+Direct repair guardrails:
+
+- bounded change
+- clear rationale in PR body
+- validation listed in PR body
+- no parent/child tracking needed
+- no long-lived acceptance needed
+- if scope expands, create or link an issue
+
+Minimal PR body shape:
+
+## Direct PR Rationale
+No governing issue is used because this is a bounded immediate repair.
+
+Reason:
+- ...
+
+Validation:
+- ...
+
 ## Escalation Triggers
 
 Read [`PR_ESCALATION_PATHS.md`](PR_ESCALATION_PATHS.md) when any of these apply:
@@ -67,7 +103,7 @@ Read [`PR_ESCALATION_PATHS.md`](PR_ESCALATION_PATHS.md) when any of these apply:
 - runtime, CI, migration, API, public contract, or behavior-changing skill changes
 - large or mixed-scope PR
 - stale SHA, branch drift, or merge conflict
-- missing issue or PR traceability
+- missing delivery traceability for a PR that is not a valid direct repair PR
 - final child slice of a parent issue
 
 Low-risk wording or reference-only skill edits may stay on the hot path if safety invariants remain intact.
@@ -80,4 +116,4 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 - blocking review feedback must be addressed or explicitly classified
 - failing required tests or checks must be classified before merge
 - minimal delivery receipt is required
-- issue and PR traceability must be preserved
+- delivery traceability must be preserved through either an issue-backed PR or a direct repair PR rationale

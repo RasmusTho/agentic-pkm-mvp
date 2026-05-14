@@ -14,6 +14,7 @@ Only execute bounded implementation work from a GitHub Issue that is the canonic
 After PR creation or publish, route normal PRs to `docs/development/PR_HOT_PATH.md`.
 Route only triggered cases to `docs/development/PR_ESCALATION_PATHS.md` or the heavier `pr-integration` path.
 If the slice is the final child slice, route parent closure to `docs/development/PARENT_ISSUE_CLOSURE.md` after merge.
+Bounded direct repair PRs may proceed without a governing Issue when the PR body supplies the full contract via direct repair rationale and validation.
 
 ## Canonical workflow
 
@@ -218,6 +219,7 @@ Only move to Review when the PR is the **explicit review handoff artifact** (nor
 ## Execution rules
 
 - Read the full Issue first.
+- For a bounded direct repair PR, treat the PR body as the contract and validate it directly instead of requiring a governing Issue.
 - Read the owner docs and source docs referenced by `Source Anchors` before editing code.
 - Stay strictly within Issue scope.
 - Do not expand scope without updating the Issue contract first.

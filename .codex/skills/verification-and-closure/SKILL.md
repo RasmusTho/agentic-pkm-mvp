@@ -58,6 +58,12 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 - If post-merge validation advanced but acceptance is still pending, record the new evidence on the parent issue body or comments
 - If work is incomplete, do not close the loop falsely; create a bounded follow-up Issue instead
 
+## Direct Repair PRs
+
+- For issue-backed PRs, close or update the governing Issue as usual.
+- For direct repair PRs, verify the PR body contract and validation instead of issue closure.
+- Do not create an Issue after the fact solely for a bounded direct repair.
+
 ## Merge Rules
 
 Verification owns the merge decision.
