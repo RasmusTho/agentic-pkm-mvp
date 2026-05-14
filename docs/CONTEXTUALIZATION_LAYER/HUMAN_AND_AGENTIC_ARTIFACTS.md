@@ -87,7 +87,6 @@ These are the artifacts the system maintains in order to support, explain, and c
 **Examples:**
 
 - task snapshots (what an agent was doing, with what context, when)
-- context bundles (the selected bridge object for a specific use, per `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md`)
 - activation traces (what context was actually used by an agent, and why)
 - reflection records (post-hoc notes from an agent or from human review of an agent run)
 - synthetic summaries (agent-produced condensations of human material)
@@ -106,6 +105,8 @@ These are the artifacts the system maintains in order to support, explain, and c
 - Variable durability — see Section 8.
 
 **Design rule:** agentic memory must not become an opaque machine file. The moment an agentic artifact stops being meaningfully human-readable and human-editable, it has stopped being agentic memory and has become a machine mirror (Section 6), and must be treated as such.
+
+**Boundary against context bundles.** Context bundles are not agentic memory. A context bundle is a bridge or assembly artifact selected for a specific use, as defined in `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md`. A bundle may contain, reference, or be assembled from agentic memory artifacts, but it does not inherit their lifecycle or activation semantics — those belong to the underlying artifacts, not to the per-use selection on top of them.
 
 This class is supporting material. It does not override human-authored knowledge. The relationship between this class and the primary human surface is already constrained by `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`; this document only frames the artifact-level vocabulary.
 
