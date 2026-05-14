@@ -73,6 +73,8 @@ PANEL_ACTION_LOGGED = "panel.action.logged"
 PANEL_LOG_CREATED = "panel.log.created"
 PANEL_SCAN_REQUESTED = "panel.scan.requested"
 
+NOTE_MOVE_WORKBENCH = "note.move.workbench"
+
 WATCHER_RUN = "watcher.run"
 
 SYNC_LATENCY_SUMMARY = "sync.latency.summary"
@@ -146,6 +148,7 @@ __all__ = [
     "PANEL_ACTION_LOGGED",
     "PANEL_LOG_CREATED",
     "PANEL_SCAN_REQUESTED",
+    "NOTE_MOVE_WORKBENCH",
     "WATCHER_RUN",
     "SYNC_LATENCY_SUMMARY",
     "ASK_QUERY_RECEIVED",
