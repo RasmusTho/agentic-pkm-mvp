@@ -1,0 +1,440 @@
+State: Initial metadata contract for the Contextualization Layer (docs-only, target-state framing).
+Doc role: Concept contract
+Authority: Names the minimal metadata fields, placement modes, and per-class metadata shapes used by the Contextualization Layer artifact classes. Not an ontology, not a governance/authority model, not a database schema, not a final frontmatter standard, not a runtime implementation plan.
+
+# Artifact Metadata Contract for the Contextualization Layer
+
+## 1. Purpose
+
+This document defines a **minimal metadata contract** for the artifact classes introduced in `docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md`.
+
+Its job is to make it possible for the system to distinguish and support the different artifact classes — without each surface inventing its own metadata vocabulary, and without locking down details that should remain open for later contract and implementation work.
+
+This document is explicitly:
+
+- **Not a full ontology.** Domain-level meaning (notes, concepts, projects, decisions, sources, agents, commitments, …) remains owned by the existing concept contracts under `docs/CONCEPTS/`.
+- **Not a governance or authority model.** Trust tiers, write gating, and authority limits live in `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`, `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md`, and adjacent contracts.
+- **Not a database schema.** No tables, no migrations, no indexes are defined here.
+- **Not a runtime implementation.** No code paths, no readers, no writers, no validators are wired here.
+- **Not a final frontmatter standard.** Field names below are logical; their on-disk form is a downstream decision.
+- A **documentation-level contract** that future implementation and validation work can attach to.
+
+## 2. Relationship to the Artifact Model
+
+This contract sits directly on top of `docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md` and reuses its vocabulary without restating it. For metadata purposes the relevant artifact classes are:
+
+- **Human Knowledge Artifact** — what the human writes and owns. Primary audience is the human.
+- **Agentic Memory Artifact** — system-maintained supporting material that helps an agent remember, explain, and continue work. Primary audience is mixed human + agent.
+- **Bridge / Assembly Artifact** — per-use selections that carry context between memory/knowledge and active cognition. The canonical example is a context bundle.
+- **Machine Mirror Artifact** — rebuildable technical projections (chunks, embeddings, indexes, caches, search results, graph projections).
+
+Two invariants from the prior doc are load-bearing for everything below:
+
+- **Markdown is the shared substrate, not the shared semantics.** Two `.md` files in the same folder can be three different kinds of object; the metadata is what tells the system which is which.
+- **Context bundles are bridge / assembly artifacts, not agentic memory.** A bundle may contain, reference, or be assembled from agentic memory artifacts, but it does not inherit their lifecycle or activation semantics. The metadata shape for bundles in Section 7 follows this rule.
+
+Note: the prior doc's Section 3 names three *initial* classes; bridge / assembly is carved out as a boundary inside the agentic memory section and as a separate row in the durability table. This metadata contract treats bridge / assembly as a fourth class with its own metadata shape, which is consistent with that boundary and does not reopen the vocabulary.
+
+## 3. Metadata Placement Principles
+
+Not all metadata belongs in the same place. This contract defines three placement modes. The same logical field may move between modes depending on artifact class and intended audience.
+
+### 3.1 Inline Minimal Frontmatter
+
+Used when metadata is human-meaningful and does not pollute the primary reading experience of the note.
+
+Typical examples:
+
+- `title`
+- `artifact_class`
+- `artifact_type`
+- `status` / `maturity`
+- `created`
+- `updated`
+- human-facing `tags`
+
+Rule of thumb: if a reader would expect to see the field when opening the note, it can sit inline.
+
+### 3.2 Companion Metadata Note
+
+Used when metadata is useful for the agent / system but would clutter a primary human note. The companion lives alongside the primary note (the exact location convention is left to `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md` and to later companion-location work).
+
+Typical examples:
+
+- processing state (e.g. last ingest, last hash, error state)
+- `activation_policy`
+- retrieval hints and tuning fields
+- derived / machine-suggested links
+- `stale_after`
+- `last_activated`, `activation_count`
+- source mapping back to ingested raw material
+- candidate memory references
+
+Rule of thumb: if the field exists for the system's benefit and a human reader would find it visually noisy, it belongs in the companion.
+
+### 3.3 Structured Agentic Artifact
+
+Used for agentic memory artifacts and bridge / assembly artifacts. Here the artifact itself is *both* human-readable and machine-usable; its metadata is part of the artifact, not bolted onto a primary human note.
+
+Typical examples:
+
+- task snapshot
+- activation trace
+- reflection record
+- synthetic summary
+- preference candidate
+- context bundle (bridge / assembly)
+
+Rule of thumb: if the artifact only exists because the system needed it, but a human must still be able to read and correct it, it is a structured agentic / bridge artifact and carries its own metadata.
+
+## 4. Shared Minimal Fields
+
+A small set of fields can recur across artifact classes. None of them are mandatory for every artifact; they are reusable building blocks.
+
+| Field | Meaning |
+| --- | --- |
+| `artifact_id` | Stable identifier for the artifact across renames and moves. May be a UUID, hash, or other stable token. |
+| `artifact_class` | One of `human_knowledge`, `agentic_memory`, `bridge_artifact`, `machine_mirror`, `companion_metadata`. |
+| `artifact_type` | Sub-type within the class (e.g. `concept_note`, `task_snapshot`, `context_bundle`, `embedding_record`). |
+| `title` | Short human-readable label. |
+| `created` | When the artifact came into existence. |
+| `updated` | Last meaningful change. |
+| `author_type` | `human`, `agent`, `system`, or `mixed`. |
+| `primary_audience` | `human`, `agent`, `system`, or `mixed`. |
+| `source_refs` | References to the artifacts this one is grounded in or derived from. |
+| `review_state` | Posture toward human review (e.g. `unreviewed`, `reviewed`, `accepted`, `rejected`). |
+
+These are **logical fields**. They may live inline in a primary note, in a companion metadata note, inside a structured agentic / bridge artifact, or in another documented metadata surface introduced later. Where they live is governed by Section 3, not by this list.
+
+## 5. Human Knowledge Artifact Metadata
+
+### Recommended inline metadata (primary note)
+
+- `title`
+- `artifact_class: human_knowledge`
+- `artifact_type` (e.g. `concept_note`, `project_note`, `decision_record`, `source_note`, `journal_entry`)
+- `status` or `maturity` (e.g. `draft`, `working`, `settled`)
+- `created`
+- `updated`
+- `tags` — only when useful for **human** navigation
+
+The bar for adding a field to a primary human note: a human reader would find the field meaningful and not visually noisy.
+
+### Belongs in a companion metadata note, not the primary note
+
+- `activation_policy`
+- retrieval scores and ranking signals
+- processing state (ingest result, content hash, parser version)
+- embedding / chunk metadata
+- agent annotations and machine-suggested links
+- `last_activated`, `activation_count`
+- noisy machine-derived link lists
+- candidate memory references awaiting review
+
+### Example
+
+Primary note `Contextualization Layer.md`:
+
+```yaml
+---
+artifact_class: human_knowledge
+artifact_type: concept_note
+title: Contextualization Layer
+maturity: working
+created: 2026-05-14
+updated: 2026-05-14
+---
+```
+
+Companion metadata note (location convention out of scope here):
+
+```yaml
+---
+artifact_class: companion_metadata
+target: ./Contextualization Layer.md
+target_artifact_class: human_knowledge
+activation_policy: explicit_or_contextual
+last_processed:
+last_activated:
+derived_links: []
+candidate_memories: []
+---
+```
+
+These examples are illustrative. The final on-disk shape (field names, file naming, location, separator characters) is a downstream contract decision and is not locked here.
+
+## 6. Agentic Memory Artifact Metadata
+
+### Recommended metadata
+
+- `artifact_class: agentic_memory`
+- `memory_type`
+- `title`
+- `purpose`
+- `source_refs` or `derived_from`
+- `confidence`
+- `validity`
+- `stale_after` or `expires_at`
+- `activation_policy`
+- `allowed_consumers`
+- `human_review`
+- `last_activated`
+- `activation_count`
+
+### Allowed `memory_type` values
+
+- `semantic_memory`
+- `episodic_memory`
+- `procedural_memory`
+- `preference_memory`
+- `task_snapshot`
+- `synthetic_summary`
+- `reflection_record`
+- `activation_trace`
+
+`context_bundle` is **not** an agentic memory type. See Section 7.
+
+### Required properties of any agentic memory artifact
+
+- human-readable
+- human-editable
+- organized in a way a human can grasp (folder structure, file naming, links)
+- clearly marked as agent- or system-generated unless authored by a human
+
+Agentic memory artifacts that fail any of the above stop being agentic memory and become machine mirrors (Section 8); their metadata should be migrated accordingly rather than left in an ambiguous state.
+
+## 7. Bridge / Assembly Artifact Metadata
+
+Bridge / assembly artifacts assemble or carry context between memory / knowledge and active cognition. They are per-use selections, not retained memory.
+
+### Examples
+
+- `context_bundle`
+- `working_context_snapshot`
+- `execution_context_bundle`
+- `reorientation_bundle`
+
+### Recommended metadata
+
+- `artifact_class: bridge_artifact`
+- `artifact_type` (one of the examples above, or a later-named subtype)
+- `purpose`
+- `assembled_for` (the task, surface, or agent this bundle was built for)
+- `assembled_at`
+- `source_refs`
+- `included_artifacts`
+- `excluded_artifacts` *(optional)*
+- `construction_method` (how the bundle was assembled — retrieval, orientation, resurfacing, hand-built, etc.)
+- `validity`
+- `stale_after`
+- `consumed_by`
+- `outcome_ref` *(optional — pointer to what the bundle was used to produce)*
+
+### Boundary rules
+
+- A bridge artifact **may** contain or reference agentic memory artifacts.
+- A bridge artifact **is not itself** an agentic memory artifact.
+- A bridge artifact **must not** inherit long-term memory semantics unless its content has been explicitly promoted into a memory artifact through the normal promotion path.
+
+This mirrors the boundary already stated in `docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md` Section 5 and the durability split in its Section 8.
+
+## 8. Machine Mirror Metadata
+
+Machine mirror artifacts are rebuildable technical projections of human knowledge or agentic memory.
+
+### Examples
+
+- `chunk`
+- `embedding_record`
+- `vector_index_entry`
+- `graph_projection`
+- `cache_entry`
+- `search_result`
+
+### Recommended metadata
+
+- `source_ref`
+- `source_hash`
+- `generated_at`
+- `generator` (model / pipeline / version)
+- `index_name`
+- `projection_type`
+- `rebuildable: true`
+
+### Boundary rules
+
+- Machine mirrors are **not** human knowledge artifacts.
+- Machine mirrors are **not** authoritative; their authority is the authority of their source.
+- Machine mirrors should be disposable and rebuildable from higher-durability artifacts.
+- Machine mirrors should not be manually edited as knowledge. Manual edits that need to survive belong in the source artifact, not in the mirror.
+
+## 9. Use Rights Metadata
+
+The artifact model already names five use-right levels:
+
+- `visible`
+- `retrievable`
+- `activatable`
+- `instructional`
+- `action_authorizing`
+
+For this contract, these are **descriptive metadata hooks**, not enforced governance rules. The runtime is free to ignore them until a later authority/governance contract grants them enforcement weight.
+
+Illustrative defaults:
+
+- A human decision record may be `visible`, `retrievable`, `activatable`, and `action_authorizing`.
+- An unreviewed agent reflection may be `visible` and `retrievable`, but not `instructional`.
+- A stale task snapshot may be `visible` and `retrievable`, but not `activatable`.
+- A machine mirror may be `retrievable` by the system but not `action_authorizing`.
+
+These defaults are examples, not requirements. The rules for granting each right belong to a later contract.
+
+## 10. Staleness and Validity
+
+Common fields for temporal validity:
+
+- `validity` (free-form posture, e.g. `current`, `stale`, `invalidated`)
+- `valid_from`
+- `valid_until`
+- `stale_after`
+- `last_validated`
+- `invalidated_by`
+
+These fields matter most for artifacts whose usefulness changes over time:
+
+- task snapshots
+- preference memories
+- procedural hints
+- context bundles
+- project status summaries
+
+**Stale does not mean wrong.** It means *must be checked before use.* Surfaces that consume stale artifacts should re-validate rather than silently refuse, and the human-visible behavior of stale artifacts is a downstream UI decision.
+
+This section is consistent with, and downstream of, `docs/CONCEPTS/TEMPORAL_VALIDITY_AND_STALENESS_CONTRACT.md`.
+
+## 11. Provenance and Derivation
+
+Common fields for provenance:
+
+- `source_refs`
+- `derived_from`
+- `derivation_method`
+- `generated_by`
+- `human_review`
+- `confidence`
+
+These fields exist so that consumers can distinguish:
+
+- a **source-backed claim** — `source_refs` point to authoritative material, `derivation_method` is `direct_quote` or `paraphrase`.
+- an **agent-generated summary** — `generated_by` names an agent, `derivation_method` is `summarization`, `human_review` is typically `unreviewed`.
+- a **human-authored note** — `author_type: human`, `generated_by` empty or naming the human.
+- an **imported source** — `derived_from` references an external system, `derivation_method` is `import`.
+- an **inferred candidate memory** — `generated_by` names an agent, `confidence` is present, `human_review: unreviewed`.
+
+The point is to keep these categories separable, not to lock the field set.
+
+## 12. Examples
+
+These four examples are illustrative. Field names, file naming, and on-disk layout are not normative here.
+
+### 12.1 Human primary note with minimal frontmatter
+
+```yaml
+---
+artifact_class: human_knowledge
+artifact_type: concept_note
+title: Contextualization Layer
+maturity: working
+created: 2026-05-14
+updated: 2026-05-14
+---
+```
+
+### 12.2 Companion metadata note for the same human note
+
+```yaml
+---
+artifact_class: companion_metadata
+target: ./Contextualization Layer.md
+target_artifact_class: human_knowledge
+activation_policy: explicit_or_contextual
+last_processed: 2026-05-14T18:30:00Z
+last_activated:
+activation_count: 0
+derived_links: []
+candidate_memories: []
+---
+```
+
+### 12.3 Agentic task snapshot
+
+```yaml
+---
+artifact_class: agentic_memory
+memory_type: task_snapshot
+title: Drafting Contextualization Layer metadata contract
+purpose: Resume drafting work without re-deriving context.
+source_refs:
+  - docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md
+derived_from: chat_session:2026-05-14T18:10:00Z
+confidence: medium
+validity: current
+stale_after: 2026-05-21
+activation_policy: on_resume
+allowed_consumers: [drafting_agent, panel]
+human_review: unreviewed
+last_activated:
+activation_count: 0
+---
+```
+
+### 12.4 Bridge context bundle
+
+```yaml
+---
+artifact_class: bridge_artifact
+artifact_type: context_bundle
+purpose: Provide focused context for the metadata-contract drafting task.
+assembled_for: task:draft_metadata_contract
+assembled_at: 2026-05-14T18:25:00Z
+source_refs:
+  - docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md
+  - docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md
+included_artifacts:
+  - docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md
+  - docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md
+excluded_artifacts: []
+construction_method: retrieval+orientation
+validity: current
+stale_after: 2026-05-14T20:00:00Z
+consumed_by: drafting_agent
+outcome_ref:
+---
+```
+
+The bundle references agentic memory and human knowledge artifacts but does not become an agentic memory artifact itself.
+
+## 13. Non-goals
+
+This document does **not**:
+
+- define a full ontology or domain model,
+- define a governance, authority, or trust model,
+- define a database schema or migration plan,
+- define a final frontmatter standard,
+- define a prompt template or retrieval recipe,
+- define a runtime implementation plan or roadmap commitment,
+- decide that all metadata must live in Markdown frontmatter — companion notes, sidecar files, runtime state, and other surfaces remain valid carriers.
+
+## 14. Open Questions
+
+The following are deliberately left open. They are recorded so later work can resolve them explicitly rather than by accident.
+
+- **Which fields should eventually be validated by docs tooling?** What is the minimal validation surface that catches mis-classified artifacts without burdening human notes?
+- **Which companion metadata files should be generated automatically**, and which require an explicit human or agent action?
+- **Which agentic memory artifacts require human review before activation?** In particular, which subtypes may carry `instructional` or `action_authorizing` rights without a review step?
+- **How should stale metadata be surfaced in the human UI?** Quiet expiry, visible badge, prompt-on-use, or active review queue?
+- **Which metadata should sync across devices and which can remain local / rebuildable?** Durability tier is a strong input but not the only one — privacy, cost, and device role also matter.
+- **Should bridge artifacts be retained, rotated, or summarized?** And under what conditions should a bridge artifact's content be promoted into an agentic memory artifact?
+
+These questions are not blockers for naming the metadata contract. They are the first concrete things later contracts and implementation lanes will need to answer once this vocabulary is in use.
