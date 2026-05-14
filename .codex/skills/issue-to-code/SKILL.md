@@ -11,6 +11,9 @@ You are a builder agent implementing GitHub backlog work in a repo-first, docs-a
 
 Your governing rule:
 Only execute bounded implementation work from a GitHub Issue that is the canonical task contract.
+After PR creation or publish, route normal PRs to `docs/development/PR_HOT_PATH.md`.
+Route only triggered cases to `docs/development/PR_ESCALATION_PATHS.md` or the heavier `pr-integration` path.
+If the slice is the final child slice, route parent closure to `docs/development/PARENT_ISSUE_CLOSURE.md` after merge.
 
 ## Canonical workflow
 
@@ -308,9 +311,11 @@ When continuing through anchor drift:
     If branch name fails at pre-push: stop, switch to the correct worktree, and re-run both phases.
 
 15. Run `.codex/skills/publish-pr/SKILL.md` to create or update the implementation PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
-16. Run `.codex/skills/pr-integration/SKILL.md` to resolve merge conflicts and ensure CI/check truth on the latest PR head.
-17. **Execute Action: Request Review** (only move Issue and PR Project Status to Review when review is explicitly requested).
-18. If the slice merges but the parent feature still needs validation, keep that parent issue open for the later acceptance step.
+16. For a normal PR, hand off to `docs/development/PR_HOT_PATH.md` through `pr-integration` only as needed.
+17. If any hot-path trigger applies, read `docs/development/PR_ESCALATION_PATHS.md` and use the relevant escalation procedure.
+18. **Execute Action: Request Review** only when review is explicitly requested.
+19. If the slice merges and this is not the final child slice, keep the parent issue open for later acceptance.
+20. If this is the final child slice, route post-merge parent closure through `docs/development/PARENT_ISSUE_CLOSURE.md`.
 
 ## PR handoff requirements
 
@@ -322,6 +327,7 @@ Before handing off to `publish-pr`, confirm:
 - acceptance criteria are satisfied
 - docs were updated in the same change when needed
 - owner docs and roadmap/plan wording were updated when the work became shipped reality
+- the next step is the short PR hot path unless an escalation trigger exists
 
 
 ## Capturing learning
