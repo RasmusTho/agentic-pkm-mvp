@@ -137,6 +137,7 @@ Validation note:
 
 Scope note:
 - `Intent -> propose -> decide -> execute -> receipt` is a canonical loop for mutation-capable interaction surfaces, especially AI-panel and action-driven flows.
+- New emergent features (for example resume my thinking, suggest next action, memory candidate, research pack, dormant project resurfacing, agent learns my workflow) compose this loop together with context bundles, reusable capabilities, policy evaluation, and feedback signals; see `docs/EMERGENT_FEATURES_MODEL.md` for the composition pattern and the rule that emergent features must not bypass governance, write guards, provenance, or authority boundaries.
 - It is not a blanket requirement that every runtime interaction must pass through a human approval step before the system can propose or execute low-risk work.
 - The runtime should reduce cognitive load by generating autonomous proposals where the action is low-risk and the artifact value is not threatened, while reserving harder guardrails for writes or transitions that could damage artifact integrity, provenance, or user trust.
 - Suggested actions may surface as proposed checkbox items in an AI panel when the system has enough context to help but not enough certainty or authority to mutate directly.
