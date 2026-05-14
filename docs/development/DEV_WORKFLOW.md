@@ -141,6 +141,8 @@ Governance-lane rules:
 - governance lane is for repository policy and workflow maintenance, not backlog delivery
 - if the change starts affecting implementation or delivered behavior, switch back to the Issue-first implementation lane
 
+Issues are the normal workflow contract. Direct repair PRs are allowed for bounded immediate fixes when the PR body is the contract, but they should stay narrow and avoid inventing backlog work after the fact.
+
 ## Runtime separation
 
 - Builder-agent instruction lives in `AGENTS.md` and the development reference docs.
