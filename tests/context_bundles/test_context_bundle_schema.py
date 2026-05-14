@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 from app.context_bundles.schema import (
     AuthorityFlags,
-    BundleReceipts,
     BundleScope,
     BundleTrigger,
     ContextBundle,
