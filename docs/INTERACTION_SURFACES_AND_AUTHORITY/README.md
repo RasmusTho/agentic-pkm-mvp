@@ -96,6 +96,15 @@ Owner-doc promotion (updates to `docs/DESIGN_PRINCIPLES.md`, `docs/plans/V60_CAP
 
 This directory is the source of truth. GitHub issues that implement or validate downstream slices reference task specs with "Implements INTERACTION_SURFACES_AND_AUTHORITY/{TASK_NAME}" and use the task's acceptance criteria as the issue contract. Creating those issues does not by itself promote future canvas Chat or Chat-originated mutation into current runtime behavior.
 
+## Related contracts: context bundles and write authority
+
+Interaction surfaces never act on raw semantic similarity. When a surface — Panel, Chat-as-canvas, or Automation — uses retrieved or remembered material to propose a writeback or trigger an action, that material crosses an authority boundary defined elsewhere:
+
+- `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` defines the inspectable envelope around the selected context (intended use, scope, included/excluded artifacts, authority limits, provenance, expiry, receipt relationship). A surface that mutates durable state must carry a context bundle whose authority and provenance constraints are satisfied; LLM reasoning over similarity hits is not, by itself, authority to write.
+- `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` separates human second-brain memory from agent operational memory and keeps candidate/review/promotion as the route from generated memory to trusted knowledge, so a surface cannot quietly elevate agent-side memory into writeback authority.
+
+These are docs-only contracts. They do not change any current Panel, Chat, or Automation runtime behavior, and they do not alter the gated execution invariant recorded in `STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md`.
+
 ## Navigation
 
 - Parent plan: `docs/plans/V60_ARCHITECTURE_TARGET.md` §Pillar 10, §Pillar 10A
