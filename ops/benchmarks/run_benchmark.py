@@ -125,14 +125,24 @@ def _bench_index_write(
             )
             vec = client.embed_text(payload_text)
             identity = client.identity
+            model_name = identity.model
+        except Exception as exc:
+            # Keep benchmark contract stable in offline/local environments.
+            warnings.append(
+                f"{METRIC_INDEX_WRITE} embeddings provider unavailable; using synthetic vector: {exc}"
+            )
+            vec = [0.0] * 1536
+            model_name = "mock-embedding"
+
+        try:
             index.upsert(
                 uuid4(),
                 kind="benchmark",
                 source_ref=f"benchmark/{i}",
                 payload={"title": f"bench-{i}"},
                 embedding=list(vec),
-                model=identity.model,
-                identity=identity,
+                model=model_name,
+                identity=None,
             )
         except Exception as exc:
             warnings.append(f"{METRIC_INDEX_WRITE} failed on sample {i}: {exc}")
