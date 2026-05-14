@@ -13,7 +13,7 @@ class ResolvedPaths:
     vault_root: Path
     yggdrasil_root: Optional[Path]
     system_settings_path: Optional[Path]
-    environment: Literal["dev", "prod"] = "prod"
+    environment: Literal["dev", "prod", "test"] = "prod"
 
 
 _DEFAULT_VAULT = Path("vault")
@@ -28,7 +28,7 @@ def _clean_path(value: str | Path | None) -> Optional[Path]:
     return Path(value) if value else None
 
 
-def resolve_vault_root(cli_override: Path | None = None, *, environment: Literal["dev", "prod"] | None = None) -> Path:
+def resolve_vault_root(cli_override: Path | None = None, *, environment: Literal["dev", "prod", "test"] | None = None) -> Path:
     """Resolve vault root path, optionally scoped to environment.
 
     Args:
@@ -119,7 +119,7 @@ def resolve_flow_settings_path(path: Path | None = None, vault_root: Path | None
 def resolve_runtime_artifact_path(
     artifact_path: Path | str,
     *,
-    environment: Literal["dev", "prod"] | None = None,
+    environment: Literal["dev", "prod", "test"] | None = None,
 ) -> Path:
     """Resolve a runtime artifact path, optionally scoped to environment.
 
@@ -154,7 +154,7 @@ def resolve_paths(
     vault_root: Path | None = None,
     settings_path: Path | None = None,
     yggdrasil_root: Path | None = None,
-    environment: Literal["dev", "prod"] | None = None,
+    environment: Literal["dev", "prod", "test"] | None = None,
 ) -> ResolvedPaths:
     env = environment or active_environment()
     vault = resolve_vault_root(vault_root, environment=env)

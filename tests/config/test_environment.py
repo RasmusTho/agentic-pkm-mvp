@@ -7,6 +7,7 @@ import pytest
 from app.config.environment import (
     ENV_DEV,
     ENV_PROD,
+    ENV_TEST,
     ENVIRONMENT_ENV,
     LAB_PROFILE,
     OPERATOR_PROFILE,
@@ -14,6 +15,7 @@ from app.config.environment import (
     active_environment,
     is_dev_environment,
     is_prod_environment,
+    is_test_environment,
 )
 
 pytestmark = pytest.mark.not_pg
@@ -176,8 +178,45 @@ class TestDocumentedControlSurface:
         """Constants should be defined for environment values."""
         assert ENV_DEV == "dev"
         assert ENV_PROD == "prod"
+        assert ENV_TEST == "test"
 
     def test_constants_for_all_profile_values(self) -> None:
         """Constants should be defined for profile values."""
         assert OPERATOR_PROFILE == "operator"
         assert LAB_PROFILE == "lab"
+
+
+class TestTestEnvironment:
+    """Test the 'test' environment value added for test compose overlays."""
+
+    def test_explicit_test_environment_accepted(self) -> None:
+        """PKM_ENVIRONMENT=test should be accepted without raising ValueError."""
+        env = {ENVIRONMENT_ENV: "test"}
+        assert active_environment(env) == ENV_TEST
+
+    def test_explicit_test_environment_case_insensitive(self) -> None:
+        """test environment selection should be case-insensitive."""
+        assert active_environment({ENVIRONMENT_ENV: "TEST"}) == ENV_TEST
+        assert active_environment({ENVIRONMENT_ENV: "Test"}) == ENV_TEST
+
+    def test_test_environment_not_dev(self) -> None:
+        """test environment should not register as dev."""
+        env = {ENVIRONMENT_ENV: "test"}
+        assert not is_dev_environment(env)
+
+    def test_test_environment_not_prod(self) -> None:
+        """test environment should not register as prod."""
+        env = {ENVIRONMENT_ENV: "test"}
+        assert not is_prod_environment(env)
+
+    def test_is_test_environment(self) -> None:
+        """is_test_environment() should return True for PKM_ENVIRONMENT=test."""
+        assert is_test_environment({ENVIRONMENT_ENV: "test"})
+        assert not is_test_environment({ENVIRONMENT_ENV: "dev"})
+        assert not is_test_environment({ENVIRONMENT_ENV: "prod"})
+        assert not is_test_environment({})
+
+    def test_invalid_env_still_raises(self) -> None:
+        """Non-'test' invalid values should still raise ValueError."""
+        with pytest.raises(ValueError):
+            active_environment({ENVIRONMENT_ENV: "staging"})

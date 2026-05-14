@@ -1,10 +1,10 @@
 """Runtime environment selection and resolution.
 
-This module provides explicit first-class environment selection for `dev` and `prod`,
+This module provides explicit first-class environment selection for `dev`, `prod`, and `test`,
 mapping existing partial controls such as PKM_SETTINGS_PROFILE into the environment model.
 
 Environment selection hierarchy:
-1. Explicit PKM_ENVIRONMENT env var (if set to 'dev' or 'prod')
+1. Explicit PKM_ENVIRONMENT env var (if set to 'dev', 'prod', or 'test')
 2. Implicit from PKM_SETTINGS_PROFILE (lab → dev, operator → prod)
 3. Default to prod
 
@@ -23,6 +23,7 @@ from typing import Literal
 # Environment values
 ENV_DEV = "dev"
 ENV_PROD = "prod"
+ENV_TEST = "test"
 
 # Environment variable for explicit selection
 ENVIRONMENT_ENV = "PKM_ENVIRONMENT"
@@ -33,11 +34,11 @@ OPERATOR_PROFILE = "operator"
 LAB_PROFILE = "lab"
 
 
-def active_environment(env: Mapping[str, str] | None = None) -> Literal["dev", "prod"]:
+def active_environment(env: Mapping[str, str] | None = None) -> Literal["dev", "prod", "test"]:
     """Resolve the active runtime environment.
 
     Priority:
-    1. Explicit PKM_ENVIRONMENT (if set to 'dev' or 'prod')
+    1. Explicit PKM_ENVIRONMENT (if set to 'dev', 'prod', or 'test')
     2. Implicit from PKM_SETTINGS_PROFILE ('lab' → dev, 'operator' → prod)
     3. Default to 'prod'
 
@@ -45,7 +46,7 @@ def active_environment(env: Mapping[str, str] | None = None) -> Literal["dev", "
         env: Optional environment mapping (defaults to os.environ)
 
     Returns:
-        Either 'dev' or 'prod'
+        'dev', 'prod', or 'test'
 
     Raises:
         ValueError: If PKM_ENVIRONMENT has an invalid value
@@ -59,8 +60,10 @@ def active_environment(env: Mapping[str, str] | None = None) -> Literal["dev", "
             return ENV_DEV
         if explicit == ENV_PROD:
             return ENV_PROD
+        if explicit == ENV_TEST:
+            return ENV_TEST
         raise ValueError(
-            f"Invalid {ENVIRONMENT_ENV}={explicit}; must be 'dev' or 'prod'"
+            f"Invalid {ENVIRONMENT_ENV}={explicit}; must be 'dev', 'prod', or 'test'"
         )
 
     # Fall back to settings profile-based inference
@@ -80,9 +83,15 @@ def is_prod_environment(env: Mapping[str, str] | None = None) -> bool:
     return active_environment(env) == ENV_PROD
 
 
+def is_test_environment(env: Mapping[str, str] | None = None) -> bool:
+    """Check if the active environment is 'test'."""
+    return active_environment(env) == ENV_TEST
+
+
 __all__ = [
     "ENV_DEV",
     "ENV_PROD",
+    "ENV_TEST",
     "ENVIRONMENT_ENV",
     "PROFILE_ENV",
     "OPERATOR_PROFILE",
@@ -90,4 +99,5 @@ __all__ = [
     "active_environment",
     "is_dev_environment",
     "is_prod_environment",
+    "is_test_environment",
 ]

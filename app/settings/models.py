@@ -264,7 +264,7 @@ class InstanceSettings(BaseModel):
         default="master",
         description="Instance role; 'master' is canonical, 'satellite' runs a partial view.",
     )
-    environment: Literal["dev", "prod"] = Field(
+    environment: Literal["dev", "prod", "test"] = Field(
         default="prod",
         description="Runtime environment; 'prod' is production-safe default, 'dev' enables development features.",
     )
