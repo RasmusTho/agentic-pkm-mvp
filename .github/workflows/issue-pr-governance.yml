@@ -92,12 +92,23 @@ jobs:
             if (issueLinkPattern.test(body)) {
               return;
             }
+            const directRepairSectionMatch = body.match(/## Direct Repair[\s\S]*?(?=\n## |\n---|\n$)/i);
+            const directRepairSection = directRepairSectionMatch ? directRepairSectionMatch[0] : "";
+            const isDirectRepair =
+              Boolean(directRepairSection) &&
+              /(?:^|\n)Type:\s*(docs|governance|code)\s*(?:\n|$)/i.test(directRepairSection) &&
+              /(?:^|\n)Reason:\s*\S/i.test(directRepairSection) &&
+              /(?:^|\n)Validation:\s*\S/i.test(directRepairSection) &&
+              /(?:^|\n)Issue required:\s*no\b/i.test(directRepairSection);
+            if (isDirectRepair) {
+              return;
+            }
             const docsAuthoringPattern = /^\-\s+\[x\]\s+Docs authoring lane\b/im;
             const governanceLanePattern = /^\-\s+\[x\]\s+Governance lane\b/im;
             const isDocsAuthoring = docsAuthoringPattern.test(body);
             const isGovernanceLane = governanceLanePattern.test(body);
             if (!isDocsAuthoring && !isGovernanceLane) {
-              core.setFailed("PRs must link a GitHub Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>` unless the PR is explicitly classified as `Docs authoring lane` or `Governance lane`.");
+              core.setFailed("PRs must link a GitHub Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>` unless the PR is explicitly classified as `Docs authoring lane`, `Governance lane`, or includes a complete `Direct Repair` block.");
               return;
             }
             const docsAllowedExact = new Set([

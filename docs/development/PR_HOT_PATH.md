@@ -62,7 +62,7 @@ These are follow-up tasks, not default PR blockers:
 
 Issue-backed PRs are required for normal planned work, delegated agent work, feature slices, runtime behavior changes, architecture changes, multi-step refactors, dependency-bearing work, and anything needing backlog tracking or parent/child acceptance.
 
-Direct repair PRs are allowed without a governing issue when the change is bounded, immediate, and the PR body can serve as the full contract.
+Direct repair PRs are allowed without a governing issue when the change is bounded, immediate, and the PR body contains a complete Direct Repair block.
 
 Direct repair examples:
 
@@ -77,22 +77,24 @@ Direct repair examples:
 Direct repair guardrails:
 
 - bounded change
-- clear rationale in PR body
-- validation listed in PR body
+- direct repair block is complete
 - no parent/child tracking needed
 - no long-lived acceptance needed
 - if scope expands, create or link an issue
 
-Minimal PR body shape:
+## Direct Repair
 
-## Direct PR Rationale
-No governing issue is used because this is a bounded immediate repair.
+Type: docs | governance | code
+Reason: <one or two sentences>
+Validation: <checks run>
+Issue required: no — bounded immediate repair
 
-Reason:
-- ...
+This block is the contract for bounded direct repair PRs.
 
-Validation:
-- ...
+- If this block is present and complete, no governing issue is required.
+- If this block is present and complete, no separate lane checkbox is required.
+- The merge receipt may reference this block instead of restating it.
+- If the repair expands beyond bounded scope, create or link an issue.
 
 ## Escalation Triggers
 
@@ -116,4 +118,4 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 - blocking review feedback must be addressed or explicitly classified
 - failing required tests or checks must be classified before merge
 - minimal delivery receipt is required
-- delivery traceability must be preserved through either an issue-backed PR or a direct repair PR rationale
+- delivery traceability must be preserved through either an issue-backed PR or a direct repair block

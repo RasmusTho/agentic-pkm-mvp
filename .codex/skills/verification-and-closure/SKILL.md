@@ -61,7 +61,7 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 ## Direct Repair PRs
 
 - For issue-backed PRs, close or update the governing Issue as usual.
-- For direct repair PRs, verify the PR body contract and validation instead of issue closure.
+- For direct repair PRs, verify the `Direct Repair` block instead of issue ACs.
 - Do not create an Issue after the fact solely for a bounded direct repair.
 
 ## Verification Modes
@@ -70,7 +70,7 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
   - verify governing issue ACs
   - close/update the governing Issue after merge
 - Direct repair PR:
-  - verify the PR body contract, `Direct PR Rationale`, and `Validation`
+  - verify the `Direct Repair` block and `Validation`
   - do not require issue ACs
   - do not close or mutate a governing Issue
   - write a direct repair delivery receipt instead
@@ -87,7 +87,7 @@ Prerequisites for merge:
 - no scope drift remains
 - the PR fits one of the two verification modes above
 - if issue-backed, all acceptance criteria from the governing Issue are satisfied and every AC's `Verify:` target resolves green on the current head SHA
-- if direct repair, the PR body contract, `Direct PR Rationale`, and `Validation` are satisfied on the current head SHA
+- if direct repair, the `Direct Repair` block and `Validation` are satisfied on the current head SHA
 - if the direct repair expands beyond bounded scope, stop and require, create, or link an issue before merge
 
 When all prerequisites are met:
@@ -146,6 +146,8 @@ Do not leave state updates as recommendations when you can execute them directly
 - detect and correct false status where possible
 - if issue-backed work is truly delivered, confirm or recommend Issue closure and Project Status = `Done`
 - if direct repair work is truly delivered, write the direct repair delivery receipt and do not create or mutate a governing Issue
+- direct repair delivery receipt shape:
+  - `Direct repair merged: PR #<n>, type=<type>, validation=<checks>.`
 - require owner-doc writeback only when acceptance changed supported truth
 - require roadmap or plan cleanup
 - produce a delivery receipt
