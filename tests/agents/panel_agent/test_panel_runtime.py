@@ -621,3 +621,57 @@ def test_runtime_writeback_proposal_dedupe_is_scoped_to_last_panel() -> None:
     # Verify the last panel now contains the proposal suggestion.
     last_panel = "%% AI:Start %%\n" + updated.split("%% AI:Start %%\n")[-1]
     assert "- [ ] Make this note evergreen" in last_panel
+
+
+def test_runtime_writeback_zone_move_writes_queued_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Panel writeback for zone_move must write a queued receipt, not ✅ executed."""
+    note_uuid = str(uuid4())
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    settings_path = _settings_file(
+        tmp_path,
+        action_id="note.move.workbench",
+        label="Flytta till Workbench",
+        intent_type="zone_move",
+        downstream_event="note.move.workbench",
+    )
+    markdown = (
+        "---\n"
+        f"uuid: {note_uuid}\n"
+        "---\n"
+        "# Test Note\n"
+        "\n"
+        "%% AI:Start %%\n"
+        "## AI-instruktion\n"
+        "Flytta till Workbench\n"
+        "## AI-åtgärder\n"
+        "- [x] Flytta till Workbench\n"
+        "%% AI:End %%\n"
+    )
+    vault_dir = tmp_path / "vault"
+    vault_dir.mkdir()
+    note_file = vault_dir / "test-note.md"
+    note_file.write_text(markdown, encoding="utf-8")
+    _seed_note(note_uuid, markdown, source_ref=str(note_file))
+
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("VAULT_ROOT", str(vault_dir))
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-zone-move-receipt", trigger="watcher")
+    assert len(events) == 1
+
+    result = execute_panel_intent(events[0], outbox_path=outbox_path)
+    assert isinstance(result, PanelRuntimeResult)
+
+    updated = note_file.read_text(encoding="utf-8")
+
+    # Checkbox must be removed — action was triggered/queued.
+    assert "- [x] Flytta till Workbench" not in updated
+
+    # Panel receipt must NOT say ✅ — that would imply execution, not queuing.
+    assert "✅ Flytta till Workbench" not in updated
+
+    # Panel receipt MUST indicate the action is queued, not executed.
+    assert "queued" in updated.lower() or "requested" in updated.lower()
+    assert "Flytta till Workbench" in updated
