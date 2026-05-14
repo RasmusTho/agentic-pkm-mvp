@@ -83,12 +83,42 @@ Only these labels are allowed. Do not create or use ad hoc labels (e.g., `govern
 
 ## Creating the issue
 
+Choose the label set based on readiness before running `gh issue create`:
+
+**Bounded, testable, and unblocked → `agent:ready`, Status=Ready:**
 ```bash
 gh issue create \
   --repo <owner/repo> \
   --title "<type>: <bounded outcome>" \
   --label "type:task,prio:med,agent:ready" \
-  --body "$(cat <<'EOF'
+  --body "..."
+# Then set Project Status=Ready
+```
+
+**Dependency unresolved → `agent:blocked`, Status=Backlog:**
+```bash
+gh issue create \
+  --repo <owner/repo> \
+  --title "<type>: <bounded outcome>" \
+  --label "type:task,prio:med,agent:blocked" \
+  --body "..."
+# Then set Project Status=Backlog
+```
+
+**Requires human decision → `agent:needs-human`, Status=Backlog:**
+```bash
+gh issue create \
+  --repo <owner/repo> \
+  --title "<type>: <bounded outcome>" \
+  --label "type:task,prio:med,agent:needs-human" \
+  --body "..."
+# Then set Project Status=Backlog
+```
+
+Do not apply `agent:ready` unless every AC has a resolvable `Verify:` target and no dependency blocks execution.
+
+**Issue body template (all cases):**
+```
 ## Context
 <1-2 sentences from the learning-log entry or observed divergence. Link the source: `docs/learning-log.md :: YYYY-MM-DD entry` or `PR #N`>
 
@@ -116,11 +146,9 @@ gh issue create \
 
 ## Applies learning (optional)
 Applies learning from `docs/learning-log.md :: YYYY-MM-DD — <entry title>`.
-EOF
-)"
 ```
 
-After creation, add to Project `Agent Delivery Control Plane` and set Status to `Ready` (if bounded + testable + unblocked) or `Backlog` (otherwise).
+After creation, add to Project `Agent Delivery Control Plane` and verify Status matches the chosen readiness state.
 
 ## Raw-intake normalization path
 
