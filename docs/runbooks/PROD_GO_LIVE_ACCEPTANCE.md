@@ -38,6 +38,291 @@ Before starting, confirm:
 
 ---
 
+<!-- anchor: prod-baseline-overview -->
+## Prod Baseline Reference
+
+This section answers the nine prod-baseline questions independently of the full acceptance phases below.
+Use it for day-to-day startup, restart, and spot-verification without running the complete acceptance procedure.
+
+For a full promotion acceptance (after a code-ref move from dev → stable), proceed through Phases 1–13.
+
+<!-- anchor: canonical-prod-startup -->
+### Canonical prod startup
+
+The canonical prod startup uses the prod compose overlay, the `pkm-prod` project namespace,
+explicit `prod` environment selection, and an operator-supplied vault root.
+
+**Via Makefile target** (preferred — requires `VAULT_ROOT` to be set):
+
+```bash
+export VAULT_ROOT="/absolute/path/to/your/real/vault"
+make prod-start-full
+```
+
+**Equivalent direct command:**
+
+```bash
+COMPOSE_FILE="docker-compose.yaml:docker-compose.prod.yml" \
+COMPOSE_PROJECT_NAME="pkm-prod" \
+PKM_ENVIRONMENT="prod" \
+VAULT_ROOT="/absolute/path/to/your/real/vault" \
+scripts/start_full_system.sh
+```
+
+- `VAULT_ROOT` is always operator-supplied — see [prod-vault-binding](#prod-vault-binding) below.
+- The startup script waits for health before returning. A successful startup writes
+  `startup_succeeded: true` and `runtime_verified: true` to `tmp/startup_status.json`.
+- Confirm the startup receipt before enabling watcher auto-exec.
+- For Ollama: add `LLM_PROVIDER=ollama`.
+
+**Compose identity:**
+
+| Surface | Value |
+|---|---|
+| Base compose file | `docker-compose.yaml` |
+| Prod overlay | `docker-compose.prod.yml` |
+| Compose project | `pkm-prod` |
+| Postgres host port | `15432` |
+| API host port | `18000` |
+
+---
+
+<!-- anchor: prod-db-volume-safety -->
+### Prod DB and volume binding
+
+Prod Postgres data lives in the external named volume `pkm-prod_pgdata`.
+
+**Volume configuration (`docker-compose.prod.yml`):**
+
+```yaml
+volumes:
+  pgdata_prod:
+    external: true
+    name: pkm-prod_pgdata
+```
+
+**Volume safety rules:**
+
+- `external: true` means `docker compose down` (even without `-v`) cannot destroy prod data.
+- Only `docker volume rm pkm-prod_pgdata` destroys the volume — never run this against prod.
+- `make prod-down` runs `$(COMPOSE_PROD) down --remove-orphans` without `-v`; prod data is safe.
+- Never run `make reset-zero`, `make reset-zero-force`, or any `scripts/reset_to_zero.sh` call
+  against the prod channel.
+
+The prod DB name defaults to `app` (override: `PKM_DB_NAME_PROD`).
+Prod Postgres listens on host port `15432`.
+
+Confirm the running prod DB:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod \
+  exec db psql -U postgres -c '\l'
+```
+
+---
+
+<!-- anchor: prod-vault-binding -->
+### Prod vault binding
+
+The real vault root is always supplied by the operator at startup. It is never hardcoded in
+code, compose files, or Makefile targets.
+
+**How the vault root is supplied:**
+
+```bash
+# Via environment variable:
+export VAULT_ROOT="/absolute/path/to/your/real/vault"
+make prod-start-full
+
+# Or inline with the canonical command:
+VAULT_ROOT="/absolute/path/to/your/real/vault" \
+COMPOSE_FILE="docker-compose.yaml:docker-compose.prod.yml" \
+COMPOSE_PROJECT_NAME="pkm-prod" \
+PKM_ENVIRONMENT="prod" \
+scripts/start_full_system.sh
+```
+
+Confirm the active vault root after startup:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod \
+  exec api python -m app.cli settings-explain --json | python3 -c "
+import sys, json; d=json.load(sys.stdin)
+vr = d.get('vault_root') or d.get('paths', {}).get('vault_root')
+print(f'vault_root={vr}')
+"
+```
+
+The printed path must be the real vault before proceeding with any watcher-enabled run.
+
+**Vault safety rules:**
+
+- Never pass a dev vault (`vault-dev/`) or test vault (`vault-test/`) as `VAULT_ROOT` to prod.
+- Never start prod with `PKM_SETTINGS_PROFILE=lab` — that maps to the dev environment.
+- If `settings-explain` shows a `dev` or `test` path, stop and correct the environment before
+  enabling the watcher.
+
+---
+
+<!-- anchor: prod-verification-checklist -->
+### Prod verification checklist
+
+Run after every startup or restart. All items must be green before enabling watcher auto-exec.
+
+```bash
+# 1. Container-level health
+docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod \
+  exec api python -m app.cli health --json
+
+# 2. Environment and vault-root gate
+docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod \
+  exec api python -m app.cli settings-explain --json | python3 -c "
+import sys, json; d=json.load(sys.stdin)
+assert d.get('environment') == 'prod', f'Expected prod, got {d.get(\"environment\")}'
+vr = d.get('vault_root') or d.get('paths', {}).get('vault_root')
+print(f'env=prod OK  vault_root={vr}')
+"
+
+# 3. Runtime status counters (watcher tick count, worker ticks, error totals)
+docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod \
+  exec api python -m app.cli status
+
+# 4. Watcher heartbeat freshness
+cat tmp/watcher_heartbeat.json | python3 -m json.tool
+
+# 5. Worker heartbeat freshness
+cat tmp/worker_heartbeat.json | python3 -m json.tool
+
+# 6. Outbox check — confirm no stuck rows
+# Resolve the prod DB name from settings (honours PKM_DB_NAME_PROD override)
+PROD_DB=$(docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod \
+  exec -T api python -m app.cli settings-explain --json 2>/dev/null | \
+  python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('database') or d.get('db_name') or 'app')")
+docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod \
+  exec -T db psql -U postgres -d "$PROD_DB" -c "
+    SELECT topic,
+           count(*) FILTER (WHERE delivered_at IS NULL)        AS pending,
+           min(created_at) FILTER (WHERE delivered_at IS NULL) AS oldest_pending,
+           count(*) FILTER (WHERE delivered_at IS NOT NULL)     AS delivered
+    FROM outbox
+    GROUP BY topic
+    ORDER BY pending DESC, oldest_pending;"
+
+# 7. Settings validation
+docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod \
+  exec api python -m app.cli settings-validate --json
+```
+
+**Required health signals (all must be green):**
+
+- `health.state == running`
+- `settings-explain.environment == prod`
+- `settings-explain.vault_root` is the real vault (not a dev or test path)
+- Watcher heartbeat fresh (within `WATCHER_HEARTBEAT_STALE_SECONDS`, default 60 s)
+- Worker heartbeat fresh
+- No stuck outbox rows with `null delivered_at` older than 2× the heartbeat cadence
+- `settings-validate` returns no errors
+
+---
+
+<!-- anchor: safe-prod-restart -->
+### Safe prod stop and restart
+
+**Safe stop:**
+
+```bash
+make prod-down
+# Equivalent: docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod down --remove-orphans
+```
+
+- Stops containers and removes orphaned containers.
+- Does NOT touch the `pkm-prod_pgdata` volume (external, protected).
+- Does NOT remove vault files (vault is a host-directory mount, not a Docker volume).
+
+**Safe restart:**
+
+```bash
+export VAULT_ROOT="/absolute/path/to/your/real/vault"
+make prod-down
+make prod-start-full
+```
+
+After restart always run the [prod-verification-checklist](#prod-verification-checklist)
+before enabling watcher auto-exec.
+
+**Avoid:**
+
+- `docker compose down -v` against `pkm-prod` — destroys `pkm-prod_pgdata`.
+- `make reset-zero` or `make reset-zero-force` on the prod channel.
+- Running `docker compose down` without `-f docker-compose.prod.yml -p pkm-prod` — may target
+  the wrong project.
+
+---
+
+<!-- anchor: prod-baseline-receipt -->
+### Prod baseline receipt
+
+A baseline receipt records the observed runtime state at a point in time.
+It is distinct from a full promotion receipt (which records a code-ref transition from
+`prepare-promotion` / `execute-promotion`).
+
+**Receipt location:** `ops/baseline/YYYY-MM-DD-<short-description>.json`
+(create the directory on first use: `mkdir -p ops/baseline`)
+
+**Minimum fields:**
+
+```json
+{
+  "receipt_type": "prod-baseline",
+  "environment": "prod",
+  "timestamp": "<ISO 8601 UTC>",
+  "compose_project": "pkm-prod",
+  "compose_files": ["docker-compose.yaml", "docker-compose.prod.yml"],
+  "vault_root": "<operator-supplied absolute path — confirm before storing>",
+  "database": "app",
+  "db_volume": "pkm-prod_pgdata",
+  "health_state": "running",
+  "watcher_heartbeat_fresh": true,
+  "worker_heartbeat_fresh": true,
+  "outbox_pending_count": 0,
+  "startup_status_path": "tmp/startup_status.json",
+  "startup_succeeded": true,
+  "runtime_verified": true,
+  "notes": ""
+}
+```
+
+For a full post-promotion receipt (after a code-ref move), use
+`docs/runbooks/prod_acceptance_receipt.example.json` as the template and Phase 9 of this
+runbook as the procedure.
+
+---
+
+<!-- anchor: prod-baseline-vs-governance -->
+### Phase distinction: baseline stabilization vs future promotion governance
+
+Be explicit about which scope is active:
+
+**Phase 1 — Prod baseline stabilization (current scope, Issues #964 / #969):**
+
+- Start prod with the canonical command and prod compose overlay.
+- Confirm environment, vault root, DB volume, health, watcher, worker, and outbox are correct.
+- Record a baseline receipt at `ops/baseline/`.
+- Does not require a code-ref promotion, rollback rehearsal, or CI gate verification.
+
+**Phase 2 — Full promotion governance (future hardening, Issue #964 and later):**
+
+- dev → stable promotion workflow with `prepare-promotion` / `execute-promotion`.
+- Release-candidate verification against `CI SUMMARY GATES ok=true`.
+- Automated rollback rehearsal and `rollback_rehearsed: true` gate.
+- Full Phase 1–13 acceptance procedure in this runbook.
+- Channel-isolation guard suite and cross-channel safety automation.
+- Direct dev→prod policy decision.
+
+Do not require Phase 2 gates as a prerequisite for Phase 1 baseline work.
+
+---
+
 ## Phase 1 — Prod/Stable Preflight
 
 **Goal:** confirm the code ref, environment config, and runtime surfaces are correct before touching the real vault.
@@ -131,11 +416,20 @@ python -m app.cli llm check
 
 ## Phase 4 — Canonical Startup Path
 
-**Goal:** confirm the runtime starts cleanly via the supported startup wrapper.
+**Goal:** confirm the runtime starts cleanly via the supported startup wrapper with the prod compose overlay.
 
 ```bash
-# Start via the supported startup script (sets WATCHER_AUTO_EXEC=1 by default)
-VAULT_ROOT="/path/to/real/vault" scripts/start_full_system.sh
+# Start via the prod-baseline canonical command (sets WATCHER_AUTO_EXEC=1 by default)
+# See canonical-prod-startup for the full command reference.
+export VAULT_ROOT="/path/to/real/vault"
+make prod-start-full
+
+# Equivalent direct command:
+# COMPOSE_FILE="docker-compose.yaml:docker-compose.prod.yml" \
+# COMPOSE_PROJECT_NAME="pkm-prod" \
+# PKM_ENVIRONMENT="prod" \
+# VAULT_ROOT="/path/to/real/vault" \
+# scripts/start_full_system.sh
 ```
 
 Monitor `tmp/startup_status.json` for completion. A healthy startup writes `startup_succeeded: true` and `runtime_verified: true`.
