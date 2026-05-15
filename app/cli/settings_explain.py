@@ -4,7 +4,7 @@ import json
 import os
 import re
 from typing import Any, Sequence
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
 
 from app.config.database import resolve_runtime_database_url
 from app.config.environment import active_environment
@@ -13,21 +13,19 @@ from app.settings.panel_actions_settings import load_panel_actions_settings, pan
 from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_settings, resolve_auto_exec_state
 
 
-# Matches credentials in DSN netloc: scheme://user:password@host or scheme://password@host
-_DSN_USERINFO_RE = re.compile(r"(?<=://)([^:@/\s]+:[^@/\s]*)(?=@)")
-# Matches sensitive query-param values: ?password=x or ?pwd=x or ?pass=x
-_DSN_QUERYPW_RE = re.compile(r"(?i)(?<=[?&])(?:password|pwd|pass)=([^&]*)")
+# group 1 = "://user:", group 2 = "@" — replaces only the password portion
+_DSN_PASSWORD_RE = re.compile(r"(://[^:@/\s]+:)[^@/\s]+(@)")
+# group 1 = "&password=" (or ?/pwd/pass variants) — URL-encodes *** as %2A%2A%2A
+_DSN_QUERYPW_RE = re.compile(r"(?i)([?&](?:password|pwd|pass)=)[^&]*")
 
 
 def mask_dsn(dsn: str) -> str:
+    """Return dsn with credentials redacted.  Uses re.sub with string replacements
+    (no callables) so static-analysis taint tools recognise the output as sanitized."""
     if "://" not in dsn:
         return dsn
-    # Use re.sub so static-analysis taint tools recognise the return value as sanitized.
-    masked = _DSN_USERINFO_RE.sub(
-        lambda m: (m.group(1).split(":")[0] + ":***") if ":" in m.group(1) else "***",
-        dsn,
-    )
-    masked = _DSN_QUERYPW_RE.sub(lambda m: m.group(0).split("=")[0] + "=%2A%2A%2A", masked)
+    masked = _DSN_PASSWORD_RE.sub(r"\1***\2", dsn)
+    masked = _DSN_QUERYPW_RE.sub(r"\1%2A%2A%2A", masked)
     return masked
 
 
@@ -98,6 +96,8 @@ def _redact_payload(obj: Any) -> Any:
         }
     if isinstance(obj, list):
         return [_redact_payload(item) for item in obj]
+    if isinstance(obj, str) and "://" in obj:
+        return mask_dsn(obj)
     return obj
 
 
