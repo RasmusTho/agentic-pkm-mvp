@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0",
+  "environment": "prod",
+  "stable_ref": "abc1234def5678",
+  "started_at": "2026-05-15T10:00:00Z",
+  "ended_at": "2026-05-15T11:02:00Z",
+  "vault_root": "/Users/operator/PKM - Alpha",
+  "database": "app",
+  "health_required_ok": true,
+  "health_checks": {
+    "state": "running",
+    "db": "ok",
+    "llm_provider": "ok",
+    "watcher_heartbeat": "fresh",
+    "worker_heartbeat": "fresh",
+    "settings_validate": "ok",
+    "startup_succeeded": true,
+    "runtime_verified": true
+  },
+  "watcher_ticks_seen": 12,
+  "outbox_pending_final": 0,
+  "worker_errors": 0,
+  "write_guard_violations": 0,
+  "test_note_uuid": "3f7e2b1a-4c8d-4e9f-a012-b3c4d5e6f789",
+  "smoke_test": {
+    "note_path": "smoke-test-1747296000.md",
+    "outbox_event_emitted": true,
+    "worker_delivered_at": "2026-05-15T10:07:23Z",
+    "note_deleted_after_test": true
+  },
+  "watcher_to_worker_path": {
+    "watcher_tick_count": 12,
+    "outbox_rows_created": 47,
+    "outbox_rows_delivered": 47,
+    "worker_retry_exhausted_count": 0,
+    "watcher_run_audit_rows": 12
+  },
+  "write_guard_posture": {
+    "watcher_auto_exec": true,
+    "allowed_actions": ["promote.evergreen"],
+    "writes_allowed": true,
+    "panel_skipped_policy": 0,
+    "skipped_dedup": 2
+  },
+  "promotion_receipt_id": "acceptance-20260515-100000",
+  "promotion_plan_path": "ops/promotions/2026-05-15-abc1234.md",
+  "rollback_rehearsed": true,
+  "rollback_anchor": {
+    "stable_prev_ref": "fedcba9876543210",
+    "plan_file_confirmed": true,
+    "operator_understands_limits": true,
+    "notes": "Rollback would reverse reversible migrations only. Vault notes are never rewound. Forward-only migrations acknowledged at promotion time."
+  },
+  "soak": {
+    "duration_minutes": 45,
+    "tick_count_start": 3,
+    "tick_count_end": 12,
+    "outbox_peak_pending": 2,
+    "degraded_events": 0
+  },
+  "ci_gate": {
+    "summary_gates_ok": true,
+    "ref_checked": "abc1234def5678"
+  },
+  "operator_decision": "accept",
+  "notes": "All acceptance criteria met. Watcher ticked 12 times over a 45-minute soak. Worker consumed all outbox rows without retry exhaustion. Write-guard posture confirmed production-safe (allowlist: promote.evergreen). Rollback rehearsal completed. CI gate green on stable ref."
+}

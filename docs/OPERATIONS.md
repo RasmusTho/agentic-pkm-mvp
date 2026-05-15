@@ -38,7 +38,9 @@ CLI note:
 - App-version bumps and git tags are separate from stable-channel promotion. When moving the `stable`
   ref, rehearsing rollback, or validating prod after a promotion, use
   `docs/RELEASE_CHANNELS/README.md` plus `prepare-promotion`, `execute-promotion`,
-  `verify-promotion`, and `rollback-promotion`. Treat release channels as an operator-governed
+  `verify-promotion`, and `rollback-promotion`. For the full operator acceptance procedure
+  (preflight, smoke test, soak, rollback rehearsal, and receipt), use
+  `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md`. Treat release channels as an operator-governed
   capability with outstanding feature acceptance, not as a fully accepted baseline workflow.
 
 ## Runtime prerequisites (registry watcher)
@@ -333,3 +335,4 @@ Quick issue routing:
 - Watcher/panel/orchestrator incident triage -> `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md`
 - Watcher/panel manual walkthrough -> `docs/runbooks/UAT_PANEL_WATCHER.md`
 - Go-live/startup diagnostics -> `docs/runbooks/RUNBOOK_GO_LIVE.md`
+- Prod go-live acceptance (preflight through soak, rollback rehearsal, receipt) -> `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md`

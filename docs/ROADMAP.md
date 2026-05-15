@@ -61,7 +61,7 @@ This roadmap is forward-looking and skimmable. History lives in `docs/history/SO
   - PanelAgent 2.0 expansion beyond the current slices remains bounded even after real-vault acceptance; break new behavior into smaller tracked slices first.
   - Reasoning/reflective layers with eval gates; expanded observability counters for orchestration/A2A.
   - Collaboration/multi-user after single-user flows are stable.
-  - Release-channels specification phase complete (Issues #609–#615 closed 2026-05-02): all six task specs (channel identity, DB-per-channel isolation, promotion plan contract, migration reversibility classification, concurrency rule, rollback contract) are delivered under `docs/RELEASE_CHANNELS/README.md`; promotion and rollback skills are authored. Operational acceptance — running a stable build against the real vault with a recorded promotion and rehearsed rollback — is the outstanding follow-up before the channel model is treated as fully live.
+  - Release-channels specification phase complete (Issues #609–#615 closed 2026-05-02): all six task specs (channel identity, DB-per-channel isolation, promotion plan contract, migration reversibility classification, concurrency rule, rollback contract) are delivered under `docs/RELEASE_CHANNELS/README.md`; promotion and rollback skills are authored; the go-live acceptance procedure is now documented at `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md` with a machine-readable receipt template. Operational acceptance — executing the runbook against the real vault and recording a pass receipt — is the outstanding step before the channel model is treated as fully live.
   - `v6.0` architecture target (**active design direction** — see `Capability-Based Architecture & Agent Evolution` above): a baseline-aware target operating model that preserves the
     vault-first / registry-watcher / DB-outbox / companion-note continuity baseline while making
     the next operating boundary explicit: `observation -> normalization/contract -> admission -> execution`.
@@ -307,7 +307,7 @@ All six task specs are complete and closed; promotion and rollback skills are au
 
 ### Outstanding follow-up
 
-**Operational acceptance** — running a stable build against the real vault with a recorded promotion and rehearsed rollback. This is the remaining step before the channel model is treated as fully live in production.
+**Operational acceptance** — running a stable build against the real vault with a recorded promotion and rehearsed rollback. The acceptance procedure is now documented and ready to execute at `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md` (including preflight, smoke test, soak guidance, rollback rehearsal, and the machine-readable receipt template). The acceptance itself — executing the runbook against the real vault and recording a pass receipt — remains the final step before the channel model is treated as fully live in production.
 
 ## Companion UI design artifact intake (2026-05-03)
 
