@@ -66,7 +66,7 @@ def enqueue(path: Path, uuid: str, desired_state: str = "promoted") -> None:
         QUEUE,
         {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "trace_id": current_trace_id() or hashlib.sha1(f"{uuid}{path}".encode()).hexdigest()[:12],
+            "trace_id": current_trace_id() or hashlib.sha256(f"{uuid}{path}".encode()).hexdigest()[:12],
             "uuid": uuid,
             "path": str(path),
             "desired_state": desired_state,

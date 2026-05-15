@@ -17,6 +17,7 @@ from app.eval.llm_client import DEFAULT_MODE as DEFAULT_EVAL_MODE
 from app.knowledge.errors import KnowledgeConfigError
 from app.knowledge.health import obsidian_dependency_status
 from app.knowledge.settings import KnowledgeAdapter, load_knowledge_settings
+from app.cli.settings_explain import mask_dsn
 from app.obs.log import span, with_trace_id
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.settings.panel_actions import get_panel_actions_diagnostics
@@ -459,7 +460,7 @@ def _db_runtime_status() -> Dict[str, Any]:
     if not dsn_value:
         return {"ok": False, "detail": "DATABASE_URL missing for postgres backend", "status": "missing"}
     ok, detail = ping_postgres(timeout=1.0)
-    return {"ok": ok, "detail": detail, "dsn": dsn_value}
+    return {"ok": ok, "detail": detail, "dsn": mask_dsn(dsn_value)}
 
 
 def _llm_runtime_status(check_result: Dict[str, Any]) -> Dict[str, Any]:

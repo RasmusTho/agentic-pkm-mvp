@@ -301,3 +301,23 @@ def test_health_skips_eval_route_by_default(monkeypatch, tmp_path) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["checks"]["llm_task_routes"]["routes"]["eval"]["status"] == "skipped"
+
+
+# --- security: DSN must not appear in health response ---
+
+def test_health_db_dsn_is_masked_in_response(monkeypatch, tmp_path) -> None:
+    client = _health_client(monkeypatch, tmp_path, worker_enabled=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:hunter2@host:5432/db")
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+
+    from app.stores import db_health as _dh
+    monkeypatch.setattr(_dh, "ping_postgres", lambda timeout: (True, "ok"))
+
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "hunter2" not in body
+    data = resp.json()
+    dsn = data.get("runtime", {}).get("db", {}).get("dsn", "")
+    assert "hunter2" not in dsn
+    assert dsn == "" or "***" in dsn
