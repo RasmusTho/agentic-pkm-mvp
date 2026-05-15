@@ -17,6 +17,7 @@ from app.context_bundles.schema import (
 from app.resurfacing.bundle_consumer import (
     BundleAuthorityViolation,
     ResurfacingBundleFrame,
+    WhyNowSignal,
     build_resurfacing_bundle_frame,
 )
 
@@ -102,13 +103,17 @@ def test_resurfacing_records_context_bundle():
 def test_resurfacing_bundle_includes_why_now_explanation():
     bundle = _bundle(included=[_item("art_b", "related note updated recently")])
 
-    frame = build_resurfacing_bundle_frame(
-        bundle, why_now="three related notes updated in last 24h", now=_NOW
+    # WhyNowSignal anchors the explanation to a named provenance signal so the
+    # "why now" decision is auditable, not just an opaque semantic score.
+    signal = WhyNowSignal(
+        rationale="three related notes updated in last 24h",
+        signal_name="watcher_run_24h",
     )
+    frame = build_resurfacing_bundle_frame(bundle, why_now=signal, now=_NOW)
 
-    # "Why now" is explicit and tied to the rationale, not hidden in a score.
-    assert frame.why_now is not None
+    # "Why now" rationale is explicit and the signal_name anchors it to provenance.
     assert "24h" in frame.why_now
+    assert frame.why_now_signal_name == "watcher_run_24h"
     # Provenance of the surfaced items is preserved for auditing.
     item = next(s for s in frame.surfaced_items if s.artifact_id == "art_b")
     assert item.provenance is not None

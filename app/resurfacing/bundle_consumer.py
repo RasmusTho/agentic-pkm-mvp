@@ -19,6 +19,18 @@ class BundleAuthorityViolation(Exception):
     """Raised when a bundle carries prohibited authority for resurfacing."""
 
 
+class WhyNowSignal(BaseModel):
+    """Provenance-backed rationale for a resurfacing event.
+
+    ``rationale`` is the human-readable explanation; ``signal_name`` anchors it
+    to a specific recorded signal (e.g. "dependency_gap", "watcher_run_24h")
+    so the "why now" is auditable rather than opaque semantic relatedness.
+    """
+
+    rationale: str
+    signal_name: Optional[str] = None
+
+
 class SurfacedItem(BaseModel):
     artifact_id: str
     reason: str
@@ -30,6 +42,7 @@ class SurfacedItem(BaseModel):
 class ResurfacingBundleFrame(BaseModel):
     bundle_id: str
     why_now: str
+    why_now_signal_name: Optional[str] = None
     surfaced_items: list[SurfacedItem] = Field(default_factory=list)
     relatedness_signals: list[SurfacedItem] = Field(default_factory=list)
     priority_signals: list[SurfacedItem] = Field(default_factory=list)
@@ -62,16 +75,27 @@ def _is_priority(item: IncludedItem) -> bool:
 def build_resurfacing_bundle_frame(
     bundle: ContextBundle,
     *,
-    why_now: str,
+    why_now: "str | WhyNowSignal",
     now: datetime | None = None,
 ) -> ResurfacingBundleFrame:
     """Project a ContextBundle into a resurfacing suggestion frame.
 
     Requires ``may_resurface=True`` and rejects ``may_write=True`` — resurfacing
     is a suggestion-only surface that must not upgrade bundle authority.
-    ``why_now`` is the caller-supplied, human-readable rationale anchored to a
-    recorded signal rather than an opaque internal score.
+
+    ``why_now`` must be either a non-empty string rationale or a
+    ``WhyNowSignal`` with a ``signal_name`` that anchors the explanation to a
+    specific recorded signal rather than opaque semantic relatedness.
     """
+    if isinstance(why_now, WhyNowSignal):
+        why_now_rationale = why_now.rationale
+        why_now_signal_name = why_now.signal_name
+    else:
+        if not why_now.strip():
+            raise ValueError("why_now must be a non-empty rationale string")
+        why_now_rationale = why_now
+        why_now_signal_name = None
+
     if not bundle.authority.may_resurface:
         raise BundleAuthorityViolation(
             f"bundle {bundle.id} does not carry may_resurface=True; "
@@ -107,7 +131,8 @@ def build_resurfacing_bundle_frame(
 
     return ResurfacingBundleFrame(
         bundle_id=bundle.id,
-        why_now=why_now,
+        why_now=why_now_rationale,
+        why_now_signal_name=why_now_signal_name,
         surfaced_items=surfaced,
         relatedness_signals=relatedness,
         priority_signals=priority,
@@ -122,5 +147,6 @@ __all__ = [
     "BundleAuthorityViolation",
     "ResurfacingBundleFrame",
     "SurfacedItem",
+    "WhyNowSignal",
     "build_resurfacing_bundle_frame",
 ]
