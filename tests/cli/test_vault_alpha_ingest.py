@@ -29,6 +29,8 @@ def _base_env(tmp_path: Path) -> dict[str, str]:
         "LLM_MOCK_RESPONSE": "Mock response [#1]",
         "INDEX_OUTBOX_PATH": str(tmp_path / "outbox.jsonl"),
         "STORE_BACKEND": "memory",
+        # Disable companion cooldown so freshly-created test files still get companions.
+        "COMPANION_CREATE_COOLDOWN_SECONDS": "0",
     }
 
 
@@ -158,6 +160,8 @@ def _force_memory_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("LLM_MOCK_RESPONSE", "Mock response [#1]")
+    # Disable companion cooldown so freshly-created test files still get companions.
+    monkeypatch.setenv("COMPANION_CREATE_COOLDOWN_SECONDS", "0")
 
 
 def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
@@ -210,7 +214,7 @@ def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
     assert companion.ingest_state == "tracked"
     assert companion.content_hash
     # Companion must NOT contain human-owned fields
-    companion_file_text = (vault / companion_path(expected_uuid)).read_text(encoding="utf-8")
+    companion_file_text = (vault / companion_path(expected_uuid, vault)).read_text(encoding="utf-8")
     assert "review_state" not in companion_file_text
     assert "maturity" not in companion_file_text
 

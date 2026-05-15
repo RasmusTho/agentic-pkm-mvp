@@ -26,6 +26,8 @@ def _mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "LLM_MOCK_RESPONSE",
         '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}',
     )
+    # Disable companion cooldown so tests with freshly-created files still get companions.
+    monkeypatch.setenv("COMPANION_CREATE_COOLDOWN_SECONDS", "0")
     reset_store_backends()
 
 

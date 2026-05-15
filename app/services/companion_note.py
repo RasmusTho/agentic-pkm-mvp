@@ -138,16 +138,17 @@ def read_companion(vault_root: Path, uuid: str) -> CompanionNote | None:
 
 
 def write_companion(vault_root: Path, companion: CompanionNote) -> None:
-    """Write companion note to disk. Creates parent directories as needed."""
+    """Write companion note to the canonical location. Creates parent dirs as needed.
+
+    Only writes to the canonical companion path (layout-aware system folder).
+    The legacy _system/companions/ dual-write has been removed; companions are
+    created in exactly one location per the COMPANION_NOTE_CONTRACT.
+    """
     path = vault_root / companion_path(companion.uuid, vault_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = _companion_to_fm(companion)
     content = dump_frontmatter(fm, "")
     path.write_text(content, encoding="utf-8")
-    legacy = vault_root / _LEGACY_COMPANIONS_DIR / f"{companion.uuid}.md"
-    if legacy != path:
-        legacy.parent.mkdir(parents=True, exist_ok=True)
-        legacy.write_text(content, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

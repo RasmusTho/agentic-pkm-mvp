@@ -21,6 +21,10 @@ from app.observability.ingest_meta import record_ingest_run
 from app.obs.log import with_trace_id
 from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
+from app.services.companion_eligibility import (
+    check_companion_eligibility,
+    load_companion_settings,
+)
 from app.services.companion_note import (
     CompanionNote,
     companion_path,
@@ -422,28 +426,42 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
     else:
         note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid or fingerprint_uuid, rel_path)
 
-    try:
-        write_companion(
-            vault_root,
-            CompanionNote(
-                uuid=note_uuid,
-                source_ref=str(rel_path),
-                title=title,
-                content_hash=text_sha256,
-                ingest_state="tracked",
-                last_ingested=datetime.now(timezone.utc).isoformat(),
-                created_by_instance="",
-                attachments=scan_attachments(stripped_text),
-            ),
-        )
-    except OSError as exc:
-        if _is_locked_error(exc) or _is_permission_denied_error(exc):
-            click.echo(
-                f"Warning: could not write companion for {rel_path}; continuing without companion update ({exc})",
-                err=True,
+    companion_settings = load_companion_settings(vault_root)
+    eligibility = check_companion_eligibility(
+        path,
+        vault_root,
+        raw_body=stripped_text,
+        cooldown_seconds=companion_settings.create_cooldown_seconds,
+    )
+    if eligibility.eligible:
+        try:
+            write_companion(
+                vault_root,
+                CompanionNote(
+                    uuid=note_uuid,
+                    source_ref=str(rel_path),
+                    title=title,
+                    content_hash=text_sha256,
+                    ingest_state="tracked",
+                    last_ingested=datetime.now(timezone.utc).isoformat(),
+                    created_by_instance="",
+                    attachments=scan_attachments(stripped_text),
+                ),
             )
-        else:
-            raise
+        except OSError as exc:
+            if _is_locked_error(exc) or _is_permission_denied_error(exc):
+                click.echo(
+                    f"Warning: could not write companion for {rel_path}; continuing without companion update ({exc})",
+                    err=True,
+                )
+            else:
+                raise
+    else:
+        click.echo(
+            f"Companion deferred for {rel_path}: {eligibility.reason}"
+            + (f" (retry after {eligibility.next_check_after})" if eligibility.next_check_after else ""),
+            err=True,
+        )
 
     core6 = {
         "id": note_uuid,
@@ -733,8 +751,21 @@ def _ingest_candidates(
                 if existing is not None:
                     companion_for_skip = companion or (read_companion(vault_root, note_uuid) if note_uuid else None)
                     companion_hash = companion_for_skip.content_hash if companion_for_skip else None
+                    # For notes without a companion (e.g. system-path notes where companion creation
+                    # is intentionally deferred), fall back to the ingest_fingerprint stored in the
+                    # object store so the fingerprint skip still fires for unchanged content.
+                    if not companion_hash:
+                        stored_payload = (existing.get("payload") or {})
+                        stored_fp = stored_payload.get("ingest_fingerprint") or {}
+                        companion_hash = str(stored_fp.get("text_sha256") or "") or None
+                    # Skip fingerprint-equal notes, but not if source_ref changed (rename case).
                     if companion_hash and companion_hash == text_sha256:
-                        should_skip = True
+                        source_ref_changed = (
+                            companion_for_skip is not None
+                            and companion_for_skip.source_ref != str(rel_path)
+                        )
+                        if not source_ref_changed:
+                            should_skip = True
             if should_skip:
                 continue
 
