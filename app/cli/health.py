@@ -586,12 +586,17 @@ def _check_v6_seams() -> Dict[str, str]:
         except Exception:
             return "disabled"
 
-    canvas_raw = os.getenv("CANVAS_ENABLED", "0").strip().lower()
+    canvas_gate_on = os.getenv("CANVAS_ENABLED", "0").strip().lower() in _TRUE_VALUES
+    canvas_importable = _seam("app.api.routes.canvas") == "enabled"
+    # Canvas is only truly "enabled" when both the gate is on AND the router imports.
+    # If the gate is on but the import fails, surface "disabled" so the misleading
+    # appearance of an active route does not mask the broken-import case.
+    canvas_state = "enabled" if (canvas_gate_on and canvas_importable) else "disabled"
     return {
         "orientation": _seam("app.api.routes.orientation"),
         "resurfacing": _seam("app.resurfacing"),
         "commitments": _seam("app.domain.commitments"),
-        "canvas": "enabled" if canvas_raw in _TRUE_VALUES else "disabled",
+        "canvas": canvas_state,
     }
 
 

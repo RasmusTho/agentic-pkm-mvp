@@ -269,6 +269,26 @@ def test_disabled_seam_not_blocking(monkeypatch, tmp_path) -> None:
     assert seams.get("canvas") == "disabled"
 
 
+def test_canvas_seam_disabled_when_router_import_fails(monkeypatch, tmp_path) -> None:
+    """Gate-on but import-broken canvas must report disabled, not enabled."""
+    import importlib
+
+    real_import_module = importlib.import_module
+
+    def fake_import_module(name: str, *args, **kwargs):
+        if name == "app.api.routes.canvas":
+            raise ImportError("simulated broken canvas import")
+        return real_import_module(name, *args, **kwargs)
+
+    monkeypatch.setenv("CANVAS_ENABLED", "1")
+    monkeypatch.setattr(importlib, "import_module", fake_import_module)
+    client = _health_client(monkeypatch, tmp_path, worker_enabled=False)
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    seams = resp.json().get("v6_0_seams") or {}
+    assert seams.get("canvas") == "disabled"
+
+
 def test_health_skips_eval_route_by_default(monkeypatch, tmp_path) -> None:
     heartbeat = tmp_path / "watcher-heartbeat.json"
     _write_watcher_heartbeat(heartbeat, ts=time.time())

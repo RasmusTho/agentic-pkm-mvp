@@ -122,7 +122,8 @@ def _log_v6_seam_status() -> None:
     orientation = _seam("app.api.routes.orientation")
     resurfacing = _seam("app.resurfacing")
     commitments = _seam("app.domain.commitments")
-    canvas = "enabled" if _truthy_env("CANVAS_ENABLED") else "disabled"
+    canvas_importable = _seam("app.api.routes.canvas") == "enabled"
+    canvas = "enabled" if (_truthy_env("CANVAS_ENABLED") and canvas_importable) else "disabled"
     logger.info(
         "v6.0 seams: orientation=%s, resurfacing=%s, commitments=%s, canvas=%s",
         orientation,
