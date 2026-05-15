@@ -54,7 +54,7 @@ def _read_frontmatter(path: Path) -> dict[str, Any]:
 
 
 def _resolve_path_setting(
-    candidate: Any, env_key: str, default: Path, *, environment: Literal["dev", "prod"] | None = None
+    candidate: Any, env_key: str, default: Path, *, environment: Literal["dev", "prod", "test"] | None = None
 ) -> Path:
     """Resolve a path setting with optional environment scoping.
 
@@ -109,7 +109,7 @@ class AutoExecResolution:
     raw_value: str | None
 
 
-def load_watcher_settings(vault_root: Path | None = None, *, environment: Literal["dev", "prod"] | None = None) -> WatcherSettings:
+def load_watcher_settings(vault_root: Path | None = None, *, environment: Literal["dev", "prod", "test"] | None = None) -> WatcherSettings:
     """Load watcher settings with optional environment scoping.
 
     Args:
