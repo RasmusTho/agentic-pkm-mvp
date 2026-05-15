@@ -95,12 +95,16 @@ if [ -n "$scope_glob_raw" ]; then
   printf "%s\n" "WATCHER_SCOPE_GLOB=$scope_glob_raw" >> "$runtime_env_path"
 fi
 
-# Compatibility shim: when OPENAI_BASE_URL is set for OpenAI-compatible local routing
-# and OPENAI_BASE is not explicitly set, derive OPENAI_BASE so that route health checks
-# and the adapter (which read OPENAI_BASE) can find the endpoint.
-# This is a one-way derivation — it does not override an explicitly set OPENAI_BASE.
-if [ -n "${OPENAI_BASE_URL:-}" ] && [ -z "${OPENAI_BASE:-}" ]; then
-  printf "%s\n" "OPENAI_BASE=${OPENAI_BASE_URL}" >> "$runtime_env_path"
+# OPENAI_BASE is the full chat-completions URL used directly by the adapter and health checks
+# (e.g. http://host.docker.internal:11434/v1/chat/completions).
+# If the operator set it explicitly, write it as-is.
+# Otherwise, if OPENAI_BASE_URL is set (OpenAI-compatible base), derive the chat-completions
+# URL by stripping a trailing slash and appending /chat/completions.
+if [ -n "${OPENAI_BASE:-}" ]; then
+  printf "%s\n" "OPENAI_BASE=${OPENAI_BASE}" >> "$runtime_env_path"
+elif [ -n "${OPENAI_BASE_URL:-}" ]; then
+  _derived_openai_base="${OPENAI_BASE_URL%/}/chat/completions"
+  printf "%s\n" "OPENAI_BASE=${_derived_openai_base}" >> "$runtime_env_path"
 fi
 
 # Propagate OPENAI_API_KEY if set; required by route health checks for the openai provider.

@@ -67,10 +67,21 @@ def test_export_runtime_env_derives_openai_base_from_openai_base_url(tmp_path: P
     subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
 
     text = out_path.read_text(encoding="utf-8")
-    assert re.search(r"^OPENAI_BASE=http://host\.docker\.internal:11434/v1$", text, re.M)
+    assert re.search(r"^OPENAI_BASE=http://host\.docker\.internal:11434/v1/chat/completions$", text, re.M)
 
 
-def test_export_runtime_env_does_not_override_explicit_openai_base(tmp_path: Path) -> None:
+def test_export_runtime_env_propagates_explicit_openai_base(tmp_path: Path) -> None:
+    repo_root, out_path, env = _runtime_env_with_db(tmp_path)
+    env["OPENAI_BASE"] = "https://api.example.invalid/v1/chat/completions"
+    env.pop("OPENAI_BASE_URL", None)
+
+    subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
+
+    text = out_path.read_text(encoding="utf-8")
+    assert re.search(r"^OPENAI_BASE=https://api\.example\.invalid/v1/chat/completions$", text, re.M)
+
+
+def test_export_runtime_env_explicit_openai_base_wins_over_url(tmp_path: Path) -> None:
     repo_root, out_path, env = _runtime_env_with_db(tmp_path)
     env["OPENAI_BASE_URL"] = "http://host.docker.internal:11434/v1"
     env["OPENAI_BASE"] = "https://api.example.invalid/v1/chat/completions"
@@ -78,6 +89,7 @@ def test_export_runtime_env_does_not_override_explicit_openai_base(tmp_path: Pat
     subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
 
     text = out_path.read_text(encoding="utf-8")
+    assert re.search(r"^OPENAI_BASE=https://api\.example\.invalid/v1/chat/completions$", text, re.M)
     assert "OPENAI_BASE=http://host.docker.internal:11434/v1" not in text
 
 

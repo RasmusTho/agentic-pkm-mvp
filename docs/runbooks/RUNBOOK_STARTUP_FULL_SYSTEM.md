@@ -26,7 +26,7 @@ make prod-start-full
 For LLM configuration when using a local Ollama endpoint via the OpenAI-compatible API (provider=`openai`):
 - Set `OPENAI_BASE_URL` to the reachable Ollama base URL (e.g., `http://host.docker.internal:11434/v1`).
 - Set `OPENAI_API_KEY` to a non-empty placeholder (e.g., `sk-local`).
-- The runtime env generator derives `OPENAI_BASE` from `OPENAI_BASE_URL` automatically when not explicitly set.
+- The runtime env generator derives `OPENAI_BASE` (the full chat-completions URL used by the adapter) from `OPENAI_BASE_URL` by appending `/chat/completions`. An explicitly set `OPENAI_BASE` is written as-is and takes precedence.
 
 ## Startup success verification
 
