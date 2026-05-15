@@ -164,7 +164,7 @@ test_metamorphic_preserves_idempotency PASSED
 
 **Scenario**:
 - DB is empty or corrupted
-- Companion notes exist in `vault/_system/companions/<uuid>.md` (source of truth)
+- Companion notes exist in `vault/<system_folder>/companions/<uuid>.md` (layout-aware; e.g. `vault/⚙️ System/companions/<uuid>.md`) (source of truth)
 - Cold rebuild re-populates DB from companions
 
 **Key Tests**:

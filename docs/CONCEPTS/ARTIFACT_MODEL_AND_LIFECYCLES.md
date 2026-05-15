@@ -13,7 +13,7 @@ A vault knowledge object exists simultaneously on three surfaces:
 | Surface | File | Owner | Authoritative for |
 |---|---|---|---|
 | **Vault note** | `<vault-relative path>.md` | Human | title, tags, body, review_state, maturity, links |
-| **Companion note** | `_system/companions/<uuid>.md` | System | uuid identity, content_hash, ingest_state, attachment manifest |
+| **Companion note** | `<system_folder>/companions/<uuid>.md` (layout-aware; e.g. `⚙️ System/companions/<uuid>.md`) | System | uuid identity, content_hash, ingest_state, attachment manifest |
 | **Runtime DB** | PostgreSQL / in-memory store | System (ephemeral) | chunks, embeddings, relations-index, classification, decisions |
 
 The runtime DB is derivable — it can always be rebuilt from vault note + companion note. The companion note is portable — it moves with the vault via Git. The vault note is the ground truth for human meaning.
@@ -114,7 +114,7 @@ companion exists, companion.source_ref ≠ current vault path
 When runtime DB is empty (cold start), the rebuild procedure is:
 
 ```
-FOR each companion file in _system/companions/*.md:
+FOR each companion file in <system_folder>/companions/*.md:
   uuid = companion.uuid
   source_ref = companion.source_ref
   vault_note = read vault note at source_ref

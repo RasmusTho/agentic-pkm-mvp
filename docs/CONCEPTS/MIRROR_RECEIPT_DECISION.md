@@ -113,7 +113,7 @@ See `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`.
 
 `System/Metadata/VaultMirror/...` was the previous mirror surface implementation.
 
-It is being replaced by the companion note at `vault/_system/companions/<uuid>.md`, which provides
+It is being replaced by the companion note at `vault/<system_folder>/companions/<uuid>.md` (layout-aware; e.g. `vault/⚙️ System/companions/<uuid>.md`), which provides
 the same continuity/identity function with:
 - flat UUID-based path instead of directory-preserving path,
 - a bounded field set that does not duplicate human-owned metadata (`review_state`, `maturity`),
@@ -209,7 +209,7 @@ They should not be treated as merely "mirror metadata".
 
 `app/services/note_log.py` is a legacy module being replaced by `app/services/companion_note.py`.
 
-New code must use companion note terminology and the `_system/companions/<uuid>.md` path.
+New code must use companion note terminology and the layout-aware `<system_folder>/companions/<uuid>.md` path (resolved via `get_vault_system_dir_rel()`; see `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`).
 
 This has three implications:
 - future refactors may rename or split this boundary,

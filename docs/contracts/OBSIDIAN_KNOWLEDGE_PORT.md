@@ -73,8 +73,8 @@ The KnowledgePort boundary is the normative write path for:
 - and repair writes that restore continuity metadata without silently redefining human meaning.
 
 System-owned path clarification:
-- `_system/companions/` is a system-owned vault path for companion-note artifacts.
-- Runtime/services may write there only through KnowledgePort or approved helpers built on top of it.
+- `<system_folder>/companions/` (layout-aware; e.g. `⚙️ System/companions/`) is the canonical system-owned vault path for companion-note artifacts. The legacy `_system/companions/` path is a read-only fallback for vaults that have not yet migrated; no new files are written there.
+- Runtime/services may write companion notes only through KnowledgePort or approved helpers built on top of it.
 
 KnowledgePort may not:
 - bypass write-policy and safety checks through ad-hoc direct filesystem mutations as the normative
