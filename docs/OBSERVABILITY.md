@@ -65,6 +65,22 @@ Architectural reading note:
   contains `scope`, `sphere_memberships`, and `situated_identity` with SSI-01 canonical semantics.
   Omitted entirely when no separated-dimension context is active — a block of all-null values is
   not permitted. See `docs/SCOPE_SPHERE_SITUATED_IDENTITY/EXPOSE_CONTEXT_DIMENSIONS_IN_STATUS_AND_RECEIPTS.md` (SSI-03) for field semantics and guardrail notes.
+- **`watcher_lifecycle`** (optional): per-watcher cumulative counters and last panel-run details
+  read from the registry heartbeat and outbox. Key fields:
+  - `panel_changed_total`, `panel_emitted_total`, `panel_rate_limited_total`: cumulative counts
+    for the panel watcher since the registry started. `panel_rate_limited_total` explains why
+    `panel_emitted_total` is low relative to `panel_changed_total` when rate-limit pressure is high.
+  - `panel_last_emitted_event_at` (ISO timestamp): when the panel watcher last successfully emitted
+    a `panel.scan.requested` event.
+  - `ingest_changed_total`, `ingest_emitted_total`, `ingest_rate_limited_total`: same counters for
+    the ingest watcher.
+  - `last_panel_run_at`, `last_panel_run_actions_count`, `last_panel_run_executed_count`,
+    `last_panel_run_summary`: details of the most recent `panel.intent.executed` event. Present
+    even when the latest watcher tick shows `candidates=0`. `last_panel_run_actions_count=0`
+    means the panel ran but parsed no actions — distinct from `null`/absent, which means no
+    panel run has occurred yet.
+  - `health status --json` also exposes per-watcher counters under
+    `runtime.watcher.watchers.{panel,ingest}` directly from the registry heartbeat file.
 
 ## Feature-line and Event Counters
 - **SoT baseline vs forward line**: `sot_baseline_version` is the locked baseline (v5.5). `sot_forward_line_version` / `feature_line_version` represent the active forward line (v5.6: LangGraph/Reasoning rollouts on top of the v5.5 baseline). `active_features` enumerates which forward-line capabilities are present (PanelAgent runtime, watcher snapshot/policy track, config-driven panel wiring).
@@ -83,6 +99,8 @@ Architectural reading note:
 - **Common interpretations**:
   - Counters increase but the note is unchanged: an intent was emitted (e.g., `promote.intent.created`), but a consumer (Promotion Agent/worker) must run to mutate files.
   - `changed > 0` but `panel_runs = 0`: panel auto-run policy blocked execution or the run was `--dry-run` / max-notes guard triggered.
+  - `panel_emitted_total` is low relative to `panel_changed_total`: check `panel_rate_limited_total` in `watcher_lifecycle` or `runtime.watcher.watchers.panel`; high rate-limit pressure means notes are detected but the per-minute emit cap is suppressing them.
+  - `panel_runs > 0` but the note is unchanged and `watcher_lifecycle.last_panel_run_actions_count = 0`: the panel ran and parsed the note but found no actionable items — the note is not AI-fenced or no action mappings matched. This is distinct from `last_panel_run_at` being absent, which means no panel run has occurred at all.
   - `ingest_attempted > 0` but `ingested = 0`: ingest errors occurred; check status errors and watcher summary.
   - Watcher runs remain 0: verify `INDEX_OUTBOX_PATH`, vault paths, and snapshot path are writable.
 
