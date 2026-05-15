@@ -8,10 +8,46 @@ Reading note:
 - not the full target-state architecture,
 - and not a claim that the current compose/runtime wiring is the permanent system decomposition.
 
-## Command-first startup
+## Prod startup (canonical)
+
+For the production runtime (`stable` channel against the real vault), use the `prod-start-full` target.
+This uses the prod compose overlay, the `pkm-prod` project namespace, explicit `prod` environment, and an
+operator-supplied `VAULT_ROOT`. Do not guess or substitute a dev/test vault path.
+
+```bash
+export VAULT_ROOT="/absolute/path/to/your/real/vault"
+make prod-start-full
+```
+
+- API is exposed on host port **18000**.
+- `VAULT_ROOT` must be set to the real operator vault path by the operator before startup.
+- The prod runtime root is the repo checkout directory (e.g., `/Users/rasmus/workspace`), not a sub-directory. Ensure the correct worktree is used.
+
+For LLM configuration when using a local Ollama endpoint via the OpenAI-compatible API (provider=`openai`):
+- Set `OPENAI_BASE_URL` to the reachable Ollama base URL (e.g., `http://host.docker.internal:11434/v1`).
+- Set `OPENAI_API_KEY` to a non-empty placeholder (e.g., `sk-local`).
+- The runtime env generator derives `OPENAI_BASE` from `OPENAI_BASE_URL` automatically when not explicitly set.
+
+## Startup success verification
+
+A successful startup writes a machine-readable receipt to `tmp/startup_status.json`.
+A startup is complete and healthy when:
+
+```json
+{
+  "startup_succeeded": true,
+  "runtime_verified": true,
+  "exit_code": 0,
+  "phase": "done"
+}
+```
+
+Check the receipt before enabling watcher auto-exec or accepting traffic.
+
+## Command-first startup (dev/test)
 1. From repo root, run:
 ```
-make alpha-up
+make start
 ```
 2. The script:
    - `scripts/start_full_system.sh` runs `docker compose up -d db api worker watcher`
@@ -19,11 +55,18 @@ make alpha-up
    - requires `LLM_PROVIDER` + `LLM_MODEL`; mock requires no endpoint, Ollama accepts `OLLAMA_URL` or `OPENAI_BASE_URL`, other providers require `OPENAI_BASE_URL`
    - waits for `/api/status` then `/api/health` to report runtime `db`/`worker`/`watcher` as ok (timeout 60s)
    - optional checks like `ffmpeg` are ignored by default via `STARTUP_IGNORE_CHECKS=ffmpeg` (set to `""` for strict mode)
-   - Obsidian compatibility check runs by default (`STARTUP_CHECK_OBSIDIAN=1`) and reports pass/warning in startup telemetry
+   - Obsidian compatibility check runs by default (`STARTUP_CHECK_OBSIDIAN=1`) and reports pass/warning in startup telemetry; an Obsidian warning is **not** a startup blocker when `required=false` in the health output
    - optional strict Obsidian gate: set `STARTUP_ENFORCE_OBSIDIAN=1` to fail fast unless host Obsidian dependency checks pass (`obsidian` CLI + installer floor)
    - vault read/write probe runs inside the `api` container before watcher/worker startup; set `STARTUP_REQUIRE_VAULT_RW=1` to make rw probe failures fatal outside verify mode
    - on failure, prints `docker compose ps`, tails api/worker/watcher logs, and dumps `/api/health`
    - startup summary prints `obsidian gate: enabled=<...> status=<...>` and `tmp/startup_status.json` includes `obsidian_gate_enabled|ok|detail`
+
+## Config externalization follow-up
+
+The current prod startup requires operators to supply LLM env vars (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, etc.)
+manually before running the startup script. A separate settings/config gap-analysis PR will externalize
+configuration through the existing settings model (`vault/@Settings/providers.md` and related surfaces).
+Do not perform that gap analysis in this runbook; handle it through the standard docs-to-issue workflow.
 
 ## Alpha Compose Runtime (canonical)
 - Services: `db`, `api`, `watcher`, `worker`.
