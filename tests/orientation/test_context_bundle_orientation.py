@@ -133,6 +133,20 @@ def test_orientation_exposes_bundle_provenance_and_exclusions():
     assert frame.exclusions[0].reason == "trust state below threshold"
 
 
+def test_orientation_stale_check_handles_naive_expiry_timestamp():
+    # ExpiryPosture allows naive datetimes (no tzinfo). Comparison with an
+    # aware `now` must not raise TypeError — naive timestamps are assumed UTC.
+    naive_expiry = ExpiryPosture(
+        stale_after=datetime(2026, 5, 15, 8, 0, 0),  # no tzinfo
+        reason="naive expiry from JSON without offset",
+    )
+    bundle = _bundle(included=[_fact_item()], expiry=naive_expiry)
+    # _NOW is 09:00 UTC, naive stale_after is treated as 08:00 UTC → stale
+    frame = build_orientation_frame_from_bundle(bundle, now=_NOW)
+    assert frame.stale is True
+    assert "naive" in frame.stale_reason
+
+
 def test_orientation_bundle_remains_non_write_authoritative():
     # Building with may_write=False is fine and frame must remain read-only.
     bundle = _bundle(included=[_fact_item()])

@@ -111,7 +111,10 @@ def build_orientation_frame_from_bundle(
     stale = False
     stale_reason: Optional[str] = None
     if bundle.expiry and bundle.expiry.stale_after is not None:
-        if now >= bundle.expiry.stale_after:
+        stale_after = bundle.expiry.stale_after
+        if stale_after.tzinfo is None:
+            stale_after = stale_after.replace(tzinfo=timezone.utc)
+        if now >= stale_after:
             stale = True
             stale_reason = bundle.expiry.reason
 
