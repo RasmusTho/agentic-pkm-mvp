@@ -7,6 +7,9 @@ parent_capability: Context Bundles
 prerequisites: [CONTEXT-BUNDLES-01, CONTEXT-BUNDLES-02, CONTEXT-BUNDLES-05]
 depends_on: [DEFINE_CONTEXT_BUNDLE_SCHEMA.md, EMIT_CONTEXT_BUNDLE_FROM_RETRIEVAL.md, CONNECT_CONTEXT_BUNDLE_TO_WRITE_PROPOSALS.md]
 can_parallelize_with: []
+status: implemented
+implementation: app/receipts/bundle_receipts.py
+github_issue: "https://github.com/RasmusTho/agentic-pkm-mvp/issues/949"
 ---
 
 # RECORD_CONTEXT_BUNDLE_RECEIPTS
@@ -43,12 +46,12 @@ runtime object instead of a reviewable bridge artifact.
 
 ## Acceptance Criteria
 
-- [ ] The implementation spec requires receipts for bundle creation and for at least one downstream
+- [x] The implementation spec requires receipts for bundle creation and for at least one downstream
   use path. Verify: `tests/receipts/test_context_bundle_receipts.py::test_context_bundle_receipt_records_sources`
-- [ ] Bundle receipts preserve included items, relevant exclusions, authority posture, and
+- [x] Bundle receipts preserve included items, relevant exclusions, authority posture, and
   provenance strongly enough for later audit. Verify: `tests/receipts/test_context_bundle_receipts.py::test_context_bundle_receipt_preserves_exclusions_and_authority`
-- [ ] Bundle receipts distinguish creation, consumption, and stale-or-expired reuse events. Verify: `tests/receipts/test_context_bundle_receipts.py::test_context_bundle_receipts_distinguish_creation_consumption_and_expiry`
-- [ ] Receipt recording does not silently promote bundle contents into memory or knowledge. Verify: `tests/receipts/test_context_bundle_receipts.py::test_context_bundle_receipt_does_not_promote_to_memory`
+- [x] Bundle receipts distinguish creation, consumption, and stale-or-expired reuse events. Verify: `tests/receipts/test_context_bundle_receipts.py::test_context_bundle_receipts_distinguish_creation_consumption_and_expiry`
+- [x] Receipt recording does not silently promote bundle contents into memory or knowledge. Verify: `tests/receipts/test_context_bundle_receipts.py::test_context_bundle_receipt_does_not_promote_to_memory`
 
 ## How to Verify (Pre-Merge)
 
@@ -72,5 +75,6 @@ runtime object instead of a reviewable bridge artifact.
 
 ## Related GitHub Issues
 
-Not created in this PR. When filed later, use this task spec as the child implementation issue
-contract for bundle receipt recording.
+- Implementation issue: [#949](https://github.com/RasmusTho/agentic-pkm-mvp/issues/949)
+- Pull request: [#954](https://github.com/RasmusTho/agentic-pkm-mvp/pull/954)
+- Parent feature: [#894](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894)
