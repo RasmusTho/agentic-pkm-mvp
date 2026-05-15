@@ -1,12 +1,15 @@
 ---
 name: Use Context Bundle for Orientation
-description: Specify how orientation consumes context bundles to rebuild situational context.
+description: How orientation consumes context bundles to rebuild situational context.
 task_id: CONTEXT-BUNDLES-03
 source_anchor: docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md :: Relation to retrieval, orientation, and resurfacing
 parent_capability: Context Bundles
 prerequisites: [CONTEXT-BUNDLES-01, CONTEXT-BUNDLES-02]
 depends_on: [DEFINE_CONTEXT_BUNDLE_SCHEMA.md, EMIT_CONTEXT_BUNDLE_FROM_RETRIEVAL.md]
 can_parallelize_with: [USE_CONTEXT_BUNDLE_FOR_RESURFACING]
+status: implemented
+implementation: app/orientation/bundle_consumer.py
+github_issue: "https://github.com/RasmusTho/agentic-pkm-mvp/issues/946"
 ---
 
 # USE_CONTEXT_BUNDLE_FOR_ORIENTATION
@@ -17,23 +20,19 @@ Specify how orientation uses a context bundle to reconstruct situational state a
 without collapsing facts, inferred state, candidate next actions, and stale context into one
 undifferentiated response.
 
-## What This Task Does
+## What This Slice Implements
 
-This task defines the implementation contract for orientation-side bundle consumption. It specifies:
+`app/orientation/bundle_consumer.py` provides `build_orientation_frame_from_bundle`, which:
 
-- how orientation assembles or consumes a bundle,
-- how it distinguishes facts, inferred state, candidate actions, and stale context,
-- and how it preserves bundle provenance for human review.
-
-## Concretely
-
-A later implementation should be able to produce an orientation frame backed by a bundle that
-records:
-
-- selected artifacts and signals used for the frame,
-- exclusions that affected the frame,
-- explicit labels for fact vs inference vs candidate action,
-- and stale or expiry posture when the orientation snapshot may no longer be current.
+- requires `may_orient=True` on the bundle's authority flags and rejects `may_write=True`
+- requires `"orient"` in `bundle.intended_use` — authority flag alone is not sufficient
+- classifies each included item into `facts`, `inferences`, or `candidate_actions` based on
+  `source_role`, `reason` text, and `provenance.origin`
+- preserves per-item provenance and exclusions on the returned `OrientationBundleFrame`
+- checks bundle expiry and surfaces `stale=True` when `stale_after` has passed, normalizing
+  naive datetimes to UTC to prevent `TypeError` on comparison
+- normalizes a caller-provided naive `now` to UTC by the same convention
+- returns `read_only=True, may_write=False` — orientation never upgrades bundle authority
 
 ## Why This Matters
 
@@ -43,20 +42,19 @@ facts or stale signals as current state.
 
 ## Acceptance Criteria
 
-- [ ] Orientation consumption is specified as reading from a context bundle or bundle reference,
-  not from opaque prompt state alone. Verify: `tests/orientation/test_context_bundle_orientation.py::test_orientation_uses_context_bundle`
-- [ ] The orientation contract distinguishes facts, inferred state, candidate next actions, and
-  stale context in the assembled output. Verify: `tests/orientation/test_context_bundle_orientation.py::test_orientation_labels_fact_inference_candidate_and_stale_context`
-- [ ] Orientation preserves source and exclusion provenance strongly enough for a human to inspect
-  why the frame was assembled. Verify: `tests/orientation/test_context_bundle_orientation.py::test_orientation_exposes_bundle_provenance_and_exclusions`
-- [ ] Orientation does not silently upgrade bundle authority into write authorization. Verify: `tests/orientation/test_context_bundle_orientation.py::test_orientation_bundle_remains_non_write_authoritative`
-
-## How to Verify (Pre-Merge)
-
-- Add or update the orientation tests named in the acceptance criteria.
-- Confirm the orientation surface can explain what it used and what it left out.
-- Confirm any orientation "next step" remains a candidate or proposal unless a separate governed
-  action surface takes over.
+- [x] Orientation consumption reads from a context bundle, not from opaque prompt state alone.
+  Verify: `tests/orientation/test_context_bundle_orientation.py::test_orientation_uses_context_bundle`
+- [x] The frame distinguishes facts, inferred state, candidate next actions, and stale context.
+  Verify: `tests/orientation/test_context_bundle_orientation.py::test_orientation_labels_fact_inference_candidate_and_stale_context`
+- [x] Orientation preserves source and exclusion provenance for human inspection.
+  Verify: `tests/orientation/test_context_bundle_orientation.py::test_orientation_exposes_bundle_provenance_and_exclusions`
+- [x] Orientation does not silently upgrade bundle authority into write authorization.
+  Verify: `tests/orientation/test_context_bundle_orientation.py::test_orientation_bundle_remains_non_write_authoritative`
+- [x] Bundles not scoped for orientation (`"orient"` absent from `intended_use`) are rejected.
+  Verify: `tests/orientation/test_context_bundle_orientation.py::test_orientation_rejects_bundle_not_scoped_for_orient`
+- [x] Naive `stale_after` and naive caller-provided `now` are normalized to UTC without raising `TypeError`.
+  Verify: `tests/orientation/test_context_bundle_orientation.py::test_orientation_stale_check_handles_naive_expiry_timestamp`
+  Verify: `tests/orientation/test_context_bundle_orientation.py::test_orientation_normalizes_naive_caller_now`
 
 ## Out of Scope
 
@@ -64,6 +62,7 @@ facts or stale signals as current state.
 - Resurfacing-specific surfacing decisions.
 - Durable memory promotion from orientation outputs.
 - Write proposal execution.
+- API route wiring (production route integration is a follow-up slice).
 
 ## Related Docs
 
@@ -73,5 +72,6 @@ facts or stale signals as current state.
 
 ## Related GitHub Issues
 
-Not created in this PR. When filed later, use this task spec as the child implementation issue
-contract for orientation-side bundle usage.
+- Implementation issue: [#946](https://github.com/RasmusTho/agentic-pkm-mvp/issues/946)
+- Pull request: [#950](https://github.com/RasmusTho/agentic-pkm-mvp/pull/950)
+- Parent feature: [#894](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894)
