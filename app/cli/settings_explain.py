@@ -30,7 +30,11 @@ def mask_dsn(dsn: str) -> str:
 
 
 def build_settings_explain_payload() -> dict[str, Any]:
-    db_url = resolve_runtime_database_url(os.environ)
+    # Replace POSTGRES_PASSWORD with a literal before building the display DSN so the
+    # real password never flows into the payload.  mask_dsn still runs to handle any
+    # password embedded in an explicit DATABASE_URL env var.
+    _display_env = {**os.environ, "POSTGRES_PASSWORD": "***"}
+    db_url = mask_dsn(resolve_runtime_database_url(_display_env))
     panel_settings = load_panel_actions_settings()
     watcher_settings = load_watcher_settings()
     auto_exec = resolve_auto_exec_state()
