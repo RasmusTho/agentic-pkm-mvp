@@ -1,0 +1,1324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Memory Candidate Review Queue — Yggdrasil Companion UI</title>
+<link rel="stylesheet" href="./colors_and_type.css" />
+<link rel="stylesheet" href="./spec_chrome.css" />
+<style>
+  /* ============================================================
+     LOCAL — memory candidate review queue
+     ============================================================ */
+  .queue {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    margin: var(--space-3) 0 var(--space-6);
+    overflow: hidden;
+  }
+  .q-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 10px 16px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+  .q-bar .count { color: var(--accent); }
+  .q-bar .filter {
+    margin-left: var(--space-3);
+    display: flex;
+    gap: 6px;
+  }
+  .q-bar .filter .pill {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--bg-base);
+    color: var(--fg-3);
+    cursor: pointer;
+    letter-spacing: var(--tracking-wide);
+  }
+  .q-bar .filter .pill[aria-pressed="true"] {
+    color: var(--cyan);
+    border-color: rgba(0,212,232,0.5);
+    background: rgba(0,212,232,0.05);
+  }
+  .q-bar .right { margin-left: auto; display: flex; gap: var(--space-3); align-items: center; }
+
+  .q-body {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    min-height: 620px;
+  }
+  .q-list {
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    max-height: 720px;
+    background: var(--bg-base);
+  }
+  .q-row {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    border-left: 2px solid transparent;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    cursor: pointer;
+  }
+  .q-row[aria-selected="true"] {
+    border-left-color: var(--cyan);
+    background: var(--bg-surface);
+  }
+  .q-row .top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+  }
+  .q-row .top .cls {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .q-row .top .cls.episodic    { color: var(--cyan); }
+  .q-row .top .cls.semantic    { color: var(--accent); }
+  .q-row .top .cls.prospective { color: var(--amber); }
+  .q-row .top .cls.procedural  { color: var(--agent); }
+  .q-row .top .cls.preference  { color: var(--vault); }
+  .q-row .top .cls.policy      { color: var(--accent); }
+  .q-row .top .cls.reflection  { color: var(--fg-2); }
+  .q-row .top .age {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+  }
+  .q-row .summary {
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    line-height: 1.35;
+  }
+  .q-row .row3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+  }
+  .q-row .row3 .conf { color: var(--cyan); }
+  .q-row .row3 .conf.low { color: var(--amber); }
+  .q-row .row3 .conf.high { color: var(--vault); }
+  .q-row .row3 .inferred { color: var(--amber); }
+  .q-row .row3 .reviewed { color: var(--vault); }
+  .q-row .row3 .conflict { color: var(--destructive); }
+  .q-row .row3 .superseded { color: var(--fg-3); }
+
+  /* candidate detail */
+  .q-detail {
+    padding: var(--space-5) var(--space-6);
+    overflow-y: auto;
+    max-height: 720px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+  .cand-head {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .cand-head .row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .cand-head .cls-pill {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-raised);
+    border: 1px solid var(--border-strong);
+    color: var(--accent);
+  }
+  .cand-head .cls-pill.episodic    { color: var(--cyan); border-color: rgba(0,212,232,0.35); }
+  .cand-head .cls-pill.semantic    { color: var(--accent); border-color: rgba(212,168,67,0.4); }
+  .cand-head .cls-pill.prospective { color: var(--amber); border-color: rgba(240,144,48,0.4); }
+  .cand-head .cls-pill.procedural  { color: var(--agent); border-color: rgba(74,158,255,0.35); }
+  .cand-head .cls-pill.preference  { color: var(--vault); border-color: rgba(57,232,125,0.35); }
+  .cand-head .cls-pill.policy      { color: var(--accent); border-color: rgba(212,168,67,0.4); }
+  .cand-head .cls-pill.reflection  { color: var(--fg-2); }
+  .cand-head .id {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+  }
+  .cand-head h3 {
+    font-family: var(--font-display);
+    font-size: var(--text-2xl);
+    font-weight: var(--weight-regular);
+    line-height: 1.15;
+    color: var(--fg-1);
+    margin: 4px 0 0;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  .cand-body {
+    border: 1px solid var(--border);
+    background: var(--bg-base);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .cand-body .lbl {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+  .cand-body .text {
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    color: var(--fg-1);
+    line-height: 1.55;
+    max-width: 60ch;
+  }
+  .cand-body .inferred-tag {
+    align-self: flex-start;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--amber-muted);
+    color: var(--amber);
+    border: 1px solid rgba(240,144,48,0.35);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+  }
+  .cand-body .reviewed-tag {
+    align-self: flex-start;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    background: rgba(57,232,125,0.06);
+    color: var(--vault);
+    border: 1px solid rgba(57,232,125,0.35);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+  }
+
+  /* why proposed */
+  .why {
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--cyan);
+    background: rgba(0,212,232,0.03);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .why .lbl {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--cyan);
+  }
+  .why p {
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    line-height: 1.5;
+    margin: 0;
+    max-width: 60ch;
+  }
+  .why .ev {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-2);
+    letter-spacing: var(--tracking-wide);
+  }
+
+  /* authority preview */
+  .auth-preview {
+    border: 1px solid var(--border-strong);
+    background: var(--bg-raised);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .auth-preview .lbl {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .auth-preview .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .auth-preview .ap {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    color: var(--fg-3);
+    background: var(--bg-base);
+  }
+  .auth-preview .ap.yes   { color: var(--vault); border-color: rgba(57,232,125,0.35); }
+  .auth-preview .ap.no    { color: var(--destructive); border-color: rgba(255,61,61,0.35); }
+  .auth-preview .ap.maybe { color: var(--amber); border-color: rgba(240,144,48,0.35); }
+
+  /* conflict / source / receipts grid */
+  .meta-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+  }
+  .meta-card {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .meta-card .lbl {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+  .meta-card .v {
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    line-height: 1.4;
+  }
+  .meta-card.conflict { border-color: rgba(255,61,61,0.35); }
+  .meta-card.conflict .lbl { color: var(--destructive); }
+
+  /* action bar */
+  .actions-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border);
+  }
+
+  /* outcome strip — terminal states */
+  .outcome {
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wide);
+    color: var(--fg-2);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--bg-base);
+    border: 1px solid var(--border-strong);
+  }
+  .outcome.accept    { color: var(--vault); border-color: rgba(57,232,125,0.4); background: rgba(57,232,125,0.04); }
+  .outcome.reject    { color: var(--destructive); border-color: rgba(255,61,61,0.4); background: rgba(255,61,61,0.04); }
+  .outcome.defer     { color: var(--amber); border-color: rgba(240,144,48,0.4); background: rgba(240,144,48,0.04); }
+  .outcome.promote   { color: var(--vault); border-color: rgba(57,232,125,0.4); background: rgba(57,232,125,0.06); }
+  .outcome.op-only   { color: var(--agent); border-color: rgba(74,158,255,0.35); background: rgba(74,158,255,0.04); }
+  .outcome.revised   { color: var(--cyan); border-color: rgba(0,212,232,0.4); background: rgba(0,212,232,0.04); }
+
+  /* gallery */
+  .gallery.mem-gallery { grid-template-columns: 1fr 1fr; }
+  .gm {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .gm-bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 12px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+  .gm-bar .cls { color: var(--accent); }
+  .gm-body { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .gm-body h5 {
+    font-family: var(--font-display);
+    font-size: var(--text-md);
+    color: var(--fg-1);
+    font-weight: var(--weight-regular);
+    line-height: 1.2;
+    margin: 0;
+  }
+  .gm-body p {
+    font-size: var(--text-sm);
+    color: var(--fg-2);
+    margin: 0;
+    line-height: 1.45;
+  }
+  .gm-body .meta-line {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+  }
+  .gm-body .meta-line .v { color: var(--fg-2); }
+  .gm-body .meta-line .v.cyan { color: var(--cyan); }
+  .gm-body .meta-line .v.gold { color: var(--accent); }
+  .gm-body .meta-line .v.amber { color: var(--amber); }
+  .gm-body .meta-line .v.dang  { color: var(--destructive); }
+  .gm-body .meta-line .v.vault { color: var(--vault); }
+  .gm-body .meta-line .v.agent { color: var(--agent); }
+
+  /* batch summary in gallery */
+  .batch-summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+  .batch-summary .cell {
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .batch-summary .cell .n {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    color: var(--fg-1);
+  }
+  .batch-summary .cell.gold .n   { color: var(--accent); }
+  .batch-summary .cell.cyan .n   { color: var(--cyan); }
+  .batch-summary .cell.amber .n  { color: var(--amber); }
+  .batch-summary .cell.vault .n  { color: var(--vault); }
+
+  @media (max-width: 900px) {
+    .q-body { grid-template-columns: 1fr; }
+    .q-list { border-right: none; border-bottom: 1px solid var(--border); max-height: none; }
+    .meta-grid { grid-template-columns: 1fr; }
+    .gallery.mem-gallery { grid-template-columns: 1fr; }
+    .batch-summary { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ============================ TOC ============================ -->
+  <nav class="toc" aria-label="Section index">
+    <div class="toc-label">Sections</div>
+    <ol>
+      <li><a href="#s1"><span class="toc-num">01</span>Context &amp; boundary</a></li>
+      <li><a href="#s2"><span class="toc-num">02</span>Memory classes</a></li>
+      <li><a href="#s3"><span class="toc-num">03</span>Queue prototype</a></li>
+      <li><a href="#s4"><span class="toc-num">04</span>Queue posture &amp; anti-inbox</a></li>
+      <li><a href="#s5"><span class="toc-num">05</span>Action vocabulary</a></li>
+      <li><a href="#s6"><span class="toc-num">06</span>State gallery</a></li>
+      <li><a href="#s7"><span class="toc-num">07</span>Edge states</a></li>
+      <li><a href="#s8"><span class="toc-num">08</span>Implementation contract</a></li>
+      <li><a href="#s9"><span class="toc-num">09</span>Authority boundaries</a></li>
+      <li><a href="#s10"><span class="toc-num">10</span>Open questions</a></li>
+      <li><a href="#s11"><span class="toc-num">11</span>Handoff to Code/Codex</a></li>
+    </ol>
+  </nav>
+
+  <!-- ============================ MAIN ============================ -->
+  <main>
+    <header class="doc-header">
+      <div class="doc-eyebrow">Companion UI · Design Handoff · Review surface</div>
+      <h1 class="doc-title">Memory Candidate Review Queue</h1>
+      <p class="doc-lede">
+        A review queue for proposed agent memories. Agents may observe, infer, or summarise —
+        and propose. The queue is where those proposals stop being agent state and start being
+        reviewable candidates. The human can accept, edit, reject, defer, expire, promote, or
+        keep-as-operational. Unreviewed memory is not semantic authority.
+      </p>
+      <div class="doc-meta">
+        <span><strong>Surface:</strong> MEMORY_CANDIDATE_REVIEW</span>
+        <span><strong>Owner-doc:</strong> AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT</span>
+        <span><strong>Authority:</strong> Review surface · review state mutates through governed pipeline</span>
+        <span><strong>Status:</strong> Design handoff · v1 · 2026-05-14</span>
+      </div>
+    </header>
+
+    <!-- ============== 01 ============== -->
+    <section class="spec" id="s1">
+      <h2><span class="secnum">01 ·</span>Context &amp; boundary</h2>
+      <p class="lede">What this queue is for, and the failure modes it must design against.</p>
+
+      <p>
+        The memory contract is intentionally explicit: agent memory supports the human, it does
+        not replace human judgment. Generated or inferred memory may not become trusted
+        knowledge automatically. The candidate → review → promote lifecycle has to be visible,
+        narrow, and bounded. That is the whole reason this queue exists.
+      </p>
+
+      <p>
+        It also has to <em>not</em> become a burdensome task inbox. If reviewing memory becomes
+        an obligation, the user will stop reviewing. The design posture is: <em>quiet by
+        default, batched, small, easy to defer, never noisy</em>.
+      </p>
+
+      <h3>Design posture</h3>
+      <ul>
+        <li><strong>Single candidate is the unit.</strong> A card with content, source, why-now,
+          confidence, authority preview, and seven actions. Everything else is queue chrome.</li>
+        <li><strong>Batch operations require an explicit batch mode.</strong> No accidental
+          bulk-accept.</li>
+        <li><strong>Promote is rare and visible.</strong> Promotion to durable vault knowledge
+          opens an inline preview of the resulting note before commit.</li>
+        <li><strong>Defer is a first-class action.</strong> Deferring is the default-friendly
+          answer to "I don't have time right now" — never a hidden snooze.</li>
+        <li><strong>Operational-only is a first-class outcome.</strong> Some memory belongs in
+          agent-side operational memory and should never become vault knowledge. That outcome
+          is a button, not a workaround.</li>
+      </ul>
+
+      <div class="callout invariant">
+        <span class="callout-label">Floor invariant · Candidacy is not authority</span>
+        A candidate in the queue has no semantic authority. The queue's posture defaults
+        prevent candidate-class items from being recalled into answers, orientation, or
+        write proposals. Recall authority is granted only by an explicit accept / promote.
+      </div>
+
+      <h3>What the queue is not</h3>
+      <ul>
+        <li>Not a memory store. Storage and recall belong to the runtime; the queue is the
+          review surface.</li>
+        <li>Not an editing surface for already-promoted memory. Revision after promotion
+          flows through the normal vault edit + governance pipeline.</li>
+        <li>Not a task tracker. Memory candidates expire on a schedule; they are not a list
+          of obligations.</li>
+        <li>Not an inbox. There is no notification badge. The queue exists where the user
+          chooses to visit.</li>
+      </ul>
+    </section>
+
+    <!-- ============== 02 ============== -->
+    <section class="spec" id="s2">
+      <h2><span class="secnum">02 ·</span>Memory classes</h2>
+      <p class="lede">
+        Following <code>AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md</code>. Class is set by the
+        proposing agent on the candidate — the queue renders the declared class, never
+        re-classifies.
+      </p>
+
+      <table class="spec">
+        <thead><tr><th>Class</th><th>Color cue</th><th>Common content</th><th>Promotion target</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Semantic knowledge</strong></td><td><span class="chip impl">gold</span></td><td>Stabilized meanings, definitions, claims that should converge on vault truth.</td><td>Durable Markdown note (vault).</td></tr>
+          <tr><td><strong>Episodic</strong></td><td><span class="chip design">cyan</span></td><td>Records that something happened, when, and surrounding situation.</td><td>Operational memory or session log; rarely vault.</td></tr>
+          <tr><td><strong>Prospective</strong></td><td><span class="chip gated">amber</span></td><td>Commitments, reminders, waiting state, candidate actions.</td><td>Vault note with type=commitment, or operational memory.</td></tr>
+          <tr><td><strong>Procedural</strong></td><td><span class="chip agent">blue</span></td><td>Repeated ways of doing something; versioned if it drives action.</td><td>Vault procedure note, versioned.</td></tr>
+          <tr><td><strong>Preference</strong></td><td><span class="chip vault">green</span></td><td>Stable user defaults, style choices, settings.</td><td>Preference store · governed.</td></tr>
+          <tr><td><strong>Policy / authority</strong></td><td><span class="chip impl">gold</span></td><td>Boundaries, permissions, safety rules.</td><td>Policy doc · governed · never auto-promoted.</td></tr>
+          <tr><td><strong>Agent reflection</strong></td><td><span class="chip">neutral</span></td><td>Agent's own retrospective notes about its work.</td><td>Operational memory only; rarely promoted.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== 03 ============== -->
+    <section class="spec" id="s3">
+      <h2><span class="secnum">03 ·</span>Queue prototype <span class="chip design" style="font-size:10px; margin-left:8px">single candidate selected</span></h2>
+      <p class="lede">
+        Default view. Twelve candidates waiting, one selected. The candidate detail shows
+        content, why-it-was-proposed, source, confidence, authority preview, and seven
+        actions. The queue list is on the left; filters are in the bar; batch mode is
+        explicit.
+      </p>
+
+      <div class="queue" aria-label="Memory Candidate Review Queue">
+        <div class="q-bar">
+          <span>queue</span>
+          <span class="count">12 pending</span>
+          <span class="filter">
+            <button class="pill" type="button" aria-pressed="true">all</button>
+            <button class="pill" type="button" aria-pressed="false">inferred</button>
+            <button class="pill" type="button" aria-pressed="false">conflict</button>
+            <button class="pill" type="button" aria-pressed="false">expiring</button>
+          </span>
+          <span class="right">
+            <span style="color:var(--fg-2);">batch mode</span>
+            <button class="btn ghost" type="button" data-intent="queue.toggle-batch">off <span class="kbd">B</span></button>
+          </span>
+        </div>
+
+        <!-- REFINEMENT v2 — persistent in-UI authority banner -->
+        <div role="note" aria-label="Authority banner" style="display:flex; align-items:center; gap:var(--space-3); padding:8px 16px; background:rgba(212,168,67,0.04); border-bottom:1px solid rgba(212,168,67,0.25); font-family:var(--font-mono); font-size:var(--text-xs); color:var(--fg-2); letter-spacing:var(--tracking-wide);">
+          <span aria-hidden="true" style="width:8px; height:8px; border-radius:50%; background:var(--accent); box-shadow:0 0 6px var(--accent); flex-shrink:0;"></span>
+          <span style="color:var(--accent); text-transform:uppercase; letter-spacing:var(--tracking-wider); font-size:10px;">Unreviewed memory is not semantic authority.</span>
+          <span style="color:var(--fg-3); text-transform:none; letter-spacing:0;">Candidate-state items in this queue cannot be recalled into answers, orientation, or write proposals. Authority activates only on accept or promote.</span>
+        </div>
+
+        <div class="q-body">
+          <!-- list -->
+          <aside class="q-list" aria-label="Pending candidates">
+            <div class="q-row" aria-selected="true">
+              <div class="top"><span class="cls semantic">semantic · candidate</span><span class="age">12m</span></div>
+              <div class="summary">"Context bundles must show exclusions when exclusion affects interpretation."</div>
+              <div class="row3">
+                <span class="inferred">inferred</span>
+                <span class="conf">conf · 0.68</span>
+                <span>· 3 sources</span>
+              </div>
+            </div>
+
+            <div class="q-row">
+              <div class="top"><span class="cls episodic">episodic</span><span class="age">28m</span></div>
+              <div class="summary">User worked on the canvas suggestion classifier between 11:40 and 12:08.</div>
+              <div class="row3">
+                <span class="reviewed">reviewed source</span>
+                <span class="conf high">conf · 0.92</span>
+                <span>· session note</span>
+              </div>
+            </div>
+
+            <div class="q-row">
+              <div class="top"><span class="cls prospective">prospective · commitment</span><span class="age">1h</span></div>
+              <div class="summary">Run the runtime proof before the 21:00 window.</div>
+              <div class="row3">
+                <span class="reviewed">explicit</span>
+                <span class="conf high">conf · 0.95</span>
+                <span>· user-stated</span>
+              </div>
+            </div>
+
+            <div class="q-row">
+              <div class="top"><span class="cls semantic">semantic</span><span class="age">1h</span></div>
+              <div class="summary">"Hugin is the canvas-side agent; Munin is the panel-side agent."</div>
+              <div class="row3">
+                <span class="reviewed">reviewed</span>
+                <span class="conflict">conflict</span>
+                <span class="conf">conf · 0.71</span>
+              </div>
+            </div>
+
+            <div class="q-row">
+              <div class="top"><span class="cls preference">preference</span><span class="age">3h</span></div>
+              <div class="summary">User prefers gold/amber for governance accents, never red.</div>
+              <div class="row3">
+                <span class="inferred">inferred · style</span>
+                <span class="conf low">conf · 0.54</span>
+              </div>
+            </div>
+
+            <div class="q-row">
+              <div class="top"><span class="cls procedural">procedural</span><span class="age">4h</span></div>
+              <div class="summary">"Start every design handoff with a context &amp; boundary section."</div>
+              <div class="row3">
+                <span class="inferred">pattern · 6 examples</span>
+                <span class="conf">conf · 0.74</span>
+              </div>
+            </div>
+
+            <div class="q-row">
+              <div class="top"><span class="cls policy">policy</span><span class="age">5h</span></div>
+              <div class="summary">"UI never re-classifies a server-declared proposal class."</div>
+              <div class="row3">
+                <span class="reviewed">reviewed</span>
+                <span class="conf high">conf · 0.96</span>
+                <span>· echo of contract</span>
+              </div>
+            </div>
+
+            <div class="q-row">
+              <div class="top"><span class="cls reflection">reflection</span><span class="age">8h</span></div>
+              <div class="summary">Hugin's draft suggestions were rejected 3× before user-edit-then-apply.</div>
+              <div class="row3">
+                <span class="inferred">agent self-report</span>
+                <span class="conf low">conf · 0.48</span>
+              </div>
+            </div>
+
+            <div class="q-row">
+              <div class="top"><span class="cls prospective">prospective · waiting</span><span class="age">14h</span></div>
+              <div class="summary">Waiting on validation receipt for canvas suggestion handoff.</div>
+              <div class="row3">
+                <span class="reviewed">explicit</span>
+                <span class="superseded">superseded?</span>
+              </div>
+            </div>
+
+            <div class="q-row">
+              <div class="top"><span class="cls episodic">episodic</span><span class="age">1d</span></div>
+              <div class="summary">User rejected 5 candidates in a row yesterday; pacing should slow.</div>
+              <div class="row3">
+                <span class="inferred">pacing inference</span>
+                <span class="conf low">conf · 0.41</span>
+              </div>
+            </div>
+
+            <div class="q-row">
+              <div class="top"><span class="cls semantic">semantic</span><span class="age">2d</span></div>
+              <div class="summary">"Receipts live in Panel locality. Companion mirrors but never owns them."</div>
+              <div class="row3">
+                <span class="reviewed">reviewed</span>
+                <span class="conf high">conf · 0.91</span>
+              </div>
+            </div>
+
+            <div class="q-row">
+              <div class="top"><span class="cls preference">preference</span><span class="age">2d</span></div>
+              <div class="summary">User opens session drawer with ⌘K rather than the top-bar button.</div>
+              <div class="row3">
+                <span class="inferred">behavior</span>
+                <span class="conf">conf · 0.66</span>
+              </div>
+            </div>
+          </aside>
+
+          <!-- detail -->
+          <section class="q-detail">
+            <header class="cand-head">
+              <div class="row">
+                <span class="cls-pill semantic">semantic · candidate</span>
+                <span class="id">mc-2026-05-14-0008</span>
+                <span style="font-family:var(--font-mono); font-size:10px; color:var(--fg-3); letter-spacing:var(--tracking-wide); text-transform:uppercase;">proposed by · Hugin · 12m ago</span>
+              </div>
+              <h3>"Context bundles must show exclusions when exclusion affects interpretation."</h3>
+            </header>
+
+            <!-- content -->
+            <div class="cand-body">
+              <span class="lbl">Proposed content</span>
+              <span class="inferred-tag">inferred</span>
+              <p class="text">Context bundles in the inspector should default to showing their
+                excluded artifacts whenever an exclusion would change how the operator
+                interprets the bundle — for example, when low-trust material was deliberately
+                dropped, or when a closely-related artifact was excluded for being out of
+                scope. Score-floor exclusions stay hidden.</p>
+            </div>
+
+            <!-- why proposed -->
+            <div class="why">
+              <span class="lbl">Why this was proposed</span>
+              <p>The agent observed three recent Hugin turns where the operator opened the
+                excluded disclosure manually and then asked a follow-up question about the
+                excluded artifact. Pattern frequency met the heuristic threshold.</p>
+              <p class="ev">evidence · session t-11, t-14, t-19 · context bundle inspector docs</p>
+            </div>
+
+            <!-- authority preview -->
+            <div class="auth-preview">
+              <span class="lbl">If accepted, the candidate will have this recall authority</span>
+              <div class="row">
+                <span class="ap yes">✓ may_recall</span>
+                <span class="ap yes">✓ may_answer</span>
+                <span class="ap maybe">~ may_propose · conditional</span>
+                <span class="ap no">✗ may_write</span>
+              </div>
+              <p style="font-size:var(--text-xs); color:var(--fg-2); margin:0;">
+                If promoted to vault knowledge, may_write becomes vault-edit authority,
+                not memory-write authority. Promotion is a separate action.
+              </p>
+            </div>
+
+            <!-- meta grid -->
+            <div class="meta-grid">
+              <div class="meta-card">
+                <span class="lbl">Source</span>
+                <span class="v">Inferred from three session-log turns. <br><span style="font-family:var(--font-mono); font-size:var(--text-xs); color:var(--fg-3)">.chats/canvas-suggestion-flow/2026-05-14-1140.md</span></span>
+              </div>
+              <div class="meta-card">
+                <span class="lbl">Confidence</span>
+                <span class="v">0.68 · medium · <span style="color:var(--amber); font-family:var(--font-mono); font-size:var(--text-xs)">heuristic threshold met, not user-stated</span></span>
+              </div>
+              <div class="meta-card">
+                <span class="lbl">Expiry</span>
+                <span class="v">No expiry proposed · operator may set on accept</span>
+              </div>
+              <div class="meta-card">
+                <span class="lbl">Receipts</span>
+                <span class="v">
+                  <span class="receipt"><span class="recdot" style="background:var(--cyan)"></span>candidate · r-0510</span>
+                </span>
+              </div>
+            </div>
+
+            <!-- actions -->
+            <div class="actions-bar">
+              <button class="btn vault" type="button" data-intent="memory.accept">Accept <span class="kbd">A</span></button>
+              <button class="btn" type="button" data-intent="memory.edit">Edit <span class="kbd">E</span></button>
+              <button class="btn governance" type="button" data-intent="memory.promote">Promote to note <span class="kbd">P</span></button>
+              <button class="btn" type="button" data-intent="memory.operational">Keep operational <span class="kbd">O</span></button>
+              <button class="btn" type="button" data-intent="memory.set-expiry">Set expiry…</button>
+              <button class="btn" type="button" data-intent="memory.defer">Defer <span class="kbd">D</span></button>
+              <button class="btn danger" type="button" data-intent="memory.reject">Reject <span class="kbd">R</span></button>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <p>
+        The action bar is intentionally seven options wide. Three of those (accept, defer,
+        reject) are the daily-driver. Four (edit, promote, keep-operational, set-expiry) are
+        rarer but visible — keeping them off-screen would push the user toward accept-or-reject
+        binaries, which is exactly the inbox-anti-pattern the queue is trying to avoid.
+      </p>
+    </section>
+
+    <!-- ============== 04 — REFINEMENT v2 — queue posture, anti-inbox mitigations, authority banner ============== -->
+    <section class="spec" id="s4">
+      <h2><span class="secnum">04 ·</span>Queue posture &amp; anti-inbox mitigations</h2>
+      <p class="lede">
+        The queue exists to prevent a specific failure mode: agent memory becoming hidden
+        semantic authority. It must do that without becoming a different failure mode: a
+        burdensome task inbox the user starts avoiding.
+      </p>
+
+      <h3>The persistent authority banner</h3>
+      <p>
+        Every queue view carries the gold banner shown above the candidate list in <a href="#s3">§03</a>:
+      </p>
+      <div class="callout invariant" style="max-width: 64ch;">
+        <span class="callout-label">In-UI invariant copy</span>
+        <strong>Unreviewed memory is not semantic authority.</strong> Candidate-state items in
+        this queue cannot be recalled into answers, orientation, or write proposals. Authority
+        activates only on accept or promote.
+      </div>
+      <p>
+        The banner is mono, gold, and persistent. It never animates. It never collapses. The
+        same banner appears at the top of the batch-mode view and on the single-candidate
+        detail page. It is the surface's <em>floor copy</em> — always present, never opt-out.
+      </p>
+
+      <h3>Anti-inbox mitigations</h3>
+      <p>
+        Queue anxiety has a known shape: the count climbs, the user feels obliged, the user
+        avoids the surface, the count climbs further. The design refuses each link of that chain.
+      </p>
+
+      <table class="spec">
+        <thead><tr><th>Mitigation</th><th>What it does</th><th>What it refuses to do</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Pull, not push</strong></td>
+            <td>The user visits the queue when they choose. No notification, no badge.</td>
+            <td>No count anywhere in the shell. No “you have N pending” toast.</td>
+          </tr>
+          <tr>
+            <td><strong>Defer is first-class</strong></td>
+            <td>“I don’t have time right now” is a button (<code>memory.defer</code>), not a workaround. Re-queues after a chosen interval; no penalty.</td>
+            <td>No “snooze” shame state. No reappearing-twice-as-loud.</td>
+          </tr>
+          <tr>
+            <td><strong>Auto-archive expired</strong></td>
+            <td>Candidates past the review window are archived as a stated policy. They are auditable but no longer in the active queue.</td>
+            <td>The queue does not grow without bound. The user is not asked to reject yesterday's noise.</td>
+          </tr>
+          <tr>
+            <td><strong>Pacing throttle on inferred</strong></td>
+            <td>If rejection rate is high, the runtime is permitted (per policy) to throttle inferred-candidate proposals per day. (See open question #4.)</td>
+            <td>The queue does not punish a hard day with a louder tomorrow.</td>
+          </tr>
+          <tr>
+            <td><strong>Default action by confidence band</strong></td>
+            <td>Low-confidence inferred candidates show <em>defer</em> as the highlighted default — not <em>accept</em>. The frictionless path is the safe one.</td>
+            <td>No accept-first ordering for things the system isn’t sure about.</td>
+          </tr>
+          <tr>
+            <td><strong>Batch mode is opt-in</strong></td>
+            <td>Bulk operations exist for cleanup days. They are off by default and require an explicit toggle (<code>queue.toggle-batch</code>).</td>
+            <td>No accidental bulk-accept. Bulk-reject requires a one-line reason that applies to every selected row.</td>
+          </tr>
+          <tr>
+            <td><strong>Reject preserves the trail</strong></td>
+            <td>Rejected candidates are auditable, with the reason kept. The trail is the record; the queue is the work.</td>
+            <td>The user is not asked to second-guess past rejections to clean up.</td>
+          </tr>
+          <tr>
+            <td><strong>Operational-only is a first-class outcome</strong></td>
+            <td>Some memory belongs in agent-side operational memory and should never become vault knowledge. <em>Keep operational</em> is a button, not a workaround.</td>
+            <td>The user is not forced through accept/reject for things that don’t deserve either.</td>
+          </tr>
+          <tr>
+            <td><strong>Promote is rare and visible</strong></td>
+            <td>Promotion opens an inline preview of the resulting vault note before commit. The frequency expectation is set by making this the conspicuous action.</td>
+            <td>The queue is not a fast lane to durable knowledge.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <span class="callout-label">Anti-pattern · “notifications would help”</span>
+        The temptation is to surface a count in the shell so the user remembers to review.
+        That is exactly the failure mode this design refuses. If review becomes obligation,
+        review stops happening, and unreviewed memory accumulates as silent authority — which
+        is the failure mode the queue exists to prevent in the first place.
+      </div>
+
+      <h3>Healthy posture summary</h3>
+      <p>
+        A healthy queue, by this design's lights, is one where:
+      </p>
+      <ul>
+        <li>the user visits the surface on their own schedule,</li>
+        <li>most candidates are deferred, rejected, or operational-only — not accepted,</li>
+        <li>promotion to durable knowledge is rare,</li>
+        <li>the candidate count does not appear anywhere else in the product,</li>
+        <li>and the gold banner stays visible the whole time.</li>
+      </ul>
+    </section>
+
+    <!-- ============== 05 ============== -->
+    <section class="spec" id="s5">
+      <h2><span class="secnum">05 ·</span>Action vocabulary</h2>
+      <p class="lede">Eight actions. Each names what changes on the candidate, and where the change is recorded.</p>
+
+      <table class="spec">
+        <thead>
+          <tr><th>Action</th><th>Effect on candidate</th><th>Effect on memory</th><th>Receipt</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Accept</strong></td>
+            <td>state → accepted</td>
+            <td>Becomes recallable as agent memory at the proposed class; authority flags activated</td>
+            <td>candidate_review_receipt</td>
+          </tr>
+          <tr>
+            <td><strong>Edit</strong></td>
+            <td>Inline edit on content; state → revised</td>
+            <td>Edited content replaces proposed content; preserves source provenance</td>
+            <td>candidate_revision_receipt</td>
+          </tr>
+          <tr>
+            <td><strong>Promote to note</strong></td>
+            <td>state → promoted</td>
+            <td>Creates a vault note (preview shown before commit); memory points at the note</td>
+            <td>promotion_receipt · note path · governance pipeline</td>
+          </tr>
+          <tr>
+            <td><strong>Keep operational</strong></td>
+            <td>state → accepted-operational</td>
+            <td>Recallable only as operational memory; never as semantic knowledge</td>
+            <td>candidate_review_receipt</td>
+          </tr>
+          <tr>
+            <td><strong>Set expiry</strong></td>
+            <td>Adds expiry to the candidate without changing its review state</td>
+            <td>None — until expiry, candidate stays in queue; on expiry, archived</td>
+            <td>candidate_expiry_receipt</td>
+          </tr>
+          <tr>
+            <td><strong>Defer</strong></td>
+            <td>state → deferred; reappears after a chosen interval</td>
+            <td>None</td>
+            <td>candidate_defer_receipt</td>
+          </tr>
+          <tr>
+            <td><strong>Reject</strong></td>
+            <td>state → rejected; requires a one-line reason</td>
+            <td>None — candidate stays inspectable for audit, not recall</td>
+            <td>candidate_reject_receipt · reason</td>
+          </tr>
+          <tr>
+            <td><strong>Delete</strong></td>
+            <td>state → deleted (rare; for spam/garbage only)</td>
+            <td>None — receipts preserved per memory contract</td>
+            <td>candidate_delete_receipt</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <span class="callout-label">Reject &gt; Delete</span>
+        Reject is the default destructive action. Delete is reserved for spam / clearly-bad
+        candidates. The two are distinct because the memory contract requires evidence-trail
+        preservation for rejections; delete is the narrow escape hatch when the candidate
+        should not leave even a rejection trace.
+      </div>
+    </section>
+
+    <!-- ============== 06 ============== -->
+    <section class="spec" id="s6">
+      <h2><span class="secnum">06 ·</span>State gallery</h2>
+      <p class="lede">Ten states. Each shows the candidate card or queue header it represents.</p>
+
+      <div class="gallery mem-gallery">
+        <!-- 1 single -->
+        <div class="gm">
+          <div class="gm-bar"><span>01 · single candidate</span><span class="cls">semantic</span></div>
+          <div class="gm-body">
+            <h5>"Context bundles must show exclusions when exclusion affects interpretation."</h5>
+            <p>Inferred from three session turns. Confidence 0.68. No prior conflict. Default
+              candidate card shape.</p>
+            <div class="meta-line">
+              <span><span class="v gold">semantic</span></span>
+              <span><span class="v amber">inferred</span></span>
+              <span><span class="v cyan">conf · 0.68</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2 batch review -->
+        <div class="gm">
+          <div class="gm-bar"><span>02 · batch review queue</span><span style="color:var(--cyan)">batch mode on</span></div>
+          <div class="gm-body">
+            <h5>12 pending · filtered by inferred</h5>
+            <div class="batch-summary">
+              <div class="cell amber"><span class="n">7</span><span>inferred</span></div>
+              <div class="cell cyan"><span class="n">3</span><span>episodic</span></div>
+              <div class="cell gold"><span class="n">1</span><span>conflict</span></div>
+              <div class="cell vault"><span class="n">1</span><span>preference</span></div>
+            </div>
+            <p>Batch mode adds checkboxes per row; bulk-accept is disabled until a per-row
+              confidence floor is set. Bulk-reject requires a one-line reason that applies to
+              every selected row.</p>
+          </div>
+        </div>
+
+        <!-- 3 strong source -->
+        <div class="gm">
+          <div class="gm-bar"><span>03 · strong source-backed</span><span class="cls" style="color:var(--vault)">reviewed source</span></div>
+          <div class="gm-body">
+            <h5>"Receipts live in Panel locality. Companion mirrors but never owns them."</h5>
+            <p>Source-backed by an owner-doc citation. The card carries a
+              <span class="reviewed-tag" style="font-size:9px; padding:1px 6px; vertical-align:middle">reviewed</span>
+              tag instead of the inferred tag. Accept is the highlighted default action.</p>
+            <div class="meta-line">
+              <span><span class="v gold">semantic</span></span>
+              <span><span class="v vault">reviewed · owner-doc cite</span></span>
+              <span><span class="v vault">conf · 0.91</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4 inferred low conf -->
+        <div class="gm">
+          <div class="gm-bar"><span>04 · inferred · low confidence</span><span class="cls" style="color:var(--amber)">heuristic only</span></div>
+          <div class="gm-body">
+            <h5>User rejected 5 candidates in a row yesterday; pacing should slow.</h5>
+            <p>Confidence 0.41. Card renders with the inferred tag and an amber confidence
+              chip. Default action moves to defer, not accept. The why-now block names the
+              heuristic.</p>
+            <div class="meta-line">
+              <span><span class="v cyan">episodic</span></span>
+              <span><span class="v amber">inferred · pacing</span></span>
+              <span><span class="v amber">conf · 0.41</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5 conflict -->
+        <div class="gm">
+          <div class="gm-bar"><span>05 · conflicts with existing memory</span><span style="color:var(--destructive)">conflict</span></div>
+          <div class="gm-body">
+            <h5>"Hugin is the canvas-side agent; Munin is the panel-side agent."</h5>
+            <p>A prior memory says <em>Hugin is the panel-side agent</em>. The card pins both
+              statements side-by-side and adds two extra actions: <em>supersede prior</em> and
+              <em>keep both as candidates</em>.</p>
+            <div class="meta-line">
+              <span><span class="v gold">semantic</span></span>
+              <span><span class="v dang">conflicts with mem-…0247</span></span>
+              <span><span class="v cyan">conf · 0.71</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 6 should expire -->
+        <div class="gm">
+          <div class="gm-bar"><span>06 · should expire</span><span style="color:var(--amber)">time-bounded</span></div>
+          <div class="gm-body">
+            <h5>Run the runtime proof before the 21:00 window.</h5>
+            <p>Prospective commitment with a natural expiry. The Set-expiry button is
+              pre-filled with the 21:00 timestamp and highlighted; accept-without-expiry shows
+              a warning.</p>
+            <div class="meta-line">
+              <span><span class="v amber">prospective · commitment</span></span>
+              <span><span class="v amber">expires 21:00</span></span>
+              <span><span class="v vault">explicit · user-stated</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 7 rejected -->
+        <div class="gm">
+          <div class="gm-bar"><span>07 · rejected with reason</span><span style="color:var(--destructive)">terminal · reject</span></div>
+          <div class="gm-body">
+            <h5>"User prefers Tron-style cyan over Norse gold."</h5>
+            <p>Rejected. Operator reason recorded: <em>"This was a one-off A/B test; not a
+              standing preference."</em> Candidate stays inspectable for audit; recall is off.</p>
+            <div class="outcome reject">REJECTED · reason · "one-off A/B test"</div>
+          </div>
+        </div>
+
+        <!-- 8 revised -->
+        <div class="gm">
+          <div class="gm-bar"><span>08 · revised by user</span><span style="color:var(--cyan)">revised → accepted</span></div>
+          <div class="gm-body">
+            <h5>"Context bundles default to showing exclusions when low-trust material is dropped."</h5>
+            <p>The user edited the proposed text — narrowed "when exclusion affects
+              interpretation" to "when low-trust material is dropped" — and accepted. The card
+              records both versions; promotion preserves the revision history.</p>
+            <div class="outcome revised">REVISED · accepted · prior version preserved</div>
+          </div>
+        </div>
+
+        <!-- 9 promoted -->
+        <div class="gm">
+          <div class="gm-bar"><span>09 · promoted to note</span><span style="color:var(--vault)">terminal · promoted</span></div>
+          <div class="gm-body">
+            <h5>"Receipts live in Panel locality. Companion mirrors but never owns them."</h5>
+            <p>Promoted to a durable Markdown note at
+              <code style="font-size:0.85em">notes/concepts/receipts-locality.md</code>.
+              Memory record now points at the note. Promotion went through the governance
+              pipeline; receipt visible in Panel.</p>
+            <div class="outcome promote">PROMOTED · notes/concepts/receipts-locality.md · receipt r-0521</div>
+          </div>
+        </div>
+
+        <!-- 10 operational only -->
+        <div class="gm">
+          <div class="gm-bar"><span>10 · operational only</span><span style="color:var(--agent)">terminal · operational</span></div>
+          <div class="gm-body">
+            <h5>Hugin's draft suggestions were rejected 3× before user-edit-then-apply.</h5>
+            <p>Kept as agent operational memory. Recallable to help Hugin's pacing; never
+              recalled as semantic knowledge. Will not appear in retrieval answers about the
+              system.</p>
+            <div class="outcome op-only">OPERATIONAL-ONLY · agent recall · no semantic authority</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============== 07 ============== -->
+    <section class="spec" id="s7">
+      <h2><span class="secnum">07 ·</span>Edge states</h2>
+      <table class="spec">
+        <thead><tr><th>Edge</th><th>Behavior</th></tr></thead>
+        <tbody>
+          <tr><td>Empty</td><td>Queue list shows "No candidates pending review." Detail area shows what kinds of candidates would appear here and how to find recent decisions.</td></tr>
+          <tr><td>Loading</td><td>Static dim row skeletons (no animation). Filter pills are disabled.</td></tr>
+          <tr><td>Degraded</td><td>If the candidate's source artifact has been deleted, the candidate renders with a <span class="chip danger">source missing</span> tag; default action is reject-or-delete.</td></tr>
+          <tr><td>Blocked</td><td>If the promotion target (vault note path) would conflict with an existing note, promote opens a dialog; the queue does not silently overwrite.</td></tr>
+          <tr><td>Stale</td><td>Candidates past their (system-default) review window render dimmed with a "stale · auto-archive in &lt;n&gt;d" line. Auto-archive is an explicit policy, not a hidden snooze.</td></tr>
+          <tr><td>Missing provenance</td><td>Candidate without source: card carries <span class="chip danger">no provenance</span>; cannot be accepted at semantic class; can be accepted at episodic only with a reason.</td></tr>
+          <tr><td>Write-guard denial</td><td>If promote fails write-guard (e.g. focus-mode policy), card shows the denial reason; the promotion attempt is preserved as a receipt.</td></tr>
+          <tr><td>Reduced motion</td><td>Receipt pill pulse, batch-mode toggle, and filter pill state changes use static colour only.</td></tr>
+          <tr><td>Narrow</td><td>List collapses above the detail; detail becomes the full screen; back button returns to list. Action bar wraps to two rows but never hides; reject keeps the danger styling.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== 08 ============== -->
+    <section class="spec" id="s8">
+      <h2><span class="secnum">08 ·</span>Implementation contract</h2>
+      <p class="lede">
+        The UI consumes candidate records conforming to <code>AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md</code>.
+        It never derives confidence or trust; class is fixed by the proposing agent.
+      </p>
+
+      <h3>Intents emitted by the queue</h3>
+      <table class="spec">
+        <thead><tr><th class="mono">data-intent</th><th>Effect</th><th>Authority</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">memory.accept</td><td>state → accepted; activates declared authority flags</td><td>governed</td></tr>
+          <tr><td class="mono">memory.edit</td><td>opens inline editor; state → revised on save</td><td>governed</td></tr>
+          <tr><td class="mono">memory.promote</td><td>opens vault-note preview; on confirm, routes through governance for write</td><td>governed · write</td></tr>
+          <tr><td class="mono">memory.operational</td><td>state → accepted-operational; semantic recall denied</td><td>governed</td></tr>
+          <tr><td class="mono">memory.set-expiry</td><td>adds expiry to candidate</td><td>governed</td></tr>
+          <tr><td class="mono">memory.defer</td><td>state → deferred; re-queues after interval</td><td>governed</td></tr>
+          <tr><td class="mono">memory.reject</td><td>state → rejected; requires one-line reason</td><td>governed</td></tr>
+          <tr><td class="mono">memory.delete</td><td>state → deleted; rare; for spam</td><td>governed</td></tr>
+          <tr><td class="mono">memory.supersede-prior</td><td>conflict state only; marks prior memory superseded; this candidate accepted in its place</td><td>governed</td></tr>
+          <tr><td class="mono">memory.keep-both</td><td>conflict state only; both prior and candidate kept; flagged for human resolution</td><td>governed</td></tr>
+          <tr><td class="mono">queue.toggle-batch</td><td>enables batch checkboxes</td><td>UI-local</td></tr>
+          <tr><td class="mono">queue.filter</td><td>filters list</td><td>UI-local</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Candidate data attributes</h3>
+      <pre class="code">&lt;article
+  data-testid=<span class="s">"memory-candidate"</span>
+  data-candidate-id=<span class="s">"mc-2026-05-14-0008"</span>
+  data-class=<span class="s">"semantic | episodic | prospective | procedural | preference | policy | reflection"</span>
+  data-state=<span class="s">"candidate | accepted | accepted-operational | revised | promoted | deferred | rejected | deleted"</span>
+  data-trust=<span class="s">"reviewed | inferred | untrusted"</span>
+  data-confidence=<span class="s">"0.0..1.0"</span>
+  data-conflict=<span class="s">"none | with:&lt;mem-id&gt;"</span>
+  data-provenance=<span class="s">"present | missing"</span>&gt;</pre>
+
+      <h3>Queue root attributes</h3>
+      <pre class="code">&lt;section
+  data-testid=<span class="s">"memory-queue"</span>
+  data-pending=<span class="s">"&lt;n&gt;"</span>
+  data-batch=<span class="s">"on | off"</span>
+  data-filter=<span class="s">"all | inferred | conflict | expiring | class:&lt;class&gt;"</span>&gt;</pre>
+
+      <div class="callout invariant">
+        <span class="callout-label">UI never derives memory class</span>
+        Class is set by the proposing agent on the candidate. The queue renders the declared
+        class. Re-classification at review time happens through edit (which records the
+        revision) — not silently.
+      </div>
+    </section>
+
+    <!-- ============== 09 ============== -->
+    <section class="spec" id="s9">
+      <h2><span class="secnum">09 ·</span>Authority boundaries</h2>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Memory supports the human, not replaces judgment</span>
+        Every state transition in the queue is an explicit operator action. The system never
+        auto-accepts a candidate. Auto-archive on expiry is policy, not authority.
+      </div>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Unreviewed memory is not semantic authority</span>
+        Candidate-state items cannot be recalled into answers, orientation, or write
+        proposals. Recall is bounded by the declared authority flags, which activate only on
+        accept / promote.
+      </div>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Promotion is governed</span>
+        Promote-to-note routes through the existing policy + validation + event-pipeline +
+        deterministic-writer path. The queue triggers; it does not write.
+      </div>
+
+      <table class="spec">
+        <thead>
+          <tr><th>Concern</th><th>May influence</th><th>May propose</th><th>May not decide</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Queue layout, action bar, copy</td><td class="yes">YES</td><td class="maybe">—</td><td class="no">—</td></tr>
+          <tr><td>Action set (eight verbs)</td><td class="maybe">naming &amp; ordering</td><td class="yes">propose additions to owner-doc</td><td class="no">cannot define semantics</td></tr>
+          <tr><td>Confidence presentation</td><td class="yes">YES · render</td><td class="maybe">propose thresholds for default actions</td><td class="no">cannot define confidence</td></tr>
+          <tr><td>Memory class set</td><td class="no">—</td><td class="maybe">propose new class to owner-doc</td><td class="no">cannot rename or remove classes</td></tr>
+          <tr><td>Authority flag set on memory</td><td class="no">—</td><td class="maybe">propose new flag</td><td class="no">cannot loosen flags</td></tr>
+          <tr><td>Recall behavior</td><td class="no">—</td><td class="no">—</td><td class="no">runtime owns</td></tr>
+          <tr><td>Promotion target paths</td><td class="maybe">UI conventions only</td><td class="maybe">propose path patterns</td><td class="no">vault contract owns</td></tr>
+          <tr><td>Auto-archive policy</td><td class="no">—</td><td class="maybe">propose default interval</td><td class="no">owner-doc owns</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== 10 ============== -->
+    <section class="spec" id="s10">
+      <h2><span class="secnum">10 ·</span>Open questions</h2>
+      <ol>
+        <li><strong>Notification surface.</strong> The queue is intentionally pull, not push.
+          Should a small unobtrusive indicator (count badge somewhere quiet) appear when the
+          pending count crosses a threshold? We suggest no badge by default; an opt-in
+          preference is acceptable.</li>
+        <li><strong>Confidence presentation.</strong> Numeric (0.68) vs banded (low / medium /
+          high). We chose numeric because the operator should not infer authority from a
+          band. Owner-doc decides.</li>
+        <li><strong>Conflict resolution UI.</strong> When a candidate conflicts with a prior
+          memory, the design exposes <em>supersede</em> and <em>keep both</em>. Owner-doc
+          should declare whether "keep both" is a permitted memory state.</li>
+        <li><strong>Pacing.</strong> Should the queue throttle inferred candidates per day
+          when rejection rate is high? We suggest yes, as a runtime policy, not a UI feature.</li>
+        <li><strong>Promotion preview shape.</strong> When promoting to a vault note, what is
+          the preview shape — full note with frontmatter, body only, diff against an existing
+          file? Suggest: full preview, with the frontmatter editable.</li>
+        <li><strong>Auto-archive interval default.</strong> 30 days? 14 days? Per-class? The
+          design assumes a default but owner-doc owns the number.</li>
+        <li><strong>Cross-link to context bundles.</strong> If a candidate was inferred from
+          a context bundle, should the why-block link to the bundle inspector?
+          Suggest: yes, one-click.</li>
+      </ol>
+    </section>
+
+    <!-- ============== 11 ============== -->
+    <section class="spec" id="s11">
+      <h2><span class="secnum">11 ·</span>Handoff notes for Claude Code / Codex</h2>
+
+      <h3>Likely normalized spec</h3>
+      <ul>
+        <li>New doc: <code>docs/CONCEPTS/MEMORY_CANDIDATE_REVIEW_UI.md</code> — UI guidance only.
+          References <code>AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md</code>.</li>
+      </ul>
+
+      <h3>Likely follow-on issues</h3>
+      <ul>
+        <li><em>Render the queue against ten fixture candidates.</em> Acceptance: the ten
+          gallery states render from ten fixture records.</li>
+        <li><em>Wire seven primary actions.</em> Acceptance: each action emits the right
+          intent, records the right receipt, and updates the queue list.</li>
+        <li><em>Promote-to-note path.</em> Acceptance: promote opens a preview; confirmation
+          routes through governance; resulting note appears at the declared path; receipt
+          visible in Panel.</li>
+        <li><em>Conflict UI.</em> Acceptance: supersede / keep-both render only for
+          conflict-state candidates and emit the right intents.</li>
+        <li><em>Batch mode.</em> Acceptance: bulk-reject requires reason; bulk-accept is
+          disabled without a confidence floor.</li>
+        <li><em>Reduced-motion + narrow layout.</em> Per §06.</li>
+      </ul>
+
+      <h3>What this design must not feed</h3>
+      <ul>
+        <li>Auto-accept rules. Every accept is an explicit click.</li>
+        <li>A recall surface. Recall is a runtime property; this queue only governs
+          candidacy.</li>
+        <li>A definition of memory class. Owner-doc owns the classes; the queue renders them.</li>
+        <li>A semantic-search surface across past memories. That is its own design.</li>
+      </ul>
+
+      <div class="callout vault">
+        <span class="callout-label">Validation expectation</span>
+        Passing receipt: ten state fixtures render correctly; seven primary actions emit the
+        right intents and receipts; conflict UI renders only when conflict is declared;
+        promote-to-note routes through governance; no UI-derived class, confidence, or
+        authority. Receipt id recorded in this package's status field.
+      </div>
+    </section>
+
+  </main>
+</div>
+</body>
+</html>

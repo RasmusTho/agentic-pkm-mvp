@@ -1,0 +1,1221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Runtime Proof / Health Dashboard — Yggdrasil Companion UI</title>
+<link rel="stylesheet" href="./colors_and_type.css" />
+<link rel="stylesheet" href="./spec_chrome.css" />
+<style>
+  /* ============================================================
+     LOCAL — operator dashboard
+     ============================================================ */
+  .dash {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    margin: var(--space-3) 0 var(--space-6);
+    overflow: hidden;
+  }
+  .dash-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 12px 16px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+  .dash-bar .vault-name {
+    color: var(--vault);
+    font-weight: var(--weight-medium);
+  }
+  .dash-bar .right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+  .dash-bar .ts { color: var(--fg-2); }
+
+  /* status banner */
+  .banner {
+    padding: var(--space-5) var(--space-6);
+    border-bottom: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--space-5);
+    align-items: center;
+  }
+  .banner .kicker {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .banner .title {
+    font-family: var(--font-display);
+    font-size: var(--text-2xl);
+    color: var(--fg-1);
+    font-weight: var(--weight-regular);
+    line-height: 1.1;
+  }
+  .banner .title .led {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    margin-right: 10px;
+    vertical-align: middle;
+    background: var(--vault);
+    box-shadow: 0 0 8px var(--vault), 0 0 2px var(--vault);
+  }
+  .banner .sub {
+    font-size: var(--text-sm);
+    color: var(--fg-2);
+    margin-top: 8px;
+    max-width: 60ch;
+  }
+  .banner .next {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
+  .banner .next .lbl {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+  .banner .next .action {
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    text-align: right;
+    max-width: 28ch;
+  }
+  .banner.healthy .title .led { background: var(--vault); box-shadow: 0 0 10px var(--vault); }
+  .banner.degraded .title .led { background: var(--amber); box-shadow: 0 0 10px var(--amber); animation: bpulse 2s ease-in-out infinite; }
+  .banner.blocked  .title .led { background: var(--destructive); box-shadow: 0 0 10px var(--destructive); animation: bpulse 1.4s ease-in-out infinite; }
+  .banner.unknown  .title .led { background: var(--fg-3); box-shadow: none; }
+  .banner.proof-pending .title .led { background: var(--accent); box-shadow: 0 0 10px var(--accent); animation: bpulse 2s ease-in-out infinite; }
+  @keyframes bpulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+  /* cards */
+  .dash-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .dash-grid > .card {
+    background: var(--bg-surface);
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 200px;
+  }
+  .card .hd {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .card .hd .name {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-2);
+  }
+  .card .hd .led {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--vault);
+    box-shadow: 0 0 6px var(--vault);
+  }
+  .card .hd .led.amber { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+  .card .hd .led.dang  { background: var(--destructive); box-shadow: 0 0 6px var(--destructive); }
+  .card .hd .led.dim   { background: var(--fg-3); box-shadow: none; }
+  .card .hd .led.cyan  { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+  .card .big {
+    font-family: var(--font-display);
+    font-size: var(--text-xl);
+    color: var(--fg-1);
+    line-height: 1.1;
+  }
+  .card .big.vault { color: var(--vault); }
+  .card .big.amber { color: var(--amber); }
+  .card .big.dang  { color: var(--destructive); }
+  .card .big.cyan  { color: var(--cyan); }
+  .card .row {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-2);
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .card .row:last-of-type { border-bottom: none; }
+  .card .row .v { color: var(--fg-1); }
+  .card .row .v.vault { color: var(--vault); }
+  .card .row .v.amber { color: var(--amber); }
+  .card .row .v.dim   { color: var(--fg-3); }
+  .card .row .v.dang  { color: var(--destructive); }
+  .card .row .v.cyan  { color: var(--cyan); }
+  .card .row .v.gold  { color: var(--accent); }
+
+  .spark {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 22px;
+    margin-top: 2px;
+  }
+  .spark .b {
+    flex: 1;
+    background: var(--cyan-dim);
+    opacity: 0.7;
+    border-radius: 1px;
+    min-height: 2px;
+  }
+  .spark.flat .b { background: var(--fg-3); opacity: 0.45; }
+  .spark.gold .b { background: var(--accent); opacity: 0.55; }
+
+  /* proof receipt strip */
+  .proof {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .proof > .card { min-height: 180px; }
+  .proof .recline {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-2);
+    margin-top: 4px;
+  }
+  .proof .recline .ck {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .proof .recline .ck:last-child { border-bottom: none; }
+  .proof .recline .ck .mark {
+    width: 14px; text-align: center;
+    color: var(--vault);
+  }
+  .proof .recline .ck .mark.skip { color: var(--amber); }
+  .proof .recline .ck .mark.fail { color: var(--destructive); }
+  .proof .recline .ck .desc { flex: 1; color: var(--fg-1); }
+  .proof .recline .ck .ts { color: var(--fg-3); }
+
+  /* next action */
+  .next-action {
+    padding: var(--space-4) var(--space-5);
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    background: var(--bg-base);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-2);
+    letter-spacing: var(--tracking-wide);
+  }
+  .next-action .lbl {
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wider);
+  }
+  .next-action .copy {
+    color: var(--fg-1);
+    text-transform: none;
+    letter-spacing: 0;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    flex: 1;
+  }
+  .next-action .actions { display: flex; gap: 8px; }
+
+  /* state gallery — mini dashboards */
+  .gallery.dash-gallery {
+    grid-template-columns: 1fr 1fr;
+  }
+  .gallery.dash-gallery .gallery-card {
+    padding: 0;
+    overflow: hidden;
+    min-height: 0;
+  }
+  .gallery.dash-gallery .gallery-card .hdr-cap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-raised);
+  }
+  .gallery.dash-gallery .gallery-card .hdr-cap h4 { margin: 0; }
+  .mini {
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .mini .title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .mini .title-row .led { width: 9px; height: 9px; border-radius: 50%; background: var(--vault); box-shadow: 0 0 6px var(--vault); }
+  .mini .title-row .led.amber { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+  .mini .title-row .led.dang  { background: var(--destructive); box-shadow: 0 0 6px var(--destructive); }
+  .mini .title-row .led.dim   { background: var(--fg-3); box-shadow: none; }
+  .mini .title-row .led.gold  { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .mini .title-row .ttl {
+    font-family: var(--font-display);
+    font-size: var(--text-md);
+    color: var(--fg-1);
+    line-height: 1.1;
+  }
+  .mini .desc {
+    font-size: var(--text-sm);
+    color: var(--fg-2);
+    line-height: 1.45;
+  }
+  .mini .sub-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    padding-top: 4px;
+    border-top: 1px dashed var(--border);
+  }
+  .mini .sub-line .k { color: var(--fg-2); }
+  .mini .sub-line .vault { color: var(--vault); }
+  .mini .sub-line .amber { color: var(--amber); }
+  .mini .sub-line .dang  { color: var(--destructive); }
+  .mini .sub-line .cyan  { color: var(--cyan); }
+  .mini .sub-line .gold  { color: var(--accent); }
+
+  .mini .next-strip {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-strong);
+    border-left: 2px solid var(--accent);
+    padding: 6px 10px;
+    font-size: var(--text-xs);
+    color: var(--fg-1);
+    line-height: 1.4;
+  }
+  .mini .next-strip.vault { border-left-color: var(--vault); }
+  .mini .next-strip.amber { border-left-color: var(--amber); }
+  .mini .next-strip.dang  { border-left-color: var(--destructive); }
+  .mini .next-strip.dim   { border-left-color: var(--fg-3); color: var(--fg-3); }
+  .mini .next-strip .lbl {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+  }
+  .mini .next-strip.vault .lbl { color: var(--vault); }
+  .mini .next-strip.amber .lbl { color: var(--amber); }
+  .mini .next-strip.dang  .lbl { color: var(--destructive); }
+  .mini .next-strip.dim   .lbl { color: var(--fg-3); }
+
+  @media (max-width: 900px) {
+    .dash-grid { grid-template-columns: 1fr 1fr; }
+    .proof { grid-template-columns: 1fr; }
+    .banner { grid-template-columns: 1fr; }
+    .banner .next { align-items: flex-start; }
+    .gallery.dash-gallery { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ============================ TOC ============================ -->
+  <nav class="toc" aria-label="Section index">
+    <div class="toc-label">Sections</div>
+    <ol>
+      <li><a href="#s1"><span class="toc-num">01</span>Context &amp; boundary</a></li>
+      <li><a href="#s2"><span class="toc-num">02</span>What the operator must answer</a></li>
+      <li><a href="#s3"><span class="toc-num">03</span>Three planes: evidence · status · action</a></li>
+      <li><a href="#s4"><span class="toc-num">04</span>Dashboard prototype</a></li>
+      <li><a href="#s5"><span class="toc-num">05</span>Section design</a></li>
+      <li><a href="#s6"><span class="toc-num">06</span>State gallery</a></li>
+      <li><a href="#s7"><span class="toc-num">07</span>Edge states &amp; checklist</a></li>
+      <li><a href="#s8"><span class="toc-num">08</span>Implementation contract</a></li>
+      <li><a href="#s9"><span class="toc-num">09</span>Authority boundaries</a></li>
+      <li><a href="#s10"><span class="toc-num">10</span>Open questions</a></li>
+      <li><a href="#s11"><span class="toc-num">11</span>Handoff to Code/Codex</a></li>
+    </ol>
+  </nav>
+
+  <!-- ============================ MAIN ============================ -->
+  <main>
+    <header class="doc-header">
+      <div class="doc-eyebrow">Companion UI · Design Handoff · Operator surface</div>
+      <h1 class="doc-title">Runtime Proof / Health Dashboard</h1>
+      <p class="doc-lede">
+        A compact single-operator proof surface. Answers nine questions about whether the
+        local-first runtime is actually working — watcher, worker, outbox, vault scope, write
+        guard, last proof receipt — and points at the next useful action. Not an enterprise
+        observability product, not an alarm panel. Shows evidence, not just color.
+      </p>
+      <div class="doc-meta">
+        <span><strong>Surface:</strong> RUNTIME_PROOF_DASHBOARD</span>
+        <span><strong>Audience:</strong> the local operator (one human, their vault)</span>
+        <span><strong>Authority:</strong> Read-only mirror of runtime state</span>
+        <span><strong>Status:</strong> Design handoff · v1 · 2026-05-14</span>
+      </div>
+    </header>
+
+    <!-- ============== 01 ============== -->
+    <section class="spec" id="s1">
+      <h2><span class="secnum">01 ·</span>Context &amp; boundary</h2>
+      <p class="lede">What this surface is for, and the postures it must avoid.</p>
+
+      <p>
+        Current stabilization work includes watcher OOM repair, worker poison-message handling,
+        startup sequencing, and (later) runtime proof receipts. The dashboard exists to make the
+        outcome of that work <em>legible to the human who runs the vault</em>: not to ops staff,
+        not to a control plane, not to a CI bot. Single operator, one local install, one vault.
+      </p>
+
+      <h3>Postures we are designing toward</h3>
+      <ul>
+        <li><strong>Sober.</strong> No alarm noise. No red unless red is correct.</li>
+        <li><strong>Evidence-bearing.</strong> Every status line is rooted in a value the runtime
+          actually emits (last heartbeat ts, queue depth, receipt id), not a derived colour.</li>
+        <li><strong>Bounded scope.</strong> Watcher, worker, outbox/index, vault, write-guard,
+          proof receipt. Nothing else. No latency graphs, no agent traces, no dependency map.</li>
+        <li><strong>Action-aware.</strong> When the state suggests a useful next action, the
+          dashboard names it — but does not perform it without explicit trigger.</li>
+      </ul>
+
+      <h3>Postures we are designing against</h3>
+      <ul>
+        <li>Dashboard-as-control-plane. The dashboard mirrors; it does not orchestrate.</li>
+        <li>Auto-repair. State transitions that look like remediation must be the operator's
+          explicit click.</li>
+        <li>Coloured-tile theatre. A row that flashes amber without saying <em>why</em> is worse
+          than no row at all.</li>
+        <li>"Everything is fine" overcompensation. If the proof has not been run, the surface
+          says that — it does not invent a green check.</li>
+      </ul>
+
+      <div class="callout invariant">
+        <span class="callout-label">Floor invariant</span>
+        The dashboard reads state. It does not write state. Any affordance that looks
+        write-like — "restart watcher", "rebuild index", "run proof" — emits an intent through
+        the existing governed path. The dashboard never auto-triggers remediation.
+      </div>
+    </section>
+
+    <!-- ============== 02 ============== -->
+    <section class="spec" id="s2">
+      <h2><span class="secnum">02 ·</span>What the operator must answer</h2>
+      <p class="lede">
+        Nine questions. The whole layout is structured so that each is answerable from the
+        primary view, in a glance.
+      </p>
+
+      <table class="spec">
+        <thead><tr><th>Q</th><th>Question</th><th>Answered by</th></tr></thead>
+        <tbody>
+          <tr><td>Q1</td><td>Is the system running?</td><td>Overall banner</td></tr>
+          <tr><td>Q2</td><td>Is the watcher healthy?</td><td>Watcher card · heartbeat, scope, restarts</td></tr>
+          <tr><td>Q3</td><td>Is the worker healthy?</td><td>Worker card · queue depth, last processed, poison count</td></tr>
+          <tr><td>Q4</td><td>Are there stuck or poison outbox messages?</td><td>Outbox card · pending / dead-lettered counts</td></tr>
+          <tr><td>Q5</td><td>Is the vault scope correct?</td><td>Vault card · active vault, scoped folders, last change</td></tr>
+          <tr><td>Q6</td><td>Is indexing moving?</td><td>Outbox card · processed sparkline · last-event ts</td></tr>
+          <tr><td>Q7</td><td>Are writes allowed or blocked?</td><td>Write-guard card · allowed / denied · reason</td></tr>
+          <tr><td>Q8</td><td>What was the last successful proof receipt?</td><td>Proof receipt panel · pass/fail · skipped checks · receipt id</td></tr>
+          <tr><td>Q9</td><td>What should I do next?</td><td>Next-action strip · single recommendation · explicit trigger</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== 03 — REFINEMENT v2 — three planes + no auto-repair + receipt link pattern ============== -->
+    <section class="spec" id="s3">
+      <h2><span class="secnum">03 ·</span>Three planes: evidence · status · action</h2>
+      <p class="lede">
+        The dashboard renders three planes simultaneously and never lets them blur. Every card,
+        every row, every banner sits cleanly on one plane.
+      </p>
+
+      <table class="spec">
+        <thead>
+          <tr><th>Plane</th><th>What it is</th><th>Where it lives</th><th>Mutability</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Evidence</strong></td>
+            <td>Runtime values the system emits — heartbeat ts, queue depth, oldest pending age, restart count, receipt id. Numbers and timestamps.</td>
+            <td>Mono captions inside cards. Per-row values. Sparkline bars.</td>
+            <td>Read-only · never derived in the UI</td>
+          </tr>
+          <tr>
+            <td><strong>Status</strong></td>
+            <td>Posture the runtime declares from evidence — <em>running</em>, <em>backlogged</em>, <em>poisoned</em>, <em>stale</em>, <em>denied</em>, <em>pass</em>, <em>fail</em>. Short adjectives or verbs.</td>
+            <td>LED dots. Card headlines. Banner title.</td>
+            <td>Read-only · declared by the snapshot's <code>posture</code> field</td>
+          </tr>
+          <tr>
+            <td><strong>Suggested action</strong></td>
+            <td>The single recommendation for what to do next — including "no action needed". Plain second-person language with a verb and an object.</td>
+            <td>Banner sub-line · the bottom next-action strip · per-state gallery cards.</td>
+            <td>Operator-triggered · the dashboard never executes</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · The three planes are never collapsed</span>
+        Evidence does not derive status (the runtime owns posture). Status does not derive
+        action (the suggested-next-action field is its own snapshot field). Action does not
+        execute itself (every action is the operator's explicit click). A coloured tile alone
+        is never a status; a status alone is never an action.
+      </div>
+
+      <h3>No automatic repair</h3>
+      <p>
+        Every affordance that looks write-like — <em>Run proof now</em>, <em>Restart watcher</em>,
+        <em>Replay dead-lettered event</em>, <em>Rebuild index</em> — is an explicit operator
+        click that emits a governed intent. The dashboard does not retry on its own. The
+        dashboard does not escalate on its own. The dashboard does not flip a subsystem from
+        amber to vault-green by acting; only the runtime does that, and only after the
+        operator triggered the action.
+      </p>
+
+      <div class="callout warn">
+        <span class="callout-label">Anti-pattern · auto-remediation</span>
+        If a state appears that wants automatic repair (e.g. "watcher dropped, restart it"),
+        the dashboard surfaces the suggestion in the action plane. The runtime — or, more
+        often, the operator — does the repair. The dashboard is not allowed to become a
+        control plane that hides what it does.
+      </div>
+
+      <h3>Receipt link pattern</h3>
+      <p>
+        Every status that has a receipt links to it. The pattern is one shape used in three
+        places:
+      </p>
+      <ul>
+        <li><strong>Proof receipt panel</strong> — the receipt pill is the canonical instance.
+          <span class="receipt applied"><span class="recdot"></span>PASS · rp-2026-05-14-09-14</span>
+          Click opens the receipt in audit view (read-only).</li>
+        <li><strong>Per-check rows</strong> — each check in the proof trace ends with a
+          timestamp that links to the check's own sub-receipt when one exists.</li>
+        <li><strong>Card receipt counts</strong> — when a card cites an action count (e.g.
+          <em>1 pending</em> in Governance, <em>0 denials · 24h</em> in Write guard), each
+          count is a hover-disclosure that lists the receipt ids; clicking any opens it.</li>
+      </ul>
+
+      <div class="callout">
+        <span class="callout-label">Receipt link rule</span>
+        Any number on the dashboard that represents <em>governed events</em> (proof runs,
+        governance receipts, write-guard denials, dead-letters, watcher restarts) must be
+        a link to the list of receipt ids it counts. Numbers without receipts (heartbeat ms,
+        tick counts) do not link. The pattern makes it impossible to look at a count without
+        being one click from the evidence behind it.
+      </div>
+    </section>
+
+    <!-- ============== 04 ============== -->
+    <section class="spec" id="s4">
+      <h2><span class="secnum">04 ·</span>Dashboard prototype <span class="chip design" style="font-size:10px; margin-left:8px">healthy state</span></h2>
+      <p class="lede">
+        Default view. All subsystems nominal, last proof passed this morning. The layout is the
+        same across every state — only the values and accent colours change.
+      </p>
+
+      <div class="dash" aria-label="Runtime Proof Dashboard — healthy state">
+        <!-- top bar -->
+        <div class="dash-bar">
+          <span class="vault-name">vault · main</span>
+          <span>scope · projects/, journal/, references/</span>
+          <span class="right">
+            <span class="ts">last poll · 14:08:32</span>
+            <button class="btn ghost" type="button" data-intent="dashboard.refresh">Refresh <span class="kbd">R</span></button>
+          </span>
+        </div>
+
+        <!-- banner -->
+        <div class="banner healthy">
+          <div>
+            <div class="kicker">overall · runtime</div>
+            <div class="title"><span class="led" aria-hidden="true"></span>Running · healthy</div>
+            <p class="sub">Watcher and worker are healthy, outbox is draining, write guard is open,
+              last proof receipt passed at 09:14 this morning with no skipped checks.</p>
+          </div>
+          <div class="next">
+            <span class="lbl">last proof</span>
+            <span class="action">PASS · receipt rp-2026-05-14-09-14 · 09:14</span>
+          </div>
+        </div>
+
+        <!-- main grid -->
+        <div class="dash-grid">
+          <!-- watcher -->
+          <div class="card">
+            <div class="hd">
+              <span class="name">Watcher</span>
+              <span class="led" aria-label="healthy"></span>
+            </div>
+            <div class="big vault">Running</div>
+            <div class="row"><span>last heartbeat</span><span class="v vault">2.1s ago</span></div>
+            <div class="row"><span>scope glob</span><span class="v">**/*.md</span></div>
+            <div class="row"><span>tick · 5m</span><span class="v">312</span></div>
+            <div class="row"><span>changed · 5m</span><span class="v">18</span></div>
+            <div class="row"><span>restarts · 24h</span><span class="v vault">0</span></div>
+          </div>
+
+          <!-- worker -->
+          <div class="card">
+            <div class="hd">
+              <span class="name">Worker</span>
+              <span class="led" aria-label="healthy"></span>
+            </div>
+            <div class="big vault">Running</div>
+            <div class="row"><span>queue depth</span><span class="v vault">0</span></div>
+            <div class="row"><span>last processed</span><span class="v">12s ago</span></div>
+            <div class="row"><span>poison · 24h</span><span class="v vault">0</span></div>
+            <div class="row"><span>dead-letter</span><span class="v vault">0</span></div>
+            <div class="spark" aria-label="processed events per minute, last 24 entries">
+              <span class="b" style="height:30%"></span><span class="b" style="height:60%"></span>
+              <span class="b" style="height:45%"></span><span class="b" style="height:80%"></span>
+              <span class="b" style="height:55%"></span><span class="b" style="height:35%"></span>
+              <span class="b" style="height:70%"></span><span class="b" style="height:90%"></span>
+              <span class="b" style="height:50%"></span><span class="b" style="height:60%"></span>
+              <span class="b" style="height:40%"></span><span class="b" style="height:75%"></span>
+              <span class="b" style="height:55%"></span><span class="b" style="height:65%"></span>
+              <span class="b" style="height:80%"></span><span class="b" style="height:45%"></span>
+              <span class="b" style="height:35%"></span><span class="b" style="height:50%"></span>
+              <span class="b" style="height:60%"></span><span class="b" style="height:40%"></span>
+              <span class="b" style="height:55%"></span><span class="b" style="height:70%"></span>
+              <span class="b" style="height:50%"></span><span class="b" style="height:35%"></span>
+            </div>
+          </div>
+
+          <!-- outbox / index -->
+          <div class="card">
+            <div class="hd">
+              <span class="name">Outbox / Index</span>
+              <span class="led" aria-label="healthy"></span>
+            </div>
+            <div class="big vault">Draining</div>
+            <div class="row"><span>pending</span><span class="v">3</span></div>
+            <div class="row"><span>delivered · 24h</span><span class="v">2,184</span></div>
+            <div class="row"><span>failed · 24h</span><span class="v vault">0</span></div>
+            <div class="row"><span>dead-lettered</span><span class="v vault">0</span></div>
+            <div class="row"><span>oldest pending</span><span class="v">800ms</span></div>
+          </div>
+
+          <!-- vault -->
+          <div class="card">
+            <div class="hd">
+              <span class="name">Vault</span>
+              <span class="led" aria-label="healthy"></span>
+            </div>
+            <div class="big">main</div>
+            <div class="row"><span>active path</span><span class="v">~/vault-main</span></div>
+            <div class="row"><span>scoped folders</span><span class="v">3</span></div>
+            <div class="row"><span>last change</span><span class="v">42s ago</span></div>
+            <div class="row"><span>notes indexed</span><span class="v">4,812</span></div>
+            <div class="row"><span>schema version</span><span class="v">v6.0</span></div>
+          </div>
+
+          <!-- write guard -->
+          <div class="card">
+            <div class="hd">
+              <span class="name">Write guard</span>
+              <span class="led" aria-label="healthy"></span>
+            </div>
+            <div class="big vault">Allowed</div>
+            <div class="row"><span>policy</span><span class="v">default</span></div>
+            <div class="row"><span>last denial · 24h</span><span class="v vault">0</span></div>
+            <div class="row"><span>governance queue</span><span class="v">1 pending</span></div>
+            <div class="row"><span>canvas writes · 24h</span><span class="v">14</span></div>
+          </div>
+
+          <!-- startup -->
+          <div class="card">
+            <div class="hd">
+              <span class="name">Startup</span>
+              <span class="led" aria-label="healthy"></span>
+            </div>
+            <div class="big">Sequenced</div>
+            <div class="row"><span>booted</span><span class="v">06:02</span></div>
+            <div class="row"><span>watcher up</span><span class="v">+1.4s</span></div>
+            <div class="row"><span>worker up</span><span class="v">+2.1s</span></div>
+            <div class="row"><span>scope loaded</span><span class="v">+2.6s</span></div>
+            <div class="row"><span>init proof</span><span class="v vault">PASS · 06:03</span></div>
+          </div>
+
+          <!-- agents -->
+          <div class="card">
+            <div class="hd">
+              <span class="name">Agents</span>
+              <span class="led cyan" aria-label="active"></span>
+            </div>
+            <div class="big">2 active</div>
+            <div class="row"><span>Hugin · canvas</span><span class="v cyan">idle</span></div>
+            <div class="row"><span>Munin · panel</span><span class="v cyan">idle</span></div>
+            <div class="row"><span>turns · 24h</span><span class="v">37</span></div>
+            <div class="row"><span>proposals · 24h</span><span class="v">12</span></div>
+          </div>
+
+          <!-- governance -->
+          <div class="card">
+            <div class="hd">
+              <span class="name">Governance</span>
+              <span class="led" style="background:var(--accent); box-shadow:0 0 6px var(--accent);" aria-label="active receipt"></span>
+            </div>
+            <div class="big" style="color:var(--accent)">1 pending</div>
+            <div class="row"><span>queued</span><span class="v gold">1</span></div>
+            <div class="row"><span>in-review</span><span class="v">0</span></div>
+            <div class="row"><span>applied · 24h</span><span class="v">6</span></div>
+            <div class="row"><span>rejected · 24h</span><span class="v">1</span></div>
+            <div class="row"><span>oldest receipt</span><span class="v">4m</span></div>
+          </div>
+        </div>
+
+        <!-- proof receipt -->
+        <div class="proof">
+          <div class="card">
+            <div class="hd">
+              <span class="name">Last proof receipt</span>
+              <span class="receipt applied"><span class="recdot"></span>PASS · rp-2026-05-14-09-14</span>
+            </div>
+            <div class="recline">
+              <div class="ck"><span class="mark">✓</span><span class="desc">watcher heartbeat &lt; 5s</span><span class="ts">09:14:01</span></div>
+              <div class="ck"><span class="mark">✓</span><span class="desc">worker drains test queue (10 events)</span><span class="ts">09:14:02</span></div>
+              <div class="ck"><span class="mark">✓</span><span class="desc">outbox commit-and-replay round-trip</span><span class="ts">09:14:03</span></div>
+              <div class="ck"><span class="mark">✓</span><span class="desc">vault scope resolves to 3 folders</span><span class="ts">09:14:03</span></div>
+              <div class="ck"><span class="mark">✓</span><span class="desc">write guard denies out-of-scope fixture</span><span class="ts">09:14:04</span></div>
+              <div class="ck"><span class="mark">✓</span><span class="desc">governance router round-trips fixture intent</span><span class="ts">09:14:05</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="hd">
+              <span class="name">Proof history · 14d</span>
+              <span style="font-family:var(--font-mono); font-size:10px; color:var(--fg-3); letter-spacing:var(--tracking-wide); text-transform:uppercase;">14 / 14 pass</span>
+            </div>
+            <div class="spark gold" style="height:34px" aria-label="proof history bars">
+              <span class="b" style="height:90%"></span><span class="b" style="height:88%"></span>
+              <span class="b" style="height:90%"></span><span class="b" style="height:86%"></span>
+              <span class="b" style="height:90%"></span><span class="b" style="height:88%"></span>
+              <span class="b" style="height:90%"></span><span class="b" style="height:88%"></span>
+              <span class="b" style="height:86%"></span><span class="b" style="height:90%"></span>
+              <span class="b" style="height:88%"></span><span class="b" style="height:90%"></span>
+              <span class="b" style="height:86%"></span><span class="b" style="height:90%"></span>
+            </div>
+            <div class="row"><span>median runtime</span><span class="v">4.2s</span></div>
+            <div class="row"><span>last skip · 14d</span><span class="v vault">0</span></div>
+            <div class="row"><span>last fail · 14d</span><span class="v vault">0</span></div>
+            <div class="row" style="margin-top:auto"><span>next scheduled</span><span class="v">21:00</span></div>
+          </div>
+        </div>
+
+        <!-- next action -->
+        <div class="next-action">
+          <span class="lbl">Suggested next action</span>
+          <span class="copy">No action needed. Next scheduled proof at 21:00. Governance queue has one
+            pending receipt waiting on you in AI Panel.</span>
+          <span class="actions">
+            <button class="btn ghost" type="button" data-intent="proof.run-now">Run proof now <span class="kbd">P</span></button>
+            <button class="btn governance" type="button" data-intent="panel.open-receipt">Open receipt</button>
+          </span>
+        </div>
+      </div>
+
+      <p>
+        Every line of mono text in the dashboard is wired to a single value the runtime emits.
+        The card layout never reflows between healthy and degraded states — only the LEDs, the
+        big-text headline, the row values, and the suggested-next-action strip change. That
+        stability is part of the calmness the surface is trying to maintain.
+      </p>
+    </section>
+
+    <!-- ============== 05 ============== -->
+    <section class="spec" id="s5">
+      <h2><span class="secnum">05 ·</span>Section design</h2>
+      <p class="lede">Each card's content rule, value sources, and copy conventions.</p>
+
+      <table class="spec">
+        <thead>
+          <tr><th>Card</th><th>Headline</th><th>Rows</th><th>Evidence</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Watcher</td>
+            <td><code>Running</code> · <code>Stopped</code> · <code>Restarting</code></td>
+            <td>last heartbeat · scope glob · tick/changed counts (5m window) · restarts (24h, distinguishes OOM)</td>
+            <td>watcher process heartbeat, restart event ledger</td>
+          </tr>
+          <tr>
+            <td>Worker</td>
+            <td><code>Running</code> · <code>Backlogged</code> · <code>Poisoned</code> · <code>Stopped</code></td>
+            <td>queue depth · last processed ts · poison count · dead-letter count · processed-per-minute sparkline</td>
+            <td>worker process state, queue counters, dead-letter ledger</td>
+          </tr>
+          <tr>
+            <td>Outbox / Index</td>
+            <td><code>Draining</code> · <code>Backlogged</code> · <code>Stalled</code></td>
+            <td>pending · delivered (24h) · failed (24h) · dead-lettered · oldest pending age</td>
+            <td>outbox table, index commit log</td>
+          </tr>
+          <tr>
+            <td>Vault</td>
+            <td>active vault name</td>
+            <td>active path · scoped folders count · last change ts · notes indexed · schema version</td>
+            <td>vault config, FS metadata, index head</td>
+          </tr>
+          <tr>
+            <td>Write guard</td>
+            <td><code>Allowed</code> · <code>Denied</code> · <code>Mixed</code></td>
+            <td>policy name · denials (24h) · governance queue size · canvas writes (24h)</td>
+            <td>write-guard policy, governance receipt store</td>
+          </tr>
+          <tr>
+            <td>Startup</td>
+            <td><code>Sequenced</code> · <code>Out-of-order</code> · <code>Init failed</code></td>
+            <td>booted · watcher-up offset · worker-up offset · scope-loaded offset · init proof result</td>
+            <td>startup sequence ledger, init proof receipt</td>
+          </tr>
+          <tr>
+            <td>Agents</td>
+            <td>count active</td>
+            <td>per-agent posture (idle / thinking / blocked) · turns (24h) · proposals (24h)</td>
+            <td>agent runtime state, session log counters</td>
+          </tr>
+          <tr>
+            <td>Governance</td>
+            <td>count pending</td>
+            <td>queued · in-review · applied (24h) · rejected (24h) · oldest receipt age</td>
+            <td>governance receipt store</td>
+          </tr>
+          <tr>
+            <td>Last proof receipt</td>
+            <td><code>PASS</code> · <code>FAIL · &lt;reason&gt;</code> · <code>NOT RUN</code></td>
+            <td>per-check pass / skip / fail with timestamp; receipt id; link to receipt</td>
+            <td>runtime-proof receipt store</td>
+          </tr>
+          <tr>
+            <td>Proof history</td>
+            <td>pass / fail ratio over 14 days</td>
+            <td>median runtime · skipped count · failed count · next scheduled</td>
+            <td>runtime-proof receipt store, scheduler</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Copy conventions</h3>
+      <ul>
+        <li>Headline strings are <em>short</em> verbs or adjectives. Never "OK", never "healthy ✓",
+          never emoji.</li>
+        <li>Counts that should be zero render in vault green; counts that should be non-zero
+          render in fg-1 (neutral). Amber and red are reserved for state that wants attention.</li>
+        <li>Timestamps prefer relative ("2.1s ago", "4m") for recent activity and absolute
+          ("09:14") for events that anchor a story.</li>
+        <li>No card shows a percentage. Percentages summarise; this surface does not summarise.</li>
+        <li>The next-action strip uses second-person plain language ("Inspect the poison
+          message", "Run the proof"). Never imperative without an object.</li>
+      </ul>
+    </section>
+
+    <!-- ============== 06 ============== -->
+    <section class="spec" id="s6">
+      <h2><span class="secnum">06 ·</span>State gallery</h2>
+      <p class="lede">
+        Nine states. Each is the banner + next-action strip the operator would see; the inner
+        grid stays structurally identical and is omitted here for compactness — see §04 for
+        the full layout.
+      </p>
+
+      <div class="gallery dash-gallery">
+        <!-- 1 healthy -->
+        <div class="gallery-card">
+          <div class="hdr-cap"><h4>01 · Healthy</h4><span class="chip vault">nominal</span></div>
+          <div class="mini">
+            <div class="title-row"><span class="led" aria-hidden="true"></span><span class="ttl">Running · healthy</span></div>
+            <p class="desc">Watcher and worker healthy. Outbox draining. Write guard open. Last
+              proof PASS this morning.</p>
+            <div class="next-strip vault">
+              <span class="lbl">Next action</span>
+              No action needed. Next scheduled proof at 21:00.
+            </div>
+            <div class="sub-line">
+              <span><span class="k">watcher</span> <span class="vault">running</span></span>
+              <span><span class="k">worker</span> <span class="vault">running</span></span>
+              <span><span class="k">proof</span> <span class="vault">pass · 09:14</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2 degraded -->
+        <div class="gallery-card">
+          <div class="hdr-cap"><h4>02 · Degraded</h4><span class="chip gated">attention</span></div>
+          <div class="mini">
+            <div class="title-row"><span class="led amber" aria-hidden="true"></span><span class="ttl">Running · degraded</span></div>
+            <p class="desc">Indexing is moving but the outbox is backlogged: 312 pending,
+              oldest 7m. Watcher and worker are otherwise healthy.</p>
+            <div class="next-strip amber">
+              <span class="lbl">Next action</span>
+              Inspect the worker. Backlog growth suggests a slow handler or contention.
+            </div>
+            <div class="sub-line">
+              <span><span class="k">outbox</span> <span class="amber">backlog · 312</span></span>
+              <span><span class="k">worker</span> <span class="amber">slow</span></span>
+              <span><span class="k">proof</span> <span class="vault">pass · 09:14</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3 watcher OOM -->
+        <div class="gallery-card">
+          <div class="hdr-cap"><h4>03 · Watcher OOM</h4><span class="chip danger">restart evidence</span></div>
+          <div class="mini">
+            <div class="title-row"><span class="led dang" aria-hidden="true"></span><span class="ttl">Watcher · restarted (OOM)</span></div>
+            <p class="desc">Watcher restarted 3 times in the last hour with OOM evidence. It is
+              currently up. Tick rate has recovered, but recent file events may be missing.</p>
+            <div class="next-strip dang">
+              <span class="lbl">Next action</span>
+              Inspect watcher restart ledger. Consider scope reduction. Re-run proof.
+            </div>
+            <div class="sub-line">
+              <span><span class="k">watcher</span> <span class="dang">3 restarts · OOM</span></span>
+              <span><span class="k">scope</span> <span class="amber">**/*</span></span>
+              <span><span class="k">proof</span> <span class="amber">stale · 09:14</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4 poison -->
+        <div class="gallery-card">
+          <div class="hdr-cap"><h4>04 · Worker poison</h4><span class="chip danger">dead-letter</span></div>
+          <div class="mini">
+            <div class="title-row"><span class="led dang" aria-hidden="true"></span><span class="ttl">Worker · poison message</span></div>
+            <p class="desc">One poison message dead-lettered. Worker continued processing other
+              events. The DLQ row links to the offending event for inspection.</p>
+            <div class="next-strip dang">
+              <span class="lbl">Next action</span>
+              Inspect the dead-lettered event in the outbox view, then ack or replay.
+            </div>
+            <div class="sub-line">
+              <span><span class="k">worker</span> <span class="vault">running</span></span>
+              <span><span class="k">dlq</span> <span class="dang">1</span></span>
+              <span><span class="k">queue</span> <span class="amber">12</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5 stale heartbeat -->
+        <div class="gallery-card">
+          <div class="hdr-cap"><h4>05 · Stale heartbeat</h4><span class="chip gated">unknown</span></div>
+          <div class="mini">
+            <div class="title-row"><span class="led amber" aria-hidden="true"></span><span class="ttl">Watcher · heartbeat stale</span></div>
+            <p class="desc">No watcher heartbeat for 42s. Threshold is 10s. We cannot confirm
+              whether the watcher is stopped or starved.</p>
+            <div class="next-strip amber">
+              <span class="lbl">Next action</span>
+              Restart watcher, or wait — the dashboard will re-check every 5s.
+            </div>
+            <div class="sub-line">
+              <span><span class="k">heartbeat</span> <span class="amber">42s ago</span></span>
+              <span><span class="k">restarts</span> <span class="vault">0</span></span>
+              <span><span class="k">proof</span> <span class="amber">stale</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 6 no recent changes -->
+        <div class="gallery-card">
+          <div class="hdr-cap"><h4>06 · No recent changes</h4><span class="chip">informational</span></div>
+          <div class="mini">
+            <div class="title-row"><span class="led" aria-hidden="true"></span><span class="ttl">Vault quiet</span></div>
+            <p class="desc">No vault change detected in the last hour. System is otherwise
+              healthy. This is fine; it is shown so the operator can decide whether the quiet
+              is expected.</p>
+            <div class="next-strip dim">
+              <span class="lbl">Next action</span>
+              No action needed.
+            </div>
+            <div class="sub-line">
+              <span><span class="k">last change</span> <span>62m ago</span></span>
+              <span><span class="k">scope</span> 3 folders</span>
+              <span><span class="k">proof</span> <span class="vault">pass</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 7 write guard active -->
+        <div class="gallery-card">
+          <div class="hdr-cap"><h4>07 · Write guard active</h4><span class="chip gated">policy</span></div>
+          <div class="mini">
+            <div class="title-row"><span class="led gold" aria-hidden="true"></span><span class="ttl">Writes blocked by policy</span></div>
+            <p class="desc">Write guard is denying writes outside <code>journal/</code>. Reason
+              is a deliberate policy <em>focus-mode</em>, not a failure. Eight intents queued.</p>
+            <div class="next-strip">
+              <span class="lbl">Next action</span>
+              Open AI Panel to review queued intents, or lift focus-mode in Settings.
+            </div>
+            <div class="sub-line">
+              <span><span class="k">policy</span> <span class="gold">focus-mode</span></span>
+              <span><span class="k">denials · 24h</span> <span class="amber">8</span></span>
+              <span><span class="k">canvas writes</span> 0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 8 proof not yet run -->
+        <div class="gallery-card">
+          <div class="hdr-cap"><h4>08 · Proof not yet run</h4><span class="chip">unknown</span></div>
+          <div class="mini">
+            <div class="title-row"><span class="led dim" aria-hidden="true"></span><span class="ttl">Runtime proof · not run</span></div>
+            <p class="desc">Runtime is up and looks healthy by individual cards, but a proof
+              receipt has not been produced this session. The dashboard does not infer green.</p>
+            <div class="next-strip">
+              <span class="lbl">Next action</span>
+              Run the proof now to produce a receipt.
+            </div>
+            <div class="sub-line">
+              <span><span class="k">last receipt</span> <span class="dim">none this session</span></span>
+              <span><span class="k">prior</span> 2026-05-13 · pass</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 9 proof failed -->
+        <div class="gallery-card">
+          <div class="hdr-cap"><h4>09 · Proof failed</h4><span class="chip danger">actionable</span></div>
+          <div class="mini">
+            <div class="title-row"><span class="led dang" aria-hidden="true"></span><span class="ttl">Runtime proof · FAIL</span></div>
+            <p class="desc">Proof rp-2026-05-14-14-02 failed: outbox commit-and-replay
+              round-trip did not complete within 5s. Two other checks were skipped because they
+              depend on outbox health.</p>
+            <div class="next-strip dang">
+              <span class="lbl">Next action</span>
+              Inspect outbox commit log. Replay the failed fixture. Re-run the proof.
+            </div>
+            <div class="sub-line">
+              <span><span class="k">check</span> <span class="dang">outbox round-trip</span></span>
+              <span><span class="k">skipped</span> <span class="amber">2</span></span>
+              <span><span class="k">receipt</span> rp-…14-02</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============== 07 ============== -->
+    <section class="spec" id="s7">
+      <h2><span class="secnum">07 ·</span>Edge states &amp; checklist</h2>
+      <p class="lede">Per the governance pack checklist (§08 of that pack).</p>
+
+      <table class="spec">
+        <thead><tr><th>Edge</th><th>Designed behavior</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Empty</td><td>Cards still render with their zero-state row values; banner says <em>Awaiting first poll</em>.</td><td>Distinct from <em>Loading</em>.</td></tr>
+          <tr><td>Loading</td><td>Card values render as mono ellipses; LEDs are dim (fg-3). Banner says <em>Loading…</em>; refresh button is disabled.</td><td>No skeleton animation; the static dim state is the loading state.</td></tr>
+          <tr><td>Degraded</td><td>State 02 above. One or more cards in amber. Banner amber LED. Next action names the affected card.</td><td>Never red unless at least one subsystem is in a hard-fail state.</td></tr>
+          <tr><td>Blocked</td><td>State 07 above. Gold LED on write-guard card; banner says <em>Writes blocked by policy</em>.</td><td>"Blocked by policy" is not "blocked by failure". Distinct copy.</td></tr>
+          <tr><td>Stale context</td><td>The "last proof" timestamp grays out if older than 24h; banner sub-line says <em>Proof receipt is stale</em>.</td><td>Stale ≠ failed.</td></tr>
+          <tr><td>Missing provenance</td><td>A card with no source value renders <em>—</em> and a tooltip <em>Source not connected</em>; never green.</td><td>Cards never invent values to avoid an empty row.</td></tr>
+          <tr><td>Write-guard denial</td><td>Card shows the denial count and the most recent denial reason; banner unaffected unless denial count crosses threshold.</td><td>Denials are normal events, not alarms.</td></tr>
+          <tr><td>Reduced motion</td><td>LED pulse and queued-receipt dot animation respect <code>prefers-reduced-motion</code>: animations replaced with static color.</td><td>Sparkline bars are static; no animation to disable.</td></tr>
+          <tr><td>Narrow / mobile</td><td>4-column grid collapses to 2 columns &lt; 900px and to 1 column &lt; 560px. Banner stacks. Next-action strip becomes a sticky bottom card.</td><td>Card order is preserved. Watcher and Worker are always above the fold.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== 08 ============== -->
+    <section class="spec" id="s8">
+      <h2><span class="secnum">08 ·</span>Implementation contract</h2>
+      <p class="lede">
+        The UI consumes a runtime-state snapshot. It does not derive subsystem health; the
+        snapshot's <code>posture</code> field is authoritative.
+      </p>
+
+      <h3>Snapshot shape (target-state)</h3>
+      <pre class="code"><span class="c">// Illustrative — exact field names owned by runtime-proof spec, not this design.</span>
+{
+  <span class="k">"polled_at"</span>: <span class="s">"2026-05-14T14:08:32Z"</span>,
+  <span class="k">"overall"</span>: { <span class="k">"posture"</span>: <span class="s">"healthy | degraded | blocked | unknown | proof-pending"</span>,
+               <span class="k">"summary"</span>: <span class="s">"…"</span> },
+  <span class="k">"watcher"</span>: { <span class="k">"posture"</span>: <span class="s">"running | stopped | restarting | unknown"</span>,
+               <span class="k">"last_heartbeat_ms"</span>: 2100,
+               <span class="k">"scope_glob"</span>: <span class="s">"**/*.md"</span>,
+               <span class="k">"tick_5m"</span>: 312, <span class="k">"changed_5m"</span>: 18,
+               <span class="k">"restarts_24h"</span>: 0, <span class="k">"oom_evidence"</span>: <span class="n">false</span> },
+  <span class="k">"worker"</span>: { <span class="k">"posture"</span>: <span class="s">"running | backlogged | poisoned | stopped"</span>,
+              <span class="k">"queue_depth"</span>: 0,
+              <span class="k">"last_processed_ms"</span>: 12000,
+              <span class="k">"poison_24h"</span>: 0,
+              <span class="k">"dead_letter_total"</span>: 0,
+              <span class="k">"processed_per_minute"</span>: [<span class="c">…24 values…</span>] },
+  <span class="k">"outbox"</span>: { <span class="k">"posture"</span>: <span class="s">"draining | backlogged | stalled"</span>,
+              <span class="k">"pending"</span>: 3, <span class="k">"delivered_24h"</span>: 2184,
+              <span class="k">"failed_24h"</span>: 0, <span class="k">"dead_lettered_total"</span>: 0,
+              <span class="k">"oldest_pending_ms"</span>: 800 },
+  <span class="k">"vault"</span>: { <span class="k">"name"</span>: <span class="s">"main"</span>, <span class="k">"path"</span>: <span class="s">"~/vault-main"</span>,
+             <span class="k">"scoped_folders"</span>: 3, <span class="k">"last_change_ms"</span>: 42000,
+             <span class="k">"notes_indexed"</span>: 4812, <span class="k">"schema_version"</span>: <span class="s">"v6.0"</span> },
+  <span class="k">"write_guard"</span>: { <span class="k">"posture"</span>: <span class="s">"allowed | denied | mixed"</span>,
+                   <span class="k">"policy"</span>: <span class="s">"default"</span>,
+                   <span class="k">"denials_24h"</span>: 0,
+                   <span class="k">"queued_governance"</span>: 1,
+                   <span class="k">"canvas_writes_24h"</span>: 14 },
+  <span class="k">"last_proof"</span>: { <span class="k">"posture"</span>: <span class="s">"pass | fail | not-run"</span>,
+                  <span class="k">"receipt_id"</span>: <span class="s">"rp-2026-05-14-09-14"</span>,
+                  <span class="k">"ran_at"</span>: <span class="s">"2026-05-14T09:14:00Z"</span>,
+                  <span class="k">"checks"</span>: [
+                    { <span class="k">"name"</span>: <span class="s">"watcher_heartbeat"</span>, <span class="k">"result"</span>: <span class="s">"pass"</span>, <span class="k">"at"</span>: <span class="s">"…"</span> }
+                  ] },
+  <span class="k">"suggested_next_action"</span>: { <span class="k">"kind"</span>: <span class="s">"none | inspect | restart | replay | rebuild | run-proof | open-panel"</span>,
+                            <span class="k">"copy"</span>: <span class="s">"…"</span>,
+                            <span class="k">"intents"</span>: [<span class="c">…</span>] }
+}</pre>
+
+      <h3>Intents emitted by the dashboard</h3>
+      <table class="spec">
+        <thead><tr><th class="mono">data-intent</th><th>Effect</th><th>Authority</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">dashboard.refresh</td><td>Re-poll snapshot</td><td>read-only</td></tr>
+          <tr><td class="mono">proof.run-now</td><td>Trigger a runtime proof run</td><td>explicit user click; emits a governed run-request</td></tr>
+          <tr><td class="mono">watcher.restart</td><td>Request watcher restart</td><td>explicit user click; routed through governed pipeline</td></tr>
+          <tr><td class="mono">outbox.replay-dlq</td><td>Replay dead-lettered event</td><td>explicit user click; per-event confirmation</td></tr>
+          <tr><td class="mono">index.rebuild</td><td>Request scoped index rebuild</td><td>explicit user click; routed; confirmed</td></tr>
+          <tr><td class="mono">panel.open-receipt</td><td>Hand off to AI Panel anchored on receipt id</td><td>navigation only</td></tr>
+          <tr><td class="mono">vault.open-event</td><td>Open the offending event in the outbox view</td><td>navigation only</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Data attributes on the dashboard root</h3>
+      <pre class="code">&lt;section
+  data-testid=<span class="s">"runtime-dashboard"</span>
+  data-overall-posture=<span class="s">"healthy | degraded | blocked | unknown | proof-pending"</span>
+  data-proof-posture=<span class="s">"pass | fail | not-run"</span>
+  data-write-guard=<span class="s">"allowed | denied | mixed"</span>
+  data-polled-at=<span class="s">"&lt;ISO ts&gt;"</span>&gt;</pre>
+
+      <div class="callout">
+        <span class="callout-label">UI never derives posture</span>
+        The UI does not compute <code>overall.posture</code> from card values. The snapshot
+        declares it. This avoids the UI and the runtime quietly disagreeing about what counts
+        as healthy.
+      </div>
+    </section>
+
+    <!-- ============== 09 ============== -->
+    <section class="spec" id="s9">
+      <h2><span class="secnum">09 ·</span>Authority boundaries</h2>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Mirror, not control plane</span>
+        The dashboard is a mirror of runtime state. Every write-shaped affordance routes through
+        the existing governed pipeline. The dashboard never auto-repairs. The dashboard never
+        derives a posture the runtime did not declare.
+      </div>
+
+      <table class="spec">
+        <thead>
+          <tr><th>Concern</th><th>May influence</th><th>May propose</th><th>May not decide</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Card layout, copy, LED palette</td><td class="yes">YES</td><td class="maybe">—</td><td class="no">—</td></tr>
+          <tr><td>Card inventory (which 8 cards)</td><td class="maybe">subset</td><td class="yes">propose to owner-doc</td><td class="no">cannot promote</td></tr>
+          <tr><td>Snapshot field names</td><td class="no">—</td><td class="yes">propose to runtime-proof spec</td><td class="no">cannot declare</td></tr>
+          <tr><td>Suggested-next-action vocabulary</td><td class="maybe">copy only</td><td class="yes">propose <code>kind</code> additions</td><td class="no">cannot define remediation behavior</td></tr>
+          <tr><td>Posture algorithm</td><td class="no">—</td><td class="no">—</td><td class="no">runtime owns; UI renders</td></tr>
+          <tr><td>Receipt schema</td><td class="no">—</td><td class="no">—</td><td class="no">runtime-proof contract owns</td></tr>
+          <tr><td>Refresh / poll interval</td><td class="maybe">UX recommendation</td><td class="maybe">propose default</td><td class="no">runtime owns</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== 10 ============== -->
+    <section class="spec" id="s10">
+      <h2><span class="secnum">10 ·</span>Open questions</h2>
+      <ol>
+        <li><strong>Polling vs push.</strong> The snapshot model assumes a poll. If runtime pushes,
+          the <em>polled_at</em> banner field becomes <em>received_at</em> and the refresh button
+          becomes "subscribe / unsubscribe". Either is acceptable to the design.</li>
+        <li><strong>Single vault scope.</strong> The design assumes one active vault per
+          dashboard. Multi-vault would need a vault switcher in the top bar; we have not designed
+          it because the product is single-operator-local.</li>
+        <li><strong>Proof-run confirmation.</strong> "Run proof now" — should it confirm? We
+          suggest no confirmation; proof runs are idempotent and free. Owner-doc decides.</li>
+        <li><strong>Agent card scope.</strong> Should the agent card list every agent (Hugin,
+          Munin, future Deep Agent) or only those with active sessions? Suggest: active sessions
+          and 0-state when none.</li>
+        <li><strong>What does "blocked" mean in the banner?</strong> We use it for policy-blocked
+          writes; we also need a name for "writes denied by failure". Suggest: <em>Running ·
+          writes refused</em> for the failure case, <em>Running · focus-mode</em> for the
+          policy case.</li>
+        <li><strong>How long does the proof history bar span?</strong> 14d, 30d, sliding? We
+          suggest 14d as the default; longer ranges live in an inspector linked from the receipt.</li>
+      </ol>
+    </section>
+
+    <!-- ============== 11 ============== -->
+    <section class="spec" id="s11">
+      <h2><span class="secnum">11 ·</span>Handoff notes for Claude Code / Codex</h2>
+
+      <h3>Likely normalized spec</h3>
+      <ul>
+        <li>New doc: <code>docs/RUNTIME_PROOF_DASHBOARD.md</code> — UI guidance only, target-state.</li>
+        <li>References: existing <em>runtime proof receipt</em> contract (when it lands),
+          <code>STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md</code>, panel locality for receipts.</li>
+      </ul>
+
+      <h3>Likely follow-on issues</h3>
+      <ul>
+        <li><em>Render the dashboard against a fixture snapshot.</em> Acceptance: dashboard
+          renders nine designed states from nine fixture snapshots without dynamic state.</li>
+        <li><em>Wire <code>proof.run-now</code> to the proof runner.</em> Acceptance: clicking
+          emits a governed run-request and the receipt id appears in the proof card on completion.</li>
+        <li><em>Wire <code>outbox.replay-dlq</code>.</em> Acceptance: a per-event confirm dialog
+          appears; replay routes through governance; receipt visible in the governance card.</li>
+        <li><em>Reduced-motion path.</em> Acceptance: with the OS pref set, no element animates.</li>
+        <li><em>Narrow layout.</em> Acceptance: 2-col and 1-col layouts preserve card order; the
+          next-action strip becomes a sticky bottom bar.</li>
+      </ul>
+
+      <h3>What this design must not feed</h3>
+      <ul>
+        <li>Auto-remediation. Every action is the operator's explicit click.</li>
+        <li>An ops-style alert channel. The dashboard does not page; it shows.</li>
+        <li>A definition of <em>healthy</em>. Runtime declares it; UI renders it.</li>
+      </ul>
+
+      <div class="callout vault">
+        <span class="callout-label">Validation expectation</span>
+        Passing receipt: dashboard renders all nine states from fixture snapshots; intents emit
+        through the governed pipeline; no UI-derived posture; reduced-motion respected; narrow
+        layout passes. Receipt id recorded in this package's status field.
+      </div>
+    </section>
+
+  </main>
+</div>
+</body>
+</html>

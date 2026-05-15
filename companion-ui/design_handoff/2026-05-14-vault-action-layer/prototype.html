@@ -1,0 +1,1180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vault Action Layer / Agent Tool Authority — Yggdrasil Companion UI</title>
+<link rel="stylesheet" href="./colors_and_type.css" />
+<link rel="stylesheet" href="./spec_chrome.css" />
+<style>
+  /* ============================================================
+     LOCAL — vault action pipeline, tier matrix, action card
+     ============================================================ */
+
+  /* === 9-step pipeline === */
+  .pipe {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    padding: var(--space-4) var(--space-5);
+    margin: var(--space-3) 0 var(--space-6);
+    display: grid;
+    grid-template-columns: repeat(9, 1fr);
+    gap: 4px;
+    position: relative;
+  }
+  .pipe .step {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--bg-base);
+    min-height: 78px;
+    text-align: left;
+  }
+  .pipe .step .n {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+  .pipe .step .label {
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    color: var(--fg-1);
+    font-weight: var(--weight-medium);
+    line-height: 1.25;
+  }
+  .pipe .step .sub {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    margin-top: auto;
+  }
+  .pipe .step.intent  { border-color: rgba(74,158,255,0.45); }
+  .pipe .step.intent  .n { color: var(--agent); }
+  .pipe .step.classify{ border-color: rgba(0,212,232,0.4); }
+  .pipe .step.classify .n { color: var(--cyan); }
+  .pipe .step.action  { border-color: rgba(0,212,232,0.4); }
+  .pipe .step.action .n { color: var(--cyan); }
+  .pipe .step.policy  { border-color: rgba(212,168,67,0.45); }
+  .pipe .step.policy .n { color: var(--accent); }
+  .pipe .step.guard   { border-color: rgba(212,168,67,0.45); }
+  .pipe .step.guard   .n { color: var(--accent); }
+  .pipe .step.idem    { border-color: rgba(212,168,67,0.45); }
+  .pipe .step.idem    .n { color: var(--accent); }
+  .pipe .step.exec    { border-color: rgba(57,232,125,0.4); }
+  .pipe .step.exec    .n { color: var(--vault); }
+  .pipe .step.receipt { border-color: rgba(57,232,125,0.4); }
+  .pipe .step.receipt .n { color: var(--vault); }
+  .pipe .step.event   { border-color: rgba(57,232,125,0.4); }
+  .pipe .step.event   .n { color: var(--vault); }
+  @media (max-width: 900px) {
+    .pipe { grid-template-columns: 1fr 1fr; }
+  }
+
+  /* === Tier matrix === */
+  .tier-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: var(--space-3) 0 var(--space-5);
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+  }
+  .tier-table th, .tier-table td {
+    text-align: left;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    font-size: var(--text-sm);
+  }
+  .tier-table th {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-2);
+    background: var(--bg-raised);
+    font-weight: var(--weight-medium);
+    border-bottom: 1px solid var(--border-strong);
+  }
+  .tier-table tr:last-child td { border-bottom: none; }
+  .tier-table td.tier {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    white-space: nowrap;
+    color: var(--fg-2);
+    width: 130px;
+  }
+  .tier-table tr.t0 td.tier { color: var(--vault); }
+  .tier-table tr.t1 td.tier { color: var(--cyan); }
+  .tier-table tr.t2 td.tier { color: var(--amber); }
+  .tier-table tr.t3 td.tier { color: var(--accent); }
+  .tier-table tr.t4 td.tier { color: var(--destructive); }
+  .tier-table tr.t4 { background: rgba(255,61,61,0.03); }
+  .tier-table td.ex {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+  }
+
+  /* === Live action card (the "Move Inbox → Workbench" sandbox) === */
+  .action-stage {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    margin: var(--space-3) 0 var(--space-6);
+    overflow: hidden;
+  }
+  .as-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 10px 16px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+  .as-bar .id { color: var(--cyan); }
+  .as-bar .right { margin-left: auto; display: flex; gap: var(--space-3); align-items: center; }
+  .as-body {
+    display: grid;
+    grid-template-columns: 1.3fr 1fr;
+    min-height: 460px;
+  }
+  .as-instruction {
+    padding: var(--space-5) var(--space-6);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .as-trace {
+    background: var(--bg-base);
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+    max-height: 600px;
+  }
+  .as-instruction .kicker {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--agent);
+  }
+  .as-instruction h3 {
+    font-family: var(--font-display);
+    font-size: var(--text-xl);
+    line-height: 1.15;
+    color: var(--fg-1);
+    margin: 0;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: var(--weight-regular);
+  }
+  .as-instruction .panel-prompt {
+    background: var(--bg-base);
+    border: 1px solid var(--border-strong);
+    border-left: 2px solid var(--agent);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    line-height: 1.5;
+    max-width: 50ch;
+  }
+  .as-instruction .panel-prompt .you {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  .resolved {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .resolved .head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+  .resolved .head .cap { color: var(--cyan); }
+  .resolved dl {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    column-gap: var(--space-3);
+    row-gap: 6px;
+    font-size: var(--text-sm);
+    margin: 0;
+  }
+  .resolved dt {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    padding-top: 3px;
+  }
+  .resolved dd {
+    color: var(--fg-1);
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    word-break: break-all;
+    line-height: 1.5;
+  }
+  .resolved dd.cyan  { color: var(--cyan); }
+  .resolved dd.vault { color: var(--vault); }
+  .resolved dd.gold  { color: var(--accent); }
+  .resolved dd.dang  { color: var(--destructive); }
+
+  /* trace stream */
+  .trace-line {
+    display: grid;
+    grid-template-columns: 22px 1fr auto;
+    column-gap: 10px;
+    align-items: baseline;
+    padding: 5px 8px;
+    border-radius: var(--radius-sm);
+    border-left: 2px solid var(--border);
+    background: var(--bg-surface);
+  }
+  .trace-line .mark {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-3);
+    text-align: center;
+  }
+  .trace-line .copy {
+    font-size: var(--text-xs);
+    color: var(--fg-1);
+    line-height: 1.5;
+    font-family: var(--font-ui);
+  }
+  .trace-line .copy code {
+    font-family: var(--font-mono);
+    font-size: 0.95em;
+    background: transparent;
+    border: none;
+    color: var(--fg-2);
+    padding: 0;
+  }
+  .trace-line .when {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+  }
+  .trace-line.pass { border-left-color: var(--vault); }
+  .trace-line.pass .mark { color: var(--vault); }
+  .trace-line.gate { border-left-color: var(--accent); }
+  .trace-line.gate .mark { color: var(--accent); }
+  .trace-line.deny { border-left-color: var(--destructive); }
+  .trace-line.deny .mark { color: var(--destructive); }
+  .trace-line.info { border-left-color: var(--cyan); }
+  .trace-line.info .mark { color: var(--cyan); }
+  .trace-line.idem { border-left-color: var(--amber); }
+  .trace-line.idem .mark { color: var(--amber); }
+
+  /* receipt strip */
+  .as-receipt {
+    padding: 12px 16px;
+    background: var(--bg-base);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .as-receipt .lbl {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--vault);
+  }
+  .as-receipt .copy {
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    line-height: 1.5;
+    flex: 1;
+    max-width: 70ch;
+  }
+  .as-receipt .actions { display: flex; gap: 8px; }
+
+  /* gallery for action states */
+  .gallery.act-gallery { grid-template-columns: 1fr 1fr; }
+  .am {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .am-bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 12px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+  }
+  .am-bar .cls.vault { color: var(--vault); }
+  .am-bar .cls.dang  { color: var(--destructive); }
+  .am-bar .cls.gold  { color: var(--accent); }
+  .am-bar .cls.amber { color: var(--amber); }
+  .am-bar .cls.cyan  { color: var(--cyan); }
+  .am-body { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .am-body h5 {
+    font-family: var(--font-display);
+    font-size: var(--text-md);
+    color: var(--fg-1);
+    font-weight: var(--weight-regular);
+    line-height: 1.2;
+    margin: 0;
+  }
+  .am-body p { font-size: var(--text-sm); color: var(--fg-2); margin: 0; line-height: 1.5; }
+  .am-body .meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+  }
+  .am-body .meta .v       { color: var(--fg-2); }
+  .am-body .meta .v.vault { color: var(--vault); }
+  .am-body .meta .v.cyan  { color: var(--cyan); }
+  .am-body .meta .v.gold  { color: var(--accent); }
+  .am-body .meta .v.amber { color: var(--amber); }
+  .am-body .meta .v.dang  { color: var(--destructive); }
+  .am-body .outcome {
+    margin-top: 4px;
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-strong);
+    color: var(--fg-3);
+  }
+  .am-body .outcome.applied  { color: var(--vault); border-color: rgba(57,232,125,0.4); background: rgba(57,232,125,0.04); }
+  .am-body .outcome.denied   { color: var(--destructive); border-color: rgba(255,61,61,0.4); background: rgba(255,61,61,0.04); }
+  .am-body .outcome.blocked  { color: var(--accent); border-color: rgba(212,168,67,0.4); background: rgba(212,168,67,0.04); }
+  .am-body .outcome.noop     { color: var(--amber); border-color: rgba(240,144,48,0.4); background: rgba(240,144,48,0.04); }
+  .am-body .outcome.resolved { color: var(--cyan); border-color: rgba(0,212,232,0.4); background: rgba(0,212,232,0.04); }
+
+  /* boundary boxes — Obsidian/MCP */
+  .boundary {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+    margin: var(--space-3) 0 var(--space-5);
+  }
+  @media (max-width: 900px) { .boundary { grid-template-columns: 1fr; } }
+  .b-cell {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .b-cell h4 {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-2);
+  }
+  .b-cell.good { border-top: 2px solid var(--vault); }
+  .b-cell.good h4 { color: var(--vault); }
+  .b-cell.bad  { border-top: 2px solid var(--destructive); }
+  .b-cell.bad h4 { color: var(--destructive); }
+  .b-cell ul { margin: 0; padding-left: 18px; }
+  .b-cell li { font-size: var(--text-sm); color: var(--fg-1); line-height: 1.5; }
+
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ============================ TOC ============================ -->
+  <nav class="toc" aria-label="Section index">
+    <div class="toc-label">Sections</div>
+    <ol>
+      <li><a href="#s1"><span class="toc-num">01</span>Context &amp; boundary</a></li>
+      <li><a href="#s2"><span class="toc-num">02</span>9-step action pipeline</a></li>
+      <li><a href="#s3"><span class="toc-num">03</span>Tool authority tiers</a></li>
+      <li><a href="#s4"><span class="toc-num">04</span>Obsidian / MCP boundary</a></li>
+      <li><a href="#s5"><span class="toc-num">05</span>Concrete action prototype</a></li>
+      <li><a href="#s6"><span class="toc-num">06</span>State gallery</a></li>
+      <li><a href="#s7"><span class="toc-num">07</span>Edge states</a></li>
+      <li><a href="#s8"><span class="toc-num">08</span>Implementation contract</a></li>
+      <li><a href="#s9"><span class="toc-num">09</span>Authority boundaries</a></li>
+      <li><a href="#s10"><span class="toc-num">10</span>Open questions</a></li>
+      <li><a href="#s11"><span class="toc-num">11</span>Handoff to Code/Codex</a></li>
+    </ol>
+  </nav>
+
+  <!-- ============================ MAIN ============================ -->
+  <main>
+    <header class="doc-header">
+      <div class="doc-eyebrow">Companion UI · Design Handoff · Authority surface</div>
+      <h1 class="doc-title">Vault Action Layer / Agent Tool Authority</h1>
+      <p class="doc-lede">
+        Agents do not get raw filesystem powers. They get bounded, governed capabilities,
+        named, classified, gated, and receipted. The vault action layer is the contract between
+        Panel-style instructions ("move this Inbox note to Workbench") and actual mutation. It
+        passes every action through nine steps — intent classification, bounded action,
+        policy, write guard, idempotency, collision-safe execution, receipt, observable event.
+        Obsidian and MCP may later sit as adapters; they may never be the primary mutation path.
+      </p>
+      <div class="doc-meta">
+        <span><strong>Surface:</strong> VAULT_ACTION_LAYER</span>
+        <span><strong>Linked issue:</strong> #910</span>
+        <span><strong>Authority:</strong> Visual + structural guidance — tool-authority taxonomy proposal</span>
+        <span><strong>Status:</strong> Design handoff · v1 · 2026-05-14</span>
+      </div>
+    </header>
+
+    <!-- ============== 01 ============== -->
+    <section class="spec" id="s1">
+      <h2><span class="secnum">01 ·</span>Context &amp; boundary</h2>
+      <p class="lede">Why a vault action layer is needed, and what it deliberately is not.</p>
+
+      <p>
+        Issue #910 made a broader need visible. Panel Agent — and any future agent — needs
+        <em>bounded vault actions</em>, not raw filesystem or generic Obsidian/MCP powers.
+        Generic write tools collapse the difference between "move a note to a known folder"
+        and "delete an arbitrary file"; they bypass policy, write guard, idempotency, and
+        receipt machinery; they make Obsidian/MCP look canonical when they are properly
+        adapters. The vault action layer is the boundary that fixes this.
+      </p>
+
+      <h3>What this design covers</h3>
+      <ul>
+        <li>The <strong>9-step pipeline</strong> every vault mutation must pass through.</li>
+        <li>The <strong>five-tier tool authority taxonomy</strong> agents are bound by.</li>
+        <li>The <strong>Obsidian / MCP boundary</strong>: adapter, not authority.</li>
+        <li>A <strong>concrete first action</strong> — "Move current Inbox note to Workbench" — designed end to end.</li>
+        <li>Eight <strong>designed states</strong>: allowed move, two denial classes, write-guard block, idempotent no-op, collision-resolved, success-with-receipt, receipt-inspection.</li>
+      </ul>
+
+      <div class="callout invariant">
+        <span class="callout-label">Floor invariant · Agents are bounded</span>
+        Agents act through declared vault actions. They do not act through generic write
+        primitives. Every action carries a tier, a policy check, a write-guard verdict, an
+        idempotency check, and a receipt. The runtime owns the action set; the design names
+        the shape that set must take.
+      </div>
+
+      <h3>What this design is not</h3>
+      <ul>
+        <li>Not a filesystem API. The pipeline is the contract; the FS calls underneath are
+          the runtime's choice.</li>
+        <li>Not an Obsidian plugin spec or an MCP integration spec. Those may later <em>sit
+          underneath</em> tier-2 bounded write tools as adapters, never as the primary
+          mutation path.</li>
+        <li>Not a UI for arbitrary file management. The vault action layer is for the
+          <em>named</em> actions agents are entitled to. Arbitrary file ops live in the
+          user's own tools.</li>
+        <li>Not a permission model for humans. Humans are the authority; the layer governs
+          what <em>agents</em> may do on the human's behalf.</li>
+      </ul>
+    </section>
+
+    <!-- ============== 02 ============== -->
+    <section class="spec" id="s2">
+      <h2><span class="secnum">02 ·</span>9-step action pipeline</h2>
+      <p class="lede">
+        Every vault action passes through nine ordered steps. Any step may refuse. Refusal is
+        first-class; it produces a receipt, not silence.
+      </p>
+
+      <div class="pipe" role="img" aria-label="9-step action pipeline: panel instruction, intent classification, bounded vault action, policy check, write guard, idempotency check, execution, durable receipt, observable event">
+        <div class="step intent">
+          <span class="n">01 · Intent</span>
+          <span class="label">Panel instruction</span>
+          <span class="sub">natural-language or structured</span>
+        </div>
+        <div class="step classify">
+          <span class="n">02 · Classify</span>
+          <span class="label">Intent → action name</span>
+          <span class="sub">router · server-side only</span>
+        </div>
+        <div class="step action">
+          <span class="n">03 · Bound</span>
+          <span class="label">Bounded vault action</span>
+          <span class="sub">named, tiered, parameterised</span>
+        </div>
+        <div class="step policy">
+          <span class="n">04 · Policy</span>
+          <span class="label">Authority check</span>
+          <span class="sub">agent tier · sphere · scope</span>
+        </div>
+        <div class="step guard">
+          <span class="n">05 · Guard</span>
+          <span class="label">Write guard</span>
+          <span class="sub">policy refusal · focus-mode</span>
+        </div>
+        <div class="step idem">
+          <span class="n">06 · Idempotent</span>
+          <span class="label">Idempotency check</span>
+          <span class="sub">no-op if already-applied</span>
+        </div>
+        <div class="step exec">
+          <span class="n">07 · Execute</span>
+          <span class="label">Collision-safe execution</span>
+          <span class="sub">deterministic resolver</span>
+        </div>
+        <div class="step receipt">
+          <span class="n">08 · Receipt</span>
+          <span class="label">Durable receipt</span>
+          <span class="sub">id · action · result · diff</span>
+        </div>
+        <div class="step event">
+          <span class="n">09 · Event</span>
+          <span class="label">Observable event/log</span>
+          <span class="sub">outbox + status doc</span>
+        </div>
+      </div>
+
+      <h3>Per-step rules</h3>
+      <table class="spec">
+        <thead><tr><th>Step</th><th>Owner</th><th>Refusal produces</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>01 · Intent</td><td>Panel UI</td><td><em>n/a — input</em></td><td>Free text or structured form; nothing committed.</td></tr>
+          <tr><td>02 · Classify</td><td>Server-side router</td><td><code>unclassified_intent_receipt</code></td><td>UI never re-classifies (see §08).</td></tr>
+          <tr><td>03 · Bound</td><td>Action registry</td><td><code>unknown_action_receipt</code></td><td>If the action name is not in the registry, refuse.</td></tr>
+          <tr><td>04 · Policy</td><td>Authority policy</td><td><code>policy_denial_receipt</code></td><td>Agent tier, sphere, scope checked against the action's required authority.</td></tr>
+          <tr><td>05 · Guard</td><td>Write guard</td><td><code>write_guard_denial_receipt</code></td><td>Even if policy allows, write guard may refuse (focus-mode, degraded vault, etc).</td></tr>
+          <tr><td>06 · Idempotent</td><td>Idempotency check</td><td><code>idempotent_noop_receipt</code></td><td>Replaying the same action is a no-op, not a duplicate; receipt is still produced.</td></tr>
+          <tr><td>07 · Execute</td><td>Deterministic writer</td><td><code>collision_resolved_receipt</code> or <code>execution_error_receipt</code></td><td>Name collisions resolved by the registry's deterministic rule (e.g. <code>-1</code> suffix); never random.</td></tr>
+          <tr><td>08 · Receipt</td><td>Receipt store</td><td><em>n/a — receipt is the output</em></td><td>Every step that refused or succeeded contributes to the receipt trace.</td></tr>
+          <tr><td>09 · Event</td><td>Outbox + status doc</td><td><em>n/a — observability</em></td><td>Event durable in the outbox; status doc references the receipt id.</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Refusal is first-class</span>
+        Every refusal produces a receipt. There is no silent failure. There is no "tried and
+        nothing happened". A denied action is auditable in exactly the same shape as a
+        successful one — same id format, same trace structure, same status-doc link.
+      </div>
+    </section>
+
+    <!-- ============== 03 ============== -->
+    <section class="spec" id="s3">
+      <h2><span class="secnum">03 ·</span>Tool authority tiers</h2>
+      <p class="lede">
+        Five tiers. An agent's <em>maximum tier</em> is set by policy. An action's
+        <em>required tier</em> is fixed by the action registry. Tier mismatch is a policy
+        denial at step 04.
+      </p>
+
+      <table class="tier-table">
+        <thead>
+          <tr><th>Tier</th><th>Name</th><th>Examples</th><th>What it may do</th><th>Receipt required</th></tr>
+        </thead>
+        <tbody>
+          <tr class="t0">
+            <td class="tier">Tier 0</td>
+            <td>Read-only tools</td>
+            <td class="ex">read_note, list_inbox, search_vault, get_receipt</td>
+            <td>Read vault state. Return projections. Never mutate.</td>
+            <td>read-trace only</td>
+          </tr>
+          <tr class="t1">
+            <td class="tier">Tier 1</td>
+            <td>Proposal tools</td>
+            <td class="ex">propose_edit, propose_link, propose_move</td>
+            <td>Emit a proposal into the governance queue. Human or governed flow decides whether to apply. <em>Never mutates.</em></td>
+            <td>proposal-receipt</td>
+          </tr>
+          <tr class="t2">
+            <td class="tier">Tier 2</td>
+            <td>Bounded write tools</td>
+            <td class="ex">move_inbox_note_to_workbench, archive_completed_commitment, append_to_session_log</td>
+            <td>Named, parameter-bounded mutations. Each is a registry entry with declared source domain, destination domain, allowed types, idempotency key shape, collision rule.</td>
+            <td>write-receipt</td>
+          </tr>
+          <tr class="t3">
+            <td class="tier">Tier 3</td>
+            <td>Governance-bearing tools</td>
+            <td class="ex">apply_governance_intent, promote_memory_to_note, change_vault_scope</td>
+            <td>Routes through full governance (Panel review or human accept). Cannot be invoked silently by an agent — always produces a queued intent the human reviews.</td>
+            <td>governance-receipt</td>
+          </tr>
+          <tr class="t4">
+            <td class="tier">Tier 4</td>
+            <td>Forbidden initially</td>
+            <td class="ex">raw_write_file, raw_delete_file, run_shell, eval_javascript</td>
+            <td>Not in the registry. Cannot be invoked. Listed here so the boundary is explicit. Future capability is opt-in per-agent and never default.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Rules</h3>
+      <ul>
+        <li>Every action in the registry declares a single tier. Tier is fixed at registration; the runtime does not re-tier at invoke time.</li>
+        <li>Agents declare a <em>maximum invocable tier</em>. Panel Agent's current ceiling is Tier 2 (bounded writes) plus Tier 3 (via human-reviewed governance).</li>
+        <li>Tier 4 is empty. It is named here so it is impossible to "discover" tier 4 by accident.</li>
+        <li>Adding a new bounded write tool (Tier 2) requires a registry entry with the full bounding contract; it is not done at agent runtime.</li>
+      </ul>
+
+      <div class="callout warn">
+        <span class="callout-label">Tier escalation is not implicit</span>
+        An agent at max-tier 2 cannot invoke a Tier 3 tool by phrasing its request differently.
+        The classifier (step 02) maps intent to action name; the registry (step 03) declares the
+        action's tier; policy (step 04) refuses if the agent's ceiling is below the action's
+        tier. There is no path that loosens this without explicit policy change.
+      </div>
+    </section>
+
+    <!-- ============== 04 ============== -->
+    <section class="spec" id="s4">
+      <h2><span class="secnum">04 ·</span>Obsidian / MCP boundary</h2>
+      <p class="lede">
+        Obsidian and MCP are valuable surfaces. They are <em>not</em> the primary mutation
+        authority. Where they appear in the stack, they sit underneath bounded vault actions
+        as adapters, with Yggdrasil's pipeline running first.
+      </p>
+
+      <div class="boundary">
+        <div class="b-cell good">
+          <h4>What is allowed</h4>
+          <ul>
+            <li>A Tier 2 bounded action — <code>move_inbox_note_to_workbench</code> — implemented internally by an Obsidian API call. Yggdrasil's pipeline still runs end to end; Obsidian is just the FS-level adapter.</li>
+            <li>An MCP server exposed by Yggdrasil that offers only Tier 0–2 action names from the registry. External callers see <em>actions</em>, not raw write primitives.</li>
+            <li>Read-only Obsidian/MCP tools at Tier 0 — fine as long as they read through the registry.</li>
+          </ul>
+        </div>
+        <div class="b-cell bad">
+          <h4>What is not allowed</h4>
+          <ul>
+            <li>Generic Obsidian MCP "write file" or "modify note" capability surfaced as an agent tool. That collapses bounding, policy, and write guard.</li>
+            <li>An agent reaching the FS through MCP that does not run Yggdrasil's policy, write guard, idempotency, and receipt steps.</li>
+            <li>An MCP adapter that produces no receipt for a successful or denied action.</li>
+            <li>Treating Obsidian as the source of truth for what an action means. The registry is the source of truth; Obsidian implements.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Adapter, not authority</span>
+        Obsidian, MCP, or any future external mutation surface may participate as the
+        <em>execution adapter</em> for a registered Tier-2 action. They may not bypass
+        intent classification, action bounding, policy, write guard, idempotency, or receipt
+        production. The vault action layer runs first; the adapter runs second.
+      </div>
+    </section>
+
+    <!-- ============== 05 ============== -->
+    <section class="spec" id="s5">
+      <h2><span class="secnum">05 ·</span>Concrete action prototype <span class="chip design" style="font-size:10px; margin-left:8px">move inbox → workbench · allowed</span></h2>
+      <p class="lede">
+        First action: <em>Move the current Inbox note to Workbench.</em> A Tier 2 bounded
+        write. The panel issues an instruction; the pipeline classifies, bounds, checks,
+        executes, and produces a receipt. The trace pane shows every step.
+      </p>
+
+      <div class="action-stage" aria-label="Vault action — move inbox note to workbench, allowed">
+        <div class="as-bar">
+          <span>action</span>
+          <span class="id">va-2026-05-14-0014</span>
+          <span>·</span>
+          <span>move_inbox_note_to_workbench</span>
+          <span class="right">
+            <span class="receipt applied"><span class="recdot"></span>tier 2 · write</span>
+          </span>
+        </div>
+
+        <div class="as-body">
+          <!-- left: instruction + resolved action -->
+          <section class="as-instruction">
+            <span class="kicker">panel · munin · turn 28</span>
+            <h3>"Move the inbox note about the watcher OOM repair to Workbench."</h3>
+
+            <div class="panel-prompt">
+              <span class="you">user · panel</span>
+              I've cleared this one — move it to Workbench so it's out of Inbox.
+            </div>
+
+            <div class="resolved">
+              <div class="head"><span class="cap">resolved action</span><span>· step 03</span></div>
+              <dl>
+                <dt>name</dt><dd class="cyan">move_inbox_note_to_workbench</dd>
+                <dt>tier</dt><dd>2 · bounded write</dd>
+                <dt>source</dt><dd>vault/Inbox/watcher-oom-repair.md</dd>
+                <dt>destination</dt><dd>vault/Workbench/</dd>
+                <dt>note type</dt><dd>inbox-item · allowed</dd>
+                <dt>idempotency key</dt><dd class="gold">sha256(src+dst+content-hash)<br>→ ik-a91e3c…</dd>
+                <dt>collision rule</dt><dd>suffix · <code>-1</code> · <code>-2</code> · …</dd>
+              </dl>
+            </div>
+          </section>
+
+          <!-- right: pipeline trace -->
+          <aside class="as-trace" aria-label="Pipeline trace">
+            <div class="trace-line info">
+              <span class="mark">→</span>
+              <span class="copy">Step 01 · Intent received from Panel turn 28.</span>
+              <span class="when">14:08:01</span>
+            </div>
+            <div class="trace-line info">
+              <span class="mark">→</span>
+              <span class="copy">Step 02 · Classifier mapped intent to <code>move_inbox_note_to_workbench</code>. Confidence 0.94. UI did not re-classify.</span>
+              <span class="when">14:08:01</span>
+            </div>
+            <div class="trace-line info">
+              <span class="mark">→</span>
+              <span class="copy">Step 03 · Bound to registry entry <code>move_inbox_note_to_workbench@v3</code>. Tier 2. Source domain · Inbox; destination domain · Workbench.</span>
+              <span class="when">14:08:01</span>
+            </div>
+            <div class="trace-line gate">
+              <span class="mark">⊕</span>
+              <span class="copy">Step 04 · Policy check. Agent · munin · max tier 2. Action tier 2. Sphere · work. Scope · vault-main. <strong>Pass.</strong></span>
+              <span class="when">14:08:01</span>
+            </div>
+            <div class="trace-line gate">
+              <span class="mark">⊕</span>
+              <span class="copy">Step 05 · Write guard. Policy · default. Vault not in focus-mode. Watcher healthy. <strong>Allowed.</strong></span>
+              <span class="when">14:08:01</span>
+            </div>
+            <div class="trace-line gate">
+              <span class="mark">⊕</span>
+              <span class="copy">Step 06 · Idempotency check. Key <code>ik-a91e3c…</code> not seen in 24h window. <strong>Not a duplicate.</strong></span>
+              <span class="when">14:08:02</span>
+            </div>
+            <div class="trace-line pass">
+              <span class="mark">✓</span>
+              <span class="copy">Step 07 · Execute. Resolver inspected destination. No collision. Atomic rename via Obsidian adapter.</span>
+              <span class="when">14:08:02</span>
+            </div>
+            <div class="trace-line pass">
+              <span class="mark">✓</span>
+              <span class="copy">Step 08 · Receipt minted · <code>r-va-2026-05-14-0014</code>. Contains action, parameters, idempotency key, trace.</span>
+              <span class="when">14:08:02</span>
+            </div>
+            <div class="trace-line pass">
+              <span class="mark">✓</span>
+              <span class="copy">Step 09 · Event appended to outbox · <code>vault.note.moved</code>. Status doc updated.</span>
+              <span class="when">14:08:02</span>
+            </div>
+          </aside>
+        </div>
+
+        <div class="as-receipt">
+          <span class="lbl">Receipt · r-va-2026-05-14-0014</span>
+          <span class="copy">
+            Moved <code style="font-family:var(--font-mono); font-size:0.9em; color:var(--cyan)">Inbox/watcher-oom-repair.md</code>
+            → <code style="font-family:var(--font-mono); font-size:0.9em; color:var(--vault)">Workbench/watcher-oom-repair.md</code>.
+            Reversible · undo creates a new receipt referencing this one.
+          </span>
+          <span class="actions">
+            <button class="btn ghost" type="button" data-intent="receipt.open">Open receipt</button>
+            <button class="btn" type="button" data-intent="action.undo">Undo</button>
+          </span>
+        </div>
+      </div>
+
+      <p>
+        The instruction is natural language. Everything from step 02 onward is structured —
+        the resolved-action card on the left shows what the classifier and registry agreed on,
+        in mono, so the operator can audit the binding before reviewing the trace. The trace
+        on the right is the receipt's narrative form; the receipt itself is a structured
+        record durable in the receipt store.
+      </p>
+    </section>
+
+    <!-- ============== 06 ============== -->
+    <section class="spec" id="s6">
+      <h2><span class="secnum">06 ·</span>State gallery</h2>
+      <p class="lede">
+        Eight states. Each is a one-action card showing the same shape: action name + outcome
+        + the step at which the verdict was reached. The full action stage in §05 carries
+        every state; here the cards summarise.
+      </p>
+
+      <div class="gallery act-gallery">
+
+        <!-- 1 allowed move -->
+        <div class="am">
+          <div class="am-bar"><span>01 · allowed move</span><span class="cls vault">tier 2 · write</span></div>
+          <div class="am-body">
+            <h5>Inbox/watcher-oom-repair.md → Workbench/</h5>
+            <p>All nine steps pass. Destination is in the allowed Workbench domain. No collision.
+              Receipt minted; event durable.</p>
+            <div class="meta">
+              <span><span class="v">classify</span> <span class="v cyan">0.94</span></span>
+              <span><span class="v">policy</span> <span class="v vault">pass</span></span>
+              <span><span class="v">guard</span> <span class="v vault">allow</span></span>
+            </div>
+            <div class="outcome applied">APPLIED · receipt r-va-…0014</div>
+          </div>
+        </div>
+
+        <!-- 2 denied — source -->
+        <div class="am">
+          <div class="am-bar"><span>02 · denied · source</span><span class="cls dang">action denied</span></div>
+          <div class="am-body">
+            <h5>Inbox/promotion-of-X.md → Workbench/</h5>
+            <p>Action denied at step 03. The note is marked
+              <code style="font-family:var(--font-mono);font-size:0.9em">type: commitment</code>;
+              <code>move_inbox_note_to_workbench</code> requires <code>type: inbox-item</code>.
+              The action registry refused the binding.</p>
+            <div class="meta">
+              <span><span class="v">step</span> <span class="v dang">03 · bound</span></span>
+              <span><span class="v">reason</span> <span class="v dang">type · not inbox-item</span></span>
+            </div>
+            <div class="outcome denied">DENIED · receipt r-va-…0015 · action.refused</div>
+          </div>
+        </div>
+
+        <!-- 3 denied — destination -->
+        <div class="am">
+          <div class="am-bar"><span>03 · denied · destination</span><span class="cls dang">action denied</span></div>
+          <div class="am-body">
+            <h5>Inbox/note.md → ~/somewhere-else/</h5>
+            <p>Destination is outside any declared vault domain. The action is parameter-bounded
+              and refused at step 03 before policy ever runs.</p>
+            <div class="meta">
+              <span><span class="v">step</span> <span class="v dang">03 · bound</span></span>
+              <span><span class="v">reason</span> <span class="v dang">destination · arbitrary</span></span>
+            </div>
+            <div class="outcome denied">DENIED · receipt r-va-…0016 · destination.arbitrary</div>
+          </div>
+        </div>
+
+        <!-- 4 write guard -->
+        <div class="am">
+          <div class="am-bar"><span>04 · blocked · write guard</span><span class="cls gold">policy</span></div>
+          <div class="am-body">
+            <h5>Inbox/note.md → Workbench/</h5>
+            <p>Steps 03–04 pass. Write guard at step 05 refuses: vault is in focus-mode (writes
+              restricted to <code>journal/</code>). Refusal is policy, not failure.</p>
+            <div class="meta">
+              <span><span class="v">step</span> <span class="v gold">05 · guard</span></span>
+              <span><span class="v">policy</span> <span class="v gold">focus-mode</span></span>
+            </div>
+            <div class="outcome blocked">BLOCKED · receipt r-va-…0017 · guard.refused</div>
+          </div>
+        </div>
+
+        <!-- 5 idempotent noop -->
+        <div class="am">
+          <div class="am-bar"><span>05 · idempotent · no-op</span><span class="cls amber">noop · receipt produced</span></div>
+          <div class="am-body">
+            <h5>Inbox/note.md → Workbench/ · replayed</h5>
+            <p>Action with the same idempotency key was applied 12 minutes ago. Step 06 returns
+              no-op; no FS write occurs. A receipt is still produced and points at the original.</p>
+            <div class="meta">
+              <span><span class="v">step</span> <span class="v amber">06 · idempotent</span></span>
+              <span><span class="v">prior</span> <span class="v cyan">r-va-…0014</span></span>
+            </div>
+            <div class="outcome noop">NO-OP · receipt r-va-…0018 · idempotent.replay</div>
+          </div>
+        </div>
+
+        <!-- 6 collision resolved -->
+        <div class="am">
+          <div class="am-bar"><span>06 · collision · resolved</span><span class="cls cyan">deterministic suffix</span></div>
+          <div class="am-body">
+            <h5>Inbox/notes.md → Workbench/notes.md</h5>
+            <p>Step 07 detected an existing <code>Workbench/notes.md</code>. The registry's
+              deterministic rule (suffix <code>-1</code>) produced <code>notes-1.md</code>.
+              Not random; not destructive; auditable.</p>
+            <div class="meta">
+              <span><span class="v">step</span> <span class="v cyan">07 · execute</span></span>
+              <span><span class="v">rule</span> <span class="v cyan">suffix · -1</span></span>
+            </div>
+            <div class="outcome resolved">RESOLVED · receipt r-va-…0019 · executed as notes-1.md</div>
+          </div>
+        </div>
+
+        <!-- 7 success with receipt -->
+        <div class="am">
+          <div class="am-bar"><span>07 · success · with receipt</span><span class="cls vault">applied</span></div>
+          <div class="am-body">
+            <h5>Inbox/watcher-oom-repair.md → Workbench/</h5>
+            <p>Same as state 01 from the operator's view. Included here because "success with
+              receipt" is the canonical shape; the receipt is durable and inspectable in
+              Panel.</p>
+            <div class="meta">
+              <span><span class="v">step</span> <span class="v vault">07 · execute</span></span>
+              <span><span class="v">undo</span> <span class="v">available</span></span>
+            </div>
+            <div class="outcome applied">APPLIED · receipt r-va-…0020 · reversible</div>
+          </div>
+        </div>
+
+        <!-- 8 receipt inspection -->
+        <div class="am">
+          <div class="am-bar"><span>08 · receipt inspection</span><span class="cls cyan">audit view</span></div>
+          <div class="am-body">
+            <h5>Receipt r-va-…0014 · move_inbox_note_to_workbench</h5>
+            <p>Audit view: the same nine-step trace, plus the parameter dump, the idempotency
+              key, the resolved adapter (Obsidian), and the linked outbox event. Click-throughs
+              go to source / destination paths.</p>
+            <div class="meta">
+              <span><span class="v">store</span> <span class="v cyan">receipts/</span></span>
+              <span><span class="v">linked</span> <span class="v cyan">outbox event v.note.moved</span></span>
+            </div>
+            <div class="outcome resolved">INSPECTED · read-only · linkable</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ============== 07 ============== -->
+    <section class="spec" id="s7">
+      <h2><span class="secnum">07 ·</span>Edge states</h2>
+      <table class="spec">
+        <thead><tr><th>Edge</th><th>Designed behavior</th></tr></thead>
+        <tbody>
+          <tr><td>Empty</td><td>No action invoked — surface shows the action registry's documentation entry for the current scope.</td></tr>
+          <tr><td>Loading</td><td>Steps populate progressively; pre-step rows render dimmed but visible — the trace structure does not jump.</td></tr>
+          <tr><td>Degraded</td><td>If the outbox is degraded, step 09 emits a deferred-event receipt and the surface shows it; the action still succeeded.</td></tr>
+          <tr><td>Blocked</td><td>State 04 — write guard refuses. Banner gold; reason named. No retry without policy change.</td></tr>
+          <tr><td>Stale</td><td>If the action references a note that has been edited since the panel turn, step 03 refuses with <code>source.stale</code>; the operator re-issues the instruction.</td></tr>
+          <tr><td>Missing provenance</td><td>If the source note has no frontmatter (no type), step 03 refuses with <code>type.unknown</code>; the receipt names the reason.</td></tr>
+          <tr><td>Write-guard denial</td><td>State 04 above. Auditable. Never silently retried.</td></tr>
+          <tr><td>Reduced motion</td><td>Trace line markers are static; no sequential animation. State changes legible from colour and copy alone.</td></tr>
+          <tr><td>Narrow / mobile</td><td>Action stage stacks: instruction + resolved-action above, trace below, receipt strip at bottom. State gallery is one column.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== 08 ============== -->
+    <section class="spec" id="s8">
+      <h2><span class="secnum">08 ·</span>Implementation contract</h2>
+      <p class="lede">
+        The UI consumes a structured <em>action</em> object and the live <em>trace</em>. It
+        never invents the action name; classification is the server's job.
+      </p>
+
+      <h3>Action object (target-state)</h3>
+      <pre class="code"><span class="c">// Illustrative — owner-doc owns the schema.</span>
+{
+  <span class="k">"id"</span>: <span class="s">"va-2026-05-14-0014"</span>,
+  <span class="k">"name"</span>: <span class="s">"move_inbox_note_to_workbench"</span>,
+  <span class="k">"version"</span>: <span class="s">"v3"</span>,
+  <span class="k">"tier"</span>: <span class="n">2</span>,
+  <span class="k">"params"</span>: {
+    <span class="k">"source"</span>:      <span class="s">"vault/Inbox/watcher-oom-repair.md"</span>,
+    <span class="k">"destination"</span>: <span class="s">"vault/Workbench/"</span>
+  },
+  <span class="k">"idempotency_key"</span>: <span class="s">"ik-a91e3c..."</span>,
+  <span class="k">"collision_rule"</span>: <span class="s">"suffix"</span>,
+  <span class="k">"agent"</span>: { <span class="k">"name"</span>: <span class="s">"munin"</span>, <span class="k">"max_tier"</span>: <span class="n">2</span> },
+  <span class="k">"sphere"</span>: <span class="s">"work"</span>,
+  <span class="k">"scope"</span>: <span class="s">"vault-main"</span>,
+  <span class="k">"trigger"</span>: { <span class="k">"surface"</span>: <span class="s">"panel"</span>, <span class="k">"turn"</span>: <span class="n">28</span> }
+}</pre>
+
+      <h3>Trace entry shape</h3>
+      <pre class="code">{
+  <span class="k">"step"</span>:    <span class="n">5</span>,
+  <span class="k">"name"</span>:    <span class="s">"write_guard"</span>,
+  <span class="k">"result"</span>:  <span class="s">"pass | refuse | noop | resolved | error"</span>,
+  <span class="k">"reason"</span>:  <span class="s">"policy=default; focus_mode=false"</span>,
+  <span class="k">"at"</span>:      <span class="s">"2026-05-14T14:08:01.812Z"</span>
+}</pre>
+
+      <h3>Intents emitted by the action surface</h3>
+      <table class="spec">
+        <thead><tr><th class="mono">data-intent</th><th>Effect</th><th>Authority</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">action.invoke</td><td>Issues a panel-classified intent</td><td>governed · routes through full pipeline</td></tr>
+          <tr><td class="mono">action.undo</td><td>Inverse of last applied action; produces a new receipt</td><td>governed · explicit user click</td></tr>
+          <tr><td class="mono">receipt.open</td><td>Open the receipt in audit view</td><td>navigation only</td></tr>
+          <tr><td class="mono">action.open-source</td><td>Open source path in Obsidian</td><td>navigation only</td></tr>
+          <tr><td class="mono">action.open-destination</td><td>Open destination path in Obsidian</td><td>navigation only</td></tr>
+          <tr><td class="mono">action.copy-id</td><td>Copy action id</td><td>read-only</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Data attributes</h3>
+      <pre class="code">&lt;section
+  data-testid=<span class="s">"action-stage"</span>
+  data-action-id=<span class="s">"va-2026-05-14-0014"</span>
+  data-action-name=<span class="s">"move_inbox_note_to_workbench"</span>
+  data-tier=<span class="s">"0 | 1 | 2 | 3"</span>
+  data-outcome=<span class="s">"applied | denied | blocked | noop | resolved | error"</span>
+  data-step=<span class="s">"&lt;1..9&gt;"</span>&gt;</pre>
+
+      <div class="callout">
+        <span class="callout-label">UI never classifies</span>
+        Step 02 happens on the server. The UI renders the resolved-action card after the
+        classifier returns. The UI does not infer the action name from the panel prompt.
+      </div>
+    </section>
+
+    <!-- ============== 09 ============== -->
+    <section class="spec" id="s9">
+      <h2><span class="secnum">09 ·</span>Authority boundaries</h2>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Bounded actions, not raw primitives</span>
+        Agents act only through named, tiered, parameter-bounded actions in the registry.
+        Generic write primitives are not exposed. Tier 4 is empty by design.
+      </div>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Pipeline is mandatory</span>
+        Every successful action passes all nine steps. Every denied action produces a receipt
+        at the refusing step. No execution adapter — Obsidian, MCP, future — bypasses any step.
+      </div>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Receipts are durable</span>
+        Every action — success, denial, no-op, resolution — produces a receipt. The receipt is
+        the audit primitive. Status docs reference the receipt id.
+      </div>
+
+      <table class="spec">
+        <thead>
+          <tr><th>Concern</th><th>May influence</th><th>May propose</th><th>May not decide</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>UI layout, copy, trace visual</td><td class="yes">YES</td><td class="maybe">—</td><td class="no">—</td></tr>
+          <tr><td>Tier taxonomy (5 tiers)</td><td class="maybe">naming / ordering</td><td class="yes">propose to owner-doc</td><td class="no">cannot define semantics in code</td></tr>
+          <tr><td>Action registry entries</td><td class="no">—</td><td class="maybe">propose new bounded actions</td><td class="no">cannot register; owner-doc / runtime owns</td></tr>
+          <tr><td>Classifier behavior</td><td class="no">—</td><td class="no">—</td><td class="no">runtime owns</td></tr>
+          <tr><td>Policy / write-guard semantics</td><td class="no">—</td><td class="no">—</td><td class="no">policy contract owns</td></tr>
+          <tr><td>Idempotency key shape</td><td class="no">—</td><td class="maybe">propose per-action conventions</td><td class="no">cannot define algorithm</td></tr>
+          <tr><td>Collision rule</td><td class="no">—</td><td class="maybe">propose deterministic defaults</td><td class="no">cannot choose runtime behavior</td></tr>
+          <tr><td>Receipt schema</td><td class="no">—</td><td class="maybe">propose UI-visible fields</td><td class="no">cannot declare schema</td></tr>
+          <tr><td>Obsidian / MCP integration</td><td class="no">—</td><td class="maybe">propose adapter boundary copy</td><td class="no">cannot make them authority</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== 10 ============== -->
+    <section class="spec" id="s10">
+      <h2><span class="secnum">10 ·</span>Open questions</h2>
+      <ol>
+        <li><strong>Are Tier 1 (proposal) and Tier 3 (governance-bearing) the same?</strong>
+          Both produce a queued artifact for human review. The design separates them because a
+          Tier 1 proposal is the agent saying "I would like to do X", whereas a Tier 3
+          governance-bearing action is the agent invoking a known action whose semantics
+          require governance (rename, scope change, memory promotion). Owner-doc decides
+          whether the distinction stays.</li>
+        <li><strong>Idempotency window.</strong> 24 hours is a placeholder. Per-action default?
+          Single fixed value? Owner-doc decides.</li>
+        <li><strong>Collision rule taxonomy.</strong> The design names <code>suffix</code> as
+          the first rule. Future rules — <code>merge</code>, <code>refuse</code>,
+          <code>timestamp</code> — should be enumerated in the registry. Suggest:
+          declarative-per-action, never inferred at invoke time.</li>
+        <li><strong>Cross-vault actions.</strong> The first action is single-vault. Multi-vault
+          moves are deferred. Should a Tier 2 multi-vault action be feasible at all, or always
+          Tier 3? Suggest Tier 3 (governance-bearing).</li>
+        <li><strong>Where do new actions come from?</strong> The flow we imagine: a need
+          surfaces (e.g. archive completed commitments), a design exploration proposes the
+          action shape, a normalized spec adds it to the registry. Owner-doc should declare
+          whether registry changes themselves are governance-bearing.</li>
+        <li><strong>Should classifier confidence affect tier?</strong> Currently no — confidence
+          is rendered for transparency but does not gate. If owner-doc wants a low-confidence
+          downgrade, that becomes a step-04 rule.</li>
+        <li><strong>Receipt retention.</strong> How long do action receipts live? Suggest:
+          forever, in vault, as a subordinate artifact. Owner-doc decides.</li>
+      </ol>
+    </section>
+
+    <!-- ============== 11 ============== -->
+    <section class="spec" id="s11">
+      <h2><span class="secnum">11 ·</span>Handoff notes for Claude Code / Codex</h2>
+
+      <h3>Linked issue</h3>
+      <ul>
+        <li><strong>#910 — Tool authority taxonomy.</strong> This package is the first-pass
+          design artifact for that issue.</li>
+      </ul>
+
+      <h3>Likely normalized spec</h3>
+      <ul>
+        <li>New owner-doc: <code>docs/CONCEPTS/VAULT_ACTION_LAYER_CONTRACT.md</code> — defines
+          the 9-step pipeline, the tier taxonomy, the registry contract, the receipt shape.</li>
+        <li>Referenced from <code>INTERACTION_SURFACES_AND_AUTHORITY/</code> and
+          <code>STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md</code>.</li>
+      </ul>
+
+      <h3>Likely follow-on issues</h3>
+      <ul>
+        <li><em>Register the first bounded action.</em> <code>move_inbox_note_to_workbench@v1</code>.
+          Acceptance: full pipeline runs against a fixture vault; eight designed states render
+          from eight fixture inputs; receipts are durable and inspectable.</li>
+        <li><em>Define Tier 4 forbidden list.</em> Acceptance: owner-doc names the explicit
+          forbidden primitives (raw write, raw delete, shell, eval) so the boundary is auditable.</li>
+        <li><em>Define the registry write path.</em> Acceptance: adding a new action requires
+          a PR that lands an entry; the entry declares tier, source/destination domains,
+          allowed types, idempotency key, collision rule, undo strategy.</li>
+        <li><em>Obsidian adapter for <code>move_inbox_note_to_workbench</code>.</em>
+          Acceptance: action runs through the pipeline; Obsidian performs the FS move; receipt
+          referenced from the status doc.</li>
+        <li><em>MCP-server exposure boundary.</em> Acceptance: the MCP server exposes only
+          registry actions by name; raw FS primitives are absent.</li>
+      </ul>
+
+      <h3>What this design must not feed</h3>
+      <ul>
+        <li>A generic "agent tools" library decoupled from the registry.</li>
+        <li>An Obsidian-or-MCP-as-primary-mutation-surface direction.</li>
+        <li>Auto-elevation of an agent's tier at runtime.</li>
+        <li>Silent failure paths.</li>
+      </ul>
+
+      <div class="callout vault">
+        <span class="callout-label">Validation expectation</span>
+        Passing receipt: the pipeline runs end-to-end against fixture inputs for all eight
+        designed states; refusals produce receipts at the refusing step; the Obsidian adapter
+        path runs the full pipeline; the MCP-exposed surface offers only registry names.
+        Receipt id recorded in this package's status field.
+      </div>
+    </section>
+
+  </main>
+</div>
+</body>
+</html>
