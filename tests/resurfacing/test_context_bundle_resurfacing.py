@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -51,6 +51,41 @@ def _item(artifact_id: str, reason: str, source_role: str | None = None) -> Incl
         source_role=source_role,
         provenance=ItemProvenance(origin="vault note"),
     )
+
+
+def test_resurfacing_bundle_surfaces_stale_expiry_state():
+    # Stale bundles must be marked stale — callers must not reuse old evidence
+    # as if it were current. Naive timestamps are assumed UTC.
+    stale_expiry = ExpiryPosture(
+        stale_after=_NOW - timedelta(hours=2),
+        reason="resurfacing snapshot expired",
+    )
+    bundle = _bundle(included=[_item("art_stale", "old note")], expiry=stale_expiry)
+    frame = build_resurfacing_bundle_frame(bundle, why_now="stale context detected", now=_NOW)
+    assert frame.stale is True
+    assert frame.stale_reason == "resurfacing snapshot expired"
+
+    # Naive stale_after is treated as UTC — must not raise TypeError.
+    naive_expiry = ExpiryPosture(
+        stale_after=datetime(2026, 5, 15, 9, 0, 0),  # no tzinfo, 1h before _NOW
+        reason="naive expiry",
+    )
+    naive_bundle = _bundle(included=[_item("art_naive", "old note")], expiry=naive_expiry)
+    naive_frame = build_resurfacing_bundle_frame(
+        naive_bundle, why_now="naive expiry test", now=_NOW
+    )
+    assert naive_frame.stale is True
+
+    # Not-yet-stale bundles must not be flagged stale.
+    fresh_expiry = ExpiryPosture(
+        stale_after=_NOW + timedelta(hours=1),
+        reason="fresh",
+    )
+    fresh_bundle = _bundle(included=[_item("art_fresh", "recent note")], expiry=fresh_expiry)
+    fresh_frame = build_resurfacing_bundle_frame(
+        fresh_bundle, why_now="still current", now=_NOW
+    )
+    assert fresh_frame.stale is False
 
 
 def test_resurfacing_records_context_bundle():

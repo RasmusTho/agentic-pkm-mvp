@@ -33,6 +33,8 @@ class ResurfacingBundleFrame(BaseModel):
     surfaced_items: list[SurfacedItem] = Field(default_factory=list)
     relatedness_signals: list[SurfacedItem] = Field(default_factory=list)
     priority_signals: list[SurfacedItem] = Field(default_factory=list)
+    stale: bool = False
+    stale_reason: Optional[str] = None
     suggestion_only: bool = True
     may_write: bool = False
 
@@ -80,6 +82,17 @@ def build_resurfacing_bundle_frame(
             f"bundle {bundle.id} carries may_write=True; resurfacing is suggestion-only"
         )
 
+    now = now or datetime.now(tz=timezone.utc)
+    stale = False
+    stale_reason: Optional[str] = None
+    if bundle.expiry and bundle.expiry.stale_after is not None:
+        stale_after = bundle.expiry.stale_after
+        if stale_after.tzinfo is None:
+            stale_after = stale_after.replace(tzinfo=timezone.utc)
+        if now >= stale_after:
+            stale = True
+            stale_reason = bundle.expiry.reason
+
     surfaced: list[SurfacedItem] = []
     relatedness: list[SurfacedItem] = []
     priority: list[SurfacedItem] = []
@@ -98,6 +111,8 @@ def build_resurfacing_bundle_frame(
         surfaced_items=surfaced,
         relatedness_signals=relatedness,
         priority_signals=priority,
+        stale=stale,
+        stale_reason=stale_reason,
         suggestion_only=True,
         may_write=False,
     )
