@@ -634,6 +634,8 @@ def _build_watchers_payload(
         }
         if state.last_trace_id:
             payload[spec.name]["last_trace_id"] = state.last_trace_id
+        if state.last_emitted_event_at is not None:
+            payload[spec.name]["last_emitted_event_at"] = state.last_emitted_event_at
     return payload
 
 
@@ -807,6 +809,7 @@ def _emit_panel_events(
         )
         return None
     state.intents_emitted += 1
+    state.last_emitted_event_at = now
     state.record_rate_event(now)
     state.update_file_state(str(rel), mtime=mtime, content_hash=digest, emitted_at=now)
     trace_id = uuid4().hex
@@ -937,6 +940,7 @@ def _emit_changed_entry(
         return None
     state.last_trace_id = trace_id
     state.intents_emitted += 1
+    state.last_emitted_event_at = now
     state.record_rate_event(now)
     state.update_file_state(str(entry.rel_path), mtime=current_mtime, content_hash=current_digest, emitted_at=now)
     if spec.emit_event == PANEL_SCAN_REQUESTED and process_panel_notes_inline:

@@ -12,6 +12,7 @@ from app.observability.status_model import (
     StoreStatus,
     SystemStatus,
     WatcherAutomationStatus,
+    WatcherLifecycleStatus,
 )
 
 
@@ -123,3 +124,83 @@ def test_status_cli_prints_snapshot(monkeypatch):
     assert "last_run_skips: dedup=1" in result.output
     assert "ingest runs by plane:" in result.output
     assert "source: /tmp/outbox.jsonl" in result.output
+
+
+def _minimal_system_status(**overrides) -> SystemStatus:
+    base = dict(
+        timestamp=datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        environment="prod",
+        sot_version="vX",
+        sot_baseline_version="v5.5",
+        sot_forward_line_version="v5.6",
+        sot_label="test",
+        active_features=[],
+        stores=[],
+        ingestion=IngestionStatus(),
+        ask=AskStatus(total_queries_24h=0),
+    )
+    base.update(overrides)
+    return SystemStatus(**base)
+
+
+def test_status_reports_last_panel_run_when_latest_tick_has_zero_candidates(monkeypatch):
+    lifecycle = WatcherLifecycleStatus(
+        panel_changed_total=2162,
+        panel_emitted_total=41,
+        panel_rate_limited_total=2114,
+        last_panel_run_at="2026-05-15T17:49:16Z",
+        last_panel_run_actions_count=2,
+        last_panel_run_executed_count=1,
+        last_panel_run_summary="triggered: promote.evergreen",
+    )
+    automation = WatcherAutomationStatus(
+        last_tick_timestamp="2026-05-15T17:50:00Z",
+        last_tick_panel_candidates=0,
+    )
+    snapshot = _minimal_system_status(
+        watcher_automation=automation,
+        watcher_lifecycle=lifecycle,
+    )
+    monkeypatch.setattr("app.cli.get_system_status", lambda: snapshot)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "Watcher lifecycle:" in result.output
+    assert "last_panel_run:" in result.output
+    assert "2026-05-15T17:49:16Z" in result.output
+    assert "actions=2" in result.output
+    assert "executed=1" in result.output
+
+
+def test_status_distinguishes_zero_action_panel_run_from_no_run(monkeypatch):
+    lifecycle_zero = WatcherLifecycleStatus(
+        panel_changed_total=10,
+        panel_emitted_total=1,
+        panel_rate_limited_total=0,
+        last_panel_run_at="2026-05-15T12:00:00Z",
+        last_panel_run_actions_count=0,
+        last_panel_run_executed_count=0,
+    )
+    snapshot_zero = _minimal_system_status(watcher_lifecycle=lifecycle_zero)
+    monkeypatch.setattr("app.cli.get_system_status", lambda: snapshot_zero)
+
+    runner = CliRunner()
+    result_zero = runner.invoke(cli, ["status"])
+    assert result_zero.exit_code == 0, result_zero.output
+    assert "actions=0" in result_zero.output
+
+    lifecycle_no_run = WatcherLifecycleStatus(
+        panel_changed_total=10,
+        panel_emitted_total=0,
+        panel_rate_limited_total=0,
+        last_panel_run_at=None,
+    )
+    snapshot_no_run = _minimal_system_status(watcher_lifecycle=lifecycle_no_run)
+    monkeypatch.setattr("app.cli.get_system_status", lambda: snapshot_no_run)
+
+    result_no_run = runner.invoke(cli, ["status"])
+    assert result_no_run.exit_code == 0, result_no_run.output
+    assert "last_panel_run: none" in result_no_run.output
+    assert "actions=0" not in result_no_run.output

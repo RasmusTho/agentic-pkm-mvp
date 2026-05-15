@@ -1250,6 +1250,43 @@ def status() -> None:
                 f"writes_blocked={watcher_automation.last_run_skipped_writes_blocked or 0} "
                 f"allowed_actions={watcher_automation.last_run_skipped_allowed_actions or 0}"
             )
+    watcher_lifecycle = getattr(status, "watcher_lifecycle", None)
+    if watcher_lifecycle:
+        click.echo("Watcher lifecycle:")
+        panel_changed = watcher_lifecycle.panel_changed_total
+        panel_emitted = watcher_lifecycle.panel_emitted_total
+        panel_rate_limited = watcher_lifecycle.panel_rate_limited_total
+        if any(v is not None for v in (panel_changed, panel_emitted, panel_rate_limited)):
+            click.echo(
+                "  panel watcher: "
+                f"changed={panel_changed if panel_changed is not None else '-'} "
+                f"emitted={panel_emitted if panel_emitted is not None else '-'} "
+                f"rate_limited={panel_rate_limited if panel_rate_limited is not None else '-'}"
+            )
+            if watcher_lifecycle.panel_last_emitted_event_at:
+                click.echo(f"  panel last_emitted_at: {watcher_lifecycle.panel_last_emitted_event_at}")
+        ingest_changed = watcher_lifecycle.ingest_changed_total
+        ingest_emitted = watcher_lifecycle.ingest_emitted_total
+        ingest_rate_limited = watcher_lifecycle.ingest_rate_limited_total
+        if any(v is not None for v in (ingest_changed, ingest_emitted, ingest_rate_limited)):
+            click.echo(
+                "  ingest watcher: "
+                f"changed={ingest_changed if ingest_changed is not None else '-'} "
+                f"emitted={ingest_emitted if ingest_emitted is not None else '-'} "
+                f"rate_limited={ingest_rate_limited if ingest_rate_limited is not None else '-'}"
+            )
+        if watcher_lifecycle.last_panel_run_at is not None:
+            actions_count = watcher_lifecycle.last_panel_run_actions_count
+            executed_count = watcher_lifecycle.last_panel_run_executed_count
+            click.echo(
+                f"  last_panel_run: at={watcher_lifecycle.last_panel_run_at} "
+                f"actions={actions_count if actions_count is not None else '-'} "
+                f"executed={executed_count if executed_count is not None else '-'}"
+            )
+            if watcher_lifecycle.last_panel_run_summary:
+                click.echo(f"  last_panel_run_summary: {watcher_lifecycle.last_panel_run_summary}")
+        else:
+            click.echo("  last_panel_run: none")
     click.echo("ASK:")
     avg_latency = (
         f"{status.ask.avg_latency_ms_24h:.0f} ms" if status.ask.avg_latency_ms_24h is not None else "-"
