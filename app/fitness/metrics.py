@@ -6,7 +6,7 @@ from statistics import fmean
 from typing import Dict, List, Sequence
 from uuid import uuid4
 
-from app.components.llm.fabric import LLMTaskIntent, get_embeddings_client
+from app.components.embeddings import get_embedding_client
 from app.retrieval.hybrid import MemoryHybridStore, hybrid_search, get_store
 from app.stores.memory import MemoryVectorIndex
 
@@ -98,7 +98,9 @@ def _process_outbox_event(
     *,
     vector_index: MemoryVectorIndex,
 ) -> None:
-    client = get_embeddings_client(LLMTaskIntent(task_kind="embed", strict_identity_required=True))
+    # Use deterministic embeddings for CI-stable latency probes and to avoid
+    # provider/network variance in fitness checks.
+    client = get_embedding_client(profile="deterministic")
     try:
         vec = client.embed_text(payload["text"])
     except Exception:

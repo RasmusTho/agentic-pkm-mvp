@@ -28,6 +28,7 @@ from .hotreload import init_hot_reload
 _LOCK = threading.RLock()
 _CURRENT: SettingsBundle | None = None
 _SUBSCRIBERS: List[Callable[[SettingsBundle], None]] = []
+_DEFAULT_RUNTIME = RUNTIME
 
 AGENT_MODEL_MAP: Dict[str, Any] = {
     "classifier": ClassifierSettings,
@@ -84,10 +85,12 @@ def _build_bundle() -> SettingsBundle:
         except Exception:
             instance_settings = InstanceSettings()
 
-    # Resolve runtime environment from process env/profile mapping.
-    # Environment variables are runtime controls and intentionally override
-    # config-file defaults when present.
-    instance_settings.environment = active_environment(dict(os.environ))  # type: ignore
+    # Runtime env/profile controls should override the repository-default
+    # compiled runtime bundle. For non-default runtime directories (for
+    # example tests using temporary runtime roots), keep explicit
+    # instance.yaml environment values.
+    if RUNTIME == _DEFAULT_RUNTIME or not instance_yaml.get("environment"):
+        instance_settings.environment = active_environment(dict(os.environ))  # type: ignore
 
     bundle = SettingsBundle(
         global_=GlobalSettings(**global_yaml),
