@@ -84,8 +84,11 @@ order. Skipped companions are logged; they are never silently dropped.
 
 Settings precedence: vault `@Settings/watchers.md` companion section → env vars → defaults.
 
-When a companion is not created, the ingest fingerprint stored in the object store is used as the
-fallback skip-check signal so unchanged content is not re-ingested on subsequent runs.
+When a companion is not created for a **permanently ineligible** note (`system_path` or
+`placeholder_title`), the ingest fingerprint stored in the object store is used as the fallback
+skip-check signal so unchanged content is not re-ingested on subsequent runs. Transiently ineligible
+notes (`cooldown_active`) are not skipped via this fallback — the ingest pipeline retries them on
+each run until the cooldown expires and companion creation succeeds.
 ## Minimal field set
 
 The companion note must carry a bounded field set sufficient for continuity and repair.
