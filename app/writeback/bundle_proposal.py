@@ -6,6 +6,7 @@ log remain distinct states — the bundle never collapses them into one step.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -34,13 +35,16 @@ def build_write_proposal_from_bundle(
     *,
     affected_artifacts: list[str],
     proposal_basis: str,
+    now: datetime | None = None,
 ) -> WriteProposal:
     """Create a governed write proposal backed by a ContextBundle.
 
     Requires ``may_propose=True`` and rejects ``may_write=True`` — bundle
     evidence may justify a proposal but must not itself authorize the apply
-    step. The governed write boundary (write guards, APPLY rules, trust
-    semantics) remains upstream of this surface.
+    step. Also rejects expired bundles — stale retrieval snapshots must not
+    silently continue to justify new write proposals.
+    The governed write boundary (write guards, APPLY rules, trust semantics)
+    remains upstream of this surface.
     """
     if not bundle.authority.may_propose:
         raise BundleProposalViolation(
@@ -52,6 +56,16 @@ def build_write_proposal_from_bundle(
             f"bundle {bundle.id} carries may_write=True; "
             "bundle authority must not bypass write guards — use governed write surface instead"
         )
+    if bundle.expiry and bundle.expiry.stale_after is not None:
+        _now = now or datetime.now(tz=timezone.utc)
+        stale_after = bundle.expiry.stale_after
+        if stale_after.tzinfo is None:
+            stale_after = stale_after.replace(tzinfo=timezone.utc)
+        if _now >= stale_after:
+            raise BundleProposalViolation(
+                f"bundle {bundle.id} is expired (stale_after={stale_after.isoformat()}); "
+                "expired bundles must not justify new write proposals"
+            )
 
     return WriteProposal(
         bundle_id=bundle.id,

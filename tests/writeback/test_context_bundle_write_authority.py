@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -23,7 +23,11 @@ from app.writeback.bundle_proposal import (
 _NOW = datetime(2026, 5, 15, 11, 0, 0, tzinfo=timezone.utc)
 
 
-def _bundle(*, authority: AuthorityFlags | None = None) -> ContextBundle:
+def _bundle(
+    *,
+    authority: AuthorityFlags | None = None,
+    expiry: ExpiryPosture | None = None,
+) -> ContextBundle:
     return ContextBundle(
         id="cb_write_001",
         created_at=_NOW,
@@ -39,7 +43,7 @@ def _bundle(*, authority: AuthorityFlags | None = None) -> ContextBundle:
         ],
         excluded=[],
         authority=authority or AuthorityFlags(may_answer=True, may_propose=True),
-        expiry=ExpiryPosture(),
+        expiry=expiry or ExpiryPosture(),
     )
 
 
@@ -115,3 +119,48 @@ def test_context_bundle_cannot_bypass_write_guards():
             affected_artifacts=["art_a"],
             proposal_basis="should also fail",
         )
+
+
+def test_expired_bundle_cannot_justify_write_proposal():
+    # Expired bundles must not silently continue to justify new write proposals.
+    # Stale retrieval snapshots lose proposal authority — callers must re-retrieve.
+    expired_expiry = ExpiryPosture(
+        stale_after=_NOW - timedelta(hours=1),
+        reason="retrieval snapshot expired",
+    )
+    expired_bundle = _bundle(expiry=expired_expiry)
+    with pytest.raises(BundleProposalViolation, match="expired"):
+        build_write_proposal_from_bundle(
+            expired_bundle,
+            affected_artifacts=["art_a"],
+            proposal_basis="should fail — stale snapshot",
+            now=_NOW,
+        )
+
+    # Naive stale_after is treated as UTC — must not raise TypeError.
+    naive_expiry = ExpiryPosture(
+        stale_after=datetime(2026, 5, 15, 9, 0, 0),  # no tzinfo, 2h before _NOW
+        reason="naive expiry",
+    )
+    naive_bundle = _bundle(expiry=naive_expiry)
+    with pytest.raises(BundleProposalViolation, match="expired"):
+        build_write_proposal_from_bundle(
+            naive_bundle,
+            affected_artifacts=["art_a"],
+            proposal_basis="should fail — naive stale snapshot",
+            now=_NOW,
+        )
+
+    # Not-yet-expired bundles must still be accepted.
+    fresh_expiry = ExpiryPosture(
+        stale_after=_NOW + timedelta(hours=1),
+        reason="still fresh",
+    )
+    fresh_bundle = _bundle(expiry=fresh_expiry)
+    proposal = build_write_proposal_from_bundle(
+        fresh_bundle,
+        affected_artifacts=["art_a"],
+        proposal_basis="valid — bundle still fresh",
+        now=_NOW,
+    )
+    assert proposal.may_write is False
