@@ -1,0 +1,1343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Context Bundle Inspector — Yggdrasil Companion UI</title>
+<link rel="stylesheet" href="./colors_and_type.css" />
+<link rel="stylesheet" href="./spec_chrome.css" />
+<style>
+  /* ============================================================
+     LOCAL — bundle inspector layout
+     ============================================================ */
+  .inspector {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    margin: var(--space-3) 0 var(--space-6);
+    overflow: hidden;
+  }
+  .insp-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 10px 16px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+  .insp-bar .id { color: var(--cyan); }
+  .insp-bar .right { margin-left: auto; display: flex; gap: var(--space-3); align-items: center; }
+
+  .insp-body {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    min-height: 560px;
+  }
+  .insp-main {
+    padding: var(--space-5) var(--space-6);
+    overflow-y: auto;
+    max-height: 680px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+  .insp-aside {
+    border-left: 1px solid var(--border);
+    background: var(--bg-base);
+    padding: var(--space-4) var(--space-5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    overflow-y: auto;
+    max-height: 680px;
+  }
+
+  /* bundle header */
+  .b-head {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .b-head .kicker {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--cyan);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+  .b-head h3 {
+    font-family: var(--font-display);
+    font-size: var(--text-2xl);
+    font-weight: var(--weight-regular);
+    line-height: 1.1;
+    color: var(--fg-1);
+    margin: 0;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .b-head .trig {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--fg-2);
+  }
+  .b-head .trig .src { color: var(--accent); }
+
+  /* authority chips */
+  .auth-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .auth {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--bg-raised);
+    color: var(--fg-3);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .auth.yes { color: var(--vault); border-color: rgba(57,232,125,0.35); background: rgba(57,232,125,0.04); }
+  .auth.no  { color: var(--destructive); border-color: rgba(255,61,61,0.35); background: rgba(255,61,61,0.04); }
+  .auth.maybe { color: var(--amber); border-color: rgba(240,144,48,0.35); background: rgba(240,144,48,0.04); }
+  .auth .mk { font-family: var(--font-mono); font-weight: var(--weight-medium); }
+
+  /* artifact list */
+  .art-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .art {
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--cyan);
+    background: var(--bg-base);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    column-gap: var(--space-3);
+    row-gap: 4px;
+  }
+  .art.excluded {
+    border-left-color: var(--fg-3);
+    opacity: 0.7;
+    background: var(--bg-raised);
+  }
+  .art.evidence  { border-left-color: var(--cyan); }
+  .art.context   { border-left-color: var(--agent); }
+  .art.memory    { border-left-color: var(--accent); }
+  .art.companion { border-left-color: var(--vault); }
+  .art .row1 { display: flex; align-items: baseline; gap: 8px; }
+  .art .row1 .ttl {
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    font-weight: var(--weight-medium);
+  }
+  .art .row1 .path {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+  }
+  .art .reason {
+    grid-column: 1 / 2;
+    font-size: var(--text-sm);
+    color: var(--fg-2);
+    line-height: 1.45;
+  }
+  .art .meta {
+    grid-column: 2 / 3;
+    grid-row: 1 / 3;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    text-align: right;
+  }
+  .art .meta .score { color: var(--cyan); }
+  .art .meta .trust { color: var(--vault); }
+  .art .meta .trust.inferred { color: var(--amber); }
+  .art .meta .trust.untrusted { color: var(--destructive); }
+  .art .meta .role { color: var(--fg-2); }
+  .art .meta .role.evidence  { color: var(--cyan); }
+  .art .meta .role.context   { color: var(--agent); }
+  .art .meta .role.memory    { color: var(--accent); }
+  .art .meta .role.companion { color: var(--vault); }
+
+  /* excluded toggle */
+  .excl-block {
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+  }
+  .excl-block summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-2);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+  .excl-block summary::before {
+    content: '▸';
+    color: var(--fg-3);
+    transition: transform var(--duration-fast) var(--ease);
+  }
+  .excl-block[open] summary::before { transform: rotate(90deg); }
+  .excl-block .excl-list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+
+  /* section heads inside main */
+  .insp-sec h4 {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-2);
+    margin-bottom: var(--space-3);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .insp-sec h4 .count {
+    font-family: var(--font-mono);
+    color: var(--fg-3);
+    font-size: 10px;
+  }
+  .insp-sec h4 .badge {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wide);
+    color: var(--cyan);
+    text-transform: uppercase;
+  }
+  .insp-sec h4 .badge.amber { color: var(--amber); }
+  .insp-sec h4 .badge.gold  { color: var(--accent); }
+  .insp-sec h4 .badge.dim   { color: var(--fg-3); }
+
+  /* aside blocks */
+  .aside-h {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-3);
+    margin-bottom: 8px;
+  }
+  .aside-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-2);
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+  }
+  .aside-row:last-child { border-bottom: none; }
+  .aside-row .v { color: var(--fg-1); text-align: right; }
+  .aside-row .v.cyan  { color: var(--cyan); }
+  .aside-row .v.gold  { color: var(--accent); }
+  .aside-row .v.vault { color: var(--vault); }
+  .aside-row .v.amber { color: var(--amber); }
+  .aside-row .v.dang  { color: var(--destructive); }
+
+  .receipt-list { display: flex; flex-direction: column; gap: 6px; }
+
+  /* status banner above bundle */
+  .b-status {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-base);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-2);
+    letter-spacing: var(--tracking-wide);
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .b-status.stale  { color: var(--amber); background: rgba(240,144,48,0.04); border-bottom-color: rgba(240,144,48,0.25); }
+  .b-status.degraded { color: var(--accent); background: rgba(212,168,67,0.04); border-bottom-color: rgba(212,168,67,0.25); }
+  .b-status.blocked  { color: var(--destructive); background: rgba(255,61,61,0.04); border-bottom-color: rgba(255,61,61,0.25); }
+  .b-status .led {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--amber);
+    box-shadow: 0 0 6px var(--amber);
+  }
+  .b-status.degraded .led { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .b-status.blocked  .led { background: var(--destructive); box-shadow: 0 0 6px var(--destructive); }
+
+  /* gallery */
+  .gallery.bundle-gallery {
+    grid-template-columns: 1fr 1fr;
+  }
+  .bm {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .bm-bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 12px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+  .bm-bar .id { color: var(--cyan); }
+  .bm-body {
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .bm-body h5 {
+    font-family: var(--font-display);
+    font-size: var(--text-md);
+    color: var(--fg-1);
+    font-weight: var(--weight-regular);
+    line-height: 1.2;
+    margin: 0;
+  }
+  .bm-body .meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+  }
+  .bm-body .auth-row { margin-top: 2px; }
+  .bm-body .auth { padding: 2px 8px; font-size: 10px; }
+  .bm-body .narrative {
+    font-size: var(--text-sm);
+    color: var(--fg-2);
+    line-height: 1.45;
+  }
+
+  /* portrait/mobile mini */
+  .portrait {
+    width: 360px;
+    margin: var(--space-3) auto var(--space-5);
+    border: 1px solid var(--border-strong);
+    border-radius: 32px;
+    background: var(--bg-base);
+    overflow: hidden;
+    padding: 28px 14px 18px;
+    box-shadow: var(--shadow-lg);
+  }
+  .portrait .bar-port {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    margin-bottom: var(--space-3);
+  }
+  .portrait .ph-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .portrait .ph-kicker {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--cyan);
+  }
+  .portrait h4 {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    color: var(--fg-1);
+    font-weight: var(--weight-regular);
+    line-height: 1.15;
+    margin: 0;
+  }
+  .portrait .ph-fold {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-2);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+  }
+  .portrait .ph-fold .v { color: var(--fg-1); }
+  .portrait .ph-art {
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--cyan);
+    background: var(--bg-base);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    font-size: var(--text-xs);
+    color: var(--fg-1);
+    line-height: 1.45;
+  }
+  .portrait .ph-art .reason { color: var(--fg-2); font-size: 11px; margin-top: 4px; }
+
+  @media (max-width: 900px) {
+    .insp-body { grid-template-columns: 1fr; }
+    .insp-aside { border-left: none; border-top: 1px solid var(--border); max-height: none; }
+    .gallery.bundle-gallery { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ============================ TOC ============================ -->
+  <nav class="toc" aria-label="Section index">
+    <div class="toc-label">Sections</div>
+    <ol>
+      <li><a href="#s1"><span class="toc-num">01</span>Context &amp; boundary</a></li>
+      <li><a href="#s2"><span class="toc-num">02</span>Field model</a></li>
+      <li><a href="#s3"><span class="toc-num">03</span>Inspector prototype</a></li>
+      <li><a href="#s4"><span class="toc-num">04</span>Candidates · compact · authority</a></li>
+      <li><a href="#s5"><span class="toc-num">05</span>Narrow / portrait layout</a></li>
+      <li><a href="#s6"><span class="toc-num">06</span>State gallery</a></li>
+      <li><a href="#s7"><span class="toc-num">07</span>Edge states</a></li>
+      <li><a href="#s8"><span class="toc-num">08</span>Implementation contract</a></li>
+      <li><a href="#s9"><span class="toc-num">09</span>Authority boundaries</a></li>
+      <li><a href="#s10"><span class="toc-num">10</span>Open questions</a></li>
+      <li><a href="#s11"><span class="toc-num">11</span>Handoff to Code/Codex</a></li>
+    </ol>
+  </nav>
+
+  <!-- ============================ MAIN ============================ -->
+  <main>
+    <header class="doc-header">
+      <div class="doc-eyebrow">Companion UI · Design Handoff · Inspector surface</div>
+      <h1 class="doc-title">Context Bundle Inspector</h1>
+      <p class="doc-lede">
+        A reviewable surface for the bridge object that sits between retrieval, orientation,
+        resurfacing, and write proposals. Shows what was selected, why it was selected, what
+        was excluded, what authority the bundle carries, and what receipts attach to it. The
+        bundle is the artifact; the inspector exposes it. Semantic similarity is not authority.
+      </p>
+      <div class="doc-meta">
+        <span><strong>Surface:</strong> CONTEXT_BUNDLE_INSPECTOR</span>
+        <span><strong>Owner-doc:</strong> CONTEXT_BUNDLE_CONTRACT</span>
+        <span><strong>Authority:</strong> Visual guidance only — bundle schema not owned here</span>
+        <span><strong>Status:</strong> Design handoff · v1 · 2026-05-14</span>
+      </div>
+    </header>
+
+    <!-- ============== 01 ============== -->
+    <section class="spec" id="s1">
+      <h2><span class="secnum">01 ·</span>Context &amp; boundary</h2>
+      <p class="lede">What the inspector is for, and what it must never become.</p>
+
+      <p>
+        The context bundle contract names a bridge object: an inspectable selection of
+        artifacts, snippets, reasons, exclusions, and authority flags, attached to a single
+        trigger (retrieval, orientation, resurfacing, or action). The inspector is the human's
+        review surface for that object. It exists so the operator can answer "<em>why</em> did
+        the system use these notes before answering, reorienting, resurfacing, or proposing?"
+      </p>
+
+      <h3>Design posture</h3>
+      <ul>
+        <li><strong>Inspect, not author.</strong> The inspector reads bundles. It does not
+          re-rank, re-classify, or rebuild them.</li>
+        <li><strong>Progressive disclosure.</strong> Excluded items, low-trust items, and
+          receipt history are collapsed by default. Their <em>presence</em> is always visible;
+          their <em>contents</em> are one click away.</li>
+        <li><strong>Authority is a first-class header.</strong> The five flags
+          (<code>may_answer</code>, <code>may_orient</code>, <code>may_resurface</code>,
+          <code>may_propose</code>, <code>may_write</code>) sit at the top of the bundle, not
+          buried in metadata.</li>
+        <li><strong>Exclusions are visible.</strong> If exclusion affects interpretation, the
+          excluded item is shown with its reason. The inspector exposes the negative space.</li>
+      </ul>
+
+      <div class="callout invariant">
+        <span class="callout-label">Floor invariant · Retrieval is not authority</span>
+        A bundle may support an answer without supporting writeback. The inspector renders the
+        bundle's declared authority flags; it never elevates them. If the bundle says
+        <code>may_write: false</code>, the inspector's writeback affordance is absent.
+        Re-classification in the UI is forbidden.
+      </div>
+
+      <h3>What the inspector is not</h3>
+      <ul>
+        <li>Not a search UI. Retrieval lives upstream; the inspector explains the result, it
+          does not run new queries.</li>
+        <li>Not a memory surface. Memory candidates have their own queue (Exploration 4).
+          The inspector may <em>reference</em> memory items the bundle includes, never promote
+          them.</li>
+        <li>Not a write surface. Where a bundle has <code>may_write: true</code>, the apply
+          affordance lives in the proposing surface (Panel, Canvas), not here.</li>
+        <li>Not a debugger. The inspector is the human's review surface, not a developer's
+          trace tool.</li>
+      </ul>
+    </section>
+
+    <!-- ============== 02 ============== -->
+    <section class="spec" id="s2">
+      <h2><span class="secnum">02 ·</span>Field model</h2>
+      <p class="lede">
+        Following <code>CONTEXT_BUNDLE_CONTRACT.md</code>. Required fields the inspector
+        always renders; optional fields it renders when present. Field names are illustrative;
+        owner-doc owns the schema.
+      </p>
+
+      <h3>Required surface</h3>
+      <table class="spec">
+        <thead><tr><th>Field</th><th>Display</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><code>id</code></td><td>Top bar, monospace, copyable</td><td>Permalink anchor for receipts and audit trails.</td></tr>
+          <tr><td><code>created_at</code></td><td>Top bar, relative + absolute</td><td>Drives staleness banner.</td></tr>
+          <tr><td><code>trigger</code></td><td>Bundle header sub-line · "Retrieval from &lt;source&gt;"</td><td>Source path is clickable to the originating surface.</td></tr>
+          <tr><td><code>intended_use</code></td><td>Bundle header pill row</td><td>One pill per use; uses we do not have light up; others stay dim.</td></tr>
+          <tr><td><code>scope</code></td><td>Aside · sphere / project / vaults</td><td>Aside, because scope changes rarely affect interpretation.</td></tr>
+          <tr><td><code>included[]</code></td><td>Main column · artifact list</td><td>One card per artifact; role coloured left border.</td></tr>
+          <tr><td><code>excluded[]</code></td><td>Main column · collapsed disclosure</td><td>Count always visible. List collapsed unless exclusion affects interpretation.</td></tr>
+          <tr><td><code>authority</code></td><td>Bundle header · five flag chips</td><td><span class="auth yes">yes</span> / <span class="auth no">no</span> / <span class="auth maybe">conditional</span>.</td></tr>
+          <tr><td><code>expiry</code></td><td>Status banner above bundle when within / past stale window</td><td>Status banner; copy explains <em>why</em> stale.</td></tr>
+          <tr><td><code>receipts</code></td><td>Aside · receipt list, linked</td><td>Retrieval / orientation / write-proposal receipts grouped.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Optional surface (rendered when present)</h3>
+      <table class="spec">
+        <thead><tr><th>Field</th><th>Display</th></tr></thead>
+        <tbody>
+          <tr><td>Human-readable summary</td><td>One-paragraph block under bundle header</td></tr>
+          <tr><td>Selection rationale</td><td>Italic line under the included list header</td></tr>
+          <tr><td>Dominant source role</td><td>Aside · "Dominant role · evidence"</td></tr>
+          <tr><td>Trust posture summary</td><td>Aside · trust mix bar (reviewed / inferred / untrusted)</td></tr>
+          <tr><td>Freshness note</td><td>Aside · "Indexed 4m ago"</td></tr>
+          <tr><td>Downstream write-proposal link</td><td>Aside · receipt-pill linking the proposal</td></tr>
+          <tr><td>Companion UI reference</td><td>Aside · note path link</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Per-artifact fields rendered in each card</h3>
+      <ul>
+        <li><strong>Title + path</strong> — vault path is monospace, dimmer.</li>
+        <li><strong>Source role</strong> — evidence / context / memory / companion · drives left border colour.</li>
+        <li><strong>Trust state</strong> — reviewed / inferred / untrusted · mono caption.</li>
+        <li><strong>Review state</strong> — confirmed / pending / rejected.</li>
+        <li><strong>Selection rationale / inclusion reason</strong> — one sentence, plain language.</li>
+        <li><strong>Score</strong> — when retrieval contributed; rendered as a small mono value, never a bar.</li>
+      </ul>
+    </section>
+
+    <!-- ============== 03 ============== -->
+    <section class="spec" id="s3">
+      <h2><span class="secnum">03 ·</span>Inspector prototype <span class="chip design" style="font-size:10px; margin-left:8px">retrieval bundle</span></h2>
+      <p class="lede">
+        Default state. A retrieval bundle that supports answering and proposing, but not
+        writing. Three included artifacts, two excluded.
+      </p>
+
+      <div class="inspector" aria-label="Context Bundle Inspector — retrieval bundle cb-2026-05-14-001">
+        <!-- top bar -->
+        <div class="insp-bar">
+          <span>bundle</span>
+          <span class="id">cb-2026-05-14-001</span>
+          <span>·</span>
+          <span>retrieval · companion-ui · Hugin turn 14</span>
+          <span class="right">
+            <span class="receipt queued"><span class="recdot"></span>linked to turn t-14</span>
+            <button class="btn ghost" type="button" data-intent="bundle.copy-id">Copy id</button>
+          </span>
+        </div>
+
+        <!-- status banner: fresh -->
+        <div class="b-status">
+          <span class="led" style="background:var(--vault); box-shadow:0 0 6px var(--vault)"></span>
+          fresh · stale after 12:00 · 4 minutes left
+        </div>
+
+        <div class="insp-body">
+          <!-- main column -->
+          <section class="insp-main">
+            <!-- bundle head -->
+            <header class="b-head">
+              <div class="kicker">Bundle · retrieval</div>
+              <h3>Re-ranking the canvas suggestion classifier</h3>
+              <div class="trig">trigger · retrieval · <span class="src">companion-ui / hugin / turn 14</span></div>
+              <div class="auth-row" aria-label="Authority flags">
+                <span class="auth yes"><span class="mk">✓</span>may_answer</span>
+                <span class="auth yes"><span class="mk">✓</span>may_orient</span>
+                <span class="auth yes"><span class="mk">✓</span>may_resurface</span>
+                <span class="auth maybe"><span class="mk">~</span>may_propose · conditional</span>
+                <span class="auth no"><span class="mk">✗</span>may_write</span>
+              </div>
+              <p style="font-size:var(--text-sm); color:var(--fg-2); margin:8px 0 0; max-width:60ch; line-height:1.5;">
+                Selected to support an answer about the classifier's body vs governance split.
+                Three artifacts from the canvas suggestion handoff and the interaction-surfaces
+                docs. Two artifacts excluded — one out-of-scope, one too stale.
+              </p>
+            </header>
+
+            <!-- included -->
+            <div class="insp-sec">
+              <h4>Included <span class="count">· 3</span> <span class="badge">role · evidence (dominant)</span></h4>
+              <div class="art-list">
+                <div class="art evidence">
+                  <div class="row1">
+                    <span class="ttl">Canvas Suggestion Flow §06</span>
+                    <span class="path">design_handoff/2026-05-11/…</span>
+                  </div>
+                  <p class="reason">Direct evidence for the classifier's split between body-edit and governance lanes — owner-doc citation for the answer.</p>
+                  <div class="meta">
+                    <span class="role evidence">evidence</span>
+                    <span class="trust">reviewed</span>
+                    <span class="score">score · 0.93</span>
+                  </div>
+                </div>
+                <div class="art evidence">
+                  <div class="row1">
+                    <span class="ttl">INTERACTION_SURFACES_AND_AUTHORITY · DEFINE_CANVAS_COEDITING_MODEL</span>
+                    <span class="path">docs/INTERACTION_SURFACES…</span>
+                  </div>
+                  <p class="reason">Authority contract for canvas co-editing; relied on for the "server is the classifier" rule the answer cites.</p>
+                  <div class="meta">
+                    <span class="role evidence">evidence</span>
+                    <span class="trust">reviewed</span>
+                    <span class="score">score · 0.88</span>
+                  </div>
+                </div>
+                <div class="art context">
+                  <div class="row1">
+                    <span class="ttl">CONTEXT_BUNDLE_CONTRACT · §Exclusion tracking</span>
+                    <span class="path">docs/CONCEPTS/…</span>
+                  </div>
+                  <p class="reason">Background context — why exclusions belong in this bundle's visible surface.</p>
+                  <div class="meta">
+                    <span class="role context">context</span>
+                    <span class="trust">reviewed</span>
+                    <span class="score">score · 0.71</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- excluded -->
+            <div class="insp-sec">
+              <h4>Excluded <span class="count">· 2</span> <span class="badge amber">visible · exclusion affects interpretation</span></h4>
+              <details class="excl-block" open>
+                <summary>Show excluded artifacts</summary>
+                <div class="excl-list">
+                  <div class="art excluded">
+                    <div class="row1">
+                      <span class="ttl">PanelAgent — current behavior</span>
+                      <span class="path">docs/PANEL_AGENT.md</span>
+                    </div>
+                    <p class="reason">Excluded — out of scope for the active sphere. The classifier in question is Canvas-side; PanelAgent's classifier is separate.</p>
+                    <div class="meta">
+                      <span class="role">excluded</span>
+                      <span class="trust inferred">scope · sphere mismatch</span>
+                    </div>
+                  </div>
+                  <div class="art excluded">
+                    <div class="row1">
+                      <span class="ttl">Converse v0 wireframes (deprecated)</span>
+                      <span class="path">design_handoff/2026-05-03-converse/</span>
+                    </div>
+                    <p class="reason">Excluded — superseded by Canvas Suggestion Flow v1. Included only as historical context.</p>
+                    <div class="meta">
+                      <span class="role">excluded</span>
+                      <span class="trust inferred">stale · superseded</span>
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </div>
+
+            <!-- rationale -->
+            <div class="insp-sec">
+              <h4>Selection rationale</h4>
+              <p style="font-size:var(--text-sm); color:var(--fg-2); margin:0; line-height:1.55; max-width:60ch;">
+                The bundle prioritized owner-doc citations (canvas + authority) over implementation
+                artifacts (PanelAgent, Converse) because the question is about the contract, not
+                the runtime. Trust state is uniformly <em>reviewed</em>; no inferred or
+                untrusted material was included. Exclusions are visible because they change the
+                interpretation: the operator should see that PanelAgent was considered and
+                deliberately dropped.
+              </p>
+            </div>
+          </section>
+
+          <!-- aside -->
+          <aside class="insp-aside" aria-label="Bundle metadata, scope, receipts">
+            <div>
+              <div class="aside-h">Scope</div>
+              <div class="aside-row"><span>sphere</span><span class="v">work</span></div>
+              <div class="aside-row"><span>project</span><span class="v">agentic-pkm-mvp</span></div>
+              <div class="aside-row"><span>vault</span><span class="v">main</span></div>
+            </div>
+
+            <div>
+              <div class="aside-h">Trust posture</div>
+              <div class="aside-row"><span>reviewed</span><span class="v vault">3 / 3</span></div>
+              <div class="aside-row"><span>inferred</span><span class="v">0</span></div>
+              <div class="aside-row"><span>untrusted</span><span class="v">0</span></div>
+              <div class="aside-row"><span>dominant role</span><span class="v cyan">evidence</span></div>
+            </div>
+
+            <div>
+              <div class="aside-h">Freshness</div>
+              <div class="aside-row"><span>created</span><span class="v">11:56</span></div>
+              <div class="aside-row"><span>indexed</span><span class="v">4m ago</span></div>
+              <div class="aside-row"><span>stale after</span><span class="v amber">12:00</span></div>
+              <div class="aside-row"><span>why</span><span class="v" style="max-width:18ch">selection tied to a transient retrieval snapshot</span></div>
+            </div>
+
+            <div>
+              <div class="aside-h">Receipts</div>
+              <div class="receipt-list">
+                <span class="receipt"><span class="recdot" style="background:var(--cyan); box-shadow:0 0 6px var(--cyan)"></span>retrieval · r-0481</span>
+                <span class="receipt"><span class="recdot" style="background:var(--cyan); box-shadow:0 0 6px var(--cyan)"></span>orientation · r-0482</span>
+                <span class="receipt"><span class="recdot" style="background:var(--fg-3)"></span>write proposal · none</span>
+              </div>
+            </div>
+
+            <div>
+              <div class="aside-h">Companion reference</div>
+              <div class="aside-row"><span>session note</span><span class="v cyan">.chats/canvas-suggestion-flow/2026-05-14-1156.md</span></div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============== 04 — REFINEMENT v2 — candidates vs selected · compact mode · similarity≠authority ============== -->
+    <section class="spec" id="s4">
+      <h2><span class="secnum">04 ·</span>Ranked candidates · compact mode · similarity is not authority</h2>
+      <p class="lede">
+        Three refinements that make the inspector's contract visually unambiguous:
+        (a) ranked candidates and selected context are not the same picture,
+        (b) provenance has a compact and an expanded view,
+        (c) semantic similarity score is rendered — but score never grants authority.
+      </p>
+
+      <h3>Ranked candidates → selected context</h3>
+      <p>
+        Retrieval returns a list of <em>candidates</em>. Selection produces the bundle's
+        <em>included</em> + <em>excluded</em> sets. The inspector renders the candidate list
+        as a faded ranked column on the left of the included list — visually subordinate, never
+        the primary surface — so the operator can see what was considered as well as what was
+        chosen.
+      </p>
+
+      <div style="display:grid; grid-template-columns: 280px 1fr; gap: var(--space-4); border: 1px solid var(--border); background: var(--bg-surface); border-radius: var(--radius-md); padding: var(--space-4); margin: var(--space-3) 0 var(--space-5);">
+        <!-- ranked candidates -->
+        <aside style="display:flex; flex-direction:column; gap:6px;" aria-label="Ranked candidates from retrieval">
+          <div style="font-family:var(--font-mono); font-size:10px; color:var(--fg-3); letter-spacing:var(--tracking-wider); text-transform:uppercase;">Retrieval candidates <span style="color:var(--fg-2);">· 8</span></div>
+          <div style="display:flex; align-items:center; gap:8px; padding:6px 8px; border-left:2px solid var(--cyan); background:var(--bg-base); border-radius:var(--radius-sm); font-size:var(--text-xs);">
+            <span style="font-family:var(--font-mono); color:var(--cyan);">0.93</span>
+            <span style="color:var(--fg-1); flex:1;">Canvas Suggestion Flow §06</span>
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--vault);">selected</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; padding:6px 8px; border-left:2px solid var(--cyan); background:var(--bg-base); border-radius:var(--radius-sm); font-size:var(--text-xs);">
+            <span style="font-family:var(--font-mono); color:var(--cyan);">0.88</span>
+            <span style="color:var(--fg-1); flex:1;">DEFINE_CANVAS_COEDITING…</span>
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--vault);">selected</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; padding:6px 8px; border-left:2px solid var(--fg-3); background:var(--bg-base); border-radius:var(--radius-sm); font-size:var(--text-xs); opacity:0.65;">
+            <span style="font-family:var(--font-mono); color:var(--fg-2);">0.81</span>
+            <span style="color:var(--fg-2); flex:1;">PanelAgent doc</span>
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--amber);">excluded</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; padding:6px 8px; border-left:2px solid var(--agent); background:var(--bg-base); border-radius:var(--radius-sm); font-size:var(--text-xs);">
+            <span style="font-family:var(--font-mono); color:var(--agent);">0.71</span>
+            <span style="color:var(--fg-1); flex:1;">CONTEXT_BUNDLE_CONTRACT §Excl…</span>
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--vault);">selected</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; padding:6px 8px; border-left:2px solid var(--fg-3); background:var(--bg-base); border-radius:var(--radius-sm); font-size:var(--text-xs); opacity:0.45;">
+            <span style="font-family:var(--font-mono); color:var(--fg-3);">0.64</span>
+            <span style="color:var(--fg-3); flex:1;">Converse v0 wireframes</span>
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--amber);">excluded</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; padding:6px 8px; border-left:2px solid var(--fg-3); background:var(--bg-base); border-radius:var(--radius-sm); font-size:var(--text-xs); opacity:0.35;">
+            <span style="font-family:var(--font-mono); color:var(--fg-3);">0.52</span>
+            <span style="color:var(--fg-3); flex:1;">RESURFACING_HEURISTICS</span>
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--fg-3);">below floor</span>
+          </div>
+          <div style="font-family:var(--font-mono); font-size:10px; color:var(--fg-3); padding:4px 8px;">+ 2 below floor (score &lt; 0.5)</div>
+        </aside>
+
+        <!-- selected context (summary card) -->
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <div style="font-family:var(--font-mono); font-size:10px; color:var(--cyan); letter-spacing:var(--tracking-wider); text-transform:uppercase;">Selected context (the bundle)</div>
+          <p style="font-size:var(--text-sm); color:var(--fg-2); margin:0; max-width:48ch; line-height:1.5;">
+            The bundle includes <strong style="color:var(--fg-1);">3 of 8</strong> candidates.
+            Two were excluded for reasons the operator must see (PanelAgent — sphere mismatch;
+            Converse — superseded). Three are below the score floor and rendered only as a
+            collapsed count.
+          </p>
+          <p style="font-size:var(--text-sm); color:var(--fg-2); margin:0; max-width:48ch; line-height:1.5;">
+            Selection is not a function of score alone — the 0.81 candidate was dropped
+            despite outranking the 0.71 candidate because the 0.81 was out of sphere. The
+            ranking column makes that visible at a glance.
+          </p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="callout-label">Visual rule</span>
+        Candidates that became <em>included</em> render at full opacity with a coloured
+        role-border. Candidates <em>excluded for a reason that affects interpretation</em>
+        render at 65% with an amber tag. Candidates <em>below the score floor</em> render at
+        35% with a neutral tag, and may collapse into a single “+N below floor” row.
+      </div>
+
+      <h3>Compact mode vs expanded provenance</h3>
+      <p>
+        The inspector has two modes. <strong>Compact</strong> is the default for inline
+        appearance — next to a chat turn, in the AI Panel side-rail, embedded in a write
+        proposal. <strong>Expanded</strong> is the standalone surface: full ranked column,
+        full aside, full per-artifact provenance.
+      </p>
+
+      <div style="display:grid; grid-template-columns: 1fr 1.4fr; gap: var(--space-4); margin: var(--space-3) 0 var(--space-5);">
+        <!-- compact -->
+        <div style="border:1px solid var(--border); background:var(--bg-surface); border-radius:var(--radius-md); overflow:hidden;">
+          <div style="padding:8px 14px; background:var(--bg-raised); border-bottom:1px solid var(--border); display:flex; gap:8px; align-items:center;">
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--fg-3); letter-spacing:var(--tracking-wider); text-transform:uppercase;">Compact mode</span>
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--cyan); margin-left:auto;">cb-…0001</span>
+          </div>
+          <div style="padding:12px 14px; display:flex; flex-direction:column; gap:8px;">
+            <div style="font-family:var(--font-display); font-size:var(--text-md); color:var(--fg-1); line-height:1.2;">Re-ranking the canvas suggestion classifier</div>
+            <div class="auth-row">
+              <span class="auth yes">✓ answer</span><span class="auth maybe">~ propose</span><span class="auth no">✗ write</span>
+            </div>
+            <div style="font-family:var(--font-mono); font-size:10px; color:var(--fg-3); letter-spacing:var(--tracking-wide); text-transform:uppercase;">3 included · 2 excluded · visible</div>
+            <button class="btn ghost" type="button" data-intent="bundle.expand" style="align-self:flex-start; font-size:10px;">Open inspector →</button>
+          </div>
+        </div>
+        <!-- expanded -->
+        <div style="border:1px solid var(--border); background:var(--bg-surface); border-radius:var(--radius-md); overflow:hidden;">
+          <div style="padding:8px 14px; background:var(--bg-raised); border-bottom:1px solid var(--border); display:flex; gap:8px; align-items:center;">
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--fg-3); letter-spacing:var(--tracking-wider); text-transform:uppercase;">Expanded mode</span>
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--cyan); margin-left:auto;">cb-…0001</span>
+          </div>
+          <div style="padding:12px 14px; display:flex; flex-direction:column; gap:8px;">
+            <div style="font-family:var(--font-display); font-size:var(--text-md); color:var(--fg-1); line-height:1.2;">Re-ranking the canvas suggestion classifier</div>
+            <div class="auth-row">
+              <span class="auth yes">✓ may_answer</span><span class="auth yes">✓ may_orient</span><span class="auth yes">✓ may_resurface</span><span class="auth maybe">~ may_propose</span><span class="auth no">✗ may_write</span>
+            </div>
+            <div style="font-family:var(--font-mono); font-size:10px; color:var(--fg-3); letter-spacing:var(--tracking-wide); text-transform:uppercase;">candidates 8 · included 3 · excluded (visible) 2 · below floor 3 · scope work / agentic-pkm-mvp · trust reviewed 3/3 · stale after 12:00 · receipts r-0481, r-0482</div>
+            <div style="font-size:var(--text-sm); color:var(--fg-2); margin:0;">Full ranked column, full aside, per-artifact provenance, exclusion reasons inline, receipts list, companion-note link — the default <span style="font-family:var(--font-mono); font-size:11px;">prototype.html §03</span> view.</div>
+          </div>
+        </div>
+      </div>
+
+      <table class="spec">
+        <thead><tr><th>Concern</th><th>Compact</th><th>Expanded</th></tr></thead>
+        <tbody>
+          <tr><td>Bundle id</td><td>visible</td><td>visible · copyable</td></tr>
+          <tr><td>Authority flags</td><td>3 most-relevant (shortened labels)</td><td>all 5, full labels</td></tr>
+          <tr><td>Included artifacts</td><td>count only</td><td>per-artifact card with role, trust, score, reason</td></tr>
+          <tr><td>Excluded artifacts</td><td>count + “visible” badge if exclusion affects interpretation</td><td>full list with reasons; collapsed by default unless interpretation-affecting</td></tr>
+          <tr><td>Ranked candidates</td><td>hidden</td><td>full faded column with score and outcome</td></tr>
+          <tr><td>Provenance / receipts</td><td>hidden</td><td>aside list</td></tr>
+          <tr><td>Stale banner</td><td>visible if stale</td><td>visible if stale</td></tr>
+          <tr><td>Compact → expanded</td><td colspan="2">single click; emits <code>bundle.expand</code>; never auto-expands</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Semantic similarity is not authority</h3>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant</span>
+        Retrieval score answers “how textually similar was this candidate to the query.” It
+        does not answer “may the system use this as a basis to answer, orient, resurface,
+        propose, or write.” Those five permissions are declared by the bundle's authority
+        flags. The score is shown for transparency — so the operator can see selection
+        reasoning — but no UI affordance is gated on score.
+      </div>
+
+      <p>
+        Concretely, in this inspector:
+      </p>
+      <ul>
+        <li>A 0.93-score artifact in a bundle with <code>may_write: false</code> shows
+          <em>no</em> apply affordance. The score does not unlock writeback.</li>
+        <li>A 0.71-score artifact in a bundle with <code>may_propose: true</code> shows
+          the same propose affordance as a 0.93-score artifact. The score does not rank the
+          affordances either.</li>
+        <li>A bundle with no scores at all (e.g. an orientation bundle) renders the same
+          authority chips as a high-score retrieval bundle. Score is not a precondition.</li>
+        <li>A high-score candidate that was excluded by the selector still appears in the
+          ranked column — score did not buy it inclusion.</li>
+      </ul>
+
+      <div class="callout warn">
+        <span class="callout-label">Anti-pattern</span>
+        The inspector must never colour a high-score artifact “more green” than a low-score one.
+        Score is rendered in cyan mono as a value, not as a judgment. Authority is rendered
+        as discrete chips. Mixing the two would silently re-introduce the failure mode the
+        bundle contract exists to prevent.
+      </div>
+    </section>
+
+    <!-- ============== 05 ============== -->
+    <section class="spec" id="s5">
+      <h2><span class="secnum">05 ·</span>Narrow / portrait layout</h2>
+      <p class="lede">
+        Bundle review must be possible on a phone. The portrait layout stacks the bundle header,
+        authority chips, included list, and excluded disclosure. Aside content collapses into
+        accordion folds — scope, trust, freshness, receipts.
+      </p>
+
+      <div class="portrait" aria-label="Mobile / portrait — bundle inspector">
+        <div class="bar-port">
+          <span>bundle</span>
+          <span style="color:var(--cyan)">cb-…001</span>
+        </div>
+
+        <div class="ph-card">
+          <span class="ph-kicker">retrieval · turn 14</span>
+          <h4>Re-ranking the canvas suggestion classifier</h4>
+
+          <div class="auth-row">
+            <span class="auth yes"><span class="mk">✓</span>answer</span>
+            <span class="auth yes"><span class="mk">✓</span>orient</span>
+            <span class="auth maybe"><span class="mk">~</span>propose</span>
+            <span class="auth no"><span class="mk">✗</span>write</span>
+          </div>
+
+          <div class="ph-fold">
+            <span>included</span><span class="v">3</span>
+          </div>
+
+          <div class="ph-art">
+            <strong>Canvas Suggestion Flow §06</strong>
+            <div class="reason">Direct evidence for the body vs governance split.</div>
+          </div>
+          <div class="ph-art">
+            <strong>DEFINE_CANVAS_COEDITING_MODEL</strong>
+            <div class="reason">Authority contract for the answer's "server is classifier" rule.</div>
+          </div>
+
+          <div class="ph-fold">
+            <span>excluded</span>
+            <span class="v" style="color:var(--amber)">2 · visible</span>
+          </div>
+
+          <div class="ph-fold">
+            <span>trust</span>
+            <span class="v">reviewed 3 / 3</span>
+          </div>
+          <div class="ph-fold">
+            <span>scope</span>
+            <span class="v">work · agentic-pkm-mvp</span>
+          </div>
+          <div class="ph-fold">
+            <span>stale after</span>
+            <span class="v" style="color:var(--amber)">12:00</span>
+          </div>
+          <div class="ph-fold">
+            <span>receipts</span>
+            <span class="v" style="color:var(--cyan)">r-0481, r-0482</span>
+          </div>
+        </div>
+      </div>
+
+      <p>
+        Folds open in place. Authority chips never collapse to icons alone — at portrait sizes
+        they shorten ("answer", "write") but keep their <span class="auth yes" style="font-size:10px; padding:1px 6px">✓</span> /
+        <span class="auth no" style="font-size:10px; padding:1px 6px">✗</span> /
+        <span class="auth maybe" style="font-size:10px; padding:1px 6px">~</span> mark so the
+        denial is unambiguous. The excluded fold is highlighted amber when exclusion affects
+        interpretation, so an operator scanning never misses it.
+      </p>
+    </section>
+
+    <!-- ============== 06 ============== -->
+    <section class="spec" id="s6">
+      <h2><span class="secnum">06 ·</span>State gallery</h2>
+      <p class="lede">Nine bundle states. Each shows the bundle head + authority row + a one-line narrative — full inspector chrome is shared across all states.</p>
+
+      <div class="gallery bundle-gallery">
+        <!-- 1 retrieval -->
+        <div class="bm">
+          <div class="bm-bar"><span>cb-…001</span><span class="id">retrieval</span></div>
+          <div class="bm-body">
+            <h5>Re-ranking the canvas suggestion classifier</h5>
+            <span class="meta">trigger · companion-ui / turn 14 · 3 included · 2 excluded</span>
+            <div class="auth-row">
+              <span class="auth yes">✓ answer</span><span class="auth yes">✓ orient</span>
+              <span class="auth maybe">~ propose</span><span class="auth no">✗ write</span>
+            </div>
+            <p class="narrative">Supports an answer. Writeback is forbidden by the bundle's own
+              authority; the inspector hides apply affordances.</p>
+          </div>
+        </div>
+
+        <!-- 2 orientation -->
+        <div class="bm">
+          <div class="bm-bar"><span>cb-…002</span><span class="id" style="color:var(--cyan)">orientation</span></div>
+          <div class="bm-body">
+            <h5>Where was I — open loops in agentic-pkm-mvp</h5>
+            <span class="meta">trigger · re-entry · 5 included · 11 excluded</span>
+            <div class="auth-row">
+              <span class="auth yes">✓ answer</span><span class="auth yes">✓ orient</span>
+              <span class="auth yes">✓ resurface</span>
+              <span class="auth no">✗ propose</span><span class="auth no">✗ write</span>
+            </div>
+            <p class="narrative">Orientation only. Five open-loop notes; the rest of the
+              project explicitly excluded so the inspector can show what is being held back.</p>
+          </div>
+        </div>
+
+        <!-- 3 resurfacing -->
+        <div class="bm">
+          <div class="bm-bar"><span>cb-…003</span><span class="id" style="color:var(--accent)">resurfacing</span></div>
+          <div class="bm-body">
+            <h5>Why now — the watcher OOM repair note</h5>
+            <span class="meta">trigger · resurface · 1 included · "why now" present</span>
+            <div class="auth-row">
+              <span class="auth yes">✓ answer</span><span class="auth no">✗ orient</span>
+              <span class="auth yes">✓ resurface</span>
+              <span class="auth maybe">~ propose</span><span class="auth no">✗ write</span>
+            </div>
+            <p class="narrative">Resurfaced because the runtime-proof dashboard moved the
+              watcher card to amber. The "why now" rationale is required and rendered prominently.</p>
+          </div>
+        </div>
+
+        <!-- 4 write proposal -->
+        <div class="bm">
+          <div class="bm-bar"><span>cb-…004</span><span class="id" style="color:var(--accent)">write proposal</span></div>
+          <div class="bm-body">
+            <h5>Promote "context bundles are inspectable" to semantic knowledge</h5>
+            <span class="meta">trigger · propose · 4 included · 1 excluded</span>
+            <div class="auth-row">
+              <span class="auth yes">✓ answer</span><span class="auth no">✗ orient</span>
+              <span class="auth no">✗ resurface</span>
+              <span class="auth yes">✓ propose</span><span class="auth maybe">~ write · conditional on governance</span>
+            </div>
+            <p class="narrative">may_write is conditional — apply lives in Panel, gated on the
+              governance receipt. Inspector links to the proposal; never applies.</p>
+          </div>
+        </div>
+
+        <!-- 5 stale -->
+        <div class="bm">
+          <div class="bm-bar" style="color:var(--amber)"><span>cb-…005</span><span style="color:var(--amber)">stale</span></div>
+          <div class="bm-body">
+            <h5>Retrieval — re-ranking the canvas classifier (12 hours ago)</h5>
+            <span class="meta">created 02:14 · stale after 04:00 · expired 8h ago</span>
+            <div class="auth-row">
+              <span class="auth maybe">~ answer · stale</span>
+              <span class="auth no">✗ orient</span>
+              <span class="auth no">✗ resurface</span>
+              <span class="auth no">✗ propose</span>
+              <span class="auth no">✗ write</span>
+            </div>
+            <p class="narrative">Authority drops to stale-default. Status banner is amber.
+              Inspector is read-only; the bundle is preserved for audit, not reuse.</p>
+          </div>
+        </div>
+
+        <!-- 6 excluded visible -->
+        <div class="bm">
+          <div class="bm-bar"><span>cb-…006</span><span class="id">retrieval</span></div>
+          <div class="bm-body">
+            <h5>Answering about Hugin's safety posture</h5>
+            <span class="meta">3 included · 7 excluded · exclusion affects interpretation</span>
+            <div class="auth-row">
+              <span class="auth yes">✓ answer</span>
+              <span class="auth no">✗ orient</span>
+              <span class="auth no">✗ resurface</span>
+              <span class="auth no">✗ propose</span>
+              <span class="auth no">✗ write</span>
+            </div>
+            <p class="narrative">Excluded list is open by default because four of the
+              exclusions are by trust-state (low-trust agent memory); the operator must see
+              they were considered and dropped.</p>
+          </div>
+        </div>
+
+        <!-- 7 degraded provenance -->
+        <div class="bm">
+          <div class="bm-bar"><span>cb-…007</span><span style="color:var(--amber)">degraded · provenance incomplete</span></div>
+          <div class="bm-body">
+            <h5>Retrieval — partial vault scope</h5>
+            <span class="meta">2 included · 1 included without provenance</span>
+            <div class="auth-row">
+              <span class="auth maybe">~ answer · degraded</span>
+              <span class="auth no">✗ orient</span>
+              <span class="auth no">✗ resurface</span>
+              <span class="auth no">✗ propose</span>
+              <span class="auth no">✗ write</span>
+            </div>
+            <p class="narrative">One artifact has no source provenance. Inspector marks the
+              artifact <em>missing provenance</em> and downgrades may_propose to false. The
+              banner is amber.</p>
+          </div>
+        </div>
+
+        <!-- 8 empty -->
+        <div class="bm">
+          <div class="bm-bar"><span>cb-…008</span><span style="color:var(--fg-3)">empty</span></div>
+          <div class="bm-body">
+            <h5>No sufficient context</h5>
+            <span class="meta">0 included · 4 considered &amp; excluded · all out of scope</span>
+            <div class="auth-row">
+              <span class="auth no">✗ answer</span>
+              <span class="auth no">✗ orient</span>
+              <span class="auth no">✗ resurface</span>
+              <span class="auth no">✗ propose</span>
+              <span class="auth no">✗ write</span>
+            </div>
+            <p class="narrative">All authority off. The body is replaced with a single line
+              ("No sufficient context for this trigger") and the excluded list — which is
+              the only evidence the operator has that the system tried.</p>
+          </div>
+        </div>
+
+        <!-- 9 blocked -->
+        <div class="bm">
+          <div class="bm-bar"><span>cb-…009</span><span style="color:var(--destructive)">blocked</span></div>
+          <div class="bm-body">
+            <h5>Context exists but cannot support write proposal</h5>
+            <span class="meta">5 included · would-be-may_propose: true · blocked by trust</span>
+            <div class="auth-row">
+              <span class="auth yes">✓ answer</span>
+              <span class="auth yes">✓ orient</span>
+              <span class="auth yes">✓ resurface</span>
+              <span class="auth no">✗ propose · blocked</span>
+              <span class="auth no">✗ write</span>
+            </div>
+            <p class="narrative">The bundle could otherwise support a proposal, but trust
+              posture is too low. Inspector shows the blocked reason inline beside the
+              may_propose chip.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============== 07 ============== -->
+    <section class="spec" id="s7">
+      <h2><span class="secnum">07 ·</span>Edge states</h2>
+      <table class="spec">
+        <thead><tr><th>Edge</th><th>Behavior</th></tr></thead>
+        <tbody>
+          <tr><td>Empty</td><td>State 08. Body collapses to a single line; excluded list still rendered so the operator sees what was tried.</td></tr>
+          <tr><td>Loading</td><td>Bundle header skeletons render in static dim mono; authority chips are absent (never neutral-coloured, which would imply a yes).</td></tr>
+          <tr><td>Degraded provenance</td><td>State 07. Per-artifact missing-provenance label, banner amber, may_propose forced to false.</td></tr>
+          <tr><td>Blocked</td><td>State 09. The blocked authority chip carries an inline reason. No "fix it" affordance.</td></tr>
+          <tr><td>Stale</td><td>State 05. Banner amber. All authority chips downgrade to no, except may_answer which becomes <em>conditional · stale</em>.</td></tr>
+          <tr><td>Missing provenance</td><td>The artifact card carries the chip <span class="chip danger">missing provenance</span>; trust state is shown as <em>unknown</em>.</td></tr>
+          <tr><td>Write-guard denial</td><td>If the inspector is reached from a proposal that was denied, the banner reads "write guard refused — see receipt r-…" and the proposal receipt pill is the only receipt-list entry not dimmed.</td></tr>
+          <tr><td>Reduced motion</td><td>Receipt pill pulse and banner LED pulse respect <code>prefers-reduced-motion</code>; static colour preserved.</td></tr>
+          <tr><td>Narrow</td><td>§05. Single column, accordion folds for scope / trust / freshness / receipts.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== 08 ============== -->
+    <section class="spec" id="s8">
+      <h2><span class="secnum">08 ·</span>Implementation contract</h2>
+      <p class="lede">
+        The UI consumes a bundle object that conforms to the target-state shape in
+        <code>CONTEXT_BUNDLE_CONTRACT.md</code>. The UI never re-classifies, re-ranks, or
+        derives authority flags.
+      </p>
+
+      <h3>Intents emitted by the inspector</h3>
+      <table class="spec">
+        <thead><tr><th class="mono">data-intent</th><th>Effect</th><th>Authority</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">bundle.copy-id</td><td>Copy bundle id to clipboard</td><td>read-only</td></tr>
+          <tr><td class="mono">bundle.open-receipt</td><td>Open a receipt anchored in Panel</td><td>navigation only</td></tr>
+          <tr><td class="mono">bundle.open-session-note</td><td>Open the companion session note in Obsidian</td><td>navigation only</td></tr>
+          <tr><td class="mono">bundle.open-artifact</td><td>Open the included or excluded artifact in Obsidian / vault</td><td>navigation only</td></tr>
+          <tr><td class="mono">bundle.toggle-excluded</td><td>Open / close excluded disclosure</td><td>UI-local</td></tr>
+          <tr><td class="mono">bundle.copy-rationale</td><td>Copy selection rationale text</td><td>read-only</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Data attributes on the inspector root</h3>
+      <pre class="code">&lt;section
+  data-testid=<span class="s">"bundle-inspector"</span>
+  data-bundle-id=<span class="s">"cb-2026-05-14-001"</span>
+  data-trigger=<span class="s">"retrieval | orientation | resurfacing | action"</span>
+  data-staleness=<span class="s">"fresh | stale | expired"</span>
+  data-degraded=<span class="s">"none | provenance | trust"</span>
+  data-empty=<span class="s">"true | false"</span>&gt;</pre>
+
+      <h3>Per-artifact data attributes</h3>
+      <pre class="code">&lt;article
+  data-testid=<span class="s">"bundle-artifact"</span>
+  data-artifact-id=<span class="s">"art_123"</span>
+  data-role=<span class="s">"evidence | context | memory | companion"</span>
+  data-trust=<span class="s">"reviewed | inferred | untrusted | unknown"</span>
+  data-included=<span class="s">"true | false"</span>
+  data-provenance=<span class="s">"present | missing"</span>&gt;</pre>
+
+      <div class="callout warn">
+        <span class="callout-label">Authority flag rendering rule</span>
+        Every authority flag is rendered explicitly — never inferred. The UI's contract:
+        if the bundle carries five flags, the UI renders five chips. If the bundle adds a
+        sixth (e.g. <code>may_promote</code> for memory), the UI must render it before the
+        bundle is allowed into the inspector — adding silently is forbidden.
+      </div>
+    </section>
+
+    <!-- ============== 09 ============== -->
+    <section class="spec" id="s9">
+      <h2><span class="secnum">09 ·</span>Authority boundaries</h2>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Semantic similarity is not authority</span>
+        Retrieval scores are shown for transparency, not as a justification for writeback.
+        The inspector never elevates a high-score artifact into a write proposal. Authority
+        flags govern; scores explain.
+      </div>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Retrieval output must not authorize writeback</span>
+        Even when <code>may_propose: true</code>, the inspector links to the proposal — it
+        does not apply it. Apply lives in the proposing surface (Panel, Canvas), gated on the
+        governance receipt.
+      </div>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Bundles are not memory</span>
+        The inspector may reference memory items the bundle includes. It must not promote
+        those items into memory or knowledge. Promotion routes through the memory candidate
+        queue (Exploration 4).
+      </div>
+
+      <table class="spec">
+        <thead>
+          <tr><th>Concern</th><th>May influence</th><th>May propose</th><th>May not decide</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Field grouping &amp; visual hierarchy</td><td class="yes">YES</td><td class="maybe">—</td><td class="no">—</td></tr>
+          <tr><td>Authority-chip wording &amp; colour</td><td class="yes">YES</td><td class="maybe">—</td><td class="no">cannot redefine flag semantics</td></tr>
+          <tr><td>Staleness presentation</td><td class="yes">YES</td><td class="maybe">propose default rendering</td><td class="no">cannot define expiry policy</td></tr>
+          <tr><td>Exclusion-visibility default</td><td class="yes">YES</td><td class="maybe">propose threshold ("affects interpretation")</td><td class="no">cannot decide what counts as affecting</td></tr>
+          <tr><td>Bundle schema</td><td class="no">—</td><td class="maybe">propose field additions to owner-doc</td><td class="no">cannot rename or remove fields</td></tr>
+          <tr><td>Authority flag set</td><td class="no">—</td><td class="maybe">propose new flag with rationale</td><td class="no">cannot loosen existing flags</td></tr>
+          <tr><td>Retrieval ranking</td><td class="no">—</td><td class="no">—</td><td class="no">runtime owns</td></tr>
+          <tr><td>Apply / writeback flow</td><td class="no">—</td><td class="no">—</td><td class="no">proposing surface owns</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== 10 ============== -->
+    <section class="spec" id="s10">
+      <h2><span class="secnum">10 ·</span>Open questions</h2>
+      <ol>
+        <li><strong>Default exclusion visibility.</strong> The design opens the excluded
+          disclosure when exclusion affects interpretation. The threshold for "affects
+          interpretation" is currently a heuristic. Owner-doc should make it normative — at
+          minimum: low-trust exclusion is always visible; sphere-mismatch is visible by default;
+          mere score-floor exclusion is hidden by default.</li>
+        <li><strong>Bundle-receipt shape.</strong> The inspector lists retrieval / orientation
+          / write-proposal receipts. If a bundle can carry more than these three receipt kinds,
+          the aside list will need a generic shape. We suggest owner-doc declare the receipt
+          taxonomy.</li>
+        <li><strong>"Why now" on resurfacing bundles.</strong> Resurfacing bundles must
+          render a "why now" rationale. Where does that field live in the bundle schema —
+          inside <code>selection_rationale</code>, or as its own <code>resurface_reason</code>?</li>
+        <li><strong>Cross-bundle navigation.</strong> If a write-proposal bundle was produced
+          from a retrieval bundle, should the inspector link between them? We suggest yes,
+          one-click, but the link belongs in <code>receipts</code> not in the body.</li>
+        <li><strong>Conditional may_propose semantics.</strong> We render
+          <code>may_propose: conditional</code> when the bundle's authority is contingent on
+          the proposing surface running its own write-guard. Owner-doc should normalize
+          whether "conditional" is a valid state for any of the five flags, or only for
+          <code>may_propose</code> and <code>may_write</code>.</li>
+        <li><strong>Memory-class included items.</strong> When an included item is an agent
+          memory candidate (not yet promoted), the inspector colours it gold (memory role).
+          Should that always force the bundle's <code>may_write</code> to false? We suggest
+          yes; candidate memory is not semantic authority.</li>
+      </ol>
+    </section>
+
+    <!-- ============== 11 ============== -->
+    <section class="spec" id="s11">
+      <h2><span class="secnum">11 ·</span>Handoff notes for Claude Code / Codex</h2>
+
+      <h3>Likely normalized spec</h3>
+      <ul>
+        <li>New doc: <code>docs/CONCEPTS/CONTEXT_BUNDLE_INSPECTOR_UI.md</code> — UI guidance only.
+          References <code>CONTEXT_BUNDLE_CONTRACT.md</code> for the schema.</li>
+      </ul>
+
+      <h3>Likely follow-on issues</h3>
+      <ul>
+        <li><em>Render the inspector against three fixture bundles.</em> Acceptance:
+          retrieval, orientation, write-proposal each render correctly, including
+          authority-chip states and exclusion disclosure default.</li>
+        <li><em>Render six fail-state fixtures.</em> Stale, empty, blocked, degraded,
+          missing-provenance, write-guard-denied. Acceptance: each renders with the right
+          banner colour, the right downgraded authority chips, and no apply affordance.</li>
+        <li><em>Narrow / portrait acceptance.</em> All folds work; authority chips never
+          collapse to icons alone.</li>
+        <li><em>Reduced-motion.</em> Pulses replaced with static colour. State changes still
+          readable.</li>
+        <li><em>Inspector→Panel handoff.</em> <code>bundle.open-receipt</code> opens Panel
+          anchored to the receipt id; no data dependency.</li>
+      </ul>
+
+      <h3>What this design must not feed</h3>
+      <ul>
+        <li>A retrieval re-rank surface. Re-ranking is upstream.</li>
+        <li>An apply affordance for write proposals. Apply lives in Panel / Canvas.</li>
+        <li>A memory-promotion surface. Promotion lives in the memory queue.</li>
+        <li>Any change to the bundle schema. The inspector renders; it does not declare.</li>
+      </ul>
+
+      <div class="callout vault">
+        <span class="callout-label">Validation expectation</span>
+        Passing receipt: nine state fixtures render correctly; authority chips match the bundle
+        verbatim; exclusion disclosure defaults match the threshold rule; narrow layout
+        preserves chip semantics; no UI-derived authority. Receipt id recorded in this
+        package's status field.
+      </div>
+    </section>
+
+  </main>
+</div>
+</body>
+</html>

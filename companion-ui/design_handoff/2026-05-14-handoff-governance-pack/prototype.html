@@ -1,0 +1,1154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Design Handoff Governance Pack — Yggdrasil Companion UI</title>
+<link rel="stylesheet" href="./colors_and_type.css" />
+<link rel="stylesheet" href="./spec_chrome.css" />
+<style>
+  /* ============================================================
+     LOCAL — governance flow diagram + template cards
+     ============================================================ */
+  .flow {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    padding: var(--space-5);
+    margin: var(--space-3) 0 var(--space-6);
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: var(--space-3);
+    align-items: stretch;
+    position: relative;
+  }
+  .flow-node {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: var(--bg-base);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    position: relative;
+    z-index: 1;
+  }
+  .flow-node .lbl {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+  .flow-node .name {
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    font-weight: var(--weight-medium);
+    line-height: 1.3;
+  }
+  .flow-node .meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    margin-top: 2px;
+  }
+  .flow-node.design { border-color: rgba(0,212,232,0.5); }
+  .flow-node.design .lbl { color: var(--cyan); }
+  .flow-node.norm   { border-color: rgba(0,212,232,0.5); }
+  .flow-node.norm   .lbl { color: var(--cyan); }
+  .flow-node.gov    { border-color: rgba(212,168,67,0.5); }
+  .flow-node.gov    .lbl { color: var(--accent); }
+  .flow-node.impl   { border-color: rgba(74,158,255,0.4); }
+  .flow-node.impl   .lbl { color: var(--agent); }
+  .flow-node.proof  { border-color: rgba(57,232,125,0.4); }
+  .flow-node.proof  .lbl { color: var(--vault); }
+  .flow-arrow {
+    align-self: center;
+    text-align: center;
+    color: var(--cyan);
+    font-family: var(--font-mono);
+    font-size: 14px;
+  }
+  @media (max-width: 900px) {
+    .flow { grid-template-columns: 1fr; }
+    .flow-arrow { transform: rotate(90deg); }
+  }
+
+  /* maturity score */
+  .maturity-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-4);
+    margin: var(--space-3) 0 var(--space-5);
+  }
+  .maturity-col {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+  }
+  .maturity-col h4 {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-2);
+    margin-bottom: var(--space-3);
+  }
+  .maturity-col.ready { border-top: 2px solid var(--vault); }
+  .maturity-col.ready h4 { color: var(--vault); }
+  .maturity-col.hold  { border-top: 2px solid var(--amber); }
+  .maturity-col.hold h4 { color: var(--amber); }
+
+  /* console mock */
+  .console {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    margin: var(--space-3) 0 var(--space-6);
+    overflow: hidden;
+  }
+  .console-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 10px 14px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+  .console-bar .crumb { color: var(--fg-2); }
+  .console-bar .crumb.active { color: var(--cyan); }
+  .console-bar .sep { color: var(--fg-3); }
+  .console-bar .right { margin-left: auto; display: flex; gap: var(--space-3); align-items: center; }
+  .console-body {
+    display: grid;
+    grid-template-columns: 240px 1fr 280px;
+    min-height: 480px;
+  }
+  .console-list {
+    border-right: 1px solid var(--border);
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: var(--bg-base);
+    overflow-y: auto;
+    max-height: 580px;
+  }
+  .console-list .row {
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .console-list .row[aria-selected="true"] {
+    background: var(--bg-raised);
+    border-left-color: var(--cyan);
+  }
+  .console-list .row .ttl {
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    line-height: 1.3;
+  }
+  .console-list .row .sub {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+  }
+  .console-list .row .sub.gov { color: var(--accent); }
+  .console-list .row .sub.norm { color: var(--cyan); }
+  .console-list .row .sub.impl { color: var(--agent); }
+  .console-list .row .sub.proof { color: var(--vault); }
+  .console-list .row .sub.design { color: var(--fg-2); }
+  .console-list .row .sub.held { color: var(--amber); }
+
+  .console-detail {
+    padding: var(--space-5);
+    overflow-y: auto;
+    max-height: 580px;
+  }
+  .console-detail h3 {
+    font-family: var(--font-display);
+    font-size: var(--text-xl);
+    color: var(--fg-1);
+    margin-bottom: var(--space-2);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: var(--weight-regular);
+  }
+  .console-detail .crumb-line {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    margin-bottom: var(--space-3);
+  }
+  .console-detail .chain {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr auto 1fr auto 1fr;
+    gap: 6px;
+    align-items: center;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    margin: var(--space-3) 0 var(--space-4);
+  }
+  .console-detail .chain .step {
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-raised);
+    border: 1px solid var(--border-strong);
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-2);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    line-height: 1.3;
+  }
+  .console-detail .chain .step.done   { color: var(--vault); border-color: rgba(57,232,125,0.4); background: rgba(57,232,125,0.04); }
+  .console-detail .chain .step.active { color: var(--cyan); border-color: rgba(0,212,232,0.5); background: rgba(0,212,232,0.04); }
+  .console-detail .chain .step.pending{ color: var(--fg-3); }
+  .console-detail .chain .arr { color: var(--fg-3); font-family: var(--font-mono); }
+
+  .field-grid {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    row-gap: 8px;
+    column-gap: var(--space-3);
+    font-size: var(--text-sm);
+    margin: var(--space-3) 0;
+  }
+  .field-grid dt {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    padding-top: 3px;
+  }
+  .field-grid dd {
+    color: var(--fg-1);
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  .console-aside {
+    border-left: 1px solid var(--border);
+    background: var(--bg-base);
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    overflow-y: auto;
+    max-height: 580px;
+  }
+  .aside-block h5 {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-3);
+    margin-bottom: 8px;
+  }
+  .aside-block ul.check { font-size: var(--text-xs); }
+  .aside-block ul.check li {
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    color: var(--fg-2);
+  }
+  .aside-block .stat {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-2);
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .aside-block .stat:last-child { border-bottom: none; }
+  .aside-block .stat .v { color: var(--fg-1); }
+  .aside-block .stat .v.gov   { color: var(--accent); }
+  .aside-block .stat .v.vault { color: var(--vault); }
+  .aside-block .stat .v.cyan  { color: var(--cyan); }
+  .aside-block .stat .v.amber { color: var(--amber); }
+
+  @media (max-width: 900px) {
+    .console-body { grid-template-columns: 1fr; }
+    .console-list, .console-aside { border-right: none; border-left: none; border-bottom: 1px solid var(--border); max-height: none; }
+  }
+
+  /* edge-state grid (small) */
+  .edge-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-3);
+    margin: var(--space-3) 0 var(--space-5);
+  }
+  .edge-cell {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    font-size: var(--text-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .edge-cell .lbl {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+  .edge-cell .lbl.gold { color: var(--accent); }
+  .edge-cell .lbl.cyan { color: var(--cyan); }
+  .edge-cell .lbl.amber{ color: var(--amber); }
+  .edge-cell .lbl.dang { color: var(--destructive); }
+  .edge-cell .lbl.vault{ color: var(--vault); }
+  .edge-cell p { font-size: var(--text-sm); color: var(--fg-2); margin: 0; line-height: 1.5; }
+  @media (max-width: 900px) { .edge-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ============================ TOC ============================ -->
+  <nav class="toc" aria-label="Section index">
+    <div class="toc-label">Sections</div>
+    <ol>
+      <li><a href="#s1"><span class="toc-num">01</span>Context &amp; boundary</a></li>
+      <li><a href="#s2"><span class="toc-num">02</span>Handoff governance flow</a></li>
+      <li><a href="#s3"><span class="toc-num">03</span>Maturity checklist</a></li>
+      <li><a href="#s4"><span class="toc-num">04</span>Review console (prototype)</a></li>
+      <li><a href="#s5"><span class="toc-num">05</span>README template</a></li>
+      <li><a href="#s6"><span class="toc-num">06</span>Implementation contract</a></li>
+      <li><a href="#s7"><span class="toc-num">07</span>Authority boundaries</a></li>
+      <li><a href="#s8"><span class="toc-num">08</span>Edge-state checklist</a></li>
+      <li><a href="#s9"><span class="toc-num">09</span>Influence table</a></li>
+      <li><a href="#s10"><span class="toc-num">10</span>Authority &amp; disclaimers</a></li>
+      <li><a href="#s11"><span class="toc-num">11</span>Open questions</a></li>
+      <li><a href="#s12"><span class="toc-num">12</span>Handoff to Code/Codex</a></li>
+    </ol>
+  </nav>
+
+  <!-- ============================ MAIN ============================ -->
+  <main>
+    <header class="doc-header">
+      <div class="doc-eyebrow">Companion UI · Design Handoff · Meta-governance</div>
+      <h1 class="doc-title">Design Handoff Governance Pack</h1>
+      <p class="doc-lede">
+        How a Claude Design exploration becomes a governed implementation input — without becoming
+        architecture authority on the way. Defines the chain
+        <span style="font-family:var(--font-mono); color:var(--cyan)">exploration → handoff package
+        → normalized spec → GitHub issue → PR → validation receipt</span>,
+        the maturity bar between each link, the templates each step produces, and the disclaimers
+        that keep design from being mistaken for runtime truth.
+      </p>
+      <div class="doc-meta">
+        <span><strong>Pack:</strong> HANDOFF_GOVERNANCE</span>
+        <span><strong>Authority:</strong> Process pattern only — not runtime</span>
+        <span><strong>Owner-docs:</strong> INTERACTION_SURFACES_AND_AUTHORITY</span>
+        <span><strong>Status:</strong> Design handoff · v1 · 2026-05-14</span>
+      </div>
+    </header>
+
+    <!-- ============== 01 ============== -->
+    <section class="spec" id="s1">
+      <h2><span class="secnum">01 ·</span>Context &amp; boundary</h2>
+      <p class="lede">What this pack is for, and what it deliberately is not.</p>
+
+      <h3>What this pack is</h3>
+      <p>
+        Yggdrasil already has a strong rule: design artifacts are not architecture authority,
+        runtime truth lives in shipped code, tests, status docs, and validation receipts. That rule
+        is healthy. It also means that <em>every</em> Claude Design exploration enters a system
+        where it is, by design, not allowed to mutate truth on its own. This pack defines the
+        intermediate path — the maturity bar, the templates, the affordances — so design work
+        actually <em>lands</em> as governed inputs instead of accumulating as well-intentioned
+        loose HTML.
+      </p>
+      <p>
+        Concretely, the pack covers five artifacts:
+      </p>
+      <ul>
+        <li>The <strong>governance flow diagram</strong> (§02) that names each link in the chain
+          and what evidence crosses each boundary.</li>
+        <li>The <strong>maturity checklist</strong> (§03) that decides when an exploration is
+          allowed to become a normalized spec.</li>
+        <li>The <strong>review console prototype</strong> (§04) — a single operator surface for
+          walking explorations through the chain.</li>
+        <li>Three <strong>templates</strong> (§05–07): README, implementation-contract notes,
+          authority boundaries.</li>
+        <li>The <strong>state, edge-case, and influence inventories</strong> (§08–09) that every
+          design must answer before promotion.</li>
+      </ul>
+
+      <h3>Surface boundaries we are honoring</h3>
+      <ul>
+        <li><strong>Repo docs &amp; contracts</strong> remain architecture authority. This pack
+          governs <em>process</em>, not architecture.</li>
+        <li><strong>GitHub issues &amp; PRs</strong> remain the place where work is committed to.
+          The pack proposes; it does not promote.</li>
+        <li><strong>Validation receipts</strong> remain runtime truth. The pack ends at handoff;
+          proof lives downstream in the runtime-proof surface (Exploration 2).</li>
+      </ul>
+
+      <div class="callout invariant">
+        <span class="callout-label">Floor invariant</span>
+        Design exploration is not architecture authority. Visual guidance is not runtime behavior.
+        Architecture authority remains in repo docs and contracts. Runtime truth remains in
+        shipped code, tests, status docs, and validation receipts. This pack expresses the
+        invariant; it does not loosen it.
+      </div>
+
+      <h3>What this pack is not</h3>
+      <ul>
+        <li>Not a new governance pipeline. Mutation continues to flow through the existing
+          policy → validation → event-pipeline → deterministic-writer path.</li>
+        <li>Not a new role or new authority surface. The human reviewer remains the
+          decision-maker; this pack only structures what they see.</li>
+        <li>Not a CI/CD spec. The chain ends at "validation receipt"; how that receipt is
+          produced is owned by runtime-proof, not by design handoff.</li>
+        <li>Not a tool requirement. The console in §04 is a target shape, not a claim that
+          such a console is shipped.</li>
+      </ul>
+    </section>
+
+    <!-- ============== 02 ============== -->
+    <section class="spec" id="s2">
+      <h2><span class="secnum">02 ·</span>Handoff governance flow</h2>
+      <p class="lede">
+        Six links. Each crossing is a deliberate maturity step with its own evidence requirement.
+        Each link emits an artifact the next link can refuse.
+      </p>
+
+      <div class="flow" role="img" aria-label="Handoff governance flow: design exploration → handoff package → normalized spec → GitHub issue → PR → validation receipt">
+        <div class="flow-node design">
+          <div class="lbl">01 · Explore</div>
+          <div class="name">Design exploration</div>
+          <div class="meta">claude.ai/design · HTML</div>
+        </div>
+        <div class="flow-node design">
+          <div class="lbl">02 · Hand off</div>
+          <div class="name">Handoff package</div>
+          <div class="meta">design_handoff/&lt;date-topic&gt;/</div>
+        </div>
+        <div class="flow-node norm">
+          <div class="lbl">03 · Normalize</div>
+          <div class="name">Normalized spec</div>
+          <div class="meta">docs/ · markdown · target-state</div>
+        </div>
+        <div class="flow-node gov">
+          <div class="lbl">04 · Schedule</div>
+          <div class="name">GitHub issue</div>
+          <div class="meta">references spec · acceptance contract</div>
+        </div>
+        <div class="flow-node impl">
+          <div class="lbl">05 · Build</div>
+          <div class="name">Pull request</div>
+          <div class="meta">code · tests · status doc updates</div>
+        </div>
+        <div class="flow-node proof">
+          <div class="lbl">06 · Prove</div>
+          <div class="name">Validation receipt</div>
+          <div class="meta">runtime proof · status doc · receipt id</div>
+        </div>
+      </div>
+
+      <h3>What crosses each boundary</h3>
+      <table class="spec">
+        <thead>
+          <tr>
+            <th>Crossing</th>
+            <th>From → To</th>
+            <th>Required evidence</th>
+            <th>Refusal condition</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>A</td>
+            <td>Exploration → Handoff package</td>
+            <td>State gallery, edge-case checklist, authority boundaries, open questions, influence table.</td>
+            <td>Missing any required section in the folder shape.</td>
+          </tr>
+          <tr>
+            <td>B</td>
+            <td>Handoff → Normalized spec</td>
+            <td>Maturity checklist (§03) passed. Spec written in repo voice (markdown, normative rules, contracts cited).</td>
+            <td>Open questions left unanswered. Conflict with an existing contract not reconciled.</td>
+          </tr>
+          <tr>
+            <td>C</td>
+            <td>Spec → GitHub issue</td>
+            <td>Issue references the spec by path. Acceptance criteria copied from the spec. Owner-doc declared.</td>
+            <td>Issue introduces scope the spec does not authorize.</td>
+          </tr>
+          <tr>
+            <td>D</td>
+            <td>Issue → PR</td>
+            <td>PR closes a single issue. Tests cover acceptance criteria. Status docs updated. No silent edits to authority docs.</td>
+            <td>PR mutates owner-docs beyond the issue's scope. Tests skip acceptance criteria.</td>
+          </tr>
+          <tr>
+            <td>E</td>
+            <td>PR → Validation receipt</td>
+            <td>Runtime proof run. Receipt id recorded in status doc. Skipped checks have stated reasons.</td>
+            <td>Runtime proof skipped without reason. Receipt not linked from the status doc.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <span class="callout-label">Refusal is a feature, not a setback</span>
+        Each boundary is allowed to send the artifact back. A design that fails maturity is not
+        broken — it is correctly held. A PR that mutates owner-docs beyond scope is correctly
+        rejected. The point of the chain is that no single link can promote itself.
+      </div>
+    </section>
+
+    <!-- ============== 03 ============== -->
+    <section class="spec" id="s3">
+      <h2><span class="secnum">03 ·</span>Maturity checklist</h2>
+      <p class="lede">
+        A design exploration is mature enough to become a normalized spec when every item on the
+        left is satisfied <em>and</em> no item on the right is open. This is the only gate that
+        decides crossing B.
+      </p>
+
+      <div class="maturity-grid">
+        <div class="maturity-col ready">
+          <h4>Ready when all of these are true</h4>
+          <ul class="check">
+            <li class="done">Scope statement names what is being designed and what is explicitly not.</li>
+            <li class="done">State gallery covers every UI state — at minimum empty, loading, normal, degraded, blocked.</li>
+            <li class="done">Edge-case checklist (§08) is filled, with each item either designed or marked deferred-with-reason.</li>
+            <li class="done">Authority boundaries section names which owner-docs apply and which the design must not touch.</li>
+            <li class="done">Influence table (§09) declares what this design <em>may</em> influence and what it <em>must not</em> decide.</li>
+            <li class="done">Visual guidance is separated from interaction contract is separated from implementation assumptions.</li>
+            <li class="done">Every claim about runtime behavior is sourced or marked target-state.</li>
+            <li class="done">A narrow/mobile layout is at least sketched, even if portrait is deferred.</li>
+            <li class="done">Reduced-motion behavior is described or marked "no motion to reduce".</li>
+            <li class="done">Open questions are written down with proposed owners.</li>
+          </ul>
+        </div>
+        <div class="maturity-col hold">
+          <h4>Held when any of these are true</h4>
+          <ul class="check">
+            <li class="skip">An open question would change the state machine if answered.</li>
+            <li class="skip">A surface boundary is unclear (which surface owns this action?).</li>
+            <li class="skip">An authority boundary conflict with an existing contract is unresolved.</li>
+            <li class="skip">A state in the gallery has no described user action set.</li>
+            <li class="skip">The design relies on runtime behavior not yet specified in repo docs.</li>
+            <li class="skip">The design implicitly introduces a new authority surface.</li>
+            <li class="skip">Provenance is shown without saying how it would be produced.</li>
+            <li class="skip">Write-guard or denial states are visually absent.</li>
+            <li class="skip">Copy treats agent output as semantic authority.</li>
+            <li class="skip">No reviewer is named.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="callout-label">Scoring posture</span>
+        The checklist is binary, not weighted. A single hold reason is enough to refuse promotion.
+        That is intentional — promotion is rarer than exploration, and the chain works because
+        the bar at crossing B is high.
+      </div>
+    </section>
+
+    <!-- ============== 04 ============== -->
+    <section class="spec" id="s4">
+      <h2><span class="secnum">04 ·</span>Review console <span class="chip design" style="font-size:10px; margin-left:8px">prototype</span></h2>
+      <p class="lede">
+        A target-shape operator surface for walking handoff packages through the chain. One list
+        of explorations, one detail pane showing where the package sits in the chain, one aside
+        showing the maturity checklist and downstream artifacts. This is the visual prototype;
+        the production form is whatever the team's existing review tools support.
+      </p>
+
+      <div class="console" aria-label="Review console — design exploration #ck-bundle-inspector selected">
+        <!-- top bar -->
+        <div class="console-bar">
+          <span class="crumb">design_handoff</span>
+          <span class="sep">/</span>
+          <span class="crumb active">2026-05-14-context-bundle-inspector</span>
+          <span class="sep">/</span>
+          <span class="crumb">crossing B</span>
+          <div class="right">
+            <span class="receipt queued"><span class="recdot"></span>maturity · 7 / 10</span>
+            <button class="btn ghost" type="button" data-intent="package.open-folder">Open folder</button>
+            <button class="btn governance" type="button" data-intent="package.request-normalization" disabled>Request normalize <span class="kbd">N</span></button>
+          </div>
+        </div>
+
+        <div class="console-body">
+          <!-- list -->
+          <aside class="console-list" aria-label="Handoff packages">
+            <div class="row">
+              <div class="ttl">Canvas Suggestion Flow</div>
+              <div class="sub vault">crossing E · receipt cb-2026-05-11-a</div>
+            </div>
+            <div class="row">
+              <div class="ttl">Cognitive Modes</div>
+              <div class="sub impl">crossing D · PR #482 open</div>
+            </div>
+            <div class="row">
+              <div class="ttl">Re-entry Mist Variants</div>
+              <div class="sub norm">crossing C · issue #501 drafted</div>
+            </div>
+            <div class="row" aria-selected="true">
+              <div class="ttl">Context Bundle Inspector</div>
+              <div class="sub gov">crossing B · maturity 7 / 10</div>
+            </div>
+            <div class="row">
+              <div class="ttl">Memory Candidate Review</div>
+              <div class="sub design">crossing A · package draft</div>
+            </div>
+            <div class="row">
+              <div class="ttl">Runtime Proof Dashboard</div>
+              <div class="sub gov">crossing B · maturity 9 / 10</div>
+            </div>
+            <div class="row">
+              <div class="ttl">Resurfacing Heuristics</div>
+              <div class="sub held">held · 2 hold reasons</div>
+            </div>
+            <div class="row">
+              <div class="ttl">Tension Patterns</div>
+              <div class="sub design">crossing A · exploration v2</div>
+            </div>
+          </aside>
+
+          <!-- detail -->
+          <section class="console-detail">
+            <div class="crumb-line">handoff · 2026-05-14 · context-bundle-inspector · v1</div>
+            <h3>Context Bundle Inspector</h3>
+
+            <div class="chain" aria-label="Position in the handoff chain">
+              <div class="step done">Explore</div>
+              <div class="arr">›</div>
+              <div class="step done">Hand off</div>
+              <div class="arr">›</div>
+              <div class="step active">Normalize</div>
+              <div class="arr">›</div>
+              <div class="step pending">Issue</div>
+              <div class="arr">›</div>
+              <div class="step pending">PR</div>
+              <div class="arr">›</div>
+              <div class="step pending">Receipt</div>
+            </div>
+
+            <dl class="field-grid">
+              <dt>Owner-docs</dt>
+              <dd>
+                <code>docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md</code>,
+                <code>docs/INTERACTION_SURFACES_AND_AUTHORITY/</code>
+              </dd>
+              <dt>Authority</dt>
+              <dd>Visual guidance only · may not loosen <code>may_write</code> semantics</dd>
+              <dt>Reviewer</dt>
+              <dd>—</dd>
+              <dt>Influence</dt>
+              <dd>Inspector layout · field grouping · staleness presentation</dd>
+              <dt>Must not decide</dt>
+              <dd>Bundle schema · authority-flag set · expiry policy</dd>
+              <dt>Edge states</dt>
+              <dd>9 designed · 0 deferred · 0 missing</dd>
+              <dt>Open questions</dt>
+              <dd>3 (see §11 of the package)</dd>
+            </dl>
+
+            <div class="callout warn">
+              <span class="callout-label">Hold reasons (3 of 10)</span>
+              Q1 about exclusion-visibility default is unresolved. Q2 about bundle-receipt-shape
+              would change the receipt list — must be answered before crossing B. Q3 about narrow
+              layout is a sketch, not a layout — acceptable as deferred-with-reason if the
+              reviewer agrees.
+            </div>
+
+            <h3 style="font-family:var(--font-ui); font-size:var(--text-sm); font-weight:var(--weight-semibold); text-transform:uppercase; letter-spacing:var(--tracking-wide); color:var(--fg-1); margin:var(--space-5) 0 var(--space-2);">Downstream artifacts</h3>
+            <ul style="margin:0 0 var(--space-4) var(--space-5); font-size:var(--text-sm); color:var(--fg-2);">
+              <li>Proposed normalized spec path: <code>docs/CONCEPTS/CONTEXT_BUNDLE_INSPECTOR_UI.md</code> (target-state · UI guidance only).</li>
+              <li>Proposed issue: <em>"Context bundle inspector — UI guidance + field-grouping contract"</em>.</li>
+              <li>Validation expectation: receipt on a render against three fixture bundles (retrieval, orientation, write-proposal).</li>
+            </ul>
+          </section>
+
+          <!-- aside -->
+          <aside class="console-aside" aria-label="Maturity + activity">
+            <div class="aside-block">
+              <h5>Maturity · 7 / 10</h5>
+              <ul class="check">
+                <li class="done">Scope</li>
+                <li class="done">State gallery</li>
+                <li class="done">Edge cases</li>
+                <li class="done">Authority boundaries</li>
+                <li class="done">Influence table</li>
+                <li class="done">Separation of guidance / contract / assumption</li>
+                <li class="done">Target-state markings</li>
+                <li>Narrow layout (sketch only)</li>
+                <li>Reduced-motion described</li>
+                <li>Open questions have owners</li>
+              </ul>
+            </div>
+
+            <div class="aside-block">
+              <h5>Owner-doc impact</h5>
+              <div class="stat"><span>CONTEXT_BUNDLE_CONTRACT.md</span><span class="v cyan">read-only</span></div>
+              <div class="stat"><span>INTERACTION_SURFACES…</span><span class="v cyan">read-only</span></div>
+              <div class="stat"><span>UI_RUNTIME_BOUNDARIES.md</span><span class="v cyan">read-only</span></div>
+              <div class="stat"><span>STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md</span><span class="v vault">invariant honored</span></div>
+            </div>
+
+            <div class="aside-block">
+              <h5>Activity</h5>
+              <div class="stat"><span>2026-05-14 · 14:08</span><span class="v">package committed</span></div>
+              <div class="stat"><span>2026-05-14 · 13:51</span><span class="v">edge-case review</span></div>
+              <div class="stat"><span>2026-05-14 · 11:02</span><span class="v">v1 draft</span></div>
+            </div>
+          </aside>
+        </div>
+      </div>
+
+      <p>
+        The console is intentionally compact. It does not animate. It does not draw the chain
+        on a pannable graph. It does not show contributor avatars. Its only job is to make the
+        chain visible and the maturity bar enforceable at a glance — which is precisely the
+        boundary work the pack is here to do.
+      </p>
+    </section>
+
+    <!-- ============== 05 ============== -->
+    <section class="spec" id="s5">
+      <h2><span class="secnum">05 ·</span>README template</h2>
+      <p class="lede">
+        Every handoff package opens with a README that the next reviewer reads first. The
+        template below is the minimum shape; fields are deliberately small.
+      </p>
+
+      <div class="template"><span class="c"># &lt;Design name&gt; — Design Handoff</span>
+
+<span class="h">Date:</span>           YYYY-MM-DD
+<span class="h">Status:</span>         Design handoff · v&lt;n&gt; · &lt;ready | held | superseded&gt;
+<span class="h">Authority:</span>      Visual guidance only — not runtime, not architecture
+<span class="h">Owner-docs:</span>     &lt;path/to/contract.md&gt;, &lt;…&gt;
+<span class="h">Crossing target:</span> &lt;A | B | C | D | E&gt;
+
+<span class="c">## What this is</span>
+
+One paragraph. Names the moment in the user's flow this design covers. Names what it
+deliberately is not.
+
+<span class="c">## Influence</span>
+
+<span class="v">May influence:</span>     layout, field grouping, copy, visual hierarchy, state coverage
+<span class="g">May not decide:</span>    schema shape, authority flags, mutation paths, runtime contracts
+<span class="g">Must not loosen:</span>   gated-execution invariant, owner-doc authority, write-guard semantics
+
+<span class="c">## Maturity</span>
+
+Linked checklist (§03 of the governance pack). Note any deferred-with-reason items.
+
+<span class="c">## Files</span>
+
+  prototype.html             — visual prototype + state gallery
+  design-notes.md            — visual guidance, rationale
+  state-gallery.md           — every UI state, screenshot or description
+  implementation-contracts.md — fields, intents, testids, classifier expectations
+  authority-boundaries.md    — what this design may / may not influence
+  edge-states.md             — empty / loading / degraded / blocked / stale / …
+  open-questions.md          — unresolved, with proposed owners
+
+<span class="c">## Related</span>
+
+Owner-doc citations. Adjacent handoff packages. Any prior version this supersedes.
+
+<span class="c">## Disclaimers</span>
+
+Design exploration is not architecture authority. Runtime truth lives in shipped code,
+tests, status docs, and validation receipts. This package proposes; it does not promote.
+</div>
+    </section>
+
+    <!-- ============== 06 ============== -->
+    <section class="spec" id="s6">
+      <h2><span class="secnum">06 ·</span>Implementation contract template</h2>
+      <p class="lede">
+        The contract document is the part of the package that implementation reads. It is the
+        only document that promises anything to code. Everything else in the package is
+        guidance.
+      </p>
+
+      <div class="template"><span class="c"># &lt;Design name&gt; — Implementation contract</span>
+
+<span class="c">## Status</span>
+
+<span class="h">Authority:</span>  Contract for UI integration · target-state
+<span class="h">Mutates:</span>    nothing on its own
+<span class="h">Depends on:</span> &lt;runtime contract path&gt;, &lt;runtime contract path&gt;
+
+<span class="c">## State enum</span>
+
+The implementation must enumerate exactly these states. Adding a state without
+amending this document means the design no longer covers it.
+
+  - &lt;state&gt;     description, allowed user actions
+  - &lt;state&gt;     …
+
+<span class="c">## Allowed transitions</span>
+
+Table of (from, trigger, to). Implementation must reject any other transition.
+
+<span class="c">## Data attributes</span>
+
+Stable attributes the design relies on for testids and behavioral selectors.
+
+  data-testid="&lt;node&gt;"
+  data-intent="&lt;verb.object&gt;"
+  data-&lt;state-axis&gt;="&lt;one-of&gt;"
+
+<span class="c">## Server contract surface</span>
+
+Endpoints / events / classifiers the UI consumes. The UI never re-classifies; the
+server's declared class wins.
+
+  &lt;endpoint or event&gt;          → &lt;ui effect&gt;
+  &lt;classifier&gt;                 → &lt;ui variant&gt;
+
+<span class="c">## Validation expectations</span>
+
+What a passing validation receipt looks like.
+
+  - render fixture &lt;name&gt; → state &lt;x&gt;
+  - intent &lt;name&gt; emits &lt;event&gt;
+  - denied state shows &lt;reason field&gt;
+
+<span class="c">## What this contract does not say</span>
+
+Explicit list of things implementation is free to choose: framework, style technique,
+animation library, persistence cache shape, network transport.
+</div>
+    </section>
+
+    <!-- ============== 07 ============== -->
+    <section class="spec" id="s7">
+      <h2><span class="secnum">07 ·</span>Authority &amp; runtime-truth disclaimer template</h2>
+      <p class="lede">
+        Every handoff carries this block verbatim — adjust only the lists. It exists so the
+        reader does not need to infer the disclaimer; it is on the page.
+      </p>
+
+      <div class="template"><span class="c"># Authority Boundaries &amp; Runtime-Truth Disclaimer</span>
+
+<span class="c">## This design is</span>
+
+  - Visual guidance for &lt;surface&gt;.
+  - An interaction contract limited to the fields enumerated in implementation-contracts.md.
+  - A target-state proposal until a normalized spec lands in owner-docs.
+
+<span class="c">## This design is not</span>
+
+  - Architecture authority. Authority lives in: &lt;owner-doc paths&gt;.
+  - Runtime truth. Runtime truth lives in shipped code, tests, status docs,
+    and validation receipts.
+  - A schema. The contract document references fields that the runtime exposes;
+    it does not declare them.
+  - A claim about current runtime behavior unless cited.
+
+<span class="c">## Invariants this design honors</span>
+
+  - <span class="g">Gated execution.</span> No interaction surface mutates durable state except through
+    the existing governed path: policy, validation, event pipeline, deterministic writer.
+  - <span class="g">Authority separation.</span> Chat is a canvas surface; Panel is the command surface;
+    Automation is its own lane. This design does not collapse them.
+  - <span class="g">Provenance visibility.</span> Where this design shows agent-contributed content,
+    it shows source, trust state, and authority flags.
+  - <span class="g">Bundle integrity.</span> Where this design shows context, it shows what was
+    excluded if exclusion affects interpretation.
+  - <span class="g">Memory candidacy.</span> Where this design shows agent memory, it never treats
+    candidate memory as semantic authority.
+
+<span class="c">## What changes this design may suggest to owner-docs</span>
+
+  - &lt;path&gt;  · &lt;suggested change · why · still subject to owner-doc review&gt;
+  - …
+
+<span class="c">## What changes this design must not suggest</span>
+
+  - Any loosening of the gated-execution invariant.
+  - Any new authority surface.
+  - Any new write path that bypasses policy / validation.
+  - Any silent promotion of agent memory into semantic knowledge.
+</div>
+    </section>
+
+    <!-- ============== 08 ============== -->
+    <section class="spec" id="s8">
+      <h2><span class="secnum">08 ·</span>State &amp; edge-case checklist</h2>
+      <p class="lede">
+        Every design must answer each of these — design it, or mark it
+        deferred-with-reason. Both are valid. Silence is not.
+      </p>
+
+      <div class="edge-grid">
+        <div class="edge-cell">
+          <span class="lbl">EMPTY</span>
+          <p>No content to show. Surface must explain why (no candidates, no context, no
+            history) and what produces content.</p>
+        </div>
+        <div class="edge-cell">
+          <span class="lbl cyan">LOADING</span>
+          <p>Awaiting an upstream operation. Surface must be inert (no actions enabled) and
+            distinguishable from <em>empty</em>.</p>
+        </div>
+        <div class="edge-cell">
+          <span class="lbl amber">DEGRADED</span>
+          <p>A subsystem is failing but the surface still functions partially. Must show what
+            is degraded and what is unaffected.</p>
+        </div>
+        <div class="edge-cell">
+          <span class="lbl dang">BLOCKED</span>
+          <p>An action is not allowed. Surface must name the reason in copy, and the denial
+            must be auditable (receipt or session-log turn).</p>
+        </div>
+        <div class="edge-cell">
+          <span class="lbl amber">STALE CONTEXT</span>
+          <p>Context shown is past its expiry. Authority flags drop to the stale-default set;
+            UI shows when it became stale and why.</p>
+        </div>
+        <div class="edge-cell">
+          <span class="lbl gold">MISSING PROVENANCE</span>
+          <p>An item is shown without a source. Must be labelled, must not be promotable,
+            must not be silently authoritative.</p>
+        </div>
+        <div class="edge-cell">
+          <span class="lbl dang">WRITE-GUARD DENIAL</span>
+          <p>A write was attempted and refused. Surface must show denial reason and the
+            receipt id, and must not retry silently.</p>
+        </div>
+        <div class="edge-cell">
+          <span class="lbl">REDUCED MOTION</span>
+          <p>All animation must have a static fallback. State changes must be readable
+            without motion cues alone.</p>
+        </div>
+        <div class="edge-cell">
+          <span class="lbl vault">NARROW LAYOUT</span>
+          <p>Designs ship a portrait/mobile sketch or declare portrait deferred-with-reason.
+            Authority labels never collapse to icons alone.</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="callout-label">How to mark deferred</span>
+        Add <code>deferred-with-reason: &lt;reason&gt;</code> to the edge-states.md entry. A
+        deferred edge case is a tracked liability, not an oversight; it will be a hold reason
+        if the deferral persists past two packages.
+      </div>
+    </section>
+
+    <!-- ============== 09 ============== -->
+    <section class="spec" id="s9">
+      <h2><span class="secnum">09 ·</span>"May influence / may not decide" table</h2>
+      <p class="lede">
+        The single most-skipped section in every prior handoff, and the single most-protective
+        against accidental authority creep. Fill this in for the design at hand. Below is the
+        template shape.
+      </p>
+
+      <table class="spec">
+        <thead>
+          <tr>
+            <th>Concern</th>
+            <th>May influence</th>
+            <th>May propose</th>
+            <th>May not decide</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>UI layout</td>
+            <td class="yes">YES — full</td>
+            <td class="maybe">—</td>
+            <td class="no">—</td>
+          </tr>
+          <tr>
+            <td>Copy &amp; microcopy</td>
+            <td class="yes">YES — full</td>
+            <td class="maybe">—</td>
+            <td class="no">—</td>
+          </tr>
+          <tr>
+            <td>State machine (UI-side)</td>
+            <td class="maybe">subset — adds/removes only with owner-doc review</td>
+            <td class="yes">YES — propose to owner-doc</td>
+            <td class="no">cannot promote</td>
+          </tr>
+          <tr>
+            <td>Field naming on artifacts</td>
+            <td class="no">—</td>
+            <td class="yes">YES — propose to owner-doc</td>
+            <td class="no">cannot rename in owner-doc</td>
+          </tr>
+          <tr>
+            <td>Authority flags on bundles / memory</td>
+            <td class="no">—</td>
+            <td class="maybe">propose addition only with rationale</td>
+            <td class="no">cannot loosen existing flags</td>
+          </tr>
+          <tr>
+            <td>Endpoints / events</td>
+            <td class="no">—</td>
+            <td class="maybe">name UI affordances bound to existing endpoints</td>
+            <td class="no">cannot invent endpoints</td>
+          </tr>
+          <tr>
+            <td>Classifier outputs</td>
+            <td class="no">—</td>
+            <td class="no">—</td>
+            <td class="no">UI renders what server returns; never re-classifies</td>
+          </tr>
+          <tr>
+            <td>Validation receipt shape</td>
+            <td class="no">—</td>
+            <td class="maybe">may suggest fields the UI needs visible</td>
+            <td class="no">cannot define receipt schema</td>
+          </tr>
+          <tr>
+            <td>Persistence shape</td>
+            <td class="no">—</td>
+            <td class="no">—</td>
+            <td class="no">vault / mirror contracts own this</td>
+          </tr>
+          <tr>
+            <td>Runtime behavior</td>
+            <td class="no">—</td>
+            <td class="no">—</td>
+            <td class="no">runtime contracts and shipped code only</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============== 10 ============== -->
+    <section class="spec" id="s10">
+      <h2><span class="secnum">10 ·</span>Authority &amp; disclaimers</h2>
+      <p class="lede">
+        Repeating the floor invariants where they cannot be skipped past.
+      </p>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Design is not architecture authority</span>
+        Architecture authority lives in <code>docs/INTERACTION_SURFACES_AND_AUTHORITY/</code>,
+        <code>docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md</code>,
+        <code>docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md</code>, and adjacent
+        owner-docs. This pack governs the process by which designs become inputs to those
+        docs. It does not become those docs.
+      </div>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Runtime truth lives downstream</span>
+        Runtime truth lives in shipped code, tests, status docs, and validation receipts.
+        Nothing in this pack promotes runtime claims. A design may describe an interaction
+        contract; it may not assert that the runtime currently honors it.
+      </div>
+
+      <div class="callout invariant">
+        <span class="callout-label">Invariant · Gated execution</span>
+        No interaction surface — Panel, Canvas Chat, Automation, or any console proposed in
+        this pack — mutates durable state outside the governed pipeline. Review consoles
+        propose state transitions; they do not write owner-docs.
+      </div>
+
+      <div class="callout warn">
+        <span class="callout-label">Process risk · authority creep</span>
+        The single largest risk of a governance pack is the pack itself becoming authority.
+        Mitigation: every section of every handoff cites owner-docs and marks itself
+        target-state. The pack proposes process; owner-docs remain the contract.
+      </div>
+    </section>
+
+    <!-- ============== 11 ============== -->
+    <section class="spec" id="s11">
+      <h2><span class="secnum">11 ·</span>Open questions</h2>
+      <ol>
+        <li><strong>Where does the review console live?</strong> Is it a tab in the existing
+          AI Panel, a separate page in <code>design_handoff/</code>, or a static HTML rendered
+          from the folder shape? Recommended: static HTML rendered from the folder, no new
+          runtime surface.</li>
+        <li><strong>Who is the named reviewer at crossing B?</strong> The pack assumes a single
+          named reviewer; the team's review topology may want two (visual + contract).</li>
+        <li><strong>Should "hold" be visible in GitHub?</strong> If a package is held at
+          crossing B, should that surface as a label on a draft issue, or stay purely inside
+          the handoff folder?</li>
+        <li><strong>How are superseded packages handled?</strong> Soft delete, archive folder,
+          or status field on the README? Recommended: status field on the README, no folder
+          moves.</li>
+        <li><strong>Does the validation receipt link back to the package?</strong> If so,
+          the package becomes inspectable from the runtime-proof surface — closing the loop.
+          That cross-link is desirable but not a blocker for v1.</li>
+      </ol>
+    </section>
+
+    <!-- ============== 12 ============== -->
+    <section class="spec" id="s12">
+      <h2><span class="secnum">12 ·</span>Handoff notes for Claude Code / Codex</h2>
+      <p class="lede">What this package would feed if it were normalized.</p>
+
+      <h3>Likely normalized spec</h3>
+      <ul>
+        <li>New doc: <code>docs/INTERACTION_SURFACES_AND_AUTHORITY/DESIGN_HANDOFF_GOVERNANCE.md</code></li>
+        <li>Contents: the flow diagram (§02), the maturity checklist (§03), the
+          influence-table template (§09), the three template skeletons (§05–07).</li>
+        <li>Authority: process pattern. Owner-doc for the handoff process itself. Does not
+          modify any existing contract.</li>
+      </ul>
+
+      <h3>Likely follow-on issues</h3>
+      <ul>
+        <li><em>Adopt handoff folder shape across all <code>companion-ui/design_handoff/</code> entries.</em>
+          Acceptance: every folder contains README, prototype.html, design-notes.md,
+          state-gallery.md, implementation-contracts.md, authority-boundaries.md,
+          edge-states.md, open-questions.md.</li>
+        <li><em>Add maturity-checklist front-matter to existing handoff READMEs.</em>
+          Acceptance: existing handoffs declare which checklist items they pass.</li>
+        <li><em>Render the review console statically from the folder.</em> Acceptance: a
+          static page lists packages, their crossing position, and maturity score, with no
+          runtime dependency.</li>
+      </ul>
+
+      <h3>What this design must not feed</h3>
+      <ul>
+        <li>A runtime review service. The chain is a process pattern; it does not require a server.</li>
+        <li>A new authority over owner-docs. Reviewers and owner-doc owners remain the
+          decision-makers.</li>
+        <li>A blocking gate on PRs. Maturity blocks crossing B (handoff → spec). PRs are
+          gated by the issue's acceptance criteria, not by the handoff package.</li>
+      </ul>
+
+      <div class="callout vault">
+        <span class="callout-label">Validation expectation</span>
+        If this design is normalized and adopted, a passing receipt is: every package in
+        <code>companion-ui/design_handoff/</code> conforms to the folder shape, declares
+        maturity, and cites owner-docs. No claim of runtime behavior is made.
+      </div>
+    </section>
+
+  </main>
+</div>
+</body>
+</html>
