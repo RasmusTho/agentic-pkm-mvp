@@ -28,7 +28,7 @@ class WhyNowSignal(BaseModel):
     """
 
     rationale: str
-    signal_name: Optional[str] = None
+    signal_name: str
 
 
 class SurfacedItem(BaseModel):
@@ -42,7 +42,7 @@ class SurfacedItem(BaseModel):
 class ResurfacingBundleFrame(BaseModel):
     bundle_id: str
     why_now: str
-    why_now_signal_name: Optional[str] = None
+    why_now_signal_name: str
     surfaced_items: list[SurfacedItem] = Field(default_factory=list)
     relatedness_signals: list[SurfacedItem] = Field(default_factory=list)
     priority_signals: list[SurfacedItem] = Field(default_factory=list)
