@@ -148,3 +148,12 @@ def test_orientation_bundle_remains_non_write_authoritative():
     )
     with pytest.raises(BundleAuthorityViolation):
         build_orientation_frame_from_bundle(write_bundle, now=_NOW)
+
+    # Bundles without may_orient are rejected — orientation must not silently
+    # upgrade a bundle not authorized for orientation use (e.g. may_answer only).
+    no_orient_bundle = _bundle(
+        included=[_fact_item()],
+        authority=AuthorityFlags(may_answer=True, may_orient=False),
+    )
+    with pytest.raises(BundleAuthorityViolation):
+        build_orientation_frame_from_bundle(no_orient_bundle, now=_NOW)

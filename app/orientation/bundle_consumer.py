@@ -79,9 +79,15 @@ def build_orientation_frame_from_bundle(
 ) -> OrientationBundleFrame:
     """Project a ContextBundle into an orientation frame.
 
-    Refuses to consume a bundle that claims `may_write=True` — orientation
-    is a non-write surface and must not silently upgrade authority.
+    Refuses to consume a bundle that lacks `may_orient` authority or claims
+    `may_write=True` — orientation is a non-write surface and must not silently
+    upgrade authority or accept bundles not authorized for orientation use.
     """
+    if not bundle.authority.may_orient:
+        raise BundleAuthorityViolation(
+            f"bundle {bundle.id} does not carry may_orient=True; "
+            "cannot consume for orientation without explicit orientation authority"
+        )
     if bundle.authority.may_write:
         raise BundleAuthorityViolation(
             f"bundle {bundle.id} carries may_write=True; orientation is non-write"
