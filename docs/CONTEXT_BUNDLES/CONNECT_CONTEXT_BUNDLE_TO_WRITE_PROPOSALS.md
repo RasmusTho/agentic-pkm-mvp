@@ -7,6 +7,9 @@ parent_capability: Context Bundles
 prerequisites: [CONTEXT-BUNDLES-01, CONTEXT-BUNDLES-02]
 depends_on: [DEFINE_CONTEXT_BUNDLE_SCHEMA.md, EMIT_CONTEXT_BUNDLE_FROM_RETRIEVAL.md]
 can_parallelize_with: []
+status: implemented
+implementation: app/writeback/bundle_proposal.py
+github_issue: "https://github.com/RasmusTho/agentic-pkm-mvp/issues/948"
 ---
 
 # CONNECT_CONTEXT_BUNDLE_TO_WRITE_PROPOSALS
@@ -42,13 +45,13 @@ If it is vague, evidence-bearing proposals can silently turn into hidden write a
 
 ## Acceptance Criteria
 
-- [ ] The proposal contract requires a bundle or stable bundle reference to travel with governed
+- [x] The proposal contract requires a bundle or stable bundle reference to travel with governed
   write proposals. Verify: `tests/writeback/test_context_bundle_write_authority.py::test_context_bundle_may_propose_without_write`
-- [ ] Proposal linkage preserves affected artifacts, proposal basis, and authority posture
+- [x] Proposal linkage preserves affected artifacts, proposal basis, and authority posture
   separately. Verify: `tests/writeback/test_context_bundle_write_authority.py::test_write_proposal_preserves_bundle_basis_and_authority_flags`
-- [ ] The implementation spec distinguishes propose, stage, apply, and log rather than collapsing
+- [x] The implementation spec distinguishes propose, stage, apply, and log rather than collapsing
   them into one mutation step. Verify: `tests/writeback/test_context_bundle_write_authority.py::test_context_bundle_write_flow_distinguishes_propose_stage_apply_and_log`
-- [ ] The proposal contract explicitly forbids bundle linkage from bypassing write guards or
+- [x] The proposal contract explicitly forbids bundle linkage from bypassing write guards or
   upgrading `may_propose` into `may_write`. Verify: `tests/writeback/test_context_bundle_write_authority.py::test_context_bundle_cannot_bypass_write_guards`
 
 ## How to Verify (Pre-Merge)
@@ -72,5 +75,6 @@ If it is vague, evidence-bearing proposals can silently turn into hidden write a
 
 ## Related GitHub Issues
 
-Not created in this PR. When filed later, use this task spec as the child implementation issue
-contract for bundle-to-proposal linkage.
+- Implementation issue: [#948](https://github.com/RasmusTho/agentic-pkm-mvp/issues/948)
+- Pull request: [#952](https://github.com/RasmusTho/agentic-pkm-mvp/pull/952)
+- Parent feature: [#894](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894)
