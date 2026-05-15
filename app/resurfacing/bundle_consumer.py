@@ -75,7 +75,7 @@ def _is_priority(item: IncludedItem) -> bool:
 def build_resurfacing_bundle_frame(
     bundle: ContextBundle,
     *,
-    why_now: "str | WhyNowSignal",
+    why_now: WhyNowSignal,
     now: datetime | None = None,
 ) -> ResurfacingBundleFrame:
     """Project a ContextBundle into a resurfacing suggestion frame.
@@ -83,18 +83,17 @@ def build_resurfacing_bundle_frame(
     Requires ``may_resurface=True`` and rejects ``may_write=True`` — resurfacing
     is a suggestion-only surface that must not upgrade bundle authority.
 
-    ``why_now`` must be either a non-empty string rationale or a
-    ``WhyNowSignal`` with a ``signal_name`` that anchors the explanation to a
-    specific recorded signal rather than opaque semantic relatedness.
+    ``why_now`` must be a ``WhyNowSignal`` — ``signal_name`` anchors the
+    rationale to a specific recorded signal so the surfacing decision is
+    auditable rather than opaque semantic relatedness.
     """
-    if isinstance(why_now, WhyNowSignal):
-        why_now_rationale = why_now.rationale
-        why_now_signal_name = why_now.signal_name
-    else:
-        if not why_now.strip():
-            raise ValueError("why_now must be a non-empty rationale string")
-        why_now_rationale = why_now
-        why_now_signal_name = None
+    if not isinstance(why_now, WhyNowSignal):
+        raise TypeError(
+            "why_now must be a WhyNowSignal — plain strings are not accepted "
+            "because they leave no provenance anchor for the surfacing decision"
+        )
+    why_now_rationale = why_now.rationale
+    why_now_signal_name = why_now.signal_name
 
     if not bundle.authority.may_resurface:
         raise BundleAuthorityViolation(
