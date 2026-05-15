@@ -1,6 +1,9 @@
-State: Filed specification. Parent feature issue #894 and the first two child implementation issues
-#895/#896 are filed on GitHub. Runtime implementation has not shipped; no runtime behavior changes
-are claimed here.
+State: All six implementation slices delivered. Parent feature issue #894 closed 2026-05-15 after
+child issues #895 (schema, PR #931), #896 (retrieval emission, PR #932), #946 (orientation, PR #950),
+#947 (resurfacing, PR #951), #948 (write proposals, PR #952), and #949 (receipts, PR #954) were
+all merged and validated. No runtime behavior changes are claimed here beyond the implemented
+schema, orientation consumer, resurfacing consumer, write-proposal linkage, and receipt-recording
+contracts at the typed-contract / pydantic layer.
 
 # Context Bundles
 
@@ -41,15 +44,18 @@ surface for that contract.
 
 ## Task List
 
-1. [DEFINE_CONTEXT_BUNDLE_SCHEMA.md](DEFINE_CONTEXT_BUNDLE_SCHEMA.md) — filed as
-   [#895](https://github.com/RasmusTho/agentic-pkm-mvp/issues/895).
-2. [EMIT_CONTEXT_BUNDLE_FROM_RETRIEVAL.md](EMIT_CONTEXT_BUNDLE_FROM_RETRIEVAL.md) — filed as
-   [#896](https://github.com/RasmusTho/agentic-pkm-mvp/issues/896); depends on #895.
-3. [USE_CONTEXT_BUNDLE_FOR_ORIENTATION.md](USE_CONTEXT_BUNDLE_FOR_ORIENTATION.md) — not yet filed.
-4. [USE_CONTEXT_BUNDLE_FOR_RESURFACING.md](USE_CONTEXT_BUNDLE_FOR_RESURFACING.md) — not yet filed.
+1. [DEFINE_CONTEXT_BUNDLE_SCHEMA.md](DEFINE_CONTEXT_BUNDLE_SCHEMA.md) — delivered, closed
+   [#895](https://github.com/RasmusTho/agentic-pkm-mvp/issues/895) via PR #931.
+2. [EMIT_CONTEXT_BUNDLE_FROM_RETRIEVAL.md](EMIT_CONTEXT_BUNDLE_FROM_RETRIEVAL.md) — delivered, closed
+   [#896](https://github.com/RasmusTho/agentic-pkm-mvp/issues/896) via PR #932.
+3. [USE_CONTEXT_BUNDLE_FOR_ORIENTATION.md](USE_CONTEXT_BUNDLE_FOR_ORIENTATION.md) — delivered, closed
+   [#946](https://github.com/RasmusTho/agentic-pkm-mvp/issues/946) via PR #950.
+4. [USE_CONTEXT_BUNDLE_FOR_RESURFACING.md](USE_CONTEXT_BUNDLE_FOR_RESURFACING.md) — delivered, closed
+   [#947](https://github.com/RasmusTho/agentic-pkm-mvp/issues/947) via PR #951.
 5. [CONNECT_CONTEXT_BUNDLE_TO_WRITE_PROPOSALS.md](CONNECT_CONTEXT_BUNDLE_TO_WRITE_PROPOSALS.md) —
-   not yet filed.
-6. [RECORD_CONTEXT_BUNDLE_RECEIPTS.md](RECORD_CONTEXT_BUNDLE_RECEIPTS.md) — not yet filed.
+   delivered, closed [#948](https://github.com/RasmusTho/agentic-pkm-mvp/issues/948) via PR #952.
+6. [RECORD_CONTEXT_BUNDLE_RECEIPTS.md](RECORD_CONTEXT_BUNDLE_RECEIPTS.md) — delivered, closed
+   [#949](https://github.com/RasmusTho/agentic-pkm-mvp/issues/949) via PR #954.
 
 ## Flat Execution Order
 
@@ -86,19 +92,19 @@ surface for that contract.
 
 - This directory is accepted at the docs/spec layer when the README, parent feature reference, and
   all six task specs are merged and internally consistent.
-- Runtime acceptance remains future work and should be recorded on parent feature issue
-  [#894](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894) plus child implementation issues.
-- Owner-doc promotion is gated on implementation evidence that the runtime actually emits, consumes,
-  and receipts context bundles truthfully.
+- All six child slices are delivered. Parent feature issue #894 is closed.
+- Owner-doc promotion beyond the typed-contract layer (e.g. STATUS.md, ARCHITECTURE.md) is gated
+  on runtime integration evidence — production route wiring, real vault emission — which is a
+  separate future slice.
 
 ## Evidence Surface
 
-- Local task specs in this directory define the implementation contract.
-- Future child PRs provide slice verification receipts.
-- Parent feature issue [#894](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894) is the
-  authoritative backlog and validation surface for this capability.
-- Owner docs such as `docs/STATUS.md` and `docs/ARCHITECTURE.md` should change only when runtime
-  support is actually delivered.
+- Task specs in this directory define the implementation contract.
+- Slice verification receipts are on the closed child issues (#946–#949) and the closed parent (#894).
+- Parent feature issue [#894](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894) is closed
+  with a full validation receipt.
+- Owner docs such as `docs/STATUS.md` and `docs/ARCHITECTURE.md` should update only when runtime
+  route wiring actually delivers production bundle emission.
 
 ## Relationship to GitHub Issues
 
@@ -107,7 +113,10 @@ GitHub issue state:
 - Parent feature issue: [#894](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894).
 - `CONTEXT-BUNDLES-01`: [#895](https://github.com/RasmusTho/agentic-pkm-mvp/issues/895).
 - `CONTEXT-BUNDLES-02`: [#896](https://github.com/RasmusTho/agentic-pkm-mvp/issues/896).
-- `CONTEXT-BUNDLES-03` through `CONTEXT-BUNDLES-06`: not yet filed.
+- `CONTEXT-BUNDLES-03`: [#946](https://github.com/RasmusTho/agentic-pkm-mvp/issues/946) — closed.
+- `CONTEXT-BUNDLES-04`: [#947](https://github.com/RasmusTho/agentic-pkm-mvp/issues/947) — closed.
+- `CONTEXT-BUNDLES-05`: [#948](https://github.com/RasmusTho/agentic-pkm-mvp/issues/948) — closed.
+- `CONTEXT-BUNDLES-06`: [#949](https://github.com/RasmusTho/agentic-pkm-mvp/issues/949) — closed.
 
 The local source/reference copy for the parent feature issue is
 [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). GitHub Issue #894 is the authoritative
@@ -123,4 +132,5 @@ Promote current-state owner docs only after implementation receipts show all of 
 - write proposals carry bundle linkage without bypassing write guards,
 - and receipts expose bundle provenance and exclusions truthfully.
 
-No owner-doc promotion is warranted until capability validation is complete on #894.
+Capability validation is complete on #894 (closed 2026-05-15). Further owner-doc promotion (STATUS.md,
+ARCHITECTURE.md) is gated on production route wiring delivering actual runtime bundle emission.

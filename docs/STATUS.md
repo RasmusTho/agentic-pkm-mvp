@@ -269,5 +269,14 @@ Update (2026-05-14): `CONTEXT-BUNDLES-01` (#895) delivered by PR #931. Adds the 
 `ContextBundle` pydantic schema (`app/context_bundles/schema.py`) covering identity, trigger,
 intended use, scope, included/excluded items with per-item provenance and trust posture, distinct
 authority flags, stale/expiry posture, and receipt linkage. No runtime behavior changed; the schema
-is a typed contract surface only. The broader context-bundle capability (#894) and remaining child
-slices (#896 and later) remain future work.
+is a typed contract surface only.
+
+Update (2026-05-15): All remaining Context Bundles child slices delivered. `CONTEXT-BUNDLES-02`
+(#896) delivered retrieval emission; `CONTEXT-BUNDLES-03` (#946, PR #950) orientation consumer;
+`CONTEXT-BUNDLES-04` (#947, PR #951) resurfacing consumer with auditable `WhyNowSignal`;
+`CONTEXT-BUNDLES-05` (#948, PR #952) write-proposal linkage enforcing `may_propose ≠ may_write`;
+`CONTEXT-BUNDLES-06` (#949, PR #954) receipt recording. Parent feature #894 closed. All six slices
+are typed-contract implementations (`app/context_bundles/`, `app/orientation/bundle_consumer.py`,
+`app/resurfacing/bundle_consumer.py`, `app/writeback/bundle_proposal.py`,
+`app/receipts/bundle_receipts.py`) with full test coverage. No production route wiring has shipped;
+runtime bundle emission in API routes is a separate future slice.
