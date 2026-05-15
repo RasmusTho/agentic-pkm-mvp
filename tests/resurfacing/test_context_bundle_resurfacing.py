@@ -223,3 +223,57 @@ def test_resurfacing_normalizes_naive_caller_now():
     stale_bundle = _bundle(included=[_item("art_k", "old note")], expiry=stale_expiry)
     stale_frame = build_resurfacing_bundle_frame(stale_bundle, why_now=_SIGNAL, now=past_naive_now)
     assert stale_frame.stale is True
+
+
+def test_resurfacing_frame_preserves_exclusions():
+    # Exclusions must survive onto the frame so a human can inspect why
+    # particular items were left out — silently dropping them hides the
+    # filtering decision and makes the surfacing unauditable.
+    excluded = ExcludedItem(
+        artifact_id="art_excluded",
+        reason="trust state below threshold",
+        trust_state="unreviewed",
+        provenance=ItemProvenance(origin="vault note"),
+    )
+    bundle = _bundle(included=[_item("art_l", "relevant now")], excluded=[excluded])
+    frame = build_resurfacing_bundle_frame(bundle, why_now=_SIGNAL, now=_NOW)
+
+    assert any(ex.artifact_id == "art_excluded" for ex in frame.exclusions)
+    assert frame.exclusions[0].reason == "trust state below threshold"
+
+
+def test_resurfacing_rejects_blank_why_now_signal_fields():
+    # Empty or whitespace-only rationale/signal_name leaves the surfacing
+    # decision without an auditable anchor — must be rejected at construction.
+    with pytest.raises(ValueError, match="signal_name"):
+        WhyNowSignal(rationale="valid", signal_name="")
+    with pytest.raises(ValueError, match="signal_name"):
+        WhyNowSignal(rationale="valid", signal_name="   ")
+    with pytest.raises(ValueError, match="rationale"):
+        WhyNowSignal(rationale="", signal_name="valid_signal")
+    with pytest.raises(ValueError, match="rationale"):
+        WhyNowSignal(rationale="\t\n  ", signal_name="valid_signal")
+
+
+def test_resurfacing_priority_classification_uses_source_role_not_reason_text():
+    # Free-text reasons containing "urgent", "priority", or "unresolved" must
+    # not by themselves classify items as priority — phrases like "not urgent"
+    # or "low priority" would otherwise be misclassified. Priority requires
+    # an explicit source_role.
+    negated_item = _item("art_neg", "not urgent and low priority — can wait")
+    no_role_item = _item("art_noroles", "unresolved blocker mentioned in note")
+    explicit_priority = _item(
+        "art_explicit", "active escalation", source_role="priority_signal"
+    )
+
+    bundle = _bundle(included=[negated_item, no_role_item, explicit_priority])
+    frame = build_resurfacing_bundle_frame(bundle, why_now=_SIGNAL, now=_NOW)
+
+    priority_ids = {s.artifact_id for s in frame.priority_signals}
+    relatedness_ids = {s.artifact_id for s in frame.relatedness_signals}
+
+    # Only the explicit source_role item is priority.
+    assert priority_ids == {"art_explicit"}
+    # Items lacking source_role fall to relatedness regardless of reason text.
+    assert "art_neg" in relatedness_ids
+    assert "art_noroles" in relatedness_ids

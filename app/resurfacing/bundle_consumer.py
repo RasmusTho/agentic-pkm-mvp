@@ -10,9 +10,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from app.context_bundles.schema import ContextBundle, IncludedItem, ItemProvenance
+from app.context_bundles.schema import (
+    ContextBundle,
+    ExcludedItem,
+    IncludedItem,
+    ItemProvenance,
+)
 
 
 class BundleAuthorityViolation(Exception):
@@ -25,10 +30,22 @@ class WhyNowSignal(BaseModel):
     ``rationale`` is the human-readable explanation; ``signal_name`` anchors it
     to a specific recorded signal (e.g. "dependency_gap", "watcher_run_24h")
     so the "why now" is auditable rather than opaque semantic relatedness.
+    Both fields must be non-empty after whitespace stripping — blank values
+    leave no auditable anchor.
     """
 
     rationale: str
     signal_name: str
+
+    @field_validator("rationale", "signal_name")
+    @classmethod
+    def _must_be_non_blank(cls, v: str, info) -> str:
+        if not v or not v.strip():
+            raise ValueError(
+                f"{info.field_name} must be a non-empty string — "
+                "blank why-now anchors leave the surfacing decision unauditable"
+            )
+        return v
 
 
 class SurfacedItem(BaseModel):
@@ -46,6 +63,7 @@ class ResurfacingBundleFrame(BaseModel):
     surfaced_items: list[SurfacedItem] = Field(default_factory=list)
     relatedness_signals: list[SurfacedItem] = Field(default_factory=list)
     priority_signals: list[SurfacedItem] = Field(default_factory=list)
+    exclusions: list[ExcludedItem] = Field(default_factory=list)
     stale: bool = False
     stale_reason: Optional[str] = None
     suggestion_only: bool = True
@@ -66,10 +84,10 @@ def _surfaced(item: IncludedItem) -> SurfacedItem:
 
 
 def _is_priority(item: IncludedItem) -> bool:
-    if item.source_role and item.source_role in _PRIORITY_ROLES:
-        return True
-    reason = (item.reason or "").lower()
-    return any(kw in reason for kw in ("priority", "urgent", "unresolved", "high-priority"))
+    # Priority is classified solely by the structured `source_role` field —
+    # substring matching on the free-text `reason` is unreliable (it would
+    # classify "not urgent" or "low priority" as priority).
+    return bool(item.source_role and item.source_role in _PRIORITY_ROLES)
 
 
 def build_resurfacing_bundle_frame(
@@ -142,6 +160,7 @@ def build_resurfacing_bundle_frame(
         surfaced_items=surfaced,
         relatedness_signals=relatedness,
         priority_signals=priority,
+        exclusions=list(bundle.excluded),
         stale=stale,
         stale_reason=stale_reason,
         suggestion_only=True,
