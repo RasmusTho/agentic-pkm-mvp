@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Query
+
+_log = logging.getLogger(__name__)
 
 from app.agents.panel.parser import parse_panel
 from app.config.paths import resolve_vault_root
@@ -32,7 +36,8 @@ def debug_panel(note_rel: str = Query(..., description="Vault-relative path to n
     try:
         markdown = note_path.read_text(encoding="utf-8")
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"failed to read note: {exc}")
+        _log.error("debug panel: failed to read note %s: %s", note_path, exc)
+        raise HTTPException(status_code=500, detail="failed to read note")
 
     state = parse_panel(markdown)
     actions = [

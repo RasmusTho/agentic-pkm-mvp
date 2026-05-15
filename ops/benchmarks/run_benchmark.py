@@ -129,7 +129,15 @@ def _bench_index_write(
             model_name = identity.model
         except Exception as exc:
             # Keep benchmark contract stable in offline/local environments.
-            base_identity = get_embedding_identity()
+            try:
+                base_identity = get_embedding_identity()
+            except Exception:
+                base_identity = EmbeddingIdentity(
+                    provider="mock",
+                    model="mock-embedding",
+                    dim=1536,
+                    normalize=True,
+                )
             warnings.append(
                 f"{METRIC_INDEX_WRITE} embeddings provider unavailable; using synthetic vector: {exc}"
             )
@@ -239,7 +247,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         os.environ.setdefault("STORE_BACKEND", "memory")
     if args.model_profile == "mock":
         os.environ.setdefault("LLM_PROVIDER", "mock")
-        os.environ.setdefault("EMBED_PROFILE", "deterministic")
+        os.environ["EMBED_PROFILE"] = "deterministic"
         os.environ.setdefault(
             "LLM_MOCK_RESPONSE",
             '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}',

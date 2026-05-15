@@ -8,6 +8,7 @@ from app.config.paths import (
     ResolvedPaths,
     resolve_flow_settings_path,
     resolve_paths,
+    resolve_runtime_artifact_path,
     resolve_system_settings_path,
     resolve_vault_root,
 )
@@ -19,6 +20,22 @@ def test_resolve_vault_root_prefers_cli(monkeypatch: pytest.MonkeyPatch, tmp_pat
     cli_root = tmp_path / "cli_vault"
     result = resolve_vault_root(cli_override=cli_root)
     assert result == cli_root
+
+
+def test_resolve_vault_root_test_environment_appends_test_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    assert resolve_vault_root(environment="test") == Path("vault-test")
+
+
+def test_resolve_vault_root_test_environment_honours_explicit_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    test_root = tmp_path / "custom_test_vault"
+    monkeypatch.setenv("VAULT_ROOT_TEST", str(test_root))
+    assert resolve_vault_root(environment="test") == test_root
+
+
+def test_resolve_runtime_artifact_path_scopes_test_environment() -> None:
+    assert resolve_runtime_artifact_path(Path("tmp/index-outbox.jsonl"), environment="test") == Path("tmp-test/index-outbox.jsonl")
 
 
 def test_system_settings_explicit_beats_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

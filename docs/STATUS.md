@@ -259,6 +259,12 @@ searches find or create active implementation issues. The bridge-map reference t
 contract was corrected from a local stale "future" reference to the active
 `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` contract.
 
+Update (2026-05-14): Issue #850 delivered v6.0 seam observability: `config/runtime.defaults.env`
+now explicitly declares `CANVAS_ENABLED=0` (canvas seam deliberately gated until stable);
+startup logs report v6.0 seam readiness at INFO level; `/api/health` and `/api/status` include
+an informational `v6_0_seams` field surfacing `orientation`, `resurfacing`, `commitments`, and
+`canvas` status. This field is informational only and does not affect health pass/fail.
+
 Update (2026-05-14): `CONTEXT-BUNDLES-01` (#895) delivered by PR #931. Adds the minimal
 `ContextBundle` pydantic schema (`app/context_bundles/schema.py`) covering identity, trigger,
 intended use, scope, included/excluded items with per-item provenance and trust posture, distinct

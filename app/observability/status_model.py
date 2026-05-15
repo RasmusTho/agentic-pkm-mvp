@@ -177,6 +177,7 @@ class SystemStatus(BaseModel):
     watcher_automation: Optional[WatcherAutomationStatus] = None
     instance_provenance: Optional[InstanceProvenanceStatus] = None
     context_dimensions: Optional[ContextDimensionsStatus] = None
+    v6_0_seams: Optional[Dict[str, str]] = None
 
 
 __all__ = [

@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Claude Design Package — 2026-05-14 — Yggdrasil Companion UI</title>
+<link rel="stylesheet" href="./colors_and_type.css" />
+<link rel="stylesheet" href="./spec_chrome.css" />
+<style>
+  /* ============================================================
+     LOCAL — index page
+     ============================================================ */
+  .pkg-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-5);
+    margin: var(--space-3) 0 var(--space-6);
+  }
+  @media (max-width: 900px) { .pkg-grid { grid-template-columns: 1fr; } }
+  .pkg {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    padding: var(--space-5);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    text-decoration: none;
+    color: var(--fg-1);
+    border-top: 2px solid var(--cyan);
+    transition: border-color var(--duration-fast) var(--ease), background var(--duration-fast) var(--ease);
+  }
+  .pkg:hover {
+    border-color: var(--cyan);
+    background: var(--bg-overlay);
+    text-decoration: none;
+  }
+  .pkg .num {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--cyan);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+  .pkg h3 {
+    font-family: var(--font-display);
+    font-size: var(--text-xl);
+    color: var(--fg-1);
+    font-weight: var(--weight-regular);
+    line-height: 1.15;
+    letter-spacing: 0;
+    text-transform: none;
+    margin: 0;
+  }
+  .pkg p {
+    font-size: var(--text-sm);
+    color: var(--fg-2);
+    line-height: 1.5;
+    margin: 0;
+  }
+  .pkg .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+  .pkg .meta-row .v { color: var(--fg-2); }
+  .pkg .open {
+    align-self: flex-start;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--cyan);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+  }
+  .pkg.gold { border-top-color: var(--accent); }
+  .pkg.gold .num { color: var(--accent); }
+  .pkg.gold .open { color: var(--accent); }
+  .pkg.green { border-top-color: var(--vault); }
+  .pkg.green .num { color: var(--vault); }
+  .pkg.green .open { color: var(--vault); }
+  .pkg.agent { border-top-color: var(--agent); }
+  .pkg.agent .num { color: var(--agent); }
+  .pkg.agent .open { color: var(--agent); }
+
+  /* dependency diagram */
+  .deps {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    padding: var(--space-5);
+    margin: var(--space-3) 0 var(--space-6);
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: var(--space-3);
+  }
+  @media (max-width: 900px) { .deps { grid-template-columns: 1fr; } }
+  .dep-node {
+    border: 1px solid var(--border-strong);
+    background: var(--bg-base);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .dep-node .lbl {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+  .dep-node .name {
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    color: var(--fg-1);
+    line-height: 1.3;
+    font-weight: var(--weight-medium);
+  }
+  .dep-node .src {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-2);
+    letter-spacing: var(--tracking-wide);
+    line-height: 1.4;
+  }
+  .dep-node.contract { border-color: rgba(212,168,67,0.4); }
+  .dep-node.contract .lbl { color: var(--accent); }
+  .dep-node.package  { border-color: rgba(0,212,232,0.4); }
+  .dep-node.package  .lbl { color: var(--cyan); }
+  .dep-node.future   { border-color: rgba(74,158,255,0.35); }
+  .dep-node.future   .lbl { color: var(--agent); }
+
+  /* summary stats */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-3);
+    margin: var(--space-3) 0 var(--space-5);
+  }
+  @media (max-width: 900px) { .summary-grid { grid-template-columns: 1fr 1fr; } }
+  .summary-cell {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .summary-cell .n {
+    font-family: var(--font-display);
+    font-size: var(--text-2xl);
+    color: var(--fg-1);
+    line-height: 1;
+  }
+  .summary-cell .l {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+  .summary-cell.gold .n  { color: var(--accent); }
+  .summary-cell.cyan .n  { color: var(--cyan); }
+  .summary-cell.vault .n { color: var(--vault); }
+  .summary-cell.agent .n { color: var(--agent); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <nav class="toc" aria-label="Index sections">
+    <div class="toc-label">Index</div>
+    <ol>
+      <li><a href="#summary"><span class="toc-num">00</span>Executive summary</a></li>
+      <li><a href="#packages"><span class="toc-num">01</span>Five packages</a></li>
+      <li><a href="#intake"><span class="toc-num">02</span>Implementation Intake</a></li>
+      <li><a href="#dependencies"><span class="toc-num">03</span>Owner-doc dependencies</a></li>
+      <li><a href="#feeds"><span class="toc-num">04</span>What this feeds</a></li>
+      <li><a href="#open"><span class="toc-num">05</span>What remains open</a></li>
+      <li><a href="#how-to-read"><span class="toc-num">06</span>How to read this package</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header class="doc-header">
+      <div class="doc-eyebrow">Companion UI · Claude Design package · 2026-05-14</div>
+      <h1 class="doc-title">Design handoff package — four explorations</h1>
+      <p class="doc-lede">
+        Five governed handoff packages produced under the new <em>handoff governance pack</em>
+        folder shape. Four UI surfaces — Runtime Proof Dashboard, Context Bundle Inspector,
+        Memory Candidate Review Queue, Vault Action Layer / Agent Tool Authority — plus the
+        meta-process pack that gates them. Every package is target-state visual guidance, not
+        architecture authority. Runtime truth lives downstream in shipped code, tests,
+        status docs, and validation receipts.
+      </p>
+      <div class="doc-meta">
+        <span><strong>Package count:</strong> 5</span>
+        <span><strong>Visual prototypes:</strong> 5 (.html)</span>
+        <span><strong>Markdown docs:</strong> 35 (7 per package)</span>
+        <span><strong>Crossing target:</strong> B (handoff → normalized spec)</span>
+      </div>
+    </header>
+
+    <!-- ============== 00 Executive summary ============== -->
+    <section class="spec" id="summary">
+      <h2><span class="secnum">00 ·</span>Executive summary</h2>
+
+      <div class="summary-grid">
+        <div class="summary-cell gold"><span class="n">5</span><span class="l">Packages</span></div>
+        <div class="summary-cell cyan"><span class="n">45</span><span class="l">UI states designed</span></div>
+        <div class="summary-cell vault"><span class="n">35</span><span class="l">Handoff docs</span></div>
+        <div class="summary-cell agent"><span class="n">0</span><span class="l">Runtime claims</span></div>
+      </div>
+
+      <h3>What was designed</h3>
+      <p>
+        Five target-state design packages, each conforming to the folder shape declared by
+        the Handoff Governance Pack (package 1 in this set). Each package contains a visual
+        prototype, a complete state gallery, an implementation contract, an
+        authority-boundaries document, a text-mirror state gallery, an edge-state checklist,
+        and an open-questions log.
+      </p>
+
+      <h3>What this package is not</h3>
+      <ul>
+        <li>Not a runtime claim. The Runtime Proof Dashboard renders a snapshot the runtime
+          would emit; it does not assert that snapshot exists today.</li>
+        <li>Not a schema. The Context Bundle Inspector renders the bundle contract; it does not
+          modify it.</li>
+        <li>Not a memory store. The Memory Candidate Review Queue reviews proposals; it does not
+          recall, infer, or promote on its own.</li>
+        <li>Not a control plane. The dashboard mirrors; remediation routes through the existing
+          governed pipeline.</li>
+      </ul>
+
+      <h3>Posture across all four</h3>
+      <ul>
+        <li><strong>Sober.</strong> No alarm dashboards. Red is reserved for actual refusals.</li>
+        <li><strong>Evidence-bearing.</strong> Every mono caption corresponds to a runtime value
+          (or names itself as an inferred default that owner-docs would amend).</li>
+        <li><strong>Progressive disclosure.</strong> Exclusions, low-trust items, receipt history,
+          and conflict resolution are all one click away rather than always-on.</li>
+        <li><strong>Authority-aware.</strong> Authority flags are first-class headers; the UI
+          renders the bundle / candidate / proposal class as declared and never re-classifies.</li>
+        <li><strong>Calm.</strong> One animation pattern (receipt pulse + banner LED), respected
+          by <code>prefers-reduced-motion</code>. No emoji. Static stability across states.</li>
+      </ul>
+    </section>
+
+    <!-- ============== 01 Packages ============== -->
+    <section class="spec" id="packages">
+      <h2><span class="secnum">01 ·</span>Five packages</h2>
+      <p class="lede">
+        Click into any prototype HTML for the full spec, state gallery, and implementation
+        contract. The four packages are independently reviewable; package 1 governs the process
+        the others were produced under.
+      </p>
+
+      <div class="pkg-grid">
+        <a class="pkg gold" href="../2026-05-14-handoff-governance-pack/prototype.html">
+          <span class="num">01 · Meta-process pack</span>
+          <h3>Design Handoff Governance Pack</h3>
+          <p>How a Claude Design exploration becomes a governed implementation input — without
+            becoming architecture authority on the way. Defines the chain
+            <em>exploration → handoff → normalized spec → issue → PR → receipt</em>, the
+            maturity bar at crossing B, three templates, and a target-shape review console.</p>
+          <div class="meta-row">
+            <span><span class="v">authority</span> · process pattern</span>
+            <span><span class="v">owner-doc</span> · INTERACTION_SURFACES_AND_AUTHORITY</span>
+            <span><span class="v">crossing</span> · B</span>
+          </div>
+          <span class="open">Open prototype →</span>
+        </a>
+
+        <a class="pkg green" href="../2026-05-14-runtime-proof-dashboard/prototype.html">
+          <span class="num">02 · Operator surface</span>
+          <h3>Runtime Proof / Health Dashboard</h3>
+          <p>Compact single-operator proof surface. Nine questions, eight cards, a proof-receipt
+            panel, and a suggested-next-action strip. Mirror of runtime state, never a control
+            plane. Nine designed states from healthy to proof-failed.</p>
+          <div class="meta-row">
+            <span><span class="v">authority</span> · visual guidance</span>
+            <span><span class="v">depends on</span> · runtime-proof receipt contract</span>
+            <span><span class="v">states</span> · 9</span>
+          </div>
+          <span class="open">Open prototype →</span>
+        </a>
+
+        <a class="pkg" href="../2026-05-14-context-bundle-inspector/prototype.html">
+          <span class="num">03 · Inspector surface</span>
+          <h3>Context Bundle Inspector</h3>
+          <p>Inspectable bridge object between retrieval, orientation, resurfacing, and write
+            proposals. Authority flags are first-class header chips. Excluded artifacts are
+            surfaced when they affect interpretation. Desktop + portrait. Nine states.</p>
+          <div class="meta-row">
+            <span><span class="v">authority</span> · visual guidance</span>
+            <span><span class="v">owner-doc</span> · CONTEXT_BUNDLE_CONTRACT</span>
+            <span><span class="v">states</span> · 9</span>
+          </div>
+          <span class="open">Open prototype →</span>
+        </a>
+
+        <a class="pkg agent" href="../2026-05-14-memory-candidate-review/prototype.html">
+          <span class="num">04 · Review surface</span>
+          <h3>Memory Candidate Review Queue</h3>
+          <p>Quiet, pull-based review queue for proposed agent memories. Seven memory classes;
+            eight actions including promote-to-note and keep-operational-only. Conflict UI
+            shows prior memory side-by-side. Ten states. Never an inbox.</p>
+          <div class="meta-row">
+            <span><span class="v">authority</span> · review surface</span>
+            <span><span class="v">owner-doc</span> · AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT</span>
+            <span><span class="v">states</span> · 10</span>
+          </div>
+          <span class="open">Open prototype →</span>
+        </a>
+
+        <a class="pkg" href="../2026-05-14-vault-action-layer/prototype.html" style="border-top-color: var(--agent);">
+          <span class="num" style="color: var(--agent);">05 · Authority surface</span>
+          <h3>Vault Action Layer / Agent Tool Authority</h3>
+          <p>9-step action pipeline (intent → classify → bound → policy → guard →
+            idempotency → execute → receipt → event), 5-tier tool taxonomy, Obsidian/MCP-as-adapter
+            boundary, concrete first action <code style="font-size:0.9em;">move_inbox_note_to_workbench</code>.
+            Eight states.</p>
+          <div class="meta-row">
+            <span><span class="v">authority</span> · structural + visual</span>
+            <span><span class="v">linked issue</span> · #910</span>
+            <span><span class="v">states</span> · 8</span>
+          </div>
+          <span class="open" style="color: var(--agent);">Open prototype →</span>
+        </a>
+      </div>
+
+      <div class="callout invariant">
+        <span class="callout-label">Floor invariant across all five</span>
+        Design exploration is not architecture authority. Visual guidance is not runtime
+        behavior. Architecture authority remains in repo owner-docs and contracts. Runtime
+        truth remains in shipped code, tests, status docs, and validation receipts.
+      </div>
+    </section>
+
+    <!-- ============== 02 Implementation Intake ============== -->
+    <section class="spec" id="intake">
+      <h2><span class="secnum">02 ·</span>Implementation Intake Summary</h2>
+      <p class="lede">
+        One table mapping each design artifact to its repo issues, the implementation it may
+        feed, what it must not directly become, its architecture dependencies, and its open
+        questions. The full canonical version lives in <code>README.md</code>; this is the
+        in-page form.
+      </p>
+
+      <table class="spec">
+        <thead>
+          <tr>
+            <th>Artifact</th>
+            <th>Issues</th>
+            <th>May be implemented</th>
+            <th>Must not be implemented directly</th>
+            <th>Architecture dependencies</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>01 · Handoff Governance Pack</strong></td>
+            <td><code>#901</code></td>
+            <td>Folder shape adoption; static review console rendered from the folder; maturity-checklist front-matter on existing READMEs.</td>
+            <td>A runtime review service. New authority over owner-docs. Blocking PR gate.</td>
+            <td><code>INTERACTION_SURFACES_AND_AUTHORITY/</code> (read-only)</td>
+          </tr>
+          <tr>
+            <td><strong>02 · Runtime Proof / Health Dashboard</strong></td>
+            <td><code>#865</code>, <code>#866</code>, <code>#850</code> + stabilization issues</td>
+            <td>UI render against nine fixture snapshots; receipt-link disclosures; reduced-motion path; narrow layout.</td>
+            <td>Auto-remediation. UI-derived posture. Dashboard-as-control-plane direction. Ops-style alerts.</td>
+            <td><code>STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md</code>; future runtime-proof receipt contract</td>
+          </tr>
+          <tr>
+            <td><strong>03 · Context Bundle Inspector</strong></td>
+            <td><code>#894</code>, <code>#895</code>, <code>#896</code></td>
+            <td>UI render against three fixture bundles + six fail-state fixtures; compact-mode embedding; ranked-candidate column.</td>
+            <td>Re-ranking. Apply / writeback affordance. Memory promotion. Bundle schema modification.</td>
+            <td><code>docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md</code> (read-only)</td>
+          </tr>
+          <tr>
+            <td><strong>04 · Memory Candidate Review Queue</strong></td>
+            <td><code>#900</code></td>
+            <td>UI render against ten fixture candidates; seven primary actions; conflict UI; promote-to-note path; auto-archive policy.</td>
+            <td>Auto-accept rules. A recall surface. Memory class definition. Semantic-search across past memories. Shell-level notifications.</td>
+            <td><code>docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md</code> (read-only)</td>
+          </tr>
+          <tr>
+            <td><strong>05 · Vault Action Layer</strong></td>
+            <td><code>#910</code> + future tool-authority docs issue</td>
+            <td>First bounded action <code>move_inbox_note_to_workbench</code>; Tier-4 forbidden list as owner-doc; registry-write path; Obsidian adapter; MCP-exposed surface limited to registry names.</td>
+            <td>Generic "agent tools" library decoupled from registry. Obsidian/MCP as primary mutation. Runtime tier-elevation. Silent failure.</td>
+            <td>New owner-doc to author (<code>VAULT_ACTION_LAYER_CONTRACT.md</code>); references <code>STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p style="font-family:var(--font-mono); font-size:var(--text-xs); color:var(--fg-3); letter-spacing:var(--tracking-wide); margin-top:var(--space-3);">
+        Open questions per artifact — see <code>README.md</code> for the full column, and
+        each package's <code>open-questions.md</code> for the structured form.
+      </p>
+    </section>
+
+    <!-- ============== 03 Dependencies ============== -->
+    <section class="spec" id="dependencies">
+      <h2><span class="secnum">03 ·</span>Owner-doc dependencies</h2>
+      <p class="lede">
+        What each package depends on, what it does not own, and what it would feed if normalized.
+        These are read-only dependencies — none of the four packages amends an owner-doc.
+      </p>
+
+      <div class="deps">
+        <div class="dep-node contract">
+          <span class="lbl">Authority contract</span>
+          <span class="name">INTERACTION_SURFACES_AND_AUTHORITY</span>
+          <span class="src">read-only · feeds: package 1 (governance pack), packages 2–4 (gated-execution invariant)</span>
+        </div>
+        <div class="dep-node contract">
+          <span class="lbl">Authority contract</span>
+          <span class="name">CONTEXT_BUNDLE_CONTRACT</span>
+          <span class="src">read-only · feeds: package 3 (inspector schema)</span>
+        </div>
+        <div class="dep-node contract">
+          <span class="lbl">Authority contract</span>
+          <span class="name">AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT</span>
+          <span class="src">read-only · feeds: package 4 (queue lifecycle, classes, authority flags)</span>
+        </div>
+        <div class="dep-node contract">
+          <span class="lbl">Invariant</span>
+          <span class="name">STATE_EXECUTION_AUTHORITY_REMAINS_GATED</span>
+          <span class="src">read-only · honored by all four packages without modification</span>
+        </div>
+        <div class="dep-node contract">
+          <span class="lbl">UI boundary</span>
+          <span class="name">UI_RUNTIME_BOUNDARIES.md</span>
+          <span class="src">read-only · referenced for separation of cognition / UI runtime / persistence</span>
+        </div>
+        <div class="dep-node future">
+          <span class="lbl">Future contract</span>
+          <span class="name">runtime-proof receipt contract</span>
+          <span class="src">when normalized · feeds: package 2 (dashboard snapshot &amp; receipt rendering)</span>
+        </div>
+        <div class="dep-node future">
+          <span class="lbl">Future contract</span>
+          <span class="name">VAULT_ACTION_LAYER_CONTRACT</span>
+          <span class="src">to be authored from package 5 · references existing invariants; modifies none</span>
+        </div>
+      </div>
+
+      <h3>What this package set does not own</h3>
+      <ul>
+        <li>The bundle schema, the memory record schema, the runtime-proof receipt schema.</li>
+        <li>The retrieval ranking algorithm.</li>
+        <li>The classifier that decides body-edit vs governance-bearing proposals.</li>
+        <li>The runtime's posture algorithm.</li>
+        <li>The governance pipeline behavior.</li>
+      </ul>
+    </section>
+
+    <!-- ============== 04 Feeds ============== -->
+    <section class="spec" id="feeds">
+      <h2><span class="secnum">04 ·</span>What this feeds</h2>
+      <p class="lede">If accepted at crossing B, each package proposes a normalized spec path and a small set of follow-on issues. Promotion decisions are owner-doc owners' to make.</p>
+
+      <table class="spec">
+        <thead>
+          <tr><th>Package</th><th>Proposed normalized spec</th><th>First implementation issue</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>01 · Handoff Governance Pack</td>
+            <td><code>docs/INTERACTION_SURFACES_AND_AUTHORITY/DESIGN_HANDOFF_GOVERNANCE.md</code></td>
+            <td>Adopt the folder shape across existing <code>companion-ui/design_handoff/</code> packages.</td>
+          </tr>
+          <tr>
+            <td>02 · Runtime Proof Dashboard</td>
+            <td><code>docs/RUNTIME_PROOF_DASHBOARD.md</code> (UI guidance, target-state)</td>
+            <td>Render the dashboard against nine fixture snapshots (one per designed state).</td>
+          </tr>
+          <tr>
+            <td>03 · Context Bundle Inspector</td>
+            <td><code>docs/CONCEPTS/CONTEXT_BUNDLE_INSPECTOR_UI.md</code> (UI guidance only)</td>
+            <td>Render the inspector against three fixture bundles (retrieval, orientation, write proposal).</td>
+          </tr>
+          <tr>
+            <td>04 · Memory Candidate Review</td>
+            <td><code>docs/CONCEPTS/MEMORY_CANDIDATE_REVIEW_UI.md</code> (UI guidance only)</td>
+            <td>Render the queue against ten fixture candidates; wire seven primary actions.</td>
+          </tr>
+          <tr>
+            <td>05 · Vault Action Layer</td>
+            <td><code>docs/CONCEPTS/VAULT_ACTION_LAYER_CONTRACT.md</code> (new owner-doc)</td>
+            <td>Register first bounded action <code>move_inbox_note_to_workbench@v1</code>; full pipeline against fixture vault.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Validation expectations</h3>
+      <p>Each package's <code>implementation-contracts.md</code> names the passing-receipt
+        shape. Across all four:</p>
+      <ul>
+        <li>Every designed state renders correctly from a fixture.</li>
+        <li>Every declared intent emits the right effect (UI-local / read-only / governed).</li>
+        <li>No UI-derived posture, class, authority, or classification.</li>
+        <li><code>prefers-reduced-motion</code> respected.</li>
+        <li>Narrow / portrait layout passes the breakpoint acceptance.</li>
+      </ul>
+    </section>
+
+    <!-- ============== 05 Open ============== -->
+    <section class="spec" id="open">
+      <h2><span class="secnum">05 ·</span>What remains open</h2>
+      <p class="lede">
+        Cross-package open questions. Per-package open questions live in each prototype's §09
+        and the sibling <code>open-questions.md</code>.
+      </p>
+
+      <ol>
+        <li><strong>Where does the review console actually live?</strong> Package 1's review
+          console is target-shape. The recommendation is a static HTML rendered from the
+          folder, not a runtime surface.</li>
+        <li><strong>Do the four packages need a shared "validation receipt" schema?</strong>
+          Each implementation issue produces one. Suggest: a common receipt shape with
+          per-package extension fields. Owner-doc decides.</li>
+        <li><strong>How does the dashboard's "Run proof" interact with package 1's chain?</strong>
+          Should a passing proof on package 2's implementation auto-link back to its package
+          status? Recommended yes; that closes the loop between handoff and runtime truth.</li>
+        <li><strong>Conditional authority flags.</strong> Package 3 (bundle inspector) renders
+          <code>may_propose · conditional</code>; package 4 (memory queue) renders
+          <code>may_recall · maybe</code>. Owner-doc should normalize whether "conditional" is
+          a valid flag state and what it means at each surface.</li>
+        <li><strong>Cross-links between bundle inspector and memory queue.</strong> When a
+          bundle includes a memory candidate, should the inspector deep-link into the queue
+          card? Suggest yes, one-click, no data dependency.</li>
+        <li><strong>Notification quietness.</strong> Packages 2 and 4 both decline to add a
+          badge / counter by default. If the team wants a single quiet indicator anywhere in
+          the shell, owner-doc should decide where (suggest: nowhere; the surfaces are pull).</li>
+      </ol>
+    </section>
+
+    <!-- ============== 06 How to read ============== -->
+    <section class="spec" id="how-to-read">
+      <h2><span class="secnum">06 ·</span>How to read this package</h2>
+
+      <h3>For a reviewer at crossing B</h3>
+      <ol>
+        <li>Read this index, particularly the <a href="#intake">Implementation Intake</a> table.</li>
+        <li>Open each <code>prototype.html</code> and skim §01 (context &amp; boundary) and the
+          state gallery section of each.</li>
+        <li>Walk the maturity checklist in package 1 §03 against each of packages 2–5.</li>
+        <li>Triage each open-questions section into block / cite / defer.</li>
+      </ol>
+
+      <h3>For a Claude Code / Codex agent picking up implementation</h3>
+      <ol>
+        <li>Read the package's <code>README.md</code>.</li>
+        <li>Read the package's <code>implementation-contracts.md</code> — this is the only
+          document that promises anything to code.</li>
+        <li>Open <code>prototype.html</code>, jump to §07 (Implementation contract) and §10
+          (Handoff notes for Claude Code / Codex).</li>
+        <li>Use the state gallery (<code>prototype.html</code> §05) and <code>state-gallery.md</code>
+          to enumerate fixtures.</li>
+      </ol>
+
+      <h3>For an owner-doc reviewer</h3>
+      <ol>
+        <li>Read the package's <code>authority-boundaries.md</code> — this names exactly what
+          the design <em>may</em> influence in your doc and what it <em>may not</em> decide.</li>
+        <li>Read the package's <code>open-questions.md</code> — your doc may be the proposed
+          owner for one or more questions.</li>
+        <li>Read <code>prototype.html</code> §08 (Authority boundaries) for the structured
+          table.</li>
+      </ol>
+
+      <h3>Folder shape</h3>
+      <pre class="code">companion-ui/design_handoff/
+  2026-05-14-claude-design-package/    <span class="c">← this index</span>
+    index.html                         <span class="c">← you are here</span>
+    README.md                          <span class="c">← Implementation Intake Summary</span>
+    CHANGELOG.md                       <span class="c">← v1 → v2 diff</span>
+
+  2026-05-14-handoff-governance-pack/  <span class="c">← package 1 · meta-process</span>
+    README.md
+    prototype.html                     <span class="c">← rich content</span>
+    design-notes.md
+    state-gallery.md
+    implementation-contracts.md
+    authority-boundaries.md
+    edge-states.md
+    open-questions.md
+    colors_and_type.css                <span class="c">← shared with siblings</span>
+    spec_chrome.css
+
+  2026-05-14-runtime-proof-dashboard/  <span class="c">← package 2</span>
+    <span class="c">… same folder shape …</span>
+
+  2026-05-14-context-bundle-inspector/ <span class="c">← package 3</span>
+    <span class="c">… same folder shape …</span>
+
+  2026-05-14-memory-candidate-review/  <span class="c">← package 4</span>
+    <span class="c">… same folder shape …</span>
+
+  2026-05-14-vault-action-layer/       <span class="c">← package 5 · v2 refinement</span>
+    <span class="c">… same folder shape …</span></pre>
+    </section>
+
+  </main>
+</div>
+</body>
+</html>
