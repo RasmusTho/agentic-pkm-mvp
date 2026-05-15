@@ -228,3 +228,42 @@ def test_write_proposal_rejects_bundle_not_scoped_for_propose():
         proposal_basis="valid — multi-use bundle includes propose",
     )
     assert proposal.may_write is False
+
+
+def test_write_proposal_rejects_empty_targets_or_blank_basis():
+    # A proposal without an affected artifact has no auditable write surface.
+    bundle = _bundle()
+    with pytest.raises(BundleProposalViolation, match="affected_artifacts"):
+        build_write_proposal_from_bundle(
+            bundle,
+            affected_artifacts=[],
+            proposal_basis="valid basis",
+        )
+
+    # Blank entries in affected_artifacts are equally unauditable.
+    with pytest.raises(BundleProposalViolation, match="affected_artifacts"):
+        build_write_proposal_from_bundle(
+            bundle,
+            affected_artifacts=["art_a", "   "],
+            proposal_basis="valid basis",
+        )
+    with pytest.raises(BundleProposalViolation, match="affected_artifacts"):
+        build_write_proposal_from_bundle(
+            bundle,
+            affected_artifacts=[""],
+            proposal_basis="valid basis",
+        )
+
+    # A blank proposal_basis leaves the write rationale untied to evidence.
+    with pytest.raises(BundleProposalViolation, match="proposal_basis"):
+        build_write_proposal_from_bundle(
+            bundle,
+            affected_artifacts=["art_a"],
+            proposal_basis="",
+        )
+    with pytest.raises(BundleProposalViolation, match="proposal_basis"):
+        build_write_proposal_from_bundle(
+            bundle,
+            affected_artifacts=["art_a"],
+            proposal_basis="\t\n  ",
+        )

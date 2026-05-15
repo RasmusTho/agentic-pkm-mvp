@@ -46,6 +46,21 @@ def build_write_proposal_from_bundle(
     The governed write boundary (write guards, APPLY rules, trust semantics)
     remains upstream of this surface.
     """
+    if not affected_artifacts:
+        raise BundleProposalViolation(
+            "affected_artifacts must be non-empty — a write proposal without a "
+            "target artifact has no auditable write surface"
+        )
+    if any(not (a and a.strip()) for a in affected_artifacts):
+        raise BundleProposalViolation(
+            "affected_artifacts entries must be non-blank — blank artifact ids "
+            "leave the proposal's write surface unauditable"
+        )
+    if not proposal_basis or not proposal_basis.strip():
+        raise BundleProposalViolation(
+            "proposal_basis must be a non-blank rationale — bundle evidence must "
+            "be tied to an explicit reason for the proposed write"
+        )
     if not bundle.authority.may_propose:
         raise BundleProposalViolation(
             f"bundle {bundle.id} does not carry may_propose=True; "
