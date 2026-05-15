@@ -4,10 +4,10 @@ import json
 import os
 import re
 from typing import Any, Sequence
+from urllib.parse import quote
 
-
-from app.config.database import resolve_runtime_database_url
-from app.config.environment import active_environment
+from app.config.database import default_database_name
+from app.config.environment import ENV_DEV, ENV_TEST, active_environment
 from app.health_contract import DEFAULT_CONTRACT
 from app.settings.panel_actions_settings import load_panel_actions_settings, panel_action_ids
 from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_settings, resolve_auto_exec_state
@@ -29,12 +29,34 @@ def mask_dsn(dsn: str) -> str:
     return masked
 
 
+def _display_database_url() -> str:
+    """Build a display-safe DSN that never reads POSTGRES_PASSWORD.
+
+    The runtime DSN resolver reads POSTGRES_PASSWORD and embeds it into the
+    DSN string — calling it from a display path would route the real password
+    into the output payload (CodeQL py/clear-text-logging-sensitive-data).
+    For an explicit DATABASE_URL/DB_DSN, hand off to mask_dsn (re.sub-based
+    sanitizer).  Otherwise reconstruct the DSN here using only non-sensitive
+    env vars, with the password hardcoded to "***".
+    """
+    explicit = (os.environ.get("DATABASE_URL", "") or os.environ.get("DB_DSN", "") or "").strip()
+    if explicit:
+        return mask_dsn(explicit)
+    env_name = active_environment()
+    if env_name == ENV_DEV:
+        db_name = (os.environ.get("PKM_DB_NAME_DEV", "") or "").strip() or default_database_name(env_name)
+    elif env_name == ENV_TEST:
+        db_name = (os.environ.get("PKM_DB_NAME_TEST", "") or "").strip() or default_database_name(env_name)
+    else:
+        db_name = (os.environ.get("PKM_DB_NAME_PROD", "") or "").strip() or default_database_name(env_name)
+    user = (os.environ.get("POSTGRES_USER", "") or "").strip() or "app"
+    host = (os.environ.get("PKM_DB_HOST", "") or "").strip() or "db"
+    port = (os.environ.get("PKM_DB_PORT", "") or "").strip() or "5432"
+    return f"postgresql+psycopg://{quote(user)}:***@{host}:{port}/{db_name}"
+
+
 def build_settings_explain_payload() -> dict[str, Any]:
-    # Replace POSTGRES_PASSWORD with a literal before building the display DSN so the
-    # real password never flows into the payload.  mask_dsn still runs to handle any
-    # password embedded in an explicit DATABASE_URL env var.
-    _display_env = {**os.environ, "POSTGRES_PASSWORD": "***"}
-    db_url = mask_dsn(resolve_runtime_database_url(_display_env))
+    db_url = _display_database_url()
     panel_settings = load_panel_actions_settings()
     watcher_settings = load_watcher_settings()
     auto_exec = resolve_auto_exec_state()
@@ -43,7 +65,7 @@ def build_settings_explain_payload() -> dict[str, Any]:
     write_guard = DEFAULT_CONTRACT.evaluate()
     return {
         "environment": active_environment(),
-        "database_url": mask_dsn(db_url),
+        "database_url": db_url,
         "panel_actions": {
             "action_count": len(panel_settings.catalog.actions),
             "action_ids": sorted(panel_settings.catalog.ids()),
