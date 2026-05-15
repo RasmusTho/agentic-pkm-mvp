@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from urllib.parse import quote
 
-from app.config.environment import ENV_DEV, ENV_PROD, active_environment
+from app.config.environment import ENV_DEV, ENV_PROD, ENV_TEST, active_environment
 
 
 def _clean(env: Mapping[str, str], key: str) -> str:
@@ -13,6 +13,8 @@ def _clean(env: Mapping[str, str], key: str) -> str:
 def default_database_name(env_name: str) -> str:
     if env_name == ENV_DEV:
         return "app_dev"
+    if env_name == ENV_TEST:
+        return "app_test"
     if env_name == ENV_PROD:
         return "app"
     return "app"
@@ -26,6 +28,8 @@ def resolve_runtime_database_url(env: Mapping[str, str]) -> str:
     env_name = active_environment(env)
     if env_name == ENV_DEV:
         db_name = _clean(env, "PKM_DB_NAME_DEV") or default_database_name(env_name)
+    elif env_name == ENV_TEST:
+        db_name = _clean(env, "PKM_DB_NAME_TEST") or default_database_name(env_name)
     else:
         db_name = _clean(env, "PKM_DB_NAME_PROD") or default_database_name(env_name)
 

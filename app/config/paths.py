@@ -33,7 +33,7 @@ def resolve_vault_root(cli_override: Path | None = None, *, environment: Literal
 
     Args:
         cli_override: Explicit override (takes precedence)
-        environment: If 'dev', appends '-dev' suffix; if 'prod' or None, uses base path
+        environment: If 'dev' or 'test', appends matching suffix; if 'prod' or None, uses base path
 
     Returns:
         Vault root path, environment-scoped if requested
@@ -42,7 +42,12 @@ def resolve_vault_root(cli_override: Path | None = None, *, environment: Literal
         return Path(cli_override)
 
     env_root = _clean_path(os.getenv("VAULT_ROOT"))
-    env_specific = _clean_path(os.getenv("VAULT_ROOT_DEV") if environment == "dev" else None)
+    if environment == "dev":
+        env_specific = _clean_path(os.getenv("VAULT_ROOT_DEV"))
+    elif environment == "test":
+        env_specific = _clean_path(os.getenv("VAULT_ROOT_TEST"))
+    else:
+        env_specific = None
 
     if env_specific is not None:
         return env_specific
@@ -52,9 +57,10 @@ def resolve_vault_root(cli_override: Path | None = None, *, environment: Literal
     else:
         base = _DEFAULT_VAULT
 
-    # If dev environment and no explicit env-specific path, append -dev suffix
     if environment == "dev":
         return base.parent / f"{base.name}-dev"
+    if environment == "test":
+        return base.parent / f"{base.name}-test"
 
     return base
 
@@ -124,27 +130,26 @@ def resolve_runtime_artifact_path(
     """Resolve a runtime artifact path, optionally scoped to environment.
 
     For dev environment, artifacts go into 'tmp-dev/' subdirectories.
+    For test environment, artifacts go into 'tmp-test/' subdirectories.
     For prod or unspecified, uses the base path.
 
     Args:
         artifact_path: Base artifact path (e.g., Path('tmp/index-outbox.jsonl'))
-        environment: If 'dev', paths resolve to environment-scoped location
+        environment: If 'dev' or 'test', paths resolve to environment-scoped location
 
     Returns:
         Environment-scoped artifact path
     """
     base = Path(artifact_path)
 
-    if environment == "dev":
-        # For dev, redirect to -dev suffixed directories
+    if environment in ("dev", "test"):
+        suffix = environment
         parent = base.parent
         name = base.name
-        # Replace 'tmp' with 'tmp-dev', or append '-dev' to parent dir name
         if parent == Path("tmp"):
-            return Path("tmp-dev") / name
-        # For nested paths, append -dev to the immediate parent if it exists
-        dev_parent_name = f"{parent.name}-dev" if parent.name else "tmp-dev"
-        return parent.parent / dev_parent_name / name if parent.parent != Path(".") else Path(dev_parent_name) / name
+            return Path(f"tmp-{suffix}") / name
+        suffixed_parent_name = f"{parent.name}-{suffix}" if parent.name else f"tmp-{suffix}"
+        return parent.parent / suffixed_parent_name / name if parent.parent != Path(".") else Path(suffixed_parent_name) / name
 
     return base
 
