@@ -391,7 +391,10 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 
 ### Companion note in the system surface
 - For each tracked vault note/uuid the forward-line model defines a companion note under
-  `vault/_system/companions/<uuid>.md`.
+  `vault/<system_folder>/companions/<uuid>.md`, where `<system_folder>` is the layout-aware system
+  folder resolved by `get_vault_system_dir_rel()` (defaults to `⚙️ System`). The legacy
+  `_system/companions/` path is a read-only fallback for vaults that have not yet migrated; no
+  new files are written there.
 - The companion note is a first-class system artifact for continuity and repair, not merely a
   convenience cache or derived runtime projection.
 - Companion notes plus vault notes are the portable file-based continuity set and must be sufficient
