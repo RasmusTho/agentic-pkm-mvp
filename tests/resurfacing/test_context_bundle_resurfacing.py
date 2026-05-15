@@ -169,3 +169,57 @@ def test_resurfacing_bundle_remains_suggestion_only():
     )
     with pytest.raises(BundleAuthorityViolation):
         build_resurfacing_bundle_frame(no_resurface_bundle, why_now=_SIGNAL, now=_NOW)
+
+
+def test_resurfacing_rejects_bundle_not_scoped_for_resurface():
+    # intended_use is part of the scoping contract — may_resurface alone is
+    # insufficient if the bundle was not assembled for resurfacing consumption.
+    answer_only_bundle = ContextBundle(
+        id="cb_answer_only",
+        created_at=_NOW,
+        trigger=BundleTrigger(type="retrieval"),
+        intended_use=["answer"],
+        scope=BundleScope(),
+        included=[_item("art_h", "relevant now")],
+        excluded=[],
+        authority=AuthorityFlags(may_answer=True, may_resurface=True),
+        expiry=ExpiryPosture(),
+    )
+    with pytest.raises(BundleAuthorityViolation, match="intended_use"):
+        build_resurfacing_bundle_frame(answer_only_bundle, why_now=_SIGNAL, now=_NOW)
+
+    # Multi-use bundles that include "resurface" are accepted.
+    multi_bundle = ContextBundle(
+        id="cb_multi",
+        created_at=_NOW,
+        trigger=BundleTrigger(type="resurfacing"),
+        intended_use=["answer", "resurface"],
+        scope=BundleScope(),
+        included=[_item("art_i", "relevant now")],
+        excluded=[],
+        authority=AuthorityFlags(may_answer=True, may_resurface=True),
+        expiry=ExpiryPosture(),
+    )
+    frame = build_resurfacing_bundle_frame(multi_bundle, why_now=_SIGNAL, now=_NOW)
+    assert frame.bundle_id == multi_bundle.id
+
+
+def test_resurfacing_normalizes_naive_caller_now():
+    # Naive caller-provided now must not raise TypeError — treated as UTC.
+    naive_now = datetime(2026, 5, 15, 11, 0, 0)  # no tzinfo, 1h after _NOW
+    fresh_expiry = ExpiryPosture(
+        stale_after=_NOW + timedelta(hours=2),
+        reason="still fresh",
+    )
+    bundle = _bundle(included=[_item("art_j", "relevant now")], expiry=fresh_expiry)
+    frame = build_resurfacing_bundle_frame(bundle, why_now=_SIGNAL, now=naive_now)
+    assert frame.stale is False
+
+    past_naive_now = datetime(2026, 5, 15, 9, 0, 0)  # 1h before _NOW
+    stale_expiry = ExpiryPosture(
+        stale_after=datetime(2026, 5, 15, 8, 30, 0, tzinfo=timezone.utc),
+        reason="stale relative to naive now",
+    )
+    stale_bundle = _bundle(included=[_item("art_k", "old note")], expiry=stale_expiry)
+    stale_frame = build_resurfacing_bundle_frame(stale_bundle, why_now=_SIGNAL, now=past_naive_now)
+    assert stale_frame.stale is True

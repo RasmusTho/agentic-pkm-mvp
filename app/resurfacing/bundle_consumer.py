@@ -104,8 +104,15 @@ def build_resurfacing_bundle_frame(
         raise BundleAuthorityViolation(
             f"bundle {bundle.id} carries may_write=True; resurfacing is suggestion-only"
         )
+    if "resurface" not in bundle.intended_use:
+        raise BundleAuthorityViolation(
+            f"bundle {bundle.id} intended_use={bundle.intended_use!r} does not include 'resurface'; "
+            "bundle was not scoped for resurfacing consumption"
+        )
 
     now = now or datetime.now(tz=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     stale = False
     stale_reason: Optional[str] = None
     if bundle.expiry and bundle.expiry.stale_after is not None:
