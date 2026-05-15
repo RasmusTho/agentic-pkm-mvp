@@ -175,3 +175,56 @@ def test_expired_bundle_cannot_justify_write_proposal():
         now=naive_now,
     )
     assert naive_proposal.may_write is False
+
+
+def test_write_proposal_rejects_bundle_not_scoped_for_propose():
+    # intended_use is part of the scoping contract — may_propose authority alone
+    # is not sufficient if the bundle was assembled for a different purpose.
+    answer_only_bundle = ContextBundle(
+        id="cb_answer_only",
+        created_at=_NOW,
+        trigger=BundleTrigger(type="retrieval"),
+        intended_use=["answer"],
+        scope=BundleScope(),
+        included=[
+            IncludedItem(
+                artifact_id="art_a",
+                reason="evidence",
+                provenance=ItemProvenance(origin="vault note"),
+            )
+        ],
+        excluded=[],
+        authority=AuthorityFlags(may_answer=True, may_propose=True),
+        expiry=ExpiryPosture(),
+    )
+    with pytest.raises(BundleProposalViolation, match="intended_use"):
+        build_write_proposal_from_bundle(
+            answer_only_bundle,
+            affected_artifacts=["art_a"],
+            proposal_basis="should fail — not scoped for propose",
+        )
+
+    # Multi-use bundles that include "propose" are accepted.
+    multi_bundle = ContextBundle(
+        id="cb_multi",
+        created_at=_NOW,
+        trigger=BundleTrigger(type="retrieval"),
+        intended_use=["answer", "propose"],
+        scope=BundleScope(),
+        included=[
+            IncludedItem(
+                artifact_id="art_a",
+                reason="evidence",
+                provenance=ItemProvenance(origin="vault note"),
+            )
+        ],
+        excluded=[],
+        authority=AuthorityFlags(may_answer=True, may_propose=True),
+        expiry=ExpiryPosture(),
+    )
+    proposal = build_write_proposal_from_bundle(
+        multi_bundle,
+        affected_artifacts=["art_a"],
+        proposal_basis="valid — multi-use bundle includes propose",
+    )
+    assert proposal.may_write is False

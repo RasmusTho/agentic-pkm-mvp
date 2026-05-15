@@ -56,6 +56,11 @@ def build_write_proposal_from_bundle(
             f"bundle {bundle.id} carries may_write=True; "
             "bundle authority must not bypass write guards — use governed write surface instead"
         )
+    if "propose" not in bundle.intended_use:
+        raise BundleProposalViolation(
+            f"bundle {bundle.id} intended_use={bundle.intended_use!r} does not include 'propose'; "
+            "bundle was not scoped for write proposal linkage"
+        )
     if bundle.expiry and bundle.expiry.stale_after is not None:
         _now = now or datetime.now(tz=timezone.utc)
         if _now.tzinfo is None:
