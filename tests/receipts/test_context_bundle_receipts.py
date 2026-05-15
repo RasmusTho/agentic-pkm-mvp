@@ -112,3 +112,17 @@ def test_context_bundle_receipt_does_not_promote_to_memory():
     assert not hasattr(receipt, "write_result")
     # Authority flags on the receipt must still not carry may_write=True.
     assert receipt.may_write is False
+
+
+def test_receipt_items_are_isolated_from_bundle_mutations():
+    # Receipt must snapshot included/excluded items at record time — mutations
+    # to the bundle after recording must not affect the already-recorded receipt.
+    bundle = _bundle()
+    receipt = record_creation_receipt(bundle, recorded_at=_NOW)
+
+    original_reason = receipt.included_items[0].reason
+    # Mutate the bundle's included item in-place.
+    bundle.included[0].reason = "mutated after recording"
+
+    # Receipt item is unaffected — deep copy, not a shared reference.
+    assert receipt.included_items[0].reason == original_reason

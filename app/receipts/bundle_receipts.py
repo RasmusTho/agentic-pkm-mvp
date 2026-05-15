@@ -65,8 +65,8 @@ def record_creation_receipt(
         bundle_id=bundle.id,
         event="created",
         recorded_at=recorded_at or datetime.now(tz=timezone.utc),
-        included_items=list(bundle.included),
-        excluded_items=list(bundle.excluded),
+        included_items=[item.model_copy(deep=True) for item in bundle.included],
+        excluded_items=[item.model_copy(deep=True) for item in bundle.excluded],
         **_authority_kwargs(bundle),
     )
 
@@ -83,8 +83,8 @@ def record_consumption_receipt(
         event="consumed",
         recorded_at=recorded_at or datetime.now(tz=timezone.utc),
         consumer=consumer,
-        included_items=list(bundle.included),
-        excluded_items=list(bundle.excluded),
+        included_items=[item.model_copy(deep=True) for item in bundle.included],
+        excluded_items=[item.model_copy(deep=True) for item in bundle.excluded],
         **_authority_kwargs(bundle),
     )
 
@@ -101,8 +101,8 @@ def record_stale_receipt(
         event="stale_or_expired",
         recorded_at=recorded_at or datetime.now(tz=timezone.utc),
         stale_reason=stale_reason,
-        included_items=list(bundle.included),
-        excluded_items=list(bundle.excluded),
+        included_items=[item.model_copy(deep=True) for item in bundle.included],
+        excluded_items=[item.model_copy(deep=True) for item in bundle.excluded],
         **_authority_kwargs(bundle),
     )
 
