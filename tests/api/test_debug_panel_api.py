@@ -89,12 +89,8 @@ def test_debug_panel_read_error_does_not_expose_exception(tmp_path, monkeypatch)
 
     monkeypatch.setenv("VAULT_ROOT", str(vault_root))
 
-    import app.api.routes.debug as debug_mod
-
-    original_read = Path.read_text
-
     def _raise_read(self, *args, **kwargs):
-        raise PermissionError(f"/very/secret/path/token=abc123: permission denied")
+        raise PermissionError("/very/secret/path/token=abc123: permission denied")
 
     monkeypatch.setattr(Path, "read_text", _raise_read)
 

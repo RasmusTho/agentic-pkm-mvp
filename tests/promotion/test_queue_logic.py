@@ -120,7 +120,6 @@ def test_run_once_writes_note_via_knowledge_port(tmp_path: Path, monkeypatch):
 
 def test_enqueue_trace_id_is_sha256_derived(tmp_path: Path, monkeypatch):
     import hashlib
-    import app.promotion.queue as q
 
     qpath, log, settings = _setup(monkeypatch, tmp_path)
     settings.write_text(
