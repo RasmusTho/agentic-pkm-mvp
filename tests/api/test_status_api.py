@@ -103,6 +103,19 @@ def test_status_counts_align_with_events(tmp_path: Path, monkeypatch) -> None:
     assert events_log.get("total_lines") == len(events)
 
 
+def test_status_includes_v6_0_seams_optional():
+    client = TestClient(app)
+    resp = client.get("/api/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "v6_0_seams" in body
+    seams = body["v6_0_seams"]
+    if seams is not None:
+        assert isinstance(seams, dict)
+        for key in ("orientation", "resurfacing", "commitments", "canvas"):
+            assert key in seams
+
+
 def test_status_exposes_panel_provenance():
     """Verify status snapshot exposes panel actions compiler provenance."""
     client = TestClient(app)

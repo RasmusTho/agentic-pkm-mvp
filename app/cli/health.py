@@ -578,6 +578,28 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
     return actions
 
 
+def _check_v6_seams() -> Dict[str, str]:
+    def _seam(module: str) -> str:
+        try:
+            importlib.import_module(module)
+            return "enabled"
+        except Exception:
+            return "disabled"
+
+    canvas_gate_on = os.getenv("CANVAS_ENABLED", "0").strip().lower() in _TRUE_VALUES
+    canvas_importable = _seam("app.api.routes.canvas") == "enabled"
+    # Canvas is only truly "enabled" when both the gate is on AND the router imports.
+    # If the gate is on but the import fails, surface "disabled" so the misleading
+    # appearance of an active route does not mask the broken-import case.
+    canvas_state = "enabled" if (canvas_gate_on and canvas_importable) else "disabled"
+    return {
+        "orientation": _seam("app.api.routes.orientation"),
+        "resurfacing": _seam("app.resurfacing"),
+        "commitments": _seam("app.domain.commitments"),
+        "canvas": canvas_state,
+    }
+
+
 @span("health.check")
 def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     trace_id = with_trace_id(trace_id)
@@ -605,5 +627,5 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     ok = bool(checks_ok and runtime_ok)
     required_ok = bool(_required_checks_ok(checks) and runtime_ok)
     suggested_actions = _suggested_actions(checks, runtime)
-    return {"environment": active_environment(), "ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions}
+    return {"environment": active_environment(), "ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions, "v6_0_seams": _check_v6_seams()}
 __all__ = ["run_health"]

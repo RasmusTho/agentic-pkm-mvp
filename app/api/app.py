@@ -110,9 +110,33 @@ async def _run_index_preflight() -> None:
     )
 
 
+def _log_v6_seam_status() -> None:
+    def _seam(module: str) -> str:
+        try:
+            import importlib
+            importlib.import_module(module)
+            return "enabled"
+        except Exception:
+            return "disabled"
+
+    orientation = _seam("app.api.routes.orientation")
+    resurfacing = _seam("app.resurfacing")
+    commitments = _seam("app.domain.commitments")
+    canvas_importable = _seam("app.api.routes.canvas") == "enabled"
+    canvas = "enabled" if (_truthy_env("CANVAS_ENABLED") and canvas_importable) else "disabled"
+    logger.info(
+        "v6.0 seams: orientation=%s, resurfacing=%s, commitments=%s, canvas=%s",
+        orientation,
+        resurfacing,
+        commitments,
+        canvas,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await _run_index_preflight()
+    _log_v6_seam_status()
     yield
 
 
