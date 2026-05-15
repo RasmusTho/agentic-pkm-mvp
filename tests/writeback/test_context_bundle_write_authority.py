@@ -164,3 +164,14 @@ def test_expired_bundle_cannot_justify_write_proposal():
         now=_NOW,
     )
     assert proposal.may_write is False
+
+    # Naive caller-provided now must not raise TypeError — treated as UTC.
+    naive_now = datetime(2026, 5, 15, 10, 0, 0)  # no tzinfo, same instant as _NOW
+    naive_now_bundle = _bundle(expiry=fresh_expiry)
+    naive_proposal = build_write_proposal_from_bundle(
+        naive_now_bundle,
+        affected_artifacts=["art_a"],
+        proposal_basis="valid — naive now is normalized",
+        now=naive_now,
+    )
+    assert naive_proposal.may_write is False

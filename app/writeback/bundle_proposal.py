@@ -58,6 +58,8 @@ def build_write_proposal_from_bundle(
         )
     if bundle.expiry and bundle.expiry.stale_after is not None:
         _now = now or datetime.now(tz=timezone.utc)
+        if _now.tzinfo is None:
+            _now = _now.replace(tzinfo=timezone.utc)
         stale_after = bundle.expiry.stale_after
         if stale_after.tzinfo is None:
             stale_after = stale_after.replace(tzinfo=timezone.utc)
