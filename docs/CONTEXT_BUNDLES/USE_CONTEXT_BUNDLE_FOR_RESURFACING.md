@@ -23,12 +23,15 @@ semantic relatedness into urgency, authority, or write permission.
 
 `app/resurfacing/bundle_consumer.py` provides `build_resurfacing_bundle_frame`, which:
 
-- requires a `WhyNowSignal(rationale, signal_name)` — both fields are required; plain strings are
-  rejected to ensure the surfacing decision is anchored to a named, recorded signal
+- requires a `WhyNowSignal(rationale, signal_name)` — both fields are required and non-blank;
+  plain strings or empty/whitespace-only values are rejected so the surfacing decision is
+  always anchored to a named, recorded signal
 - requires `may_resurface=True` on the bundle's authority flags and rejects `may_write=True`
 - requires `"resurface"` in `bundle.intended_use` — authority flag alone is not sufficient
-- classifies included items into `relatedness_signals` and `priority_signals` based on
-  `source_role` and `reason` text
+- classifies included items into `priority_signals` (when the structured `source_role` field
+  marks them as priority) or `relatedness_signals` otherwise; free-text reason substrings are
+  not consulted because negated phrases like "not urgent" would otherwise be misclassified
+- preserves bundle `excluded` items on `ResurfacingBundleFrame.exclusions` for human inspection
 - checks bundle expiry and surfaces `stale=True` when `stale_after` has passed, normalizing
   naive datetimes to UTC to prevent `TypeError` on comparison
 - normalizes a caller-provided naive `now` to UTC by the same convention
@@ -55,6 +58,12 @@ hard to trust or dismiss.
 - [x] Naive `stale_after` and naive caller-provided `now` are normalized to UTC without raising `TypeError`.
   Verify: `tests/resurfacing/test_context_bundle_resurfacing.py::test_resurfacing_bundle_surfaces_stale_expiry_state`
   Verify: `tests/resurfacing/test_context_bundle_resurfacing.py::test_resurfacing_normalizes_naive_caller_now`
+- [x] Bundle exclusions are preserved on the frame for human inspection.
+  Verify: `tests/resurfacing/test_context_bundle_resurfacing.py::test_resurfacing_frame_preserves_exclusions`
+- [x] `WhyNowSignal` rejects blank or whitespace-only rationale/signal_name at construction.
+  Verify: `tests/resurfacing/test_context_bundle_resurfacing.py::test_resurfacing_rejects_blank_why_now_signal_fields`
+- [x] Priority classification relies on structured `source_role` only; free-text reason substrings are not consulted.
+  Verify: `tests/resurfacing/test_context_bundle_resurfacing.py::test_resurfacing_priority_classification_uses_source_role_not_reason_text`
 
 ## Out of Scope
 
