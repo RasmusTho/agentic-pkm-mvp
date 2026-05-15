@@ -427,11 +427,13 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid or fingerprint_uuid, rel_path)
 
     companion_settings = load_companion_settings(vault_root)
+    is_rename = companion is not None and companion.source_ref != str(rel_path)
+    cooldown = companion_settings.rename_cooldown_seconds if is_rename else companion_settings.create_cooldown_seconds
     eligibility = check_companion_eligibility(
         path,
         vault_root,
         raw_body=stripped_text,
-        cooldown_seconds=companion_settings.create_cooldown_seconds,
+        cooldown_seconds=cooldown,
     )
     if eligibility.eligible:
         try:
@@ -757,7 +759,18 @@ def _ingest_candidates(
                     if not companion_hash:
                         stored_payload = (existing.get("payload") or {})
                         stored_fp = stored_payload.get("ingest_fingerprint") or {}
-                        companion_hash = str(stored_fp.get("text_sha256") or "") or None
+                        fallback_hash = str(stored_fp.get("text_sha256") or "") or None
+                        if fallback_hash:
+                            # Only permanently ineligible notes (system_path,
+                            # placeholder_title) may be skipped via the object-store
+                            # fallback. Cooldown-deferred notes must stay eligible for
+                            # retry once the cooldown expires; using the stored hash
+                            # would prevent the companion from ever being created.
+                            perm_check = check_companion_eligibility(
+                                path, vault_root, raw_body=stripped_text, cooldown_seconds=0.0
+                            )
+                            if perm_check.reason in ("system_path", "placeholder_title"):
+                                companion_hash = fallback_hash
                     # Skip fingerprint-equal notes, but not if source_ref changed (rename case).
                     if companion_hash and companion_hash == text_sha256:
                         source_ref_changed = (

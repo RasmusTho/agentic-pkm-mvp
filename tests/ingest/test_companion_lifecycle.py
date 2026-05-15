@@ -13,7 +13,9 @@ These tests go through the vault_alpha ingest path end-to-end.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -136,6 +138,54 @@ class TestRealNoteGetsCompanion:
         companion = read_companion(vault_root, note_uuid)
         assert companion is not None
         assert companion.source_ref == "Notes/My Real Note.md"
+
+
+# ---------------------------------------------------------------------------
+# Cooldown-deferred note gets companion after cooldown expires (P1 regression)
+# ---------------------------------------------------------------------------
+
+class TestCooldownDeferredNoteGetsCompanionOnRetry:
+    def test_companion_created_on_second_ingest_after_cooldown_expires(
+        self, tmp_path: Path, _mock_env: None
+    ) -> None:
+        """
+        A note ingested during the cooldown window must get its companion on the
+        next run once the cooldown has expired, even if content is unchanged.
+
+        Regression: the object-store fingerprint fallback was skipping these notes
+        permanently, preventing companion creation after cooldown expiry.
+        """
+        vault_root = tmp_path / "vault"
+        vault_root.mkdir()
+        _write_layout(vault_root)
+
+        note_uuid = "aa112233-bb44-cc55-dd66-ee7788990011"
+        note = vault_root / "Notes" / "Deferred Note.md"
+        note.parent.mkdir()
+        note.write_text(
+            f"---\nuuid: {note_uuid}\ntitle: Deferred Note\n---\n"
+            "Real content that survives cooldown.\n",
+            encoding="utf-8",
+        )
+
+        # First ingest: cooldown active (mtime = now) → companion not created,
+        # but object stored with ingest_fingerprint.
+        with patch.dict(os.environ, {"COMPANION_CREATE_COOLDOWN_SECONDS": "9999"}):
+            run_vault_alpha_ingest_paths(vault_root, [note])
+
+        companion_after_first = read_companion(vault_root, note_uuid)
+        assert companion_after_first is None, "companion must not exist while cooldown is active"
+
+        # Second ingest: cooldown disabled → companion must be created even
+        # though content (and thus fingerprint) is unchanged.
+        with patch.dict(os.environ, {"COMPANION_CREATE_COOLDOWN_SECONDS": "0"}):
+            run_vault_alpha_ingest_paths(vault_root, [note])
+
+        companion_after_second = read_companion(vault_root, note_uuid)
+        assert companion_after_second is not None, (
+            "companion must be created on retry after cooldown expires"
+        )
+        assert companion_after_second.source_ref == "Notes/Deferred Note.md"
 
 
 # ---------------------------------------------------------------------------
