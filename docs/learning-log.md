@@ -120,3 +120,8 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Source:** pr-integration
 **Diverged:** The governance lane's allowed-file set in `issue-pr-governance.yml` includes only `.github/workflows/issue-pr-governance.yml` by exact match; other workflow files (e.g. `smoke.yml`, `ci-smoke.yaml`) are not included. A PR that classifies as `Governance lane` but touches these files will fail the file-restriction check. The Direct Repair path bypasses file restrictions entirely and is the correct route for workflow-file repairs.
 **Upstream artifact:** `docs/development/PR_HOT_PATH.md` — add a note that workflow-file repairs (other than `issue-pr-governance.yml`) must use `Direct Repair`, not the `Governance lane` checkbox, because the governance lane allowlist is narrower than `.github/workflows/**`.
+
+## 2026-05-15 — #973 (watcher lifecycle observability)
+**Source:** issue-to-code / pr-integration
+**Diverged:** After CI went green on PR #988, the plan (hot-path step 3) required triaging review feedback before handoff — instead the agent declared "awaiting human review" without checking whether a review was already posted. A Codex P2 comment (stale-log masking in `_get_watcher_lifecycle_status`) was present and needed addressing before merge.
+**Upstream artifact:** `docs/development/PR_HOT_PATH.md` §"Review feedback triage" — make explicit that the agent must check for existing review comments immediately after CI is confirmed green, before any handoff or merge recommendation. The normal next step after CI green + review triage is `verification-and-closure`, not a park for human review.

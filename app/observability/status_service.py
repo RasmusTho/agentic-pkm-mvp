@@ -858,6 +858,20 @@ def _last_panel_log_record(path: Path) -> dict | None:
         return None
 
 
+def _newer_panel_record(a: dict | None, b: dict | None) -> dict | None:
+    if a is None:
+        return b
+    if b is None:
+        return a
+    ts_a = _parse_timestamp(a.get("timestamp") or a.get("created_at"))
+    ts_b = _parse_timestamp(b.get("timestamp") or b.get("created_at"))
+    if ts_a is None:
+        return b
+    if ts_b is None:
+        return a
+    return a if ts_a >= ts_b else b
+
+
 def _get_watcher_lifecycle_status() -> WatcherLifecycleStatus | None:
     try:
         watcher_settings = load_watcher_settings()
@@ -880,13 +894,15 @@ def _get_watcher_lifecycle_status() -> WatcherLifecycleStatus | None:
     outbox_path = Path(INDEX_OUTBOX_PATH) if INDEX_OUTBOX_PATH else None
     panel_event_log = watcher_settings.paths.panel_event_log
 
-    executed_record = _last_panel_run_record(panel_event_log)
-    if executed_record is None and outbox_path:
-        executed_record = _last_panel_run_record(outbox_path)
+    executed_record = _newer_panel_record(
+        _last_panel_run_record(panel_event_log),
+        _last_panel_run_record(outbox_path) if outbox_path else None,
+    )
 
-    log_record = _last_panel_log_record(panel_event_log)
-    if log_record is None and outbox_path:
-        log_record = _last_panel_log_record(outbox_path)
+    log_record = _newer_panel_record(
+        _last_panel_log_record(panel_event_log),
+        _last_panel_log_record(outbox_path) if outbox_path else None,
+    )
 
     last_panel_run_at: str | None = None
     last_panel_run_actions_count: int | None = None
