@@ -171,3 +171,61 @@ def test_orientation_bundle_remains_non_write_authoritative():
     )
     with pytest.raises(BundleAuthorityViolation):
         build_orientation_frame_from_bundle(no_orient_bundle, now=_NOW)
+
+
+def test_orientation_rejects_bundle_not_scoped_for_orient():
+    # A bundle may carry may_orient=True but intended_use is part of the
+    # scoping contract — consuming it for orientation when it was scoped only
+    # for answering silently violates that contract.
+    answer_only_bundle = ContextBundle(
+        id="cb_answer_only",
+        created_at=_NOW,
+        trigger=BundleTrigger(type="retrieval"),
+        intended_use=["answer"],
+        scope=BundleScope(),
+        included=[_fact_item()],
+        excluded=[],
+        authority=AuthorityFlags(may_answer=True, may_orient=True),
+        expiry=ExpiryPosture(),
+    )
+    with pytest.raises(BundleAuthorityViolation, match="intended_use"):
+        build_orientation_frame_from_bundle(answer_only_bundle, now=_NOW)
+
+    # Multi-use bundles that include "orient" are accepted.
+    multi_bundle = ContextBundle(
+        id="cb_multi",
+        created_at=_NOW,
+        trigger=BundleTrigger(type="orientation"),
+        intended_use=["answer", "orient"],
+        scope=BundleScope(),
+        included=[_fact_item()],
+        excluded=[],
+        authority=AuthorityFlags(may_answer=True, may_orient=True),
+        expiry=ExpiryPosture(),
+    )
+    frame = build_orientation_frame_from_bundle(multi_bundle, now=_NOW)
+    assert frame.bundle_id == multi_bundle.id
+
+
+def test_orientation_normalizes_naive_caller_now():
+    # If the caller passes a naive `now`, the comparison must not raise TypeError.
+    # Naive now is treated as UTC — matches the same convention as stale_after.
+    naive_now = datetime(2026, 5, 15, 10, 0, 0)  # no tzinfo, 1h after _NOW
+    expiry = ExpiryPosture(
+        stale_after=_NOW + timedelta(hours=2),
+        reason="still fresh relative to naive now",
+    )
+    bundle = _bundle(included=[_fact_item()], expiry=expiry)
+    # Must not raise TypeError from naive vs. aware comparison.
+    frame = build_orientation_frame_from_bundle(bundle, now=naive_now)
+    assert frame.stale is False
+
+    # Naive now past stale_after also resolves correctly.
+    past_naive_now = datetime(2026, 5, 15, 8, 0, 0)  # 1h before _NOW
+    stale_expiry = ExpiryPosture(
+        stale_after=datetime(2026, 5, 15, 7, 30, 0, tzinfo=timezone.utc),
+        reason="stale relative to naive now",
+    )
+    stale_bundle = _bundle(included=[_fact_item()], expiry=stale_expiry)
+    stale_frame = build_orientation_frame_from_bundle(stale_bundle, now=past_naive_now)
+    assert stale_frame.stale is True

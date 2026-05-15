@@ -92,6 +92,11 @@ def build_orientation_frame_from_bundle(
         raise BundleAuthorityViolation(
             f"bundle {bundle.id} carries may_write=True; orientation is non-write"
         )
+    if "orient" not in bundle.intended_use:
+        raise BundleAuthorityViolation(
+            f"bundle {bundle.id} intended_use={bundle.intended_use!r} does not include 'orient'; "
+            "bundle was not scoped for orientation consumption"
+        )
 
     facts: list[OrientationSegment] = []
     inferences: list[OrientationSegment] = []
@@ -108,6 +113,8 @@ def build_orientation_frame_from_bundle(
             facts.append(segment)
 
     now = now or datetime.now(tz=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     stale = False
     stale_reason: Optional[str] = None
     if bundle.expiry and bundle.expiry.stale_after is not None:
