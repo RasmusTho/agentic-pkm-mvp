@@ -22,6 +22,8 @@ def _mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "LLM_MOCK_RESPONSE",
         '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}',
     )
+    # Disable companion cooldown so tests with freshly-created files still get companions.
+    monkeypatch.setenv("COMPANION_CREATE_COOLDOWN_SECONDS", "0")
     reset_store_backends()
 
 
@@ -62,10 +64,13 @@ def test_ingest_companion_lives_at_flat_uuid_path(tmp_path: Path, _mock_env: Non
 
     run_vault_alpha_ingest_paths(vault_root, [note_path])
 
-    expected_companion = vault_root / companion_path(note_uuid)
+    # Use vault_root to resolve the layout-aware canonical companion path.
+    expected_companion = vault_root / companion_path(note_uuid, vault_root)
     assert expected_companion.exists(), f"companion not found at {expected_companion}"
 
-    # Legacy path must NOT be written
+    # Legacy paths must NOT be written (dual-write removed).
+    legacy_companion = vault_root / "_system" / "companions" / f"{note_uuid}.md"
+    assert not legacy_companion.exists(), "_system/companions/ must not be written"
     legacy_root = vault_root / "System" / "Metadata" / "VaultMirror"
     assert not legacy_root.exists(), "VaultMirror directory must not be created"
 
@@ -84,7 +89,8 @@ def test_ingest_companion_has_no_forbidden_fields(tmp_path: Path, _mock_env: Non
 
     run_vault_alpha_ingest_paths(vault_root, [note_path])
 
-    companion_file = vault_root / companion_path(note_uuid)
+    # Use vault_root-aware path to find the canonical companion.
+    companion_file = vault_root / companion_path(note_uuid, vault_root)
     text = companion_file.read_text(encoding="utf-8")
     assert "review_state" not in text, "companion must not copy review_state from vault note"
     assert "maturity" not in text, "companion must not copy maturity from vault note"

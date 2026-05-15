@@ -108,6 +108,8 @@ def _configure_runtime_env(
     monkeypatch.setenv("PANEL_AGENT_PIPELINE", "direct")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(resolved_outbox_path))
+    # Disable companion cooldown so freshly-seeded test files still get companions.
+    monkeypatch.setenv("COMPANION_CREATE_COOLDOWN_SECONDS", "0")
 
 
 def _load_registry_config(config_path: Path, monkeypatch: pytest.MonkeyPatch, *, outbox_path: Path, state_dir: Path, vault_root: Path) -> registry.RegistryConfig:
@@ -210,7 +212,8 @@ def _seeded_note_paths(seed_folder: Path) -> list[Path]:
 
 
 def _companion_paths(vault_root: Path) -> list[Path]:
-    companions_dir = vault_root / "_system" / "companions"
+    from app.services.companion_note import companion_path
+    companions_dir = (vault_root / companion_path("x", vault_root)).parent
     if not companions_dir.exists():
         return []
     return sorted(companions_dir.rglob("*.md"))

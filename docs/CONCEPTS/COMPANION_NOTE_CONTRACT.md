@@ -1,4 +1,4 @@
-State: Delivered (v5.6 companion note contract); stable invariant for v6 design
+State: Delivered (v5.7 companion note contract — single write path, eligibility policy); stable invariant for v6 design
 Doc role: Core SoT
 Authority: Canonical definition of the companion note as a first-class system artifact for continuity, identity repair, and bounded system-side tracking of vault notes.
 
@@ -47,19 +47,45 @@ A companion note is not:
 ## Location convention
 
 Current forward-line convention:
-- `vault/_system/companions/<uuid>.md`
+- `vault/<system_folder>/companions/<uuid>.md`
 
-This path is system-owned.
-It belongs to the system surface, not the normal human writing surface.
+Where `<system_folder>` is the layout-configured system folder (e.g. `⚙️ System`), resolved via
+`get_vault_system_dir_rel()`. The path is layout-aware: vault settings or `VAULT_SYSTEM_DIR_REL`
+may override the default.
 
-If runtime compatibility still references older mirror-oriented paths, that should be treated as a
-transitional implementation detail rather than a contradiction of this contract.
+This path is system-owned. It belongs to the system surface, not the normal human writing surface.
+
+**Single write path**: `write_companion()` writes to exactly one location — the canonical
+layout-aware path above. The legacy dual-write to `_system/companions/` has been removed.
+Read fallback to `_system/companions/` is retained temporarily for vaults that have not yet
+migrated to the layout-aware path.
 
 Compatibility note:
 - older `System/Metadata/VaultMirror/...` files should be read as proto-companion continuity
   artifacts during transition
-- forward-line docs define `_system/companions/` as the intended steady-state location
-- migration and compatibility behavior should remain explicit until implementation fully converges
+- the `_system/companions/` path is the legacy read-fallback location, not the write target
+- vaults should migrate to the layout-aware system folder as part of normal ingest
+
+## Creation eligibility policy
+
+A companion note is only created when the source note passes all eligibility checks, in priority
+order. Skipped companions are logged; they are never silently dropped.
+
+1. **system_path** — note lives inside the system folder (e.g. `⚙️ System/`) or `_system/`.
+   Companions are never created for system-plane files.
+2. **placeholder_title** — filename stem is a known editor placeholder (Namnlös, Untitled,
+   New Note, Unnamed, Sans titre, etc., with optional trailing number). These are transient
+   cursor-landing files with no stable identity.
+3. **empty_note** — note body has no meaningful non-structural content after panel-stripping. A
+   body consisting only of headings, horizontal rules, or whitespace is considered empty.
+4. **cooldown_active** — note mtime is within `create_cooldown_seconds` of `now`. The default is
+   60 s; set `COMPANION_CREATE_COOLDOWN_SECONDS=0` to disable. The `rename_cooldown_seconds`
+   (default 20 s; env `COMPANION_RENAME_COOLDOWN_SECONDS`) applies to rename/update events.
+
+Settings precedence: vault `@Settings/watchers.md` companion section → env vars → defaults.
+
+When a companion is not created, the ingest fingerprint stored in the object store is used as the
+fallback skip-check signal so unchanged content is not re-ingested on subsequent runs.
 ## Minimal field set
 
 The companion note must carry a bounded field set sufficient for continuity and repair.

@@ -45,6 +45,21 @@ codebase rather than older plan text.
 - PanelAgent retains the legacy truncated snippet fallback when Note Context assembly fails. This is
   compatibility/safety behavior, not the primary path.
 
+### Shipped (v5.7 — issue #971)
+
+- **Single write path**: `write_companion()` no longer dual-writes to `_system/companions/`. The
+  canonical write target is always `<system_folder>/companions/<uuid>.md` (layout-aware). Legacy
+  `_system/companions/` read-fallback is retained for migration but no new files are written there.
+- **Creation eligibility policy** (`app/services/companion_eligibility.py`): companions are only
+  created when a note passes all four checks — not a system path, not a placeholder title, has
+  meaningful content, and not within the create cooldown window (default 60 s; configurable via
+  vault settings or `COMPANION_CREATE_COOLDOWN_SECONDS`).
+- **Fingerprint skip fallback**: for notes without a companion (e.g. system-path notes), the
+  ingest skip logic now falls back to the object-store `ingest_fingerprint.text_sha256` so
+  unchanged content is not re-ingested on subsequent runs.
+- **Orphan detection**: `find_orphaned_companions()` in the eligibility module provides a read-only
+  scan of companions whose `source_ref` no longer points to an existing vault note.
+
 ### Remaining verification and doc-sync items
 
 - Active SoT and roadmap docs still need to separate "implemented/integrated" from "remaining

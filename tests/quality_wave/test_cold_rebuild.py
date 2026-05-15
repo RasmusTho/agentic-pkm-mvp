@@ -36,6 +36,8 @@ def _setup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, outbox_name: 
     monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "config")
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "capture")
     monkeypatch.setenv("VAULT_DESK_DIR_REL", "workbench")
+    # Disable companion cooldown so freshly-seeded test files still get companions.
+    monkeypatch.setenv("COMPANION_CREATE_COOLDOWN_SECONDS", "0")
     outbox_path = tmp_path / outbox_name
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     return outbox_path
@@ -84,7 +86,8 @@ def _seed_names() -> list[str]:
 
 def _mirror_paths(vault_root: Path) -> list[Path]:
     """Get companion note paths (replaces legacy VaultMirror paths)."""
-    companion_root = vault_root / "_system" / "companions"
+    from app.services.companion_note import companion_path
+    companion_root = (vault_root / companion_path("x", vault_root)).parent
     if not companion_root.exists():
         return []
     return sorted(companion_root.glob("*.md"))
