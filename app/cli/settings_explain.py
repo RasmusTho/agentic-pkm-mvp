@@ -93,11 +93,30 @@ def build_settings_explain_payload() -> dict[str, Any]:
     }
 
 
+_SENSITIVE_KEYS: frozenset[str] = frozenset(
+    {
+        "token", "secret", "password", "key", "dsn", "database_url",
+        "api_key", "auth", "credential", "credentials",
+    }
+)
+
+
+def _redact_payload(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {
+            k: "***" if any(s in k.lower() for s in _SENSITIVE_KEYS) else _redact_payload(v)
+            for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_redact_payload(item) for item in obj]
+    return obj
+
+
 def emit_settings_explain(payload: dict[str, Any], *, pretty: bool = True) -> None:
     kwargs: dict[str, Any] = {"sort_keys": True}
     if pretty:
         kwargs["indent"] = 2
-    print(json.dumps(payload, **kwargs))
+    print(json.dumps(_redact_payload(payload), **kwargs))
 
 
 def main(argv: Sequence[str] | None = None) -> int:

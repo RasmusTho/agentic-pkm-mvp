@@ -114,3 +114,29 @@ def test_run_once_writes_note_via_knowledge_port(tmp_path: Path, monkeypatch):
     assert processed == 1
     assert calls and calls[0][0] == "note.md"
     assert "review_state: promoted" in calls[0][1]
+
+
+# --- security: trace_id uses SHA-256, not SHA-1 ---
+
+def test_enqueue_trace_id_is_sha256_derived(tmp_path: Path, monkeypatch):
+    import hashlib
+    import app.promotion.queue as q
+
+    qpath, log, settings = _setup(monkeypatch, tmp_path)
+    settings.write_text(
+        "promotion:\n  cooldown_seconds: 999\n  require_idle_seconds: 0\n  max_retries: 1\n"
+        "  move_policy:\n    enabled: false\n    default_target: 2_Cards/Concepts\n",
+        encoding="utf-8",
+    )
+    p = tmp_path / "vault" / "sha256_note.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("---\nreview_state: inbox\n---\nBody\n", encoding="utf-8")
+    uuid = "aaaaaaaa-0000-0000-0000-000000000001"
+
+    monkeypatch.setattr("app.promotion.queue.current_trace_id", lambda: None)
+
+    enqueue(p, uuid=uuid, desired_state="promoted")
+    obj = json.loads(qpath.read_text(encoding="utf-8").splitlines()[0])
+    tid = obj["trace_id"]
+    expected = hashlib.sha256(f"{uuid}{p}".encode()).hexdigest()[:12]
+    assert tid == expected, f"trace_id {tid!r} was not derived from SHA-256"
