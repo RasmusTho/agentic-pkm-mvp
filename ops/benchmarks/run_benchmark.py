@@ -239,6 +239,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         os.environ.setdefault("STORE_BACKEND", "memory")
     if args.model_profile == "mock":
         os.environ.setdefault("LLM_PROVIDER", "mock")
+        os.environ.setdefault("EMBED_PROFILE", "deterministic")
         os.environ.setdefault(
             "LLM_MOCK_RESPONSE",
             '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}',
