@@ -194,10 +194,19 @@ cat tmp/watcher_heartbeat.json | python3 -m json.tool
 cat tmp/worker_heartbeat.json | python3 -m json.tool
 
 # 6. Outbox check — confirm no stuck rows
+# Resolve the prod DB name from settings (honours PKM_DB_NAME_PROD override)
+PROD_DB=$(docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod \
+  exec -T api python -m app.cli settings-explain --json 2>/dev/null | \
+  python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('database') or d.get('db_name') or 'app')")
 docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod \
-  exec db psql -U postgres -d app \
-  -c "SELECT topic, count(*), max(created_at), max(delivered_at) FROM outbox \
-      GROUP BY topic ORDER BY max(created_at) DESC;"
+  exec -T db psql -U postgres -d "$PROD_DB" -c "
+    SELECT topic,
+           count(*) FILTER (WHERE delivered_at IS NULL)        AS pending,
+           min(created_at) FILTER (WHERE delivered_at IS NULL) AS oldest_pending,
+           count(*) FILTER (WHERE delivered_at IS NOT NULL)     AS delivered
+    FROM outbox
+    GROUP BY topic
+    ORDER BY pending DESC, oldest_pending;"
 
 # 7. Settings validation
 docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod \
