@@ -95,6 +95,23 @@ if [ -n "$scope_glob_raw" ]; then
   printf "%s\n" "WATCHER_SCOPE_GLOB=$scope_glob_raw" >> "$runtime_env_path"
 fi
 
+# OPENAI_BASE is the full chat-completions URL used directly by the adapter and health checks
+# (e.g. http://host.docker.internal:11434/v1/chat/completions).
+# If the operator set it explicitly, write it as-is.
+# Otherwise, if OPENAI_BASE_URL is set (OpenAI-compatible base), derive the chat-completions
+# URL by stripping a trailing slash and appending /chat/completions.
+if [ -n "${OPENAI_BASE:-}" ]; then
+  printf "%s\n" "OPENAI_BASE=${OPENAI_BASE}" >> "$runtime_env_path"
+elif [ -n "${OPENAI_BASE_URL:-}" ]; then
+  _derived_openai_base="${OPENAI_BASE_URL%/}/chat/completions"
+  printf "%s\n" "OPENAI_BASE=${_derived_openai_base}" >> "$runtime_env_path"
+fi
+
+# Propagate OPENAI_API_KEY if set; required by route health checks for the openai provider.
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+  printf "%s\n" "OPENAI_API_KEY=${OPENAI_API_KEY}" >> "$runtime_env_path"
+fi
+
 if [ "${LLM_PROVIDER:-}" = "ollama" ]; then
   python3 - <<'PY' >> "$runtime_env_path"
 from __future__ import annotations
