@@ -78,6 +78,7 @@ class WatcherState:
     bad_ticks: int = 0
     outbox_offset: int = 0
     dynamic_sleep_seconds: float | None = None
+    last_emitted_event_at: float | None = None
 
     @classmethod
     def load(cls, path: Path) -> WatcherState:
@@ -103,6 +104,7 @@ class WatcherState:
             bad_ticks=int(data.get("bad_ticks") or 0),
             outbox_offset=int(data.get("outbox_offset") or 0),
             dynamic_sleep_seconds=_sanitize_ts(data.get("dynamic_sleep_seconds")),
+            last_emitted_event_at=_sanitize_ts(data.get("last_emitted_event_at")),
         )
 
     def save(self, path: Path) -> None:
@@ -123,6 +125,7 @@ class WatcherState:
             "bad_ticks": self.bad_ticks,
             "outbox_offset": self.outbox_offset,
             "dynamic_sleep_seconds": self.dynamic_sleep_seconds,
+            "last_emitted_event_at": self.last_emitted_event_at,
         }
         path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 

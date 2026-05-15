@@ -126,6 +126,21 @@ class ContextDimensionsStatus(BaseModel):
     situated_identity: str | None = None
 
 
+class WatcherLifecycleStatus(BaseModel):
+    panel_changed_total: int | None = None
+    panel_emitted_total: int | None = None
+    panel_rate_limited_total: int | None = None
+    panel_last_emitted_event_at: str | None = None
+    panel_last_trace_id: str | None = None
+    ingest_changed_total: int | None = None
+    ingest_emitted_total: int | None = None
+    ingest_rate_limited_total: int | None = None
+    last_panel_run_at: str | None = None
+    last_panel_run_actions_count: int | None = None
+    last_panel_run_executed_count: int | None = None
+    last_panel_run_summary: str | None = None
+
+
 class WatcherAutomationStatus(BaseModel):
     auto_exec_enabled: bool = False
     mode: str = "emit-only"
@@ -175,6 +190,7 @@ class SystemStatus(BaseModel):
     worker_queue: Optional[WorkerQueueStatus] = None
     view_freshness: Optional[ViewFreshnessStatus] = None
     watcher_automation: Optional[WatcherAutomationStatus] = None
+    watcher_lifecycle: Optional[WatcherLifecycleStatus] = None
     instance_provenance: Optional[InstanceProvenanceStatus] = None
     context_dimensions: Optional[ContextDimensionsStatus] = None
     v6_0_seams: Optional[Dict[str, str]] = None
@@ -197,6 +213,7 @@ __all__ = [
     "ViewFreshnessStatus",
     "InstanceProvenanceStatus",
     "WatcherAutomationStatus",
+    "WatcherLifecycleStatus",
     "ContextDimensionsStatus",
     "SystemStatus",
 ]

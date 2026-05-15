@@ -421,6 +421,9 @@ def _heartbeat_status(
     ):
         if key in raw:
             payload[key] = raw[key]
+    watchers_raw = raw.get("watchers")
+    if isinstance(watchers_raw, dict):
+        payload["watchers"] = watchers_raw
     return payload
 
 

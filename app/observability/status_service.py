@@ -11,6 +11,7 @@ from typing import Iterable
 from app.config.environment import active_environment
 from app.events.types import PROMOTE_INTENT_CREATED, PROMOTE_DONE
 from app.events.types import ORCHESTRATOR_STEP_ERROR, ORCHESTRATOR_STEP_FINISHED
+from app.events.types import PANEL_INTENT_EXECUTED, PANEL_LOG_CREATED
 from app.observability.ingest_meta import get_ingest_status
 from app.orchestrator.delivery_sla import (
     DELIVERY_SLA_DELIVERED,
@@ -36,6 +37,7 @@ from app.observability.status_model import (
     WatcherAutomationStatus,
     WorkerQueueStatus,
     WriteGuardStatus,
+    WatcherLifecycleStatus,
     ContextDimensionsStatus,
 )
 from app.outbox.events import INDEX_OUTBOX_PATH
@@ -795,6 +797,148 @@ def _status_context_dimensions(outbox_path: Path) -> ContextDimensionsStatus | N
     return None
 
 
+def _read_watcher_heartbeat_watchers() -> dict[str, dict]:
+    try:
+        from app.watcher.heartbeat import resolve_heartbeat_path
+        path = resolve_heartbeat_path()
+        if not path.exists():
+            return {}
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        watchers = raw.get("watchers")
+        return watchers if isinstance(watchers, dict) else {}
+    except Exception:
+        return {}
+
+
+def _last_panel_run_record(path: Path) -> dict | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            last: dict | None = None
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                topic = payload.get("event") or payload.get("event_type") or payload.get("topic")
+                if topic == PANEL_INTENT_EXECUTED:
+                    last = payload
+            return last
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
+def _last_panel_log_record(path: Path) -> dict | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            last: dict | None = None
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                topic = payload.get("event") or payload.get("event_type") or payload.get("topic")
+                if topic == PANEL_LOG_CREATED:
+                    last = payload
+            return last
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
+def _newer_panel_record(a: dict | None, b: dict | None) -> dict | None:
+    if a is None:
+        return b
+    if b is None:
+        return a
+    ts_a = _parse_timestamp(a.get("timestamp") or a.get("created_at"))
+    ts_b = _parse_timestamp(b.get("timestamp") or b.get("created_at"))
+    if ts_a is None:
+        return b
+    if ts_b is None:
+        return a
+    return a if ts_a >= ts_b else b
+
+
+def _get_watcher_lifecycle_status() -> WatcherLifecycleStatus | None:
+    try:
+        watcher_settings = load_watcher_settings()
+    except Exception:
+        return None
+
+    watchers = _read_watcher_heartbeat_watchers()
+    panel_w = watchers.get("panel") or {}
+    ingest_w = watchers.get("ingest") or {}
+
+    panel_emitted_at_raw = panel_w.get("last_emitted_event_at")
+    panel_last_emitted_iso: str | None = None
+    if panel_emitted_at_raw is not None:
+        try:
+            from datetime import timezone
+            panel_last_emitted_iso = datetime.fromtimestamp(float(panel_emitted_at_raw), tz=timezone.utc).isoformat()
+        except Exception:
+            pass
+
+    outbox_path = Path(INDEX_OUTBOX_PATH) if INDEX_OUTBOX_PATH else None
+    panel_event_log = watcher_settings.paths.panel_event_log
+
+    executed_record = _newer_panel_record(
+        _last_panel_run_record(panel_event_log),
+        _last_panel_run_record(outbox_path) if outbox_path else None,
+    )
+
+    log_record = _newer_panel_record(
+        _last_panel_log_record(panel_event_log),
+        _last_panel_log_record(outbox_path) if outbox_path else None,
+    )
+
+    last_panel_run_at: str | None = None
+    last_panel_run_actions_count: int | None = None
+    last_panel_run_executed_count: int | None = None
+    last_panel_run_summary: str | None = None
+
+    if executed_record is not None:
+        last_panel_run_at = str(executed_record.get("timestamp") or executed_record.get("created_at") or "")
+        payload = executed_record.get("payload") or {}
+        if isinstance(payload, dict):
+            actions = payload.get("actions")
+            executed_ids = payload.get("executed_action_ids")
+            last_panel_run_actions_count = len(actions) if isinstance(actions, list) else 0
+            last_panel_run_executed_count = len(executed_ids) if isinstance(executed_ids, list) else 0
+
+    if log_record is not None:
+        log_payload = log_record.get("payload") or {}
+        if isinstance(log_payload, dict):
+            last_panel_run_summary = log_payload.get("summary")
+
+    return WatcherLifecycleStatus(
+        panel_changed_total=int(panel_w["changed_total"]) if "changed_total" in panel_w else None,
+        panel_emitted_total=int(panel_w["emitted_total"]) if "emitted_total" in panel_w else None,
+        panel_rate_limited_total=int(panel_w["rate_limited_total"]) if "rate_limited_total" in panel_w else None,
+        panel_last_emitted_event_at=panel_last_emitted_iso,
+        panel_last_trace_id=str(panel_w["last_trace_id"]) if "last_trace_id" in panel_w else None,
+        ingest_changed_total=int(ingest_w["changed_total"]) if "changed_total" in ingest_w else None,
+        ingest_emitted_total=int(ingest_w["emitted_total"]) if "emitted_total" in ingest_w else None,
+        ingest_rate_limited_total=int(ingest_w["rate_limited_total"]) if "rate_limited_total" in ingest_w else None,
+        last_panel_run_at=last_panel_run_at or None,
+        last_panel_run_actions_count=last_panel_run_actions_count,
+        last_panel_run_executed_count=last_panel_run_executed_count,
+        last_panel_run_summary=last_panel_run_summary,
+    )
+
+
 def _get_v6_seams() -> dict | None:
     try:
         from app.cli.health import _check_v6_seams  # lazy to avoid circular import
@@ -843,6 +987,7 @@ def get_system_status() -> SystemStatus:
             worker_queue=worker_queue,
         ),
         watcher_automation=_get_watcher_automation_status(),
+        watcher_lifecycle=_get_watcher_lifecycle_status(),
         instance_provenance=_get_instance_provenance_status(),
         context_dimensions=_status_context_dimensions(Path(INDEX_OUTBOX_PATH)),
         v6_0_seams=_get_v6_seams(),
