@@ -35,7 +35,7 @@ from pathlib import Path
 import pytest
 
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
-from app.services.companion_note import companion_path, read_companion
+from app.services.companion_note import read_companion
 from app.stores import reset_store_backends
 from scripts.yaml_roundtrip import load_frontmatter
 
