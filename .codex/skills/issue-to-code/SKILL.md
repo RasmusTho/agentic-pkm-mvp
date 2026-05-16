@@ -16,6 +16,37 @@ Route only triggered cases to `docs/development/PR_ESCALATION_PATHS.md` or the h
 If the slice is the final child slice, route parent closure to `docs/development/PARENT_ISSUE_CLOSURE.md` after merge.
 Bounded direct repair PRs may proceed without a governing Issue when the PR body supplies the full contract via a complete Direct Repair block.
 
+## Pre-implementation classification check
+
+Before claiming an Issue or producing any implementation, answer the following. Stop as indicated if the answer is unresolvable.
+
+**Artifact class** — which class does this change produce or mutate?
+
+- Human Knowledge Artifact (vault notes, plans, research)
+- Agentic Memory Artifact (memory candidates, promoted memory)
+- Machine Mirror Artifact (embeddings, index projections)
+- Bridge / Assembly Artifact (context bundles, composite panels)
+- Companion Metadata Note (`.meta.md` companions, frontmatter sidecars)
+- Runtime state (outbox rows, dispatcher DB, watcher tick state)
+- Governance-bearing state (GitHub labels, Project status, release pointer)
+
+**Environment / channel risk** — which environment or release channel does this touch?
+
+- `none / docs-only` — no runtime change
+- `dev` — local dev environment, `app_dev` DB, alpha path
+- `test` — test bootstrap, `app_test` DB, `vault-test/`
+- `prod` — `app` DB, real vault, watcher execution, panel actions
+- `stable promotion` — moving the `stable` pointer, irreversible migrations, prod process restart
+
+**Stop conditions** — stop and resolve before coding if any of these is true:
+
+- Authority boundary is unclear (plan/spec doc treated as shipped runtime without code/test evidence).
+- Task touches `prod`, `stable`, migrations, vault paths, DSNs, or watcher execution without reading `docs/RELEASE_CHANNELS/README.md` and `docs/ENVIRONMENTS.md` first.
+- Task depends on target-state or spec docs as shipped behavior but no code path, passing test, or owner-doc acceptance record confirms the behavior is live.
+- Any Acceptance Criterion lacks a concrete `Verify:` target (a test pointer for behavioral ACs, a doc anchor / roadmap diff / runtime receipt for non-behavioral ACs).
+
+Apply `docs/development/AGENT_OPERATING_PROTOCOL.md` for the full classification reference.
+
 ## Canonical workflow
 
 Hot path:

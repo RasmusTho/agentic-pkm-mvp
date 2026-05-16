@@ -86,6 +86,10 @@ Enforcement note:
 - Replace duplicated policy with links or short boundary notes.
 - When a capability is still being stabilized, make the intended verification path and acceptance path explicit instead of implying they will emerge later.
 
+## Pre-implementation classification
+
+Before starting implementation on a non-trivial task, apply `docs/development/AGENT_OPERATING_PROTOCOL.md` to classify the task class (Architecture / Implementation / Operations / Governance / Cost-control), confirm artifact class and environment/channel risk, identify the governing owner doc, and verify that every AC carries a resolvable `Verify:` target. This is a routing and orientation step, not a process gate — it keeps implementation bounded and stops misclassified work before it reaches code.
+
 ## Docs-authoring lane
 
 Docs authoring is the docs-only path for evolving or clarifying authoritative repo docs before backlog extraction.

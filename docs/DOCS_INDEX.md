@@ -16,6 +16,22 @@ For cross-cutting semantic, architecture, or planning work, use
 `docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md` to connect the active human/ontology chain to
 parallel execution work.
 
+## Agent quick routing
+
+First-read map for common work areas. Use `docs/DOCS_INDEX.md` (this file) to locate the full owner doc after identifying the area.
+
+| Work area | First-read docs |
+| --- | --- |
+| Builder-agent workflow | `AGENTS.md` → `.codex/skills/README.md` → `docs/development/AGENT_OPERATING_PROTOCOL.md` |
+| Runtime agents | `docs/AGENTS.md`, `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` |
+| Contextualization Layer | `docs/CONTEXTUALIZATION_LAYER/README.md`, `docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md` |
+| Companion notes | `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`, `docs/CONTEXTUALIZATION_LAYER/COMPANION_NOTE_PATTERN.md` |
+| Agent memory | `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`, `docs/AGENT_MEMORY/README.md` |
+| Release channels | `docs/RELEASE_CHANNELS/README.md`, `docs/ENVIRONMENTS.md` |
+| Canvas Chat / interaction surfaces | `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`, `docs/CANVAS_CHAT_SURFACE/README.md` |
+| Governance-bearing mutation | `AGENTS.md` (GitHub delivery governance), `.codex/skills/issue-to-code/SKILL.md` |
+| Operations / runtime health | `docs/OPERATIONS.md`, `docs/HEALTH.md`, `docs/OBSERVABILITY.md` |
+
 ## Temporal governance
 
 Some docs are structurally correct but still drift because time, delivery state, runtime posture,
@@ -254,6 +270,7 @@ These directories are docs-only specification authority for v6.0 capability boun
 | docs/SETTINGS.md | Settings | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Settings compiler + registries documented; some areas are forward-looking. |
 | docs/DEV_WORKFLOW.md | Developer workflow | Aligned (forward line v5.x) | 2026-04-02 | Compatibility pointer to `docs/development/DEV_WORKFLOW.md`; now mirrors the feature-issue -> slice -> slice-verification -> feature-validation -> acceptance chain. |
 | docs/development/DEV_WORKFLOW.md | Development workflow | Aligned (forward line v5.x) | 2026-04-02 | Development reference for builder-agent working loop, the feature/slice breakdown model, and the rule that post-merge validation evidence lives on the parent feature issue until owner-doc promotion. |
+| docs/development/AGENT_OPERATING_PROTOCOL.md | Agent operating protocol (pre-implementation checks) | Governance | 2026-05-16 | Defines five task classes (Architecture, Implementation, Operations, Governance, Cost-control/quality-control), eight required pre-implementation checks (repo skill, owner docs, authority boundary, artifact class, environment/channel risk, verification target, docs writeback, stop conditions), artifact class taxonomy, environment/channel risk levels, and explicit stop conditions for spec-vs-runtime confusion and unsafe mutation. |
 | docs/development/PR_HOT_PATH.md | PR hot path workflow | Reference | 2026-05-14 | Default PR delivery sequence for routine work, including the trigger points that require escalation procedures. |
 | docs/development/PR_ESCALATION_PATHS.md | PR escalation procedures | Reference | 2026-05-14 | Conditional escalation playbook for PR delivery when hot-path triggers apply (stale SHA, blocking review feedback, CI failure, or risk classification changes). |
 | docs/development/PARENT_ISSUE_CLOSURE.md | Parent issue closure protocol | Reference | 2026-05-14 | Defines when and how to close parent feature issues after slice completion and verification evidence is present. |

@@ -13,6 +13,7 @@ It does not apply to runtime/system agents that exist inside the product. Runtim
 4. Read the owner document before editing code or nearby docs.
 5. Use `docs/development/DEV_WORKFLOW.md` for the working loop and validation expectations.
 6. Use `docs/development/AGENT_INSTRUCTION_GOVERNANCE.md` for maintenance rules, rationale, and compatibility-entrypoint policy.
+7. Before producing implementation guidance or touching code, apply `docs/development/AGENT_OPERATING_PROTOCOL.md` to classify the task, identify artifact class and channel risk, and confirm stop conditions are clear.
 
 ## Repo-local skill routing
 
