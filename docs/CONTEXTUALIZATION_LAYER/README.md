@@ -14,6 +14,7 @@ Each document here is intentionally narrow. None of them define a full ontology,
 2. **[ARTIFACT_METADATA_CONTRACT.md](ARTIFACT_METADATA_CONTRACT.md)** — Minimal metadata contract. Names placement modes (inline frontmatter / companion metadata note / structured agentic artifact), shared minimal fields, and per-class metadata shapes for human knowledge, agentic memory, bridge / assembly (e.g. context bundles), and machine mirror artifacts.
 3. **[COMPANION_NOTE_PATTERN.md](COMPANION_NOTE_PATTERN.md)** — Companion note pattern. Names placement options, required linkage fields, companion types, readability requirements, editability / conflict principles, and durability / sync posture for companion notes that absorb metadata the primary artifact should not carry.
 4. **[ARTIFACT_LIFECYCLE_MODEL.md](ARTIFACT_LIFECYCLE_MODEL.md)** — Artifact lifecycle model. Names the lifecycle states, transitions, and class-specific applicability for human knowledge artifacts, agentic memory artifacts, bridge / assembly artifacts, machine mirror artifacts, and companion metadata notes. Separates lifecycle (state) from activation (use-right), the latter being deferred to a downstream contract.
+5. **[EXAMPLE_FIXTURES.md](EXAMPLE_FIXTURES.md)** — Example fixtures. Provides concrete, instantiated examples of how the five artifact classes coexist in practice, using a three-day design scenario to walk through human knowledge, companion metadata, agentic memory, bridge / assembly, and machine mirror artifacts with example YAML and JSON.
 
 ## Cross-cutting concept contracts
 
