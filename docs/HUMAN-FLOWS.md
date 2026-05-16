@@ -342,7 +342,11 @@ The contract is that the important artifacts remain understandable, recoverable,
 
 ### Preserve long-lived artifacts beyond the current system
 
+<!-- vault-first-human-surface -->
+
 The system must treat the human's central artifacts as longer-lived than any current stack, runtime, or implementation choice.
+
+The vault is the primary durable human cognitive surface. Human writing, decisions, and standing meaning live in vault notes (with companion notes as the system-owned continuity pair). Runtime substrate — LangGraph orchestration state, any future Deep Agents harness, the Orchestrator, the event/outbox layer, derived indexes — is operational and rebuildable. It carries bounded execution under governance; it does not own canonical cognition. The corresponding architectural framing lives in `docs/ARCHITECTURE.md :: layered cognitive/runtime architecture` and `docs/ARCHITECTURE.md :: runtime state vs canonical cognition`.
 
 This means:
 - central notes and core artifacts should remain directly comprehensible without the current system,

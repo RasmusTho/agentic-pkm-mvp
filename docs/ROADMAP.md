@@ -132,7 +132,15 @@ Deliverables:
 
 ## Phase 2 — Deep Agent Introduction (Thin Slice, Post-v6.0)
 
+<!-- deep-agents-runtime-exploration -->
+
 Introduce Deep Agents under strict constraints.
+
+Framing:
+- Deep Agents are an **optional future operational harness / runtime layer**, not a shipped capability and not the cognitive mediation layer of the system.
+- Like LangGraph (see `docs/ARCHITECTURE.md :: LangGraph runtime substrate`), Deep Agents are runtime/execution substrate: they orchestrate planning and multi-step reasoning under existing governance, capability contracts, and authority boundaries.
+- Adopting a Deep Agents harness must not promote runtime orchestration state into canonical cognition. The vault remains the primary durable human cognitive surface (`docs/HUMAN-FLOWS.md :: vault-first human surface`), and orchestration state remains operational and rebuildable (`docs/ARCHITECTURE.md :: runtime state vs canonical cognition`).
+- Deep Agents introduction is exploratory: no production Deep Agents integration is claimed in the current baseline or in the v6.0 seams. Future adoption is conditional on structural separation, observable runtime evidence, and explicit owner-doc promotion.
 
 Scope:
 
