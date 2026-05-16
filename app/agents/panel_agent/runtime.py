@@ -45,6 +45,20 @@ def _has_no_match_marker(text: str, instruction: str) -> bool:
     return _no_match_marker(instruction) in text
 
 
+def _resolve_note_file(note_path_str: str | None, vault_root: Path | None) -> Path | None:
+    """Resolve the vault file path for a note, or return None if unresolvable."""
+    if not note_path_str:
+        return None
+    candidate = Path(note_path_str)
+    if candidate.is_absolute() and candidate.exists():
+        return candidate
+    if vault_root:
+        candidate = vault_root / note_path_str
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _resolve_outbox_path(path: Path | None = None) -> Path:
     if path is not None:
         return Path(path)
@@ -208,8 +222,16 @@ def execute_panel_intent(
                 )
             )
     # Suppress duplicate no-match events when the instruction is unchanged (#1012).
+    # Use the live file as the source of truth (ObjectStore may lag post-writeback).
     _instruction = intent_event.payload.panel.instruction or ""
-    if _has_no_match_marker(note_text, _instruction):
+    _note_file_for_dedup = _resolve_note_file(intent_event.payload.note.path, vault_root)
+    _dedup_text = note_text
+    if _note_file_for_dedup is not None:
+        try:
+            _dedup_text = _note_file_for_dedup.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    if _has_no_match_marker(_dedup_text, _instruction):
         emitted_events = [
             e for e in emitted_events
             if not (
@@ -430,17 +452,7 @@ def _apply_note_writeback(
     note_uuid = state.note.uuid
     note_path_str = state.note.path
 
-    # Resolve the vault file path for writing.
-    note_file: Path | None = None
-    if note_path_str:
-        candidate = Path(note_path_str)
-        if candidate.is_absolute() and candidate.exists():
-            note_file = candidate
-        elif vault_root:
-            candidate = vault_root / note_path_str
-            if candidate.exists():
-                note_file = candidate
-
+    note_file = _resolve_note_file(note_path_str, vault_root)
     if note_file is None:
         logger.warning(
             "panel writeback skipped (cannot resolve note file) note_uuid=%s note_path=%s",
