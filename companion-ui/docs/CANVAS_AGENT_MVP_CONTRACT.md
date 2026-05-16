@@ -226,7 +226,10 @@ session_id: <uuid>
 ---
 ```
 
-The `type: chat-session` field is system-assigned and governance-bearing. The `.chats/` namespace
+The `type: chat-session` field is system-assigned and governance-bearing. Session log writing is
+implemented in `app/chat/session_log.py` (`SessionLogWriter.open_session()` / `append_turn()` /
+`close_session()`); the write contract is specified in
+`docs/CANVAS_CHAT_SURFACE/WRITE_SESSION_LOGS.md`. The `.chats/` namespace
 and `type: chat-session` field together let session artifacts be filtered from normal vault views
 and distinguished from human-authored notes by retrieval and system tooling.
 
@@ -337,8 +340,11 @@ This contract is docs-only. The following are **not** decided here:
 1. **Undo granularity.** Should the undo stack distinguish assistant-applied edits from user
    keystrokes? If so, how is the boundary surfaced to the user?
 2. **Session recovery after interruption.** What is the minimum continuity payload needed to
-   restore an interrupted Canvas session to `active` state? How is the session log written at
-   interruption time vs. at clean close?
+   restore an interrupted Canvas session to `active` state? Note: session log write timing is
+   already specified and shipped — `SessionLogWriter.open_session()` is called at session start and
+   `append_turn()` is called per turn (see `app/chat/session_log.py` and
+   `docs/CANVAS_CHAT_SURFACE/WRITE_SESSION_LOGS.md`). The open question is only the additional
+   recovery payload: what Companion UI must persist so re-entry into a paused session is low-cost.
 3. **Conflict resolution.** If the user edits the note externally (Obsidian) while a Canvas
    session is `paused`, what is the merge/conflict protocol?
 4. **Session log retention policy.** What is the retention window after which sessions are eligible
