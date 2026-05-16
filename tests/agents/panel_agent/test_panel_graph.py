@@ -486,11 +486,25 @@ def test_panel_graph_freeform_proposes_catalog_action_without_checkboxes(monkeyp
 
     result = run_panel_graph(state, decider_mode="llm")
     event_names = {getattr(evt, "event", None) for evt in result.emitted_events}
-    assert "promote.intent.created" in event_names
-    assert "panel.action.triggered" in event_names
+    # Proposal vs execution boundary (#979):
+    # A freeform LLM proposal for a governance-bearing capability
+    # (`promote.evergreen`, capability_class: governed_execution) must not
+    # execute same-pass. It is surfaced as an unchecked proposal via a
+    # `panel.action.logged` proposal_offered signal; the governed
+    # `promote.intent.created` event only fires after explicit human
+    # confirmation.
+    assert "promote.intent.created" not in event_names
+    assert "panel.action.triggered" not in event_names
+    assert "panel.action.logged" in event_names
     statuses = {r.id: r.status for r in result.action_results}
-    assert statuses["promote.evergreen"] == "triggered"
+    assert statuses["promote.evergreen"] == "skipped"
+    reasons = {r.id: r.details.get("reason") for r in result.action_results}
+    assert reasons["promote.evergreen"] == "proposal_offered"
+    assert "promote.evergreen" in result.proposed_action_ids
+    # The action is selected (LLM chose it) but written back as unchecked.
     assert result.selected_action_ids == ["promote.evergreen"]
+    proposed_action = next(a for a in result.actions if a.id == "promote.evergreen")
+    assert proposed_action.checked is False
 
 
 def test_panel_graph_freeform_rejects_out_of_catalog_id(monkeypatch) -> None:

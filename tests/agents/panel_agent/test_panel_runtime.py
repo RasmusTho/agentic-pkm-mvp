@@ -523,10 +523,22 @@ def test_runtime_writeback_proposed_actions_as_unchecked_suggestions(tmp_path: P
     # Proposed action should appear as unchecked checkbox.
     assert "- [ ] Make this note evergreen" in updated
 
-    # Promotion event should be emitted (proposal passed validation).
+    # Proposal-vs-execution boundary (#979): a freeform LLM proposal for a
+    # governance-bearing capability (`promote.evergreen`, capability_class:
+    # governed_execution) must NOT execute same-pass. It is written back as
+    # an unchecked suggestion and surfaced via a `panel.action.logged`
+    # proposal_offered signal; the governed effect (`promote.intent.created`)
+    # only fires after the human checks the box on a subsequent pass.
     records = _read_outbox(outbox_path)
     topics = {rec["event"] for rec in records}
-    assert "promote.intent.created" in topics
+    assert "promote.intent.created" not in topics
+    assert "panel.action.logged" in topics
+    logged_reasons = {
+        rec["payload"].get("reason")
+        for rec in records
+        if rec["event"] == "panel.action.logged"
+    }
+    assert "proposal_offered" in logged_reasons
 
 
 def test_runtime_writeback_proposes_idempotent_on_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
