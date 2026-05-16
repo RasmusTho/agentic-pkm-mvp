@@ -252,7 +252,13 @@ def _write_proposals_to_panel(markdown: str, proposed_labels: list[tuple[str, st
         stable_id = stable_action_id(label_text)
         if stable_id in existing_ids or label_text in existing_labels:
             continue
-        proposal_lines.append(f"- [ ] {label_text} <!--ai:id={stable_id}-->")
+        # Mark governance-bearing proposals with a persistent marker so the
+        # parser can re-surface them as `proposal_pending=True` on subsequent
+        # passes. This prevents the LLM from auto-selecting an unchecked
+        # proposed line on a later pass and bypassing the human gate (#979).
+        proposal_lines.append(
+            f"- [ ] {label_text} <!--ai:id={stable_id}--> <!--ai:proposed=979-->"
+        )
 
     if not proposal_lines:
         return markdown

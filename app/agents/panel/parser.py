@@ -16,7 +16,11 @@ _LABEL_PREFIXES = {
     "actions": ("actions", "åtgärder"),
     "logs": ("log", "logg"),
 }
-_ACTION_PATTERN = re.compile(r"^- \[( |x|X)\]\s*(.*?)(?:\s*<!--\s*ai:id=([A-Za-z0-9_.-]+)\s*-->)?\s*$")
+_ACTION_PATTERN = re.compile(
+    r"^- \[( |x|X)\]\s*(.*?)"
+    r"(?:\s*<!--\s*ai:id=([A-Za-z0-9_.-]+)\s*-->)?"
+    r"(?:\s*<!--\s*ai:proposed=([A-Za-z0-9_.-]+)\s*-->)?\s*$"
+)
 
 
 def parse_panel(markdown: str) -> PanelState:
@@ -166,9 +170,15 @@ def _line_to_action(line: str) -> PanelAction | None:
     checked = match.group(1).lower() == "x"
     text = match.group(2).strip()
     action_id = match.group(3) or None
+    proposal_pending = match.group(4) is not None
     if not text:
         return None
-    return PanelAction(checked=checked, text=text, action_id=action_id)
+    return PanelAction(
+        checked=checked,
+        text=text,
+        action_id=action_id,
+        proposal_pending=proposal_pending,
+    )
 
 
 def is_ai_fence(line: str) -> bool:

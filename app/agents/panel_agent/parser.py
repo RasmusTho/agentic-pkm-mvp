@@ -11,7 +11,11 @@ _SECTION_MAP: dict[str, Literal["instruction", "actions", "log"]] = {
     "ai-åtgärder": "actions",
     "ai-logg": "log",
 }
-_ACTION_PATTERN = re.compile(r"^- \[( |x|X)\]\s*(.*?)(?:\s*<!--\s*ai:id=([A-Za-z0-9_.-]+)\s*-->)?\s*$")
+_ACTION_PATTERN = re.compile(
+    r"^- \[( |x|X)\]\s*(.*?)"
+    r"(?:\s*<!--\s*ai:id=([A-Za-z0-9_.-]+)\s*-->)?"
+    r"(?:\s*<!--\s*ai:proposed=([A-Za-z0-9_.-]+)\s*-->)?\s*$"
+)
 
 
 @dataclass
@@ -25,6 +29,7 @@ class ParsedAction:
     label: str
     checked: bool
     action_id: str | None = None
+    proposal_pending: bool = False
 
 
 @dataclass
@@ -98,9 +103,15 @@ def _parse_action(line: str) -> ParsedAction | None:
     checked = match.group(1).lower() == "x"
     label = match.group(2).strip()
     action_id = match.group(3) or None
+    proposal_pending = match.group(4) is not None
     if not label:
         return None
-    return ParsedAction(label=label, checked=checked, action_id=action_id)
+    return ParsedAction(
+        label=label,
+        checked=checked,
+        action_id=action_id,
+        proposal_pending=proposal_pending,
+    )
 
 
 def _looks_like_heading_panel(lines: list[str]) -> bool:

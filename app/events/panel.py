@@ -24,6 +24,13 @@ class PanelIntentAction(BaseModel):
     label: str
     checked: bool
     mapping: PanelActionMapping | None = None
+    # #979 proposal-vs-execution boundary: True when this action was parsed
+    # from a panel line carrying the `<!--ai:proposed=...-->` marker written
+    # back by a prior pass. Used by the runtime gate to ensure governance-
+    # bearing actions can only execute after a human explicitly checks the
+    # box (`[ ]` -> `[x]`); the LLM cannot auto-select an unchecked proposed
+    # line on a subsequent pass.
+    proposal_pending: bool = False
 
 
 class PanelInfo(BaseModel):

@@ -346,10 +346,16 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
             # on a subsequent pass. Non-governance-bearing proposals
             # (orientation / proposal / clarification / read-only) may
             # still execute in the same pass.
+            # Block auto-execution when either:
+            # - this-pass freeform proposal: action.id is in proposed_ids
+            # - prior-pass proposal that survived writeback: action.proposal_pending
+            #   (set by the parser from the persistent `<!--ai:proposed=...-->` marker)
+            # Both gates require not action.checked: once the human toggles `[ ]` -> `[x]`,
+            # the parsed action.checked is True and execution proceeds normally.
             gated_as_proposal = (
                 override_checked
-                and action.id in proposed_ids
                 and not action.checked
+                and (action.id in proposed_ids or action.proposal_pending)
                 and _is_governance_bearing(action)
             )
             if gated_as_proposal:
