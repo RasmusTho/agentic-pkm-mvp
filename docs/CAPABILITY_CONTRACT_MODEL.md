@@ -73,6 +73,154 @@ The capabilities below are the canonical examples for the capability contract mo
 
 These examples are the canonical capability set the rest of the architecture composes around. New capabilities should fit alongside these (or extend one of them through a per-capability spec) rather than be invented inside an agent or surface.
 
+## Cognitive mediation capability classes
+
+<!-- Cognitive mediation capability classes -->
+
+This section defines the first-pass taxonomy of capability classes for cognitive mediation. The taxonomy does not claim autonomous execution and does not make LLM output authoritative. Every class is bounded by the authority rules in `Standard capability contract shape` above and by the governance/policy gates in `docs/ARCHITECTURE.md`.
+
+### Intent-space vs capability-space
+
+<!-- Intent-space vs capability-space -->
+
+**Intent-space** is what the human (or a governing agent) is trying to accomplish: "orient me," "find related material," "clarify this term," "draft a repair patch." Intent is expressed in human or structured-agent terms and carries no runtime semantics on its own.
+
+**Capability-space** is the runtime-executable contract: a named capability with explicit typed inputs, typed outputs, authority class, and side-effect class. A capability translates an intent into a bounded, provenance-bearing, surface-independent result.
+
+The two spaces are distinct by design:
+
+- Intent originates from the human or a governing agent; it is never generated or overridden by a capability.
+- A capability receives an intent (or a context bundle derived from one), performs its bounded function, and returns information or a proposal.
+- The gap between intent-space and capability-space is where orchestration, policy evaluation, and admission gating live: a capability does not collapse that gap.
+
+Mapping an intent to a capability class is a governance responsibility, not a capability responsibility. A capability must never claim to "interpret" or "decide" which intent applies.
+
+### Proposal-only capability semantics
+
+<!-- proposal-only capability semantics -->
+
+Capabilities in the **proposal** authority class return a structured proposal to the caller. They never perform the mutation themselves.
+
+Proposal-only semantics:
+
+- Output is a structured proposal object with explicit fields: proposed change, scope, provenance, confidence signal, and expiry/freshness metadata.
+- The proposal does not take effect until an authorizing layer (governance gate, Panel human confirmation, WriteGuard, or receipt-governed APPLY gate) accepts it.
+- A proposal capability may emit an observability event but must not write to the durable surface.
+- If the proposal is rejected or expires without acceptance, no side effect persists.
+- LLM-generated content inside a proposal is marked as such in provenance metadata; it is never treated as authoritative without the acceptance step.
+
+Execution semantics (governed-effect authority class) are distinct: they require an explicit acceptance receipt, pass through the event envelope, and produce a traceable receipt artifact. Proposal-only capabilities do not cross into governed-effect territory.
+
+### Capability class definitions
+
+<!-- capability metadata -->
+
+Each capability class carries the following authority/risk metadata fields alongside the twelve standard contract fields:
+
+| Metadata field | Description |
+|---|---|
+| `capability_class` | One of: `orientation`, `proposal`, `retrieval`, `clarification`, `synthesis_review`, `governed_execution`, `repair_maintenance`. |
+| `authority_class` | One of: `read-only`, `proposal`, `governed_effect` (from Standard capability contract shape). |
+| `mutation_risk` | One of: `none` (no durable write), `additive` (appends, does not overwrite), `destructive` (overwrites or deletes). |
+| `requires_human_gate` | Boolean. Whether explicit human confirmation is required before any effect is applied. |
+| `requires_policy_gate` | Boolean. Whether a policy/admission check is required before the capability may be invoked or its output acted upon. |
+| `receipt_required` | Boolean. Whether a receipt artifact must be produced and persisted when this capability's output is applied. |
+
+#### Orientation
+
+A capability that returns a situational frame for "where am I and what was I doing" without a query term. Draws on recent activity, open-loop proxies, and context-change signals.
+
+- `capability_class`: `orientation`
+- `authority_class`: `read-only`
+- `mutation_risk`: `none`
+- `requires_human_gate`: false
+- `requires_policy_gate`: false
+- `receipt_required`: false
+
+Orientation does not advise the human on what to do next; it only frames the present situation. Intent derivation from the orientation frame is a human or governing-agent responsibility.
+
+#### Proposal
+
+A capability that returns a structured change proposal (note patch, metadata update, link addition, action suggestion, etc.) for a specific target artifact.
+
+- `capability_class`: `proposal`
+- `authority_class`: `proposal`
+- `mutation_risk`: `none` (the capability itself does not mutate; the accepted proposal may be additive or destructive depending on its content)
+- `requires_human_gate`: true (proposal must be reviewed before application)
+- `requires_policy_gate`: true (proposal passes through governance/admission before acceptance)
+- `receipt_required`: true (if the proposal is applied, a receipt is required)
+
+The proposal capability is the primary mechanism for surfacing suggested changes without asserting mutation authority. Examples: note patch proposal, action catalog suggestion, freeform panel checkbox write-back.
+
+#### Retrieval
+
+A capability that finds candidate artifacts (or projections) relevant to a query or context bundle.
+
+- `capability_class`: `retrieval`
+- `authority_class`: `read-only`
+- `mutation_risk`: `none`
+- `requires_human_gate`: false
+- `requires_policy_gate`: false (but caller must respect surface authority rules for returned artifacts)
+- `receipt_required`: false
+
+Retrieval results carry explicit provenance and temporal-validity flags. They are input to reasoning, not authoritative facts.
+
+#### Clarification
+
+A capability that returns a structured disambiguation or definition response when an intent, term, or artifact is ambiguous.
+
+- `capability_class`: `clarification`
+- `authority_class`: `read-only`
+- `mutation_risk`: `none`
+- `requires_human_gate`: false
+- `requires_policy_gate`: false
+- `receipt_required`: false
+
+Clarification output is advisory. It does not resolve ambiguity autonomously or alter how a surface interprets subsequent inputs.
+
+#### Synthesis / Review
+
+A capability that assembles and summarizes information across retrieved artifacts, orientation signals, and session context. Returns a structured synthesis payload, not a mutation.
+
+- `capability_class`: `synthesis_review`
+- `authority_class`: `read-only` (synthesis output itself) or `proposal` (if synthesis produces a structured change recommendation)
+- `mutation_risk`: `none` (read-only subclass) or inherits proposal semantics
+- `requires_human_gate`: depends on subclass (false for read-only; true if output becomes a proposal)
+- `requires_policy_gate`: depends on subclass
+- `receipt_required`: false (read-only subclass); true (if proposal subclass is applied)
+
+Examples: commitment surfacing, archive exposure summary, context bundle assembly, memory candidate extraction.
+
+#### Governance-bearing execution
+
+A capability that causes a durable change through the governance/authority layer, the event envelope, and the receipt mechanism.
+
+- `capability_class`: `governed_execution`
+- `authority_class`: `governed_effect`
+- `mutation_risk`: `additive` or `destructive` (stated explicitly per capability instance)
+- `requires_human_gate`: true (explicit acceptance or armed watcher policy with explicit allowlist)
+- `requires_policy_gate`: true (WriteGuard, policy evaluation, idempotency check, and outbox admission all apply)
+- `receipt_required`: true
+
+No capability in this class bypasses WriteGuard, event envelope, policy gates, or the receipt contract. LLM output is never the direct source of a governed-execution side effect; it may inform a proposal that is then accepted through the governance path.
+
+#### Repair / Maintenance
+
+A capability that proposes or executes bounded self-correcting changes to the system's own derived artifacts (indexes, mirror metadata, receipt records, companion notes). Distinct from governance-bearing execution because it targets system-derived artifacts rather than human-canonical vault artifacts.
+
+- `capability_class`: `repair_maintenance`
+- `authority_class`: `proposal` (when identifying drift) or `governed_effect` (when applying a bounded repair with a policy gate)
+- `mutation_risk`: `additive` (drift annotation) or `destructive` (index rebuild, stale-record removal) — stated explicitly
+- `requires_human_gate`: depends on scope (false for index-only repair; true for vault-note repair)
+- `requires_policy_gate`: true
+- `receipt_required`: true for any durable repair write
+
+Examples: index rebuild, companion note drift correction, receipt record backfill, stale-metadata removal from derived stores.
+
+---
+
+These capability classes compose with the existing governance, policy, WriteGuard, and event-receipt contracts. They do not replace or bypass those contracts. A capability class assignment is a constraint, not an enabler: assigning `governed_execution` to a capability does not grant it mutation rights; it names the class so the appropriate gates are invoked.
+
 ## Out of scope for this document
 
 This is the capability **contract model**, not the capability **runtime**. The following are intentionally not defined here:
