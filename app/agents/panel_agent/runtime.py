@@ -101,7 +101,9 @@ def execute_panel_intent(
         note_text = str(payload.get("raw_text") or payload.get("text") or "")
         executed_ids = set(payload.get("executed_action_ids") or [])
 
+    original_action_count = len(list(intent_event.payload.actions))
     actions = [action for action in intent_event.payload.actions if action.id not in executed_ids]
+    converged_rerun = bool(executed_ids) and original_action_count > 0 and not actions
     payload = intent_event.payload.model_copy(update={"actions": list(actions)})
     intent_event = intent_event.model_copy(update={"payload": payload})
     panel_hints = [
@@ -124,6 +126,7 @@ def execute_panel_intent(
         policy_flags=policy_flags,
         vault_root=vault_root,
         decider_mode=decider_mode,
+        converged_rerun=converged_rerun,
     )
     state = run_panel_graph(initial_state, decider_mode=decider_mode)
 
@@ -207,6 +210,29 @@ def execute_panel_intent(
         emitted_events=emitted_events,
         log_entry=state.log_entry,
     )
+
+
+def _existing_panel_proposal_labels(markdown: str) -> set[str]:
+    """Return the set of label texts already present as checkbox actions in the
+    last panel block of ``markdown``. Used to decide which proposals are new and
+    should trigger a fresh proposal receipt (#980).
+    """
+    lines = markdown.splitlines()
+    panel_start = None
+    panel_end = None
+    for idx in range(len(lines) - 1, -1, -1):
+        line = lines[idx].strip().lower()
+        if "%%" in line and "ai" in line:
+            if panel_end is None:
+                panel_end = idx
+            else:
+                panel_start = idx
+                break
+    if panel_end is None or panel_start is None:
+        return set()
+    panel_text = "\n".join(lines[panel_start : panel_end + 1])
+    parsed = parse_panel(panel_text)
+    return {action.text.strip() for action in parsed.actions if action.text.strip()}
 
 
 def _write_proposals_to_panel(markdown: str, proposed_labels: list[tuple[str, str]]) -> str:
@@ -329,15 +355,53 @@ def _apply_note_writeback(
                 proposed_labels.append((action.id, action.label))
 
     queued_labels: list[str] = []  # async actions (zone_move): queued, not yet executed
+    fallback_labels: list[tuple[str, str]] = []  # (label, reason) for logged-but-not-triggered actions
+
+    # Reasons that represent execution failures or mismatches we want to surface
+    # as bounded fallback receipts (#980). Other "logged" outcomes (e.g. zone_move
+    # routed through the action layer) are treated as queued, matching pre-#980
+    # behavior.
+    _FALLBACK_REASONS = {
+        "unmapped_action",
+        "unknown_mapping",
+        "ambiguous_action",
+        "watcher_not_allowed",
+        "trust_verb_missing",
+        "trust_verb_invalid",
+        "admission_required",
+    }
 
     for result in state.action_results:
         if result.checked and result.status in {"triggered", "logged"}:
-            if (result.intent_type or "").lower() == "zone_move":
+            reason = str((result.details or {}).get("reason") or "")
+            if result.status == "logged" and reason in _FALLBACK_REASONS:
+                fallback_labels.append((result.label, reason))
+            elif (result.intent_type or "").lower() == "zone_move":
                 queued_labels.append(result.label)
             else:
                 executed_labels.append(result.label)
 
-    if not executed_labels and not queued_labels and not proposed_labels:
+    # Detect a no-match / no-op pass: this run produced no executed/queued/proposed
+    # outcomes and the graph emitted a no_actions_matched signal. Surface a single
+    # bounded receipt line so the human sees the decision in the AI status block.
+    no_match_visible = (
+        not executed_labels
+        and not queued_labels
+        and not proposed_labels
+        and any(
+            getattr(evt, "event", None) == "panel.action.logged"
+            and (getattr(evt, "payload", {}) or {}).get("reason") == "no_actions_matched"
+            for evt in (state.emitted_events or [])
+        )
+    )
+
+    if (
+        not executed_labels
+        and not queued_labels
+        and not proposed_labels
+        and not fallback_labels
+        and not no_match_visible
+    ):
         return
 
     note_uuid = state.note.uuid
@@ -384,15 +448,45 @@ def _apply_note_writeback(
     updated = remove_actions_from_markdown(annotated, ids_to_remove)
 
     # Write back proposed (unchecked) actions as suggestions for user confirmation.
+    # Only labels that were newly inserted should trigger a fresh proposal receipt
+    # so reruns over an already-proposed panel stay idempotent (#980 + #979).
+    newly_proposed_labels: list[str] = []
     if proposed_labels:
+        before_len = len(updated)
+        # Compute newly-added labels by diffing the file before/after the insert,
+        # but the simpler signal is the dedupe inside _write_proposals_to_panel:
+        # detect which labels were not already in the panel block.
+        existing_panel_labels = _existing_panel_proposal_labels(updated)
+        newly_proposed_labels = [
+            label for _id, label in proposed_labels
+            if label.strip() not in existing_panel_labels
+        ]
         updated = _write_proposals_to_panel(updated, proposed_labels)
+        del before_len
 
     # Build receipt lines.
     # zone_move actions are asynchronous: the Vault Action Layer is the authoritative
     # execution receipt.  Write "queued" here so the panel receipt never claims completion.
+    # Proposal receipts (#980) surface proposal-generation outcomes without claiming
+    # execution; no-match receipts surface the runtime no-op decision.
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     receipts = [f"\u2705 {label} ({now_str})" for label in executed_labels]
     receipts += [f"\u23f3 {label} (queued, {now_str})" for label in queued_labels]
+    # Proposal-offered receipts: visible suggestion line in AI status block.
+    # Only emit for proposals that are newly inserted this pass; duplicate
+    # proposals on rerun stay silent so receipt blocks remain bounded.
+    receipts += [
+        f"\U0001f4a1 F\u00f6rslag: {label} (v\u00e4ntar bekr\u00e4ftelse, {now_str})"
+        for label in newly_proposed_labels
+    ]
+    # Fallback diagnostics: action was surfaced but did not execute.
+    receipts += [
+        f"\u26a0\ufe0f {label} ({reason}, {now_str})"
+        for label, reason in fallback_labels
+    ]
+    # No-match / no-op receipt: one bounded line, only when nothing else surfaced.
+    if no_match_visible:
+        receipts.append(f"\u2139\ufe0f Inga \u00e5tg\u00e4rder matchade ({now_str})")
 
     # Find preferred insert position (after last panel fence).
     parsed = parse_panel(updated)
@@ -418,11 +512,13 @@ def _apply_note_writeback(
     _refresh_companion_hash(note_uuid, updated, vault_root, note_file)
 
     logger.info(
-        "panel writeback applied note_path=%s removed=%d receipts=%d proposals=%d",
+        "panel writeback applied note_path=%s removed=%d receipts=%d proposals=%d fallbacks=%d no_match=%s",
         note_file,
         len(ids_to_remove),
         len(receipts),
         len(proposed_labels),
+        len(fallback_labels),
+        no_match_visible,
     )
 
 

@@ -38,6 +38,15 @@ class PanelAgentState(BaseModel):
     panel_hints: List[dict[str, Any]] = Field(default_factory=list)
     executed_action_ids: List[str] = Field(default_factory=list)
     proposed_action_ids: List[str] = Field(default_factory=list)
+    # Set by the runtime when the pre-filter intent had actions but they were all
+    # already-executed and filtered out before reaching the graph. Used by the
+    # no-actions-matched receipt gate to distinguish converged reruns from true
+    # no-match runs.
+    converged_rerun: bool = False
+    # Set by the cognition seam when a backend returned a concrete selection
+    # decision (including empty). Distinguishes freeform LLM no-match (decision
+    # was made: nothing fits) from rule-mode pass-through (no decision invoked).
+    cognition_decision_made: bool = False
     vault_root: Path | None = None
 
     # Runtime-populated fields

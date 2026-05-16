@@ -384,6 +384,58 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
     state.selected_action_ids = list(selected_ids or [])
     state.selected_action_reasons = reasons or {}
     state.action_results = actions
+
+    # No-op / no-match visibility (#980): when this pass produced no executed,
+    # logged, or proposed outcome, emit a bounded panel.action.logged event with
+    # `reason: no_actions_matched` so the runtime decision stays visible. Only
+    # surface this when the pass had genuine input to evaluate (panel actions or
+    # a non-empty instruction triggering the freeform path); a converged rerun
+    # whose only inputs were already-filtered executed IDs is not a no-match.
+    proposed_ids_now = {aid for aid in (state.proposed_action_ids or []) if aid}
+    produced_any = any(
+        r.status in {"triggered", "logged"}
+        or (r.status == "skipped" and r.details.get("reason") == "proposal_offered")
+        for r in actions
+    )
+    instruction_text = ""
+    try:
+        instruction_text = (state.intent_event.payload.panel.instruction or "").strip()
+    except Exception:
+        instruction_text = ""
+    # Converged-rerun signal: either the runtime flagged this pass as a
+    # post-execution rerun, or prior executed IDs are present with no fresh
+    # checkbox input. Treat as already-finished, not no-match.
+    converged_rerun = state.converged_rerun or (
+        bool(state.executed_action_ids) and not actions_to_process
+    )
+    # Only emit no-match when there was real input AND a cognition decision was
+    # made this pass (freeform LLM returned empty, or checked-but-unmapped). A
+    # rule-mode passthrough with empty actions is not a no-match.
+    cognition_decided = bool(state.cognition_decision_made)
+    had_input = (
+        bool(actions_to_process)
+        or (bool(instruction_text) and cognition_decided)
+    ) and not converged_rerun
+    if had_input and not produced_any and not proposed_ids_now:
+        intent_event = state.intent_event
+        instruction = ""
+        try:
+            instruction = (intent_event.payload.panel.instruction or "").strip()
+        except Exception:
+            instruction = ""
+        no_match_event = PanelActionLoggedEvent(
+            trace_id=intent_event.trace_id,
+            source=_build_panel_source(),
+            payload={
+                "note": intent_event.payload.note.model_dump(mode="json"),
+                "panel_id": intent_event.payload.panel.panel_id,
+                "action": None,
+                "reason": "no_actions_matched",
+                "instruction": instruction,
+            },
+        )
+        emitted.append(no_match_event)
+
     state.emitted_events = emitted
     return state
 
@@ -398,6 +450,10 @@ def _decide_actions_with_backend(state: PanelAgentState, backend: PanelCognition
     # that have no corresponding entry in state.actions (e.g., no-checkbox panels).
     if chosen:
         state = _inject_catalog_proposals(state, chosen)
+    # Mark that a cognition decision was made (even if empty) so the no-match
+    # receipt path (#980) can distinguish freeform decide=nothing from rule-mode
+    # passthrough.
+    state.cognition_decision_made = True
     return _apply_actions(state, selected_ids=chosen, reasons=reasons)
 
 

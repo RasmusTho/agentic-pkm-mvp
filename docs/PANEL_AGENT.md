@@ -73,7 +73,7 @@ Capability taxonomy alignment (v6.x cognitive mediation, `docs/CAPABILITY_CONTRA
   - Instruction heading: `## AI-instruktion` (localized variants supported)
   - Actions heading: `## AI-åtgärder` (localized variants supported)
   - Checkboxes: `- [ ]` or `- [x]` (checked means run the action)
-- AI status callout (foldable, outside the panel): `> [!info]- AI status` with receipt lines (`- ✅ ...`, `- ⚠️ ...`, `- ⏳ ...`). The runtime appends receipts for executed/failed actions and trims to the last 20; already-executed IDs remove their checkbox from the panel on re-run.
+- AI status callout (foldable, outside the panel): `> [!info]- AI status` with receipt lines (`- ✅ ...` executed, `- ⏳ ...` queued, `- ⚠️ ...` fallback diagnostic with reason, `- 💡 Förslag: ... (väntar bekräftelse, ...)` proposal pending human confirmation, `- ℹ️ Inga åtgärder matchade ...` for a freeform no-op pass). The runtime appends receipts for executed/failed/proposal/no-match outcomes and trims to the last 20; already-executed IDs remove their checkbox from the panel on re-run. Proposal-offered receipts (#980) are emitted only when the proposal is newly inserted into the panel block; reruns over an already-proposed panel stay silent so the receipt block remains bounded and idempotent. Fallback receipts surface checked actions that did not execute (e.g. `unmapped_action`, `watcher_not_allowed`, `ambiguous_action`); no-match receipts surface a freeform LLM pass that produced no actionable selection. Both also emit `panel.action.logged` events with the matching `reason` for downstream observability.
 - This callout is a human-visible receipt overlay on the warm surface, not the canonical mirror artifact.
 - Legacy notes that only use the headings without fences are still parsed; new panels should use fences.
 - Panel content is not indexed or used as knowledge.
@@ -89,6 +89,9 @@ Make this note evergreen
 
 > [!info]- AI status
 > - ✅ Re-classify as Concept (2025-03-01 10:00)
+> - 💡 Förslag: Gör denna anteckning evergreen (väntar bekräftelse, 2025-03-01 10:00)
+> - ℹ️ Inga åtgärder matchade (2025-03-01 10:01)
+> - ⚠️ Unmapped freeform request (unmapped_action, 2025-03-01 10:02)
 ```
 
 ## Runtime V1 (fan-out, promotion intent, receipts)
