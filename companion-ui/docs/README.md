@@ -13,7 +13,8 @@ Foundational documents for cognitive interaction architecture.
 - `FUTURE_RESEARCH.md`
 - `DESIGN_BRIEF.md` (preserved source brief)
 
-## Feature implementation specs
+## Surface contracts and feature implementation specs
+- `CANVAS_AGENT_MVP_CONTRACT.md` — normalized Canvas Agent MVP surface contract: co-authoring posture, session lifecycle, user-present authority, direct in-place editing, undo/rollback, `.chats/` provenance, governance-bearing escape hatch, distinction from Panel and from Canvas bounded suggestion flow. Governing issue: #1021.
 - `CANVAS_SUGGESTION_FLOW.md` — normalized implementation spec for the Canvas Suggestion Flow: state machine, component inventory, intent vocabulary, backend mapping, invariants. Derived from design handoff `companion-ui/design_handoff/2026-05-11-canvas-suggestion-flow/`. Implementation contracts for #868–#874.
 
 ## Cognitive architecture consolidation set
