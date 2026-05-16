@@ -197,6 +197,18 @@ A companion is *about* a target artifact, not a replacement for it. Its lifecycl
 
 ## 6. Applicability matrix
 
+**Scope of this matrix.** The rows below are the **shared cross-class lifecycle terms** named in this document's brief (created, processed, candidate, reviewed, accepted/promoted, rejected, revised, activated, stale, invalidated, archived, regenerated, discarded). The matrix's job is to say, for each of those shared terms, whether the term applies to a given class.
+
+**Class-specific lifecycle states are defined in their own §5.x section, not in this matrix.** In particular:
+
+- `working` and `settled` (human knowledge) — see §5.1.
+- `observed` (agentic memory) — see §5.2.
+- `assembled`, `exposed`, `consumed`, `expired`, `archived-for-audit` (bridge / assembly) — see §5.3.
+- `generated`, `current` (machine mirror) — see §5.4.
+- `reconciled` (companion metadata) — see §5.5.
+
+Those states are authoritative for their class and **are not overridden by this matrix**. If a future spec or validator consumes lifecycle vocabulary, it must read this matrix *and* the per-class sections together; treating the matrix alone as the contract will drop valid class-specific states.
+
 Rows are lifecycle terms. Columns are artifact classes. Values:
 
 - `applies` — the state is a normal part of this class's lifecycle.
@@ -220,7 +232,7 @@ Rows are lifecycle terms. Columns are artifact classes. Values:
 | `regenerated` | prohibited | prohibited | prohibited (assemble a new bundle instead) | applies | applies |
 | `discarded` | prohibited (use `archived`) | applies | applies | applies | applies |
 
-This matrix is normative for lifecycle state vocabulary. The activation/use-right gating that hangs off each state is **not** defined here; it is deferred to [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943).
+This matrix is normative for the **shared cross-class lifecycle terms listed above**. It does not enumerate class-specific states; for those, the per-class sections in §5.1–5.5 are authoritative. The activation/use-right gating that hangs off each state is **not** defined here; it is deferred to [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943).
 
 ## 7. Transition model
 
