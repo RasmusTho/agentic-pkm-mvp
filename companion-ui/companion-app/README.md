@@ -4,10 +4,26 @@ This folder contains implementation staging artifacts and production-candidate C
 
 ## Canvas Core implementation modules (production-candidate)
 
-The following Python modules are **production-candidate Canvas Core** — they are not staging prototypes and may be imported by tests and future runtime code:
+Canvas Core production-candidate Python modules live in the `companion_ui/` package:
 
-- `canvas_core_state.py` — Canvas session lifecycle state machine (`start → active → paused/interrupted → closed`).  Enforces body-edit authority: direct edits are allowed only when the session is `active` and user-present.  This is **not** Canvas bounded suggestion flow state.
-- `canvas_active_artifact_shell.py` — Active artifact body shell contract.  Declares the four canonical Canvas layout regions (`canvas-artifact-body`, `canvas-session-controls`, `canvas-provenance`, `canvas-escape-hatch`) and asserts the artifact body as the primary surface.  Portrait/mobile layouts must preserve the artifact body as the cognitive anchor.
+```
+companion-ui/companion-app/
+└── companion_ui/                         ← importable Python package root
+    └── canvas_core/
+        ├── __init__.py
+        ├── session_state.py              ← Canvas session lifecycle state machine
+        └── active_artifact_shell.py      ← Active artifact body shell contract
+```
+
+The `companion-ui/companion-app/` directory is the package root added to `sys.path` by `tests/companion_ui/conftest.py`.  Import in tests as:
+
+```python
+from companion_ui.canvas_core.session_state import CanvasSessionState
+from companion_ui.canvas_core.active_artifact_shell import CanvasArtifactShell
+```
+
+- `session_state.py` — Canvas session lifecycle state machine (`start → active → paused/interrupted → closed`).  Enforces body-edit authority: direct edits are allowed only when the session is `active` and user-present.  This is **not** Canvas bounded suggestion flow state.
+- `active_artifact_shell.py` — Active artifact body shell contract.  Declares the four canonical Canvas layout regions (`canvas-artifact-body`, `canvas-session-controls`, `canvas-provenance`, `canvas-escape-hatch`) and asserts the artifact body as the primary surface.  Portrait/mobile layouts must preserve the artifact body as the cognitive anchor.
 
 Canvas Core tests live in `tests/companion_ui/`:
 - `test_canvas_session_lifecycle.py` — verifies lifecycle state machine (#1024)
