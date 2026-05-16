@@ -31,6 +31,39 @@ _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 logger = logging.getLogger(__name__)
 _TRUST_VERBS = {"ASSERT", "SUGGEST", "APPLY"}
 
+# Governance-bearing capabilities (capability_class=governed_execution /
+# authority_class=governed_effect per docs/CAPABILITY_CONTRACT_MODEL.md).
+# Freeform LLM-proposed actions in this set must NOT be auto-executed in the
+# same runtime pass — they must be written back as unchecked proposals and run
+# only after explicit human confirmation on a subsequent pass.
+#
+# This hardcoded set is a transitional bridge: #982 will move capability_class
+# / authority_class metadata onto each catalog entry so this gating becomes
+# fully data-driven from the catalog descriptor.
+_GOVERNANCE_BEARING_ACTION_IDS: frozenset[str] = frozenset({
+    "promote.evergreen",
+    "note.archive",
+    "ingest.summary.create",
+    "note.move.workbench",
+})
+
+
+def _is_governance_bearing(action: PanelIntentAction) -> bool:
+    """Return True if the action's capability class is governance-bearing.
+
+    A future revision will read `capability_class`/`authority_class` directly
+    off the catalog descriptor (#982). Until that metadata lands, the explicit
+    action-id allowlist above is the source of truth, augmented by a
+    conservative fallback that treats any `promotion` intent_type as
+    governance-bearing.
+    """
+    if action.id in _GOVERNANCE_BEARING_ACTION_IDS:
+        return True
+    mapping = action.mapping
+    if mapping and (mapping.intent_type or "").strip().lower() == "promotion":
+        return True
+    return False
+
 
 def _build_panel_source() -> PanelEventSource:
     return PanelEventSource(trigger="runtime", component="panel_agent", sot="v5.0-runtime1")
@@ -178,6 +211,20 @@ def _handle_action(
     emitted: list[Any] = []
     emitted_names: list[str] = []
     if not action_to_use.checked:
+        # Freeform LLM proposal that was gated back to unchecked by the
+        # proposal-vs-execution boundary (#979): emit a "proposal_offered"
+        # signal so downstream consumers can see the proposal was surfaced
+        # for human confirmation without executing.
+        if reason == "proposal_offered":
+            assert state.intent_event is not None
+            logged = _logged_event(state.intent_event, action_to_use, "proposal_offered")
+            emitted.append(logged)
+            return _build_action_result(
+                action_to_use,
+                status="skipped",
+                emitted=[logged.event],
+                reason="proposal_offered",
+            ), emitted
         return _build_action_result(
             action_to_use, status="skipped", emitted=[], reason=reason or "unchecked"
         ), emitted
@@ -278,6 +325,7 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
 
     executed_ids = {aid for aid in (state.executed_action_ids or []) if aid}
     allowed_ids = {action.id for action in state.actions}
+    proposed_ids = {aid for aid in (state.proposed_action_ids or []) if aid}
     actions_to_process: list[PanelIntentAction] = [
         action for action in list(state.actions) if action.id not in executed_ids
     ]
@@ -288,7 +336,35 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
         override_checked = None
         if selected_ids is not None:
             override_checked = action.id in selected_ids
+            # Proposal vs execution boundary (#979):
+            # An action that was injected as a freeform LLM proposal
+            # (tracked in state.proposed_action_ids) was never explicitly
+            # checked by the human. For governance-bearing capability
+            # classes (governed_execution / governed_effect per
+            # docs/CAPABILITY_CONTRACT_MODEL.md), we must NOT auto-check
+            # it. It must be written back unchecked so the human confirms
+            # on a subsequent pass. Non-governance-bearing proposals
+            # (orientation / proposal / clarification / read-only) may
+            # still execute in the same pass.
+            # Block auto-execution when either:
+            # - this-pass freeform proposal: action.id is in proposed_ids
+            # - prior-pass proposal that survived writeback: action.proposal_pending
+            #   (set by the parser from the persistent `<!--ai:proposed=...-->` marker)
+            # Both gates require not action.checked: once the human toggles `[ ]` -> `[x]`,
+            # the parsed action.checked is True and execution proceeds normally.
+            gated_as_proposal = (
+                override_checked
+                and not action.checked
+                and (action.id in proposed_ids or action.proposal_pending)
+                and _is_governance_bearing(action)
+            )
+            if gated_as_proposal:
+                override_checked = False
+        else:
+            gated_as_proposal = False
         reason = reasons.get(action.id) if reasons else None
+        if gated_as_proposal:
+            reason = "proposal_offered"
         result, new_events = _handle_action(
             state,
             action,

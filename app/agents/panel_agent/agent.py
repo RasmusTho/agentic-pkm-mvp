@@ -50,7 +50,13 @@ def _map_action(action: ParsedAction, catalog: PanelActionCatalog) -> PanelInten
     descriptor = catalog.find_by_label(action.label)
     mapping = descriptor.to_mapping() if descriptor else None
     action_id = descriptor.id if descriptor else (action.action_id or normalize_label(action.label) or uuid4().hex)
-    return PanelIntentAction(id=action_id, label=action.label, checked=action.checked, mapping=mapping)
+    return PanelIntentAction(
+        id=action_id,
+        label=action.label,
+        checked=action.checked,
+        mapping=mapping,
+        proposal_pending=action.proposal_pending,
+    )
 
 
 def _panel_payload(

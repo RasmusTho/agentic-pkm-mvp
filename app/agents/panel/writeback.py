@@ -12,7 +12,9 @@ from typing import Iterable
 from app.store.object_store import DomainObject, ObjectStore
 
 ACTION_PATTERN = re.compile(
-    r"^(\s*-\s*\[( |x|X)\]\s*)(.*?)(\s*<!--\s*ai:id=([A-Za-z0-9_.-]+)\s*-->)?\s*$"
+    r"^(\s*-\s*\[( |x|X)\]\s*)(.*?)"
+    r"(\s*<!--\s*ai:id=([A-Za-z0-9_.-]+)\s*-->)?"
+    r"(\s*<!--\s*ai:proposed=([A-Za-z0-9_.-]+)\s*-->)?\s*$"
 )
 AI_STATUS_HEADER = "> [!info]- AI status"
 MAX_RECEIPTS = 20
@@ -37,11 +39,12 @@ def annotate_action_ids(markdown: str) -> str:
             continue
         label = (match.group(3) or "").strip()
         action_id = match.group(5)
+        proposed_marker = match.group(6) or ""
         if action_id:
             continue
         action_id = stable_action_id(label)
         prefix = match.group(1)
-        lines[idx] = f"{prefix}{label} <!--ai:id={action_id}-->"
+        lines[idx] = f"{prefix}{label} <!--ai:id={action_id}-->{proposed_marker}"
         changed = True
     if not changed:
         return markdown
