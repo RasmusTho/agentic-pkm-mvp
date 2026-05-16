@@ -102,6 +102,21 @@ Minimum field list:
 - `last_ingested`
 - `created_by_instance`
 
+### `created_by_instance` provenance
+
+`created_by_instance` records the runtime instance identity of the ingest process that created the
+companion note. It is populated from the same settings-bundle resolver used by outbox event metadata
+(`instance_provenance.instance_id`), so companion provenance and event provenance are consistent for
+a given ingest run.
+
+Resolution rules (in order):
+1. `get_settings_bundle().instance.id` — the canonical runtime identity.
+2. If the bundle is unavailable or the instance field is absent/empty, `created_by_instance` is set
+   to the explicit sentinel value `"unknown"` — never an empty string.
+
+An empty string value (`created_by_instance: ""`) is a bug, not a valid state. The field must always
+carry either a resolved identity or the explicit sentinel `"unknown"`.
+
 Additional bounded continuity or healing metadata may exist when consistent with this contract, but
 the companion note must not silently become a dump for arbitrary runtime internals.
 

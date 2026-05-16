@@ -21,6 +21,7 @@ from app.observability.ingest_meta import record_ingest_run
 from app.obs.log import with_trace_id
 from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
+from app.settings.runtime import get_settings_bundle
 from app.services.companion_eligibility import (
     check_companion_eligibility,
     load_companion_settings,
@@ -37,6 +38,33 @@ from app.store.object_store import DomainObject, ObjectStore
 from app.stores import get_object_store
 from app.vault.layout import ensure_vault_layout
 from app.vault.paths import get_vault_system_dir_rel
+
+#: Sentinel written to created_by_instance when runtime identity is unavailable.
+_UNKNOWN_INSTANCE = "unknown"
+
+
+def _resolve_instance_id() -> str:
+    """
+    Resolve the runtime instance identity for companion provenance.
+
+    Uses the same settings-bundle resolver as event metadata so companion
+    created_by_instance is consistent with instance_provenance in outbox events.
+
+    Returns the instance id string, or the explicit sentinel 'unknown' when the
+    settings bundle is unavailable or carries no instance — never an empty string.
+    """
+    try:
+        bundle = get_settings_bundle()
+        instance = getattr(bundle, "instance", None)
+        if instance is None:
+            return _UNKNOWN_INSTANCE
+        raw = getattr(instance, "id", None)
+        if raw is None:
+            return _UNKNOWN_INSTANCE
+        resolved = str(raw).strip()
+        return resolved if resolved else _UNKNOWN_INSTANCE
+    except Exception:
+        return _UNKNOWN_INSTANCE
 
 
 @dataclass
@@ -446,7 +474,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
                     content_hash=text_sha256,
                     ingest_state="tracked",
                     last_ingested=datetime.now(timezone.utc).isoformat(),
-                    created_by_instance="",
+                    created_by_instance=_resolve_instance_id(),
                     attachments=scan_attachments(stripped_text),
                 ),
             )
