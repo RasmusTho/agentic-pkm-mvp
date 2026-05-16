@@ -16,6 +16,22 @@ For cross-cutting semantic, architecture, or planning work, use
 `docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md` to connect the active human/ontology chain to
 parallel execution work.
 
+## Agent quick routing
+
+First-read map for common work areas. Use `docs/DOCS_INDEX.md` (this file) to locate the full owner doc after identifying the area.
+
+| Work area | First-read docs |
+| --- | --- |
+| Builder-agent workflow | `AGENTS.md` → `.codex/skills/README.md` → `docs/development/AGENT_OPERATING_PROTOCOL.md` |
+| Runtime agents | `docs/AGENTS.md`, `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` |
+| Contextualization Layer | `docs/CONTEXTUALIZATION_LAYER/README.md`, `docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md` |
+| Companion notes | `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`, `docs/CONTEXTUALIZATION_LAYER/COMPANION_NOTE_PATTERN.md` |
+| Agent memory | `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`, `docs/AGENT_MEMORY/README.md` |
+| Release channels | `docs/RELEASE_CHANNELS/README.md`, `docs/ENVIRONMENTS.md` |
+| Canvas Chat / interaction surfaces | `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`, `docs/CANVAS_CHAT_SURFACE/README.md` |
+| Governance-bearing mutation | `AGENTS.md` (GitHub delivery governance), `.codex/skills/issue-to-code/SKILL.md` |
+| Operations / runtime health | `docs/OPERATIONS.md`, `docs/HEALTH.md`, `docs/OBSERVABILITY.md` |
+
 ## Temporal governance
 
 Some docs are structurally correct but still drift because time, delivery state, runtime posture,
