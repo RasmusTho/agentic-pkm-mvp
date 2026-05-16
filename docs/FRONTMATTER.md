@@ -96,6 +96,16 @@ Healing-write clarification:
 - Healing is scenario-bound and should follow the artifact-model authority matrix rather than an
   unconditional "frontmatter wins" rule.
 
+Watcher ingest clarification (issue #976, 2026-05-15 UAT):
+- Watcher ingest writes `uuid` only to the source note frontmatter. This is intentional and correct.
+- `origin`, `source_ref`, `trust`, and `review_state` are NOT auto-written to source note
+  frontmatter; they are projected into the companion note and object store instead.
+- A source note carrying only `uuid` after ingest is not partially broken — it satisfies the
+  CORE_CONTRACT.md contract ("uuid in frontmatter plus the companion note form the primary
+  file-based identity anchors used for rebuild and repair").
+- If UAT or tooling inspection shows a source note with uuid-only frontmatter, that is the
+  expected runtime outcome, not a gap in the ingest pipeline.
+
 ### Requires explicit confirmation
 - Any write that changes meaning-bearing classification (domain, durable taxonomy, claims) or any durable workflow decision.
 - Any write that is triggered by cross-domain or cross-plane use (materializing retained content into a writing-surface note).
