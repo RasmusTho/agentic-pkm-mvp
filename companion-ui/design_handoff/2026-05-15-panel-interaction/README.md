@@ -1,4 +1,4 @@
-State: Handoff package — Crossing A. Design brief archived; interactive prototype (index.html) pending Claude Design session output.
+State: Handoff package — Crossing A. Design brief archived; interactive prototype (prototype.html) pending Claude Design session output.
 
 # Panel Interaction Design Handoff — 2026-05-15
 
@@ -27,7 +27,7 @@ The design problem is explicitly layered:
 | File | Role |
 |---|---|
 | `BRIEF.md` | Design session input brief — constraints, state machine spec, component inventory, open questions, non-goals |
-| `index.html` | Interactive prototype — Claude Design session output (**pending; not yet created**) |
+| `prototype.html` | Interactive prototype — Claude Design session output (**pending; not yet created**) |
 | `README.md` | This file — authority status and crossing target |
 | `implementation-contracts.md` | State enum, allowed transitions, data attributes, component inventory, design intent vocabulary |
 | `authority-boundaries.md` | What this design is and is not; invariants this package must honor |
@@ -75,7 +75,7 @@ This package targets **Crossing A → B**. Crossing B requires all of the follow
 
 ## Next steps
 
-1. Complete the Claude Design session using `BRIEF.md` as the input brief; export the output HTML as `index.html` in this folder.
+1. Complete the Claude Design session using `BRIEF.md` as the input brief; export the output HTML as `prototype.html` in this folder.
 2. Human reviews `open-questions.md`; confirms triage and resolves any blocking questions.
 3. Route to Crossing B when the maturity checklist is satisfied.
 4. After Crossing B: author a normalized spec in `companion-ui/docs/PANEL_INTERACTION_SPEC.md`.
