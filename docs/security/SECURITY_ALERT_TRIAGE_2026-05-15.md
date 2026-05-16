@@ -1,5 +1,7 @@
 # Security Alert Triage — 2026-05-15
 
+State: Point-in-time triage snapshot of the CodeQL and Dependabot alert set captured on 2026-05-15. Not a living posture document; use `docs/SECURITY.md` and `docs/SECURITY-ROADMAP-v6.1.md` for current security state.
+
 Triage date: 2026-05-15  
 Repo: RasmusTho/agentic-pkm-mvp  
 System posture: local-first, single-user. Companion UI/API may later be exposed beyond localhost/Tailscale.
