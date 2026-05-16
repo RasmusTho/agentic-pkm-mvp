@@ -206,6 +206,42 @@ def _select_actions_from_instruction_hint(
     return {action.id}, {action.id: "instruction_hint_fallback"}
 
 
+def _record_cognition_metadata(state: PanelAgentState, **fields: Any) -> None:
+    """Merge bounded cognition-route observability fields onto state.
+
+    Only known scalar/bounded fields are stored. Callers must never pass prompt
+    bodies, raw LLM output, or secret material. See docs/PANEL_AGENT.md for the
+    canonical key set (#984).
+    """
+    meta = dict(state.cognition_metadata or {})
+    for key, value in fields.items():
+        # Allow explicit None to clear a key only when caller passes it as
+        # `fallback_reason=None`; otherwise treat None as "no update".
+        if value is None and key not in {"fallback_reason", "provider", "model"}:
+            continue
+        meta[key] = value
+    state.cognition_metadata = meta
+
+
+def _facade_route_info(facade: Any) -> tuple[str | None, str | None]:
+    """Pull provider/model from the most recent telemetry record on the facade.
+
+    Returns ``(provider, model)``. Either may be ``None`` when telemetry is
+    unavailable (e.g. router resolution failed before a record was written).
+    """
+    try:
+        records = getattr(facade, "telemetry", None) or []
+        if not records:
+            return None, None
+        last = records[-1]
+        return (
+            getattr(last, "provider", None) or None,
+            getattr(last, "model", None) or None,
+        )
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
 def _select_actions_from_catalog(
     state: PanelAgentState,
     catalog: PanelActionCatalog,
@@ -219,6 +255,16 @@ def _select_actions_from_catalog(
     """
     available = catalog.actions
     if not available:
+        _record_cognition_metadata(
+            state,
+            cognition_mode="llm",
+            route="freeform",
+            fallback_used=True,
+            fallback_reason="no_catalog_available",
+            proposal_candidate_count=0,
+            proposal_accepted_count=0,
+            proposal_rejected_count=0,
+        )
         return set(), {}
 
     action_lines = []
@@ -251,8 +297,8 @@ def _select_actions_from_catalog(
     ]
 
     valid_ids = {d.id for d in available}
+    facade = get_reasoning_facade()
     try:
-        facade = get_reasoning_facade()
         parsed = facade.structured(
             messages,
             schema=_PANEL_DECIDER_SCHEMA,
@@ -269,6 +315,7 @@ def _select_actions_from_catalog(
 
         selected: set[str] = set()
         reasons: dict[str, str] = {}
+        rejected = 0
         for item in candidates:
             action_id: str | None = None
             reason: str | None = None
@@ -278,16 +325,45 @@ def _select_actions_from_catalog(
                 action_id = item.get("id") or item.get("action_id")
                 reason = item.get("reason") or item.get("why")
             if not action_id:
+                rejected += 1
                 continue
             action_id = str(action_id).strip()
             if action_id not in valid_ids:
                 logger.debug("Freeform proposal %r rejected: not in active catalog", action_id)
+                rejected += 1
                 continue
             selected.add(action_id)
             if reason:
                 reasons[action_id] = reason
+        provider, model = _facade_route_info(facade)
+        _record_cognition_metadata(
+            state,
+            cognition_mode="llm",
+            route="freeform",
+            provider=provider,
+            model=model,
+            fallback_used=False,
+            fallback_reason=None,
+            proposal_candidate_count=len(candidates),
+            proposal_accepted_count=len(selected),
+            proposal_rejected_count=rejected,
+            no_match=(len(selected) == 0),
+        )
         return selected, reasons
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        provider, model = _facade_route_info(facade)
+        _record_cognition_metadata(
+            state,
+            cognition_mode="llm",
+            route="freeform",
+            provider=provider,
+            model=model,
+            fallback_used=True,
+            fallback_reason=f"llm_error:{type(exc).__name__}",
+            proposal_candidate_count=0,
+            proposal_accepted_count=0,
+            proposal_rejected_count=0,
+        )
         return None
 
 
@@ -349,8 +425,8 @@ def _run_llm_selection(state: PanelAgentState) -> tuple[set[str], dict[str, str]
         {"role": "system", "content": system},
         {"role": "user", "content": "\n".join(user_parts)},
     ]
+    facade = get_reasoning_facade()
     try:
-        facade = get_reasoning_facade()
         parsed = facade.structured(
             messages,
             schema=_PANEL_DECIDER_SCHEMA,
@@ -365,8 +441,11 @@ def _run_llm_selection(state: PanelAgentState) -> tuple[set[str], dict[str, str]
         selected: set[str] = set()
         reasons: dict[str, str] = {}
         valid_ids = {a.id for a in actions}
+        candidate_total = 0
+        rejected = 0
 
         if isinstance(candidates, list):
+            candidate_total = len(candidates)
             for item in candidates:
                 action_id: str | None = None
                 reason: str | None = None
@@ -376,13 +455,16 @@ def _run_llm_selection(state: PanelAgentState) -> tuple[set[str], dict[str, str]
                     action_id = item.get("id") or item.get("action_id")
                     reason = item.get("reason") or item.get("why")
                 if not action_id:
+                    rejected += 1
                     continue
                 action_id = str(action_id).strip()
                 if action_id not in valid_ids:
+                    rejected += 1
                     continue
                 selected.add(action_id)
                 if reason:
                     reasons[action_id] = reason
+        provider, model = _facade_route_info(facade)
         if not selected:
             hinted = _select_actions_from_instruction_hint(
                 actions=actions,
@@ -390,10 +472,49 @@ def _run_llm_selection(state: PanelAgentState) -> tuple[set[str], dict[str, str]
                 instruction=state.panel.instruction or "",
             )
             if hinted is not None:
+                _record_cognition_metadata(
+                    state,
+                    cognition_mode="llm",
+                    route="checkbox",
+                    provider=provider,
+                    model=model,
+                    fallback_used=True,
+                    fallback_reason="instruction_hint_fallback",
+                    proposal_candidate_count=candidate_total,
+                    proposal_accepted_count=len(hinted[0]),
+                    proposal_rejected_count=rejected,
+                    no_match=False,
+                )
                 return hinted
+        _record_cognition_metadata(
+            state,
+            cognition_mode="llm",
+            route="checkbox",
+            provider=provider,
+            model=model,
+            fallback_used=False,
+            fallback_reason=None,
+            proposal_candidate_count=candidate_total,
+            proposal_accepted_count=len(selected),
+            proposal_rejected_count=rejected,
+            no_match=(len(selected) == 0),
+        )
         # Empty set is a valid decision (LLM chose to run nothing).
         return selected, reasons
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        provider, model = _facade_route_info(facade)
+        _record_cognition_metadata(
+            state,
+            cognition_mode="llm",
+            route="checkbox",
+            provider=provider,
+            model=model,
+            fallback_used=True,
+            fallback_reason=f"llm_error:{type(exc).__name__}",
+            proposal_candidate_count=0,
+            proposal_accepted_count=0,
+            proposal_rejected_count=0,
+        )
         return None
 
 
@@ -412,6 +533,15 @@ class RuleCognitionBackend:
     def select_actions(
         self, state: PanelAgentState
     ) -> tuple[set[str], dict[str, str]] | None:
+        _record_cognition_metadata(
+            state,
+            cognition_mode="rule",
+            route="rule",
+            provider=None,
+            model=None,
+            fallback_used=False,
+            fallback_reason=None,
+        )
         return None
 
 

@@ -184,7 +184,13 @@ def _action_triggered_event(intent_event: PanelIntentEvent, action: PanelIntentA
     )
 
 
-def _logged_event(intent_event: PanelIntentEvent, action: PanelIntentAction, reason: str) -> PanelActionLoggedEvent:
+def _logged_event(
+    intent_event: PanelIntentEvent,
+    action: PanelIntentAction,
+    reason: str,
+    *,
+    cognition_metadata: dict[str, Any] | None = None,
+) -> PanelActionLoggedEvent:
     payload = {
         "note": intent_event.payload.note.model_dump(mode="json"),
         "panel_id": intent_event.payload.panel.panel_id,
@@ -193,6 +199,10 @@ def _logged_event(intent_event: PanelIntentEvent, action: PanelIntentAction, rea
     }
     if action.mapping:
         payload["mapping"] = action.mapping.model_dump(mode="json")
+    if cognition_metadata:
+        # #984 attach bounded cognition-route observability so receipts surface
+        # provider/model/fallback alongside the reason code.
+        payload["cognition_metadata"] = dict(cognition_metadata)
     return PanelActionLoggedEvent(trace_id=intent_event.trace_id, source=_build_panel_source(), payload=payload)
 
 
@@ -208,6 +218,7 @@ def _handle_action(
     if override_checked is not None:
         action_to_use = action.model_copy(update={"checked": override_checked})
 
+    cognition_metadata = state.cognition_metadata or None
     emitted: list[Any] = []
     emitted_names: list[str] = []
     if not action_to_use.checked:
@@ -217,7 +228,12 @@ def _handle_action(
         # for human confirmation without executing.
         if reason == "proposal_offered":
             assert state.intent_event is not None
-            logged = _logged_event(state.intent_event, action_to_use, "proposal_offered")
+            logged = _logged_event(
+                state.intent_event,
+                action_to_use,
+                "proposal_offered",
+                cognition_metadata=cognition_metadata,
+            )
             emitted.append(logged)
             return _build_action_result(
                 action_to_use,
@@ -253,7 +269,12 @@ def _handle_action(
         "trust_verb_invalid",
         "admission_required",
     }:
-        logged = _logged_event(intent_event, action_to_use, resolution_reason)
+        logged = _logged_event(
+            intent_event,
+            action_to_use,
+            resolution_reason,
+            cognition_metadata=cognition_metadata,
+        )
         emitted.append(logged)
         emitted_names.append(logged.event)
         _IDEMPOTENCY_GUARD.mark_action(note_id, action_to_use.id)
@@ -277,7 +298,12 @@ def _handle_action(
         return _build_action_result(action_to_use, status="triggered", emitted=emitted_names), emitted
 
     logged_reason = reason or "unhandled_action"
-    logged = _logged_event(intent_event, action_to_use, logged_reason)
+    logged = _logged_event(
+        intent_event,
+        action_to_use,
+        logged_reason,
+        cognition_metadata=cognition_metadata,
+    )
     emitted.append(logged)
     emitted_names.append(logged.event)
     _IDEMPOTENCY_GUARD.mark_action(note_id, action_to_use.id)
@@ -423,16 +449,19 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
             instruction = (intent_event.payload.panel.instruction or "").strip()
         except Exception:
             instruction = ""
+        no_match_payload: dict[str, Any] = {
+            "note": intent_event.payload.note.model_dump(mode="json"),
+            "panel_id": intent_event.payload.panel.panel_id,
+            "action": None,
+            "reason": "no_actions_matched",
+            "instruction": instruction,
+        }
+        if state.cognition_metadata:
+            no_match_payload["cognition_metadata"] = dict(state.cognition_metadata)
         no_match_event = PanelActionLoggedEvent(
             trace_id=intent_event.trace_id,
             source=_build_panel_source(),
-            payload={
-                "note": intent_event.payload.note.model_dump(mode="json"),
-                "panel_id": intent_event.payload.panel.panel_id,
-                "action": None,
-                "reason": "no_actions_matched",
-                "instruction": instruction,
-            },
+            payload=no_match_payload,
         )
         emitted.append(no_match_event)
 
@@ -460,6 +489,7 @@ def _decide_actions_with_backend(state: PanelAgentState, backend: PanelCognition
 def _emit_events(state: PanelAgentState) -> PanelAgentState:
     assert state.intent_event is not None, "PanelAgentState must include intent_event"
     cognition_mode: str | None = state.decider_mode
+    cognition_metadata = dict(state.cognition_metadata or {})
     executed_event = PanelIntentExecutedEvent(
         trace_id=state.intent_event.trace_id,
         source=_build_panel_source(),
@@ -469,6 +499,7 @@ def _emit_events(state: PanelAgentState) -> PanelAgentState:
             actions=state.action_results,
             executed_action_ids=list(state.executed_action_ids or []),
             cognition_mode=cognition_mode,
+            cognition_metadata=cognition_metadata,
         ),
     )
 
@@ -479,6 +510,7 @@ def _emit_events(state: PanelAgentState) -> PanelAgentState:
         summary=_build_summary(state.action_results),
         actions=state.action_results,
         cognition_mode=cognition_mode,
+        cognition_metadata=cognition_metadata,
     )
     log_event = PanelLogEvent(trace_id=state.intent_event.trace_id, source=_build_panel_source(), payload=log_entry)
 
