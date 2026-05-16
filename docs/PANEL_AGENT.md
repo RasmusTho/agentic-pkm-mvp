@@ -50,6 +50,15 @@ Other implementation notes:
 - PanelAgent Runtime V1 remains the baseline until the PanelAgent 2.0 path is fully implemented and operationally accepted. The real-vault acceptance receipt for #240 now closes that line for the shipped v5.6 path.
 - LangGraph control flow supports a decider mode (`PANEL_AGENT_DECIDER=rule|llm`); `llm` is the default runtime posture for LLM-backed intent interpretation, while `rule` is an explicit opt-out for unit tests, CI, and other bounded deterministic validation lanes. Both modes route through the shared `ReasoningFacade` with the canonical `decide` task kind.
 - The executed `cognition_mode` is included in the `panel.intent.executed` event payload and in `panel.log.created` entries so external consumers can observe which interpretation path was used.
+- <!-- panel-agent-cognition-observability --> Bounded LLM-route observability (`cognition_metadata`) accompanies `cognition_mode` on `panel.intent.executed` and `panel.log.created`, and is mirrored onto the `panel.action.logged` receipts (`proposal_offered`, `no_actions_matched`) so runtime decisions stay debuggable. The metadata dictionary is bounded to scalar fields only and intentionally excludes prompt bodies, raw LLM output, and any secret material:
+  - `cognition_mode` — `"rule"` or `"llm"`, mirrors the top-level field.
+  - `route` — `"rule"`, `"checkbox"`, or `"freeform"`; identifies which selection pathway ran.
+  - `provider` / `model` — taken from the most recent `ReasoningFacade` telemetry record for the call; `null` when the route did not invoke the facade.
+  - `fallback_used` (bool) and `fallback_reason` (string or `null`) — `fallback_reason` is one of `instruction_hint_fallback`, `llm_error:<ExcType>`, or `no_catalog_available`.
+  - `proposal_candidate_count` — raw count of action entries returned by the LLM.
+  - `proposal_accepted_count` — count that mapped to canonical catalog IDs.
+  - `proposal_rejected_count` — count dropped because they were missing/blank IDs or out of catalog.
+  - `no_match` (bool) — `true` when the cognition decision produced zero accepted catalog actions (drives the `no_actions_matched` receipt).
 - LLM-driven contract tests live under `tests/e2e/test_panel_llm_e2e.py` (gated by `@pytest.mark.panel_llm_e2e` and `PANEL_AGENT_LLM_E2E=1`) to validate end-to-end promotion/non-promotion scenarios (including the freeform no-checkbox path) using the real decider. Tests requiring deterministic rule-mode behavior explicitly set `PANEL_AGENT_DECIDER=rule`.
 - Any future PanelAgent expansion beyond the current shipped slices should be decomposed via the issue/track flow first so the remaining work stays bounded and reviewable.
 

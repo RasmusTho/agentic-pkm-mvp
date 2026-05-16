@@ -190,6 +190,26 @@ Payload highlights:
 - `note`, `panel`
 - `actions[]`: `id`, `label`, `checked`, `status` (e.g. triggered/logged/skipped), optional `intent_type`, `emitted_events[]`
 - `executed_action_ids[]`: stable `ai:id` values recorded for idempotency
+- `cognition_mode`: `"rule"` or `"llm"` — top-level mirror of the cognition route used this pass.
+- `cognition_metadata`: bounded LLM-route observability (see below). Same shape is mirrored on `panel.log.created` and on `panel.action.logged` receipts.
+
+<!-- panel-agent-cognition-observability-metadata -->
+#### PanelAgent cognition observability metadata
+
+Bounded, scalar-only dictionary used to surface the LLM cognition route and fallback path. It is attached to:
+- `panel.intent.executed` (`payload.cognition_metadata`)
+- `panel.log.created` (`payload.cognition_metadata`)
+- `panel.action.logged` receipts with `reason` in {`proposal_offered`, `no_actions_matched`, and other receipt reasons emitted via the runtime path}
+
+Fields (all optional, defaults are empty dict / null):
+- `cognition_mode` — `"rule"` or `"llm"`.
+- `route` — `"rule"`, `"checkbox"`, or `"freeform"`.
+- `provider` / `model` — provider and model identifier from the most recent `ReasoningFacade` telemetry record. `null` when the route did not invoke the facade.
+- `fallback_used` (bool), `fallback_reason` (string or `null`) — one of `instruction_hint_fallback`, `llm_error:<ExcType>`, `no_catalog_available`.
+- `proposal_candidate_count`, `proposal_accepted_count`, `proposal_rejected_count` — bounded counts of raw LLM-returned candidates and how many mapped to canonical catalog IDs.
+- `no_match` (bool) — `true` when the cognition decision produced zero accepted catalog actions; drives the `no_actions_matched` receipt.
+
+Backward compatibility: existing consumers that only read `cognition_mode` continue to work. The metadata dictionary is additive and intentionally bounded — it must not carry prompt bodies, raw LLM output, or secret material. See `docs/PANEL_AGENT.md` for the producer-side contract (#984).
 
 ### `promote.intent.created`
 

@@ -47,6 +47,11 @@ class PanelAgentState(BaseModel):
     # decision (including empty). Distinguishes freeform LLM no-match (decision
     # was made: nothing fits) from rule-mode pass-through (no decision invoked).
     cognition_decision_made: bool = False
+    # Bounded LLM-route / fallback observability surfaced by the cognition seam (#984).
+    # Populated by LLMCognitionBackend so emit_events can attach provider/model,
+    # fallback path, and proposal accept/reject counts to outbound events. Keys are
+    # intentionally bounded and free of prompt bodies or secrets.
+    cognition_metadata: dict[str, Any] = Field(default_factory=dict)
     vault_root: Path | None = None
 
     # Runtime-populated fields

@@ -83,6 +83,12 @@ class PanelIntentExecutedPayload(BaseModel):
     actions: list[PanelRuntimeActionResult] = Field(default_factory=list)
     executed_action_ids: list[str] = Field(default_factory=list)
     cognition_mode: str | None = None
+    # #984 bounded cognition-route observability. Optional dict of bounded scalar
+    # fields (provider, model, route, fallback_used, fallback_reason,
+    # proposal_candidate_count, proposal_accepted_count,
+    # proposal_rejected_count, no_match). Must not contain prompt bodies or
+    # secrets. See docs/PANEL_AGENT.md and docs/EVENTS.md.
+    cognition_metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class PanelIntentExecutedEvent(BaseModel):
@@ -117,6 +123,9 @@ class PanelLogEntry(BaseModel):
     summary: str
     actions: list[PanelRuntimeActionResult] = Field(default_factory=list)
     cognition_mode: str | None = None
+    # #984 bounded cognition-route observability mirror of
+    # PanelIntentExecutedPayload.cognition_metadata.
+    cognition_metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class PanelLogEvent(BaseModel):
