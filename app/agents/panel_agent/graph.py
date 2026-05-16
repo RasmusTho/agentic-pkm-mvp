@@ -31,36 +31,60 @@ _IDEMPOTENCY_GUARD = IdempotencyGuard(ttl_seconds=86400.0)
 logger = logging.getLogger(__name__)
 _TRUST_VERBS = {"ASSERT", "SUGGEST", "APPLY"}
 
-# Governance-bearing capabilities (capability_class=governed_execution /
-# authority_class=governed_effect per docs/CAPABILITY_CONTRACT_MODEL.md).
-# Freeform LLM-proposed actions in this set must NOT be auto-executed in the
-# same runtime pass — they must be written back as unchecked proposals and run
-# only after explicit human confirmation on a subsequent pass.
-#
-# This hardcoded set is a transitional bridge: #982 will move capability_class
-# / authority_class metadata onto each catalog entry so this gating becomes
-# fully data-driven from the catalog descriptor.
-_GOVERNANCE_BEARING_ACTION_IDS: frozenset[str] = frozenset({
-    "promote.evergreen",
-    "note.archive",
-    "ingest.summary.create",
-    "note.move.workbench",
+# Governance-bearing capability classes / authority classes per
+# docs/CAPABILITY_CONTRACT_MODEL.md (`Cognitive mediation capability
+# classes`). Freeform LLM-proposed actions whose catalog descriptor falls in
+# this set must NOT be auto-executed in the same runtime pass — they must be
+# written back as unchecked proposals and run only after explicit human
+# confirmation on a subsequent pass.
+_GOVERNANCE_BEARING_CAPABILITY_CLASSES: frozenset[str] = frozenset({
+    "governed_execution",
+})
+_GOVERNANCE_BEARING_AUTHORITY_CLASSES: frozenset[str] = frozenset({
+    "governed_effect",
 })
 
 
-def _is_governance_bearing(action: PanelIntentAction) -> bool:
+def _is_governance_bearing(
+    action: PanelIntentAction,
+    catalog: PanelActionCatalog | None = None,
+) -> bool:
     """Return True if the action's capability class is governance-bearing.
 
-    A future revision will read `capability_class`/`authority_class` directly
-    off the catalog descriptor (#982). Until that metadata lands, the explicit
-    action-id allowlist above is the source of truth, augmented by a
-    conservative fallback that treats any `promotion` intent_type as
-    governance-bearing.
+    Reads `capability_class` / `authority_class` from the catalog descriptor
+    when available (#982). Falls back to the descriptor carried on
+    `action.mapping` via the catalog lookup; if neither is available,
+    conservatively treats `requires_human_gate=true`, the `promotion`
+    intent_type, or a non-empty `trust_verb` as governance-bearing so that
+    legacy or partially-described entries still gate correctly.
     """
-    if action.id in _GOVERNANCE_BEARING_ACTION_IDS:
-        return True
+    descriptor = None
+    if catalog is not None and action.id:
+        descriptor = catalog.get(action.id)
+
+    if descriptor is not None:
+        cap_class = (descriptor.capability_class or "").strip().lower()
+        auth_class = (descriptor.authority_class or "").strip().lower()
+        if cap_class in _GOVERNANCE_BEARING_CAPABILITY_CLASSES:
+            return True
+        if auth_class in _GOVERNANCE_BEARING_AUTHORITY_CLASSES:
+            return True
+        if descriptor.requires_human_gate is True:
+            return True
+        # If the descriptor explicitly marks itself proposal/read-only, trust it.
+        if cap_class in {"proposal", "retrieval", "clarification", "orientation", "synthesis_review"}:
+            return False
+        if auth_class in {"read-only", "proposal"}:
+            return False
+
+    # Conservative legacy fallback for descriptors lacking capability metadata:
+    # promotion intent_type and APPLY-style trust_verbs are governance-bearing.
     mapping = action.mapping
-    if mapping and (mapping.intent_type or "").strip().lower() == "promotion":
+    if mapping is None:
+        return False
+    if (mapping.intent_type or "").strip().lower() == "promotion":
+        return True
+    if (mapping.trust_verb or "").strip().upper() == "APPLY":
         return True
     return False
 
@@ -382,7 +406,7 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
                 override_checked
                 and not action.checked
                 and (action.id in proposed_ids or action.proposal_pending)
-                and _is_governance_bearing(action)
+                and _is_governance_bearing(action, state.action_catalog)
             )
             if gated_as_proposal:
                 override_checked = False

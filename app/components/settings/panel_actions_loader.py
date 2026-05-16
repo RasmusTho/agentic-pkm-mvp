@@ -31,6 +31,12 @@ class PanelActionDescriptor(BaseModel):
     watcher_allowed: bool = True
     manual_only: bool = False
     trust_verb: str | None = None
+    # Capability metadata per docs/CAPABILITY_CONTRACT_MODEL.md. Optional so that
+    # legacy catalog entries remain valid; absence is treated as "unspecified"
+    # by capability-class consumers (e.g., the PanelAgent governance gate).
+    capability_class: str | None = None
+    authority_class: str | None = None
+    requires_human_gate: bool | None = None
 
     def to_mapping(self) -> PanelActionMapping:
         return PanelActionMapping(
@@ -159,6 +165,13 @@ def _entry_to_descriptor(entry: dict[str, Any]) -> PanelActionDescriptor | None:
         watcher_allowed=bool(entry.get("watcher_allowed", True)),
         manual_only=bool(entry.get("manual_only", False)),
         trust_verb=str(entry.get("trust_verb") or entry.get("verb") or "").strip() or None,
+        capability_class=(str(entry.get("capability_class") or "").strip() or None),
+        authority_class=(str(entry.get("authority_class") or "").strip() or None),
+        requires_human_gate=(
+            bool(entry["requires_human_gate"])
+            if "requires_human_gate" in entry and entry["requires_human_gate"] is not None
+            else None
+        ),
     )
 
 
