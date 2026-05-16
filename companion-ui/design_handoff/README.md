@@ -19,7 +19,7 @@ Preserved Claude Design artifacts and handoff packages. These are reference/hand
 | `2026-05-14-context-bundle-inspector/` | 2026-05-14 | A | #894, #895, #896 | Inspectable context-bundle bridge object. Design only. |
 | `2026-05-14-memory-candidate-review/` | 2026-05-14 | A | #900 | Pull-based memory candidate review queue. Design only. |
 | `2026-05-14-vault-action-layer/` | 2026-05-14 | A | #910 | 9-step vault action pipeline, 5-tier tool taxonomy. Design only. |
-| `2026-05-15-panel-interaction/` | 2026-05-15 | A | #977, #978, #981 | Panel interaction surface: vault-native AI fence + Companion UI render layer. State machine (8 states), component inventory, authority boundaries, open questions. Interactive prototype (index.html) pending. |
+| `2026-05-15-panel-interaction/` | 2026-05-15 | A (accepted as design intent — #994) | #977, #978, #981, #994 | Panel interaction surface: vault-native AI fence + Companion UI render layer. State machine (8 states), component inventory, authority boundaries, open questions. Accepted as design-intent input per `ACCEPTANCE.md`; AI fence reaffirmed as communication envelope, `companion:panel:run` HTML-comment blocks classified as proposed/internal projection only. Interactive prototype (prototype.html) pending. |
 
 **Crossing A** = archived, not yet through maturity checklist.
 **Crossing B** = maturity checklist passed; normalized spec exists in `companion-ui/docs/`.
