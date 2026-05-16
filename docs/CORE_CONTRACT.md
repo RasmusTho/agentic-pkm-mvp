@@ -74,6 +74,10 @@ these six semantic coordinates must remain stable.
 - Writing-surface human notes remain the primary human contract surface for vault-based work; they express intent and meaning.
 - For vault notes, `uuid` in frontmatter plus the companion note form the primary file-based
   identity anchors used for rebuild and repair.
+- Watcher ingest writes `uuid` to source note frontmatter only. Other Core-6 fields (`origin`,
+  `source_ref`, `trust`, `review_state`) are projected into the companion note and object store —
+  they are implicit/derived for the source note, not written to its frontmatter. A uuid-only
+  source note frontmatter after ingest is the correct expected runtime outcome (issue #976).
 - External/retained artifacts may also project Core-6 without becoming vault notes.
 - The DB/system plane is a normalized mirror or projection of the contract, not the source of truth for human meaning.
 - Policy-selected axes may extend the artifact view, but they do not become part of Core-6 unless this document changes.
