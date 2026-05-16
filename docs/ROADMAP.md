@@ -130,6 +130,20 @@ Deliverables:
 - Governed mutation paths remain explicit and mediated across interaction and automation surfaces.
 - The v6 target operating model classifies proposed changes as current-state bug fixes, enabling changes, or target-state changes before implementation begins.
 
+## Deep Agents as runtime layer exploration (future work)
+
+<!-- Deep Agents runtime exploration -->
+
+Deep Agents are an **optional future operational harness and runtime layer** for planning, decomposition, and multi-step reasoning. They are not shipped, not active in the current baseline, and must not be described as cognition authority or semantic authority.
+
+Design intent (not yet implemented):
+- Deep Agents operate as a runtime execution harness on top of the capability layer — they compose capabilities (retrieval, orientation, resurfacing, context building) through planning, not by owning or replacing them.
+- Deep Agents remain downstream of governance: WriteGuard, policy gates, and event receipts apply to any mutation intent surfaced through a Deep Agent harness, exactly as they do for any other execution path.
+- Deep Agent runtime state is transient orchestration state, not canonical cognition. Vault notes remain the durable human-canonical surface.
+- Introduction is gated on structural separation (Phase 1 — v6.0 Baseline) being complete. No Deep Agents in production mutation flows until that separation is verified.
+
+This section names Deep Agents as a runtime layer exploration to distinguish it from cognition-authority claims, ASK-style centralization, or governance bypass. Any future implementation must satisfy the explicit rules in `Phase 2 — Deep Agent Introduction` below.
+
 ## Phase 2 — Deep Agent Introduction (Thin Slice, Post-v6.0)
 
 <!-- deep-agents-runtime-exploration -->
