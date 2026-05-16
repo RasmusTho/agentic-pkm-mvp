@@ -111,6 +111,38 @@ mappings:
             encoding="utf-8",
         )
         return path
+    if variant == "proposal_only":
+        # #982: minimal proposal-only cognitive capabilities (non-governance-bearing).
+        path.write_text(
+            """---
+mappings:
+  - id: "proposal.next_actions"
+    kind: "proposal"
+    labels:
+      - "Suggest next actions"
+    description: "Propose a small, bounded set of next-step suggestions."
+    llm_hint: "Choose this when the instruction asks what to do next or for next steps."
+    intent_type: "proposal"
+    downstream_event: "panel.proposal.next_actions"
+    capability_class: "proposal"
+    authority_class: "proposal"
+    requires_human_gate: false
+  - id: "retrieval.related_notes"
+    kind: "retrieval"
+    labels:
+      - "Show related notes"
+    description: "Return a bounded list of candidate related notes."
+    llm_hint: "Choose this when the instruction asks for related material."
+    intent_type: "retrieval"
+    downstream_event: "panel.retrieval.related_notes"
+    capability_class: "retrieval"
+    authority_class: "read-only"
+    requires_human_gate: false
+---
+""",
+            encoding="utf-8",
+        )
+        return path
     raise ValueError(f"unknown panel action catalog variant: {variant}")
 
 
@@ -344,5 +376,44 @@ def test_panel_llm_freeform_promotes_without_checkboxes(tmp_path: Path, monkeypa
     else:
         pytest.fail(
             "expected promote.intent.created from freeform panel LLM run (no checkboxes) after 3 attempts; "
+            f"last topics={last_topics} outbox_events={[ev.get('event') for ev in last_outbox_events]}"
+        )
+
+
+def test_panel_generates_bounded_proposals_from_freeform_instruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#982 AC: PanelAgent can generate at least one bounded suggestion from a
+    freeform orientation request using the proposal-only capability set.
+
+    Live-LLM smoke: with no checkbox actions and a proposal-only catalog, the
+    panel must surface at least one bounded proposal-only action via the
+    freeform path. The downstream surface remains observational (no
+    governance-bearing event fires).
+    """
+    _skip_if_no_llm()
+    _skip_if_live_llm_unavailable()
+    last_topics: list[str] = []
+    last_outbox_events: list[dict] = []
+    for _ in range(3):
+        _, topics, outbox_events = _run_live_panel_freeform_subprocess(
+            tmp_path,
+            instruction="I am not sure what to do with this note. What would you suggest next?",
+            actions_variant="proposal_only",
+        )
+        assert "panel.intent.executed" in topics
+        assert "panel.log.created" in topics
+        # No governance-bearing effect from proposal-only capabilities.
+        assert "promote.intent.created" not in topics
+        assert not any(ev.get("event") == "promote.intent.created" for ev in outbox_events)
+        # The bounded suggestion surface is the panel.action.logged receipt.
+        if "panel.action.logged" in topics:
+            break
+        last_topics = topics
+        last_outbox_events = outbox_events
+    else:
+        pytest.fail(
+            "expected at least one bounded proposal-only suggestion (panel.action.logged) "
+            "from a freeform orientation request after 3 attempts; "
             f"last topics={last_topics} outbox_events={[ev.get('event') for ev in last_outbox_events]}"
         )
