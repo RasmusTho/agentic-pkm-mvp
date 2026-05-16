@@ -280,3 +280,18 @@ are typed-contract implementations (`app/context_bundles/`, `app/orientation/bun
 `app/resurfacing/bundle_consumer.py`, `app/writeback/bundle_proposal.py`,
 `app/receipts/bundle_receipts.py`) with full test coverage. No production route wiring has shipped;
 runtime bundle emission in API routes is a separate future slice.
+
+### Cognitive mediation alignment (2026-05-16)
+
+`docs/CAPABILITY_CONTRACT_MODEL.md` now carries the 6.x cognitive mediation alignment vocabulary:
+capability classes (orientation, proposal, retrieval, clarification, synthesis/review,
+governance-bearing execution, repair/maintenance), the intent-space vs capability-space
+distinction, proposal-only capability semantics, and a metadata vocabulary for catalog entries
+(`authority_class`, `capability_class`, `risk_tier`, `reversibility`, `approval_envelope`,
+`side_effect_class`, `provenance_required`). `docs/PANEL_AGENT.md` cross-references this taxonomy
+under "Capability taxonomy alignment" without claiming new shipped runtime behavior.
+
+Scope: architecture alignment only. No runtime change, no event-payload change, no catalog change.
+The vocabulary is the language new cognitive-mediation catalog entries (tracked separately) are
+expected to populate; existing entries remain valid without retroactive backfill. Delivers #981
+under the PanelAgent / Cognitive Mediation program coordinated by #978.
