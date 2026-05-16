@@ -78,3 +78,55 @@ def test_checked_checkbox_actions_execute() -> None:
     assert statuses["promote.evergreen"] == "triggered"
     # The human-checked action is NOT in proposed_action_ids: it was not an LLM proposal.
     assert "promote.evergreen" not in (result.proposed_action_ids or [])
+
+
+def test_checked_action_receipts_preserved() -> None:
+    """AC #980-5: existing execution receipts remain unchanged for checked
+    actions; #980's no-op/proposal visibility additions do not displace the
+    checked-action receipt path. The graph must still emit `promote.intent.created`
+    and `panel.action.triggered`, and must NOT emit a `no_actions_matched` signal
+    when at least one checked action executed.
+    """
+    mapping = PanelActionMapping(
+        id="promote.evergreen",
+        intent_type="promotion",
+        trust_verb="APPLY",
+        downstream_event="review.promote.evergreen",
+        params={"maturity": "evergreen"},
+    )
+    action = PanelIntentAction(
+        id=mapping.id,
+        label="Make this note evergreen",
+        checked=True,
+        mapping=mapping,
+    )
+    note = NoteRef(
+        uuid="panel-980-receipt-preserved-0000-4000-8000-000000000001",
+        path="vault/Receipt.md",
+        origin="vault",
+    )
+    panel = PanelInfo(panel_id="p1", instruction="Promote.", raw_block=None)
+    payload = PanelIntentPayload(note=note, panel=panel, actions=[action])
+    intent = PanelIntentEvent(payload=payload, trace_id="trace-#980-receipt")
+    state = PanelAgentState(
+        trace_id=intent.trace_id,
+        note=note,
+        panel=panel,
+        actions=[action],
+        intent_event=intent,
+    )
+
+    result = run_panel_graph(state, decider_mode="rule")
+
+    event_names = [getattr(evt, "event", None) for evt in result.emitted_events]
+    # Execution receipts preserved.
+    assert "promote.intent.created" in event_names
+    assert "panel.action.triggered" in event_names
+    # No no-op marker fires when actions actually executed.
+    no_match_logged = [
+        evt
+        for evt in result.emitted_events
+        if getattr(evt, "event", None) == "panel.action.logged"
+        and (getattr(evt, "payload", {}) or {}).get("reason") == "no_actions_matched"
+    ]
+    assert not no_match_logged
