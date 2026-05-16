@@ -155,6 +155,52 @@ def write_companion(vault_root: Path, companion: CompanionNote) -> None:
 # Lookup
 # ---------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class DuplicateCompanion:
+    """A UUID that exists in both canonical and legacy companion locations."""
+    uuid: str
+    canonical_path: Path   # absolute path to the canonical companion
+    legacy_path: Path      # absolute path to the legacy companion
+
+
+def find_duplicate_companions(vault_root: Path) -> list[DuplicateCompanion]:
+    """
+    Detect companion UUIDs that exist in both the canonical and legacy locations.
+
+    A duplicate is defined as a UUID with a file in BOTH:
+    - canonical: vault/<system_dir>/companions/<uuid>.md
+    - legacy:    vault/_system/companions/<uuid>.md
+
+    This function is read-only. It does not delete or modify any files.
+    Use the result for human review or explicit guarded migration.
+
+    Returns:
+        List of DuplicateCompanion records for UUIDs present in both locations.
+    """
+    canonical_dir = vault_root / _companions_dir(vault_root)
+    legacy_dir = vault_root / _LEGACY_COMPANIONS_DIR
+
+    # If canonical and legacy resolve to the same directory, there can be no duplicates.
+    if canonical_dir.resolve() == legacy_dir.resolve():
+        return []
+
+    if not canonical_dir.exists() or not legacy_dir.exists():
+        return []
+
+    canonical_uuids = {p.stem for p in canonical_dir.glob("*.md")}
+    legacy_uuids = {p.stem for p in legacy_dir.glob("*.md")}
+    duplicated = canonical_uuids & legacy_uuids
+
+    return [
+        DuplicateCompanion(
+            uuid=uuid,
+            canonical_path=canonical_dir / f"{uuid}.md",
+            legacy_path=legacy_dir / f"{uuid}.md",
+        )
+        for uuid in sorted(duplicated)
+    ]
+
+
 def find_companion_by_content_hash(vault_root: Path, sha256: str) -> CompanionNote | None:
     """Scan all companions for one whose content_hash matches sha256."""
     companions_dir = vault_root / _companions_dir(vault_root)
@@ -408,10 +454,12 @@ __all__ = [
     "AttachmentRef",
     "CompanionNote",
     "ConflictLog",
+    "DuplicateCompanion",
     "IDENTITY_HISTORY_MAX",
     "IdentityHistoryEntry",
     "companion_path",
     "find_companion_by_content_hash",
+    "find_duplicate_companions",
     "read_companion",
     "rebuild_companion_from_db",
     "repair_companion",

@@ -12,6 +12,7 @@ from typing import Any, Dict
 import httpx
 
 from app.components.llm.fabric import describe_default_route_policies, describe_default_routes
+from app.services.companion_diagnostics import companion_diagnostics_summary
 from app.config.environment import active_environment
 from app.eval.llm_client import DEFAULT_MODE as DEFAULT_EVAL_MODE
 from app.knowledge.errors import KnowledgeConfigError
@@ -582,6 +583,18 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
     return actions
 
 
+def _check_companion_diagnostics() -> Dict[str, Any]:
+    vault_root = Path(os.getenv("VAULT_ROOT") or "vault").expanduser()
+    try:
+        summary = companion_diagnostics_summary(vault_root)
+    except Exception as exc:
+        return _result(True, f"companion diagnostics skipped: {exc}", data={"skipped": True})
+    count = summary["duplicate_companion_count"]
+    ok = count == 0
+    detail = "no duplicate companion notes" if ok else f"{count} duplicate companion note(s) detected"
+    return _result(ok, detail, data=dict(summary))
+
+
 def _check_v6_seams() -> Dict[str, str]:
     def _seam(module: str) -> str:
         try:
@@ -619,6 +632,7 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     checks["llm_task_routes"] = _annotate_required(_check_llm_task_routes(checks["llm_router"]), required=True)
     checks["llm_providers"] = _annotate_required(_check_llm_providers(checks["ollama"]), required=False)
     checks["embedding_index"] = _annotate_required(_check_embedding_index(), required=True)
+    checks["companion_diagnostics"] = _annotate_required(_check_companion_diagnostics(), required=False)
 
     runtime = {
         "watcher": _watcher_runtime_status(),
