@@ -57,6 +57,16 @@ Direction note:
 - the forward direction is richer cognition in support of Panel,
 - but mutation authority remains bounded by policy, validation, deterministic note-writer paths, and downstream controlled execution.
 
+<!-- capability taxonomy alignment -->
+Capability taxonomy alignment (v6.x cognitive mediation, `docs/CAPABILITY_CONTRACT_MODEL.md`):
+- Panel action selection maps to the **proposal** capability class: the agent proposes actions as unchecked checkboxes; the human confirms; governance gates apply on execution. No Panel cognition path collapses proposal into governed execution.
+- Panel instruction parsing and checkbox interpretation map to the **clarification** capability class: they resolve ambiguity about what the human intends but do not assert intent on behalf of the human.
+- Orientation signals available to Panel (note context, recent activity) map to the **orientation** capability class: read-only, no mutation.
+- Execution of confirmed panel actions (e.g., promotion, frontmatter patch) maps to the **governance-bearing execution** capability class: requires the event envelope, policy gate, WriteGuard, and a receipt artifact.
+- PanelAgent does not currently implement synthesis/review or repair/maintenance capability classes directly; those remain future-track work.
+- LLM output from Panel cognition (LLM decider, freeform path) is always in the proposal or clarification class; it is never promoted to governed-execution authority without the human confirmation + policy gate step.
+- See `docs/CAPABILITY_CONTRACT_MODEL.md` (`Cognitive mediation capability classes`) for the full taxonomy, authority/risk metadata fields, and composition rules.
+
 ## Panel syntax (Markdown)
 - Panels are delimited by tolerant AI fences: any `%% ...ai... %%` (case-insensitive) line opens/closes a panel. First fence opens, second closes, third opens the next, etc.
 - Inside a panel:
