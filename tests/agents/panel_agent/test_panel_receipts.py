@@ -308,3 +308,176 @@ def test_receipts_remain_bounded(
     assert len(receipt_lines) <= MAX_RECEIPTS, (
         f"AI status callout exceeded MAX_RECEIPTS={MAX_RECEIPTS}: {len(receipt_lines)} lines"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1012: suppress repeated no-match receipts on rerun
+# ---------------------------------------------------------------------------
+
+def _no_match_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, note_uuid: str) -> tuple[Path, Path]:
+    """Shared setup for no-match rerun tests. Returns (note_file, outbox_path)."""
+    settings_path = _settings_file(
+        tmp_path,
+        action_id="promote.evergreen",
+        label="Make this note evergreen",
+        intent_type="promotion",
+        trust_verb="APPLY",
+        downstream_event="review.promote.evergreen",
+    )
+    markdown = (
+        "---\n"
+        f"uuid: {note_uuid}\n"
+        "---\n"
+        "%% AI:Start %%\n"
+        "## AI-instruktion\n"
+        "Please do something that has no canonical action.\n"
+        "%% AI:End %%\n"
+    )
+    note_file = _vault_note(tmp_path, note_uuid, markdown)
+    outbox_path = tmp_path / "outbox.jsonl"
+
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("VAULT_ROOT", str(note_file.parent))
+    monkeypatch.setenv("PANEL_AGENT_DECIDER", "llm")
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+    monkeypatch.setattr(
+        "app.agents.panel_agent.cognition.get_reasoning_facade",
+        lambda: _StubReasoningFacade({"actions": []}),
+    )
+    return note_file, outbox_path
+
+
+def test_no_match_rerun_unchanged_input_is_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #1012-1 + #1012-2: rerun with unchanged instruction must not append
+    another 'Inga åtgärder matchade' line or emit another panel.action.logged event.
+    """
+    note_uuid = str(uuid4())
+    note_file, outbox_path = _no_match_setup(tmp_path, monkeypatch, note_uuid)
+
+    # First run.
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-1012-a", trigger="watcher")
+    execute_panel_intent(events[0], outbox_path=outbox_path)
+
+    after_first = note_file.read_text(encoding="utf-8")
+    assert "Inga åtgärder matchade" in after_first
+    no_match_count_1 = after_first.count("Inga åtgärder matchade")
+
+    logged_events_1 = [
+        r for r in _read_outbox(outbox_path)
+        if r.get("event") == "panel.action.logged"
+        and (r.get("payload") or {}).get("reason") == "no_actions_matched"
+    ]
+    assert logged_events_1, "expected a no_actions_matched event on first run"
+
+    # Simulate watcher re-index: update ObjectStore with the post-writeback content.
+    _seed_note(note_uuid, after_first, source_ref=str(note_file))
+
+    # Second run — same instruction.
+    events2 = run_panel_intent_for_note(note_uuid, trace_id="trace-1012-b", trigger="watcher")
+    execute_panel_intent(events2[0], outbox_path=outbox_path)
+
+    after_second = note_file.read_text(encoding="utf-8")
+    assert after_second.count("Inga åtgärder matchade") == no_match_count_1, (
+        "rerun appended a duplicate no-match receipt line"
+    )
+
+    logged_events_2 = [
+        r for r in _read_outbox(outbox_path)
+        if r.get("event") == "panel.action.logged"
+        and (r.get("payload") or {}).get("reason") == "no_actions_matched"
+    ]
+    assert len(logged_events_2) == len(logged_events_1), (
+        "rerun emitted an extra panel.action.logged(no_actions_matched) event"
+    )
+
+
+def test_no_match_changed_input_writes_fresh_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #1012-3: if the panel instruction changes between runs and still resolves
+    to no-match, a new receipt IS written.
+    """
+    note_uuid = str(uuid4())
+    note_file, outbox_path = _no_match_setup(tmp_path, monkeypatch, note_uuid)
+
+    # First run.
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-1012-c", trigger="watcher")
+    execute_panel_intent(events[0], outbox_path=outbox_path)
+
+    after_first = note_file.read_text(encoding="utf-8")
+    assert "Inga åtgärder matchade" in after_first
+
+    # Simulate instruction change: replace the panel instruction.
+    changed_markdown = after_first.replace(
+        "Please do something that has no canonical action.",
+        "Please do something different that also has no canonical action.",
+    )
+    note_file.write_text(changed_markdown, encoding="utf-8")
+    _seed_note(note_uuid, changed_markdown, source_ref=str(note_file))
+
+    # Second run — different instruction.
+    events2 = run_panel_intent_for_note(note_uuid, trace_id="trace-1012-d", trigger="watcher")
+    execute_panel_intent(events2[0], outbox_path=outbox_path)
+
+    after_second = note_file.read_text(encoding="utf-8")
+    assert after_second.count("Inga åtgärder matchade") > after_first.count("Inga åtgärder matchade"), (
+        "expected a fresh no-match receipt for changed instruction"
+    )
+
+
+def test_fallback_rerun_unchanged_input_is_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #1012-4: a rerun of an unmapped checked action must not append a duplicate
+    fallback receipt or emit an extra event when the action and reason are unchanged.
+    """
+    note_uuid = str(uuid4())
+    settings_path = _settings_file(
+        tmp_path,
+        action_id="promote.evergreen",
+        label="Make this note evergreen",
+        intent_type="promotion",
+        trust_verb="APPLY",
+        downstream_event="review.promote.evergreen",
+    )
+    markdown = (
+        "---\n"
+        f"uuid: {note_uuid}\n"
+        "---\n"
+        "%% AI:Start %%\n"
+        "## AI-instruktion\n"
+        "Do something\n"
+        "## AI-åtgärder\n"
+        "- [x] Some unmapped freeform request\n"
+        "%% AI:End %%\n"
+    )
+    note_file = _vault_note(tmp_path, note_uuid, markdown)
+    outbox_path = tmp_path / "outbox.jsonl"
+
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("VAULT_ROOT", str(note_file.parent))
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+
+    # First run.
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-1012-e", trigger="watcher")
+    execute_panel_intent(events[0], outbox_path=outbox_path)
+
+    after_first = note_file.read_text(encoding="utf-8")
+    assert "unmapped_action" in after_first
+    fallback_count_1 = after_first.count("unmapped_action")
+
+    # Simulate re-index with same content (fallback action was removed from panel).
+    _seed_note(note_uuid, after_first, source_ref=str(note_file))
+
+    # Second run — same note, no new checked action.
+    events2 = run_panel_intent_for_note(note_uuid, trace_id="trace-1012-f", trigger="watcher")
+    execute_panel_intent(events2[0], outbox_path=outbox_path)
+
+    after_second = note_file.read_text(encoding="utf-8")
+    assert after_second.count("unmapped_action") == fallback_count_1, (
+        "rerun appended a duplicate fallback receipt"
+    )

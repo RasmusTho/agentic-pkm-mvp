@@ -32,6 +32,18 @@ from app.store.object_store import ObjectStore
 
 logger = logging.getLogger(__name__)
 
+# No-match dedup marker (issue #1012). Char class follows #979 pattern: [A-Za-z0-9_.-]+
+_NO_MATCH_MARKER_TPL = "<!--ai:no-match={hash}-->"
+
+
+def _no_match_marker(instruction: str) -> str:
+    h = hashlib.sha256(instruction.encode("utf-8")).hexdigest()[:16]
+    return _NO_MATCH_MARKER_TPL.format(hash=h)
+
+
+def _has_no_match_marker(text: str, instruction: str) -> bool:
+    return _no_match_marker(instruction) in text
+
 
 def _resolve_outbox_path(path: Path | None = None) -> Path:
     if path is not None:
@@ -195,6 +207,17 @@ def execute_panel_intent(
                     source="panel_agent.runtime",
                 )
             )
+    # Suppress duplicate no-match events when the instruction is unchanged (#1012).
+    _instruction = intent_event.payload.panel.instruction or ""
+    if _has_no_match_marker(note_text, _instruction):
+        emitted_events = [
+            e for e in emitted_events
+            if not (
+                getattr(e, "event", None) == "panel.action.logged"
+                and (getattr(e, "payload", {}) or {}).get("reason") == "no_actions_matched"
+            )
+        ]
+
     _write_db_outbox_events(emitted_events)
     for event in emitted_events:
         append_jsonl_outbox_event(resolved_outbox, event, default_source="panel_agent.runtime")
@@ -433,6 +456,27 @@ def _apply_note_writeback(
         logger.warning("panel writeback skipped (cannot read note) note_path=%s", note_file)
         return
 
+    # Suppress duplicate no-match receipt when instruction is unchanged (#1012).
+    _instruction = state.panel.instruction or ""
+    if no_match_visible and _has_no_match_marker(current_text, _instruction):
+        no_match_visible = False
+
+    # Filter fallback labels already visible in the current receipt block (#1012).
+    fallback_labels = [
+        (label, reason) for label, reason in fallback_labels
+        if f"⚠️ {label} ({reason}," not in current_text
+    ]
+
+    # Early return if dedup eliminated all remaining work.
+    if (
+        not executed_labels
+        and not queued_labels
+        and not proposed_labels
+        and not fallback_labels
+        and not no_match_visible
+    ):
+        return
+
     # Annotate checkbox lines with ai:id so removal works correctly.
     annotated = annotate_action_ids(current_text)
 
@@ -484,9 +528,11 @@ def _apply_note_writeback(
         f"\u26a0\ufe0f {label} ({reason}, {now_str})"
         for label, reason in fallback_labels
     ]
-    # No-match / no-op receipt: one bounded line, only when nothing else surfaced.
+    # No-match / no-op receipt: one bounded line with an instruction-hash marker so
+    # reruns over unchanged input are idempotent (#1012).
     if no_match_visible:
-        receipts.append(f"\u2139\ufe0f Inga \u00e5tg\u00e4rder matchade ({now_str})")
+        _marker = _no_match_marker(state.panel.instruction or "")
+        receipts.append(f"\u2139\ufe0f Inga \u00e5tg\u00e4rder matchade ({now_str}) {_marker}")
 
     # Find preferred insert position (after last panel fence).
     parsed = parse_panel(updated)
