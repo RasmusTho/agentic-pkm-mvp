@@ -199,6 +199,32 @@ current architecture language.
   - Internal interface abstractions (`VaultPort`, `KnowledgePort`, store protocols).
   - Representative internal functions used as runtime seams between modules.
 
+## Layered cognitive/runtime architecture
+
+<!-- layered cognitive/runtime architecture -->
+
+The architecture is read across four distinct layers. Collapsing these layers — treating runtime state as canonical cognition, or elevating an execution substrate to semantic authority — is an explicit error. Each layer has a different authority class and a different durability posture.
+
+**Human cognitive surfaces**
+- Vault notes in the Obsidian writing surface are the primary durable human cognitive layer.
+- Panel (embedded command surface) and Chat (canvas-shaped exploration surface) are human-intent surfaces that interface with the runtime without becoming the canonical cognitive record.
+- These surfaces are where meaning lives; runtime infrastructure serves them, not the reverse.
+
+**Governance and semantic authority layer**
+- WriteGuard, policy gates, capability contracts, event receipts, and provenance checks form the governance/authority layer.
+- This layer defines what transitions are admissible, under what authority, and with what accountability trail.
+- Governance authority is not delegated to execution orchestration frameworks; it must remain explicit and observable.
+
+**Runtime orchestration layer**
+- LangGraph graph execution, the planner, orchestrator, and bounded agent control flows form the runtime execution layer.
+- This layer coordinates deterministic work through explicit state transitions, graph steps, and tool invocations.
+- The runtime orchestration layer implements execution contracts; it does not own semantic meaning, canonical cognition, or governance authority.
+
+**Infrastructure and runtime services layer**
+- Object store, vector index, DB outbox, companion API, and embedding providers form the infrastructure layer.
+- These services are rebuildable operational substrates that support the layers above.
+- Their state is derived and transient relative to the human and system artifact surfaces.
+
 ## Layered reading model
 - Human cognitive functions are a product-level design lens for why the system exists and what it should help the user do.
 - The ontology/policy layer explains what kinds of things the runtime is dealing with and what boundaries or authority bases apply.
@@ -255,6 +281,23 @@ See also:
 - Tools/MCP: tools are actions an agent chooses from within its LangGraph or equivalent bounded control flow; they should not be hard-wired at the pipeline/Orchestrator level beyond routing envelopes.
 - Foundational capabilities such as ingestion, indexing, retrieval, reasoning support, and execution/governance support remain first-class even when they are not expressed as standalone agents.
 - Current adoption is phased and mixed: ASK and PanelAgent are active runtime LangGraph surfaces; Reviewer/pilot and older graph wrappers exist for selected agent lanes, CLI/dev use, or tests; most ingest/index production paths still run as deterministic pipelines until later rollout phases.
+
+## LangGraph as runtime execution substrate
+
+<!-- LangGraph runtime substrate -->
+
+LangGraph is the execution orchestration substrate for bounded agent control flows in this runtime. It is not a cognition authority, not a semantic authority, and not the canonical source of truth for human knowledge.
+
+Explicit constraints that must not be weakened:
+- LangGraph graph state is deterministic execution state, scoped to a single agent run. It is not canonical cognition.
+- LangGraph does not own semantic meaning, vault note content, or domain ontology.
+- LangGraph does not govern what is true about the human's knowledge or commitments; those remain in vault artifacts and explicit governance contracts.
+- `ReasoningFacade` and LangGraph-backed agents operate as execution substrate over capabilities; they invoke capabilities through explicit planning and do not bypass WriteGuard, policy gates, or provenance requirements.
+- A LangGraph graph executing successfully is not equivalent to the human approving, promoting, or canonicalizing any output. Execution output requires explicit governance steps before it becomes a mutation on canonical surfaces.
+
+<!-- runtime state vs canonical cognition -->
+
+**Runtime state is not canonical cognition.** LangGraph graph state, planner state, orchestrator step state, and related runtime execution objects are transient operational records. They describe what an execution did, not what is true about the human's knowledge, commitments, or intent. The vault note (and its companion note) remain the durable canonical surface that outlives any execution run. Runtime stores, indexes, and execution traces are rebuildable projections from the file-based continuity set; they are never semantically primary.
 
 ## Agent Implementation Pattern (Current Direction)
 - Agents MUST preserve external event contracts and Outbox envelopes during migrations.

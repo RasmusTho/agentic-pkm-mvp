@@ -779,6 +779,16 @@ They follow from what the system is meant to help the human do.
 
 ## 13. Current human-facing surfaces
 
+<!-- vault-first human surface -->
+
+**Vault notes are the primary durable human cognitive surface.** The Obsidian vault is the authoritative writing, reading, capture, and working surface for the human. All runtime state — indexes, stores, execution traces, agent outputs — is derived from and subordinate to the human-authored vault artifacts. Runtime services serve this surface; they do not replace it, redefine it, or become semantically primary over it.
+
+The vault-first principle means:
+- vault notes remain readable and meaningful without the current runtime,
+- runtime stores and indexes are rebuildable projections from the file-based continuity set (vault notes + companion notes),
+- automation and agent behavior must preserve authorship, provenance, and the integrity of vault-first artifacts,
+- and no execution substrate (LangGraph, orchestrator, Deep Agent harness) becomes the canonical cognitive record in place of the vault.
+
 The current baseline exposes these main surfaces:
 - Obsidian vault: the primary writing, reading, capture, and working surface.
 - CLI: operator/developer tooling for ingest, retrieval, watcher control, and diagnostics.
