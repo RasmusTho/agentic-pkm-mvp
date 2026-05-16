@@ -33,6 +33,7 @@ The design problem is explicitly layered:
 | `authority-boundaries.md` | What this design is and is not; invariants this package must honor |
 | `open-questions.md` | Unresolved questions triaged into crossing-blocking / normalized-spec / deferred |
 | `state-gallery.md` | State-by-state descriptions for all declared Panel UI states |
+| `ACCEPTANCE.md` | Governance status record (issue #994): accepted-as-design-intent vs deferred-to-normalized-spec classification |
 
 ---
 
