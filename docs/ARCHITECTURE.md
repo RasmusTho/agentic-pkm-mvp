@@ -471,12 +471,33 @@ Treat these as post-v5.6 follow-up or specialized-reference topics owned by:
 
 ## Layered System Architecture (v6 Direction)
 
+<!-- layered-cognitive-runtime-architecture -->
+
 This section describes the intended v6 direction. It does not override the locked v5.5 baseline or the delivered v5.6 contracts.
+
+The v6 direction explicitly distinguishes four layers so they can evolve and be reviewed independently without collapsing authority:
+
+- **Human cognitive surfaces** — the vault, Panel, Chat canvas, and other places where humans produce, read, and decide. The vault is the primary durable human cognitive surface; see `docs/HUMAN-FLOWS.md :: vault-first human surface`.
+- **Governance / semantic authority** — policies, admissibility rules, provenance, approval, capability contracts, and the authority boundaries owned by `docs/CAPABILITY_CONTRACT_MODEL.md`, `docs/INTERACTION_SURFACES_AND_AUTHORITY/`, and the governance layer below. This layer decides what is allowed to mean what and what is allowed to mutate.
+- **Runtime orchestration** — deterministic execution of bounded work: state progression, tool invocation, event emission, retry, checkpointing, and effector control. This is where LangGraph lives today and where any future Deep Agents harness would sit. See `LangGraph runtime substrate` and `Deep Agents runtime exploration` below.
+- **Infrastructure / runtime services** — persistence backends, transport, provider calls, process boundaries, and observability. Detailed in `docs/INFRASTRUCTURE.md` and `docs/OPERATIONS.md`.
+
+These layers compose in one direction: human cognitive surfaces and governance own meaning and authority; runtime orchestration and infrastructure are the substrate that carries bounded execution under that authority. Runtime layers must not silently become the semantic center of the system.
 
 - Interaction is the primary organizing concern for the user-facing architecture; cognition and reusable capabilities support those interaction surfaces, while foundational capabilities such as ingestion and indexing remain first-class elsewhere in the system.
 - The architecture is organized around five distinct concerns: interaction, cognition, execution, memory, and governance.
-- LangGraph is the current and planned control-plane mechanism for deterministic orchestration and explicit runtime state progression.
-- Deep Agents are a future cognition mechanism for planning, decomposition, and multi-step reasoning. They are introduced only after structural separation is in place.
+
+<!-- langgraph-runtime-substrate -->
+
+- **LangGraph is runtime/execution substrate, not canonical cognition or semantic authority.** It is the current and planned control-plane mechanism for deterministic orchestration and explicit runtime state progression — bounded state machines, tool selection within an agent's control flow, retries, checkpoints, and event emission. LangGraph state is operational orchestration state; it does not redefine artifact meaning, does not own capability semantics, and does not become the canonical record of human cognition. Capability contracts (`docs/CAPABILITY_CONTRACT_MODEL.md`), the event envelope, governance/admission, and the vault remain authoritative; LangGraph carries execution under those contracts.
+
+<!-- deep-agents-runtime-substrate -->
+
+- **Deep Agents are an optional future operational harness/runtime layer for cognition.** They are introduced only after structural separation is in place, only inside an explicitly read-only Chat slice initially, and only as an execution/orchestration substrate for planning, decomposition, and multi-step reasoning. Like LangGraph, a Deep Agents harness is runtime substrate: it does not own semantic authority, does not become the canonical cognitive surface (the vault remains that), and cannot mutate state outside the governed execution layer. Deep Agents are not currently shipped; the forward-line framing lives in `docs/ROADMAP.md :: Deep Agents runtime exploration`.
+
+<!-- runtime-state-vs-canonical-cognition -->
+
+- **Runtime state is not canonical cognition.** Orchestration state inside LangGraph, future Deep Agents harnesses, the Orchestrator, the Reasoning seam, or the event/outbox layer is operational and rebuildable. It exists to coordinate bounded work safely. The canonical human cognitive surface is the vault, and the canonical semantic record is the human vault note. The system-owned companion note is a system-plane identity/continuity pair to that vault note — it carries stable identity, lineage, and continuity metadata, not human meaning (see the three-surface artifact model above and `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`). Rich context lives in the vault note and the runtime DB; the companion must not be read or written as the authoritative record of what the human means. Runtime state may inform recovery and observability, but it must not be treated as the authoritative record of what the human means, decided, or committed to.
 - The capability layer provides reusable functions such as retrieval, reranking, and context building. Capabilities are shared building blocks, not conceptual centers of the system.
 - Retrieval is now exposed as an explicit typed capability contract (RetrievalRequest/RetrievalResponse) with surface-independent provenance and temporal-validity metadata; ASK remains a consumer of this seam. Minimal read-only runtime seams for orientation (`app/orientation/runtime.py`) and resurfacing (`app/resurfacing/runtime.py`) are delivered as bounded additive capability seams consuming derived signals only; no durable salience field is stored. These are accepted capability boundaries per the FINDING_AND_REORIENTING contracts (#392); relation-aware ranking, full interaction-surface integration (Panel/Chat), and resurfacing-triggered mutations remain future work.
 - The execution layer contains controlled effectors only. Reasoning must not directly mutate notes or trigger execution.
