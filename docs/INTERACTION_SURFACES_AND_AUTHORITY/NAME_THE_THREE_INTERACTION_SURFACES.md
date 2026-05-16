@@ -25,7 +25,7 @@ Produces a single docs section that:
 
 1. Names exactly three interaction surfaces: **Panel**, **Chat**, **Automation**.
 2. For each surface, states its cognitive posture in one sentence:
-   - Panel — command-oriented: explicit intent, explicit action, explicit receipt.
+   - Panel — artifact-intent oriented: agent-surfaced likely intention, human confirmation, governed action, local receipt.
    - Chat — exploration-oriented: externalize and manipulate thought, reason across context, optionally commit through governance.
    - Automation — proactive or scheduled: the system acts on the user's behalf without a live interactive turn, within a governed and inspectable envelope.
 3. States why the three are not collapsible:
@@ -55,7 +55,7 @@ This task also protects against a common failure mode in dual-interaction design
 ## Acceptance Criteria
 
 - [x] The task file names exactly three surfaces: Panel, Chat, Automation.
-- [x] Each surface has a one-sentence cognitive posture statement.
+- [x] Each surface has a one-sentence cognitive posture statement. Panel: artifact-intent oriented (updated from command-oriented per issue #1019).
 - [x] The non-collapsibility argument explicitly covers all three pairwise collisions (Panel/Chat, Chat/Automation, Panel/Automation).
 - [x] The task file does not describe any Chat implementation detail.
 - [x] The task file does not answer the Chat mutation question; it defers to `RECONCILE_CHAT_MUTATION_AUTHORITY.md`.
@@ -82,13 +82,19 @@ Docs review only:
 
 The system provides three distinct interaction surfaces — **Panel**, **Chat**, and **Automation** — each serving different user cognitive postures and working within separate authority boundaries.
 
-### Panel: Command-Oriented Surface
+### Panel: Artifact-Intent Oriented Surface
 
-**Cognitive posture:** explicit intent, explicit action, explicit receipt.
+**Cognitive posture:** artifact-intent oriented — agent-surfaced likely intention, human confirmation, governed action, local receipt.
 
-Panel is the user's direct control surface for making intentional moves on the vault. The user names what they want to do (create, revise, link, or commit a change), the system executes the action, and Panel returns a receipt that shows what changed. This surface assumes the user is present, deliberate, and wants unambiguous evidence of what the system did.
+Panel is the artifact-local surface where the agent may manifest what it believes the user likely wants to do with the current artifact, and the user recognizes, corrects, or confirms that interpretation before anything changes. The user need not have fully formulated the intention before Panel surfaces it. Panel helps the user discover and decide what should happen with the active artifact — its likely next move, role, classification, lifecycle, follow-up, or governed action.
 
-Panel serves the user need for **preserving authorship and control** — the user remains the decision-maker, and every action is traceable and reversible.
+Panel does not externalize open-ended thought like Chat/Canvas. It externalizes a bounded, artifact-local hypothesis about what the user may want to do with this specific artifact next. This keeps the Panel/Chat separation sharp rather than weakening it.
+
+The interaction posture is: artifact state → agent proposes likely intention → user recognizes/corrects/confirms → confirmed intention enters governed execution → receipt is written near the artifact.
+
+Panel is therefore **proposal-oriented before confirmation** and **command/receipt-oriented at the execution boundary**. Explicit intent may emerge after the agent manifests a likely next action and the user confirms it — rather than always originating as a fully-formed user command.
+
+Panel serves the user need for **preserving authorship and control** — the user remains the decision-maker, and every confirmed action is traceable and reversible.
 
 ### Chat: Exploration-Oriented Surface
 
@@ -110,12 +116,19 @@ Automation serves the user need for **managing commitments without mental overlo
 
 #### Panel and Chat Cannot Collapse
 
-If Panel and Chat were unified into a single "conversation surface," the user would lose:
-- clarity about which posture applies (am I thinking aloud, or committing a change?),
-- the local receipt mechanism that Panel provides via in-note status callouts,
-- and the ability to reason exploratively without accidentally locking decisions into place.
+Panel and Chat serve categorically different cognitive functions:
 
-Semantically, Panel is decision-final and Chat is decision-exploratory. Combining them would force users to either treat all thought as binding or all speech as provisional—neither is correct.
+- **Chat/Canvas externalizes open-ended thought** and supports co-authoring within or around the artifact's content — text work, idea development, reasoning across context.
+- **Panel externalizes bounded artifact-local likely intention** — what the agent hypothesizes the user may want to do with this artifact as a system artifact (its next move, role, classification, lifecycle, follow-up, or governed action).
+
+Panel is not a co-authoring surface. Panel is not a generic conversation surface. Panel is not a Canvas Suggestion Flow variant. The surfaces may coexist but cannot substitute for each other.
+
+If Panel and Chat were unified into a single "conversation surface," the user would lose:
+- the distinction between thinking aloud (Chat) and deciding what should happen to an artifact (Panel),
+- the local receipt mechanism that Panel provides via in-note status callouts,
+- and the ability to reason exploratively without those thoughts being treated as artifact lifecycle decisions.
+
+Semantically, Panel is artifact-decision-oriented and Chat is thought-externalization-oriented. Combining them would blur which cognitive mode the user is in and erode the artifact-local accountability that Panel provides.
 
 #### Chat and Automation Cannot Collapse
 
@@ -137,7 +150,7 @@ This task:
 ### Grounding in User Needs
 
 These three surfaces align with distinct user needs:
-- **Panel** supports "make an explicit move on the vault" (user need #8: preserving authorship and control).
+- **Panel** supports "discover and decide what should happen with the active artifact" and "make a confirmed move on the vault" (user need #8: preserving authorship and control).
 - **Chat** supports "externalize and manipulate thought" (user need #2: thinking outside the head).
 - **Automation** supports "the system does the small stuff without asking" (user need #4: managing commitments without mental overload).
 
