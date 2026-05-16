@@ -19,6 +19,32 @@ Interpretation note:
 - not a claim that panel behavior should stay embedded in one architectural agent forever,
 - and not a claim that event/outbox coordination is the whole long-term architecture.
 
+<!-- PANEL-INTENT-MANIFESTATION -->
+## Conceptual Role: Artifact-Local Intent Manifestation
+
+Panel is not only a checkbox executor.
+
+Panel is the artifact-local surface where the agent may manifest likely user intention for the current artifact as reviewable proposals. These proposals help the user recognize what they may want to do next — before the user has necessarily formulated that intention as an explicit command.
+
+The interaction posture is:
+
+```
+artifact state -> agent proposes likely intention -> user recognizes/corrects/confirms -> confirmed intention enters governed execution -> receipt is written near the artifact.
+```
+
+Key distinctions:
+
+- **Proposal generation is cognition/proposal/clarification.** The agent's proposals are bounded to the active catalog and artifact context. LLM output from Panel cognition is always in the proposal or clarification class; it is never promoted to governed-execution authority without an explicit human confirmation step.
+- **Execution requires explicit confirmation and governance.** Proposed actions are written back as suggested unchecked checkboxes. Governed effects do not fire until the user checks the checkbox and a subsequent runtime pass applies the gated execution path (policy, WriteGuard, idempotency, deterministic writer, receipt).
+- **Panel is artifact-local.** Proposals are bounded to the specific artifact currently open. Panel is not a generic conversation surface, not a co-authoring surface, and not a Canvas Suggestion Flow variant.
+- **Panel is proposal-oriented before confirmation and command/receipt-oriented at the execution boundary.** These two layers coexist; neither removes the other.
+
+This conceptual role is consistent with the shipped runtime contract below. The freeform path (PA2-FREEFORM) and the suggested-checkbox write-back (PA2-SUGGESTED-CHECKBOXES) are the current runtime realization of this model. The capability taxonomy section further below maps each Panel cognition path to its authority class.
+
+For the interaction-surface authority contract, see:
+- `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AUTHORITY_BOUNDARY.md`
+- `docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md`
+
 ## PanelAgent Runtime V1 (current baseline)
 - Panel should be read as the current mutation-capable interaction surface in the runtime.
 - Runtime V1 uses a fixed mapping from panel actions to follow-up events (e.g., promotion intents) and writes receipts into an in-note AI status callout; the panel stays a small working set with no history.

@@ -24,7 +24,7 @@ Panel is the runtime baseline for mutation-capable interaction in v5.5 and v6.0.
 Produces a docs section that states:
 
 1. **What Panel is, in one sentence.**
-   Proposed authority statement (to be finalized during review): "Panel is the command-oriented interaction surface where the user expresses explicit intent inside a vault note, and the system translates that intent into governed, receipt-bearing actions through the intent/event/note-writer pipeline."
+   Authority statement: "Panel is the artifact-local intent manifestation and confirmation surface where the agent may propose likely next actions for the active artifact, the user recognizes/corrects/confirms intent, and confirmed intent enters governed, receipt-bearing execution through the intent/event/note-writer pipeline."
 
 2. **What Panel is allowed to do on the user's behalf, today.**
    - Parse checked panel actions into `panel.intent.created` events.
@@ -40,7 +40,7 @@ Produces a docs section that states:
    - Carry forward intent across notes without an explicit new panel action.
 
 4. **Panel's cognitive posture.**
-   Command-oriented. The user sees the action, checks it, and is accountable for it. Panel does not externalize thinking; it executes committed intent.
+   Artifact-intent oriented. The agent surfaces likely next intentions; the user recognizes, corrects, or confirms them. Panel does not externalize open-ended thought like Chat/Canvas; it externalizes a bounded, artifact-local interpretation of what the user may want to do next. Panel is proposal-oriented before confirmation and command/receipt-oriented at the execution boundary.
 
 5. **Panel's receipt surface.**
    In-note AI status callout plus event stream (`panel.intent.created`, `panel.intent.executed`, downstream intents). Panel's receipts live where the action happened, which is a key part of why the user can trust what the system did.
@@ -52,7 +52,7 @@ Produces a docs section that states:
 
 The deliverable is a section in this file titled `## Panel Authority Boundary` that captures the six points above, plus a short "what a reviewer should be able to say out loud after reading this" paragraph.
 
-Example of the one-sentence test the task must pass: a reviewer reading the section should be able to say "Panel turns explicit in-note checkboxes into governed events and writes a receipt back into the same note" without looking at runtime code.
+Example of the one-sentence test the task must pass: a reviewer reading the section should be able to say "Panel surfaces likely artifact intentions as proposals; the user confirms; confirmed intent enters governed execution and a receipt is written back into the same note" without looking at runtime code.
 
 ## Why This Matters
 
@@ -108,7 +108,7 @@ None in this capability. If later filed, the issue should reference "Implements 
 
 ### One-Sentence Authority Statement
 
-Panel is the command-oriented interaction surface where the user expresses explicit intent inside a vault note, and the system translates that intent into governed, receipt-bearing actions through the intent/event/note-writer pipeline.
+Panel is the artifact-local intent manifestation and confirmation surface where the agent may propose likely next actions for the active artifact, the user recognizes/corrects/confirms intent, and confirmed intent enters governed, receipt-bearing execution through the intent/event/note-writer pipeline.
 
 ### What Panel Is Allowed to Do on the User's Behalf Today
 
@@ -133,7 +133,19 @@ Grounded in `docs/PANEL_AGENT.md` §Runtime V1:
 
 ### Panel's Cognitive Posture
 
-**Command-oriented.** The user sees the action, checks it, and is accountable for it. Panel does not externalize thinking; it executes committed intent. This posture is defined in `NAME_THE_THREE_INTERACTION_SURFACES.md` and applies here without modification: explicit intent, explicit action, explicit receipt.
+**Artifact-intent oriented.**
+
+Panel does not externalize open-ended thought like Chat/Canvas. Instead, it externalizes the agent's bounded interpretation of what the user may want to do with this specific artifact next.
+
+The interaction posture is:
+
+```
+artifact state -> agent proposes likely intention -> user recognizes/corrects/confirms -> confirmed intention enters governed execution -> receipt is written near the artifact.
+```
+
+Panel is therefore **proposal-oriented before confirmation** and **command/receipt-oriented at the execution boundary**.
+
+This posture is consistent with the vocabulary in `NAME_THE_THREE_INTERACTION_SURFACES.md`. The user sees proposed actions, decides whether to confirm them, and is accountable for confirmed actions. The key shift from a purely command-oriented framing: the user may not have fully formulated the intention before Panel surfaces it. Panel makes likely artifact intentions visible so the user can recognize, correct, or confirm them — rather than requiring the user to initiate a fully-formed command.
 
 ### Panel's Receipt Surface
 
@@ -150,7 +162,7 @@ Panel may consume richer cognition in the future (v6.0 Phase 3) but only as plan
 
 ### What a Reviewer Should Be Able to Say After Reading This
 
-"Panel turns explicit in-note checkboxes into governed events and writes a receipt back into the same note. The user decides; the system executes deterministically through the note-writer path. LLM reasoning informs action selection but does not bypass human confirmation for mutations."
+"Panel is the artifact-local surface where the agent surfaces likely next intentions as reviewable proposals. The user recognizes, corrects, or confirms those proposals. Only confirmed intent enters the governed execution path: policy, WriteGuard, deterministic note-writer, and receipt. LLM reasoning informs action selection and proposal generation, but does not bypass human confirmation for mutations."
 
 Panel is the primary command-oriented surface, not the exclusive authoritative intent surface. Hybrid Chat integration must preserve Panel's receipt-bearing command role while allowing Chat-originated governance-bearing intents to enter the same gated execution boundary when explicitly authorized.
 
