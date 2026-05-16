@@ -21,6 +21,7 @@ from app.observability.tracer import start_span
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
 from app.services.indexer import handle_ingest_object_created
 from app.services.companion_note import CompanionNote, scan_attachments, write_companion
+from app.settings.runtime import get_settings_bundle
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import ack_outbox, append_jsonl_outbox_event, bootstrap, poll_outbox_one, write_outbox_event
 from app.vault.paths import get_vault_inbox_dir_rel
@@ -30,6 +31,23 @@ from scripts.yaml_roundtrip import load_frontmatter
 
 logger = logging.getLogger(__name__)
 _WRITE_GUARD = OptimisticWriteGuard()
+
+_UNKNOWN_INSTANCE = "unknown"
+
+
+def _resolve_instance_id() -> str:
+    try:
+        bundle = get_settings_bundle()
+        instance = getattr(bundle, "instance", None)
+        if instance is None:
+            return _UNKNOWN_INSTANCE
+        raw = getattr(instance, "id", None)
+        if raw is None:
+            return _UNKNOWN_INSTANCE
+        resolved = str(raw).strip()
+        return resolved if resolved else _UNKNOWN_INSTANCE
+    except Exception:
+        return _UNKNOWN_INSTANCE
 _MAX_TRANSIENT_RETRY_ATTEMPTS = 3
 
 
@@ -511,7 +529,7 @@ def handle_ingest_vault_changed(
                     content_hash=text_sha256,
                     ingest_state="tracked",
                     last_ingested=datetime.now(timezone.utc).isoformat(),
-                    created_by_instance="",
+                    created_by_instance=_resolve_instance_id(),
                     attachments=scan_attachments(content),
                 ),
             )
