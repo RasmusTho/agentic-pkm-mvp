@@ -85,13 +85,13 @@ class ProposalRow:
             raise ValueError(f"Unknown affordances: {unknown!r}")
 
     def can_confirm(self) -> bool:
-        return "confirm" in self.available_affordances and self.status == "staged"
+        return "confirm" in self.available_affordances and self.status in ("staged", "corrected")
 
     def can_correct(self) -> bool:
         return "correct" in self.available_affordances and self.status == "staged"
 
     def can_reject(self) -> bool:
-        return "reject" in self.available_affordances and self.status == "staged"
+        return "reject" in self.available_affordances and self.status in ("staged", "corrected")
 
     def as_render_dict(self) -> dict:
         """Return a serialisable dict for UI layer consumption."""

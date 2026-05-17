@@ -13,9 +13,6 @@ import pytest
 from datetime import datetime, timezone
 
 from companion_ui.panel.proposal_row import (
-    PROPOSAL_AFFORDANCES,
-    PROPOSAL_STATUS_VALUES,
-    RECEIPT_OUTCOMES,
     ProposalEvidence,
     ProposalRow,
     ProposalReceipt,
@@ -97,6 +94,28 @@ class TestProposalRowAffordances:
 
     def test_staged_row_can_reject(self) -> None:
         row = make_stub_proposal_row()
+        assert row.can_reject() is True
+
+    def test_corrected_row_can_confirm(self) -> None:
+        e = ProposalEvidence("t", "c", "r")
+        row = ProposalRow(
+            proposal_id="p1",
+            artifact_id="note-a",
+            description="desc",
+            evidence=e,
+            status="corrected",
+        )
+        assert row.can_confirm() is True
+
+    def test_corrected_row_can_reject(self) -> None:
+        e = ProposalEvidence("t", "c", "r")
+        row = ProposalRow(
+            proposal_id="p1",
+            artifact_id="note-a",
+            description="desc",
+            evidence=e,
+            status="corrected",
+        )
         assert row.can_reject() is True
 
     def test_confirming_row_cannot_confirm(self) -> None:

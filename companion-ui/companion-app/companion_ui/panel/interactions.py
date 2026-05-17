@@ -18,7 +18,7 @@ Source contract: companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md :: Part 3.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -40,7 +40,7 @@ PROPOSAL_INTERACTION_STATES: set[str] = {
 _LEGAL_INTERACTION_TRANSITIONS: dict[str, set[str]] = {
     "staged":              {"confirming", "corrected", "rejected", "clarification-needed"},
     "confirming":          {"submitted", "blocked", "staged"},
-    "submitted":           set(),           # terminal in UI; runtime drives from here
+    "submitted":           {"blocked"},     # runtime may return blocked after submission
     "corrected":           {"confirming", "rejected", "correction-pending"},
     "correction-pending":  {"corrected", "rejected", "staged"},
     "rejected":            set(),           # terminal — user declined
@@ -147,7 +147,8 @@ class ProposalInteractionState:
 
     @property
     def is_terminal(self) -> bool:
-        return self.state in ("submitted", "rejected")
+        # submitted is not terminal — the runtime may still return blocked.
+        return self.state == "rejected"
 
     @property
     def awaiting_runtime(self) -> bool:

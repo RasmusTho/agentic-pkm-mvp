@@ -60,11 +60,21 @@ class TestConfirmInteraction:
         s.mark_submitted()
         assert s.state == "submitted"
 
-    def test_submitted_is_terminal(self) -> None:
+    def test_submitted_is_not_terminal(self) -> None:
+        # submitted awaits a runtime response; blocked can still arrive async.
         s = ProposalInteractionState(proposal_id="p1")
         s.confirm()
         s.mark_submitted()
-        assert s.is_terminal is True
+        assert s.is_terminal is False
+        assert s.awaiting_runtime is True
+
+    def test_submitted_can_receive_blocked_from_runtime(self) -> None:
+        s = ProposalInteractionState(proposal_id="p1")
+        s.confirm()
+        s.mark_submitted()
+        s.mark_blocked()
+        assert s.state == "blocked"
+        assert s.is_terminal is False
 
     def test_confirm_from_non_staged_raises(self) -> None:
         s = ProposalInteractionState(proposal_id="p1", state="rejected")
