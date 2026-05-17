@@ -232,19 +232,21 @@ The write-back boundary is the contract between Companion UI and the runtime at 
 
 ### Two Approaches Compared
 
-Two confirmation write-back approaches are viable for Companion UI:
+Two confirmation write-back approaches are compared. **Direct Companion UI vault write-back is not viable under this contract** — the UI must not write vault files directly. Any checkbox-compatible projection must be performed by the runtime through the governed write path.
 
-#### Approach 1: Checkbox write-back + watcher re-run
+#### Approach 1: Runtime-mediated checkbox projection + watcher-compatible semantics
 
-The Companion UI writes a confirmed checkbox to the vault panel block, then relies on the watcher to detect the checked item and re-run the Panel runtime loop.
+The Companion UI signals confirmation to the runtime (e.g., via a lightweight call or event). The runtime then writes the confirmed checkbox into the vault panel block through the governed write path (policy / WriteGuard / idempotency), and the watcher re-runs the Panel runtime loop on the resulting vault state.
+
+> **Important:** The Companion UI does not write to the vault directly. The runtime is the sole writer. The checkbox in the vault panel block is a runtime-produced projection of the confirmed intent, not a UI-produced write.
 
 **Strengths:**
-- Preserves full Obsidian-compatible semantics (the checkbox is the canonical confirmation).
+- Preserves full Obsidian-compatible semantics (the checkbox in vault is the canonical confirmation artifact).
 - Durable vault-visible projection is identical to the CLI flow.
-- No new endpoint required.
+- No new high-level endpoint required beyond a thin runtime notification.
 
 **Weaknesses:**
-- Confirmation latency depends on watcher cadence.
+- Confirmation latency depends on watcher cadence after the runtime write.
 - Companion UI has no direct feedback loop about execution progress or outcome.
 - The UI cannot distinguish "waiting for watcher" from "watcher failed" without additional status polling.
 - Same-turn execution of newly generated proposals is not supported (which is correct by constraint, but the latency is higher).
@@ -361,7 +363,7 @@ The following acceptance criteria map directly to issues #995 and #996.
 
 ### Confirmation write-back contract (#996)
 
-- [x] Contract compares checkbox write-back + watcher re-run versus dedicated confirm endpoint.
+- [x] Contract compares runtime-mediated checkbox projection + watcher-compatible semantics versus dedicated confirm endpoint, and states that direct Companion UI vault write-back is not viable.
 - [x] Contract records the proposed default (dedicated confirm endpoint) and rationale.
 - [x] Contract states confirmation means the user has recognized, corrected, or accepted an agent-manifested artifact-local intention.
 - [x] Contract states UI performs no direct vault I/O.
