@@ -129,7 +129,7 @@ Grounded in `docs/PANEL_AGENT.md` §Runtime V1:
 - Act on unchecked or ambiguous panel items without first surfacing them as suggested checkboxes for explicit human confirmation.
 - Use LLM reasoning as the sole basis for a mutation; every mutation flows through policy, validation, and the deterministic writer path. See `STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md` for the invariant that governs this constraint.
 - Carry forward intent across notes without an explicit new panel action on the target note.
-- Execute actions the user has not explicitly checked, except for freeform catalog-driven proposals that are written back as suggested (unchecked) checkboxes first.
+- Execute actions the user has not explicitly checked. Freeform catalog-driven proposals (including AI-generated proposals from `AI-instruktion` when `AI-åtgärder` is empty) are always written back as suggested unchecked checkboxes for human review and do not execute in the same runtime pass. See `docs/PANEL_AGENT.md :: PA2-OPTION-B` for the accepted decision.
 
 ### Panel's Cognitive Posture
 
