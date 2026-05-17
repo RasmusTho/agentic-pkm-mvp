@@ -247,3 +247,34 @@ class TestGovernanceBoundary:
         # canvas_writer may appear in docstring explanation; ensure it is not imported
         assert "import canvas_writer" not in src
         assert "canvas_writer." not in src
+
+
+# ---------------------------------------------------------------------------
+# Top-level AC entry points — exact Verify: targets from issue #869
+# ---------------------------------------------------------------------------
+
+def test_suggested_insertion_staged_styling() -> None:
+    """AC: <ins> element renders with correct staging attributes (amber colour hint)."""
+    t = TestSuggestedInsertionStagedStyling()
+    t.test_suggested_insertion_staged_styling()
+    t.test_staged_render_dict_element_is_ins()
+    t.test_staged_render_dict_data_state()
+
+
+def test_suggested_insertion_state_transitions() -> None:
+    """AC: data-state transitions staged→applied on apply; staged→discarded on discard."""
+    t = TestSuggestedInsertionStateTransitions()
+    t.test_suggested_insertion_state_transitions_apply()
+    t.test_suggested_insertion_state_transitions_discard()
+
+
+def test_suggested_insertion_receipt_populated() -> None:
+    """AC: data-receipt populated after apply; aria-label includes anchor reference."""
+    t = TestSuggestedInsertionReceiptPopulated()
+    t.test_suggested_insertion_receipt_populated()
+    t.test_aria_label_includes_anchor()
+
+
+def test_suggested_insertion_discarded_removed() -> None:
+    """AC: discarded state removes element from DOM (is_visible=False)."""
+    TestSuggestedInsertionDiscardedRemoved().test_suggested_insertion_discarded_removed()

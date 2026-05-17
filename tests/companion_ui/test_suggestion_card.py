@@ -228,3 +228,31 @@ class TestNoBoundaryCrossing:
         # canvas_writer may appear in docstring explanation; ensure it is not imported
         assert "import canvas_writer" not in src
         assert "canvas_writer." not in src
+
+
+# ---------------------------------------------------------------------------
+# Top-level AC entry points — exact Verify: targets from issue #868
+# ---------------------------------------------------------------------------
+
+def test_suggestion_card_body_variant_renders_apply_button() -> None:
+    """AC: body variant renders Apply button (suggestion.apply intent)."""
+    TestSuggestionCardBodyVariant().test_suggestion_card_body_variant_renders_apply_button()
+
+
+def test_governance_variant_has_no_apply_button() -> None:
+    """AC: governance variant has no Apply button in DOM."""
+    t = TestGovernanceVariantHasNoApplyButton()
+    t.test_governance_variant_has_no_apply_button()
+    t.test_governance_render_dict_no_apply()
+
+
+def test_blocked_variant_is_alert_role() -> None:
+    """AC: blocked variant carries role='alert' and denial reason."""
+    t = TestBlockedVariantIsAlertRole()
+    t.test_blocked_variant_is_alert_role()
+    t.test_blocked_variant_carries_denial_reason()
+
+
+def test_suggestion_id_consistency() -> None:
+    """AC: data-suggestion-id matches between card and SuggestedInsertion block."""
+    TestSuggestionIdConsistency().test_suggestion_id_consistency()

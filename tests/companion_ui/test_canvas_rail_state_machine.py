@@ -279,3 +279,52 @@ class TestNoBoundaryCrossing:
         src = open(mod.__file__).read()
         assert "WriteGuard" not in src
         assert "SessionLogWriter" not in src
+
+
+# ---------------------------------------------------------------------------
+# Top-level AC entry points — exact Verify: targets from issue #870
+# ---------------------------------------------------------------------------
+
+def test_all_states_defined() -> None:
+    """AC: state machine reflects all 9 canonical states."""
+    TestAllStatesDefined().test_all_states_defined()
+
+
+def test_canonical_state_names_used() -> None:
+    """AC: internal state names use canonical snake_case; DOM aliases are rendering-only."""
+    t = TestCanonicalStateNamesUsed()
+    t.test_state_machine_state_property_returns_canonical()
+    t.test_dom_alias_property_returns_alias()
+    t.test_unknown_initial_state_raises()
+    t.test_unknown_transition_target_raises()
+
+
+def test_illegal_transitions_rejected() -> None:
+    """AC: illegal transitions including governance→apply and staged→terminal are rejected."""
+    t = TestIllegalTransitionsRejected()
+    t.test_governance_cannot_enter_apply_pending()
+    t.test_staged_body_cannot_jump_to_applied()
+    t.test_staged_governance_cannot_jump_to_idle()
+
+
+def test_error_paths_return_to_staged() -> None:
+    """AC: error paths return to the matching staged state."""
+    t = TestErrorPathsReturnToStaged()
+    t.test_apply_error_returns_to_staged_body()
+    t.test_governance_error_returns_to_staged_governance()
+
+
+def test_governance_receipt_returns_to_idle() -> None:
+    """AC: governance_pending returns to idle when a receipt is returned."""
+    t = TestGovernanceReceiptReturnsToIdle()
+    t.test_governance_pending_to_idle()
+    t.test_full_governance_lane()
+
+
+def test_terminal_states_locked() -> None:
+    """AC: terminal presentation states prevent further action."""
+    t = TestTerminalStatesLocked()
+    t.test_applied_only_allows_idle()
+    t.test_discarded_only_allows_idle()
+    t.test_blocked_only_allows_idle()
+    t.test_applied_cannot_transition_to_staged()
