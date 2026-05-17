@@ -420,6 +420,16 @@ Open `Companion UI Wireframes.html` in a browser and navigate the canvas. Scroll
 
 ---
 
+## Governance status
+
+**Crossing:** A (pre-governance)
+
+This package was archived before the design handoff governance chain was established in [`companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md`](../../../companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md). It is explicitly exempt from retroactive maturity-checklist completion. The maturity checklist (Crossing B) and the associated required files (`implementation-contracts.md`, `authority-boundaries.md`, `open-questions.md`) do not apply to this package retroactively. The package remains a valid exploration archive.
+
+Future work: a Crossing B review may be initiated as a separate task if this package is nominated for promotion to a normalized spec.
+
+---
+
 ## Prompt to paste into Claude Code
 
 Paste this at the start of your Claude Code session:
