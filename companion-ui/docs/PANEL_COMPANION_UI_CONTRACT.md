@@ -379,13 +379,28 @@ The following acceptance criteria map directly to issues #995 and #996.
 
 ## Follow-Up Recommendations
 
-After this contract is accepted, the following implementation issues are recommended:
+### Delivered foundations
 
-1. **Panel render model / component shell.** Create a Companion UI Panel component shell that renders the Panel surface states (idle, running, proposals-staged, etc.) against a stub data model. No runtime integration yet.
-2. **Panel proposal row / status rendering.** Implement the proposal row component (description, provenance visibility, confirm/correct/reject affordances) and the status/receipt display.
-3. **Panel confirm / correct / reject affordances.** Implement the confirmation interaction: explicit per-proposal confirm, correct, and reject actions.
-4. **Panel confirmation endpoint / API contract.** Create a bounded implementation issue for the runtime confirm endpoint. Define the request/response schema, governed execution wiring, and receipt mapping.
-5. **Durable vault-visible projection mapping.** Verify that confirmation via Companion UI produces the same vault-visible receipt and checkbox state as the CLI/watcher flow.
+The following items from the original recommendations are delivered:
+
+1. **Panel render model / component shell** — model and component shell delivered by #1039 / PR #1044; visual shell stub delivered by #1045 / PR #1046.
+2. **Panel proposal row / status rendering model** — delivered by #1040 / PR #1044.
+3. **Panel confirm / correct / reject interaction state model** — delivered by #1041 / PR #1044.
+
+### Still-pending production UI work
+
+The following production UI items are not yet implemented and are deferred until needed:
+
+- Production visual component integration (if/when required).
+- Styling and design-system integration.
+- Real data loading from runtime state.
+
+### Still-pending runtime/projection work
+
+The following items remain pending — spec/contract only, implementation deferred:
+
+- **Panel confirmation endpoint implementation** — based on `companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md`. Create a bounded implementation issue for the runtime confirm endpoint: request/response schema, governed execution wiring, and receipt mapping.
+- **Runtime-mediated durable vault-visible projection implementation** — based on `companion-ui/docs/PANEL_DURABLE_PROJECTION_MAPPING.md`. Verify that confirmation via Companion UI produces the same vault-visible receipt and checkbox state as the CLI/watcher flow.
 
 ---
 
