@@ -25,6 +25,10 @@ class SameTurnExecutionError(RuntimeError):
     pass
 
 
+class UnknownProposalError(LookupError):
+    pass
+
+
 @dataclass
 class StagedProposal:
     artifact_id: str
@@ -135,14 +139,7 @@ class PanelConfirmationService:
 
         proposal = self._proposals.get(request.proposal_id)
         if proposal is None:
-            return ConfirmResponse(
-                proposal_id=request.proposal_id,
-                artifact_id=request.artifact_id,
-                status="error",
-                outcome="error",
-                error="unknown_proposal",
-                idempotency_key=request.idempotency_key,
-            )
+            raise UnknownProposalError(request.proposal_id)
 
         if proposal.artifact_id != request.artifact_id:
             raise ValueError("proposal does not belong to artifact_id")
@@ -177,6 +174,12 @@ class PanelConfirmationService:
             )
             self._idempotency.set(request.idempotency_key, resp)
             return resp
+
+        if request.correction and request.correction.enabled:
+            raise ValueError(
+                "correction.enabled=true is not supported in this slice — "
+                "corrected confirmations are not yet implemented"
+            )
 
         import app.panel.confirmation as _self_mod
 
@@ -217,6 +220,7 @@ __all__ = [
     "Receipt",
     "SameTurnExecutionError",
     "StagedProposal",
+    "UnknownProposalError",
     "_idempotency_store",
     "_proposal_store",
     "_service",

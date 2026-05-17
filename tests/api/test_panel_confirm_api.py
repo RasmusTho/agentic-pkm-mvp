@@ -145,11 +145,10 @@ def test_panel_confirm_endpoint_rejects_invalid_action(client: TestClient) -> No
 
 
 def test_panel_confirm_endpoint_rejects_unknown_proposal_id(client: TestClient) -> None:
-    # No proposal staged — proposal_id is unknown
+    # No proposal staged — proposal_id is unknown; contract requires 4xx
     resp = client.post("/api/panel/confirm", json=_valid_body(proposal_id="nonexistent"))
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["error"] == "unknown_proposal"
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["error"] == "unknown_proposal"
 
 
 def test_panel_confirm_endpoint_blocked_on_writeguard(client: TestClient) -> None:
