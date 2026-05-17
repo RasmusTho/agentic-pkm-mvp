@@ -73,6 +73,11 @@ try:
 except ImportError:
     canvas_router = None
 
+try:
+    from app.api.routes.panel import router as panel_router
+except ImportError:
+    panel_router = None
+
 static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
 logger = logging.getLogger(__name__)
 
@@ -170,6 +175,8 @@ def _create_app() -> FastAPI:
         application.include_router(agent_router)
     if canvas_router is not None:
         application.include_router(canvas_router, prefix="/api")
+    if panel_router is not None:
+        application.include_router(panel_router, prefix="/api")
     return application
 
 
