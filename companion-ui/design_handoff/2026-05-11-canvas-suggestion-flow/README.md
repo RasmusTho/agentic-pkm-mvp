@@ -39,6 +39,18 @@ See `Canvas Suggestion Flow.html §13` for the full design-vs-contract split. Hi
 
 See `companion-ui/companion-app/canvas_suggestion_flow.html` for the staged prototype.
 
+## Governance status
+
+**Crossing:** B+ (normalized spec exists)
+
+This package was archived before the design handoff governance chain was established in [`companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md`](../../docs/DESIGN_HANDOFF_GOVERNANCE.md). It is pre-governance for the purposes of retroactive maturity-checklist completion; however, a normalized spec has since been authored and is authoritative:
+
+**Normalized spec:** [`companion-ui/docs/CANVAS_SUGGESTION_FLOW.md`](../../docs/CANVAS_SUGGESTION_FLOW.md)
+
+Because the normalized spec exists, this package is effectively at Crossing B+ — it has cleared the handoff→normalized-spec crossing. Implementation issues derived from this package (#868–#874) reference the normalized spec, not this design archive. Do not modify the implementation issues via this package.
+
+---
+
 ## Related docs
 
 - `companion-ui/docs/OVERLAY_GRAMMAR.md`
