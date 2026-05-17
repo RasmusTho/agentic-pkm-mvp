@@ -1,7 +1,7 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency guardrails); v5.6 delivery line closed; v6 is the active design and planning direction. Post-v5.6 follow-ups are tracked separately; see `docs/STATUS.md#version-framing-consistency-note` for the authoritative framing map.
+State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency guardrails); v5.6 delivery line closed; v6.0 seams baseline shipped at capability-seam level; broader v6 runtime/product consumption is v6.1+. Post-v5.6 follow-ups are tracked separately; see `docs/STATUS.md#version-framing-consistency-note` for the authoritative framing map.
 Doc role: Core SoT
 Authority: Canonical map of document roles and review status for the current repo; use it to determine whether a document is Core SoT, Reference, Plan, or Historical.
-# Documentation Review Index — SoT v5.5 baseline + v6 active planning
+# Documentation Review Index — SoT v5.5 baseline + v6.0 seams shipped; v6.1+ broader consumption
 
 Central map of active and archived documentation artifacts in this repo. Use this index before treating any document as decision input.
 
