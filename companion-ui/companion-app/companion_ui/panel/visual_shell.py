@@ -96,6 +96,28 @@ def _stub_receipt(artifact_id: str, outcome: str = "success") -> ProposalReceipt
 
 
 # ---------------------------------------------------------------------------
+# Interaction-aware proposal render helper
+# ---------------------------------------------------------------------------
+
+
+def _proposal_render_dict_with_interaction(
+    row: ProposalRow,
+    interaction: ProposalInteractionState,
+) -> dict:
+    """Merge ProposalRow render dict with live interaction state.
+
+    Affordances are suppressed when the interaction is awaiting the runtime or
+    is terminal, preventing duplicate confirm/reject actions on in-flight rows.
+    """
+    d = row.as_render_dict()
+    if interaction.awaiting_runtime or interaction.is_terminal:
+        d["affordances"] = {"confirm": False, "correct": False, "reject": False}
+    d["interaction_state"] = interaction.state
+    d["user_action_required"] = interaction.user_action_required
+    return d
+
+
+# ---------------------------------------------------------------------------
 # Per-state shell view builders
 # ---------------------------------------------------------------------------
 
@@ -141,7 +163,10 @@ def build_confirming_view(artifact_id: str) -> PanelShellView:
     session.get("prop-001").confirm()
     return PanelShellView(
         render=render_panel_state(rs),
-        proposals=[p.as_render_dict() for p in proposals],
+        proposals=[
+            _proposal_render_dict_with_interaction(p, session.get(p.proposal_id))
+            for p in proposals
+        ],
         interaction_summary=session.summary(),
     )
 

@@ -13,8 +13,6 @@ No runtime startup, no backend API, no vault write path.
 
 from __future__ import annotations
 
-import pytest
-
 from companion_ui.panel.visual_shell import (
     REQUIRED_PANEL_STATES,
     PanelShellView,
@@ -120,6 +118,22 @@ def test_confirming_state():
     assert prop_states["prop-001"]["state"] == "confirming"
 
 
+def test_confirming_state_disables_affordances_for_in_flight_proposal():
+    v = build_confirming_view(ARTIFACT_ID)
+    rows_by_id = {r["proposal_id"]: r for r in v.proposals}
+    # prop-001 is awaiting_runtime — all affordances must be False
+    p001 = rows_by_id["prop-001"]
+    assert p001["affordances"]["confirm"] is False, "in-flight confirm must be disabled"
+    assert p001["affordances"]["correct"] is False, "in-flight correct must be disabled"
+    assert p001["affordances"]["reject"] is False, "in-flight reject must be disabled"
+    assert p001["interaction_state"] == "confirming"
+    assert p001["user_action_required"] is False
+    # prop-002 is still staged — affordances remain available
+    p002 = rows_by_id["prop-002"]
+    assert p002["affordances"]["confirm"] is True
+    assert p002["interaction_state"] == "staged"
+
+
 def test_executing_state_has_loading_flag():
     v = build_executing_view(ARTIFACT_ID)
     assert v.render["state"] == "executing"
@@ -171,7 +185,6 @@ def test_blocked_state_custom_reason():
 
 
 def test_no_match_is_visible_failure():
-    v = build_no_match_view(ARTIFACT_ID)
     from companion_ui.panel.render_model import PanelRenderState
     rs = PanelRenderState(artifact_id=ARTIFACT_ID, state="no-match")
     assert rs.is_visible_failure is True
