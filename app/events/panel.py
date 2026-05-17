@@ -115,6 +115,18 @@ class PanelActionLoggedEvent(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict)
 
 
+class PanelActionBlockedEvent(BaseModel):
+    event: str = "panel.action.blocked"
+    version: str = "1.0"
+    timestamp: str = Field(default_factory=_now_iso)
+    trace_id: str = Field(default_factory=lambda: uuid4().hex)
+    event_id: str = Field(default_factory=lambda: uuid4().hex)
+    source: PanelEventSource = Field(
+        default_factory=lambda: PanelEventSource(trigger="runtime", component="panel_agent", sot="v5.0-runtime1")
+    )
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
 class PanelLogEntry(BaseModel):
     timestamp: str = Field(default_factory=_now_iso)
     trace_id: str | None = None
@@ -152,6 +164,7 @@ __all__ = [
     "PanelIntentExecutedEvent",
     "PanelIntentExecutedPayload",
     "PanelActionLoggedEvent",
+    "PanelActionBlockedEvent",
     "PanelLogEntry",
     "PanelLogEvent",
 ]
