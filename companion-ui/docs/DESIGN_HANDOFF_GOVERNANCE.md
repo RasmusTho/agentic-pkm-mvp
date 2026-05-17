@@ -154,3 +154,27 @@ The following are explicitly not authorized by this governance doc. They remain 
 - `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` — architecture spine
 - `docs/INTEGRATION_FABRIC_CONTRACT.md` — integration fabric contracts
 - `docs/CAPABILITY_CONTRACT_MODEL.md` — capability contract model
+
+## Crossing B review log
+
+Reviews conducted by Codex agent under issue #956 on 2026-05-17.
+
+| Package | Reviewer | Date | Verdict | Notes |
+|---|---|---|---|---|
+| `2026-05-14-runtime-proof-dashboard` | Codex / #956 | 2026-05-17 | **PROMOTE** | All 7 checklist items pass. 6 open questions triaged (5 deferred, 1 to normalized spec). Owner-doc `STATE_EXECUTION_AUTHORITY_REMAINS_GATED.md` shipped; "runtime-proof receipt contract" is proposed/not yet authored — package correctly qualifies it. |
+| `2026-05-14-context-bundle-inspector` | Codex / #956 | 2026-05-17 | **PROMOTE** | All 7 checklist items pass. 6 open questions triaged (1 deferred, 5 to normalized spec). Owner-docs `CONTEXT_BUNDLE_CONTRACT.md` and `INTERACTION_SURFACES_AND_AUTHORITY/` shipped. Implementation issue #894 blocked — does not gate design promotion. |
+| `2026-05-14-memory-candidate-review` | Codex / #956 | 2026-05-17 | **PROMOTE** | All 7 checklist items pass. 7 open questions triaged (5 deferred, 2 to normalized spec). Owner-doc `AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` shipped. Implementation issue #900 blocked — does not gate design promotion. |
+| `2026-05-14-vault-action-layer` | Codex / #956 | 2026-05-17 | **PROMOTE** | All 7 checklist items pass. 7 open questions triaged (1 deferred, 6 to normalized spec). Q1 and Q4 (provisional blockers in package) do not block: both have coherent design positions the normalized spec should confirm. Primary owner-doc `VAULT_ACTION_LAYER_CONTRACT.md` is proposed/not yet authored — expected; authoring it is the normalized-spec output. |
+
+### Handoff archive update
+
+The packages above advance from Crossing A to Crossing B as of this review. The handoff archive table should reflect:
+
+| Package | Crossing after this review |
+|---|---|
+| `2026-05-14-runtime-proof-dashboard` | B (PROMOTE — normalized spec authoring unblocked) |
+| `2026-05-14-context-bundle-inspector` | B (PROMOTE — normalized spec authoring unblocked) |
+| `2026-05-14-memory-candidate-review` | B (PROMOTE — normalized spec authoring unblocked) |
+| `2026-05-14-vault-action-layer` | B (PROMOTE — normalized spec authoring unblocked) |
+
+Downstream normalized-spec authoring issues should be created separately per the "Do not implement yet" section. Each is gated on this review completing, not on upstream implementation blockers.
