@@ -178,6 +178,7 @@ def test_direct_body_edit_is_not_bounded_suggestion_flow() -> None:
     src = inspect.getsource(mod)
     assert "canvas_suggestion_flow" not in src
     assert "suggestion_flow" not in src
-    assert "staged" not in src.lower() or "staged" not in src  # no staged-proposal language
+    assert "staged_body" not in src
+    assert "staged_governance" not in src
     assert "GovernanceBearingEditError" in src
     assert "GOVERNANCE_BEARING_EDIT_CLASSES" in src

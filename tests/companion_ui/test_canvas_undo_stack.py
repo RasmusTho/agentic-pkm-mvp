@@ -16,11 +16,7 @@ ACs from #1027:
 import pytest
 
 from companion_ui.canvas_core.active_artifact_shell import CanvasArtifactShell
-from companion_ui.canvas_core.body_edit import (
-    AppliedEdit,
-    BodyEditRequest,
-    CanvasBodyEditor,
-)
+from companion_ui.canvas_core.body_edit import AppliedEdit
 from companion_ui.canvas_core.undo_stack import CanvasUndoStack, UndoneEdit
 
 SESSION_ID = "session-undo-001"
