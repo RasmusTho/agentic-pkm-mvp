@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Panel Visual Shell — Companion UI Staging (PROTOTYPE)</title>
+  <!--
+    PROTOTYPE / STAGING — non-production.
+    Renders all 8 required Panel states with stub/in-memory data only.
+    No runtime endpoint calls.  No vault writes.  No Canvas Core imports.
+    Closes #1045.  Governed by companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md.
+
+    Surface boundary:
+      Panel in Companion UI only.
+      NOT Canvas Core.  NOT Canvas bounded suggestion flow.
+      Stub data only.  Confirm/correct/reject affordances are slots only —
+      no POST /api/panel/confirm wiring in this file.
+  -->
+  <link rel="stylesheet" href="./colors_and_type.css" />
+  <style>
+    /* ----------------------------------------------------------------
+       Panel shell variables
+    ---------------------------------------------------------------- */
+    :root {
+      --panel-bg:          #1a1a2e;
+      --panel-surface:     #16213e;
+      --panel-border:      #0f3460;
+      --panel-accent:      #e94560;
+      --panel-accent-ok:   #2ecc71;
+      --panel-accent-warn: #f39c12;
+      --panel-accent-err:  #e74c3c;
+      --panel-text:        #eaeaea;
+      --panel-muted:       #888;
+      --panel-radius:      8px;
+      --panel-gap:         16px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Inter", system-ui, sans-serif;
+      font-size: 14px;
+      background: var(--panel-bg);
+      color: var(--panel-text);
+      padding: var(--panel-gap);
+    }
+
+    h1 { font-size: 1.1rem; margin-bottom: 4px; }
+    .prototype-banner {
+      background: var(--panel-accent);
+      color: #fff;
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 4px;
+      display: inline-block;
+      margin-bottom: 20px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    /* ----------------------------------------------------------------
+       State grid
+    ---------------------------------------------------------------- */
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: var(--panel-gap);
+    }
+
+    /* ----------------------------------------------------------------
+       Panel card
+    ---------------------------------------------------------------- */
+    .panel-card {
+      background: var(--panel-surface);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--panel-radius);
+      overflow: hidden;
+    }
+
+    .panel-card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--panel-border);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--panel-muted);
+    }
+
+    .panel-card-header .state-badge {
+      font-family: monospace;
+      color: var(--panel-accent);
+    }
+
+    .panel-card-body { padding: 14px; }
+
+    /* ----------------------------------------------------------------
+       Panel state label row
+    ---------------------------------------------------------------- */
+    .panel-state-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid var(--panel-border);
+      border-top-color: var(--panel-accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .icon { font-size: 1rem; line-height: 1; }
+
+    /* ----------------------------------------------------------------
+       Artifact context bar
+    ---------------------------------------------------------------- */
+    .artifact-context {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      background: rgba(255,255,255,0.04);
+      border-radius: 4px;
+      margin-bottom: 12px;
+      font-size: 0.75rem;
+      color: var(--panel-muted);
+    }
+    .artifact-context strong { color: var(--panel-text); }
+
+    /* ----------------------------------------------------------------
+       Proposal row
+    ---------------------------------------------------------------- */
+    .proposal-list { display: flex; flex-direction: column; gap: 10px; }
+
+    .proposal-row {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      padding: 10px 12px;
+    }
+
+    .proposal-description {
+      font-size: 0.875rem;
+      margin-bottom: 6px;
+    }
+
+    .proposal-evidence {
+      font-size: 0.72rem;
+      color: var(--panel-muted);
+      margin-bottom: 8px;
+    }
+
+    .affordance-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    /* Affordance buttons are slots — no onclick wiring in this stub */
+    .btn {
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      border-radius: 4px;
+      border: 1px solid transparent;
+      cursor: not-allowed;   /* stub: not wired */
+      font-weight: 600;
+      opacity: 0.85;
+    }
+    .btn:hover { opacity: 1; }
+    .btn[data-affordance="confirm"] {
+      background: var(--panel-accent-ok);
+      color: #fff;
+      border-color: var(--panel-accent-ok);
+    }
+    .btn[data-affordance="correct"] {
+      background: transparent;
+      color: var(--panel-accent-warn);
+      border-color: var(--panel-accent-warn);
+    }
+    .btn[data-affordance="reject"] {
+      background: transparent;
+      color: var(--panel-accent-err);
+      border-color: var(--panel-accent-err);
+    }
+    .btn-stub-label {
+      font-size: 0.65rem;
+      color: var(--panel-muted);
+      margin-top: 4px;
+    }
+
+    /* ----------------------------------------------------------------
+       Receipt row
+    ---------------------------------------------------------------- */
+    .receipt-row {
+      padding: 8px 12px;
+      background: rgba(46,204,113,0.08);
+      border: 1px solid rgba(46,204,113,0.25);
+      border-radius: 6px;
+      font-size: 0.8rem;
+    }
+
+    .receipt-row.blocked {
+      background: rgba(231,76,60,0.08);
+      border-color: rgba(231,76,60,0.25);
+    }
+
+    .receipt-row .outcome-tag {
+      font-weight: 700;
+      margin-bottom: 4px;
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .outcome-tag.success { color: var(--panel-accent-ok); }
+    .outcome-tag.blocked  { color: var(--panel-accent-err); }
+
+    .receipt-row .receipt-detail { color: var(--panel-muted); font-size: 0.72rem; }
+
+    /* ----------------------------------------------------------------
+       Failure state callout (no-match / blocked)
+    ---------------------------------------------------------------- */
+    .failure-callout {
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-size: 0.82rem;
+    }
+    .failure-callout.no-match {
+      background: rgba(243,156,18,0.08);
+      border: 1px solid rgba(243,156,18,0.3);
+      color: var(--panel-accent-warn);
+    }
+    .failure-callout.blocked {
+      background: rgba(231,76,60,0.08);
+      border: 1px solid rgba(231,76,60,0.3);
+      color: var(--panel-accent-err);
+    }
+    .failure-callout .reason-label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+      opacity: 0.75;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Panel Visual Shell</h1>
+<div class="prototype-banner">Prototype — stub data — not production</div>
+<p style="color:var(--panel-muted); font-size:0.78rem; margin-bottom:24px;">
+  All 8 required Panel states rendered with in-memory stub data.
+  No runtime calls. No vault writes. Affordance buttons are visual slots only.
+  Governed by <code>companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md</code>.
+</p>
+
+<!-- ================================================================
+     STATE GRID — one card per required Panel state
+     data-panel-state mirrors the PanelRenderState.state values
+     ================================================================ -->
+<div class="state-grid">
+
+  <!-- ── 1. idle ─────────────────────────────────────────────────── -->
+  <div class="panel-card" data-panel-state="idle" data-testid="panel-state-idle">
+    <div class="panel-card-header">
+      Panel — <span class="state-badge">idle</span>
+    </div>
+    <div class="panel-card-body">
+      <div class="artifact-context">
+        <span>📄</span>
+        <strong>Projects/Q2-arch.md</strong>
+        <span style="margin-left:auto;">artifact-local</span>
+      </div>
+      <div class="panel-state-label">
+        <span class="icon">⬜</span> Panel ready
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 2. running ──────────────────────────────────────────────── -->
+  <div class="panel-card" data-panel-state="running" data-testid="panel-state-running">
+    <div class="panel-card-header">
+      Panel — <span class="state-badge">running</span>
+    </div>
+    <div class="panel-card-body">
+      <div class="artifact-context">
+        <span>📄</span>
+        <strong>Projects/Q2-arch.md</strong>
+        <span style="margin-left:auto;">artifact-local</span>
+      </div>
+      <div class="panel-state-label">
+        <span class="spinner"></span> Thinking…
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 3. proposals-staged ─────────────────────────────────────── -->
+  <div class="panel-card" data-panel-state="proposals-staged"
+       data-testid="panel-state-proposals-staged">
+    <div class="panel-card-header">
+      Panel — <span class="state-badge">proposals-staged</span>
+    </div>
+    <div class="panel-card-body">
+      <div class="artifact-context">
+        <span>📄</span>
+        <strong>Projects/Q2-arch.md</strong>
+        <span style="margin-left:auto;">artifact-local</span>
+      </div>
+      <div class="panel-state-label">
+        <span class="icon">📋</span> 2 proposal(s) ready
+      </div>
+      <div class="proposal-list">
+
+        <!-- prop-001 -->
+        <div class="proposal-row" data-proposal-id="prop-001"
+             data-testid="proposal-row">
+          <div class="proposal-description">Move note to Projects</div>
+          <div class="proposal-evidence">
+            rule · lifecycle.move ·
+            "Note has active project tag and no lifecycle classification"
+          </div>
+          <div class="affordance-row">
+            <button class="btn" data-affordance="confirm"
+                    data-testid="affordance-confirm"
+                    title="Stub — not wired to runtime">Confirm</button>
+            <button class="btn" data-affordance="correct"
+                    data-testid="affordance-correct"
+                    title="Stub — not wired to runtime">Correct</button>
+            <button class="btn" data-affordance="reject"
+                    data-testid="affordance-reject"
+                    title="Stub — not wired to runtime">Reject</button>
+          </div>
+          <div class="btn-stub-label">Stub — no POST /api/panel/confirm wired</div>
+        </div>
+
+        <!-- prop-002 -->
+        <div class="proposal-row" data-proposal-id="prop-002"
+             data-testid="proposal-row">
+          <div class="proposal-description">Add #active tag</div>
+          <div class="proposal-evidence">
+            llm · lifecycle.move ·
+            "Note has active project tag and no lifecycle classification"
+          </div>
+          <div class="affordance-row">
+            <button class="btn" data-affordance="confirm"
+                    title="Stub — not wired to runtime">Confirm</button>
+            <button class="btn" data-affordance="correct"
+                    title="Stub — not wired to runtime">Correct</button>
+            <button class="btn" data-affordance="reject"
+                    title="Stub — not wired to runtime">Reject</button>
+          </div>
+          <div class="btn-stub-label">Stub — no POST /api/panel/confirm wired</div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 4. confirming ───────────────────────────────────────────── -->
+  <div class="panel-card" data-panel-state="confirming"
+       data-testid="panel-state-confirming">
+    <div class="panel-card-header">
+      Panel — <span class="state-badge">confirming</span>
+    </div>
+    <div class="panel-card-body">
+      <div class="artifact-context">
+        <span>📄</span>
+        <strong>Projects/Q2-arch.md</strong>
+        <span style="margin-left:auto;">artifact-local</span>
+      </div>
+      <div class="panel-state-label">
+        <span class="spinner"></span> Confirming…
+      </div>
+      <div class="proposal-list">
+        <div class="proposal-row" data-proposal-id="prop-001"
+             data-interaction-state="confirming">
+          <div class="proposal-description">Move note to Projects</div>
+          <div class="proposal-evidence">
+            rule · lifecycle.move · awaiting runtime response
+          </div>
+          <div class="affordance-row">
+            <button class="btn" data-affordance="confirm" disabled>Confirm</button>
+            <button class="btn" data-affordance="correct" disabled>Correct</button>
+            <button class="btn" data-affordance="reject" disabled>Reject</button>
+          </div>
+          <div class="btn-stub-label">Stub — awaiting runtime (simulated)</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 5. executing ────────────────────────────────────────────── -->
+  <div class="panel-card" data-panel-state="executing"
+       data-testid="panel-state-executing">
+    <div class="panel-card-header">
+      Panel — <span class="state-badge">executing</span>
+    </div>
+    <div class="panel-card-body">
+      <div class="artifact-context">
+        <span>📄</span>
+        <strong>Projects/Q2-arch.md</strong>
+        <span style="margin-left:auto;">artifact-local</span>
+      </div>
+      <div class="panel-state-label">
+        <span class="spinner"></span> Executing…
+      </div>
+      <p style="font-size:0.78rem; color:var(--panel-muted); margin-top:8px;">
+        Runtime is applying governed vault write.
+        Companion UI does not write vault files directly.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── 6. receipt-displayed ────────────────────────────────────── -->
+  <div class="panel-card" data-panel-state="receipt-displayed"
+       data-testid="panel-state-receipt-displayed">
+    <div class="panel-card-header">
+      Panel — <span class="state-badge">receipt-displayed</span>
+    </div>
+    <div class="panel-card-body">
+      <div class="artifact-context">
+        <span>📄</span>
+        <strong>Projects/Q2-arch.md</strong>
+        <span style="margin-left:auto;">artifact-local</span>
+      </div>
+      <div class="panel-state-label">
+        <span class="icon">✅</span> Done — see receipt
+      </div>
+      <div class="receipt-row" data-testid="receipt-row">
+        <div class="outcome-tag success">success</div>
+        <div>prop-001 · lifecycle.move</div>
+        <div class="receipt-detail">
+          Note moved to Projects/Q2-arch.md · 2026-05-17T12:00:00Z
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 7. no-match ─────────────────────────────────────────────── -->
+  <div class="panel-card" data-panel-state="no-match"
+       data-testid="panel-state-no-match">
+    <div class="panel-card-header">
+      Panel — <span class="state-badge">no-match</span>
+    </div>
+    <div class="panel-card-body">
+      <div class="artifact-context">
+        <span>📄</span>
+        <strong>Projects/Q2-arch.md</strong>
+        <span style="margin-left:auto;">artifact-local</span>
+      </div>
+      <div class="panel-state-label">
+        <span class="icon">🔍</span> No proposals for this note
+      </div>
+      <div class="failure-callout no-match" data-testid="failure-callout-no-match">
+        <div class="reason-label">Reason</div>
+        Panel ran but found no actionable proposals for this note.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 8. blocked ──────────────────────────────────────────────── -->
+  <div class="panel-card" data-panel-state="blocked"
+       data-testid="panel-state-blocked">
+    <div class="panel-card-header">
+      Panel — <span class="state-badge">blocked</span>
+    </div>
+    <div class="panel-card-body">
+      <div class="artifact-context">
+        <span>📄</span>
+        <strong>Projects/Q2-arch.md</strong>
+        <span style="margin-left:auto;">artifact-local</span>
+      </div>
+      <div class="panel-state-label">
+        <span class="icon">🚫</span> Blocked
+      </div>
+      <div class="failure-callout blocked" data-testid="failure-callout-blocked">
+        <div class="reason-label">Reason</div>
+        Execution blocked: WriteGuard denied (tag allowlist).
+      </div>
+      <div class="receipt-row blocked" style="margin-top:10px;" data-testid="receipt-row">
+        <div class="outcome-tag blocked">blocked</div>
+        <div>prop-001 · lifecycle.move</div>
+        <div class="receipt-detail">
+          2026-05-17T12:00:00Z · Runtime receipt (stub)
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /state-grid -->
+
+</body>
+</html>
