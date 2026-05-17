@@ -87,13 +87,13 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 - v4.10 — locked Reality-MVP baseline (foundation only).
 - v5.0 — PanelAgent Runtime V1 baseline on top of v4.10.
 - v5.x — **SoT delivery line** (v5.5 locked baseline plus delivered v5.6 enablement); v5.6 is closed. Unresolved work is post-v5.6 follow-up unless an owner issue reclassifies it.
-- v6 — **active design and planning direction**; target operating model under active design but not yet runtime baseline. Governing docs: `docs/ROADMAP.md`, `docs/plans/V60_ARCHITECTURE_TARGET.md`, `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`. See `docs/STATUS.md#version-framing-consistency-note` for the authoritative framing map.
+- v6.0 seams — **shipped at capability-seam level** (orientation/resurfacing/commitment-domain/context-dimensions runtimes plus closed capability spec dirs); broader v6 runtime/product consumption is v6.1+. Governing docs: `docs/ROADMAP.md`, `docs/plans/V60_ARCHITECTURE_TARGET.md`, `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`. See `docs/STATUS.md#version-framing-consistency-note` for the authoritative framing map.
 
 ## Root and Repo Docs
 - `docs/EMBEDDINGS.md` — Normative embeddings spec (identity, guardrails, rebuild policy).
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| README.md | Top-level overview | Aligned (forward line v5.x) | 2026-04-02 | v5.5 baseline quickstart + invariants; points readers to DOCS_INDEX/STATUS/ARCHITECTURE and the wider active docs set. |
+| README.md | Top-level overview | Aligned (v6.0 seams shipped; v6.1+ framing) | 2026-05-17 | v5.5 baseline quickstart + invariants; v6.0 seams baseline shipped; broader v6 consumption is v6.1+; points readers to DOCS_INDEX/STATUS/ARCHITECTURE and the wider active docs set. |
 | docs/archive/docs-refactor/DOCS_REFACTOR_PLAN.md | Documentation simplification plan | Legacy (archived) | 2026-03-14 | Archived planning record for the 2026 docs cleanup effort; no longer an active decision surface. |
 | docs/archive/docs-refactor/DOCS_SECOND_WAVE_CLEANUP.md | Second-wave cleanup matrix | Legacy (archived) | 2026-03-14 | Archived execution matrix for the completed cleanup wave. |
 | docs/archive/docs-refactor/HISTORICAL_EXTRACTION_REVIEW.md | Historical extraction review | Legacy (archived) | 2026-03-14 | Archived extraction review used during the historical-doc cleanup pass. |
