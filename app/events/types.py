@@ -69,7 +69,9 @@ PROMOTE_SKIP_MOVE = "promote.skip.move"
 
 PANEL_INTENT_CREATED = "panel.intent.created"
 PANEL_INTENT_EXECUTED = "panel.intent.executed"
+PANEL_ACTION_TRIGGERED = "panel.action.triggered"
 PANEL_ACTION_LOGGED = "panel.action.logged"
+PANEL_ACTION_BLOCKED = "panel.action.blocked"
 PANEL_LOG_CREATED = "panel.log.created"
 PANEL_SCAN_REQUESTED = "panel.scan.requested"
 
@@ -145,7 +147,9 @@ __all__ = [
     "PROMOTE_SKIP_MOVE",
     "PANEL_INTENT_CREATED",
     "PANEL_INTENT_EXECUTED",
+    "PANEL_ACTION_TRIGGERED",
     "PANEL_ACTION_LOGGED",
+    "PANEL_ACTION_BLOCKED",
     "PANEL_LOG_CREATED",
     "PANEL_SCAN_REQUESTED",
     "NOTE_MOVE_WORKBENCH",
