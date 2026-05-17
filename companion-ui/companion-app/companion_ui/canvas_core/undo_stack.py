@@ -19,6 +19,15 @@ from companion_ui.canvas_core.active_artifact_shell import CanvasArtifactShell
 from companion_ui.canvas_core.body_edit import AppliedEdit
 
 
+class UndoDivergenceError(RuntimeError):
+    """Raised when undo cannot safely revert because the body has diverged.
+
+    The body has changed since the assistant edit was applied (e.g., a user
+    keystroke landed after the edit).  Silently overwriting user work is
+    unsafe; the caller must surface this as a conflict before proceeding.
+    """
+
+
 @dataclass
 class UndoneEdit:
     """Provenance record for a rolled-back assistant body edit.
@@ -95,6 +104,9 @@ class CanvasUndoStack:
         Raises:
             IndexError: nothing to undo.
             ValueError: shell artifact_id does not match stack scope.
+            UndoDivergenceError: the body has changed since the edit was applied
+                (e.g., an intervening user keystroke); reverts the pop so the
+                edit remains on the stack and the caller can surface the conflict.
         """
         if not self._applied:
             raise IndexError("Nothing to undo: the Canvas undo stack is empty.")
@@ -104,6 +116,14 @@ class CanvasUndoStack:
                 f"stack artifact_id {self._artifact_id!r}."
             )
         edit = self._applied.pop()
+        if shell.body != edit.body_after:
+            self._applied.append(edit)
+            raise UndoDivergenceError(
+                f"Cannot undo edit {edit.edit_id!r}: the current body differs from the "
+                "body after the assistant edit was applied. An intervening change (e.g., "
+                "a user keystroke) may have landed. Surface this as a conflict before "
+                "proceeding with undo."
+            )
         shell.body = edit.body_before
         undone = UndoneEdit(
             undo_id=str(uuid4()),
@@ -115,4 +135,4 @@ class CanvasUndoStack:
         return undone
 
 
-__all__ = ["CanvasUndoStack", "UndoneEdit"]
+__all__ = ["CanvasUndoStack", "UndoDivergenceError", "UndoneEdit"]

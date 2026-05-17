@@ -17,7 +17,7 @@ import pytest
 
 from companion_ui.canvas_core.active_artifact_shell import CanvasArtifactShell
 from companion_ui.canvas_core.body_edit import AppliedEdit
-from companion_ui.canvas_core.undo_stack import CanvasUndoStack, UndoneEdit
+from companion_ui.canvas_core.undo_stack import CanvasUndoStack, UndoDivergenceError, UndoneEdit
 
 SESSION_ID = "session-undo-001"
 OTHER_SESSION_ID = "session-other-999"
@@ -196,3 +196,35 @@ def test_undo_is_not_bounded_suggestion_discard() -> None:
     # The module must not import or invoke bounded-suggestion discard logic.
     assert "SuggestionDiscard" not in src
     assert "discard_suggestion" not in src
+
+
+# ---------------------------------------------------------------------------
+# Review fix: undo surfaces conflict when body has diverged since assistant edit
+# ---------------------------------------------------------------------------
+
+
+def test_undo_raises_divergence_error_when_body_changed_after_edit() -> None:
+    shell = _active_shell(body="v1")
+    stack = CanvasUndoStack(session_id=SESSION_ID, artifact_id=ARTIFACT_ID)
+    edit = _make_edit(body_before="original", body_after="v1")
+    stack.push(edit)
+
+    shell.body = "v1 plus user keystroke"
+
+    with pytest.raises(UndoDivergenceError):
+        stack.undo(shell)
+
+    assert shell.body == "v1 plus user keystroke", "Body must not be mutated when undo diverges"
+    assert stack.can_undo, "Edit must remain on stack after divergence error"
+
+
+def test_undo_succeeds_when_body_matches_edit_after() -> None:
+    shell = _active_shell(body="v1")
+    stack = CanvasUndoStack(session_id=SESSION_ID, artifact_id=ARTIFACT_ID)
+    edit = _make_edit(body_before="original", body_after="v1")
+    stack.push(edit)
+
+    undone = stack.undo(shell)
+
+    assert shell.body == "original"
+    assert isinstance(undone, UndoneEdit)

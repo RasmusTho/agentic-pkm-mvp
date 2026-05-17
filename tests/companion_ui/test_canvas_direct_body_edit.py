@@ -18,6 +18,7 @@ import pytest
 from companion_ui.canvas_core.active_artifact_shell import CanvasArtifactShell
 from companion_ui.canvas_core.body_edit import (
     GOVERNANCE_BEARING_EDIT_CLASSES,
+    SAFE_EDIT_CLASSES,
     AppliedEdit,
     BodyEditRequest,
     CanvasBodyEditor,
@@ -182,3 +183,52 @@ def test_direct_body_edit_is_not_bounded_suggestion_flow() -> None:
     assert "staged_governance" not in src
     assert "GovernanceBearingEditError" in src
     assert "GOVERNANCE_BEARING_EDIT_CLASSES" in src
+
+
+# ---------------------------------------------------------------------------
+# Review fix: allowlist blocks ambiguous/unknown classes (not just named blocklist)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "edit_class",
+    ["unknown_class", "some_ambiguous_op", "future_class", ""],
+)
+def test_ambiguous_edit_class_is_blocked_by_allowlist(edit_class: str) -> None:
+    shell = _active_shell()
+    session = _active_session()
+    editor = CanvasBodyEditor()
+
+    request = BodyEditRequest(artifact_id=ARTIFACT_ID, new_body="should not apply", edit_class=edit_class)
+    with pytest.raises(GovernanceBearingEditError):
+        editor.apply_edit(shell, session, request, session_id=SESSION_ID)
+
+    assert shell.body == "original body"
+
+
+def test_safe_edit_classes_constant_contains_only_body() -> None:
+    assert SAFE_EDIT_CLASSES == frozenset({"body"})
+
+
+def test_governance_bearing_edit_classes_includes_classification_and_commitment() -> None:
+    assert "classification" in GOVERNANCE_BEARING_EDIT_CLASSES
+    assert "commitment_state" in GOVERNANCE_BEARING_EDIT_CLASSES
+
+
+# ---------------------------------------------------------------------------
+# Review fix: session/shell artifact binding — wrong session rejected
+# ---------------------------------------------------------------------------
+
+
+def test_body_edit_rejected_when_session_artifact_mismatches_shell() -> None:
+    shell = _active_shell()  # artifact_id = ARTIFACT_ID
+    other_artifact_id = "note-other"
+    session = CanvasSessionState(artifact_id=other_artifact_id)
+    session.transition("active")
+    editor = CanvasBodyEditor()
+
+    request = BodyEditRequest(artifact_id=ARTIFACT_ID, new_body="should not apply")
+    with pytest.raises(ValueError, match="artifact_id"):
+        editor.apply_edit(shell, session, request, session_id=SESSION_ID)
+
+    assert shell.body == "original body"

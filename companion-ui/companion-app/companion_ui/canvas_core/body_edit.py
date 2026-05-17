@@ -20,13 +20,24 @@ from companion_ui.canvas_core.active_artifact_shell import CanvasArtifactShell
 from companion_ui.canvas_core.session_state import CanvasSessionState
 
 
-# Mutation classes that are governance-bearing and must not pass through this path.
+# The only edit class that is safe for the direct Canvas body-edit path.
+# Any class not in this set is treated as governance-bearing or ambiguous and
+# is rejected — this includes all named governance-bearing classes below and
+# any future/unknown class (ambiguous-defaults-to-governance-bearing).
+SAFE_EDIT_CLASSES: frozenset[str] = frozenset({"body"})
+
+# Named mutation classes that are known to be governance-bearing.
+# Used for documentation, testing, and routing classification.  Enforcement
+# in apply_edit() uses SAFE_EDIT_CLASSES (allowlist), not this blocklist,
+# so unrecognised classes are also blocked.
 GOVERNANCE_BEARING_EDIT_CLASSES: frozenset[str] = frozenset(
     {
         "frontmatter",
+        "classification",
         "cross_note",
         "lifecycle",
         "promotion",
+        "commitment_state",
         "companion_note",
         "receipt",
         "session_log",
@@ -76,8 +87,8 @@ class CanvasBodyEditor:
 
     Enforces:
     - session must be active/user-present (delegated to CanvasSessionState),
-    - edit_class must not be governance-bearing,
-    - artifact_id must match the active shell.
+    - edit_class must be in SAFE_EDIT_CLASSES (allowlist — ambiguous classes blocked),
+    - session, shell, and request must all refer to the same artifact.
 
     Does not produce Panel receipts or governance receipts.
     Does not implement undo execution (see undo_stack module).
@@ -96,16 +107,23 @@ class CanvasBodyEditor:
 
         Raises:
             PermissionError: session is not active/user-present.
-            GovernanceBearingEditError: edit_class is governance-bearing.
-            ValueError: artifact_id mismatch.
+            GovernanceBearingEditError: edit_class is not in SAFE_EDIT_CLASSES.
+            ValueError: artifact_id mismatch between session, shell, or request.
         """
         session.assert_body_edit_allowed()
 
-        if request.edit_class in GOVERNANCE_BEARING_EDIT_CLASSES:
+        if request.edit_class not in SAFE_EDIT_CLASSES:
             raise GovernanceBearingEditError(
-                f"Edit class {request.edit_class!r} is governance-bearing and must not "
-                "be applied through the Canvas direct body-edit path. "
-                "Route through the governance-bearing escape hatch instead."
+                f"Edit class {request.edit_class!r} is not permitted on the Canvas direct "
+                "body-edit path. Only 'body' edits may be applied in place. "
+                "Route governance-bearing or ambiguous classes through the escape hatch."
+            )
+
+        if shell.artifact_id != session.artifact_id:
+            raise ValueError(
+                f"Shell artifact_id {shell.artifact_id!r} does not match "
+                f"session artifact_id {session.artifact_id!r}. "
+                "A Canvas session is bound to a single artifact."
             )
 
         if request.artifact_id != shell.artifact_id:
@@ -130,6 +148,7 @@ class CanvasBodyEditor:
 
 __all__ = [
     "GOVERNANCE_BEARING_EDIT_CLASSES",
+    "SAFE_EDIT_CLASSES",
     "AppliedEdit",
     "BodyEditRequest",
     "CanvasBodyEditor",
