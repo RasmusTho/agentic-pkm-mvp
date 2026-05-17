@@ -5,9 +5,6 @@ from __future__ import annotations
 import pathlib
 from unittest.mock import MagicMock
 
-import pytest
-
-import app.panel.confirmation as confirm_module
 from app.agents.panel.writeback import AI_STATUS_HEADER, stable_action_id
 from app.events.panel import (
     NoteRef,

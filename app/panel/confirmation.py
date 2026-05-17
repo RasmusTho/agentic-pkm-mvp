@@ -27,7 +27,7 @@ from app.agents.panel.writeback import (
 from app.events.panel import PanelIntentEvent
 from app.events.schema import make_outbox_event
 from app.outbox.events import INDEX_OUTBOX_PATH
-from app.services.outbox import append_jsonl_outbox_event
+from app.services.outbox import append_jsonl_outbox_event, coerce_outbox_event, write_outbox_event
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
 logger = logging.getLogger(__name__)
@@ -152,11 +152,22 @@ def _emit_projection_event(
         payload=payload,
         trace_id=trace_id,
     )
+    # Write to JSONL audit log
     resolved = outbox_path or _resolve_outbox_path()
     try:
         append_jsonl_outbox_event(resolved, evt, default_source="panel_agent.confirmation")
     except Exception:
-        logger.debug("projection event outbox write skipped event=%s", event_name)
+        logger.debug("projection event jsonl write skipped event=%s", event_name)
+    # Mirror to DB outbox when backend is pg (same pattern as panel_agent/runtime.py)
+    backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
+    db_url = os.getenv("DATABASE_URL") or os.getenv("DB_DSN")
+    if backend == "pg" or db_url:
+        outbox_evt = coerce_outbox_event(evt, default_source="panel_agent.confirmation")
+        if outbox_evt is not None:
+            try:
+                write_outbox_event(outbox_evt, idempotency_key=outbox_evt.event_id)
+            except Exception as exc:
+                logger.debug("projection event db outbox write skipped event=%s err=%s", event_name, exc)
 
 
 def _resolve_note_file(note_path: str | None) -> Path | None:
@@ -265,22 +276,23 @@ class PanelConfirmationService:
                 "same-turn execution is not allowed — proposal was staged in the current interaction window"
             )
 
-        if request.action == "reject":
-            _write_rejected_projection(proposal)
-            resp = ConfirmResponse(
-                proposal_id=request.proposal_id,
-                artifact_id=request.artifact_id,
-                status="rejected",
-                outcome="rejected",
-                idempotency_key=request.idempotency_key,
-                events_emitted=[],
-            )
-            self._idempotency.set(request.idempotency_key, resp)
-            return resp
-
         try:
             self._guard.assert_writes_allowed("panel.confirm")
         except WritesBlockedError as exc:
+            if request.action == "reject":
+                # Rejection is a user decision, not an execution; vault write is safe even when
+                # execution is blocked, but we still honour WriteGuard to keep the single-writer
+                # rule uniform. Skip vault write; record rejected outcome without receipt.
+                resp = ConfirmResponse(
+                    proposal_id=request.proposal_id,
+                    artifact_id=request.artifact_id,
+                    status="rejected",
+                    outcome="rejected",
+                    idempotency_key=request.idempotency_key,
+                    events_emitted=[],
+                )
+                self._idempotency.set(request.idempotency_key, resp)
+                return resp
             _write_blocked_projection(
                 proposal,
                 gate="writeguard",
@@ -305,6 +317,19 @@ class PanelConfirmationService:
                 block_reason=BlockReason(gate="writeguard", message=str(exc)),
                 idempotency_key=request.idempotency_key,
                 events_emitted=["panel.action.blocked"],
+            )
+            self._idempotency.set(request.idempotency_key, resp)
+            return resp
+
+        if request.action == "reject":
+            _write_rejected_projection(proposal)
+            resp = ConfirmResponse(
+                proposal_id=request.proposal_id,
+                artifact_id=request.artifact_id,
+                status="rejected",
+                outcome="rejected",
+                idempotency_key=request.idempotency_key,
+                events_emitted=[],
             )
             self._idempotency.set(request.idempotency_key, resp)
             return resp
