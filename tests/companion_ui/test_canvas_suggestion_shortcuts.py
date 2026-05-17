@@ -30,7 +30,7 @@ class TestShortcutActions:
             "governance.queue",
             "suggestion.discard",
             "suggestion.inspect",
-            "composer.enable",
+            "suggestion.edit",
         }
         actual_values = {a.value for a in ShortcutAction}
         assert actual_values == expected_values
@@ -48,7 +48,7 @@ class TestShortcutActions:
         assert ShortcutAction.INSPECT_SUGGESTION.value == "suggestion.inspect"
 
     def test_dismiss_rail(self) -> None:
-        assert ShortcutAction.DISMISS_RAIL.value == "composer.enable"
+        assert ShortcutAction.DISMISS_RAIL.value == "suggestion.edit"
 
 
 # ---------------------------------------------------------------------------
@@ -91,8 +91,8 @@ class TestBodyVariantActions:
 
     def test_a_applies_in_body_only(self) -> None:
         """AC: A applies suggestion in body variant only."""
-        body_sm = SuggestionShortcutMap(variant="body")
-        gov_sm = SuggestionShortcutMap(variant="governance")
+        body_sm = SuggestionShortcutMap(variant="body", rail_state="staged_body")
+        gov_sm = SuggestionShortcutMap(variant="governance", rail_state="staged_governance")
         assert body_sm.key_for(ShortcutAction.APPLY_BODY_SUGGESTION) == "A"
         assert gov_sm.key_for(ShortcutAction.APPLY_BODY_SUGGESTION) is None
 
@@ -124,9 +124,9 @@ class TestGovernanceVariantActions:
         assert ShortcutAction.APPLY_BODY_SUGGESTION not in sm.available_actions()
 
     def test_q_queues_governance_only(self) -> None:
-        """AC: Q queues governance in staged_gov only; no effect in other variants."""
-        gov_sm = SuggestionShortcutMap(variant="governance")
-        body_sm = SuggestionShortcutMap(variant="body")
+        """AC: Q queues governance in staged_governance only; no effect in other variants."""
+        gov_sm = SuggestionShortcutMap(variant="governance", rail_state="staged_governance")
+        body_sm = SuggestionShortcutMap(variant="body", rail_state="staged_body")
         assert gov_sm.key_for(ShortcutAction.QUEUE_GOVERNANCE_SUGGESTION) == "Q"
         assert body_sm.key_for(ShortcutAction.QUEUE_GOVERNANCE_SUGGESTION) is None
 
@@ -215,19 +215,19 @@ class TestTerminalStateActions:
 
 class TestKeyFor:
     def test_key_for_apply_in_body(self) -> None:
-        sm = SuggestionShortcutMap(variant="body")
+        sm = SuggestionShortcutMap(variant="body", rail_state="staged_body")
         key = sm.key_for(ShortcutAction.APPLY_BODY_SUGGESTION)
         assert key is not None
         assert isinstance(key, str)
         assert len(key) > 0
 
     def test_key_for_queue_in_governance(self) -> None:
-        sm = SuggestionShortcutMap(variant="governance")
+        sm = SuggestionShortcutMap(variant="governance", rail_state="staged_governance")
         key = sm.key_for(ShortcutAction.QUEUE_GOVERNANCE_SUGGESTION)
         assert key is not None
 
     def test_key_for_discard_in_body(self) -> None:
-        sm = SuggestionShortcutMap(variant="body")
+        sm = SuggestionShortcutMap(variant="body", rail_state="staged_body")
         key = sm.key_for(ShortcutAction.DISCARD_SUGGESTION)
         assert key is not None
 
@@ -249,8 +249,8 @@ class TestKeyFor:
 
     def test_canonical_key_bindings(self) -> None:
         """Verify canonical keys match issue #872 table."""
-        body_sm = SuggestionShortcutMap(variant="body")
-        gov_sm = SuggestionShortcutMap(variant="governance")
+        body_sm = SuggestionShortcutMap(variant="body", rail_state="staged_body")
+        gov_sm = SuggestionShortcutMap(variant="governance", rail_state="staged_governance")
         assert body_sm.key_for(ShortcutAction.APPLY_BODY_SUGGESTION) == "A"
         assert gov_sm.key_for(ShortcutAction.QUEUE_GOVERNANCE_SUGGESTION) == "Q"
         assert body_sm.key_for(ShortcutAction.DISCARD_SUGGESTION) == "D"
@@ -344,9 +344,9 @@ class TestNoBoundaryCrossing:
 # ---------------------------------------------------------------------------
 
 def test_a_applies_in_body_only() -> None:
-    """AC: A applies suggestion in body only; no effect in other states."""
-    body = SuggestionShortcutMap(variant="body")
-    gov = SuggestionShortcutMap(variant="governance")
+    """AC: A applies suggestion in staged body only; no effect in other states."""
+    body = SuggestionShortcutMap(variant="body", rail_state="staged_body")
+    gov = SuggestionShortcutMap(variant="governance", rail_state="staged_governance")
     blocked = SuggestionShortcutMap(variant="blocked")
     assert body.key_for(ShortcutAction.APPLY_BODY_SUGGESTION) == "A"
     assert gov.key_for(ShortcutAction.APPLY_BODY_SUGGESTION) is None
@@ -354,17 +354,17 @@ def test_a_applies_in_body_only() -> None:
 
 
 def test_q_queues_governance_only() -> None:
-    """AC: Q queues governance in staged_gov only."""
-    gov = SuggestionShortcutMap(variant="governance")
-    body = SuggestionShortcutMap(variant="body")
+    """AC: Q queues governance in staged_governance only; no effect elsewhere."""
+    gov = SuggestionShortcutMap(variant="governance", rail_state="staged_governance")
+    body = SuggestionShortcutMap(variant="body", rail_state="staged_body")
     assert gov.key_for(ShortcutAction.QUEUE_GOVERNANCE_SUGGESTION) == "Q"
     assert body.key_for(ShortcutAction.QUEUE_GOVERNANCE_SUGGESTION) is None
 
 
 def test_d_discards_in_staged() -> None:
-    """AC: D discards in any staged variant; no effect if blocked or terminal."""
-    body = SuggestionShortcutMap(variant="body")
-    gov = SuggestionShortcutMap(variant="governance")
+    """AC: D discards in staged variants only; no effect if blocked, terminal, or unstaged."""
+    body = SuggestionShortcutMap(variant="body", rail_state="staged_body")
+    gov = SuggestionShortcutMap(variant="governance", rail_state="staged_governance")
     blocked = SuggestionShortcutMap(variant="blocked")
     terminal = SuggestionShortcutMap(variant="body", terminal_state=True)
     assert body.key_for(ShortcutAction.DISCARD_SUGGESTION) == "D"
@@ -381,8 +381,8 @@ def test_i_focuses_suggestion() -> None:
 
 
 def test_e_enables_composer_in_thinking() -> None:
-    """AC: E re-enables composer (DISMISS_RAIL maps to composer.enable)."""
-    # E is mapped to DISMISS_RAIL / composer.enable in all variants
+    """AC: E dismisses rail / edits suggestion (DISMISS_RAIL maps to suggestion.edit)."""
+    # E is mapped to DISMISS_RAIL / suggestion.edit in all variants
     for variant in ["body", "governance", "blocked", "terminal"]:
         sm = SuggestionShortcutMap(variant=variant)
         assert sm.key_for(ShortcutAction.DISMISS_RAIL) == "E"

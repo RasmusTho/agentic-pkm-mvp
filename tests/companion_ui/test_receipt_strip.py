@@ -277,7 +277,6 @@ class TestNoBoundaryCrossing:
     def test_no_vault_write_imports(self) -> None:
         """No runtime writer symbols are imported (mentions in docstrings are OK)."""
         import companion_ui.canvas_suggestion_flow.receipt_strip as mod
-        import importlib
         # Check that none of these are importable attributes (i.e. not imported)
         assert not hasattr(mod, "WriteGuard")
         assert not hasattr(mod, "SessionLogWriter")

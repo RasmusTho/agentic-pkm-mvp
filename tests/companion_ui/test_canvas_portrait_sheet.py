@@ -11,8 +11,6 @@ Verifies:
 - No dependency on Canvas Core, Panel, backend runtime, or vault writes.
 """
 
-import pytest
-
 from companion_ui.canvas_suggestion_flow.portrait_sheet import (
     AUTO_SNAP_ON_PROPOSAL,
     FORBIDDEN_AUTO_SNAP,

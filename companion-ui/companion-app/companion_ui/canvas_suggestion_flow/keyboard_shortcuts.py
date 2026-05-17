@@ -37,7 +37,7 @@ class ShortcutAction(Enum):
     QUEUE_GOVERNANCE_SUGGESTION = "governance.queue"
     DISCARD_SUGGESTION = "suggestion.discard"
     INSPECT_SUGGESTION = "suggestion.inspect"
-    DISMISS_RAIL = "composer.enable"
+    DISMISS_RAIL = "suggestion.edit"
 
 
 # Canonical key bindings for each action (issue #872 table).
@@ -87,6 +87,11 @@ _MUTATING_ACTIONS: frozenset[ShortcutAction] = frozenset({
     ShortcutAction.DISCARD_SUGGESTION,
 })
 
+# Rail states in which a suggestion is staged and awaiting user action.
+# Mutating shortcuts (APPLY, QUEUE, DISCARD) are only offered when the rail
+# is in one of these states — matches CANVAS_SUGGESTION_FLOW.md §States.
+_STAGED_STATES: frozenset[str] = frozenset({"staged_body", "staged_governance"})
+
 
 class SuggestionShortcutMap:
     """Keyboard shortcut map for the bounded suggestion rail.
@@ -133,12 +138,14 @@ class SuggestionShortcutMap:
     def available_actions(self) -> list[ShortcutAction]:
         """Return the list of available ShortcutActions for this variant/state.
 
-        When in a terminal state, mutating shortcuts (APPLY, QUEUE, DISCARD) are
-        suppressed — only INSPECT and DISMISS remain.
+        Mutating shortcuts (APPLY, QUEUE, DISCARD) are suppressed when:
+        - the rail is in a terminal presentation state, OR
+        - the rail_state is not a staged state (idle, thinking, apply_pending, etc.)
+
+        Only INSPECT and DISMISS remain when shortcuts are gated out.
         """
         base = _VARIANT_ACTIONS[self._variant]
-        if self._terminal_state:
-            # Remove mutating actions; terminal state is read-only.
+        if self._terminal_state or self._rail_state not in _STAGED_STATES:
             base = base - _MUTATING_ACTIONS
         return sorted(base, key=lambda a: a.value)
 
