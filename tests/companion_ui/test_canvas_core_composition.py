@@ -239,14 +239,19 @@ class TestCanvasCoreComposition:
         assert recovery.reentry_state == "recovered"
         assert recovery.blocks_new_edits is False
 
-        # 12. canvas_suggestion_flow must not appear anywhere in this test module
-        # (static assertion via import guard in the module docstring and below)
-        import sys
-        loaded = set(sys.modules.keys())
-        assert not any("canvas_suggestion_flow" in name for name in loaded), (
-            "canvas_suggestion_flow was imported — this violates the Canvas Core "
-            "surface boundary. It must not be referenced in Canvas Core code."
-        )
+        # 12. canvas_core source files must not reference canvas_suggestion_flow.
+        # Checking sys.modules is unreliable in a shared test session because
+        # other test modules import canvas_suggestion_flow during collection.
+        # Source-file inspection is the correct check for the stated invariant.
+        import pathlib
+        canvas_core_dir = pathlib.Path(__file__).resolve().parents[2] / \
+            "companion-ui" / "companion-app" / "companion_ui" / "canvas_core"
+        for src_file in canvas_core_dir.glob("*.py"):
+            content = src_file.read_text()
+            assert "canvas_suggestion_flow" not in content, (
+                f"{src_file.name} references canvas_suggestion_flow — this violates "
+                "the Canvas Core surface boundary."
+            )
 
     def test_governance_bearing_edit_classes_are_routed(self) -> None:
         """Every known governance-bearing class routes away from the direct edit path."""
