@@ -193,7 +193,7 @@ Architectural reading note:
 - `panel.intent.executed` — payload `{note, panel, actions:[{id,label,checked,status,emitted_events}], executed_action_ids:[...]}` (source `panel_agent` / trigger `runtime`).
 - `panel.action.triggered` — payload `{note, panel_id, action:{id,label}, target_event}` for handled actions.
 - `panel.action.logged` — payload `{note, panel_id, action:{id,label,checked}, reason, mapping?}` for unmapped/unimplemented actions.
-- `panel.action.blocked` — payload `{note, panel_id, action_id, gate, reason, timestamp}` emitted when a confirmed action is blocked at a gate; checkbox is preserved in the working set (intention not acted upon). Delivered by #1057.
+- `panel.action.blocked` — payload `{note_uuid, note_path, gate, reason, proposal_id}` (timestamp on outbox envelope) emitted when a confirmed action is blocked at a gate; checkbox is preserved in the working set (intention not acted upon). Delivered by #1057.
 - `promote.intent.created` — payload includes `{note, panel, action, instruction, maturity}` plus `{action_id, intent_source="panel.note", note.path}`; emitted when a checked action has `intent_type: promotion`; downstream consumer uses `note.path` to patch the vault note frontmatter (for example `maturity: evergreen` plus a compatibility-mapped review posture).
 
 ## Wiring configuration
