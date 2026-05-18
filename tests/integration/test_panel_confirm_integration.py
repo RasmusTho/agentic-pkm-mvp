@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pathlib
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -227,7 +227,6 @@ def test_panel_confirm_integration_blocked_vault_and_receipt(
     mock_guard.assert_writes_allowed.side_effect = WritesBlockedError(
         "blocked", "write guard active in UAT", "panel.confirm"
     )
-    from app.write_guard import DEFAULT_WRITE_GUARD
     original_guard = confirm_module._service._guard
     confirm_module._service._guard = mock_guard
 

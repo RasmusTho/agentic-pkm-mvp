@@ -11,7 +11,6 @@ from typing import Any
 
 from companion_ui.workspace.confirm_session import (
     ArtifactPayload,
-    ConfirmOutcome,
     WorkspaceConfirmSession,
 )
 
