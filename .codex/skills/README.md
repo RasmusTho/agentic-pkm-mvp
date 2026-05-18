@@ -46,14 +46,18 @@ Conditional / maintenance path:
   - cadence-triggered: read `docs/learning-log.md` since last retro marker, cluster by upstream artifact, propose concrete edits for human review, append retro marker after human response
 - `learning-to-issue`
   - convert retrospective learnings (learning-log entries, live PR/CI divergences) into canonical bounded GitHub Issues; also normalizes raw-intake issues created outside the standard contract
+- `promote-to-test`
+  - release-channel staged workflow: move a candidate commit into the isolated test channel; runs test-scoped channel-isolation preflight, prepare, execute, and verify; produces a durable test verification receipt required by `promote-test-to-prod`; fail-closed on channel binding mismatches
+- `promote-test-to-prod`
+  - release-channel staged workflow: promote a test-verified candidate to prod/stable; requires a PASS receipt from `promote-to-test` or an explicit emergency bypass receipt with operator risk note; orchestrates `prepare-promotion → execute-promotion → verify-promotion`; direct dev→prod is emergency bypass only and always produces a risk receipt
 - `prepare-promotion`
-  - release-channel operator skill: produce a promotion plan diffing `main` against `stable` with code delta, migration delta (reversible vs forward-only), config delta, and risk notes; always runs before `execute-promotion`; governed by `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md`
+  - release-channel low-level skill: produce a promotion plan diffing the candidate ref against the current stable/baseline with code delta, migration delta (reversible vs forward-only), config delta, and risk notes; used internally by the staged workflows; governed by `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md`
 - `execute-promotion`
-  - release-channel operator skill: consume a reviewed and operator-acknowledged promotion plan; move the `stable` ref, apply migrations to the prod DB, restart the prod process; always follow with `verify-promotion`
+  - release-channel low-level skill: consume a reviewed and operator-acknowledged promotion plan; move the `stable` ref, apply migrations to the target DB, restart the target channel; used by `promote-test-to-prod`; always follow with `verify-promotion`
 - `verify-promotion`
-  - release-channel operator skill: verify prod is healthy after `execute-promotion` or `rollback-promotion`; runs health, status, settings-explain, and smoke checks; appends a verification receipt to the promotion plan; PASS/FAIL only
+  - release-channel low-level skill: verify a channel is healthy after `execute-promotion` or `rollback-promotion`; runs health, status, settings-explain, and smoke checks; appends a verification receipt to the promotion plan; PASS/FAIL only; used by both staged workflows
 - `rollback-promotion`
-  - release-channel operator skill: restore `stable` to `stable-prev`, reverse reversible migrations, restart prod; call after `execute-promotion` failure or `verify-promotion` FAIL; always follow with `verify-promotion`; governed by `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`
+  - release-channel low-level skill: restore `stable` to `stable-prev`, reverse reversible migrations, restart prod; real prod vault is never rewound by rollback; call after `execute-promotion` failure or `verify-promotion` FAIL; always follow with `verify-promotion`; governed by `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`
 
 ## Connected execution paths
 
@@ -67,8 +71,11 @@ Conditional / maintenance path:
   `capture-learning -> learning-to-issue` (when the signal is ready for the backlog) or `learning-retrospective -> learning-to-issue` (when batched retro signals mature into bounded issues)
 - Temporal audit path:
   `temporal-doc-governance` and, when GitHub state is involved, `backlog-reconciliation-drift-audit`
-- Release-channel promotion path:
-  `prepare-promotion -> (operator review) -> execute-promotion -> verify-promotion`; on failure: `rollback-promotion -> verify-promotion`
+- Release-channel promotion path (normal — two-stage):
+  `promote-to-test -> (test PASS receipt) -> promote-test-to-prod`
+  where `promote-test-to-prod` internally runs: `prepare-promotion -> (operator review) -> execute-promotion -> verify-promotion`; on failure: `rollback-promotion -> verify-promotion`
+- Release-channel promotion path (emergency bypass — direct dev→prod):
+  `promote-test-to-prod --bypass-test-receipt --risk-note "<reason>"` — requires written operator risk note; produces a bypass receipt instead of a test verification receipt; not the default path
 
 If multiple skills seem relevant, prefer the narrower workflow skill over the generic repo-dev skill.
 
