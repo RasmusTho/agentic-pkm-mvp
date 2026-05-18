@@ -122,40 +122,30 @@ Rules:
 
 ## 5. Current Shipped State
 
-As of 2026-05-18 (after PR #1101 merged):
+As of 2026-05-18 (after PR #1101, PR #1108 merged):
 
 | Component | State |
 |---|---|
 | Live workspace HTTP client | Shipped — `companion_ui/workspace/http_client.py` (#1071 / PR #1101) |
 | Real-note workspace dev page model | Shipped — `companion_ui/workspace/real_note_dev_page.py` (#1072 / PR #1101) |
-| Browser dev server | **Not yet shipped** |
+| Browser dev server | Shipped — `companion_ui/workspace/serve_dev_page.py` (#1103 / PR #1108) |
 | Production Companion UI | **Not yet shipped** |
 | Auth / TLS / reverse proxy for Companion UI | **Not yet shipped** |
 | PWA packaging | **Not yet shipped** |
 | Native app wrapper (Tauri, Electron, etc.) | **Not yet shipped** |
 
-Do not interpret the shipped HTTP client or page model as implying a browser server exists. They are
-Python-layer components only. No browser-accessible server is operational yet.
-
 ---
 
-## 6. Immediate Next Implementation Slice
+## 6. Next Implementation Slice
 
-**Minimal browser dev server for the real-note workspace page.**
+The minimal browser dev server shipped in PR #1108 (#1103). The browser-accessible dev page
+(`companion_ui.workspace.serve_dev_page`) is operational at `127.0.0.1:8111` (dev) by default.
 
-Scope:
+The next implementation slice has not been formally defined in this document. See `docs/ROADMAP.md`
+and `docs/STATUS.md` for current sequencing.
 
-- Wrap `RealNoteWorkspaceDevPage` (the existing page model) and the live workspace HTTP client in a
-  minimal WSGI/ASGI server.
-- Serve a browser-accessible dev page at `localhost:<port>` (default: `127.0.0.1:8111` for dev).
-- Remain dev/staging only. This is not a production UI.
-- Follow the access model: default bind is `127.0.0.1`; LAN/Tailscale bind is explicit.
-- No auth/TLS/reverse-proxy as part of this slice.
-
-For operational conventions (ports, environment variables, UAT steps), see
+For operational detail on the shipped dev server, see
 `companion-ui/docs/REAL_NOTE_WORKSPACE_DEV_PAGE.md`.
-
-The browser dev server is a separate implementation issue and is not claimed here as shipped.
 
 ---
 
