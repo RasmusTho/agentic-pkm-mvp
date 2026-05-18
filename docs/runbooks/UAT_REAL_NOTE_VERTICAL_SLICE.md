@@ -99,7 +99,6 @@ AID = stable_action_id(ACTION_LABEL)
 
 # UAT note lives inside the vault so the GET endpoint can serve it, and both
 # the confirm writeback and the artifact refresh operate on the same file.
-import shutil
 vault_uat_dir = vault / "_uat_test"
 vault_uat_dir.mkdir(exist_ok=True)
 uat_note = vault_uat_dir / "test_confirm_session.md"
@@ -163,7 +162,13 @@ try:
     print(f"CHECK 5 Vault state after confirm        PASS")
 
 finally:
-    shutil.rmtree(vault_uat_dir, ignore_errors=True)
+    # Remove only the file this run created, not the entire _uat_test directory.
+    # The operator may have pre-existing files under _uat_test; rmtree would wipe them.
+    uat_note.unlink(missing_ok=True)
+    try:
+        vault_uat_dir.rmdir()  # succeeds only if the directory is now empty
+    except OSError:
+        pass
 
 print("\n  UAT RESULT:  ALL 5 CHECKS PASSED  ✅")
 PYEOF
