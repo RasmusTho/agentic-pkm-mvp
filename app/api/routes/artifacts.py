@@ -9,7 +9,6 @@ Rejects path traversal and paths outside the configured vault root.
 from __future__ import annotations
 
 import hashlib
-import re
 from pathlib import Path
 from typing import Optional
 
