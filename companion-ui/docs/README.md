@@ -2,6 +2,9 @@
 
 Foundational documents for cognitive interaction architecture.
 
+## Product architecture and hosting
+- `COMPANION_UI_TARGET_ARCHITECTURE.md` — owner doc for Companion UI target architecture: local-first web app served by Yggdrasil, localhost/LAN/Tailscale access model, runtime API as the only vault access path, vault-boundary rules, current shipped state, browser dev server as the next slice, long-term options (PWA, desktop wrapper), non-goals. Governing issue: #1102.
+
 ## Core set
 - `SYSTEM_OVERVIEW.md`
 - `COGNITIVE_PRINCIPLES.md`
