@@ -70,17 +70,7 @@ python -m app.cli status
 
 ## 3. How to Start the Companion UI Dev Page
 
-> **No browser dev server is shipped yet.**
-> `companion_ui.workspace.serve_dev_page` does not exist. The commands below
-> are placeholders showing the intended invocation shape for when the minimal
-> browser dev server is implemented (the next implementation slice per
-> `companion-ui/docs/COMPANION_UI_TARGET_ARCHITECTURE.md` section 6). Until
-> then, run the page model directly from a script or REPL as described in the
-> inline comments below.
-
-The dev page is currently a Python page model (`RealNoteWorkspaceDevPage`).
-To run it as a local HTTP dev server, use a minimal WSGI/ASGI wrapper or
-call the model directly from a script/REPL.
+The browser dev server ships as `companion_ui.workspace.serve_dev_page` (#1103).
 
 ### Environment variables
 
@@ -90,10 +80,7 @@ call the model directly from a script/REPL.
 | `HOST`                 | `127.0.0.1`                 | Bind address for the dev server               |
 | `PORT`                 | `8111` (dev), `8112` (test), `8113` (prod) | Dev server listen port        |
 
-### Suggested Companion UI dev page ports
-
-Since there are no canonical Companion UI server ports in the repo yet, the
-following convention is suggested:
+### Companion UI dev page ports
 
 | Environment | Companion UI dev page port |
 |-------------|---------------------------|
@@ -104,23 +91,32 @@ following convention is suggested:
 ### Local-only startup (default)
 
 ```bash
-# dev page pointing at dev runtime
+cd companion-ui/companion-app
 COMPANION_API_BASE_URL=http://127.0.0.1:18001 HOST=127.0.0.1 PORT=8111 \
-  python -m companion_ui.workspace.serve_dev_page  # placeholder; adapt to your runner
+  python -m companion_ui.workspace.serve_dev_page
+```
+
+Then open:
+
+```
+http://127.0.0.1:8111/?note_path=<valid-dev-note-path>
 ```
 
 ### Explicit LAN/Tailscale startup
 
+Only use this when intentionally enabling LAN or Tailscale access.
+`HOST=0.0.0.0` must be explicit. Do not expose publicly.
+
 ```bash
-# Explicit bind to all interfaces — only do this for intentional LAN/Tailscale access
-COMPANION_API_BASE_URL=http://<mac-mini-ip>:18001 HOST=0.0.0.0 PORT=8111 \
-  python -m companion_ui.workspace.serve_dev_page  # placeholder; adapt to your runner
+cd companion-ui/companion-app
+COMPANION_API_BASE_URL=http://<host-lan-or-tailnet-ip>:18001 HOST=0.0.0.0 PORT=8111 \
+  python -m companion_ui.workspace.serve_dev_page
 ```
 
-Then from another device:
+Then from a trusted device on the same LAN or Tailnet:
 
 ```
-http://<mac-mini-lan-or-tailnet-ip>:8111/
+http://<host-lan-or-tailnet-ip>:8111/?note_path=<valid-dev-note-path>
 ```
 
 ---
@@ -171,14 +167,10 @@ targets. The runtime owns environment and vault binding.
 4. **Start the matching Companion UI dev/staging page on the matching port.**
 
    ```bash
+   cd companion-ui/companion-app
    COMPANION_API_BASE_URL=http://127.0.0.1:<api-port> PORT=<ui-port> \
-     HOST=127.0.0.1 python -m companion_ui.workspace.serve_dev_page  # placeholder; adapt to your runner
+     HOST=127.0.0.1 python -m companion_ui.workspace.serve_dev_page
    ```
-
-   > **Not yet implemented.** `companion_ui.workspace.serve_dev_page` is a
-   > placeholder for the browser dev server (next implementation slice). Until
-   > it ships, run the `RealNoteWorkspaceDevPage` model directly from a
-   > script or REPL.
 
 5. **Set the UI API base URL to the matching runtime API port.**
 
