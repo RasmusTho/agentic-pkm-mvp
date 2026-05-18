@@ -593,9 +593,11 @@ provenance:
 ai_ocr_text: "<extracted text, non-authoritative>"
 privacy: review-required
 authority:
-  source_authoritative: true   # the screenshot file
+  human_authored: true
   ai_generated_fields:
     - ai_ocr_text
+  source_authoritative: false   # the screenshot file holds source authority; this note does not
+  system_authoritative: false
   requires_review: true
 ---
 ```
@@ -619,13 +621,15 @@ extracted:
   amount: "<amount>"
   warranty_until: "2028-05-18"
 authority:
-  source_authoritative: true
-  ai_summary_authoritative: false
+  human_authored: true
   ai_generated_fields:
     - extracted.vendor
     - extracted.date
     - extracted.amount
     - extracted.warranty_until
+  source_authoritative: false   # the scan/PDF file holds source authority; this note does not
+  ai_summary_authoritative: false
+  system_authoritative: false
   requires_review: true
 ---
 ```
