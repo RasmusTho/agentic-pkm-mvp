@@ -14,7 +14,7 @@ services:
       - "18002:8000"
     environment:
       API_HEALTHCHECK_URL: http://host.docker.internal:18002/healthz
-      PKM_ENVIRONMENT: prod
+      PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
       VAULT_SYSTEM_DIR_REL: "⚙️ System"
@@ -23,7 +23,7 @@ services:
 
   worker:
     environment:
-      PKM_ENVIRONMENT: prod
+      PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
       VAULT_SYSTEM_DIR_REL: "⚙️ System"
@@ -32,7 +32,7 @@ services:
 
   watcher:
     environment:
-      PKM_ENVIRONMENT: prod
+      PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
       VAULT_SYSTEM_DIR_REL: "⚙️ System"
