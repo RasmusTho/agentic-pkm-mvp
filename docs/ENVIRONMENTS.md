@@ -14,6 +14,26 @@ Reading rule:
 - Use this document when a change touches environment-specific behavior, storage boundaries, runtime topology, write safety, rollout posture, or local bootstrap expectations.
 - Use `docs/ARCHITECTURE.md` for system structure, `docs/OPERATIONS.md` for operator procedure, `docs/TESTING.md` for verification layers, and `docs/STATUS.md` for current rollout posture.
 
+## Code vs Environment Separation
+
+Two kinds of separation govern how `dev`, `test`, and `prod` stay isolated:
+
+**Code separation** — which process runs which code:
+- Each channel runs from a dedicated checkout or worktree (see `docs/RELEASE_CHANNELS/README.md §Channel model`).
+- A `prod` process runs from a `stable`-pinned checkout; a `dev` process runs from a working branch. Separate worktrees prevent code churn in one checkout from affecting a running process in another.
+- Code separation is the responsibility of the operator and the promotion workflow, not the runtime itself.
+
+**Environment separation** — which data and config each process touches:
+- The runtime resolves environment-specific vault roots, DB names, and runtime-artifact paths through `PKM_ENVIRONMENT` (see §Runtime Control Surface).
+- `prod`: `vault/`, `app` DB, `tmp/` artifacts.
+- `dev`: `vault-dev/`, `app_dev` DB, `tmp-dev/` artifacts.
+- `test`: `vault-test/`, `app_test` DB, `tmp-test/` artifacts.
+- Environment separation is enforced by configuration, not by code path differences.
+
+**The two are orthogonal.** The environment selector controls *what data is touched*; the code ref controls *what code is running*. Both must be correct for a safe prod runtime.
+
+**Current vs future invariants.** The separation requirements in §Separation Requirements describe the current baseline. Release-channel promotion contracts (how the `stable` ref moves, how migrations apply) are owned by `docs/RELEASE_CHANNELS/README.md` and are being hardened incrementally. The current priority is establishing a sound prod baseline; full promotion-workflow automation is a later hardening step.
+
 ## Minimal Environment Model
 
 The repo uses a lightweight but explicit environment model:
