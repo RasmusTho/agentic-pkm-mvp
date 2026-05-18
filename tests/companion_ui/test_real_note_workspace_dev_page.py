@@ -245,3 +245,34 @@ def test_dev_page_load_failure_surfaces_error() -> None:
     assert state.error is not None
     assert state.shell is None
     assert page.render_fields() is None
+
+
+# ---------------------------------------------------------------------------
+# Regression: note-path-only load must not raise when runtime returns no artifact_id
+# ---------------------------------------------------------------------------
+
+
+def test_dev_page_note_path_only_load_succeeds_without_artifact_id() -> None:
+    """When no artifact_id is supplied and the runtime echoes '' back, the page
+    must not raise. It should fall back to note_path as the artifact identifier
+    so the workspace shell's non-empty artifact_id invariant is satisfied."""
+    # Simulate the runtime behaviour: artifact_id echoed as "" when not supplied
+    response_without_artifact_id = {
+        "artifact_id": "",
+        "note_path": "/vault/notes/test.md",
+        "title": "Test Note",
+        "body": "# Test Note\n\nBody.",
+        "content_hash": "abc000",
+    }
+    mock_resp = _mock_get_response(response_without_artifact_id)
+
+    with patch("httpx.get", return_value=mock_resp):
+        client = WorkspaceHttpClient(base_url="http://localhost:18001")
+        page = RealNoteWorkspaceDevPage(client)
+        state = page.load(NoteLoadIntent(note_path="/vault/notes/test.md"))
+
+    assert state.is_loaded is True, f"Expected load to succeed; error: {state.error}"
+    assert state.shell is not None
+    # Artifact ID falls back to note_path when API returns empty
+    assert state.shell.artifact_id == "/vault/notes/test.md"
+    assert state.shell.title == "Test Note"

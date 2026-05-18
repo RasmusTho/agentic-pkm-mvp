@@ -131,9 +131,18 @@ class RealNoteWorkspaceDevPage:
             self.state = DevPageState(error=str(exc))
             return self.state
 
+        # The runtime echoes artifact_id only when supplied in the request.
+        # Fall back to note_path so note-path-only loads don't fail the shell's
+        # non-empty artifact_id invariant.
+        resolved_note_path = raw.get("note_path") or intent.note_path
+        resolved_artifact_id = (
+            raw.get("artifact_id")
+            or intent.artifact_id
+            or resolved_note_path
+        )
         payload = ArtifactNotePayload(
-            artifact_id=raw.get("artifact_id", ""),
-            note_path=raw.get("note_path", intent.note_path),
+            artifact_id=resolved_artifact_id,
+            note_path=resolved_note_path,
             title=raw.get("title", ""),
             body=raw.get("body", ""),
             content_hash=raw.get("content_hash", ""),
