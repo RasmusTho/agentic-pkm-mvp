@@ -54,13 +54,14 @@ Before executing any step, confirm all four bindings are correct:
    - Classify each migration as reversible or forward-only (per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`).
    - Produce a test promotion plan at `ops/test-promotions/YYYY-MM-DD-<short-sha>.md`.
 
-5. **Test-scoped execute.** Apply migrations to `app_test` (port 15434). Restart the test compose stack (`make test-down && make test-up`). Record the test execution receipt in the plan file.
+5. **Test-scoped execute.** Apply migrations to `app_test` (port 15434). Restart the test compose stack (`make test-down && make test-up`). Before restarting, confirm `docker-compose.test.yml` declares `PKM_ENVIRONMENT: test` for all services (api, worker, watcher) — this is enforced by `tests/ops/test_release_channel_isolation.py::test_test_compose_does_not_declare_prod_environment`. If the compose file declares `prod` instead, abort and fix the compose contract before proceeding. Record the test execution receipt in the plan file.
 
-6. **Test-scoped verify.** Run `verify-promotion` against the test channel:
-   - Confirm `PKM_ENVIRONMENT=test`, vault=`TEST_VAULT_ROOT`, DB=`app_test`.
-   - Confirm Postgres test container healthy (port 15434).
-   - Run `python -m app.cli status` against test channel (requires test API base URL).
-   - Run the repo smoke gate against test config.
+6. **Test-scoped verify.** Verify directly against the test channel — do NOT call the `verify-promotion` skill, which is prod-scoped and will fail or produce a wrong result when run against a `PKM_ENVIRONMENT=test` stack:
+   - Confirm `PKM_ENVIRONMENT=test` is active in the running containers (`docker compose -p pkm-test exec api env | grep PKM_ENVIRONMENT`).
+   - Confirm vault root is `TEST_VAULT_ROOT`, not the prod vault path.
+   - Confirm Postgres test container is healthy on port 15434 (`app_test` DB).
+   - Run `python -m app.cli status` against the test API base URL (e.g. `http://localhost:18002`).
+   - Run the repo smoke gate with test-channel environment variables.
    - Confirm watcher heartbeat in test artifacts (`tmp-test/`).
 
 7. **Durable test verification receipt.** On PASS, append a receipt to the plan file:
