@@ -97,7 +97,13 @@ PROPOSAL_ID  = "prop-uat-real-001"
 ARTIFACT_ID  = "uat-art-001"
 AID = stable_action_id(ACTION_LABEL)
 
-uat_note = Path("/tmp/uat_real_note.md")
+# UAT note lives inside the vault so the GET endpoint can serve it, and both
+# the confirm writeback and the artifact refresh operate on the same file.
+import shutil
+vault_uat_dir = vault / "_uat_test"
+vault_uat_dir.mkdir(exist_ok=True)
+uat_note = vault_uat_dir / "test_confirm_session.md"
+uat_note_rel = "_uat_test/test_confirm_session.md"
 uat_note.write_text(f"# UAT Note\n- [ ] {ACTION_LABEL} <!--ai:id={AID}-->\nBody.\n", encoding="utf-8")
 
 confirm_module._proposal_store.clear()
@@ -107,7 +113,7 @@ confirm_module._proposal_store.stage(
     StagedProposal(
         artifact_id=ARTIFACT_ID,
         intent_event=PanelIntentEvent(payload=PanelIntentPayload(
-            note=NoteRef(uuid=ARTIFACT_ID, path=str(uat_note)),
+            note=NoteRef(uuid=ARTIFACT_ID, path=str(uat_note.resolve())),
             panel=PanelInfo(panel_id=PROPOSAL_ID, instruction="UAT"),
             actions=[PanelIntentAction(id=AID, label=ACTION_LABEL, checked=True)],
         )),
@@ -129,8 +135,7 @@ class RealApiStub:
     def post(self, url, *, json):
         return client.post(url, json=json).json()
     def get(self, url, *, params):
-        p = dict(params); p["note_path"] = real_note_rel
-        return client.get(url, params=p).json()
+        return client.get(url, params=params).json()
 
 with patch.object(runtime_module, "run_panel_graph", _fake_graph), \
      patch.object(runtime_module, "load_panel_action_catalog", lambda: None), \
@@ -139,21 +144,24 @@ with patch.object(runtime_module, "run_panel_graph", _fake_graph), \
     session = WorkspaceConfirmSession(http_client=RealApiStub())
     outcome = session.confirm(
         proposal_id=PROPOSAL_ID, artifact_id=ARTIFACT_ID,
-        note_path=real_note_rel, action="confirm",
+        note_path=uat_note_rel, action="confirm",
         idempotency_key="idem-uat-real-001",
     )
 
 assert outcome.status == "executed"
 print(f"CHECK 3 WorkspaceConfirmSession.confirm PASS  status={outcome.status}")
 
+# Refresh must reflect the post-confirm state of the same note that was confirmed.
 assert session.current_payload is not None
-assert session.current_payload.body == real_note.read_text(encoding="utf-8")
+assert session.current_payload.body == uat_note.read_text(encoding="utf-8")
 print(f"CHECK 4 Artifact refresh after confirm  PASS")
 
 vault_content = uat_note.read_text(encoding="utf-8")
 assert f"- [ ] {ACTION_LABEL}" not in vault_content
 assert AI_STATUS_HEADER in vault_content and "✅" in vault_content
 print(f"CHECK 5 Vault state after confirm        PASS")
+
+shutil.rmtree(vault_uat_dir, ignore_errors=True)
 
 print("\n  UAT RESULT:  ALL 5 CHECKS PASSED  ✅")
 PYEOF
