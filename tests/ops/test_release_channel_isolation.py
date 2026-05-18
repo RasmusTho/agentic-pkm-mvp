@@ -149,7 +149,6 @@ def test_test_and_prod_compose_projects_are_distinct() -> None:
       tests/ops/test_release_channel_isolation.py::test_test_and_prod_compose_projects_are_distinct
     """
     makefile_text = MAKEFILE.read_text(encoding="utf-8")
-    prod_compose_text = PROD_COMPOSE.read_text(encoding="utf-8")
 
     # Extract prod project name from Makefile — anchor to target definition
     # (start-of-line + colon) to avoid matching the .PHONY declaration.
