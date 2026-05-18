@@ -769,11 +769,12 @@ run_docker_compose() {
 }
 
 check_compose_port_conflicts() {
+  local target_services=("$@")
   local config_json
   if ! config_json=$(run_docker_compose config --format json 2>/dev/null); then
     return 0
   fi
-  CONFIG_JSON="$config_json" python - <<'PY'
+  CONFIG_JSON="$config_json" TARGET_SERVICES="${target_services[*]:-}" python - <<'PY'
 import json
 import os
 import re
@@ -787,6 +788,12 @@ try:
     config = json.loads(os.environ["CONFIG_JSON"])
 except Exception:
     sys.exit(0)
+
+target_services_raw = (os.environ.get("TARGET_SERVICES") or "").strip()
+if target_services_raw:
+    target_services = set(target_services_raw.split())
+else:
+    target_services = set()
 
 ps = subprocess.run(
     ["docker", "ps", "--format", "{{.Names}}\t{{.Ports}}"],
@@ -802,6 +809,8 @@ for line in ps.stdout.splitlines():
 
 collisions = []
 for service_name, service in (config.get("services") or {}).items():
+    if target_services and service_name not in target_services:
+        continue
     for port in service.get("ports") or []:
         published = str(port.get("published") or "").strip()
         if not published:
@@ -832,7 +841,6 @@ PY
 
 run_preflight
 start_startup_watchdog "$STARTUP_TIMEOUT_SECONDS"
-check_compose_port_conflicts
 
 llm_provider="${LLM_PROVIDER:-}"
 llm_provider=$(printf "%s" "$llm_provider" | tr '[:upper:]' '[:lower:]')
@@ -840,6 +848,17 @@ llm_requires_ollama=0
 if [ "$llm_provider" = "ollama" ]; then
   llm_requires_ollama=1
 fi
+preflight_services=(db api)
+if [ "$START_WORKER" -eq 1 ]; then
+  preflight_services+=(worker)
+fi
+if [ "$START_WATCHERS" -eq 1 ]; then
+  preflight_services+=(watcher)
+fi
+if [ "${AUTO_BOOTSTRAP:-0}" -eq 1 ] && [ "$llm_requires_ollama" -eq 1 ]; then
+  preflight_services+=(ollama)
+fi
+check_compose_port_conflicts "${preflight_services[@]}"
 
 alpha_rebuild="${ALPHA_REBUILD:-0}"
 alpha_rebuild_pull="${ALPHA_REBUILD_PULL:-0}"
