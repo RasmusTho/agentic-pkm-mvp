@@ -106,62 +106,64 @@ uat_note = vault_uat_dir / "test_confirm_session.md"
 uat_note_rel = "_uat_test/test_confirm_session.md"
 uat_note.write_text(f"# UAT Note\n- [ ] {ACTION_LABEL} <!--ai:id={AID}-->\nBody.\n", encoding="utf-8")
 
-confirm_module._proposal_store.clear()
-confirm_module._idempotency_store.clear()
-confirm_module._proposal_store.stage(
-    PROPOSAL_ID,
-    StagedProposal(
-        artifact_id=ARTIFACT_ID,
-        intent_event=PanelIntentEvent(payload=PanelIntentPayload(
-            note=NoteRef(uuid=ARTIFACT_ID, path=str(uat_note.resolve())),
-            panel=PanelInfo(panel_id=PROPOSAL_ID, instruction="UAT"),
-            actions=[PanelIntentAction(id=AID, label=ACTION_LABEL, checked=True)],
-        )),
-        proposed_at=0.0,
-    ),
-)
-
-def _fake_graph(state, **kwargs):
-    result = PanelRuntimeActionResult(id=AID, label=ACTION_LABEL, checked=True, status="triggered")
-    emitted = [make_outbox_event(event="panel.intent.executed", source="test", payload={})]
-    return PanelAgentState(
-        trace_id="uat-trace", note=state.note, panel=state.panel,
-        actions=state.actions, action_results=[result],
-        emitted_events=emitted, executed_action_ids=[AID],
-        vault_root=None, intent_event=state.intent_event,
+try:
+    confirm_module._proposal_store.clear()
+    confirm_module._idempotency_store.clear()
+    confirm_module._proposal_store.stage(
+        PROPOSAL_ID,
+        StagedProposal(
+            artifact_id=ARTIFACT_ID,
+            intent_event=PanelIntentEvent(payload=PanelIntentPayload(
+                note=NoteRef(uuid=ARTIFACT_ID, path=str(uat_note.resolve())),
+                panel=PanelInfo(panel_id=PROPOSAL_ID, instruction="UAT"),
+                actions=[PanelIntentAction(id=AID, label=ACTION_LABEL, checked=True)],
+            )),
+            proposed_at=0.0,
+        ),
     )
 
-class RealApiStub:
-    def post(self, url, *, json):
-        return client.post(url, json=json).json()
-    def get(self, url, *, params):
-        return client.get(url, params=params).json()
+    def _fake_graph(state, **kwargs):
+        result = PanelRuntimeActionResult(id=AID, label=ACTION_LABEL, checked=True, status="triggered")
+        emitted = [make_outbox_event(event="panel.intent.executed", source="test", payload={})]
+        return PanelAgentState(
+            trace_id="uat-trace", note=state.note, panel=state.panel,
+            actions=state.actions, action_results=[result],
+            emitted_events=emitted, executed_action_ids=[AID],
+            vault_root=None, intent_event=state.intent_event,
+        )
 
-with patch.object(runtime_module, "run_panel_graph", _fake_graph), \
-     patch.object(runtime_module, "load_panel_action_catalog", lambda: None), \
-     patch.object(runtime_module, "_write_db_outbox_events", lambda _: None):
+    class RealApiStub:
+        def post(self, url, *, json):
+            return client.post(url, json=json).json()
+        def get(self, url, *, params):
+            return client.get(url, params=params).json()
 
-    session = WorkspaceConfirmSession(http_client=RealApiStub())
-    outcome = session.confirm(
-        proposal_id=PROPOSAL_ID, artifact_id=ARTIFACT_ID,
-        note_path=uat_note_rel, action="confirm",
-        idempotency_key="idem-uat-real-001",
-    )
+    with patch.object(runtime_module, "run_panel_graph", _fake_graph), \
+         patch.object(runtime_module, "load_panel_action_catalog", lambda: None), \
+         patch.object(runtime_module, "_write_db_outbox_events", lambda _: None):
 
-assert outcome.status == "executed"
-print(f"CHECK 3 WorkspaceConfirmSession.confirm PASS  status={outcome.status}")
+        session = WorkspaceConfirmSession(http_client=RealApiStub())
+        outcome = session.confirm(
+            proposal_id=PROPOSAL_ID, artifact_id=ARTIFACT_ID,
+            note_path=uat_note_rel, action="confirm",
+            idempotency_key="idem-uat-real-001",
+        )
 
-# Refresh must reflect the post-confirm state of the same note that was confirmed.
-assert session.current_payload is not None
-assert session.current_payload.body == uat_note.read_text(encoding="utf-8")
-print(f"CHECK 4 Artifact refresh after confirm  PASS")
+    assert outcome.status == "executed"
+    print(f"CHECK 3 WorkspaceConfirmSession.confirm PASS  status={outcome.status}")
 
-vault_content = uat_note.read_text(encoding="utf-8")
-assert f"- [ ] {ACTION_LABEL}" not in vault_content
-assert AI_STATUS_HEADER in vault_content and "✅" in vault_content
-print(f"CHECK 5 Vault state after confirm        PASS")
+    # Refresh must reflect the post-confirm state of the same note that was confirmed.
+    assert session.current_payload is not None
+    assert session.current_payload.body == uat_note.read_text(encoding="utf-8")
+    print(f"CHECK 4 Artifact refresh after confirm  PASS")
 
-shutil.rmtree(vault_uat_dir, ignore_errors=True)
+    vault_content = uat_note.read_text(encoding="utf-8")
+    assert f"- [ ] {ACTION_LABEL}" not in vault_content
+    assert AI_STATUS_HEADER in vault_content and "✅" in vault_content
+    print(f"CHECK 5 Vault state after confirm        PASS")
+
+finally:
+    shutil.rmtree(vault_uat_dir, ignore_errors=True)
 
 print("\n  UAT RESULT:  ALL 5 CHECKS PASSED  ✅")
 PYEOF

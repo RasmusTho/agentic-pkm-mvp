@@ -70,6 +70,14 @@ python -m app.cli status
 
 ## 3. How to Start the Companion UI Dev Page
 
+> **No browser dev server is shipped yet.**
+> `companion_ui.workspace.serve_dev_page` does not exist. The commands below
+> are placeholders showing the intended invocation shape for when the minimal
+> browser dev server is implemented (the next implementation slice per
+> `companion-ui/docs/COMPANION_UI_TARGET_ARCHITECTURE.md` section 6). Until
+> then, run the page model directly from a script or REPL as described in the
+> inline comments below.
+
 The dev page is currently a Python page model (`RealNoteWorkspaceDevPage`).
 To run it as a local HTTP dev server, use a minimal WSGI/ASGI wrapper or
 call the model directly from a script/REPL.
@@ -106,7 +114,7 @@ COMPANION_API_BASE_URL=http://127.0.0.1:18001 HOST=127.0.0.1 PORT=8111 \
 ```bash
 # Explicit bind to all interfaces — only do this for intentional LAN/Tailscale access
 COMPANION_API_BASE_URL=http://<mac-mini-ip>:18001 HOST=0.0.0.0 PORT=8111 \
-  python -m companion_ui.workspace.serve_dev_page
+  python -m companion_ui.workspace.serve_dev_page  # placeholder; adapt to your runner
 ```
 
 Then from another device:
@@ -164,8 +172,13 @@ targets. The runtime owns environment and vault binding.
 
    ```bash
    COMPANION_API_BASE_URL=http://127.0.0.1:<api-port> PORT=<ui-port> \
-     HOST=127.0.0.1 python -m companion_ui.workspace.serve_dev_page
+     HOST=127.0.0.1 python -m companion_ui.workspace.serve_dev_page  # placeholder; adapt to your runner
    ```
+
+   > **Not yet implemented.** `companion_ui.workspace.serve_dev_page` is a
+   > placeholder for the browser dev server (next implementation slice). Until
+   > it ships, run the `RealNoteWorkspaceDevPage` model directly from a
+   > script or REPL.
 
 5. **Set the UI API base URL to the matching runtime API port.**
 
