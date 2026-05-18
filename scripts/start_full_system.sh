@@ -592,12 +592,39 @@ if [ -z "${START_WORKER:-}" ]; then
     START_WORKER=0
   fi
 fi
+resolve_channel_defaults() {
+  local raw_env normalized_env
+  raw_env="${PKM_ENVIRONMENT:-${ENVIRONMENT:-}}"
+  normalized_env="$(printf "%s" "$raw_env" | tr '[:upper:]' '[:lower:]' | xargs)"
+  case "$normalized_env" in
+    dev)
+      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml:docker-compose.dev.yml}"
+      COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-pkm-dev}"
+      API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18001}"
+      ;;
+    test)
+      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml:docker-compose.test.yml}"
+      COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-pkm-test}"
+      API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18002}"
+      ;;
+    prod|"")
+      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml:docker-compose.prod.yml}"
+      COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-pkm-prod}"
+      API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"
+      ;;
+    *)
+      API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"
+      ;;
+  esac
+  export COMPOSE_FILE COMPOSE_PROJECT_NAME API_BASE_URL
+}
+
 START_FLIGHT_RECORDER="${START_FLIGHT_RECORDER:-1}"
 FLIGHT_RECORDER_INTERVAL="${FLIGHT_RECORDER_INTERVAL:-5}"
 FLIGHT_RECORDER_DURATION="${FLIGHT_RECORDER_DURATION:-0}"
 VERIFY_ACTIVE="${VERIFY_ACTIVE:-0}"
 ALLOW_LEGACY_VAULT="${ALLOW_LEGACY_VAULT:-0}"
-API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"
+resolve_channel_defaults
 API_BASE_URL="${API_BASE_URL%/}"
 HEALTH_ENDPOINT="${HEALTH_ENDPOINT:-$API_BASE_URL/healthz}"
 HEALTH_MAX_ATTEMPTS="${HEALTH_MAX_ATTEMPTS:-12}"
@@ -741,8 +768,71 @@ run_docker_compose() {
   fi
 }
 
+check_compose_port_conflicts() {
+  local config_json
+  if ! config_json=$(run_docker_compose config --format json 2>/dev/null); then
+    return 0
+  fi
+  CONFIG_JSON="$config_json" python - <<'PY'
+import json
+import os
+import re
+import subprocess
+import sys
+
+project = os.environ.get("COMPOSE_PROJECT_NAME", "<default>")
+environment = os.environ.get("PKM_ENVIRONMENT") or os.environ.get("ENVIRONMENT") or "prod(default)"
+
+try:
+    config = json.loads(os.environ["CONFIG_JSON"])
+except Exception:
+    sys.exit(0)
+
+ps = subprocess.run(
+    ["docker", "ps", "--format", "{{.Names}}\t{{.Ports}}"],
+    capture_output=True,
+    text=True,
+    check=False,
+)
+running = []
+for line in ps.stdout.splitlines():
+    parts = line.split("\t", 1)
+    if len(parts) == 2:
+        running.append((parts[0], parts[1]))
+
+collisions = []
+for service_name, service in (config.get("services") or {}).items():
+    for port in service.get("ports") or []:
+        published = str(port.get("published") or "").strip()
+        if not published:
+            continue
+        pattern = re.compile(rf"(^|[^\d]){re.escape(published)}->")
+        for container_name, ports in running:
+            if container_name.startswith(f"{project}-"):
+                continue
+            if pattern.search(ports):
+                collisions.append((service_name, published, container_name))
+                break
+
+if collisions:
+    print("ERROR: Port preflight failed before compose up.", file=sys.stderr)
+    print(f"Target environment={environment}, compose project={project}", file=sys.stderr)
+    for service_name, published, owner in collisions:
+        print(
+            f"  service '{service_name}' needs host port {published}, already used by '{owner}'",
+            file=sys.stderr,
+        )
+    print("Safe next actions:", file=sys.stderr)
+    print("  - Start with the canonical env-specific target (prod/test/dev).", file=sys.stderr)
+    print("  - If owner is stale same-environment stack, stop only that project.", file=sys.stderr)
+    print("  - Do not blindly stop unrelated prod/test containers.", file=sys.stderr)
+    sys.exit(19)
+PY
+}
+
 run_preflight
 start_startup_watchdog "$STARTUP_TIMEOUT_SECONDS"
+check_compose_port_conflicts
 
 llm_provider="${LLM_PROVIDER:-}"
 llm_provider=$(printf "%s" "$llm_provider" | tr '[:upper:]' '[:lower:]')
