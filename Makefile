@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap dev-up dev-down prod-up prod-down prod-start-full test-up test-down dispatcher-init dispatcher-sync
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap dev-up dev-down prod-up prod-down prod-start-full test-start-full test-up test-down verify-test-channel verify-prod-channel dispatcher-init dispatcher-sync
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 TEST_VAULT_ROOT ?= $(PWD)/vault-test
@@ -116,11 +116,29 @@ prod-start-full: require-vault-root
 	VERIFY_RUNTIME_SERVICE_WAIT_SECONDS=60 \
 	scripts/start_full_system.sh
 
+test-start-full: require-vault-root
+	COMPOSE_FILE="docker-compose.yaml:docker-compose.test.yml" \
+	COMPOSE_PROJECT_NAME="pkm-test" \
+	PKM_ENVIRONMENT="test" \
+	VAULT_ROOT="$(VAULT_ROOT)" \
+	VERIFY_RUNTIME_SERVICE_WAIT_SECONDS=60 \
+	scripts/start_full_system.sh
+
 test-up:
 	@VAULT_ROOT="$(TEST_VAULT_ROOT)" $(COMPOSE_TEST) up -d --build
 
 test-down:
 	@$(COMPOSE_TEST) down --remove-orphans
+
+verify-test-channel:
+	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PYTHON) -m pytest -q \
+		tests/ops/test_release_channel_isolation.py \
+		tests/ops/test_release_channel_startup_targets.py
+
+verify-prod-channel:
+	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PYTHON) -m pytest -q \
+		tests/ops/test_release_channel_isolation.py \
+		tests/ops/test_release_channel_startup_targets.py
 
 alpha-e2e-smoke:
 	@$(PYTHON) - <<'PY'

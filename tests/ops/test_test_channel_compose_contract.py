@@ -103,11 +103,15 @@ def test_test_compose_uses_prod_runtime_selector_for_test_channel() -> None:
 
 def test_test_compose_watcher_env_has_valid_pkm_environment() -> None:
     """All test-overlay services must declare a PKM_ENVIRONMENT value that
-    active_environment() accepts (dev or prod).
+    active_environment() accepts (dev, prod, or test).
 
-    This is the regression-prevention counterpart of Issue #698: the watcher
-    entered a restart loop because PKM_ENVIRONMENT=test caused a ValueError
-    inside active_environment() at import time.
+    Issue #698 context: the watcher entered a restart loop because
+    PKM_ENVIRONMENT=test caused a ValueError inside active_environment() at
+    import time. That bug is fixed (Issue #848 / PR #940): 'test' is now a
+    first-class selector value. The guard now allows 'dev', 'prod', and 'test'.
+
+    Issue #968 policy: the test overlay must declare PKM_ENVIRONMENT=test to
+    enforce channel isolation. See docs/RELEASE_CHANNELS/README.md.
 
     Verify: Issue #698 AC1 (compose-config side — no Docker required).
     """
@@ -115,7 +119,7 @@ def test_test_compose_watcher_env_has_valid_pkm_environment() -> None:
     test_overlay = _load_compose(TEST_COMPOSE)
     services = test_overlay.get("services") or {}
 
-    valid_environments = {"dev", "prod"}
+    valid_environments = {"dev", "prod", "test"}
 
     for svc_name in ("api", "worker", "watcher"):
         svc = services.get(svc_name) or {}
@@ -127,7 +131,7 @@ def test_test_compose_watcher_env_has_valid_pkm_environment() -> None:
         assert pkm_env in valid_environments, (
             f"Service '{svc_name}' has PKM_ENVIRONMENT={pkm_env!r} in test overlay "
             f"but active_environment() only accepts {valid_environments}. "
-            "Use 'prod' (or 'dev') to avoid watcher startup crash (Issue #698)."
+            "Use 'test', 'dev', or 'prod' (Issue #698 / #968)."
         )
 
 
@@ -162,8 +166,8 @@ def test_make_test_up_starts_watcher_without_restart_loop() -> None:
         try:
             from app.config.environment import active_environment
             result = active_environment()
-            assert result in ("dev", "prod"), (
-                f"active_environment() returned {result!r}; expected 'dev' or 'prod'. "
+            assert result in ("dev", "prod", "test"), (
+                f"active_environment() returned {result!r}; expected 'dev', 'prod', or 'test'. "
                 "PKM_ENVIRONMENT must be set to a valid value in docker-compose.test.yml."
             )
         except ValueError as exc:

@@ -30,12 +30,13 @@ The repo provides several startup commands. Choose based on the channel and requ
 | --- | --- | --- | --- | --- | --- | --- |
 | `make prod-start-full VAULT_ROOT=<path>` | prod (`stable`) | `docker-compose.yaml:docker-compose.prod.yml` | `pkm-prod` | `prod` | Yes | **Canonical prod startup.** All four bindings explicit. |
 | `make prod-up` | prod | `docker-compose.yaml:docker-compose.prod.yml` | `pkm-prod` | `prod` | No | Bring up prod containers only (no health-gate wait). Not a substitute for `prod-start-full`. |
-| `make test-up` | test | `docker-compose.yaml:docker-compose.test.yml` | (test project) | `prod` ⚠️ (known gap — `docker-compose.test.yml` hard-codes `PKM_ENVIRONMENT: prod`; tracked #968) | Uses `TEST_VAULT_ROOT` | Bring up test containers. Use `make start-test-system` for health-gated test startup. |
+| `make test-start-full VAULT_ROOT=<path>` | test | `docker-compose.yaml:docker-compose.test.yml` | `pkm-test` | `test` | Yes | **Canonical test startup.** All four bindings explicit. Use for staged promotion verification (see `promote-to-test` skill). |
+| `make test-up` | test | `docker-compose.yaml:docker-compose.test.yml` | `pkm-test` | `test` | Uses `TEST_VAULT_ROOT` | Bring up test containers only (no health-gate wait). Not a substitute for `test-start-full`. |
 | `make start` | dev/test | `docker-compose.yaml` (base) | (default) | inherited | Yes (or set `ALLOW_LEGACY_VAULT=1`) | Generic local startup for dev/test iteration. `scripts/start_full_system.sh` exits if `VAULT_ROOT` is unset. |
 | `make alpha-up VAULT_ROOT=<path>` | **Legacy.** Equivalent to the old prod startup before explicit env binding existed. Runs `scripts/start_full_system.sh` without explicit compose file, project name, or `PKM_ENVIRONMENT`. | — | — | — | Yes | **Do not use for new prod startups.** Use `make prod-start-full` instead. |
 | `scripts/start_full_system.sh` | Varies | Inherits caller env | Inherits caller env | Inherits caller env | Caller-supplied | Core startup script invoked by `make` targets above. Do not call directly unless you have set all four bindings explicitly. |
 
-**Rule:** for a prod startup, always use `make prod-start-full VAULT_ROOT=<path>`. This is the only target that enforces all four explicit bindings and runs the health-gate wait. `make alpha-up` and bare `scripts/start_full_system.sh` calls lack one or more of these guarantees.
+**Rule:** for a prod startup, always use `make prod-start-full VAULT_ROOT=<path>`; for a test-channel startup, use `make test-start-full VAULT_ROOT=<path>`. These targets enforce all four explicit bindings and run the health-gate wait. `make alpha-up` and bare `scripts/start_full_system.sh` calls lack one or more of these guarantees.
 
 ## Prod startup (canonical)
 
