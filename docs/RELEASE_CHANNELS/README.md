@@ -13,7 +13,7 @@ related_docs:
   - docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md
 ---
 
-State: Active specification for the release-channels capability. Docs-only at this stage. No code, no schema moves, no skills written yet.
+State: Active specification for the release-channels capability. Promotion skills now exist under `.codex/skills/`; this doc remains the canonical boundary and invariant contract they consume.
 Doc role: Core SoT for the release-channels capability
 Owner: `docs/ROADMAP.md`
 Temporal class: strategic
@@ -26,6 +26,32 @@ Last verified against: docs/ENVIRONMENTS.md, docs/ARCHITECTURE.md, docs/STATUS.m
 This directory specifies the capability that lets a **stable build run in prod against the real vault** while **new feature work continues in dev on the same machine**, without dev churn destabilizing prod and without prod freeze blocking dev.
 
 This is the capability that turns the existing `dev` / `test` / `prod` environment model into something the operator can actually *use* day-to-day. [ENVIRONMENTS.md](../ENVIRONMENTS.md) today defines environment selection and artifact path scoping, but it explicitly leaves deployment automation, schema separation between long-lived environments, and cross-channel safety out of scope. That gap is what blocks running a stable operator-facing system while active development continues — and therefore what this capability closes.
+
+## Current direction: prod baseline before promotion hardening
+
+The immediate operator priority is **establishing a stable prod baseline**, not completing the full promotion-governance workflow. These are sequential concerns, not parallel ones.
+
+Before promotion workflows can be trusted, the prod runtime must be running safely: correct compose overlay (`docker-compose.prod.yml`), explicit project namespace (`pkm-prod`), explicit `PKM_ENVIRONMENT=prod`, and an operator-supplied `VAULT_ROOT` pointing at the real vault. This binding is not optional and cannot be defaulted.
+
+### Prod runtime binding
+
+A correctly bound prod startup requires all four elements to be explicit and operator-verified before the process starts:
+1. Compose file: `docker-compose.yaml:docker-compose.prod.yml`
+2. Project namespace: `pkm-prod` (prevents resource collision with dev/test)
+3. Environment selector: `PKM_ENVIRONMENT=prod` (controls vault root, DB name, artifact paths)
+4. Vault root: operator-supplied absolute path to the real vault (never a dev or test path)
+
+Use `make prod-start-full VAULT_ROOT=<path>` for the canonical prod startup that enforces all four. See `docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md §Startup command semantics`.
+
+### Future promotion hardening
+
+Once the prod baseline is stable, the promotion workflow (prepare → execute → verify → rollback) will be hardened as a separate governance layer. The test channel (`pkm-test`) is a deliberate intermediate stage in that path. What belongs to future promotion hardening and not to the current baseline:
+- the `promote-to-test` and `promote-test-to-prod` staged workflows
+- automated migration reversal classification
+- operator acknowledgement receipts for forward-only migrations
+- CI/UAT-as-test policy for the test channel
+
+The absence of these does not block establishing a prod baseline. Operators should not wait for promotion hardening to run prod.
 
 ## Human need this serves
 
@@ -102,7 +128,12 @@ Promotion trigger is **manual, single-user**. No PR-merge-triggered automation, 
 
 - The previous stable ref is always resolvable (e.g. previous tag retained, or `stable-prev` pointer maintained).
 - Migrations are classified at promotion time as **reversible** or **forward-only**. Forward-only migrations are allowed but require the operator to acknowledge that rollback cannot restore DB shape.
-- Vault state rolled back separately is out of scope; the vault is the operator's authored content and is never rewound by a release operation. Note-level undo is a vault-level concern, not a channel-level concern.
+
+### Vault is not release state
+
+The real prod vault is the operator's authored content. It is **never rewound by a release rollback operation**. Rolling back the `stable` ref and reversing DB migrations does not alter vault notes, companion notes, or any operator-authored file under the vault root.
+
+This is a deliberate invariant: the vault is a human cognitive surface, not a deployment artifact. Release operations (promote, rollback) are scoped to code, DB schema, and runtime artifacts only. Note-level undo is a vault-level concern (operator action or vault history), not a channel-level concern.
 
 ## Verification path (pre-merge, per task)
 

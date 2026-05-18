@@ -1,12 +1,41 @@
 State: SoT v5.x forward line (full-system startup)
 # Full System Startup (db + api + watcher + worker)
 
-Use this runbook to bring up the Alpha Compose Runtime and validate runtime health before running gap tests or other checks.
+Use this runbook to bring up the full Compose stack and validate runtime health before running gap tests, acceptance checks, or other operator workflows.
 
 Reading note:
-- this runbook is about current startup and operator validation,
+- this runbook covers startup and operator validation only,
 - not the full target-state architecture,
 - and not a claim that the current compose/runtime wiring is the permanent system decomposition.
+
+## Concept map: startup vs verification vs promotion vs rollback
+
+These are four separate operations with different goals, risks, and rollback surfaces. Do not conflate them.
+
+| Operation | What it does | Scope | Reversible? |
+| --- | --- | --- | --- |
+| **Startup** | Bring compose services up; wait for health gate | Code + config | Yes — `make prod-down` |
+| **Verification** | Confirm running system is healthy and meets acceptance criteria | Running runtime | Yes — no state changes |
+| **Promotion to test** | Move a commit into the test channel; apply migrations to `app_test` | Code ref + `app_test` DB | Yes, if migrations reversible |
+| **Promotion to prod** | Move the `stable` ref; apply migrations to `app` DB; restart prod | Code ref + `app` DB | Conditional — forward-only migrations are irreversible |
+| **Rollback** | Return `stable` to previous ref; reverse reversible migrations; restart | Code ref + DB schema | Partial — vault is never rewound (see §Vault is not release state) |
+
+Startup and verification are safe to repeat. Promotion and rollback are operator-gated and produce audit receipts. Do not run a promotion as part of a normal startup.
+
+## Startup command semantics
+
+The repo provides several startup commands. Choose based on the channel and required isolation level.
+
+| Command | Channel | Compose file | Project namespace | `PKM_ENVIRONMENT` | VAULT_ROOT required | Use when |
+| --- | --- | --- | --- | --- | --- | --- |
+| `make prod-start-full VAULT_ROOT=<path>` | prod (`stable`) | `docker-compose.yaml:docker-compose.prod.yml` | `pkm-prod` | `prod` | Yes | **Canonical prod startup.** All four bindings explicit. |
+| `make prod-up` | prod | `docker-compose.yaml:docker-compose.prod.yml` | `pkm-prod` | `prod` | No | Bring up prod containers only (no health-gate wait). Not a substitute for `prod-start-full`. |
+| `make test-up` | test | `docker-compose.yaml:docker-compose.test.yml` | (test project) | `test` | Uses `TEST_VAULT_ROOT` | Bring up test containers. Use `make start-test-system` for health-gated test startup. |
+| `make start` | dev/test | `docker-compose.yaml` (base) | (default) | inherited | No | Generic local startup for dev/test iteration. |
+| `make alpha-up VAULT_ROOT=<path>` | **Legacy.** Equivalent to the old prod startup before explicit env binding existed. Runs `scripts/start_full_system.sh` without explicit compose file, project name, or `PKM_ENVIRONMENT`. | — | — | — | Yes | **Do not use for new prod startups.** Use `make prod-start-full` instead. |
+| `scripts/start_full_system.sh` | Varies | Inherits caller env | Inherits caller env | Inherits caller env | Caller-supplied | Core startup script invoked by `make` targets above. Do not call directly unless you have set all four bindings explicitly. |
+
+**Rule:** for a prod startup, always use `make prod-start-full VAULT_ROOT=<path>`. This is the only target that enforces all four explicit bindings and runs the health-gate wait. `make alpha-up` and bare `scripts/start_full_system.sh` calls lack one or more of these guarantees.
 
 ## Prod startup (canonical)
 
@@ -86,7 +115,8 @@ Architectural reading note:
 - while the higher-level architecture still distinguishes interaction, cognition, execution, memory, and governance above these startup mechanics.
 
 Deprecated:
-- `scripts/run_alpha_stack.sh` and `scripts/run_alpha_live.sh` are legacy helpers. Use `make alpha-up` instead.
+- `scripts/run_alpha_stack.sh` and `scripts/run_alpha_live.sh` are legacy helpers. Use `make prod-start-full VAULT_ROOT=<path>` (prod) or `make start` (dev/test) instead.
+- `make alpha-up` is a legacy alias for the old prod startup without explicit env binding. Prefer `make prod-start-full`.
 
 ## Watcher registry (multi-spec)
 - Config file: `configs/watchers.yaml` (ships with `panel` + `ingest` watchers).
@@ -138,4 +168,4 @@ export KNOWLEDGE_ALLOW_FALLBACK=0
 - If `/api/health` fails:
   - check heartbeat files in `/app/tmp`
   - `docker logs --tail 200 workspace-api-1|workspace-worker-1|workspace-watcher-1`
-  - rerun `make alpha-up` after fixing config/env.
+  - rerun `make prod-start-full VAULT_ROOT=<path>` (prod) or `make start` (dev/test) after fixing config/env.
