@@ -14,7 +14,7 @@ It is intentionally narrow:
 
 - It defines *which lifecycle states* apply to which artifact class.
 - It defines *which transitions are allowed*, *which are prohibited*, and *which are deferred* to neighbouring contracts.
-- It separates lifecycle (what state an artifact is in) from activation/use-right (what an artifact may do in that state), which is the scope of `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md` (planned in [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943)).
+- It separates lifecycle (what state an artifact is in) from activation/use-right (what an artifact may do in that state), which is the scope of `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`.
 - It does **not** specify a state machine, a validator, a watcher, a database schema, a prompt template, an activation engine, or a runtime implementation.
 
 This document is **target-state semantics, not runtime claim**. Nothing here asserts that any of these states is currently enforced by code.
@@ -43,12 +43,12 @@ The following invariants from the prior Contextualization Layer docs are load-be
 - **`memory_type` is for agentic memory semantics; `artifact_type` is for artifact classification.** Lifecycle state applies to the *artifact*, not to the cognitive class of memory it carries.
 - **Context bundles are bridge/assembly artifacts, not agentic memory.** A bundle may contain or reference memory artifacts, but it does not inherit their lifecycle.
 - **Machine mirrors are rebuildable technical projections.** They cannot be treated as durable source knowledge or as authoritative memory.
-- **Unreviewed memory must never become hidden authority.** Lifecycle state alone does not grant authority; authority granting is governed by `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md` and the activation/use-right semantics in [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943).
+- **Unreviewed memory must never become hidden authority.** Lifecycle state alone does not grant authority; authority granting is governed by `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md` and the activation/use-right semantics in `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`.
 
 ## 4. Lifecycle principles
 
 1. **Lifecycle is class-specific.** Not every state applies to every class. Borrowing a state across classes is a category error and is called out in Section 7.
-2. **Lifecycle state is not authority.** An artifact being `reviewed` or `accepted` does not, by itself, grant the right to instruct or to authorize a write. Authority is granted by the activation/use-right contract (see [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943)), gated by trust semantics, and recorded via receipts.
+2. **Lifecycle state is not authority.** An artifact being `reviewed` or `accepted` does not, by itself, grant the right to instruct or to authorize a write. Authority is granted by the activation/use-right contract (see `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`), gated by trust semantics, and recorded via receipts.
 3. **Review and promotion are explicit and only apply to agentic memory.** Editing a human knowledge artifact is *not* "promoting" it. Assembling a context bundle is *not* "promoting" its sources into memory. Regenerating a machine mirror is *not* "reviewing" it.
 4. **Activation is separate from existence and from retrieval.** Whether an artifact may enter working context for a task is governed by activation semantics, not by lifecycle state. Lifecycle state is one *input* to activation, but not the whole story.
 5. **Machine mirrors are rebuildable.** Discarding a mirror does not lose information when the source remains. Treating a mirror as if it carried independent state is a misclassification.
@@ -96,7 +96,7 @@ This is the only class for which the canonical memory lifecycle from `docs/CONCE
 - `accepted/promoted` — the candidate has become a more durable memory artifact and/or has been promoted into a more stable memory class (e.g. `preference_candidate` accepted as a stable `preference_memory`).
 - `rejected` — the candidate is not accepted. The rejection is recorded; the candidate artifact may be retained for audit or archived.
 - `revised` — the memory has been corrected, narrowed, or reclassified. Provenance to the prior version is preserved.
-- `stale` — the memory may no longer be safely treated as current. It remains inspectable. **Stale agentic memory must not silently authorize action**; re-validation belongs to activation semantics ([#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943)).
+- `stale` — the memory may no longer be safely treated as current. It remains inspectable. **Stale agentic memory must not silently authorize action**; re-validation belongs to activation semantics (`docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`).
 - `invalidated` — the memory has been contradicted, superseded, or proven wrong. It must not instruct or authorize action without an explicit re-review. The original is retained with the invalidation reason for audit.
 - `archived` — the memory is retained but no longer in active use. Recall may still surface it with an `archived` marker; it does not enter working context by default.
 - `discarded` — the memory artifact has been removed. Provenance and receipts are preserved per `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`; the recalled support material is gone.
@@ -225,14 +225,14 @@ Rows are lifecycle terms. Columns are artifact classes. Values:
 | `accepted` / `promoted` | prohibited | applies | prohibited (normative rule from `CONTEXT_BUNDLE_CONTRACT.md`) | prohibited | prohibited |
 | `rejected` | prohibited | applies | prohibited | prohibited | prohibited |
 | `revised` | applies | applies | n/a (a new bundle is assembled instead) | n/a (a regeneration replaces it) | applies |
-| `activated` | conditional (deferred to [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943)) | conditional (deferred to [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943)) | conditional (deferred to [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943); bundle `exposed`/`consumed` is the lifecycle correlate) | conditional (deferred to [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943); mirrors do not "activate", they are retrieved) | conditional (deferred to [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943)) |
+| `activated` | conditional (defined in `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`) | conditional (defined in `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`) | conditional (defined in `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`; bundle `exposed`/`consumed` is the lifecycle correlate) | conditional (defined in `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`; mirrors do not "activate", they are retrieved) | conditional (defined in `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`) |
 | `stale` | applies | applies | applies | applies | applies |
 | `invalidated` | conditional (only by explicit superseding artifact) | applies | n/a (use `expired`) | n/a (use `stale`; rebuild from source) | n/a (follows target) |
 | `archived` | applies | applies | applies (as `archived-for-audit`) | n/a (rebuildable; discard instead) | applies (follows target) |
 | `regenerated` | prohibited | prohibited | prohibited (assemble a new bundle instead) | applies | applies |
 | `discarded` | prohibited (use `archived`) | applies | applies | applies | applies |
 
-This matrix is normative for the **shared cross-class lifecycle terms listed above**. It does not enumerate class-specific states; for those, the per-class sections in §5.1–5.5 are authoritative. The activation/use-right gating that hangs off each state is **not** defined here; it is deferred to [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943).
+This matrix is normative for the **shared cross-class lifecycle terms listed above**. It does not enumerate class-specific states; for those, the per-class sections in §5.1–5.5 are authoritative. The activation/use-right gating that hangs off each state is **not** defined here; it is defined in `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`.
 
 ## 7. Transition model
 
@@ -250,7 +250,7 @@ These are listed in Sections 5.1–5.5. The transition lists are not closed; fut
 
 ### Ambiguous transitions deferred to other contracts
 
-- The transition from `accepted/promoted` (memory) into being *used* in an agent turn is *activation*, governed by [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943). This document does not define when an accepted memory may be activated for `instructional` or `action_authorizing` use.
+- The transition from `accepted/promoted` (memory) into being *used* in an agent turn is *activation*, governed by `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`. This document does not define when an accepted memory may be activated for `instructional` or `action_authorizing` use.
 - The transition from `stale` back to `current` for a human knowledge artifact — i.e. whether the artifact is treated as current again after a re-validation — is the subject of `docs/CONCEPTS/TEMPORAL_VALIDITY_AND_STALENESS_CONTRACT.md`. This document only names `stale` as a state, not the re-validation policy.
 - The transition from `stale → invalidated` for agentic memory in the presence of contradicting evidence is governed by `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` contradiction and staleness handling. This document only names the state.
 
@@ -295,7 +295,7 @@ A concept note `Contextualization Layer.md` moves `created → working → settl
 
 ### 11.2 Agentic memory artifact
 
-A `preference_candidate` is materialised by an observation: `observed → candidate`. A review surface presents it; the human accepts it: `candidate → reviewed → accepted/promoted`. The accepted preference is used for several months. The human's preference changes; a new candidate contradicts it: the old preference is `revised` against the new evidence, the new candidate is reviewed and promoted, and the prior version is retained with `invalidated` plus provenance. The invalidated version is `archived` for audit. At no point did the activation of this preference for any specific agent turn become part of *this* lifecycle — that is the scope of [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943).
+A `preference_candidate` is materialised by an observation: `observed → candidate`. A review surface presents it; the human accepts it: `candidate → reviewed → accepted/promoted`. The accepted preference is used for several months. The human's preference changes; a new candidate contradicts it: the old preference is `revised` against the new evidence, the new candidate is reviewed and promoted, and the prior version is retained with `invalidated` plus provenance. The invalidated version is `archived` for audit. At no point did the activation of this preference for any specific agent turn become part of *this* lifecycle — that is the scope of `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`.
 
 ### 11.3 Bridge / assembly artifact
 
@@ -331,7 +331,7 @@ This document is explicitly **not**:
 - A database or storage schema.
 - A final frontmatter or on-disk shape.
 - A fixture set — see [#941](https://github.com/RasmusTho/agentic-pkm-mvp/issues/941).
-- A use-right or activation contract — see [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943).
+- A use-right or activation contract — see `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`.
 - A claim that any of these states is currently enforced in runtime code.
 
 ## 14. Open questions
@@ -340,7 +340,7 @@ The following are deliberately left open. They are recorded so later contracts a
 
 - **When does `stale` become `invalidated` automatically for an agentic memory artifact?** Or is automatic transition prohibited, requiring human or policy review every time?
 - **What is the minimum review record needed for `candidate → accepted/promoted`?** Identity of reviewer, timestamp, rationale, or all three?
-- **Should `archived` agentic memory remain retrievable by default**, or should retrieval require an explicit "include archived" flag? Likely the latter, but this is an activation-semantics question for [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943).
+- **Should `archived` agentic memory remain retrievable by default**, or should retrieval require an explicit "include archived" flag? Likely the latter, but see the open questions in `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`.
 - **How is `revised` represented when the prior version must be retained for audit?** A linked predecessor `artifact_id`, an append-only revision log inside the companion, or a separate immutable record?
 - **What is the policy for a `synthesis_companion` whose target has been archived?** Does the companion follow into archive automatically, or does it persist as a candidate-memory holding area?
 - **Should bundle `expired` always require `archived-for-audit`**, or is a direct `expired → discarded` path acceptable when no receipt references the bundle?
@@ -350,5 +350,5 @@ These questions are not blockers for naming the lifecycle model. They are the fi
 ## 15. Follow-up links
 
 - [#941](https://github.com/RasmusTho/agentic-pkm-mvp/issues/941) — concrete fixtures that will instantiate this lifecycle vocabulary.
-- [#943](https://github.com/RasmusTho/agentic-pkm-mvp/issues/943) — activation/use-right semantics built on top of these lifecycle states.
+- `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md` — activation/use-right semantics built on top of these lifecycle states.
 - [#900](https://github.com/RasmusTho/agentic-pkm-mvp/issues/900) — parent Agent Memory feature; tracks the broader implementation-preparation cluster.
