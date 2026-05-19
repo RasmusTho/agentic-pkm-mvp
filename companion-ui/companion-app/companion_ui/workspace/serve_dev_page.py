@@ -4,7 +4,7 @@ DEV/STAGING ONLY — not for production use.
 
 Does not implement auth, TLS, reverse proxy, or public exposure.
 Calls the configured runtime API through WorkspaceHttpClient
-(GET /api/artifacts/note). Does not read vault files directly.
+(GET /api/companion/workspace). Does not read vault files directly.
 Vault binding is determined by the runtime environment, not by this server.
 
 Environment variables:
@@ -82,6 +82,34 @@ def _render_note_section(fields: dict) -> str:
     content_hash = _e(fields.get("content_hash", ""))
     body = _e(fields.get("body", ""))
     panel_rail = _e(fields.get("panel_rail", "Panel / agent rail placeholder"))
+    canvas_state = _e(fields.get("canvas_session_state", "idle"))
+    persistence = str(fields.get("canvas_session_persistence", ""))
+    panel_state = _e(fields.get("panel_state", "idle"))
+    proposal_count = int(fields.get("panel_proposal_count", 0) or 0)
+    writeguard_status = _e(fields.get("guard_writeguard_status", "ok"))
+    canvas_enabled = bool(fields.get("guard_canvas_enabled", True))
+    guard_messages: list[str] = []
+    if writeguard_status.lower() == "blocked":
+        guard_messages.append("WriteGuard blocked")
+    if not canvas_enabled:
+        guard_messages.append("Canvas disabled")
+    guard_html = ""
+    if guard_messages:
+        guard_html = (
+            '<div class="rail-alert rail-alert-blocked" '
+            'data-testid="workspace-guard-indicator">'
+            + _e(" / ".join(guard_messages))
+            + "</div>"
+        )
+    persistence_html = ""
+    if persistence == "in_memory":
+        persistence_html = (
+            '<div class="rail-alert rail-alert-muted" '
+            'data-testid="workspace-session-persistence">'
+            "Session persistence: in_memory"
+            "</div>"
+        )
+    proposal_text = f"{proposal_count} proposal{'s' if proposal_count != 1 else ''}"
 
     return f"""
   <div class="workspace-layout">
@@ -103,9 +131,20 @@ def _render_note_section(fields: dict) -> str:
     <aside class="agent-rail" data-testid="workspace-agent-rail" data-region="agent-rail">
       <div class="rail-header">
         <span class="rail-label">Companion&nbsp;/ Panel</span>
-        <span class="rail-badge">idle</span>
+        <span class="rail-badge" data-testid="workspace-panel-state">{panel_state}</span>
       </div>
       <div class="rail-placeholder-body">
+        <div class="rail-state-row" data-testid="workspace-canvas-state">
+          <span class="rail-state-label">Canvas</span>
+          <span class="rail-state-value">{canvas_state}</span>
+        </div>
+        <div class="rail-state-row">
+          <span class="rail-state-label">Panel</span>
+          <span class="rail-state-value">{panel_state}</span>
+          <span class="rail-state-count" data-testid="workspace-panel-proposal-count">{proposal_text}</span>
+        </div>
+        {guard_html}
+        {persistence_html}
         {panel_rail}
       </div>
     </aside>
@@ -431,7 +470,43 @@ def render_index_html(
       padding: 16px;
       font-size: var(--text-sm);
       color: var(--fg-3);
-      font-style: italic;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }}
+    .rail-state-row {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      font-style: normal;
+    }}
+    .rail-state-label {{
+      color: var(--fg-3);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }}
+    .rail-state-value, .rail-state-count {{
+      color: var(--fg-2);
+    }}
+    .rail-alert {{
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      font-style: normal;
+      padding: 8px 10px;
+    }}
+    .rail-alert-blocked {{
+      background: var(--destructive-muted);
+      border: 1px solid rgba(255,61,61,0.3);
+      color: var(--destructive);
+    }}
+    .rail-alert-muted {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      color: var(--fg-2);
     }}
   </style>
 </head>

@@ -69,11 +69,18 @@ def _note_payload(
     body: str = "This is the note body.",
 ) -> dict:
     return {
-        "note_path": note_path,
-        "title": title,
-        "artifact_id": artifact_id,
-        "content_hash": content_hash,
-        "body": body,
+        "artifact": {
+            "note_path": note_path,
+            "title": title,
+            "artifact_id": artifact_id,
+            "content_hash": content_hash,
+            "body": body,
+        },
+        "canvas": {"session_state": "idle", "session_persistence": "in_memory"},
+        "panel": {"state": "idle", "proposal_count": 0},
+        "guards": {"canvas_enabled": True, "writeguard_status": "ok"},
+        "runtime": {},
+        "suggestions": {},
     }
 
 
@@ -368,7 +375,7 @@ class TestHandleGet:
         )
         assert len(client.get_calls) == 1
         url, params = client.get_calls[0]
-        assert url == "/api/artifacts/note"
+        assert url == "/api/companion/workspace"
         assert params.get("note_path") == "Some/Note.md"
 
     def test_successful_load_renders_note_fields(self) -> None:

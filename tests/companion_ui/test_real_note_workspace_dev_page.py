@@ -45,6 +45,23 @@ def _artifact_response(**overrides: Any) -> dict[str, Any]:
     return base
 
 
+def _workspace_response(
+    *,
+    artifact: dict[str, Any] | None = None,
+    canvas: dict[str, Any] | None = None,
+    panel: dict[str, Any] | None = None,
+    guards: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "artifact": artifact or _artifact_response(),
+        "canvas": canvas or {"session_state": "idle", "session_persistence": "in_memory"},
+        "panel": panel or {"state": "idle", "proposal_count": 0},
+        "guards": guards or {"canvas_enabled": True, "writeguard_status": "ok"},
+        "runtime": {},
+        "suggestions": {},
+    }
+
+
 def _mock_get_response(payload: dict) -> MagicMock:
     m = MagicMock()
     m.status_code = 200
@@ -56,7 +73,7 @@ def _loaded_page(
     note_path: str = "notes/research.md",
     response: dict | None = None,
 ) -> RealNoteWorkspaceDevPage:
-    resp = response or _artifact_response()
+    resp = response or _workspace_response()
     mock_resp = _mock_get_response(resp)
     with patch("httpx.get", return_value=mock_resp):
         client = WorkspaceHttpClient(base_url="http://localhost:18001")
@@ -82,7 +99,7 @@ def test_dev_page_exposes_note_path_load_intent() -> None:
     assert intent_with_id.artifact_id == "uuid-1"
 
     # Dev page calls the runtime API with note_path from the intent
-    mock_resp = _mock_get_response(_artifact_response())
+    mock_resp = _mock_get_response(_workspace_response())
     with patch("httpx.get", return_value=mock_resp) as mock_get:
         client = WorkspaceHttpClient(base_url="http://localhost:18001")
         page = RealNoteWorkspaceDevPage(client)
@@ -90,6 +107,7 @@ def test_dev_page_exposes_note_path_load_intent() -> None:
 
     assert state.is_loaded is True
     call_args = mock_get.call_args
+    assert call_args.args[0] == "http://localhost:18001/api/companion/workspace"
     assert "note_path" in call_args.kwargs["params"]
     assert call_args.kwargs["params"]["note_path"] == "Notes/test.md"
 
@@ -101,13 +119,13 @@ def test_dev_page_exposes_note_path_load_intent() -> None:
 
 def test_dev_page_renders_real_note_payload() -> None:
     """Dev page renders title, path, artifact_id, body, and content marker."""
-    page = _loaded_page(response=_artifact_response(
+    page = _loaded_page(response=_workspace_response(artifact=_artifact_response(
         artifact_id="note-uuid-42",
-        note_path="/vault/notes/research.md",
+        note_path="notes/research.md",
         title="Research Note",
         body="# Research Note\n\nDetailed body.",
         content_hash="deadbeef0042",
-    ))
+    )))
 
     assert page.state.is_loaded is True
     assert page.state.shell is not None
@@ -115,7 +133,7 @@ def test_dev_page_renders_real_note_payload() -> None:
     # All required fields present
     shell = page.state.shell
     assert shell.title == "Research Note"
-    assert shell.note_path == "/vault/notes/research.md"
+    assert shell.note_path == "notes/research.md"
     assert shell.artifact_id == "note-uuid-42"
     assert "Detailed body" in shell.body
     assert shell.content_hash == "deadbeef0042"
@@ -124,7 +142,27 @@ def test_dev_page_renders_real_note_payload() -> None:
     fields = page.render_fields()
     assert fields is not None
     assert fields["title"] == "Research Note"
-    assert fields["note_path"] == "/vault/notes/research.md"
+    assert fields["note_path"] == "notes/research.md"
+
+
+def test_loads_from_workspace_aggregate() -> None:
+    """Dev page reads artifact, Canvas, Panel, and guard fields from the workspace aggregate."""
+    page = _loaded_page(response=_workspace_response(
+        artifact=_artifact_response(title="Aggregate Note"),
+        canvas={"session_state": "active", "session_persistence": "in_memory"},
+        panel={"state": "proposal_staged", "proposal_count": 2},
+        guards={"canvas_enabled": False, "writeguard_status": "blocked"},
+    ))
+
+    fields = page.render_fields()
+    assert fields is not None
+    assert fields["title"] == "Aggregate Note"
+    assert fields["canvas_session_state"] == "active"
+    assert fields["canvas_session_persistence"] == "in_memory"
+    assert fields["panel_state"] == "proposal_staged"
+    assert fields["panel_proposal_count"] == 2
+    assert fields["guard_writeguard_status"] == "blocked"
+    assert fields["guard_canvas_enabled"] is False
     assert fields["artifact_id"] == "note-uuid-42"
     assert "Detailed body" in fields["body"]
     assert fields["content_hash"] == "deadbeef0042"
@@ -185,7 +223,7 @@ def test_dev_page_is_marked_non_production() -> None:
     assert "dev" in page_label_lower or "staging" in page_label_lower
 
     # render_fields exposes is_production_ui=False after load
-    mock_resp = _mock_get_response(_artifact_response())
+    mock_resp = _mock_get_response(_workspace_response())
     with patch("httpx.get", return_value=mock_resp):
         page.load(NoteLoadIntent(note_path="notes/test.md"))
 
@@ -257,22 +295,22 @@ def test_dev_page_note_path_only_load_succeeds_without_artifact_id() -> None:
     must not raise. It should fall back to note_path as the artifact identifier
     so the workspace shell's non-empty artifact_id invariant is satisfied."""
     # Simulate the runtime behaviour: artifact_id echoed as "" when not supplied
-    response_without_artifact_id = {
+    response_without_artifact_id = _workspace_response(artifact={
         "artifact_id": "",
-        "note_path": "/vault/notes/test.md",
+        "note_path": "notes/test.md",
         "title": "Test Note",
         "body": "# Test Note\n\nBody.",
         "content_hash": "abc000",
-    }
+    })
     mock_resp = _mock_get_response(response_without_artifact_id)
 
     with patch("httpx.get", return_value=mock_resp):
         client = WorkspaceHttpClient(base_url="http://localhost:18001")
         page = RealNoteWorkspaceDevPage(client)
-        state = page.load(NoteLoadIntent(note_path="/vault/notes/test.md"))
+        state = page.load(NoteLoadIntent(note_path="notes/test.md"))
 
     assert state.is_loaded is True, f"Expected load to succeed; error: {state.error}"
     assert state.shell is not None
     # Artifact ID falls back to note_path when API returns empty
-    assert state.shell.artifact_id == "/vault/notes/test.md"
+    assert state.shell.artifact_id == "notes/test.md"
     assert state.shell.title == "Test Note"

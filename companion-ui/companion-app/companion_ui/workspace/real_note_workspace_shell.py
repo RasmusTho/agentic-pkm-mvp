@@ -1,7 +1,7 @@
 """Read-only real-note workspace shell (#1064).
 
 Renders an actual vault note/artifact payload as received from the
-GET /api/artifacts/note endpoint. Note body is the primary surface;
+workspace aggregate artifact block. Note body is the primary surface;
 a reserved secondary slot holds Panel/agent state without requiring Panel data.
 
 This module does NOT:

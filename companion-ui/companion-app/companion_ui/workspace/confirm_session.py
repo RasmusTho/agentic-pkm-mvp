@@ -1,11 +1,11 @@
-"""Panel confirm → artifact refresh session model (#1065).
+"""Panel confirm -> artifact refresh session model (#1065).
 
 Connects the Companion UI layer to the Panel confirm API and the artifact
-read endpoint. The UI remains a pure API consumer — no vault file access.
+read endpoint. The UI remains a pure API consumer - no vault file access.
 
 Contracts consumed:
 - POST /api/panel/confirm  (panel confirmation endpoint, #1053)
-- GET  /api/artifacts/note (read-only artifact endpoint, #1063)
+- GET  /api/companion/workspace (read-side workspace aggregate, #1123)
 
 This module does NOT:
 - read or write vault files directly
@@ -70,7 +70,7 @@ class ConfirmOutcome:
 
 @dataclass
 class ArtifactPayload:
-    """Note payload received from GET /api/artifacts/note."""
+    """Note payload received from the workspace aggregate artifact block."""
 
     artifact_id: str
     note_path: str
@@ -85,12 +85,12 @@ class ArtifactPayload:
 
 
 class WorkspaceConfirmSession:
-    """Companion UI session model for Panel confirm → artifact refresh flow.
+    """Companion UI session model for Panel confirm -> artifact refresh flow.
 
     Call confirm() to:
     1. POST to /api/panel/confirm with the staged proposal
     2. Record the typed result
-    3. Reload the artifact note payload via GET /api/artifacts/note
+    3. Reload the artifact note payload via GET /api/companion/workspace
 
     After confirm(), inspect last_result and current_payload.
     """
@@ -136,13 +136,14 @@ class WorkspaceConfirmSession:
 
     def _refresh_artifact(self, *, note_path: str, artifact_id: str) -> None:
         raw = self._http.get(
-            "/api/artifacts/note",
-            params={"note_path": note_path, "artifact_id": artifact_id},
+            "/api/companion/workspace",
+            params={"note_path": note_path},
         )
+        artifact = raw.get("artifact") or {}
         self.current_payload = ArtifactPayload(
-            artifact_id=raw.get("artifact_id", artifact_id),
-            note_path=raw.get("note_path", note_path),
-            title=raw.get("title", ""),
-            body=raw.get("body", ""),
-            content_hash=raw.get("content_hash", ""),
+            artifact_id=artifact.get("artifact_id", artifact_id),
+            note_path=artifact.get("note_path", note_path),
+            title=artifact.get("title", ""),
+            body=artifact.get("body", ""),
+            content_hash=artifact.get("content_hash", ""),
         )
