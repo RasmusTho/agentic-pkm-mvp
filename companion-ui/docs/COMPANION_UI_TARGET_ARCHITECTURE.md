@@ -122,15 +122,21 @@ Rules:
 
 ## 5. Current Shipped State
 
-As of 2026-05-18 (after PR #1101, PR #1108 merged):
+As of 2026-05-19 (after PR #1101, PR #1108, PR #1119 merged):
 
 | Component | State |
 |---|---|
-| Live workspace HTTP client | Shipped — `companion_ui/workspace/http_client.py` (#1071 / PR #1101) |
-| Real-note workspace dev page model | Shipped — `companion_ui/workspace/real_note_dev_page.py` (#1072 / PR #1101) |
+| Live workspace HTTP client | Shipped — `companion_ui/workspace/workspace_http_client.py` (#1071 / PR #1101) |
+| Real-note workspace dev page model | Shipped — `companion_ui/workspace/real_note_workspace_dev_page.py` (#1072 / PR #1101) |
 | Browser dev server | Shipped — `companion_ui/workspace/serve_dev_page.py` (#1103 / PR #1108) |
-| Production Companion UI | **Not yet shipped** |
-| Auth / TLS / reverse proxy for Companion UI | **Not yet shipped** |
+| Real-note workspace visual shell (first alignment pass) | Shipped — Yggdrasil tokens, note body primary, companion rail placeholder (#1119). Dev/staging only. |
+| Canvas Core models and session API | Shipped — `companion_ui/canvas_core/`, `app/api/routes/canvas.py` behind `CANVAS_ENABLED` |
+| Canvas Suggestion Flow models | Shipped — `companion_ui/canvas_suggestion_flow/` (browser integration pending) |
+| Panel models and confirmation service | Shipped — `companion_ui/panel/`, `app/panel/confirmation.py`, `POST /api/panel/confirm` |
+| Canvas governance pipeline (stub replaced) | Shipped — `app/panel/canvas_pipeline.py`, wired into `app/api/routes/canvas.py` |
+| Panel correction path | Shipped — `app/panel/confirmation.py` (correction.enabled=true now supported) |
+| Production Companion UI | **Not yet shipped** — browser wiring, workspace state API, product modes are next |
+| Auth / TLS / reverse proxy for Companion UI | **Not yet shipped** — deferred until workspace state endpoint ships |
 | PWA packaging | **Not yet shipped** |
 | Native app wrapper (Tauri, Electron, etc.) | **Not yet shipped** |
 
@@ -138,11 +144,24 @@ As of 2026-05-18 (after PR #1101, PR #1108 merged):
 
 ## 6. Next Implementation Slice
 
-The minimal browser dev server shipped in PR #1108 (#1103). The browser-accessible dev page
-(`companion_ui.workspace.serve_dev_page`) is operational at `127.0.0.1:8111` (dev) by default.
+The immediate next slices are defined in `docs/ROADMAP.md` under "Companion UI integration
+roadmap (2026-05-19)". The ordering reflects the integration-first posture: existing Canvas Core,
+Panel, and Suggestion Flow model foundations are shipped and must not be reimplemented.
 
-The next implementation slice has not been formally defined in this document. See `docs/ROADMAP.md`
-and `docs/STATUS.md` for current sequencing.
+Summary of next work:
+1. Docs: define post-dev-server implementation roadmap
+2. Complete remaining workspace shell gaps (stable selectors, error state, dev marker)
+3. Docs: define workspace state read-side API contract (aggregate endpoint for browser)
+4. Runtime: expose workspace state endpoint
+5. Docs: define local auth/trusted-device access model (gate: after #4 merges)
+6. Bind browser shell to workspace state endpoint
+7. Docs: decide editor integration for shipped Canvas API (gate: after #3)
+8. Canvas/Panel/Suggestion Flow browser integration (wire existing models, not rebuild)
+9. Product modes (Find/Reorient/Resurface/Act) on top of wired surfaces
+
+All future Companion UI implementation must be preceded by a bounded GitHub issue.
+Docs-first where contracts are undecided. Agents must rescope to integration if they discover
+an already-shipped model.
 
 For operational detail on the shipped dev server, see
 `companion-ui/docs/REAL_NOTE_WORKSPACE_DEV_PAGE.md`.

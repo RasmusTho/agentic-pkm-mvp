@@ -22,6 +22,8 @@ from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError
 from app.chat.governance_router import GovernanceActionType, GovernanceRouter
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.config.paths import resolve_vault_root
+from app.panel.canvas_pipeline import CanvasPanelPipeline
+from app.panel.confirmation import _proposal_store as _panel_proposal_store
 
 router = APIRouter(prefix="/canvas", tags=["canvas"])
 
@@ -76,6 +78,7 @@ class GovernanceRequest(BaseModel):
 class GovernanceResponse(BaseModel):
     intent_id: str
     session_id: str
+    artifact_id: str
 
 
 class CloseResponse(BaseModel):
@@ -151,16 +154,15 @@ def governance_action(session_id: str, req: GovernanceRequest) -> GovernanceResp
         raise HTTPException(status_code=422, detail=f"Unknown action_type: {req.action_type!r}")
     vault_root = _get_vault_root()
     log_writer = SessionLogWriter(vault_root=vault_root)
-
-    class _StubPipeline:
-        """Stub pipeline for governance actions. TODO: route to real panel pipeline."""
-        def submit_intent(self, action_type: str, payload: dict, session_id: str) -> str:
-            import uuid
-            return str(uuid.uuid4())
-
-    gov = GovernanceRouter(panel_pipeline=_StubPipeline(), session_log_writer=log_writer)
+    artifact_id = str(session.note_path.relative_to(vault_root))
+    pipeline = CanvasPanelPipeline(proposal_store=_panel_proposal_store, artifact_id=artifact_id)
+    gov = GovernanceRouter(panel_pipeline=pipeline, session_log_writer=log_writer)
     pending = gov.request_governance_action(session, action_type, req.payload)
-    return GovernanceResponse(intent_id=pending.intent_id, session_id=pending.session_id)
+    return GovernanceResponse(
+        intent_id=pending.intent_id,
+        session_id=pending.session_id,
+        artifact_id=artifact_id,
+    )
 
 
 @router.delete("/sessions/{session_id}", response_model=CloseResponse)

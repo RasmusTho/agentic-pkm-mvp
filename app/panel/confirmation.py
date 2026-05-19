@@ -216,6 +216,26 @@ def _write_rejected_projection(proposal: StagedProposal) -> None:
         logger.debug("rejected projection vault write failed note_path=%s", note_path)
 
 
+def _apply_correction(
+    intent_event: "PanelIntentEvent",
+    correction: CorrectionFields,
+) -> "PanelIntentEvent":
+    """Return a deep copy of intent_event with the correction applied.
+
+    If correction.corrected_action_id is set, only that action's mapping.params
+    is updated. If None, the correction is applied to all actions. The original
+    proposal is never mutated.
+    """
+    from app.events.panel import PanelIntentEvent  # local import to avoid circular
+
+    corrected = intent_event.model_copy(deep=True)
+    for action in corrected.payload.actions:
+        target = correction.corrected_action_id is None or action.id == correction.corrected_action_id
+        if target and correction.corrected_parameters is not None and action.mapping is not None:
+            action.mapping.params = {**action.mapping.params, **correction.corrected_parameters}
+    return corrected
+
+
 def _write_blocked_projection(
     proposal: StagedProposal,
     gate: str,
@@ -334,15 +354,13 @@ class PanelConfirmationService:
             self._idempotency.set(request.idempotency_key, resp)
             return resp
 
-        if request.correction and request.correction.enabled:
-            raise ValueError(
-                "correction.enabled=true is not supported in this slice — "
-                "corrected confirmations are not yet implemented"
-            )
-
         import app.panel.confirmation as _self_mod
 
-        result = _self_mod.execute_panel_intent(proposal.intent_event)
+        if request.correction and request.correction.enabled:
+            corrected_event = _apply_correction(proposal.intent_event, request.correction)
+            result = _self_mod.execute_panel_intent(corrected_event)
+        else:
+            result = _self_mod.execute_panel_intent(proposal.intent_event)
         events: list[str] = []
         for e in result.emitted_events:
             if isinstance(e, dict):
@@ -357,6 +375,9 @@ class PanelConfirmationService:
 
         now_iso = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
+        is_corrected = bool(request.correction and request.correction.enabled)
+        correction_note = "corrected" if is_corrected else None
+
         if all_logged and not any_triggered:
             # Logged outcome: emit panel.action.logged if not already present
             if "panel.action.logged" not in events:
@@ -370,7 +391,12 @@ class PanelConfirmationService:
                     trace_id=proposal.trace_id or request.idempotency_key,
                 )
                 events.append("panel.action.logged")
-            receipt = Receipt(action_taken="confirm", outcome="logged", timestamp=now_iso)
+            receipt = Receipt(
+                action_taken="confirm",
+                outcome="logged",
+                timestamp=now_iso,
+                message=correction_note,
+            )
             resp = ConfirmResponse(
                 proposal_id=request.proposal_id,
                 artifact_id=request.artifact_id,
@@ -394,6 +420,7 @@ class PanelConfirmationService:
                 outcome="success",
                 timestamp=now_iso,
                 inverse_action=inverse_action,
+                message=correction_note,
             )
             resp = ConfirmResponse(
                 proposal_id=request.proposal_id,
