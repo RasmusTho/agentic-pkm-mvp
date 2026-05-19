@@ -2,9 +2,26 @@
 
 **Status: dev/staging only — this is not a production UI contract.**
 
+## Visual alignment history
+
+| Pass | PR | What changed |
+|---|---|---|
+| Minimal dev server (diagnostic view) | #1108 (#1103) | Plain HTML table render: functional, no visual design |
+| First visual alignment pass | #1118 | Yggdrasil shell: note body as primary surface, provenance chrome, agent rail placeholder, dark design tokens — still not production UI |
+
+The first visual alignment pass (#1118) replaces the plain diagnostic table with a
+contract-aligned workspace shell. It uses Yggdrasil design tokens, preserves all
+functional behavior, and adds stable `data-testid` / `data-region` attributes for
+future Canvas/Panel integration. Canvas body-edit and Panel execution remain out of
+scope. See `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`
+and `tests/companion_ui/test_real_note_workspace_visual_shell.py` for the
+implementation and verification targets.
+
+---
+
 ## 1. Purpose and Scope
 
-This document describes the minimal Companion UI dev/staging page that loads a
+This document describes the Companion UI dev/staging page that loads a
 real vault note through the runtime API and renders it through the read-only
 workspace shell.
 
@@ -286,10 +303,15 @@ The following are explicitly out of scope for this dev page:
 - Using real environment vaults in automated tests
 - Production auth/TLS/reverse-proxy hardening
 - Public internet exposure
-- Canvas bounded suggestion UI
+- Canvas bounded suggestion UI (placeholder only in the agent rail)
 - Canvas body-edit behavior
+- Panel execution and confirmation (agent rail is a placeholder)
 - Proposal-generation UI
 - Production UI framework decision
+
+The first visual alignment pass (#1118) adds the workspace shell and design tokens.
+It does not claim production UI. Canvas editing and Panel execution remain out of
+scope; the agent rail renders a placeholder only.
 
 ---
 
