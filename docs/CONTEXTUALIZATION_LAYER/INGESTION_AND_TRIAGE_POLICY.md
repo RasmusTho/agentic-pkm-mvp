@@ -1,6 +1,6 @@
 State: Ingestion and triage policy for the Contextualization Layer (docs-only, target-state framing).
 Doc role: Concept contract / policy
-Authority: Defines the lifecycle state model, per-pipeline capture-to-promotion flows, and AI/governance boundaries for life-wide artifact ingestion and triage. Not a runtime implementation, not a migration plan, not a schema.
+Authority: Defines the ingestion pipeline states, per-pipeline capture-to-promotion flows, and AI/governance boundaries for life-wide artifact ingestion and triage. Not a runtime implementation, not a migration plan, not a schema.
 
 # Ingestion and Triage Policy
 
@@ -19,7 +19,9 @@ This document is explicitly:
 
 This document sits on top of `docs/CONTEXTUALIZATION_LAYER/LIFE_WIDE_ARTIFACT_TAXONOMY.md` and `docs/CONTEXTUALIZATION_LAYER/ARTIFACT_METADATA_CONTRACT.md`. It applies the artifact classes, lifecycle states, authority model, and AI-governance rules defined there to concrete capture-to-promotion flows.
 
-## 2. Lifecycle state model
+## 2. Ingestion pipeline states
+
+> **Disambiguation:** These are triage workflow stages, not values for the `lifecycle` metadata field. The `lifecycle` field values (`ephemeral`, `active`, `durable`, `archived`, `rebuildable`) are defined in `ARTIFACT_METADATA_CONTRACT.md` and `LIFE_WIDE_ARTIFACT_TAXONOMY.md`. The states below describe where an artifact sits in the ingestion process, not its long-term durability posture.
 
 Every artifact that enters the system passes through one or more of the following states. States are not strictly sequential for all artifact classes, but the model below defines what is allowed at each state.
 
