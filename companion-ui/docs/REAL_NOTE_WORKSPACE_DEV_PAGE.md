@@ -205,8 +205,8 @@ targets. The runtime owns environment and vault binding.
 
 8. **Verify no mutation occurs during simple load.**
 
-   A `GET /api/artifacts/note` request is read-only. Confirm no vault files
-   are modified during a load-only operation.
+   A `GET /api/companion/workspace` request is read-only. Confirm no vault
+   files are modified during a load-only operation.
 
 ### Example environment mappings
 
@@ -277,8 +277,8 @@ The following safety rules apply unconditionally to the dev/staging page:
 
 - **Do not use real dev/test/prod vaults as automated test fixtures.** Automated
   tests must use fake clients, fixtures, or `tmp_path`.
-- **Default UAT remains read-only note loading.** A `GET /api/artifacts/note`
-  call does not mutate vault files.
+- **Default UAT remains read-only workspace loading.** A
+  `GET /api/companion/workspace` call does not mutate vault files.
 - **Confirm/reject/writeback testing against any real environment vault must be
   explicitly operator-gated** and use a disposable test note. It is not part of
   this PR's scope.

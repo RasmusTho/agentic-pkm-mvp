@@ -35,6 +35,12 @@ def _fields(
     content_hash: str = "sha256-feedcafe",
     body: str = "# Research Note\n\nContent goes here.",
     panel_rail: str = "Panel / agent rail placeholder",
+    canvas_session_state: str = "idle",
+    canvas_session_persistence: str = "in_memory",
+    panel_state: str = "idle",
+    panel_proposal_count: int = 0,
+    guard_writeguard_status: str = "ok",
+    guard_canvas_enabled: bool = True,
 ) -> dict:
     return {
         "title": title,
@@ -43,6 +49,12 @@ def _fields(
         "content_hash": content_hash,
         "body": body,
         "panel_rail": panel_rail,
+        "canvas_session_state": canvas_session_state,
+        "canvas_session_persistence": canvas_session_persistence,
+        "panel_state": panel_state,
+        "panel_proposal_count": panel_proposal_count,
+        "guard_writeguard_status": guard_writeguard_status,
+        "guard_canvas_enabled": guard_canvas_enabled,
         "is_production_ui": False,
         "dev_page_label": "dev/staging",
     }
@@ -223,6 +235,32 @@ class TestAgentRail:
         """Rail must carry an idle state badge for future Panel state wiring."""
         html = _html_with_note()
         assert "idle" in html
+
+    def test_canvas_state_indicator(self) -> None:
+        html = _html_with_note(canvas_session_state="paused")
+        assert 'data-testid="workspace-canvas-state"' in html
+        assert "Canvas" in html
+        assert "paused" in html
+
+    def test_panel_state_indicator(self) -> None:
+        html = _html_with_note(panel_state="proposal_staged", panel_proposal_count=2)
+        assert 'data-testid="workspace-panel-state"' in html
+        assert "proposal_staged" in html
+        assert "2 proposals" in html
+
+    def test_guard_blocked_indicator(self) -> None:
+        html = _html_with_note(
+            guard_writeguard_status="blocked",
+            guard_canvas_enabled=False,
+        )
+        assert 'data-testid="workspace-guard-indicator"' in html
+        assert "WriteGuard blocked" in html
+        assert "Canvas disabled" in html
+
+    def test_in_memory_session_persistence_notice(self) -> None:
+        html = _html_with_note(canvas_session_persistence="in_memory")
+        assert 'data-testid="workspace-session-persistence"' in html
+        assert "Session persistence: in_memory" in html
 
 
 # ---------------------------------------------------------------------------

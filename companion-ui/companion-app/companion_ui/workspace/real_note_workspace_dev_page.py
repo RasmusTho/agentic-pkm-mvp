@@ -4,7 +4,7 @@ DEV/STAGING ONLY — this is not a production UI contract.
 
 Provides a thin page model that:
 - accepts a NoteLoadIntent (note_path) from the user
-- loads GET /api/artifacts/note via the live HTTP client
+- loads GET /api/companion/workspace via the live HTTP client
 - renders the payload through the read-only workspace shell
 - exposes a secondary Panel/agent rail placeholder
 
@@ -83,6 +83,12 @@ class DevPageState:
     shell: Optional[RealNoteWorkspaceShell] = None
     error: Optional[str] = None
     panel_rail_placeholder: str = "Panel / agent rail — placeholder (dev)"
+    canvas_session_state: str = "idle"
+    canvas_session_persistence: str = ""
+    panel_state: str = "idle"
+    panel_proposal_count: int = 0
+    guard_writeguard_status: str = "ok"
+    guard_canvas_enabled: bool = True
     is_loaded: bool = False
 
 
@@ -117,38 +123,55 @@ class RealNoteWorkspaceDevPage:
     def load(self, intent: NoteLoadIntent) -> DevPageState:
         """Load a note via the runtime API.
 
-        Calls GET /api/artifacts/note through the injected client.
+        Calls GET /api/companion/workspace through the injected client.
         The runtime API determines which vault is read; the page does
         not choose or inspect vault files.
         """
         params: dict = {"note_path": intent.note_path}
-        if intent.artifact_id:
-            params["artifact_id"] = intent.artifact_id
 
         try:
-            raw = self._http.get("/api/artifacts/note", params=params)
+            raw = self._http.get("/api/companion/workspace", params=params)
         except WorkspaceClientError as exc:
             self.state = DevPageState(error=str(exc))
             return self.state
 
+        artifact = raw.get("artifact") or {}
+        canvas = raw.get("canvas") or {}
+        panel = raw.get("panel") or {}
+        guards = raw.get("guards") or {}
+
         # The runtime echoes artifact_id only when supplied in the request.
         # Fall back to note_path so note-path-only loads don't fail the shell's
         # non-empty artifact_id invariant.
-        resolved_note_path = raw.get("note_path") or intent.note_path
+        resolved_note_path = artifact.get("note_path") or intent.note_path
         resolved_artifact_id = (
-            raw.get("artifact_id")
+            artifact.get("artifact_id")
             or intent.artifact_id
             or resolved_note_path
         )
         payload = ArtifactNotePayload(
             artifact_id=resolved_artifact_id,
             note_path=resolved_note_path,
-            title=raw.get("title", ""),
-            body=raw.get("body", ""),
-            content_hash=raw.get("content_hash", ""),
+            title=artifact.get("title", ""),
+            body=artifact.get("body", ""),
+            content_hash=artifact.get("content_hash", ""),
         )
         shell = RealNoteWorkspaceShell(payload=payload, agent_rail_state=None)
-        self.state = DevPageState(shell=shell, is_loaded=True)
+        panel_count = int(panel.get("proposal_count") or 0)
+        panel_label = panel.get("state") or "idle"
+        if panel_count:
+            panel_label = f"{panel_label} ({panel_count} proposal{'s' if panel_count != 1 else ''})"
+        self.state = DevPageState(
+            shell=shell,
+            panel_rail_placeholder=f"Panel state: {panel_label}",
+            canvas_session_state=canvas.get("session_state") or "idle",
+            canvas_session_persistence=canvas.get("session_persistence") or "",
+            panel_state=panel.get("state") or "idle",
+            panel_proposal_count=panel_count,
+            guard_writeguard_status=guards.get("writeguard_status") or "ok",
+            guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
+            is_loaded=True,
+        )
         return self.state
 
     def render_fields(self) -> Optional[dict]:
@@ -166,6 +189,12 @@ class RealNoteWorkspaceDevPage:
             "body": shell.body,
             "content_hash": shell.content_hash,
             "panel_rail": self.state.panel_rail_placeholder,
+            "canvas_session_state": self.state.canvas_session_state,
+            "canvas_session_persistence": self.state.canvas_session_persistence,
+            "panel_state": self.state.panel_state,
+            "panel_proposal_count": self.state.panel_proposal_count,
+            "guard_writeguard_status": self.state.guard_writeguard_status,
+            "guard_canvas_enabled": self.state.guard_canvas_enabled,
             "is_production_ui": self.is_production_ui,
             "dev_page_label": self.dev_page_label,
         }

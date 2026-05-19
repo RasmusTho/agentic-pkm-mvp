@@ -2,7 +2,7 @@
 
 Concrete adapter implementing the HttpClient protocol consumed by
 WorkspaceConfirmSession. Uses httpx to call:
-  GET  /api/artifacts/note
+  GET  /api/companion/workspace
   POST /api/panel/confirm
 
 The base URL is configurable so the same client works against dev,

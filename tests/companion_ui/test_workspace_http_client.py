@@ -1,7 +1,7 @@
 """Tests: live workspace HTTP client (#1071).
 
 Verifies that WorkspaceHttpClient:
-- fetches artifact note payloads from a configured base URL
+- fetches workspace aggregate payloads from a configured base URL
 - submits Panel confirm requests to the correct endpoint
 - maps executed/blocked/rejected/logged outcomes into WorkspaceConfirmSession shape
 - surfaces HTTP/API failures as typed client errors, not silent empty states
@@ -59,32 +59,39 @@ _REFRESHED_ARTIFACT: dict[str, Any] = {
     "content_hash": "refreshed00",
 }
 
+_REFRESHED_WORKSPACE: dict[str, Any] = {
+    "artifact": _REFRESHED_ARTIFACT,
+    "canvas": {"session_state": "idle", "session_persistence": "in_memory"},
+    "panel": {"state": "idle", "proposal_count": 0},
+    "guards": {"canvas_enabled": True, "writeguard_status": "ok"},
+}
+
 
 # ---------------------------------------------------------------------------
 # AC 1: client fetches artifact note payload from configured base URL
 # ---------------------------------------------------------------------------
 
 
-def test_workspace_http_client_fetches_artifact_note() -> None:
-    """Client calls GET /api/artifacts/note at the configured base URL."""
-    mock_resp = _mock_response(200, _SAMPLE_ARTIFACT)
+def test_workspace_http_client_fetches_workspace_aggregate() -> None:
+    """Client calls GET /api/companion/workspace at the configured base URL."""
+    mock_resp = _mock_response(200, {"artifact": _SAMPLE_ARTIFACT})
 
     with patch("httpx.get", return_value=mock_resp) as mock_get:
         client = WorkspaceHttpClient(base_url="http://localhost:18001")
         result = client.get(
-            "/api/artifacts/note",
+            "/api/companion/workspace",
             params={"note_path": "/vault/notes/test.md"},
         )
 
     mock_get.assert_called_once()
     call_args = mock_get.call_args
-    assert call_args.args[0] == "http://localhost:18001/api/artifacts/note"
+    assert call_args.args[0] == "http://localhost:18001/api/companion/workspace"
     assert call_args.kwargs["params"]["note_path"] == "/vault/notes/test.md"
 
-    assert result["artifact_id"] == "note-uuid-1"
-    assert result["title"] == "Test Note"
-    assert result["content_hash"] == "abc123def456"
-    assert "Body content" in result["body"]
+    assert result["artifact"]["artifact_id"] == "note-uuid-1"
+    assert result["artifact"]["title"] == "Test Note"
+    assert result["artifact"]["content_hash"] == "abc123def456"
+    assert "Body content" in result["artifact"]["body"]
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +184,7 @@ def test_workspace_http_client_maps_panel_confirm_outcomes() -> None:
             **extra,
         }
         confirm_mock = _mock_response(200, confirm_payload)
-        artifact_mock = _mock_response(200, _REFRESHED_ARTIFACT)
+        artifact_mock = _mock_response(200, _REFRESHED_WORKSPACE)
 
         with patch("httpx.post", return_value=confirm_mock), \
              patch("httpx.get", return_value=artifact_mock):
@@ -220,14 +227,14 @@ def test_workspace_http_client_surfaces_typed_errors() -> None:
     with patch("httpx.get", return_value=_mock_response(404, '{"error":"note_not_found"}')):
         client = WorkspaceHttpClient(base_url="http://localhost:18001")
         with pytest.raises(WorkspaceClientHTTPError) as exc_info:
-            client.get("/api/artifacts/note", params={"note_path": "missing.md"})
+            client.get("/api/companion/workspace", params={"note_path": "missing.md"})
         assert exc_info.value.status_code == 404
 
     # 500 → WorkspaceClientHTTPError with status_code
     with patch("httpx.get", return_value=_mock_response(500, "Internal Server Error")):
         client = WorkspaceHttpClient(base_url="http://localhost:18001")
         with pytest.raises(WorkspaceClientHTTPError) as exc_info:
-            client.get("/api/artifacts/note", params={"note_path": "error.md"})
+            client.get("/api/companion/workspace", params={"note_path": "error.md"})
         assert exc_info.value.status_code == 500
 
     # 422 on confirm → WorkspaceClientHTTPError
@@ -241,13 +248,13 @@ def test_workspace_http_client_surfaces_typed_errors() -> None:
     with patch("httpx.get", side_effect=_httpx.ConnectError("connection refused")):
         client = WorkspaceHttpClient(base_url="http://localhost:18001")
         with pytest.raises(WorkspaceClientNetworkError):
-            client.get("/api/artifacts/note", params={"note_path": "test.md"})
+            client.get("/api/companion/workspace", params={"note_path": "test.md"})
 
     # Timeout → WorkspaceClientNetworkError
     with patch("httpx.get", side_effect=_httpx.TimeoutException("timed out")):
         client = WorkspaceHttpClient(base_url="http://localhost:18001")
         with pytest.raises(WorkspaceClientNetworkError):
-            client.get("/api/artifacts/note", params={"note_path": "slow.md"})
+            client.get("/api/companion/workspace", params={"note_path": "slow.md"})
 
 
 # ---------------------------------------------------------------------------

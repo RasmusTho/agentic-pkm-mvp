@@ -52,12 +52,19 @@ _REJECTED_CONFIRM_RESPONSE: dict[str, Any] = {
     "events_emitted": [],
 }
 
-_REFRESHED_ARTIFACT_RESPONSE: dict[str, Any] = {
+_REFRESHED_ARTIFACT: dict[str, Any] = {
     "artifact_id": "note-uuid-1",
-    "note_path": "/vault/notes/test.md",
+    "note_path": "notes/test.md",
     "title": "Test Note",
     "body": "# Test Note\n\nUpdated body after confirm.",
     "content_hash": "refreshed00",
+}
+
+_REFRESHED_WORKSPACE_RESPONSE: dict[str, Any] = {
+    "artifact": _REFRESHED_ARTIFACT,
+    "canvas": {"session_state": "idle", "session_persistence": "in_memory"},
+    "panel": {"state": "idle", "proposal_count": 0},
+    "guards": {"canvas_enabled": True, "writeguard_status": "ok"},
 }
 
 
@@ -67,7 +74,7 @@ class _StubHttpClient:
     def __init__(
         self,
         confirm_response: dict[str, Any],
-        artifact_response: dict[str, Any] = _REFRESHED_ARTIFACT_RESPONSE,
+        artifact_response: dict[str, Any] = _REFRESHED_WORKSPACE_RESPONSE,
     ) -> None:
         self._confirm = confirm_response
         self._artifact = artifact_response
@@ -87,7 +94,7 @@ def _confirm_kwargs(**overrides) -> dict:
     base = {
         "proposal_id": "prop-1",
         "artifact_id": "note-uuid-1",
-        "note_path": "/vault/notes/test.md",
+        "note_path": "notes/test.md",
         "action": "confirm",
         "idempotency_key": "idem-1",
     }
@@ -167,7 +174,7 @@ def test_panel_confirm_displays_rejected_result() -> None:
 def test_panel_confirm_refreshes_artifact_payload_after_response() -> None:
     http = _StubHttpClient(
         confirm_response=_EXECUTED_CONFIRM_RESPONSE,
-        artifact_response=_REFRESHED_ARTIFACT_RESPONSE,
+        artifact_response=_REFRESHED_WORKSPACE_RESPONSE,
     )
     session = WorkspaceConfirmSession(http)
 
@@ -184,9 +191,9 @@ def test_panel_confirm_refreshes_artifact_payload_after_response() -> None:
     # Artifact endpoint was called exactly once
     assert len(http.artifact_calls) == 1
     art_call = http.artifact_calls[0]
-    assert art_call["url"] == "/api/artifacts/note"
-    assert art_call["params"]["note_path"] == "/vault/notes/test.md"
-    assert art_call["params"]["artifact_id"] == "note-uuid-1"
+    assert art_call["url"] == "/api/companion/workspace"
+    assert art_call["params"]["note_path"] == "notes/test.md"
+    assert "artifact_id" not in art_call["params"]
 
 
 # ---------------------------------------------------------------------------
