@@ -84,7 +84,10 @@ def _render_note_section(fields: dict) -> str:
     panel_rail = _e(fields.get("panel_rail", "Panel / agent rail placeholder"))
     canvas_state = _e(fields.get("canvas_session_state", "idle"))
     persistence = str(fields.get("canvas_session_persistence", ""))
-    panel_state = _e(fields.get("panel_state", "idle"))
+    panel_render = fields.get("panel_render") or {}
+    panel_state = _e(panel_render.get("state") or fields.get("panel_state", "idle"))
+    panel_label = _e(panel_render.get("label") or panel_rail)
+    panel_message = _e(panel_render.get("message") or "")
     proposal_count = int(fields.get("panel_proposal_count", 0) or 0)
     writeguard_status = _e(fields.get("guard_writeguard_status", "ok"))
     canvas_enabled = bool(fields.get("guard_canvas_enabled", True))
@@ -110,6 +113,16 @@ def _render_note_section(fields: dict) -> str:
             "</div>"
         )
     proposal_text = f"{proposal_count} proposal{'s' if proposal_count != 1 else ''}"
+    panel_message_html = ""
+    if panel_message:
+        panel_message_html = (
+            '<div class="panel-message" data-testid="workspace-panel-message">'
+            + panel_message
+            + "</div>"
+        )
+    proposal_rows_html = _render_panel_proposal_rows(
+        fields.get("panel_proposals") or [],
+    )
 
     return f"""
   <div class="workspace-layout">
@@ -140,15 +153,51 @@ def _render_note_section(fields: dict) -> str:
         </div>
         <div class="rail-state-row">
           <span class="rail-state-label">Panel</span>
-          <span class="rail-state-value">{panel_state}</span>
+          <span class="rail-state-value" data-testid="workspace-panel-label">{panel_label}</span>
           <span class="rail-state-count" data-testid="workspace-panel-proposal-count">{proposal_text}</span>
         </div>
+        {panel_message_html}
+        {proposal_rows_html}
         {guard_html}
         {persistence_html}
         {panel_rail}
       </div>
     </aside>
   </div>"""
+
+
+def _render_panel_proposal_rows(proposals: list[dict]) -> str:
+    if not proposals:
+        return ""
+
+    rows: list[str] = []
+    for proposal in proposals:
+        evidence = proposal.get("evidence") or {}
+        affordances = proposal.get("affordances") or {}
+        enabled_affordances = [
+            label
+            for label in ("confirm", "correct", "reject")
+            if affordances.get(label)
+        ]
+        rows.append(
+            f"""
+        <div class="panel-proposal-row" data-testid="workspace-panel-proposal-row">
+          <div class="panel-proposal-title">{_e(proposal.get("description", ""))}</div>
+          <div class="panel-proposal-meta">
+            <span>{_e(proposal.get("proposal_id", ""))}</span>
+            <span>{_e(proposal.get("status", ""))}</span>
+          </div>
+          <div class="panel-proposal-evidence" data-testid="workspace-panel-evidence">
+            <span>{_e(evidence.get("trigger_summary", ""))}</span>
+            <span>{_e(evidence.get("action_class", ""))}</span>
+            <span>{_e(evidence.get("cognition_route", ""))}</span>
+          </div>
+          <div class="panel-proposal-affordances">
+            {_e(" / ".join(enabled_affordances))}
+          </div>
+        </div>"""
+        )
+    return "\n".join(rows)
 
 
 def _render_error_section(error: str) -> str:
@@ -507,6 +556,35 @@ def render_index_html(
       background: var(--bg-raised);
       border: 1px solid var(--border);
       color: var(--fg-2);
+    }}
+    .panel-message {{
+      border-left: 2px solid var(--accent);
+      color: var(--fg-2);
+      font-size: var(--text-sm);
+      padding-left: 10px;
+    }}
+    .panel-proposal-row {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--fg-2);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 10px;
+    }}
+    .panel-proposal-title {{
+      color: var(--fg-1);
+      font-size: var(--text-sm);
+      font-style: normal;
+    }}
+    .panel-proposal-meta, .panel-proposal-evidence, .panel-proposal-affordances {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      font-style: normal;
     }}
   </style>
 </head>

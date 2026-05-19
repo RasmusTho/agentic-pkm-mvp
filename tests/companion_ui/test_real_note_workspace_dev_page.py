@@ -150,7 +150,7 @@ def test_loads_from_workspace_aggregate() -> None:
     page = _loaded_page(response=_workspace_response(
         artifact=_artifact_response(title="Aggregate Note"),
         canvas={"session_state": "active", "session_persistence": "in_memory"},
-        panel={"state": "proposal_staged", "proposal_count": 2},
+        panel={"state": "proposals-staged", "proposal_count": 2},
         guards={"canvas_enabled": False, "writeguard_status": "blocked"},
     ))
 
@@ -159,7 +159,7 @@ def test_loads_from_workspace_aggregate() -> None:
     assert fields["title"] == "Aggregate Note"
     assert fields["canvas_session_state"] == "active"
     assert fields["canvas_session_persistence"] == "in_memory"
-    assert fields["panel_state"] == "proposal_staged"
+    assert fields["panel_state"] == "proposals-staged"
     assert fields["panel_proposal_count"] == 2
     assert fields["guard_writeguard_status"] == "blocked"
     assert fields["guard_canvas_enabled"] is False
