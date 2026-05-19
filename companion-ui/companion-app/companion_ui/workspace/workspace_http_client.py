@@ -3,7 +3,9 @@
 Concrete adapter implementing the HttpClient protocol consumed by
 WorkspaceConfirmSession. Uses httpx to call:
   GET  /api/companion/workspace
+  POST /api/canvas/sessions
   POST /api/panel/confirm
+  DELETE /api/canvas/sessions/{id}
 
 The base URL is configurable so the same client works against dev,
 test, or prod runtime instances. The runtime environment determines
@@ -91,6 +93,17 @@ class WorkspaceHttpClient:
         full_url = self._base_url + url
         try:
             resp = httpx.post(full_url, json=json, timeout=self._timeout)
+        except httpx.RequestError as exc:
+            raise WorkspaceClientNetworkError(str(exc)) from exc
+        if resp.status_code >= 400:
+            raise WorkspaceClientHTTPError(resp.status_code, resp.text)
+        return resp.json()
+
+    def delete(self, url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """DELETE request to the runtime API. Raises WorkspaceClientError on failure."""
+        full_url = self._base_url + url
+        try:
+            resp = httpx.delete(full_url, params=params, timeout=self._timeout)
         except httpx.RequestError as exc:
             raise WorkspaceClientNetworkError(str(exc)) from exc
         if resp.status_code >= 400:
