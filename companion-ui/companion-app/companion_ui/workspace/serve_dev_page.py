@@ -134,6 +134,10 @@ def _render_note_section(fields: dict) -> str:
         fields.get("panel_proposals") or [],
     )
     suggestion_flow_html = _render_suggestion_flow_region(fields)
+    suggestion_cards_html = _render_suggestion_cards(fields.get("suggestion_cards") or [])
+    suggested_insertions_html = _render_suggested_insertions(
+        fields.get("suggested_insertions") or []
+    )
     canvas_controls_html = _render_canvas_session_controls(
         note_path=note_path_val,
         session_id=canvas_session_id,
@@ -165,6 +169,7 @@ def _render_note_section(fields: dict) -> str:
       </header>
       <div class="note-body" data-testid="workspace-note-body" data-region="note-body">
         <pre class="note-body-content">{body}</pre>
+        {suggested_insertions_html}
       </div>
     </div>
     <aside class="agent-rail" data-testid="workspace-agent-rail" data-region="agent-rail">
@@ -186,6 +191,7 @@ def _render_note_section(fields: dict) -> str:
         {panel_message_html}
         {proposal_rows_html}
         {suggestion_flow_html}
+        {suggestion_cards_html}
         {guard_html}
         {persistence_html}
         {panel_rail}
@@ -221,6 +227,80 @@ def _render_suggestion_flow_region(fields: dict) -> str:
           <div class="suggestion-composer-state">{composer_text}</div>
           <div class="suggestion-transitions">{transition_html}</div>
         </div>"""
+
+
+def _render_suggestion_cards(cards: list[dict]) -> str:
+    rows: list[str] = []
+    for card in cards:
+        intents = card.get("available_intents") or []
+        actions = "".join(
+            (
+                '<button type="button" class="suggestion-action" '
+                f'data-intent="{_e(intent)}">{_e(_suggestion_action_label(intent))}</button>'
+            )
+            for intent in intents
+        )
+        role = f' role="{_e(card.get("aria_role"))}"' if card.get("aria_role") else ""
+        notice = ""
+        if card.get("classification_notice"):
+            notice = (
+                '<div class="suggestion-card-notice" '
+                'data-testid="suggestion-card-classification">'
+                + _e(card.get("classification_notice"))
+                + "</div>"
+            )
+        denial = ""
+        if card.get("denial_reason"):
+            denial = (
+                '<div class="suggestion-card-denial" data-testid="suggestion-card-denial">'
+                + _e(card.get("denial_reason"))
+                + "</div>"
+            )
+        rows.append(
+            f"""
+        <div
+          class="suggestion-card"
+          data-testid="suggestion-card"
+          data-variant="{_e(card.get("data_variant", ""))}"
+          data-suggestion-id="{_e(card.get("data_suggestion_id", ""))}"{role}>
+          <div class="suggestion-card-title">{_e(card.get("title", ""))}</div>
+          <div class="suggestion-card-preview">{_e(card.get("preview_text", ""))}</div>
+          {notice}
+          {denial}
+          <div class="suggestion-card-actions">{actions}</div>
+        </div>"""
+        )
+    return "\n".join(rows)
+
+
+def _suggestion_action_label(intent: str) -> str:
+    return {
+        "suggestion.apply": "Apply",
+        "suggestion.discard": "Discard",
+        "suggestion.inspect": "Inspect",
+        "governance.queue": "Queue",
+        "blocked.acknowledge": "Acknowledge",
+    }.get(intent, intent)
+
+
+def _render_suggested_insertions(insertions: list[dict]) -> str:
+    rows: list[str] = []
+    for insertion in insertions:
+        if not insertion.get("is_visible", True):
+            continue
+        rows.append(
+            f"""
+        <ins
+          class="suggested-insertion"
+          data-testid="suggested-insertion-block"
+          data-suggestion-id="{_e(insertion.get("data_suggestion_id", ""))}"
+          data-state="{_e(insertion.get("data_state", ""))}"
+          aria-label="{_e(insertion.get("aria_label", ""))}">
+          <span class="suggested-insertion-label">{_e(insertion.get("label", ""))}</span>
+          <span class="suggested-insertion-text">{_e(insertion.get("proposed_text", ""))}</span>
+        </ins>"""
+        )
+    return "\n".join(rows)
 
 
 def _render_canvas_session_controls(
@@ -610,6 +690,27 @@ def render_index_html(
       white-space: pre-wrap;
       word-break: break-word;
     }}
+    .suggested-insertion {{
+      background: rgba(212,168,67,0.08);
+      border-left: 3px solid var(--accent);
+      color: var(--fg-1);
+      display: block;
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      margin-top: 12px;
+      padding: 10px 12px;
+      text-decoration: none;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }}
+    .suggested-insertion-label {{
+      color: var(--accent);
+      display: block;
+      font-size: var(--text-xs);
+      letter-spacing: 0.06em;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+    }}
 
     /* ---- Agent rail ---- */
     .agent-rail {{
@@ -778,6 +879,42 @@ def render_index_html(
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
+    }}
+    .suggestion-card {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--fg-2);
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      padding: 10px;
+    }}
+    .suggestion-card[data-variant="blocked"] {{
+      border-color: rgba(255,61,61,0.3);
+    }}
+    .suggestion-card-title {{
+      color: var(--fg-1);
+      font-size: var(--text-sm);
+    }}
+    .suggestion-card-preview, .suggestion-card-notice, .suggestion-card-denial {{
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .suggestion-card-actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }}
+    .suggestion-action {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--fg-1);
+      font-family: var(--font-ui);
+      font-size: var(--text-xs);
+      padding: 4px 7px;
+      text-transform: uppercase;
     }}
     .panel-proposal-row {{
       background: var(--bg-raised);
