@@ -35,6 +35,10 @@ Two invariants from the prior doc are load-bearing for everything below:
 
 Note: the prior doc's Section 3 names three *initial* classes; bridge / assembly is carved out as a boundary inside the agentic memory section and as a separate row in the durability table. This metadata contract treats bridge / assembly as a fourth class with its own metadata shape, which is consistent with that boundary and does not reopen the vocabulary.
 
+This contract also covers the expanded life-wide artifact taxonomy introduced in `docs/CONTEXTUALIZATION_LAYER/LIFE_WIDE_ARTIFACT_TAXONOMY.md`. That document names the concrete artifact sub-classes a life-wide PKM must support across all life areas — from ephemeral `shopping_list` and `email_summary` artifacts to durable `evergreen_note`, `decision_record`, and `media_note` artifacts, through agentic memory candidates and machine mirrors. The `artifact_class` values, lifecycle postures, authority flags, provenance kinds, and work-relation values in Sections 4–8 below align with and are informed by that taxonomy. When the taxonomy's authority / provenance / work-relation axes and this contract appear to diverge, the taxonomy governs the conceptual intent; this contract governs the field-level expression.
+
+The taxonomy's Section 14 ("Implications for future work") explicitly lists updating this contract as the first required follow-up. This revision delivers that update.
+
 ## 3. Metadata Placement Principles
 
 Not all metadata belongs in the same place. This contract defines three placement modes. The same logical field may move between modes depending on artifact class and intended audience.
@@ -94,7 +98,7 @@ A small set of fields can recur across artifact classes. None of them are mandat
 | Field | Meaning |
 | --- | --- |
 | `artifact_id` | Stable identifier for the artifact across renames and moves. May be a UUID, hash, or other stable token. |
-| `artifact_class` | One of `human_knowledge`, `agentic_memory`, `bridge_artifact`, `machine_mirror`, `companion_metadata`. |
+| `artifact_class` | The artifact family. **Umbrella values:** `human_knowledge`, `agentic_memory`, `bridge_artifact`, `machine_mirror`, `companion_metadata`. **Concrete taxonomy class names** from `LIFE_WIDE_ARTIFACT_TAXONOMY.md` (e.g. `evergreen_note`, `shopping_list`, `email_summary`, `media_note`) are also valid and imply the corresponding umbrella class — `evergreen_note` implies `human_knowledge`, `machine_mirror` doubles as a concrete class name. Either form is conformant; the concrete name is preferred when it is known. See Section 4.1 for the full allowed set. |
 | `artifact_type` | Sub-type within the class (e.g. `concept_note`, `task_snapshot`, `context_bundle`, `embedding_record`). |
 | `title` | Short human-readable label. |
 | `created` | When the artifact came into existence. |
@@ -103,26 +107,93 @@ A small set of fields can recur across artifact classes. None of them are mandat
 | `primary_audience` | `human`, `agent`, `system`, or `mixed`. |
 | `source_refs` | References to the artifacts this one is grounded in or derived from. |
 | `review_state` | Posture toward human review (e.g. `unreviewed`, `reviewed`, `accepted`, `rejected`). |
+| `lifecycle` | Stability and retention posture: `ephemeral`, `active`, `durable`, `archived`, `rebuildable`. |
+| `authority` | Trust and action boundary. A map or set of flags; see Section 4.1. |
+| `provenance` | Where the artifact or its claims originated. See Section 4.1 and Section 11. |
+| `work_relation` | Why the artifact exists in the workflow: `capture`, `orient`, `decide`, `execute`, `learn`, `create`, `remember`, `resurface`, `communicate`. |
+| `privacy` | Privacy posture: `private`, `review-required`, `internal`. Relevant especially for media, contact, financial, and screenshot artifacts. |
+| `review` | Whether the artifact is pending or has undergone human review. |
+| `review_on` | Scheduled or condition-based review date. |
+| `review_reason` | Why this artifact is flagged for review. |
 
 These are **logical fields**. They may live inline in a primary note, in a companion metadata note, inside a structured agentic / bridge artifact, or in another documented metadata surface introduced later. Where they live is governed by Section 3, not by this list.
+
+### 4.1 Dimension independence
+
+The fields above capture distinct, non-substitutable axes. Collapsing any two of them is an anti-pattern. None of them may be inferred from folder path, Markdown format, or MOC membership.
+
+- **`artifact_class`** — the broad semantic artifact family. Two valid forms: the **umbrella values** (`human_knowledge`, `agentic_memory`, `bridge_artifact`, `machine_mirror`, `companion_metadata`) or a **concrete taxonomy class name** from `LIFE_WIDE_ARTIFACT_TAXONOMY.md` (e.g. `evergreen_note`, `shopping_list`, `email_summary`, `media_note`). Concrete names imply their umbrella class and are preferred when the sub-class is known. Both forms are authoritative and conformant — the Section 4 table and Section 4.1 use the same allowed set. Class is not determined by folder path, Markdown format, or MOC membership.
+- **`artifact_type`** — the concrete form or subtype within a class (e.g. `concept_note`, `task_snapshot`, `context_bundle`, `embedding_record`). For life-wide taxonomy classes whose `artifact_class` name is already specific, `artifact_type` names a further subdivision only when needed.
+- **`memory_type`** — the cognitive class of an agentic memory artifact (`working_context`, `episodic_memory`, `semantic_memory`, `prospective_memory`, `procedural_memory`, `preference_memory`, `policy_memory`). This axis applies only to `agentic_memory` artifacts and must not be conflated with `artifact_type`. The two are orthogonal: the same form can carry different cognitive classes, and the same cognitive class can take different forms.
+- **`lifecycle`** — the stability and retention posture (`ephemeral`, `active`, `durable`, `archived`, `rebuildable`). A folder or MOC is not a lifecycle. Promotion from `ephemeral` or `active` into `durable` is governance-bearing; see `LIFE_WIDE_ARTIFACT_TAXONOMY.md` Section 4.
+- **`authority`** — the trust and action boundary. Flags include `human_authored`, `ai_generated`, `source_authoritative`, `governance_bearing`, `requires_review`, `agent_editable`. A folder path, a Markdown heading, an AI-generated summary, or MOC membership is not authority.
+- **`provenance`** — where the artifact or its claims originated. Provenance is distinct from authority: an artifact may have clear provenance (an AI summary knows its source) but remain non-authoritative. Provenance kinds: `user_authored`, `own_photo`, `own_screenshot`, `own_scan`, `email_thread`, `youtube_url`, `web_article`, `book`, `pdf`, `ai_summary`, `ai_caption`, `ai_extraction`, `machine_index`.
+- **`work_relation`** — why the artifact exists in the workflow. A note whose `work_relation` is `orient` must not be silently mutated the way a note whose `work_relation` is `execute` may be under explicit instruction.
+
+### 4.2 Required, recommended, and optional by artifact family
+
+The table below states a default field posture. "Required" means a conformant artifact should carry the field. "Recommended" means expected for most artifacts in the family. "Optional" means it may be omitted. "—" means the field does not apply to this family. No runtime enforcement is defined here.
+
+| Field | HK | AM | BA | MM | CN |
+| --- | --- | --- | --- | --- | --- |
+| `artifact_class` | Required | Required | Required | Required | Required |
+| `artifact_type` | Recommended | Recommended | Required | Recommended | Recommended |
+| `title` | Required | Required | Recommended | Optional | Recommended |
+| `lifecycle` | Recommended | Required | Recommended | Required | Recommended |
+| `authority` | Recommended | Required | Required | Required | Required |
+| `provenance` | Recommended | Required | Required | Optional | Recommended |
+| `work_relation` | Recommended | Recommended | Recommended | Optional | Optional |
+| `privacy` | Optional | Optional | Optional | Optional | Optional |
+| `review` / `review_state` | Optional | Required | Optional | Optional | Optional |
+| `created` / `updated` | Recommended | Required | Required | Required | Recommended |
+| `source_refs` | Optional | Required | Required | Required | Optional |
+| `memory_type` | — | Required | — | — | — |
+| `confidence` | — | Recommended | — | — | — |
+| `stale_after` | Optional | Required | Required | Optional | Optional |
+| `activation_policy` | — | Required | — | — | Optional |
+
+HK = Human Knowledge Artifact, AM = Agentic Memory Artifact, BA = Bridge / Assembly Artifact, MM = Machine Mirror Artifact, CN = Companion Metadata Note.
+
+### 4.3 AI-generated metadata rules
+
+These rules apply to any field or artifact that AI has produced or may produce. They are normative for this contract and consistent with `LIFE_WIDE_ARTIFACT_TAXONOMY.md` Section 12.
+
+**Non-authoritativeness by default.** AI-generated metadata and AI-generated artifacts are non-authoritative by default. An AI-generated field does not carry the weight of human-authored knowledge unless a human or governed process has explicitly reviewed and promoted it.
+
+**Allowed AI actions.** AI may suggest classification, captions, summaries, provenance hints, tags, link candidates, `memory_type` assignments, and draft companion notes. AI may create agentic memory candidates and machine mirror artifacts outright. AI may edit fields that are explicitly scoped as `agent_editable` in the `authority` map.
+
+**What AI must not do.**
+- AI must not silently promote source material into durable human knowledge (`evergreen_note`, `synthesis_note`, `decision_record`).
+- AI must not silently mutate governance-bearing metadata (lifecycle classification, authority assertions, `decision_record` content, classification fields that drive downstream behavior).
+- AI must not treat an `ai_suggestion` artifact or an unreviewed agentic memory candidate as authoritative knowledge.
+- Where authority, lifecycle, classification, or cross-note effects are involved, AI must queue a proposal rather than commit a change.
+
+**Marking AI-generated fields.** When individual fields in an otherwise human-owned artifact are AI-generated, they should be grouped or marked as such (e.g. an `ai_generated_fields` list in the `authority` block, or by carrying those fields in a companion note rather than inline).
+
+**Promotion path.** Promotion from `ai_suggestion` or unreviewed agentic memory into a durable Human Knowledge Artifact requires explicit human review or a governed process. `review_state: queued` is the expected staging state before review; promotion produces a different artifact class, not a mutation of the suggestion in place.
 
 ## 5. Human Knowledge Artifact Metadata
 
 ### Recommended inline metadata (primary note)
 
 - `title`
-- `artifact_class: human_knowledge`
-- `artifact_type` (e.g. `concept_note`, `project_note`, `decision_record`, `source_note`, `journal_entry`)
+- `artifact_class` — for life-wide HK artifacts, the `artifact_class` value names the concrete taxonomy class directly: `evergreen_note`, `source_note`, `literature_note`, `synthesis_note`, `decision_record`, `reflection_note`, `project_note`, `area_dashboard`, `daily_log`, `shopping_list`, `checklist`, `media_note`, `screenshot_note`, `scan_or_receipt_note`, `email_summary`, `youtube_source_note`, `contact_note`, `fleeting_capture`. The value `human_knowledge` remains acceptable as a catch-all when the specific sub-class is not yet determined.
+- `artifact_type` — a further subdivision within the class when the `artifact_class` alone is not specific enough (e.g. `artifact_class: media_note` + `artifact_type: photo`).
+- `lifecycle` — for human knowledge artifacts: `ephemeral` (shopping list, fleeting capture), `active` (project note, email summary), or `durable` (evergreen, decision record). Not needed on every note but meaningful on anything with a non-obvious retention horizon.
 - `status` or `maturity` (e.g. `draft`, `working`, `settled`)
 - `created`
 - `updated`
 - `tags` — only when useful for **human** navigation
+- `work_relation` — optional; only when the artifact's role is non-obvious from its class (e.g. `work_relation: decide` on a note whose class alone does not make that clear).
+- `privacy` — optional; include for artifacts containing personal, financial, health, or sensitive data.
 
 The bar for adding a field to a primary human note: a human reader would find the field meaningful and not visually noisy.
 
 ### Belongs in a companion metadata note, not the primary note
 
 - `activation_policy`
+- `authority` details and AI-generated field lists
+- `provenance` details beyond a simple `source_refs` pointer
 - retrieval scores and ranking signals
 - processing state (ingest result, content hash, parser version)
 - embedding / chunk metadata
@@ -130,6 +201,7 @@ The bar for adding a field to a primary human note: a human reader would find th
 - `last_activated`, `activation_count`
 - noisy machine-derived link lists
 - candidate memory references awaiting review
+- `review_on`, `review_reason` when these are system-managed rather than human-authored
 
 ### Example
 
@@ -456,6 +528,187 @@ outcome_ref:
 ```
 
 The bundle references agentic memory and human knowledge artifacts but does not become an agentic memory artifact itself. The `authority_flags` block makes the bundle governable: in this example the bundle is allowed to support answering, orientation, resurfacing, and proposing, but is **not** allowed to authorize a writeback.
+
+### 12.5 Evergreen note
+
+Durable, atomic human knowledge. Distinct from any source, literature, or AI-summary layer.
+
+```yaml
+---
+artifact_class: evergreen_note
+title: Contextualization separates substrate from semantics
+lifecycle: durable
+work_relation: learn
+authority:
+  human_authored: true
+  ai_generated: false
+  governance_bearing: false
+created: 2026-05-18
+updated: 2026-05-18
+---
+```
+
+An AI may suggest a link or flag a potential contradiction but must not rewrite this artifact. It is already durable and does not require lifecycle promotion.
+
+### 12.6 Source note and literature note (distinction)
+
+These are two distinct artifacts. Collapsing them loses the authority boundary.
+
+```yaml
+# source_note — the book as artifact; source itself remains the authority
+---
+artifact_class: source_note
+title: "Shape Up — Ryan Singer"
+lifecycle: durable
+work_relation: learn
+provenance: book
+authority:
+  source_authoritative: false   # the published book holds source authority
+  human_authored: true
+  ai_generated: false
+---
+
+# literature_note — what the author says, in the user's words; not the user's own claims
+---
+artifact_class: literature_note
+title: "Shape Up — chapter 2 paraphrase"
+lifecycle: durable
+work_relation: learn
+source_refs:
+  - "[[Shape Up — Ryan Singer]]"
+authority:
+  human_authored: true
+  ai_generated: false
+  source_authoritative: false   # faithful restatement, not the source itself
+---
+```
+
+A `literature_note` is input to an `evergreen_note` or `synthesis_note`, not a substitute for it.
+
+### 12.7 Media note
+
+Authority remains in the original media file. AI captions and extracted fields are non-authoritative.
+
+```yaml
+---
+artifact_class: media_note
+artifact_type: photo
+lifecycle: durable
+work_relation: remember
+provenance:
+  source_kind: own_photo
+  source_file: /Media/Photos/2026/20260518_kitchen-panel.jpg
+ai_caption: "Oak veneer panel test leaning against kitchen wall."
+human_caption: "Test of natural oak veneer against existing oak floor — sample looks good."
+authority:
+  human_authored: true
+  ai_generated_fields:
+    - ai_caption
+  source_authoritative: false   # the photo file is the source authority
+privacy: private
+created: 2026-05-18
+---
+```
+
+The `source_file` path is the authoritative record; the vault note carries human context and non-authoritative AI-derived fields.
+
+### 12.8 Email summary
+
+The email thread in the provider is the authority. This note is non-authoritative by default.
+
+```yaml
+---
+artifact_class: email_summary
+lifecycle: active
+work_relation: orient
+provenance:
+  source_kind: email_thread
+  provider: gmail
+  thread_id: "<gmail thread id>"
+authority:
+  source_authoritative: false
+  ai_generated: true
+  requires_review: true
+review_state: unreviewed
+created: 2026-05-18
+---
+```
+
+Actions, decisions, and references extracted from this summary MAY be promoted into separate artifacts via explicit review. The summary itself is not knowledge.
+
+### 12.9 Shopping list
+
+Ephemeral and operational. Not evergreen by default; the list does not become durable knowledge.
+
+```yaml
+---
+artifact_class: shopping_list
+lifecycle: ephemeral
+work_relation: execute
+authority:
+  human_authored: true
+  ai_generated: false
+  governance_bearing: false
+  agent_editable: true   # checking items off is agent-editable under explicit instruction
+created: 2026-05-18
+---
+```
+
+Patterns extracted from many shopping lists MAY be promoted into a durable preference or reference note via explicit human review, but the list itself is operational and not retained as knowledge.
+
+### 12.10 Agentic memory candidate (unreviewed)
+
+AI-produced candidate awaiting human promotion. Non-authoritative until reviewed.
+
+```yaml
+---
+artifact_class: agentic_memory
+artifact_type: preference_candidate
+memory_type: preference_memory
+title: "Preferred note length: concise atomic claims over long summaries"
+purpose: Proposed preference candidate derived from session observations.
+derived_from: session:2026-05-18T10:00:00Z
+confidence: medium
+lifecycle: active
+authority:
+  ai_generated: true
+  human_authored: false
+  requires_review: true
+review_state: queued
+review_reason: AI-derived preference candidate; human confirmation required before activation.
+stale_after: 2026-06-18
+activation_policy: review_required
+allowed_consumers: []
+---
+```
+
+This candidate does not enter the `activation_policy` flow until `review_state` is promoted to `accepted` by a human or governed process.
+
+### 12.11 Machine mirror
+
+Rebuildable, system-derived, non-authoritative. Must not be manually edited as knowledge.
+
+```yaml
+---
+artifact_class: machine_mirror
+artifact_type: embedding_record
+lifecycle: rebuildable
+source_ref: docs/CONTEXTUALIZATION_LAYER/ARTIFACT_METADATA_CONTRACT.md
+source_hash: sha256:...
+generated_at: 2026-05-18T12:00:00Z
+generator: text-embedding-3-small/v1
+index_name: vault_semantic_index
+projection_type: dense_embedding
+rebuildable: true
+authority:
+  human_authored: false
+  ai_generated: false
+  source_authoritative: false   # authority belongs to the source artifact, not the mirror
+  system_authoritative: false   # mirrors are rebuildable projections; they hold no independent authority
+---
+```
+
+The mirror's authority is the authority of its source. Deleting this record and regenerating it from the source produces an equivalent artifact.
 
 ## 13. Non-goals
 
