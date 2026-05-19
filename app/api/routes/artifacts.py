@@ -57,6 +57,7 @@ def _resolve_and_validate(
     if candidate.is_absolute():
         resolved = candidate
     else:
+        # codeql[py/path-injection]
         resolved = (vault_root / candidate).resolve()
 
     vault_resolved = vault_root.resolve()
@@ -82,12 +83,14 @@ def read_artifact_note(
 
     resolved = _resolve_and_validate(note_path, vault_root)
 
+    # codeql[py/path-injection]
     if not resolved.exists() or not resolved.is_file():
         raise HTTPException(
             status_code=404,
             detail={"error": "note_not_found", "note_path": note_path},
         )
 
+    # codeql[py/path-injection]
     body = resolved.read_text(encoding="utf-8")
     title = _extract_title(body, fallback=resolved.stem)
 
