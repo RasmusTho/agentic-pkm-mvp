@@ -82,7 +82,10 @@ def _render_note_section(fields: dict) -> str:
     content_hash = _e(fields.get("content_hash", ""))
     body = _e(fields.get("body", ""))
     panel_rail = _e(fields.get("panel_rail", "Panel / agent rail placeholder"))
+    canvas_session_id = _e(fields.get("canvas_session_id") or "")
     canvas_state = _e(fields.get("canvas_session_state", "idle"))
+    canvas_user_present = bool(fields.get("canvas_user_present", False))
+    canvas_can_edit_body = bool(fields.get("canvas_can_edit_body", False))
     persistence = str(fields.get("canvas_session_persistence", ""))
     panel_render = fields.get("panel_render") or {}
     panel_state = _e(panel_render.get("state") or fields.get("panel_state", "idle"))
@@ -123,6 +126,12 @@ def _render_note_section(fields: dict) -> str:
     proposal_rows_html = _render_panel_proposal_rows(
         fields.get("panel_proposals") or [],
     )
+    canvas_controls_html = _render_canvas_session_controls(
+        note_path=note_path_val,
+        session_id=canvas_session_id,
+        can_edit_body=canvas_can_edit_body,
+        user_present=canvas_user_present,
+    )
 
     return f"""
   <div class="workspace-layout">
@@ -151,6 +160,7 @@ def _render_note_section(fields: dict) -> str:
           <span class="rail-state-label">Canvas</span>
           <span class="rail-state-value">{canvas_state}</span>
         </div>
+        {canvas_controls_html}
         <div class="rail-state-row">
           <span class="rail-state-label">Panel</span>
           <span class="rail-state-value" data-testid="workspace-panel-label">{panel_label}</span>
@@ -164,6 +174,37 @@ def _render_note_section(fields: dict) -> str:
       </div>
     </aside>
   </div>"""
+
+
+def _render_canvas_session_controls(
+    *,
+    note_path: str,
+    session_id: str,
+    can_edit_body: bool,
+    user_present: bool,
+) -> str:
+    start_disabled = " disabled" if session_id else ""
+    close_disabled = "" if session_id else " disabled"
+    edit_disabled = "" if can_edit_body else " disabled"
+    present_text = "user present" if user_present else "user not present"
+    return f"""
+        <div class="canvas-controls" data-testid="workspace-canvas-session-controls">
+          <button
+            type="button"
+            data-testid="workspace-canvas-start"
+            data-api-method="POST"
+            data-api-path="/api/canvas/sessions"
+            data-note-path="{note_path}"{start_disabled}>Start</button>
+          <button
+            type="button"
+            data-testid="workspace-canvas-close"
+            data-api-method="DELETE"
+            data-api-path="/api/canvas/sessions/{session_id}"{close_disabled}>Close</button>
+          <button
+            type="button"
+            data-testid="workspace-canvas-edit-submit"{edit_disabled}>Apply body edit</button>
+          <span class="canvas-presence" data-testid="workspace-canvas-user-present">{present_text}</span>
+        </div>"""
 
 
 def _render_panel_proposal_rows(proposals: list[dict]) -> str:
@@ -562,6 +603,33 @@ def render_index_html(
       color: var(--fg-2);
       font-size: var(--text-sm);
       padding-left: 10px;
+    }}
+    .canvas-controls {{
+      display: grid;
+      gap: 6px;
+      grid-template-columns: 1fr 1fr;
+    }}
+    .canvas-controls button {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--fg-1);
+      font-family: var(--font-ui);
+      font-size: var(--text-xs);
+      letter-spacing: 0.04em;
+      padding: 5px 8px;
+      text-transform: uppercase;
+    }}
+    .canvas-controls button:disabled {{
+      color: var(--fg-3);
+      cursor: not-allowed;
+      opacity: 0.55;
+    }}
+    .canvas-presence {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      grid-column: 1 / -1;
     }}
     .panel-proposal-row {{
       background: var(--bg-raised);

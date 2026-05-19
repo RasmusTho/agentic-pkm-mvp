@@ -85,7 +85,11 @@ class DevPageState:
     shell: Optional[RealNoteWorkspaceShell] = None
     error: Optional[str] = None
     panel_rail_placeholder: str = "Panel / agent rail — placeholder (dev)"
+    canvas_session_id: str | None = None
     canvas_session_state: str = "idle"
+    canvas_user_present: bool = False
+    canvas_can_edit_body: bool = False
+    canvas_recovery_needed: bool = False
     canvas_session_persistence: str = ""
     panel_state: str = "idle"
     panel_proposal_count: int = 0
@@ -178,7 +182,11 @@ class RealNoteWorkspaceDevPage:
         self.state = DevPageState(
             shell=shell,
             panel_rail_placeholder=panel_render.get("label", "Panel ready"),
+            canvas_session_id=canvas.get("session_id"),
             canvas_session_state=canvas.get("session_state") or "idle",
+            canvas_user_present=bool(canvas.get("user_present", False)),
+            canvas_can_edit_body=bool(canvas.get("can_edit_body", False)),
+            canvas_recovery_needed=bool(canvas.get("recovery_needed", False)),
             canvas_session_persistence=canvas.get("session_persistence") or "",
             panel_state=panel_state,
             panel_proposal_count=panel_count,
@@ -189,6 +197,35 @@ class RealNoteWorkspaceDevPage:
             is_loaded=True,
         )
         return self.state
+
+    def open_canvas_session(self, intent: NoteLoadIntent) -> DevPageState:
+        """Open a Canvas session through the runtime, then refresh workspace state."""
+        try:
+            self._http.post(
+                "/api/canvas/sessions",
+                json={"note_path": intent.note_path},
+            )
+        except WorkspaceClientError as exc:
+            self.state = DevPageState(error=str(exc))
+            return self.state
+        return self.load(intent)
+
+    def close_canvas_session(
+        self,
+        *,
+        session_id: str,
+        note_path: str,
+    ) -> DevPageState:
+        """Close a Canvas session through the runtime, then refresh workspace state."""
+        try:
+            self._http.delete(
+                f"/api/canvas/sessions/{session_id}",
+                params={"total_summary": "session closed from Companion UI"},
+            )
+        except WorkspaceClientError as exc:
+            self.state = DevPageState(error=str(exc))
+            return self.state
+        return self.load(NoteLoadIntent(note_path=note_path))
 
     def render_fields(self) -> Optional[dict]:
         """Return a flat dict of renderable fields for the current state.
@@ -205,7 +242,11 @@ class RealNoteWorkspaceDevPage:
             "body": shell.body,
             "content_hash": shell.content_hash,
             "panel_rail": self.state.panel_rail_placeholder,
+            "canvas_session_id": self.state.canvas_session_id,
             "canvas_session_state": self.state.canvas_session_state,
+            "canvas_user_present": self.state.canvas_user_present,
+            "canvas_can_edit_body": self.state.canvas_can_edit_body,
+            "canvas_recovery_needed": self.state.canvas_recovery_needed,
             "canvas_session_persistence": self.state.canvas_session_persistence,
             "panel_state": self.state.panel_state,
             "panel_proposal_count": self.state.panel_proposal_count,
