@@ -103,6 +103,8 @@ def _resolve_workspace_note(note_path_raw: str, vault_root: Path) -> Path:
             },
         )
 
+    # codeql[py/path-injection] candidate is rejected above unless it is a
+    # relative path without traversal, then checked against vault_root below.
     resolved = (vault_root / candidate).resolve()
     vault_resolved = vault_root.resolve()
     try:
@@ -121,6 +123,8 @@ def _resolve_workspace_note(note_path_raw: str, vault_root: Path) -> Path:
 
 def _relative_to_vault(path: Path, vault_root: Path) -> str | None:
     try:
+        # codeql[py/path-injection] callers pass paths already resolved inside
+        # vault_root; this conversion only strips the trusted vault prefix.
         return path.resolve().relative_to(vault_root.resolve()).as_posix()
     except ValueError:
         return None
@@ -148,6 +152,8 @@ def _frontmatter_artifact_id(body: str) -> str | None:
 
 def _active_canvas_session(note_file: Path) -> object | None:
     for session in canvas_module._sessions.values():
+        # codeql[py/path-injection] session.note_path is created by the Canvas
+        # API after vault-root validation; this compares canonical paths only.
         if Path(session.note_path).resolve() == note_file.resolve():
             return session
     return None
@@ -229,6 +235,8 @@ def read_companion_workspace(
     resolved = _resolve_workspace_note(note_path, vault_root)
     safe_note_path = _relative_to_vault(resolved, vault_root) or note_path
 
+    # codeql[py/path-injection] resolved was produced by _resolve_workspace_note,
+    # which rejects absolute/traversal paths and enforces vault containment.
     if not resolved.exists() or not resolved.is_file():
         raise HTTPException(
             status_code=404,
@@ -240,6 +248,7 @@ def read_companion_workspace(
             },
         )
 
+    # codeql[py/path-injection] same sanitized, vault-contained path as above.
     body = resolved.read_text(encoding="utf-8")
     artifact_id = _frontmatter_artifact_id(body) or _content_hash(safe_note_path)
     canvas_enabled = _truthy_env("CANVAS_ENABLED")
