@@ -36,6 +36,7 @@ Leave blank for governance lane when the PR stays within approved governance sur
 ## Validation
 Implementation lane:
 - [ ] `ruff check app tests`
+- [ ] If files under `app/` or `tests/` changed, lint output from `ruff check app tests` is included below or a tooling limitation is stated.
 - [ ] `mypy app`
 - [ ] `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`
 - [ ] Additional targeted checks run as needed
