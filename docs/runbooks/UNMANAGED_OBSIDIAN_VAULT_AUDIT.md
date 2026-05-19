@@ -201,7 +201,7 @@ grep -rl "artifact_class:" "$VAULT_ROOT" --include="*.md" > audit/vault-already-
 
 **Actions:**
 
-1. **Adopt templates for new notes.** Use the templates in `docs/examples/vault-templates/` for new notes going forward. This does not require migrating old notes.
+1. **Adopt templates for new notes.** Use the templates in `docs/examples/vault-templates/` (defined in PR #1096, pending merge) for new notes going forward. This does not require migrating old notes.
 
 2. **Set up a capture inbox area.** Designate an inbox folder (e.g. `00_Inbox/`) for new `fleeting_capture` notes. Route new captures there before triage.
 
@@ -329,6 +329,6 @@ This runbook does **not**:
 
 - `docs/CONTEXTUALIZATION_LAYER/LIFE_WIDE_ARTIFACT_TAXONOMY.md` — artifact classes and axes
 - `docs/CONTEXTUALIZATION_LAYER/ARTIFACT_METADATA_CONTRACT.md` — field semantics
-- `docs/CONTEXTUALIZATION_LAYER/MEDIA_ARTIFACT_CONTRACT.md` — media-specific rules
-- `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` — triage and promotion flows
-- `docs/examples/vault-templates/` — template examples for new notes
+- `docs/CONTEXTUALIZATION_LAYER/MEDIA_ARTIFACT_CONTRACT.md` — media-specific rules (pending merge, PR #1094)
+- `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` — triage and promotion flows (pending merge, PR #1095)
+- `docs/examples/vault-templates/` — template examples for new notes (pending merge, PR #1096)
