@@ -33,8 +33,10 @@ This module does NOT:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
+from companion_ui.panel.proposal_row import ProposalEvidence, ProposalRow
+from companion_ui.panel.render_model import PanelRenderState, render_panel_state
 from companion_ui.workspace.real_note_workspace_shell import (
     ArtifactNotePayload,
     RealNoteWorkspaceShell,
@@ -87,6 +89,8 @@ class DevPageState:
     canvas_session_persistence: str = ""
     panel_state: str = "idle"
     panel_proposal_count: int = 0
+    panel_render: dict[str, Any] | None = None
+    panel_proposals: list[dict[str, Any]] | None = None
     guard_writeguard_status: str = "ok"
     guard_canvas_enabled: bool = True
     is_loaded: bool = False
@@ -158,16 +162,28 @@ class RealNoteWorkspaceDevPage:
         )
         shell = RealNoteWorkspaceShell(payload=payload, agent_rail_state=None)
         panel_count = int(panel.get("proposal_count") or 0)
-        panel_label = panel.get("state") or "idle"
-        if panel_count:
-            panel_label = f"{panel_label} ({panel_count} proposal{'s' if panel_count != 1 else ''})"
+        panel_state = panel.get("state") or "idle"
+        panel_message = _panel_message(panel)
+        render_state = PanelRenderState(
+            artifact_id=resolved_artifact_id,
+            state=panel_state,
+            message=panel_message,
+            proposal_count=panel_count,
+        )
+        panel_render = render_panel_state(render_state)
+        panel_proposals = _proposal_rows_from_panel(
+            panel=panel,
+            artifact_id=resolved_artifact_id,
+        )
         self.state = DevPageState(
             shell=shell,
-            panel_rail_placeholder=f"Panel state: {panel_label}",
+            panel_rail_placeholder=panel_render.get("label", "Panel ready"),
             canvas_session_state=canvas.get("session_state") or "idle",
             canvas_session_persistence=canvas.get("session_persistence") or "",
-            panel_state=panel.get("state") or "idle",
+            panel_state=panel_state,
             panel_proposal_count=panel_count,
+            panel_render=panel_render,
+            panel_proposals=panel_proposals,
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
             guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
             is_loaded=True,
@@ -193,8 +209,53 @@ class RealNoteWorkspaceDevPage:
             "canvas_session_persistence": self.state.canvas_session_persistence,
             "panel_state": self.state.panel_state,
             "panel_proposal_count": self.state.panel_proposal_count,
+            "panel_render": self.state.panel_render or {},
+            "panel_proposals": self.state.panel_proposals or [],
             "guard_writeguard_status": self.state.guard_writeguard_status,
             "guard_canvas_enabled": self.state.guard_canvas_enabled,
             "is_production_ui": self.is_production_ui,
             "dev_page_label": self.dev_page_label,
         }
+
+
+def _panel_message(panel: dict[str, Any]) -> str | None:
+    state = panel.get("state") or "idle"
+    if state == "blocked":
+        return panel.get("blocked_reason") or panel.get("message")
+    if state == "no-match":
+        return panel.get("no_match_reason") or panel.get("message")
+    return panel.get("message")
+
+
+def _proposal_rows_from_panel(
+    *,
+    panel: dict[str, Any],
+    artifact_id: str,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for raw in panel.get("proposals") or []:
+        evidence_raw = raw.get("evidence") or {}
+        evidence = ProposalEvidence(
+            trigger_summary=evidence_raw.get("trigger_summary", ""),
+            action_class=evidence_raw.get("action_class", ""),
+            cognition_route=evidence_raw.get("cognition_route", ""),
+        )
+        affordances = _proposal_affordance_set(raw.get("affordances"))
+        row = ProposalRow(
+            proposal_id=raw.get("proposal_id", ""),
+            artifact_id=raw.get("artifact_id") or artifact_id,
+            description=raw.get("description", ""),
+            evidence=evidence,
+            available_affordances=affordances,
+            status=raw.get("status", "staged"),
+        )
+        rows.append(row.as_render_dict())
+    return rows
+
+
+def _proposal_affordance_set(raw: Any) -> set[str]:
+    if isinstance(raw, dict):
+        return {name for name, enabled in raw.items() if enabled}
+    if isinstance(raw, list):
+        return set(raw)
+    return {"confirm", "correct", "reject"}
