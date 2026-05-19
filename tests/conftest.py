@@ -136,6 +136,7 @@ def clean_llm_env(monkeypatch: pytest.MonkeyPatch):
         "OLLAMA_URL",
         "OPENAI_API_KEY",
         "OPENAI_BASE",
+        "OPENAI_BASE_URL",
         "DEEPSEEK_API_KEY",
         "DEEPSEEK_BASE",
     ]

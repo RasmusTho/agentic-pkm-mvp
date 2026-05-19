@@ -43,6 +43,27 @@ def test_health_llm_router_includes_configured_task_routes(monkeypatch) -> None:
     assert result["route_policies"]["qa"]["effective"]["provider"] == "openai"
 
 
+def test_provider_env_check_accepts_openai_base_url(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.example.invalid/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("OPENAI_BASE", raising=False)
+
+    result = health_module._provider_env_check("openai", "gpt-5.4-mini")
+
+    assert result["ok"] is True
+    assert result["status"] == "ok"
+
+
+def test_provider_env_check_openai_base_still_accepted(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_BASE", "https://api.example.invalid/v1/chat/completions")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    result = health_module._provider_env_check("openai", "gpt-5.4-mini")
+
+    assert result["ok"] is True
+
+
 def test_health_task_routes_fail_when_effective_model_missing(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_BASE", "https://api.example.invalid/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
