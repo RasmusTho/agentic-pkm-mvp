@@ -276,7 +276,7 @@ Not every field is required on every note. The bar for including a field inline:
 | `provenance.source_file` | Required | Required | — | Required | Required | Required |
 | `provenance.source_url` | — | — | Required | — | — | — |
 | `privacy` | Required | Recommended | Recommended | Required | Required | Required |
-| `usage_rights` | — | — | Recommended | — | — | — |
+| `usage_rights` | — | — | Required | — | — | — |
 | `authority` block | Recommended | Recommended | Required | Recommended | Required | Required |
 | `ai_generated_fields` | Recommended | Recommended | — | Recommended | Recommended | Recommended |
 
