@@ -86,6 +86,9 @@ def _render_note_section(fields: dict) -> str:
     canvas_state = _e(fields.get("canvas_session_state", "idle"))
     canvas_user_present = bool(fields.get("canvas_user_present", False))
     canvas_can_edit_body = bool(fields.get("canvas_can_edit_body", False))
+    recovery_needed = bool(fields.get("canvas_recovery_needed", False))
+    recovery_acknowledged = bool(fields.get("canvas_recovery_acknowledged", False))
+    conflict_detected = bool(fields.get("canvas_conflict_detected", False))
     session_log_path = _e(fields.get("canvas_session_log_path") or "")
     undo_available = bool(fields.get("canvas_undo_available", False))
     applied_edit_count = int(fields.get("canvas_applied_edit_count", 0) or 0)
@@ -134,9 +137,13 @@ def _render_note_section(fields: dict) -> str:
     canvas_controls_html = _render_canvas_session_controls(
         note_path=note_path_val,
         session_id=canvas_session_id,
+        session_state=canvas_state,
         can_edit_body=canvas_can_edit_body,
         user_present=canvas_user_present,
         content_hash=content_hash,
+        recovery_needed=recovery_needed,
+        recovery_acknowledged=recovery_acknowledged,
+        conflict_detected=conflict_detected,
         session_log_path=session_log_path,
         undo_available=undo_available,
         applied_edit_count=applied_edit_count,
@@ -220,9 +227,13 @@ def _render_canvas_session_controls(
     *,
     note_path: str,
     session_id: str,
+    session_state: str,
     can_edit_body: bool,
     user_present: bool,
     content_hash: str,
+    recovery_needed: bool,
+    recovery_acknowledged: bool,
+    conflict_detected: bool,
     session_log_path: str,
     undo_available: bool,
     applied_edit_count: int,
@@ -236,6 +247,22 @@ def _render_canvas_session_controls(
     undo_api_path = f"/api/canvas/sessions/{session_id}/edits/last" if session_id else ""
     present_text = "user present" if user_present else "user not present"
     log_text = session_log_path or "no session log"
+    recovery_api_path = f"/api/canvas/sessions/{session_id}/recovery/ack" if session_id else ""
+    recovery_html = ""
+    if conflict_detected:
+        recovery_state = "acknowledged" if recovery_acknowledged else "needs acknowledgement"
+        recovery_reason = "recovery needed" if recovery_needed else "paused/interrupted"
+        recovery_html = f"""
+          <div class="canvas-recovery-conflict" data-testid="workspace-canvas-recovery-conflict">
+            <span data-testid="workspace-canvas-conflict-session-state">{session_state}</span>
+            <span>{recovery_reason}</span>
+            <span data-testid="workspace-canvas-recovery-state">{recovery_state}</span>
+            <button
+              type="button"
+              data-testid="workspace-canvas-recovery-ack"
+              data-api-method="LOCAL"
+              data-api-path="{recovery_api_path}">Acknowledge</button>
+          </div>"""
     return f"""
         <div class="canvas-controls" data-testid="workspace-canvas-session-controls">
           <button
@@ -261,6 +288,7 @@ def _render_canvas_session_controls(
             data-api-method="DELETE"
             data-api-path="{undo_api_path}"{undo_disabled}>Undo</button>
           <span class="canvas-presence" data-testid="workspace-canvas-user-present">{present_text}</span>
+          {recovery_html}
           <div class="canvas-provenance" data-testid="workspace-canvas-provenance">
             <span class="canvas-provenance-label">log</span>
             <code data-testid="workspace-canvas-session-log-path">{log_text}</code>
@@ -693,6 +721,25 @@ def render_index_html(
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       grid-column: 1 / -1;
+    }}
+    .canvas-recovery-conflict {{
+      background: var(--destructive-muted);
+      border: 1px solid rgba(255,61,61,0.3);
+      border-radius: var(--radius-md);
+      color: var(--destructive);
+      display: flex;
+      flex-direction: column;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      gap: 5px;
+      grid-column: 1 / -1;
+      padding: 8px 10px;
+    }}
+    .canvas-recovery-conflict button {{
+      background: var(--bg-raised);
+      border: 1px solid rgba(255,61,61,0.35);
+      color: var(--fg-1);
+      width: 100%;
     }}
     .canvas-provenance {{
       color: var(--fg-3);

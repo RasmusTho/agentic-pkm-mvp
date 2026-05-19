@@ -92,7 +92,10 @@ class DevPageState:
     canvas_session_state: str = "idle"
     canvas_user_present: bool = False
     canvas_can_edit_body: bool = False
+    canvas_runtime_can_edit_body: bool = False
     canvas_recovery_needed: bool = False
+    canvas_recovery_acknowledged: bool = False
+    canvas_conflict_detected: bool = False
     canvas_session_log_path: str | None = None
     canvas_undo_available: bool = False
     canvas_applied_edit_count: int = 0
@@ -138,6 +141,8 @@ class RealNoteWorkspaceDevPage:
     def __init__(self, http_client: WorkspaceHttpClient) -> None:
         self._http = http_client
         self.state: DevPageState = DevPageState()
+        self._last_content_hash_by_note: dict[str, str] = {}
+        self._acknowledged_recovery_notes: set[str] = set()
 
     def load(self, intent: NoteLoadIntent) -> DevPageState:
         """Load a note via the runtime API.
@@ -176,6 +181,23 @@ class RealNoteWorkspaceDevPage:
             body=artifact.get("body", ""),
             content_hash=artifact.get("content_hash", ""),
         )
+        content_hash = payload.content_hash
+        previous_hash = self._last_content_hash_by_note.get(resolved_note_path)
+        session_state = canvas.get("session_state") or "idle"
+        recovery_needed = bool(canvas.get("recovery_needed", False))
+        recovery_acknowledged = resolved_note_path in self._acknowledged_recovery_notes
+        hash_conflict = (
+            recovery_needed
+            and previous_hash is not None
+            and bool(content_hash)
+            and previous_hash != content_hash
+        )
+        state_conflict = session_state in {"paused", "interrupted"}
+        conflict_detected = recovery_needed or hash_conflict or state_conflict
+        runtime_can_edit_body = bool(canvas.get("can_edit_body", False))
+        can_edit_body = runtime_can_edit_body and (not conflict_detected or recovery_acknowledged)
+        if content_hash:
+            self._last_content_hash_by_note[resolved_note_path] = content_hash
         shell = RealNoteWorkspaceShell(payload=payload, agent_rail_state=None)
         panel_count = int(panel.get("proposal_count") or 0)
         panel_state = panel.get("state") or "idle"
@@ -198,10 +220,13 @@ class RealNoteWorkspaceDevPage:
             shell=shell,
             panel_rail_placeholder=panel_render.get("label", "Panel ready"),
             canvas_session_id=canvas.get("session_id"),
-            canvas_session_state=canvas.get("session_state") or "idle",
+            canvas_session_state=session_state,
             canvas_user_present=bool(canvas.get("user_present", False)),
-            canvas_can_edit_body=bool(canvas.get("can_edit_body", False)),
-            canvas_recovery_needed=bool(canvas.get("recovery_needed", False)),
+            canvas_runtime_can_edit_body=runtime_can_edit_body,
+            canvas_can_edit_body=can_edit_body,
+            canvas_recovery_needed=recovery_needed,
+            canvas_recovery_acknowledged=recovery_acknowledged,
+            canvas_conflict_detected=conflict_detected,
             canvas_session_log_path=canvas.get("session_log_path"),
             canvas_undo_available=bool(canvas.get("undo_available", False)),
             canvas_applied_edit_count=int(canvas.get("applied_edit_count") or 0),
@@ -278,6 +303,15 @@ class RealNoteWorkspaceDevPage:
             return self.state
         return self.load(NoteLoadIntent(note_path=note_path))
 
+    def acknowledge_canvas_recovery(self, *, note_path: str) -> DevPageState:
+        """Acknowledge recovery/conflict state before body edits resume."""
+        self._acknowledged_recovery_notes.add(note_path)
+        if self.state.shell is not None and self.state.shell.note_path == note_path:
+            self.state.canvas_recovery_acknowledged = True
+            self.state.canvas_conflict_detected = False
+            self.state.canvas_can_edit_body = self.state.canvas_runtime_can_edit_body
+        return self.state
+
     def undo_last_canvas_edit(
         self,
         *,
@@ -316,6 +350,8 @@ class RealNoteWorkspaceDevPage:
             "canvas_user_present": self.state.canvas_user_present,
             "canvas_can_edit_body": self.state.canvas_can_edit_body,
             "canvas_recovery_needed": self.state.canvas_recovery_needed,
+            "canvas_recovery_acknowledged": self.state.canvas_recovery_acknowledged,
+            "canvas_conflict_detected": self.state.canvas_conflict_detected,
             "canvas_session_log_path": self.state.canvas_session_log_path,
             "canvas_undo_available": self.state.canvas_undo_available,
             "canvas_applied_edit_count": self.state.canvas_applied_edit_count,
