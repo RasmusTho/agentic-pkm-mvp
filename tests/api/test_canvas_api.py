@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import app.api.routes.canvas as canvas_module
 from app.api.app import app
+from app.api.routes.artifacts import _content_hash
 
 
 @pytest.fixture(autouse=True)
@@ -51,12 +52,35 @@ def test_edit_updates_vault_file(client: TestClient, vault: Path) -> None:
 
     edit_resp = client.post(
         f"/api/canvas/sessions/{session_id}/edits",
-        json={"new_body": "Updated body.", "change_summary": "rewrote"},
+        json={
+            "new_body": "Updated body.",
+            "change_summary": "rewrote",
+            "content_hash": _content_hash((vault / "note.md").read_text(encoding="utf-8")),
+        },
     )
     assert edit_resp.status_code == 200
     assert edit_resp.json()["ok"] is True
     note = vault / "note.md"
     assert "Updated body." in note.read_text(encoding="utf-8")
+
+
+def test_edit_rejects_stale_content_hash(client: TestClient, vault: Path) -> None:
+    open_resp = client.post(
+        "/api/canvas/sessions", json={"note_path": "note.md", "label": "stale-test"}
+    )
+    session_id = open_resp.json()["session_id"]
+
+    edit_resp = client.post(
+        f"/api/canvas/sessions/{session_id}/edits",
+        json={
+            "new_body": "Updated body.",
+            "change_summary": "rewrote",
+            "content_hash": "stale-hash",
+        },
+    )
+
+    assert edit_resp.status_code == 409
+    assert "Original body." in (vault / "note.md").read_text(encoding="utf-8")
 
 
 def test_close_session_writes_log(client: TestClient, vault: Path) -> None:
