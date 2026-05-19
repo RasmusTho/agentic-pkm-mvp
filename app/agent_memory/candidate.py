@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Optional
+from uuid import uuid4
+
+from pydantic import BaseModel, Field
+
+
+class ReviewState(str, Enum):
+    UNREVIEWED = "unreviewed"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    REVISED = "revised"
+
+
+class MemoryType(str, Enum):
+    WORKING_CONTEXT = "working_context"
+    EPISODIC_MEMORY = "episodic_memory"
+    SEMANTIC_MEMORY = "semantic_memory"
+    PROSPECTIVE_MEMORY = "prospective_memory"
+    PROCEDURAL_MEMORY = "procedural_memory"
+    PREFERENCE_MEMORY = "preference_memory"
+    POLICY_MEMORY = "policy_memory"
+
+
+class ContradictionState(str, Enum):
+    CLEAR = "clear"
+    CONTRADICTED = "contradicted"
+    REVISED = "revised"
+    REJECTED = "rejected"
+
+
+class MemoryCandidate(BaseModel):
+    """Candidate memory awaiting review before promotion to durable memory.
+
+    memory_type is the proposed cognitive class — it does not mean the candidate
+    is already promoted. review_state must reach ACCEPTED before the candidate
+    enters activatable working context.
+    """
+
+    artifact_class: str = Field(default="agentic_memory")
+    candidate_id: str = Field(default_factory=lambda: uuid4().hex)
+    title: str
+    memory_type: MemoryType
+    artifact_type: Optional[str] = None
+    review_state: ReviewState = Field(default=ReviewState.UNREVIEWED)
+    inferred: bool = Field(default=True)
+
+    # Source provenance — first-class fields, not optional comment text
+    source_refs: list[str] = Field(default_factory=list)
+    derived_from: Optional[str] = None
+    generated_by: Optional[str] = None
+
+    content: Optional[str] = None
+    confidence: Optional[str] = None
+
+    # Correction and contradiction hooks for revise/reject flows
+    contradiction_state: ContradictionState = Field(default=ContradictionState.CLEAR)
+    correction_of: Optional[str] = None
+    contradiction_notes: Optional[str] = None
+
+    observed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

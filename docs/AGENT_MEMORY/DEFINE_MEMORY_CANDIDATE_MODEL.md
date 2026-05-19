@@ -46,12 +46,12 @@ they were settled knowledge.
 
 ## Acceptance Criteria
 
-- [ ] The implementation spec defines a candidate-memory model that preserves source provenance and
+- [x] The implementation spec defines a candidate-memory model that preserves source provenance and
   explicit review state. Verify: `tests/agent_memory/test_memory_candidate_model.py::test_memory_candidate_preserves_source_and_review_state`
-- [ ] The candidate model distinguishes inferred material from reviewed material. Verify: `tests/agent_memory/test_memory_candidate_model.py::test_memory_candidate_marks_inferred_vs_reviewed`
-- [ ] The candidate model preserves proposed memory class without treating it as already promoted
+- [x] The candidate model distinguishes inferred material from reviewed material. Verify: `tests/agent_memory/test_memory_candidate_model.py::test_memory_candidate_marks_inferred_vs_reviewed`
+- [x] The candidate model preserves proposed memory class without treating it as already promoted
   truth. Verify: `tests/agent_memory/test_memory_candidate_model.py::test_memory_candidate_separates_candidate_class_from_promoted_class`
-- [ ] The candidate model includes correction or contradiction posture strongly enough to support
+- [x] The candidate model includes correction or contradiction posture strongly enough to support
   later revise/reject flows. Verify: `tests/agent_memory/test_memory_candidate_model.py::test_memory_candidate_supports_contradiction_and_revision_state`
 
 ## How to Verify (Pre-Merge)
@@ -75,5 +75,4 @@ they were settled knowledge.
 
 ## Related GitHub Issues
 
-Not created in this PR. When filed later, use this task spec as the child implementation issue
-contract for candidate-memory modeling.
+Implemented by GitHub Issue #1079. Model shipped in `app/agent_memory/candidate.py`.
