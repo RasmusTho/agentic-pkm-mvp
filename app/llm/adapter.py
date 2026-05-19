@@ -60,9 +60,13 @@ def generate(
         content = raw_response["message"]["content"]
     elif p == "openai":
         api = os.environ["OPENAI_API_KEY"]
-        url = os.getenv("OPENAI_BASE", "").strip()
+        url = (os.getenv("OPENAI_BASE") or "").strip()
         if not url:
-            raise RuntimeError("OPENAI_BASE is required for openai provider")
+            _base_url = (os.getenv("OPENAI_BASE_URL") or "").strip().rstrip("/")
+            if _base_url:
+                url = _base_url + "/chat/completions"
+        if not url:
+            raise RuntimeError("OPENAI_BASE_URL or OPENAI_BASE is required for openai provider")
         r = requests.post(
             url,
             headers={"Authorization": f"Bearer {api}", "Content-Type": "application/json"},

@@ -336,9 +336,13 @@ def call_llm(
     elif provider == "openai":
         try:
             api_key = os.environ["OPENAI_API_KEY"]
-            url = os.getenv("OPENAI_BASE", "").strip()
+            url = (os.getenv("OPENAI_BASE") or "").strip()
             if not url:
-                raise RuntimeError("OPENAI_BASE is required for openai provider")
+                _base_url = (os.getenv("OPENAI_BASE_URL") or "").strip().rstrip("/")
+                if _base_url:
+                    url = _base_url + "/chat/completions"
+            if not url:
+                raise RuntimeError("OPENAI_BASE_URL or OPENAI_BASE is required for openai provider")
             response_text, response_payload = _http_chat(
                 url=url,
                 api_key=api_key,

@@ -38,3 +38,13 @@ def test_test_compose_uses_prod_runtime_selector_for_test_channel() -> None:
     services = (compose.get("services") or {})
     assert ((services.get("db") or {}).get("ports") or []) == ["15434:5432"]
     assert ((services.get("api") or {}).get("ports") or []) == ["18002:8000"]
+
+
+def test_dev_compose_overrides_base_ports_for_parallel_stack() -> None:
+    raw = Path("docker-compose.dev.yml").read_text(encoding="utf-8")
+    assert "ports: !override" in raw, "dev overlay must use !override to replace base published ports"
+
+    compose = yaml.load(raw, Loader=_ComposeLoader)
+    services = (compose.get("services") or {})
+    assert ((services.get("db") or {}).get("ports") or []) == ["15433:5432"]
+    assert ((services.get("api") or {}).get("ports") or []) == ["18001:8000"]

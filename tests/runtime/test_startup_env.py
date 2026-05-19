@@ -76,6 +76,17 @@ def test_openai_provider_requires_openai_base_url() -> None:
     assert result["missing_all_of"] == ["OPENAI_BASE_URL"]
 
 
+def test_openai_provider_accepts_openai_base_url() -> None:
+    env = {
+        "LLM_PROVIDER": "openai",
+        "LLM_MODEL": "gpt-5.4",
+        "OPENAI_BASE_URL": "https://api.example.invalid/v1",
+    }
+    result = validate_llm_env(env)
+    assert result["ok"] is True
+    assert result["missing_all_of"] == []
+
+
 def test_missing_llm_model_fails() -> None:
     env = {"LLM_PROVIDER": "mock"}
     result = validate_llm_env(env)

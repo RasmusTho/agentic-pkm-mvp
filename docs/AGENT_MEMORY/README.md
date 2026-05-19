@@ -1,5 +1,5 @@
-State: Draft specification. Not implemented. Docs-only feature-breakdown surface; no runtime
-behavior changes are claimed here.
+State: Partial implementation. AGENT-MEMORY-01 (MemoryCandidate model) delivered by PR #1112
+(issue #1079, 2026-05-19). Tasks 2–5 remain spec-only; no runtime behavior for those slices yet.
 
 # Agent Memory
 
@@ -55,9 +55,10 @@ planning surface for it.
 
 ## Capability-Level Acceptance Criteria
 
-- [ ] The repository contains a bounded memory-candidate model task that preserves provenance and
+- [x] The repository contains a bounded memory-candidate model task that preserves provenance and
   review state.
   Verify: `docs/AGENT_MEMORY/DEFINE_MEMORY_CANDIDATE_MODEL.md`
+  Delivered: `app/agent_memory/candidate.py` (PR #1112, issue #1079)
 - [ ] Review queue, promotion/rejection/revision, recall explanation, and authority guard are each
   specified as independently mergeable tasks.
   Verify: `docs/AGENT_MEMORY/*.md`
@@ -94,12 +95,12 @@ planning surface for it.
 
 ## Relationship to GitHub Issues
 
-No GitHub issues are created in this PR.
+- Parent feature: #900
+- AGENT-MEMORY-01 (MemoryCandidate model): implemented by issue #1079, PR #1112 (2026-05-19)
+- AGENT-MEMORY-02 through 05: filed as issues #1080–#1085; awaiting execution
 
-The local source for a future parent feature issue is
-[PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). Child implementation issues should be created
-later from these task specs using the repo's `feature-breakdown` and `docs-to-issue` workflows when
-the contract is ready to enter execution.
+The local source for the parent feature issue is
+[PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md).
 
 ## Owner-Doc Promotion Trigger
 

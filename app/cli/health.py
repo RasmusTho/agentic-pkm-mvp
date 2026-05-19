@@ -180,10 +180,10 @@ def _provider_env_check(provider: str, model: str) -> Dict[str, Any]:
             "base_url": result.get("base_url"),
         }
     if normalized == "openai":
-        base = (os.getenv("OPENAI_BASE") or "").strip()
+        base = (os.getenv("OPENAI_BASE") or os.getenv("OPENAI_BASE_URL") or "").strip()
         api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
         ok = bool(base and api_key)
-        detail = "OpenAI route configured" if ok else "OPENAI_BASE and OPENAI_API_KEY are required"
+        detail = "OpenAI route configured" if ok else "OPENAI_BASE_URL (or OPENAI_BASE) and OPENAI_API_KEY are required"
         return {"ok": ok, "detail": detail, "status": "ok" if ok else "fail", "base_url": base}
     if normalized == "deepseek":
         base = (os.getenv("DEEPSEEK_BASE") or "").strip()
