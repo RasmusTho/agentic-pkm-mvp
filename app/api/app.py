@@ -83,6 +83,11 @@ try:
 except ImportError:
     artifacts_router = None
 
+try:
+    from app.api.routes.companion import router as companion_router
+except ImportError:
+    companion_router = None
+
 static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
 logger = logging.getLogger(__name__)
 
@@ -184,6 +189,8 @@ def _create_app() -> FastAPI:
         application.include_router(panel_router, prefix="/api")
     if artifacts_router is not None:
         application.include_router(artifacts_router, prefix="/api")
+    if companion_router is not None:
+        application.include_router(companion_router, prefix="/api")
     return application
 
 
@@ -195,4 +202,3 @@ async def index() -> HTMLResponse:
     """Interim dashboard for status visibility and manual ASK checks."""
     index_path = static_dir / "index.html"
     return HTMLResponse(index_path.read_text(encoding="utf-8"))
-
