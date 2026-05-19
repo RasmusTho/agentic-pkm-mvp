@@ -33,5 +33,5 @@ These are example Markdown templates for common life-wide artifact classes in th
 
 - `docs/CONTEXTUALIZATION_LAYER/LIFE_WIDE_ARTIFACT_TAXONOMY.md` — artifact classes and axes
 - `docs/CONTEXTUALIZATION_LAYER/ARTIFACT_METADATA_CONTRACT.md` — field semantics
-- `docs/CONTEXTUALIZATION_LAYER/MEDIA_ARTIFACT_CONTRACT.md` — media-specific rules
-- `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` — capture-to-promotion flows
+- `docs/CONTEXTUALIZATION_LAYER/MEDIA_ARTIFACT_CONTRACT.md` — media-specific rules (pending merge, PR #1094)
+- `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` — capture-to-promotion flows (pending merge, PR #1095)
