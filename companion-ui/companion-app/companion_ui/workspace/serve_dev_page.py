@@ -133,6 +133,9 @@ def _render_note_section(fields: dict) -> str:
     proposal_rows_html = _render_panel_proposal_rows(
         fields.get("panel_proposals") or [],
     )
+    panel_response_html = _render_panel_confirm_response(
+        fields.get("panel_last_response") or {},
+    )
     suggestion_flow_html = _render_suggestion_flow_region(fields)
     suggestion_cards_html = _render_suggestion_cards(fields.get("suggestion_cards") or [])
     suggested_insertions_html = _render_suggested_insertions(
@@ -190,6 +193,7 @@ def _render_note_section(fields: dict) -> str:
         </div>
         {panel_message_html}
         {proposal_rows_html}
+        {panel_response_html}
         {suggestion_flow_html}
         {suggestion_cards_html}
         {guard_html}
@@ -388,9 +392,20 @@ def _render_panel_proposal_rows(proposals: list[dict]) -> str:
         affordances = proposal.get("affordances") or {}
         enabled_affordances = [
             label
-            for label in ("confirm", "correct", "reject")
+            for label in ("confirm", "reject")
             if affordances.get(label)
         ]
+        buttons = "".join(
+            (
+                '<button type="button" class="panel-proposal-action" '
+                'data-testid="workspace-panel-action" '
+                f'data-panel-action="{_e(label)}" '
+                'data-api-method="POST" '
+                'data-api-path="/api/panel/confirm">'
+                f"{_e(label)}</button>"
+            )
+            for label in enabled_affordances
+        )
         rows.append(
             f"""
         <div class="panel-proposal-row" data-testid="workspace-panel-proposal-row">
@@ -405,11 +420,39 @@ def _render_panel_proposal_rows(proposals: list[dict]) -> str:
             <span>{_e(evidence.get("cognition_route", ""))}</span>
           </div>
           <div class="panel-proposal-affordances">
-            {_e(" / ".join(enabled_affordances))}
+            {buttons}
           </div>
         </div>"""
         )
     return "\n".join(rows)
+
+
+def _render_panel_confirm_response(response: dict) -> str:
+    if not response:
+        return ""
+    status = _e(response.get("status", ""))
+    receipt = response.get("receipt") or {}
+    block_reason = response.get("block_reason") or {}
+    receipt_html = ""
+    if status in {"executed", "logged"} and receipt:
+        receipt_html = (
+            '<div class="panel-confirm-receipt" data-testid="workspace-panel-receipt">'
+            + _e(receipt.get("message") or receipt.get("outcome") or status)
+            + "</div>"
+        )
+    blocked_html = ""
+    if status == "blocked" and block_reason:
+        blocked_html = (
+            '<div class="panel-confirm-blocked" data-testid="workspace-panel-blocked-reason">'
+            + _e(block_reason.get("message") or "")
+            + "</div>"
+        )
+    return f"""
+        <div class="panel-confirm-response" data-testid="workspace-panel-confirm-response">
+          <span data-testid="workspace-panel-confirm-status">{status}</span>
+          {receipt_html}
+          {blocked_html}
+        </div>"""
 
 
 def _render_error_section(error: str) -> str:
@@ -939,6 +982,30 @@ def render_index_html(
       font-size: var(--text-xs);
       font-style: normal;
     }}
+    .panel-proposal-action {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--fg-1);
+      font-family: var(--font-ui);
+      font-size: var(--text-xs);
+      padding: 4px 7px;
+      text-transform: uppercase;
+    }}
+    .panel-confirm-response {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--fg-2);
+      display: flex;
+      flex-direction: column;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      gap: 5px;
+      padding: 10px;
+    }}
+    .panel-confirm-receipt {{ color: var(--fg-1); }}
+    .panel-confirm-blocked {{ color: var(--destructive); }}
   </style>
 </head>
 <body>
