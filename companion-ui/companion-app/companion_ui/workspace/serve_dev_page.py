@@ -86,6 +86,10 @@ def _render_note_section(fields: dict) -> str:
     canvas_state = _e(fields.get("canvas_session_state", "idle"))
     canvas_user_present = bool(fields.get("canvas_user_present", False))
     canvas_can_edit_body = bool(fields.get("canvas_can_edit_body", False))
+    session_log_path = _e(fields.get("canvas_session_log_path") or "")
+    undo_available = bool(fields.get("canvas_undo_available", False))
+    applied_edit_count = int(fields.get("canvas_applied_edit_count", 0) or 0)
+    undone_edit_count = int(fields.get("canvas_undone_edit_count", 0) or 0)
     persistence = str(fields.get("canvas_session_persistence", ""))
     panel_render = fields.get("panel_render") or {}
     panel_state = _e(panel_render.get("state") or fields.get("panel_state", "idle"))
@@ -133,6 +137,10 @@ def _render_note_section(fields: dict) -> str:
         can_edit_body=canvas_can_edit_body,
         user_present=canvas_user_present,
         content_hash=content_hash,
+        session_log_path=session_log_path,
+        undo_available=undo_available,
+        applied_edit_count=applied_edit_count,
+        undone_edit_count=undone_edit_count,
     )
 
     return f"""
@@ -215,12 +223,19 @@ def _render_canvas_session_controls(
     can_edit_body: bool,
     user_present: bool,
     content_hash: str,
+    session_log_path: str,
+    undo_available: bool,
+    applied_edit_count: int,
+    undone_edit_count: int,
 ) -> str:
     start_disabled = " disabled" if session_id else ""
     close_disabled = "" if session_id else " disabled"
     edit_disabled = "" if can_edit_body else " disabled"
+    undo_disabled = "" if undo_available else " disabled"
     edit_api_path = f"/api/canvas/sessions/{session_id}/edits" if session_id else ""
+    undo_api_path = f"/api/canvas/sessions/{session_id}/edits/last" if session_id else ""
     present_text = "user present" if user_present else "user not present"
+    log_text = session_log_path or "no session log"
     return f"""
         <div class="canvas-controls" data-testid="workspace-canvas-session-controls">
           <button
@@ -240,7 +255,18 @@ def _render_canvas_session_controls(
             data-api-method="POST"
             data-api-path="{edit_api_path}"
             data-content-hash="{content_hash}"{edit_disabled}>Apply body edit</button>
+          <button
+            type="button"
+            data-testid="workspace-canvas-undo"
+            data-api-method="DELETE"
+            data-api-path="{undo_api_path}"{undo_disabled}>Undo</button>
           <span class="canvas-presence" data-testid="workspace-canvas-user-present">{present_text}</span>
+          <div class="canvas-provenance" data-testid="workspace-canvas-provenance">
+            <span class="canvas-provenance-label">log</span>
+            <code data-testid="workspace-canvas-session-log-path">{log_text}</code>
+            <span data-testid="workspace-canvas-edit-count">{applied_edit_count} edit{'s' if applied_edit_count != 1 else ''}</span>
+            <span data-testid="workspace-canvas-undone-count">{undone_edit_count} undone</span>
+          </div>
         </div>"""
 
 
@@ -667,6 +693,25 @@ def render_index_html(
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       grid-column: 1 / -1;
+    }}
+    .canvas-provenance {{
+      color: var(--fg-3);
+      display: flex;
+      flex-direction: column;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      gap: 2px;
+      grid-column: 1 / -1;
+      min-width: 0;
+    }}
+    .canvas-provenance code {{
+      color: var(--fg-2);
+      overflow-wrap: anywhere;
+    }}
+    .canvas-provenance-label {{
+      color: var(--fg-3);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
     }}
     .suggestion-flow {{
       background: var(--bg-raised);

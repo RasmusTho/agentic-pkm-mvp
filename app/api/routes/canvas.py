@@ -3,6 +3,7 @@
 POST   /api/canvas/sessions                  — open session, return session_id
 POST   /api/canvas/sessions/{id}/edits       — apply body edit
 POST   /api/canvas/sessions/{id}/governance  — submit governance action
+DELETE /api/canvas/sessions/{id}/edits/last  — undo last body edit
 DELETE /api/canvas/sessions/{id}             — close session
 
 Gated by CANVAS_ENABLED env var (must be "1" or truthy to enable; default off).
@@ -12,14 +13,16 @@ All session state is in-memory for the lifetime of the API process.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.api.routes.artifacts import _content_hash
-from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError
+from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError, _split_frontmatter
 from app.chat.governance_router import GovernanceActionType, GovernanceRouter
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.config.paths import resolve_vault_root
@@ -28,6 +31,18 @@ router = APIRouter(prefix="/canvas", tags=["canvas"])
 
 # In-memory session registry — process lifetime only.
 _sessions: dict[str, SessionLog] = {}
+
+
+@dataclass(frozen=True)
+class _AppliedBodyEdit:
+    edit_id: str
+    body_before: str
+    body_after: str
+    change_summary: str
+
+
+_edit_history: dict[str, list[_AppliedBodyEdit]] = {}
+_undone_history: dict[str, list[_AppliedBodyEdit]] = {}
 
 
 def _canvas_enabled() -> bool:
@@ -70,6 +85,13 @@ class EditResponse(BaseModel):
     ok: bool
 
 
+class UndoResponse(BaseModel):
+    session_id: str
+    ok: bool
+    undo_id: str
+    original_edit_id: str
+
+
 class GovernanceRequest(BaseModel):
     action_type: str
     payload: dict[str, Any] = {}
@@ -107,6 +129,12 @@ def _validate_note_path(note_path_str: str, vault_root: Path) -> Path:
     return candidate
 
 
+def _note_body(note_path: Path) -> str:
+    content = note_path.read_text(encoding="utf-8")
+    _, body = _split_frontmatter(content)
+    return body
+
+
 @router.post("/sessions", response_model=OpenSessionResponse)
 def open_session(req: OpenSessionRequest) -> OpenSessionResponse:
     _require_canvas()
@@ -118,6 +146,8 @@ def open_session(req: OpenSessionRequest) -> OpenSessionResponse:
     log_writer = SessionLogWriter(vault_root=vault_root)
     session = log_writer.open_session(note_path, req.label)
     _sessions[session.session_id] = session
+    _edit_history[session.session_id] = []
+    _undone_history[session.session_id] = []
     return OpenSessionResponse(
         session_id=session.session_id,
         note_path=str(session.note_path),
@@ -135,6 +165,7 @@ def apply_edit(session_id: str, req: EditRequest) -> EditResponse:
         current_hash = _content_hash(session.note_path.read_text(encoding="utf-8"))
         if current_hash != req.content_hash:
             raise HTTPException(status_code=409, detail="content_hash mismatch")
+    body_before = _note_body(session.note_path)
     vault_root = _get_vault_root()
     log_writer = SessionLogWriter(vault_root=vault_root)
     writer = CanvasWriter(vault_root=vault_root, log_writer=log_writer)
@@ -142,7 +173,61 @@ def apply_edit(session_id: str, req: EditRequest) -> EditResponse:
         writer.apply_edit(session, req.new_body, req.change_summary)
     except GovernanceBearingMutationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    body_after = _note_body(session.note_path)
+    _edit_history.setdefault(session_id, []).append(
+        _AppliedBodyEdit(
+            edit_id=str(uuid4()),
+            body_before=body_before,
+            body_after=body_after,
+            change_summary=req.change_summary,
+        )
+    )
     return EditResponse(session_id=session_id, ok=True)
+
+
+@router.delete("/sessions/{session_id}/edits/last", response_model=UndoResponse)
+def undo_last_edit(session_id: str) -> UndoResponse:
+    _require_canvas()
+    session = _sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
+
+    edits = _edit_history.setdefault(session_id, [])
+    if not edits:
+        raise HTTPException(status_code=409, detail="No undoable Canvas body edit")
+
+    latest = edits[-1]
+    current_body = _note_body(session.note_path)
+    if current_body != latest.body_after:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot undo last Canvas body edit: note body has diverged since "
+                "the assistant edit was applied"
+            ),
+        )
+
+    vault_root = _get_vault_root()
+    log_writer = SessionLogWriter(vault_root=vault_root)
+    writer = CanvasWriter(vault_root=vault_root, log_writer=log_writer)
+    undo_id = str(uuid4())
+    try:
+        writer.apply_edit(
+            session,
+            latest.body_before,
+            f"[undo:{undo_id}] reverted edit:{latest.edit_id}",
+        )
+    except GovernanceBearingMutationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    edits.pop()
+    _undone_history.setdefault(session_id, []).append(latest)
+    return UndoResponse(
+        session_id=session_id,
+        ok=True,
+        undo_id=undo_id,
+        original_edit_id=latest.edit_id,
+    )
 
 
 @router.post("/sessions/{session_id}/governance", response_model=GovernanceResponse)
@@ -175,6 +260,8 @@ def close_session(session_id: str, total_summary: str = "session closed") -> Clo
     session = _sessions.pop(session_id, None)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
+    _edit_history.pop(session_id, None)
+    _undone_history.pop(session_id, None)
     vault_root = _get_vault_root()
     log_writer = SessionLogWriter(vault_root=vault_root)
     log_writer.close_session(session, total_summary)

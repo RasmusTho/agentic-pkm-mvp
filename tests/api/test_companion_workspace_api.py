@@ -21,10 +21,14 @@ from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 @pytest.fixture(autouse=True)
 def _clear_runtime_state() -> None:
     canvas_module._sessions.clear()
+    canvas_module._edit_history.clear()
+    canvas_module._undone_history.clear()
     confirm_module._proposal_store.clear()
     confirm_module._idempotency_store.clear()
     yield
     canvas_module._sessions.clear()
+    canvas_module._edit_history.clear()
+    canvas_module._undone_history.clear()
     confirm_module._proposal_store.clear()
     confirm_module._idempotency_store.clear()
     companion_module.DEFAULT_WRITE_GUARD.snapshot_fn = DEFAULT_WRITE_GUARD.snapshot_fn
@@ -97,6 +101,9 @@ def test_workspace_canvas_state_no_session(client: TestClient, vault_note: Path)
     assert canvas["session_id"] is None
     assert canvas["session_state"] is None
     assert canvas["session_persistence"] == "in_memory"
+    assert canvas["undo_available"] is False
+    assert canvas["applied_edit_count"] == 0
+    assert canvas["undone_edit_count"] == 0
 
 
 def test_workspace_canvas_state_with_open_session(
@@ -112,6 +119,15 @@ def test_workspace_canvas_state_with_open_session(
         note_path=vault_note,
         label="test",
     )
+    canvas_module._edit_history["session-1"] = [
+        canvas_module._AppliedBodyEdit(
+            edit_id="edit-1",
+            body_before="Body text.\n",
+            body_after="Updated body.\n",
+            change_summary="updated",
+        )
+    ]
+    canvas_module._undone_history["session-1"] = []
 
     resp = _workspace(client)
 
@@ -120,6 +136,9 @@ def test_workspace_canvas_state_with_open_session(
     assert canvas["session_id"] == "session-1"
     assert canvas["session_state"] == "active"
     assert canvas["session_log_path"] == ".chats/note/session.md"
+    assert canvas["undo_available"] is True
+    assert canvas["applied_edit_count"] == 1
+    assert canvas["undone_edit_count"] == 0
     assert canvas["session_persistence"] == "in_memory"
 
 
