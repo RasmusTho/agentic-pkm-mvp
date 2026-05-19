@@ -98,7 +98,7 @@ A small set of fields can recur across artifact classes. None of them are mandat
 | Field | Meaning |
 | --- | --- |
 | `artifact_id` | Stable identifier for the artifact across renames and moves. May be a UUID, hash, or other stable token. |
-| `artifact_class` | One of `human_knowledge`, `agentic_memory`, `bridge_artifact`, `machine_mirror`, `companion_metadata`. |
+| `artifact_class` | The artifact family. **Umbrella values:** `human_knowledge`, `agentic_memory`, `bridge_artifact`, `machine_mirror`, `companion_metadata`. **Concrete taxonomy class names** from `LIFE_WIDE_ARTIFACT_TAXONOMY.md` (e.g. `evergreen_note`, `shopping_list`, `email_summary`, `media_note`) are also valid and imply the corresponding umbrella class — `evergreen_note` implies `human_knowledge`, `machine_mirror` doubles as a concrete class name. Either form is conformant; the concrete name is preferred when it is known. See Section 4.1 for the full allowed set. |
 | `artifact_type` | Sub-type within the class (e.g. `concept_note`, `task_snapshot`, `context_bundle`, `embedding_record`). |
 | `title` | Short human-readable label. |
 | `created` | When the artifact came into existence. |
@@ -122,7 +122,7 @@ These are **logical fields**. They may live inline in a primary note, in a compa
 
 The fields above capture distinct, non-substitutable axes. Collapsing any two of them is an anti-pattern. None of them may be inferred from folder path, Markdown format, or MOC membership.
 
-- **`artifact_class`** — the broad semantic artifact family (`human_knowledge`, `agentic_memory`, `bridge_artifact`, `machine_mirror`, `companion_metadata`). For life-wide PKM artifacts, the value often names a concrete taxonomy class directly (e.g. `shopping_list`, `email_summary`, `evergreen_note`). Class is not determined by where the file lives.
+- **`artifact_class`** — the broad semantic artifact family. Two valid forms: the **umbrella values** (`human_knowledge`, `agentic_memory`, `bridge_artifact`, `machine_mirror`, `companion_metadata`) or a **concrete taxonomy class name** from `LIFE_WIDE_ARTIFACT_TAXONOMY.md` (e.g. `evergreen_note`, `shopping_list`, `email_summary`, `media_note`). Concrete names imply their umbrella class and are preferred when the sub-class is known. Both forms are authoritative and conformant — the Section 4 table and Section 4.1 use the same allowed set. Class is not determined by folder path, Markdown format, or MOC membership.
 - **`artifact_type`** — the concrete form or subtype within a class (e.g. `concept_note`, `task_snapshot`, `context_bundle`, `embedding_record`). For life-wide taxonomy classes whose `artifact_class` name is already specific, `artifact_type` names a further subdivision only when needed.
 - **`memory_type`** — the cognitive class of an agentic memory artifact (`working_context`, `episodic_memory`, `semantic_memory`, `prospective_memory`, `procedural_memory`, `preference_memory`, `policy_memory`). This axis applies only to `agentic_memory` artifacts and must not be conflated with `artifact_type`. The two are orthogonal: the same form can carry different cognitive classes, and the same cognitive class can take different forms.
 - **`lifecycle`** — the stability and retention posture (`ephemeral`, `active`, `durable`, `archived`, `rebuildable`). A folder or MOC is not a lifecycle. Promotion from `ephemeral` or `active` into `durable` is governance-bearing; see `LIFE_WIDE_ARTIFACT_TAXONOMY.md` Section 4.
@@ -701,9 +701,10 @@ index_name: vault_semantic_index
 projection_type: dense_embedding
 rebuildable: true
 authority:
-  system_authoritative: true
   human_authored: false
-  source_authoritative: false
+  ai_generated: false
+  source_authoritative: false   # authority belongs to the source artifact, not the mirror
+  system_authoritative: false   # mirrors are rebuildable projections; they hold no independent authority
 ---
 ```
 
