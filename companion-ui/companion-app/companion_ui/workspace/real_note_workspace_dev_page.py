@@ -34,6 +34,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Optional
+from uuid import uuid4
 
 from companion_ui.canvas_suggestion_flow.suggested_insertion import (
     SuggestedInsertion,
@@ -109,6 +110,7 @@ class DevPageState:
     panel_proposal_count: int = 0
     panel_render: dict[str, Any] | None = None
     panel_proposals: list[dict[str, Any]] | None = None
+    panel_last_response: dict[str, Any] | None = None
     suggestion_state: str = "idle"
     suggestion_dom_alias: str = "idle"
     suggestion_allowed_transitions: list[str] | None = None
@@ -242,6 +244,7 @@ class RealNoteWorkspaceDevPage:
             panel_proposal_count=panel_count,
             panel_render=panel_render,
             panel_proposals=panel_proposals,
+            panel_last_response=self.state.panel_last_response,
             suggestion_state=suggestion_machine.state,
             suggestion_dom_alias=suggestion_machine.dom_alias,
             suggestion_allowed_transitions=sorted(suggestion_machine.allowed_transitions()),
@@ -338,6 +341,62 @@ class RealNoteWorkspaceDevPage:
             return self.state
         return self.load(NoteLoadIntent(note_path=note_path))
 
+    def confirm_panel_proposal(
+        self,
+        *,
+        proposal_id: str,
+        artifact_id: str,
+        note_path: str,
+    ) -> DevPageState:
+        """Confirm a staged Panel proposal, then refresh workspace state."""
+        return self._submit_panel_decision(
+            proposal_id=proposal_id,
+            artifact_id=artifact_id,
+            note_path=note_path,
+            action="confirm",
+        )
+
+    def reject_panel_proposal(
+        self,
+        *,
+        proposal_id: str,
+        artifact_id: str,
+        note_path: str,
+    ) -> DevPageState:
+        """Reject a staged Panel proposal, then refresh workspace state."""
+        return self._submit_panel_decision(
+            proposal_id=proposal_id,
+            artifact_id=artifact_id,
+            note_path=note_path,
+            action="reject",
+        )
+
+    def _submit_panel_decision(
+        self,
+        *,
+        proposal_id: str,
+        artifact_id: str,
+        note_path: str,
+        action: str,
+    ) -> DevPageState:
+        try:
+            response = self._http.post(
+                "/api/panel/confirm",
+                json={
+                    "proposal_id": proposal_id,
+                    "artifact_id": artifact_id,
+                    "action": action,
+                    "idempotency_key": str(uuid4()),
+                },
+            )
+        except WorkspaceClientError as exc:
+            self.state = DevPageState(error=str(exc))
+            return self.state
+        self.state.panel_last_response = response
+        refreshed = self.load(NoteLoadIntent(note_path=note_path, artifact_id=artifact_id))
+        refreshed.panel_last_response = response
+        return refreshed
+
     def render_fields(self) -> Optional[dict]:
         """Return a flat dict of renderable fields for the current state.
 
@@ -369,6 +428,7 @@ class RealNoteWorkspaceDevPage:
             "panel_proposal_count": self.state.panel_proposal_count,
             "panel_render": self.state.panel_render or {},
             "panel_proposals": self.state.panel_proposals or [],
+            "panel_last_response": self.state.panel_last_response or {},
             "suggestion_state": self.state.suggestion_state,
             "suggestion_dom_alias": self.state.suggestion_dom_alias,
             "suggestion_allowed_transitions": self.state.suggestion_allowed_transitions or [],
