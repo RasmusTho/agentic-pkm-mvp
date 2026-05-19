@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.api.routes.artifacts import _content_hash
 from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError
 from app.chat.governance_router import GovernanceActionType, GovernanceRouter
 from app.chat.session_log import SessionLog, SessionLogWriter
@@ -61,6 +62,7 @@ class OpenSessionResponse(BaseModel):
 class EditRequest(BaseModel):
     new_body: str
     change_summary: str
+    content_hash: str | None = None
 
 
 class EditResponse(BaseModel):
@@ -129,6 +131,10 @@ def apply_edit(session_id: str, req: EditRequest) -> EditResponse:
     session = _sessions.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
+    if req.content_hash is not None:
+        current_hash = _content_hash(session.note_path.read_text(encoding="utf-8"))
+        if current_hash != req.content_hash:
+            raise HTTPException(status_code=409, detail="content_hash mismatch")
     vault_root = _get_vault_root()
     log_writer = SessionLogWriter(vault_root=vault_root)
     writer = CanvasWriter(vault_root=vault_root, log_writer=log_writer)

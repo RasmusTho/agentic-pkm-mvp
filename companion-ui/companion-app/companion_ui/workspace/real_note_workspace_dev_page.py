@@ -227,6 +227,34 @@ class RealNoteWorkspaceDevPage:
             return self.state
         return self.load(NoteLoadIntent(note_path=note_path))
 
+    def apply_canvas_edit(
+        self,
+        *,
+        session_id: str,
+        note_path: str,
+        new_body: str,
+        change_summary: str,
+        content_hash: str,
+    ) -> DevPageState:
+        """Apply a body-safe Canvas edit, then refresh workspace state."""
+        if not self.state.canvas_can_edit_body:
+            self.state.error = "Canvas body edit unavailable outside an active editable session"
+            self.state.is_loaded = False
+            return self.state
+        try:
+            self._http.post(
+                f"/api/canvas/sessions/{session_id}/edits",
+                json={
+                    "new_body": new_body,
+                    "change_summary": change_summary,
+                    "content_hash": content_hash,
+                },
+            )
+        except WorkspaceClientError as exc:
+            self.state = DevPageState(error=str(exc))
+            return self.state
+        return self.load(NoteLoadIntent(note_path=note_path))
+
     def render_fields(self) -> Optional[dict]:
         """Return a flat dict of renderable fields for the current state.
 

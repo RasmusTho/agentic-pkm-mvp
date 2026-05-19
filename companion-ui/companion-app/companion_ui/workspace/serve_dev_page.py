@@ -131,6 +131,7 @@ def _render_note_section(fields: dict) -> str:
         session_id=canvas_session_id,
         can_edit_body=canvas_can_edit_body,
         user_present=canvas_user_present,
+        content_hash=content_hash,
     )
 
     return f"""
@@ -182,10 +183,12 @@ def _render_canvas_session_controls(
     session_id: str,
     can_edit_body: bool,
     user_present: bool,
+    content_hash: str,
 ) -> str:
     start_disabled = " disabled" if session_id else ""
     close_disabled = "" if session_id else " disabled"
     edit_disabled = "" if can_edit_body else " disabled"
+    edit_api_path = f"/api/canvas/sessions/{session_id}/edits" if session_id else ""
     present_text = "user present" if user_present else "user not present"
     return f"""
         <div class="canvas-controls" data-testid="workspace-canvas-session-controls">
@@ -202,7 +205,10 @@ def _render_canvas_session_controls(
             data-api-path="/api/canvas/sessions/{session_id}"{close_disabled}>Close</button>
           <button
             type="button"
-            data-testid="workspace-canvas-edit-submit"{edit_disabled}>Apply body edit</button>
+            data-testid="workspace-canvas-edit-submit"
+            data-api-method="POST"
+            data-api-path="{edit_api_path}"
+            data-content-hash="{content_hash}"{edit_disabled}>Apply body edit</button>
           <span class="canvas-presence" data-testid="workspace-canvas-user-present">{present_text}</span>
         </div>"""
 

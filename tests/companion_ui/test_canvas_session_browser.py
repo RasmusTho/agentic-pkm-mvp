@@ -124,7 +124,9 @@ def test_edit_controls_disabled_outside_active() -> None:
         can_edit_body=False,
     )
 
-    assert 'data-testid="workspace-canvas-edit-submit" disabled' in html
+    assert 'data-testid="workspace-canvas-edit-submit"' in html
+    assert 'data-api-path=""' in html
+    assert "disabled>Apply body edit</button>" in html
 
 
 def test_session_state_indicator() -> None:
