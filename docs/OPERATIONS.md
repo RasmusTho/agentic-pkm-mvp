@@ -1,12 +1,12 @@
-State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; this is the top-level operations entrypoint for the current runtime while v6 remains planning-only.
+State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; this is the top-level operations entrypoint for the current runtime while v6.0 seams are shipped in bounded form and broader v6.1+ consumption remains planned.
 Doc role: Core SoT
 Authority: Top-level operator guidance for the current runtime; delegates specialized operational detail to linked companion docs but remains the main operational entrypoint.
 Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-05-07
-Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/PANEL_AGENT.md, docs/STATUS.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/RELEASE_CHANNELS/README.md, docs/runbooks/UAT_PANEL_WATCHER.md, .codex/skills/prepare-promotion/SKILL.md, .codex/skills/execute-promotion/SKILL.md, .codex/skills/verify-promotion/SKILL.md, .codex/skills/rollback-promotion/SKILL.md, app/api/routes/canvas.py, app/chat/canvas_writer.py, app/chat/governance_router.py, app/chat/session_log.py, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/settings/validate.py, app/watcher/registry.py, app/workers/outbox_worker.py, tests/api/test_canvas_api.py, tests/cli/test_canvas_cli.py, tests/cli/test_sync_latency_harness.py, tests/events/test_outbox_consumer_contract.py, tests/settings/test_panel_watcher_config_validation.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #745/#746/#749/#750/#751/#752/#754/#755/#762/#763/#766/#796, release-channel issue-state check for #609/#610/#611/#612 on 2026-05-07, and current repo state at e5ff97f on 2026-05-07
+Last reviewed: 2026-05-19
+Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/PANEL_AGENT.md, docs/STATUS.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/RELEASE_CHANNELS/README.md, docs/RELEASE_CHANNELS/TERMINOLOGY.md, docs/runbooks/UAT_PANEL_WATCHER.md, app/api/routes/artifacts.py, app/api/routes/canvas.py, app/api/routes/panel.py, app/chat/canvas_writer.py, app/chat/governance_router.py, app/chat/session_log.py, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/panel/confirmation.py, app/settings/validate.py, app/watcher/registry.py, app/workers/outbox_worker.py, tests/api/test_artifact_note_read_api.py, tests/api/test_canvas_api.py, tests/api/test_panel_confirm_api.py, tests/cli/test_canvas_cli.py, tests/cli/test_sync_latency_harness.py, tests/events/test_outbox_consumer_contract.py, tests/integration/test_panel_confirm_integration.py, tests/settings/test_panel_watcher_config_validation.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1054/#1056/#1068/#1069/#1070/#1076/#1118/#1119, and current repo state at 725f5b4 on 2026-05-19
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
