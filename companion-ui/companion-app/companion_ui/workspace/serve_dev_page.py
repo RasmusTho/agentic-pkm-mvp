@@ -70,29 +70,54 @@ def _e(value: str) -> str:
 
 
 def _render_note_section(fields: dict) -> str:
-    """Render the note view table and body preview from render_fields() output."""
+    """Render the workspace shell from render_fields() output.
+
+    Uses Yggdrasil design tokens. Stable data-testid / data-region attributes
+    match the region constants in real_note_workspace_shell.py for future
+    Canvas/Panel integration.
+    """
+    title = _e(fields.get("title", ""))
+    note_path_val = _e(fields.get("note_path", ""))
+    artifact_id = _e(fields.get("artifact_id", ""))
+    content_hash = _e(fields.get("content_hash", ""))
+    body = _e(fields.get("body", ""))
+    panel_rail = _e(fields.get("panel_rail", "Panel / agent rail placeholder"))
+
     return f"""
-  <div class="note-view">
-    <table>
-      <tr><th>Title</th><td>{_e(fields.get("title", ""))}</td></tr>
-      <tr><th>Note path</th><td><code>{_e(fields.get("note_path", ""))}</code></td></tr>
-      <tr><th>Artifact ID</th><td><code>{_e(fields.get("artifact_id", ""))}</code></td></tr>
-      <tr><th>Content hash</th><td><code>{_e(fields.get("content_hash", ""))}</code></td></tr>
-    </table>
-    <h3>Body</h3>
-    <pre class="body-preview">{_e(fields.get("body", ""))}</pre>
-  </div>
-  <div class="rail-placeholder">
-    [{_e(fields.get("panel_rail", "Panel / agent rail placeholder"))}]
+  <div class="workspace-layout">
+    <div class="workspace-main">
+      <header class="note-header" data-testid="workspace-note-header" data-region="note-header">
+        <h1 class="note-title">{title}</h1>
+        <div class="note-provenance">
+          <span class="prov-item"><span class="prov-label">path</span><code>{note_path_val}</code></span>
+          <span class="prov-sep">&middot;</span>
+          <span class="prov-item"><span class="prov-label">artifact</span><code>{artifact_id}</code></span>
+          <span class="prov-sep">&middot;</span>
+          <span class="prov-item"><span class="prov-label">hash</span><code>{content_hash}</code></span>
+        </div>
+      </header>
+      <div class="note-body" data-testid="workspace-note-body" data-region="note-body">
+        <pre class="note-body-content">{body}</pre>
+      </div>
+    </div>
+    <aside class="agent-rail" data-testid="workspace-agent-rail" data-region="agent-rail">
+      <div class="rail-header">
+        <span class="rail-label">Companion&nbsp;/ Panel</span>
+        <span class="rail-badge">idle</span>
+      </div>
+      <div class="rail-placeholder-body">
+        {panel_rail}
+      </div>
+    </aside>
   </div>"""
 
 
 def _render_error_section(error: str) -> str:
-    """Render a visible error state section."""
+    """Render a visible error state using Yggdrasil destructive tokens."""
     return f"""
-  <div class="error">
-    <strong>Error loading note</strong><br>
-    <code>{_e(error)}</code>
+  <div class="error-state" data-testid="workspace-error-state">
+    <span class="error-label">API Error</span>
+    <span class="error-message"><code>{_e(error)}</code></span>
   </div>"""
 
 
@@ -103,10 +128,15 @@ def render_index_html(
     fields: Optional[dict] = None,
     error: str = "",
 ) -> str:
-    """Render the workspace dev page as plain HTML.
+    """Render the workspace dev page as a Companion UI visual shell.
 
     Pure function — no network calls, no file I/O.
     All user-supplied values are HTML-escaped.
+
+    This is the first visual-alignment pass (not production UI). It uses
+    Yggdrasil design tokens and the workspace region contract from
+    real_note_workspace_shell.py. Canvas body-edit and Panel execution
+    are not implemented; the agent rail is a placeholder.
     """
     content_section = ""
     if error:
@@ -118,95 +148,304 @@ def render_index_html(
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Companion UI — Real-Note Workspace [DEV]</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Space+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet">
   <style>
+    /* Yggdrasil design tokens (subset inlined for offline resilience) */
+    :root {{
+      --bg-base:       #070b12;
+      --bg-surface:    #0c1220;
+      --bg-raised:     #111a2e;
+      --bg-overlay:    #162038;
+      --fg-1:          #dce8f0;
+      --fg-2:          #7a9ab8;
+      --fg-3:          #3d5570;
+      --border:        #152030;
+      --border-strong: #1e3050;
+      --border-focus:  #00d4e8;
+      --accent:        #d4a843;
+      --cyan:          #00d4e8;
+      --cyan-muted:    #001e28;
+      --agent:         #4a9eff;
+      --agent-muted:   #051228;
+      --destructive:      #ff3d3d;
+      --destructive-muted:#160404;
+      --font-display:  'EB Garamond', Georgia, serif;
+      --font-ui:       'Space Grotesk', system-ui, sans-serif;
+      --font-mono:     'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      --text-xs:   0.6875rem;
+      --text-sm:   0.8125rem;
+      --text-base: 0.9375rem;
+      --text-xl:   1.5rem;
+      --text-2xl:  2rem;
+      --radius-sm: 2px;
+      --radius-md: 4px;
+    }}
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    html {{ font-size: 16px; -webkit-font-smoothing: antialiased; }}
     body {{
-      font-family: monospace;
-      max-width: 960px;
-      margin: 2rem auto;
-      padding: 0 1rem;
-      color: #222;
+      background: var(--bg-base);
+      background-image:
+        linear-gradient(rgba(0,212,232,0.022) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,212,232,0.022) 1px, transparent 1px);
+      background-size: 48px 48px;
+      color: var(--fg-1);
+      font-family: var(--font-ui);
+      font-size: var(--text-base);
+      line-height: 1.55;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
     }}
-    .dev-banner {{
-      background: #ffcc00;
-      border: 2px solid #cc8800;
-      padding: 0.5rem 1rem;
-      margin-bottom: 1.5rem;
-      font-weight: bold;
+
+    /* ---- Top bar ---- */
+    .topbar {{
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 20px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
     }}
-    .api-target {{
-      background: #eef2ff;
-      border: 1px solid #aab;
-      padding: 0.5rem 1rem;
-      margin-bottom: 1.5rem;
-      font-size: 0.95em;
+    .topbar-api {{
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      flex: 1;
+      min-width: 0;
     }}
-    .load-form {{
-      margin-bottom: 1.5rem;
+    .topbar-api .api-label {{
+      color: var(--fg-3);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      flex-shrink: 0;
     }}
-    .load-form input[type=text] {{
-      width: 55%;
-      padding: 0.35rem 0.5rem;
-      font-family: monospace;
-      font-size: 1em;
+    .topbar-api .api-url {{
+      color: var(--fg-2);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }}
-    .load-form button {{
-      padding: 0.35rem 1.2rem;
-      margin-left: 0.5rem;
+    .dev-chip {{
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: var(--radius-sm);
+      background: rgba(240,144,48,0.08);
+      border: 1px solid rgba(240,144,48,0.35);
+      color: #f09030;
+      flex-shrink: 0;
+    }}
+
+    /* ---- Load form ---- */
+    .load-bar {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }}
+    .load-bar label {{
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }}
+    .load-bar input[type=text] {{
+      flex: 1;
+      min-width: 0;
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--fg-1);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      padding: 5px 10px;
+      outline: none;
+    }}
+    .load-bar input[type=text]:focus {{
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 1px var(--border-focus);
+    }}
+    .load-bar button {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--fg-1);
+      font-family: var(--font-ui);
+      font-size: var(--text-xs);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 5px 14px;
       cursor: pointer;
+      flex-shrink: 0;
     }}
-    .error {{
-      background: #fff0f0;
-      border: 2px solid #c00;
-      padding: 0.75rem 1rem;
-      margin: 1rem 0;
-      color: #800;
+    .load-bar button:hover {{ border-color: var(--cyan); color: var(--cyan); }}
+
+    /* ---- Error state ---- */
+    .error-state {{
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin: 20px;
+      padding: 12px 16px;
+      background: var(--destructive-muted);
+      border: 1px solid rgba(255,61,61,0.3);
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
     }}
-    .note-view table {{
-      border-collapse: collapse;
-      width: 100%;
-      margin-bottom: 1rem;
+    .error-label {{
+      color: var(--destructive);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-size: var(--text-xs);
+      flex-shrink: 0;
     }}
-    .note-view th,
-    .note-view td {{
-      border: 1px solid #ccc;
-      padding: 0.4rem 0.75rem;
-      text-align: left;
-      vertical-align: top;
+    .error-message {{ color: var(--fg-2); }}
+    .error-message code {{ background: none; border: none; padding: 0; color: var(--fg-1); }}
+
+    /* ---- Workspace layout ---- */
+    .workspace-layout {{
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
     }}
-    .note-view th {{
-      width: 160px;
-      background: #f4f4f4;
+    .workspace-main {{
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }}
-    pre.body-preview {{
-      background: #f8f8f8;
-      border: 1px solid #ddd;
-      padding: 1rem;
+
+    /* ---- Note header ---- */
+    .note-header {{
+      padding: 20px 24px 12px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }}
+    .note-title {{
+      font-family: var(--font-display);
+      font-size: var(--text-2xl);
+      font-weight: 400;
+      line-height: 1.2;
+      color: var(--fg-1);
+      margin-bottom: 8px;
+    }}
+    .note-provenance {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 4px 8px;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+    }}
+    .prov-item {{ display: inline-flex; align-items: baseline; gap: 4px; }}
+    .prov-label {{
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--fg-3);
+    }}
+    .prov-item code {{
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: var(--text-xs);
+      color: var(--fg-2);
+    }}
+    .prov-sep {{ color: var(--border-strong); }}
+
+    /* ---- Note body ---- */
+    .note-body {{
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+    }}
+    .note-body-content {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 20px;
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      color: var(--fg-1);
+      line-height: 1.65;
       white-space: pre-wrap;
       word-break: break-word;
-      max-height: 420px;
-      overflow-y: auto;
-      margin: 0;
     }}
-    .rail-placeholder {{
-      background: #f0f0f0;
-      border: 1px dashed #999;
-      padding: 1rem;
-      margin-top: 1.25rem;
-      color: #666;
+
+    /* ---- Agent rail ---- */
+    .agent-rail {{
+      width: 280px;
+      flex-shrink: 0;
+      background: var(--bg-surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }}
+    .rail-header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }}
+    .rail-label {{
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--fg-3);
+    }}
+    .rail-badge {{
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      padding: 1px 7px;
+      border-radius: var(--radius-sm);
+      background: var(--agent-muted);
+      border: 1px solid rgba(74,158,255,0.2);
+      color: var(--agent);
+      letter-spacing: 0.04em;
+    }}
+    .rail-placeholder-body {{
+      flex: 1;
+      padding: 16px;
+      font-size: var(--text-sm);
+      color: var(--fg-3);
       font-style: italic;
     }}
   </style>
 </head>
 <body>
-  <div class="dev-banner">[DEV/STAGING ONLY — not for production use]</div>
-  <h1>Companion UI — Real-Note Workspace</h1>
-  <div class="api-target">
-    <strong>Runtime API:</strong> <code>{_e(api_base_url)}</code>
+  <div class="topbar">
+    <div class="topbar-api">
+      <span class="api-label">Runtime API</span>
+      <span class="api-url" title="{_e(api_base_url)}">{_e(api_base_url)}</span>
+    </div>
+    <span class="dev-chip">DEV / not production</span>
   </div>
-  <div class="load-form">
-    <form method="GET" action="/">
-      <label for="note_path"><strong>Note path:</strong></label><br>
+  <div class="load-bar">
+    <form method="GET" action="/" style="display:flex;align-items:center;gap:8px;width:100%">
+      <label for="note_path">note_path</label>
       <input
         type="text"
         id="note_path"
