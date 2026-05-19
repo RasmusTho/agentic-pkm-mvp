@@ -35,6 +35,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from companion_ui.canvas_suggestion_flow.rail_state_machine import (
+    CanvasRailStateMachine,
+)
 from companion_ui.panel.proposal_row import ProposalEvidence, ProposalRow
 from companion_ui.panel.render_model import PanelRenderState, render_panel_state
 from companion_ui.workspace.real_note_workspace_shell import (
@@ -95,6 +98,10 @@ class DevPageState:
     panel_proposal_count: int = 0
     panel_render: dict[str, Any] | None = None
     panel_proposals: list[dict[str, Any]] | None = None
+    suggestion_state: str = "idle"
+    suggestion_dom_alias: str = "idle"
+    suggestion_allowed_transitions: list[str] | None = None
+    suggestion_composer_enabled: bool = True
     guard_writeguard_status: str = "ok"
     guard_canvas_enabled: bool = True
     is_loaded: bool = False
@@ -146,6 +153,7 @@ class RealNoteWorkspaceDevPage:
         artifact = raw.get("artifact") or {}
         canvas = raw.get("canvas") or {}
         panel = raw.get("panel") or {}
+        suggestions = raw.get("suggestions") or {}
         guards = raw.get("guards") or {}
 
         # The runtime echoes artifact_id only when supplied in the request.
@@ -179,6 +187,9 @@ class RealNoteWorkspaceDevPage:
             panel=panel,
             artifact_id=resolved_artifact_id,
         )
+        suggestion_machine = CanvasRailStateMachine(
+            suggestions.get("current_suggestion_state") or "idle"
+        )
         self.state = DevPageState(
             shell=shell,
             panel_rail_placeholder=panel_render.get("label", "Panel ready"),
@@ -192,6 +203,10 @@ class RealNoteWorkspaceDevPage:
             panel_proposal_count=panel_count,
             panel_render=panel_render,
             panel_proposals=panel_proposals,
+            suggestion_state=suggestion_machine.state,
+            suggestion_dom_alias=suggestion_machine.dom_alias,
+            suggestion_allowed_transitions=sorted(suggestion_machine.allowed_transitions()),
+            suggestion_composer_enabled=suggestion_machine.composer_enabled,
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
             guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
             is_loaded=True,
@@ -280,6 +295,10 @@ class RealNoteWorkspaceDevPage:
             "panel_proposal_count": self.state.panel_proposal_count,
             "panel_render": self.state.panel_render or {},
             "panel_proposals": self.state.panel_proposals or [],
+            "suggestion_state": self.state.suggestion_state,
+            "suggestion_dom_alias": self.state.suggestion_dom_alias,
+            "suggestion_allowed_transitions": self.state.suggestion_allowed_transitions or [],
+            "suggestion_composer_enabled": self.state.suggestion_composer_enabled,
             "guard_writeguard_status": self.state.guard_writeguard_status,
             "guard_canvas_enabled": self.state.guard_canvas_enabled,
             "is_production_ui": self.is_production_ui,

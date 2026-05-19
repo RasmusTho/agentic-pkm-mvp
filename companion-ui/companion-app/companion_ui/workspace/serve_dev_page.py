@@ -126,6 +126,7 @@ def _render_note_section(fields: dict) -> str:
     proposal_rows_html = _render_panel_proposal_rows(
         fields.get("panel_proposals") or [],
     )
+    suggestion_flow_html = _render_suggestion_flow_region(fields)
     canvas_controls_html = _render_canvas_session_controls(
         note_path=note_path_val,
         session_id=canvas_session_id,
@@ -169,12 +170,42 @@ def _render_note_section(fields: dict) -> str:
         </div>
         {panel_message_html}
         {proposal_rows_html}
+        {suggestion_flow_html}
         {guard_html}
         {persistence_html}
         {panel_rail}
       </div>
     </aside>
   </div>"""
+
+
+def _render_suggestion_flow_region(fields: dict) -> str:
+    suggestion_state = _e(fields.get("suggestion_state", "idle"))
+    dom_alias = _e(fields.get("suggestion_dom_alias", suggestion_state))
+    composer_enabled = bool(fields.get("suggestion_composer_enabled", True))
+    composer_text = "composer enabled" if composer_enabled else "composer locked"
+    transitions = fields.get("suggestion_allowed_transitions") or []
+    transition_html = "".join(
+        (
+            '<span class="suggestion-transition" '
+            f'data-testid="workspace-suggestion-transition" data-transition-to="{_e(target)}">'
+            f"{_e(target)}</span>"
+        )
+        for target in transitions
+    )
+    return f"""
+        <div
+          class="suggestion-flow"
+          data-testid="workspace-suggestion-flow"
+          data-suggestion-state="{suggestion_state}"
+          data-suggestion-dom-alias="{dom_alias}">
+          <div class="rail-state-row">
+            <span class="rail-state-label">Suggestion</span>
+            <span class="rail-state-value">{suggestion_state}</span>
+          </div>
+          <div class="suggestion-composer-state">{composer_text}</div>
+          <div class="suggestion-transitions">{transition_html}</div>
+        </div>"""
 
 
 def _render_canvas_session_controls(
@@ -636,6 +667,25 @@ def render_index_html(
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       grid-column: 1 / -1;
+    }}
+    .suggestion-flow {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 10px;
+    }}
+    .suggestion-composer-state, .suggestion-transition {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .suggestion-transitions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
     }}
     .panel-proposal-row {{
       background: var(--bg-raised);
