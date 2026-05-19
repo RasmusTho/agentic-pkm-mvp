@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import re
 
-import pytest
-
 from companion_ui.workspace.serve_dev_page import render_index_html
 from companion_ui.workspace.real_note_workspace_shell import (
     REGION_AGENT_RAIL,
