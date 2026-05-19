@@ -12,7 +12,7 @@ import yaml
 
 import app.api.routes.canvas as canvas_module
 import app.panel.confirmation as confirm_module
-from app.api.routes.artifacts import _content_hash, read_artifact_note
+from app.api.routes.artifacts import _content_hash, _extract_title
 from app.config.paths import resolve_vault_root
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
@@ -108,6 +108,15 @@ def _validate_workspace_note_path(note_path_raw: str) -> str:
             },
         )
     return candidate.as_posix()
+
+
+def _find_workspace_note(vault_root: Path, safe_note_path: str) -> Path | None:
+    for candidate in vault_root.rglob("*"):
+        if not candidate.is_file():
+            continue
+        if _vault_relative(candidate, vault_root) == safe_note_path:
+            return candidate
+    return None
 
 
 def _frontmatter_artifact_id(body: str) -> str | None:
@@ -219,22 +228,19 @@ def read_companion_workspace(
     trace_id = uuid4().hex
     safe_note_path = _validate_workspace_note_path(note_path)
     vault_root = resolve_vault_root()
-    try:
-        artifact = read_artifact_note(note_path=safe_note_path, artifact_id="")
-    except HTTPException as exc:
-        if exc.status_code == 404:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": "note_not_found",
-                    "message": "No note exists for the requested note_path",
-                    "note_path": safe_note_path,
-                    "trace_id": trace_id,
-                },
-            ) from exc
-        raise
+    artifact_path = _find_workspace_note(vault_root, safe_note_path)
+    if artifact_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "note_not_found",
+                "message": "No note exists for the requested note_path",
+                "note_path": safe_note_path,
+                "trace_id": trace_id,
+            },
+        )
 
-    body = artifact.body
+    body = artifact_path.read_text(encoding="utf-8")
     artifact_id = _frontmatter_artifact_id(body) or _content_hash(safe_note_path)
     canvas_enabled = _truthy_env("CANVAS_ENABLED")
     writeguard_status = _writeguard_status()
@@ -243,9 +249,9 @@ def read_companion_workspace(
         artifact=ArtifactState(
             artifact_id=artifact_id,
             note_path=safe_note_path,
-            title=artifact.title,
+            title=_extract_title(body, fallback=artifact_path.stem),
             body=body,
-            content_hash=artifact.content_hash,
+            content_hash=_content_hash(body),
         ),
         runtime=RuntimeState(
             environment_label=_safe_environment_label(),
