@@ -89,6 +89,7 @@ Panel state, receipts, or write-guard state.
     "state": "idle | running | proposals-staged | confirming | executing | receipt-displayed | no-match | blocked | clarification-needed | plan-staged | capability-needed | partial-complete",
     "proposal_count": 0,
     "receipt_count": 0,
+    "latest_receipt_outcome": "success | blocked | logged | partial | rejected | null",
     "blocked_reason": null,
     "no_match_reason": null
   },
@@ -173,6 +174,7 @@ refresh.
 | `state` | One of the Panel render states defined in `PANEL_COMPANION_UI_CONTRACT.md`. |
 | `proposal_count` | Count of currently staged artifact-local proposals for this note. |
 | `receipt_count` | Count of current receipt/outcome items relevant to this note. |
+| `latest_receipt_outcome` | Server-declared outcome for the most recent relevant receipt: `success`, `blocked`, `logged`, `partial`, `rejected`, or `null` when no receipt is available. The UI must use this field, not `state`, to distinguish successful execution from logged/deferred or blocked outcomes on cold load. |
 | `blocked_reason` | Human-readable reason when `state = "blocked"`, else `null`. |
 | `no_match_reason` | Human-readable reason when `state = "no-match"`, else `null`. |
 
@@ -278,6 +280,7 @@ showing unavailable actions.
     "state": "blocked",
     "proposal_count": 0,
     "receipt_count": 0,
+    "latest_receipt_outcome": "blocked",
     "blocked_reason": "WriteGuard blocked the requested operation",
     "no_match_reason": null
   },

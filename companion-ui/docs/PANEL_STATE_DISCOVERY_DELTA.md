@@ -29,7 +29,7 @@ confirmation path.
 | Question | Answer |
 |---|---|
 | How does the browser discover staged proposals on cold load? | It reads `panel.state` and `panel.proposal_count` from `GET /api/companion/workspace?note_path=...`. If `panel.state = "proposals-staged"` and `proposal_count > 0`, the browser renders the Panel proposal affordance for that artifact. |
-| How does the browser discover receipts for a given note? | It reads `panel.receipt_count` and renders receipt posture according to `panel.state`, especially `receipt-displayed`, `blocked`, `logged`, and `partial-complete` states. The durable vault-visible receipt mapping remains governed by `PANEL_DURABLE_PROJECTION_MAPPING.md`. |
+| How does the browser discover receipts for a given note? | It reads `panel.receipt_count` and `panel.latest_receipt_outcome`. `panel.state` tells the browser whether a receipt should be displayed; `latest_receipt_outcome` distinguishes success, blocked, logged/deferred, partial, and rejected outcomes. The durable vault-visible receipt mapping remains governed by `PANEL_DURABLE_PROJECTION_MAPPING.md`. |
 | Is polling, SSE, or explicit refresh the right model? | Explicit refresh and load-time aggregation are sufficient for the current slice. Polling or SSE is not required until there is a concrete live-update UX issue. |
 | What does blocked/no-match state look like? | `panel.state = "blocked"` carries `blocked_reason`; `panel.state = "no-match"` carries `no_match_reason`. Both are defined by `WORKSPACE_STATE_CONTRACT.md` and rendered as visible Panel states, not silent failures. |
 
@@ -49,6 +49,7 @@ The browser uses only the `panel` slice for Panel discovery:
     "state": "proposals-staged",
     "proposal_count": 2,
     "receipt_count": 0,
+    "latest_receipt_outcome": null,
     "blocked_reason": null,
     "no_match_reason": null
   }
@@ -70,13 +71,17 @@ Receipt discovery is aggregate-level for this slice:
   items relevant to the active artifact.
 - `panel.state = "receipt-displayed"` tells the browser the primary render
   state.
+- `latest_receipt_outcome` tells the browser what happened: `success`,
+  `blocked`, `logged`, `partial`, or `rejected`.
 - Blocked/logged/partial outcomes remain governed by
   `PANEL_CONFIRMATION_API_CONTRACT.md` and
   `PANEL_DURABLE_PROJECTION_MAPPING.md`.
 
 This delta does not introduce a new receipt list schema. If the browser later
 needs full receipt rows on cold load, that is an additive extension to
-`WORKSPACE_STATE_CONTRACT.md`, not a separate discovery endpoint.
+`WORKSPACE_STATE_CONTRACT.md`, not a separate discovery endpoint. Until then,
+`latest_receipt_outcome` is the required field that prevents the browser from
+misrepresenting a logged/deferred or blocked receipt as a successful execution.
 
 ## Update Model
 
