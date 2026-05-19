@@ -35,9 +35,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from companion_ui.canvas_suggestion_flow.suggested_insertion import (
+    SuggestedInsertion,
+)
 from companion_ui.canvas_suggestion_flow.rail_state_machine import (
     CanvasRailStateMachine,
 )
+from companion_ui.canvas_suggestion_flow.suggestion_card import SuggestionCard
 from companion_ui.panel.proposal_row import ProposalEvidence, ProposalRow
 from companion_ui.panel.render_model import PanelRenderState, render_panel_state
 from companion_ui.workspace.real_note_workspace_shell import (
@@ -109,6 +113,8 @@ class DevPageState:
     suggestion_dom_alias: str = "idle"
     suggestion_allowed_transitions: list[str] | None = None
     suggestion_composer_enabled: bool = True
+    suggestion_cards: list[dict[str, Any]] | None = None
+    suggested_insertions: list[dict[str, Any]] | None = None
     guard_writeguard_status: str = "ok"
     guard_canvas_enabled: bool = True
     is_loaded: bool = False
@@ -240,6 +246,8 @@ class RealNoteWorkspaceDevPage:
             suggestion_dom_alias=suggestion_machine.dom_alias,
             suggestion_allowed_transitions=sorted(suggestion_machine.allowed_transitions()),
             suggestion_composer_enabled=suggestion_machine.composer_enabled,
+            suggestion_cards=_suggestion_cards_from_payload(suggestions),
+            suggested_insertions=_suggested_insertions_from_payload(suggestions),
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
             guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
             is_loaded=True,
@@ -365,6 +373,8 @@ class RealNoteWorkspaceDevPage:
             "suggestion_dom_alias": self.state.suggestion_dom_alias,
             "suggestion_allowed_transitions": self.state.suggestion_allowed_transitions or [],
             "suggestion_composer_enabled": self.state.suggestion_composer_enabled,
+            "suggestion_cards": self.state.suggestion_cards or [],
+            "suggested_insertions": self.state.suggested_insertions or [],
             "guard_writeguard_status": self.state.guard_writeguard_status,
             "guard_canvas_enabled": self.state.guard_canvas_enabled,
             "is_production_ui": self.is_production_ui,
@@ -413,3 +423,48 @@ def _proposal_affordance_set(raw: Any) -> set[str]:
     if isinstance(raw, list):
         return set(raw)
     return {"confirm", "correct", "reject"}
+
+
+def _suggestion_payloads(suggestions: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = suggestions.get("proposals") or suggestions.get("proposal")
+    if raw is None and suggestions.get("server_declared_classification"):
+        raw = suggestions
+    if isinstance(raw, dict):
+        return [raw]
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    return []
+
+
+def _suggestion_cards_from_payload(suggestions: dict[str, Any]) -> list[dict[str, Any]]:
+    cards: list[dict[str, Any]] = []
+    fallback_classification = suggestions.get("server_declared_classification")
+    for index, raw in enumerate(_suggestion_payloads(suggestions), start=1):
+        variant = raw.get("server_declared_classification") or fallback_classification
+        if variant not in {"body", "governance", "blocked"}:
+            variant = "blocked"
+        card = SuggestionCard(
+            suggestion_id=str(raw.get("suggestion_id") or f"suggestion-{index}"),
+            variant=variant,
+            title=str(raw.get("title") or raw.get("summary") or "Suggestion"),
+            preview_text=str(raw.get("preview_text") or raw.get("proposed_text") or ""),
+            denial_reason=raw.get("denial_reason") or "Suggestion is blocked.",
+        )
+        cards.append(card.as_render_dict())
+    return cards
+
+
+def _suggested_insertions_from_payload(suggestions: dict[str, Any]) -> list[dict[str, Any]]:
+    insertions: list[dict[str, Any]] = []
+    fallback_classification = suggestions.get("server_declared_classification")
+    for index, raw in enumerate(_suggestion_payloads(suggestions), start=1):
+        variant = raw.get("server_declared_classification") or fallback_classification
+        if variant != "body":
+            continue
+        insertion = SuggestedInsertion(
+            suggestion_id=str(raw.get("suggestion_id") or f"suggestion-{index}"),
+            anchor_description=str(raw.get("anchor_description") or "current note body"),
+            proposed_text=str(raw.get("proposed_text") or raw.get("preview_text") or ""),
+        )
+        insertions.append(insertion.as_render_dict())
+    return insertions
