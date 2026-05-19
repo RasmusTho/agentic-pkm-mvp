@@ -93,6 +93,10 @@ class DevPageState:
     canvas_user_present: bool = False
     canvas_can_edit_body: bool = False
     canvas_recovery_needed: bool = False
+    canvas_session_log_path: str | None = None
+    canvas_undo_available: bool = False
+    canvas_applied_edit_count: int = 0
+    canvas_undone_edit_count: int = 0
     canvas_session_persistence: str = ""
     panel_state: str = "idle"
     panel_proposal_count: int = 0
@@ -198,6 +202,10 @@ class RealNoteWorkspaceDevPage:
             canvas_user_present=bool(canvas.get("user_present", False)),
             canvas_can_edit_body=bool(canvas.get("can_edit_body", False)),
             canvas_recovery_needed=bool(canvas.get("recovery_needed", False)),
+            canvas_session_log_path=canvas.get("session_log_path"),
+            canvas_undo_available=bool(canvas.get("undo_available", False)),
+            canvas_applied_edit_count=int(canvas.get("applied_edit_count") or 0),
+            canvas_undone_edit_count=int(canvas.get("undone_edit_count") or 0),
             canvas_session_persistence=canvas.get("session_persistence") or "",
             panel_state=panel_state,
             panel_proposal_count=panel_count,
@@ -270,6 +278,24 @@ class RealNoteWorkspaceDevPage:
             return self.state
         return self.load(NoteLoadIntent(note_path=note_path))
 
+    def undo_last_canvas_edit(
+        self,
+        *,
+        session_id: str,
+        note_path: str,
+    ) -> DevPageState:
+        """Undo the most recent Canvas body edit, then refresh workspace state."""
+        if not self.state.canvas_undo_available:
+            self.state.error = "No undoable Canvas body edit is available"
+            self.state.is_loaded = False
+            return self.state
+        try:
+            self._http.delete(f"/api/canvas/sessions/{session_id}/edits/last")
+        except WorkspaceClientError as exc:
+            self.state = DevPageState(error=str(exc))
+            return self.state
+        return self.load(NoteLoadIntent(note_path=note_path))
+
     def render_fields(self) -> Optional[dict]:
         """Return a flat dict of renderable fields for the current state.
 
@@ -290,6 +316,10 @@ class RealNoteWorkspaceDevPage:
             "canvas_user_present": self.state.canvas_user_present,
             "canvas_can_edit_body": self.state.canvas_can_edit_body,
             "canvas_recovery_needed": self.state.canvas_recovery_needed,
+            "canvas_session_log_path": self.state.canvas_session_log_path,
+            "canvas_undo_available": self.state.canvas_undo_available,
+            "canvas_applied_edit_count": self.state.canvas_applied_edit_count,
+            "canvas_undone_edit_count": self.state.canvas_undone_edit_count,
             "canvas_session_persistence": self.state.canvas_session_persistence,
             "panel_state": self.state.panel_state,
             "panel_proposal_count": self.state.panel_proposal_count,

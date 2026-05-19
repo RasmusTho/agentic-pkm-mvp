@@ -15,8 +15,12 @@ from app.api.routes.artifacts import _content_hash
 @pytest.fixture(autouse=True)
 def _clear_sessions():
     canvas_module._sessions.clear()
+    canvas_module._edit_history.clear()
+    canvas_module._undone_history.clear()
     yield
     canvas_module._sessions.clear()
+    canvas_module._edit_history.clear()
+    canvas_module._undone_history.clear()
 
 
 @pytest.fixture()
@@ -62,6 +66,55 @@ def test_edit_updates_vault_file(client: TestClient, vault: Path) -> None:
     assert edit_resp.json()["ok"] is True
     note = vault / "note.md"
     assert "Updated body." in note.read_text(encoding="utf-8")
+
+
+def test_undo_last_edit_reverts_body_and_preserves_log(client: TestClient, vault: Path) -> None:
+    open_resp = client.post(
+        "/api/canvas/sessions", json={"note_path": "note.md", "label": "undo-test"}
+    )
+    session_id = open_resp.json()["session_id"]
+    log_path = Path(open_resp.json()["log_path"])
+
+    edit_resp = client.post(
+        f"/api/canvas/sessions/{session_id}/edits",
+        json={
+            "new_body": "Updated body.",
+            "change_summary": "rewrote",
+            "content_hash": _content_hash((vault / "note.md").read_text(encoding="utf-8")),
+        },
+    )
+    assert edit_resp.status_code == 200
+
+    undo_resp = client.delete(f"/api/canvas/sessions/{session_id}/edits/last")
+
+    assert undo_resp.status_code == 200
+    assert undo_resp.json()["ok"] is True
+    assert "Original body." in (vault / "note.md").read_text(encoding="utf-8")
+    log_content = log_path.read_text(encoding="utf-8")
+    assert "rewrote" in log_content
+    assert "[undo:" in log_content
+    assert "reverted edit:" in log_content
+
+
+def test_undo_rejects_diverged_body(client: TestClient, vault: Path) -> None:
+    open_resp = client.post(
+        "/api/canvas/sessions", json={"note_path": "note.md", "label": "undo-conflict"}
+    )
+    session_id = open_resp.json()["session_id"]
+    client.post(
+        f"/api/canvas/sessions/{session_id}/edits",
+        json={
+            "new_body": "Updated body.",
+            "change_summary": "rewrote",
+            "content_hash": _content_hash((vault / "note.md").read_text(encoding="utf-8")),
+        },
+    )
+    (vault / "note.md").write_text("# Hello\n\nManual user change.\n", encoding="utf-8")
+
+    undo_resp = client.delete(f"/api/canvas/sessions/{session_id}/edits/last")
+
+    assert undo_resp.status_code == 409
+    assert "Manual user change." in (vault / "note.md").read_text(encoding="utf-8")
 
 
 def test_edit_rejects_stale_content_hash(client: TestClient, vault: Path) -> None:
