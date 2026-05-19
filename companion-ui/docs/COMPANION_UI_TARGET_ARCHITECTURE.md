@@ -118,6 +118,9 @@ Rules:
 - Work-computer access is deferred unless already safely reachable through the operator's approved
   Tailscale/network setup.
 
+The detailed localhost/LAN/Tailscale/token/CSRF posture is defined in
+`companion-ui/docs/LOCAL_ACCESS_MODEL.md`.
+
 ---
 
 ## 5. Current Shipped State
@@ -146,6 +149,14 @@ and `docs/STATUS.md` for current sequencing.
 
 For operational detail on the shipped dev server, see
 `companion-ui/docs/REAL_NOTE_WORKSPACE_DEV_PAGE.md`.
+
+The next browser integration contracts are:
+
+- `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md` — read-side workspace aggregate for artifact,
+  Canvas, Panel, suggestion, and guard state.
+- `companion-ui/docs/CANVAS_BROWSER_EDITOR_DECISION.md` — interim Canvas browser editor primitive
+  and full-body edit delivery decision.
+- `companion-ui/docs/PANEL_STATE_DISCOVERY_DELTA.md` — Panel browser discovery gap analysis.
 
 ---
 
@@ -220,6 +231,10 @@ The following must not happen under this architecture:
 |---|---|
 | `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md` | Cognitive boundary and integration boundary rules; upstream of this doc |
 | `companion-ui/docs/REAL_NOTE_WORKSPACE_DEV_PAGE.md` | Operational detail for the dev page: ports, env vars, UAT steps |
+| `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md` | Read-side aggregate contract for browser workspace state |
+| `companion-ui/docs/LOCAL_ACCESS_MODEL.md` | Localhost, LAN, Tailscale, token, and CSRF access posture |
+| `companion-ui/docs/CANVAS_BROWSER_EDITOR_DECISION.md` | Canvas browser editor primitive and edit delivery decision |
+| `companion-ui/docs/PANEL_STATE_DISCOVERY_DELTA.md` | Panel discovery delta against the workspace aggregate |
 | `companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md` | Panel surface contract; vault write-back boundary rules |
 | `companion-ui/docs/CANVAS_AGENT_MVP_CONTRACT.md` | Canvas surface contract; in-session authority model |
 | `docs/COMPANION_UI_PRODUCT_SPEC.md` | Product mode model (Find/Reorient/Resurface/Act); upstream authority |
