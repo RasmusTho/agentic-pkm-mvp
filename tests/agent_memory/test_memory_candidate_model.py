@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from app.agent_memory.candidate import ContradictionState, MemoryCandidate, MemoryType, ReviewState
 
 

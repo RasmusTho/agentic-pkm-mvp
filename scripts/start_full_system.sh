@@ -607,9 +607,13 @@ resolve_channel_defaults() {
       COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-pkm-test}"
       API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18002}"
       ;;
-    prod|"")
+    prod)
       COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml:docker-compose.prod.yml}"
       COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-pkm-prod}"
+      API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"
+      ;;
+    "")
+      # Unset: inherit caller/Compose defaults without forcing prod overlay
       API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"
       ;;
     *)
