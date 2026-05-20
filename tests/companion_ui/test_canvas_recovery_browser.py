@@ -9,6 +9,7 @@ from companion_ui.workspace.real_note_workspace_dev_page import (
     RealNoteWorkspaceDevPage,
 )
 from companion_ui.workspace.serve_dev_page import render_index_html
+from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError
 
 
 class _FakeClient:
@@ -19,7 +20,10 @@ class _FakeClient:
 
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
         self.get_calls.append((url, params))
-        return self.payloads.pop(0)
+        payload = self.payloads.pop(0)
+        if isinstance(payload, Exception):
+            raise payload
+        return payload
 
     def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
         self.post_calls.append((url, json))
@@ -174,4 +178,27 @@ def test_recovery_ack_resets_for_new_conflict_cycle() -> None:
 
     assert state.canvas_conflict_detected is True
     assert state.canvas_recovery_acknowledged is False
+    assert state.canvas_can_edit_body is False
+
+
+def test_failed_post_edit_refresh_clears_trusted_hash_bypass() -> None:
+    client = _FakeClient([
+        _workspace_payload(content_hash="hash-1"),
+        WorkspaceClientNetworkError("refresh failed"),
+        _workspace_payload(content_hash="hash-2", recovery_needed=False),
+    ])
+    page = _load_page(client)
+
+    failed_refresh = page.apply_canvas_edit(
+        session_id="session-1",
+        note_path="Notes/canvas.md",
+        new_body="Updated.",
+        change_summary="edit before failed refresh",
+        content_hash="hash-1",
+    )
+    assert failed_refresh.is_loaded is False
+
+    state = page.load(NoteLoadIntent(note_path="Notes/canvas.md"))
+
+    assert state.canvas_conflict_detected is True
     assert state.canvas_can_edit_body is False
