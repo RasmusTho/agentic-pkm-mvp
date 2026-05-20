@@ -138,7 +138,37 @@ http://<host-lan-or-tailnet-ip>:8111/?note_path=<valid-dev-note-path>
 
 ---
 
-## 4. Environment-Bound Vault Access Model
+## 4. Production Launch Profile
+
+The production launch profile is separate from the dev/staging server. It keeps
+the same runtime-mediated workspace boundary, defaults to the production runtime
+API port, links production-profile static assets under `/static/`, and omits
+dev/staging markers from rendered output. It does not add auth, TLS, reverse
+proxying, public internet exposure, or direct vault access.
+
+```bash
+cd companion-ui/companion-app
+COMPANION_API_BASE_URL=http://127.0.0.1:18000 HOST=127.0.0.1 PORT=8113 \
+  python -m companion_ui.workspace.serve_production_page
+```
+
+Then open:
+
+```
+http://127.0.0.1:8113/?note_path=<valid-prod-note-path>
+```
+
+Production profile defaults:
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `COMPANION_API_BASE_URL` | `http://127.0.0.1:18000` | Production runtime API target |
+| `HOST` | `127.0.0.1` | Localhost-first bind address |
+| `PORT` | `8113` | Companion UI production profile port |
+
+---
+
+## 5. Environment-Bound Vault Access Model
 
 > The Companion UI dev page reads from whichever vault is bound to the
 > configured runtime API. It does not know or choose the vault directly.
@@ -159,7 +189,7 @@ targets. The runtime owns environment and vault binding.
 
 ---
 
-## 5. Manual UAT Against Environment-Bound Vaults
+## 6. Manual UAT Against Environment-Bound Vaults
 
 ### Verification steps
 
@@ -221,7 +251,7 @@ targets. The runtime owns environment and vault binding.
 
 ---
 
-## 6. Local Network / Tailscale Access
+## 7. Local Network / Tailscale Access
 
 ### Home network (LAN) access
 
@@ -271,7 +301,7 @@ targets. The runtime owns environment and vault binding.
 
 ---
 
-## 7. Safety Rules
+## 8. Safety Rules
 
 The following safety rules apply unconditionally to the dev/staging page:
 

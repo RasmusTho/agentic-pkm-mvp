@@ -477,6 +477,7 @@ def render_index_html(
     note_path: str = "",
     fields: Optional[dict] = None,
     error: str = "",
+    production_profile: bool = False,
 ) -> str:
     """Render the workspace dev page as a Companion UI visual shell.
 
@@ -493,16 +494,24 @@ def render_index_html(
         content_section = _render_error_section(error)
     elif fields is not None:
         content_section = _render_note_section(fields)
+    title_suffix = "PROD" if production_profile else "DEV"
+    dev_chip = "" if production_profile else '<span class="dev-chip">DEV / not production</span>'
+    production_static_link = (
+        '<link rel="stylesheet" href="/static/companion-workspace.css">'
+        if production_profile
+        else ""
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Companion UI — Real-Note Workspace [DEV]</title>
+  <title>Companion UI — Real-Note Workspace [{title_suffix}]</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Space+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet">
+  {production_static_link}
   <style>
     /* Yggdrasil design tokens (subset inlined for offline resilience) */
     :root {{
@@ -1021,7 +1030,7 @@ def render_index_html(
       <span class="api-label">Runtime API</span>
       <span class="api-url" title="{_e(api_base_url)}">{_e(api_base_url)}</span>
     </div>
-    <span class="dev-chip">DEV / not production</span>
+    {dev_chip}
   </div>
   <div class="load-bar">
     <form method="GET" action="/" style="display:flex;align-items:center;gap:8px;width:100%">
@@ -1046,6 +1055,7 @@ def handle_get(
     query_string: str,
     client: WorkspaceHttpClient,
     api_base_url: str,
+    production_profile: bool = False,
 ) -> str:
     """Parse query string, optionally load a note, and return full page HTML.
 
@@ -1069,10 +1079,17 @@ def handle_get(
         note_path=note_path,
         fields=fields,
         error=error,
+        production_profile=production_profile,
     )
 
 
-def make_handler(*, client: WorkspaceHttpClient, api_base_url: str) -> type:
+def make_handler(
+    *,
+    client: WorkspaceHttpClient,
+    api_base_url: str,
+    production_profile: bool = False,
+    static_assets: dict[str, tuple[str, bytes]] | None = None,
+) -> type:
     """Return a configured BaseHTTPRequestHandler subclass.
 
     The returned class closes over client and api_base_url as class attributes
@@ -1082,13 +1099,24 @@ def make_handler(*, client: WorkspaceHttpClient, api_base_url: str) -> type:
     class _Handler(BaseHTTPRequestHandler):
         _client = client
         _api_base_url = api_base_url
+        _production_profile = production_profile
+        _static_assets = static_assets or {}
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path in self._static_assets:
+                content_type, body = self._static_assets[parsed.path]
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             body = handle_get(
                 query_string=parsed.query,
                 client=self._client,
                 api_base_url=self._api_base_url,
+                production_profile=self._production_profile,
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
