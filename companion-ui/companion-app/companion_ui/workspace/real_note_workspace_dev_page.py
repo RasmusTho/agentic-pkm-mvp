@@ -392,6 +392,34 @@ class RealNoteWorkspaceDevPage:
             action="reject",
         )
 
+    def correct_panel_proposal(
+        self,
+        *,
+        proposal_id: str,
+        artifact_id: str,
+        note_path: str,
+        corrected_action_id: str | None = None,
+        corrected_parameters: dict[str, Any] | None = None,
+    ) -> DevPageState:
+        """Submit a corrected staged Panel proposal, then refresh workspace state."""
+        if corrected_action_id is None and corrected_parameters is None:
+            self.state.error = (
+                "Panel correction requires corrected_action_id or corrected_parameters"
+            )
+            self.state.is_loaded = False
+            return self.state
+        return self._submit_panel_decision(
+            proposal_id=proposal_id,
+            artifact_id=artifact_id,
+            note_path=note_path,
+            action="confirm",
+            correction={
+                "enabled": True,
+                "corrected_action_id": corrected_action_id,
+                "corrected_parameters": corrected_parameters,
+            },
+        )
+
     def _submit_panel_decision(
         self,
         *,
@@ -399,16 +427,20 @@ class RealNoteWorkspaceDevPage:
         artifact_id: str,
         note_path: str,
         action: str,
+        correction: dict[str, Any] | None = None,
     ) -> DevPageState:
+        request_payload: dict[str, Any] = {
+            "proposal_id": proposal_id,
+            "artifact_id": artifact_id,
+            "action": action,
+            "idempotency_key": str(uuid4()),
+        }
+        if correction is not None:
+            request_payload["correction"] = correction
         try:
             response = self._http.post(
                 "/api/panel/confirm",
-                json={
-                    "proposal_id": proposal_id,
-                    "artifact_id": artifact_id,
-                    "action": action,
-                    "idempotency_key": str(uuid4()),
-                },
+                json=request_payload,
             )
         except WorkspaceClientError as exc:
             self.state = DevPageState(error=str(exc))

@@ -392,7 +392,7 @@ def _render_panel_proposal_rows(proposals: list[dict]) -> str:
         affordances = proposal.get("affordances") or {}
         enabled_affordances = [
             label
-            for label in ("confirm", "reject")
+            for label in ("confirm", "correct", "reject")
             if affordances.get(label)
         ]
         buttons = "".join(
@@ -435,9 +435,16 @@ def _render_panel_confirm_response(response: dict) -> str:
     block_reason = response.get("block_reason") or {}
     receipt_html = ""
     if status in {"executed", "logged"} and receipt:
+        corrected_badge = ""
+        if receipt.get("message") == "corrected":
+            corrected_badge = (
+                '<span class="panel-confirm-corrected" '
+                'data-testid="workspace-panel-corrected-receipt">corrected</span>'
+            )
         receipt_html = (
             '<div class="panel-confirm-receipt" data-testid="workspace-panel-receipt">'
             + _e(receipt.get("message") or receipt.get("outcome") or status)
+            + corrected_badge
             + "</div>"
         )
     blocked_html = ""
