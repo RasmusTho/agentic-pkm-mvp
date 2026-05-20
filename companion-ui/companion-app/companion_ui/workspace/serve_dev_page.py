@@ -138,6 +138,8 @@ def _render_note_section(fields: dict) -> str:
     )
     suggestion_flow_html = _render_suggestion_flow_region(fields)
     suggestion_cards_html = _render_suggestion_cards(fields.get("suggestion_cards") or [])
+    portrait_sheet_html = _render_portrait_sheet(fields.get("portrait_sheet") or {})
+    shortcut_html = _render_keyboard_shortcuts(fields.get("keyboard_shortcuts") or {})
     governance_receipts_html = _render_governance_receipts(
         fields.get("governance_receipts") or []
     )
@@ -178,7 +180,11 @@ def _render_note_section(fields: dict) -> str:
         {suggested_insertions_html}
       </div>
     </div>
-    <aside class="agent-rail" data-testid="workspace-agent-rail" data-region="agent-rail">
+    <aside
+      class="agent-rail"
+      data-testid="workspace-agent-rail"
+      data-region="agent-rail"
+      data-layout-desktop="side-rail">
       <div class="rail-header">
         <span class="rail-label">Companion&nbsp;/ Panel</span>
         <span class="rail-badge" data-testid="workspace-panel-state">{panel_state}</span>
@@ -199,12 +205,14 @@ def _render_note_section(fields: dict) -> str:
         {panel_response_html}
         {suggestion_flow_html}
         {suggestion_cards_html}
+        {shortcut_html}
         {governance_receipts_html}
         {guard_html}
         {persistence_html}
         {panel_rail}
       </div>
     </aside>
+    {portrait_sheet_html}
   </div>"""
 
 
@@ -234,6 +242,49 @@ def _render_suggestion_flow_region(fields: dict) -> str:
           </div>
           <div class="suggestion-composer-state">{composer_text}</div>
           <div class="suggestion-transitions">{transition_html}</div>
+        </div>"""
+
+
+def _render_portrait_sheet(sheet: dict) -> str:
+    if not sheet:
+        return ""
+    visible = "true" if sheet.get("is_visible") else "false"
+    return f"""
+    <aside
+      class="portrait-sheet"
+      data-testid="{_e(sheet.get("data_testid", "portrait-sheet"))}"
+      data-layout-portrait="bottom-sheet"
+      data-suggestion-id="{_e(sheet.get("suggestion_id", ""))}"
+      data-rail-state="{_e(sheet.get("rail_state", ""))}"
+      data-current-snap="{_e(sheet.get("current_snap", ""))}"
+      data-height-hint="{_e(sheet.get("height_hint", ""))}"
+      data-auto-snap-target="{_e(sheet.get("auto_snap_target", ""))}"
+      data-forbidden-auto-snap="{_e(sheet.get("forbidden_auto_snap", ""))}"
+      data-touch-target-min-height="{_e(sheet.get("touch_target_min_height", ""))}"
+      data-receipts-strip-position="{_e(sheet.get("receipts_strip_position", ""))}"
+      aria-hidden="{visible == "false"}">
+    </aside>"""
+
+
+def _render_keyboard_shortcuts(shortcuts: dict) -> str:
+    bindings = shortcuts.get("key_bindings") or {}
+    if not bindings:
+        return ""
+    rows = "".join(
+        (
+            '<span class="shortcut-hint" data-testid="workspace-shortcut" '
+            f'data-intent="{_e(intent)}" data-key="{_e(key)}">{_e(key)}</span>'
+        )
+        for intent, key in bindings.items()
+    )
+    return f"""
+        <div
+          class="shortcut-map"
+          data-testid="workspace-shortcut-map"
+          data-variant="{_e(shortcuts.get("variant", ""))}"
+          data-rail-state="{_e(shortcuts.get("rail_state", ""))}"
+          data-ignore-input-focus="true">
+          {rows}
         </div>"""
 
 
@@ -1005,6 +1056,60 @@ def render_index_html(
       font-size: var(--text-xs);
       padding: 4px 7px;
       text-transform: uppercase;
+    }}
+    .shortcut-map {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 8px 10px;
+    }}
+    .shortcut-hint {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      min-height: 20px;
+    }}
+    .portrait-sheet {{
+      display: none;
+    }}
+    @media (max-width: 899px) {{
+      .workspace-shell {{
+        padding-bottom: 60px;
+      }}
+      .agent-rail {{
+        display: none;
+      }}
+      .portrait-sheet {{
+        background: var(--bg-surface);
+        border-top: 1px solid var(--border);
+        bottom: 0;
+        display: block;
+        left: 0;
+        min-height: 44px;
+        position: fixed;
+        right: 0;
+        z-index: 20;
+      }}
+      .portrait-sheet[data-current-snap="peek"] {{
+        height: 60px;
+      }}
+      .portrait-sheet[data-current-snap="half"] {{
+        height: 50vh;
+      }}
+      .portrait-sheet[data-current-snap="full"] {{
+        height: calc(100vh - 64px);
+      }}
+      .portrait-sheet[data-current-snap="closed"] {{
+        display: none;
+      }}
+    }}
+    @media (min-width: 900px) {{
+      .agent-rail[data-layout-desktop="side-rail"] {{
+        display: flex;
+      }}
     }}
     .panel-proposal-row {{
       background: var(--bg-raised);
