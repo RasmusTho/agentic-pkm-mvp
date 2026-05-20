@@ -138,6 +138,9 @@ def _render_note_section(fields: dict) -> str:
     )
     suggestion_flow_html = _render_suggestion_flow_region(fields)
     suggestion_cards_html = _render_suggestion_cards(fields.get("suggestion_cards") or [])
+    governance_receipts_html = _render_governance_receipts(
+        fields.get("governance_receipts") or []
+    )
     suggested_insertions_html = _render_suggested_insertions(
         fields.get("suggested_insertions") or []
     )
@@ -196,6 +199,7 @@ def _render_note_section(fields: dict) -> str:
         {panel_response_html}
         {suggestion_flow_html}
         {suggestion_cards_html}
+        {governance_receipts_html}
         {guard_html}
         {persistence_html}
         {panel_rail}
@@ -275,6 +279,33 @@ def _render_suggestion_cards(cards: list[dict]) -> str:
         </div>"""
         )
     return "\n".join(rows)
+
+
+def _render_governance_receipts(receipts: list[dict]) -> str:
+    rows: list[str] = []
+    for receipt in receipts:
+        rows.append(
+            f"""
+        <button
+          type="button"
+          class="receipt-pill"
+          data-testid="{_e(receipt.get("data_testid", "receipt-pill"))}"
+          data-receipt-id="{_e(receipt.get("data_receipt_id", ""))}"
+          data-suggestion-id="{_e(receipt.get("data_suggestion_id", ""))}"
+          data-artifact-id="{_e(receipt.get("data_artifact_id", ""))}"
+          data-status="{_e(receipt.get("data_status", ""))}"
+          data-intent="{_e(receipt.get("data_intent", "governance.openReceipt"))}"
+          aria-label="{_e(receipt.get("aria_label", ""))}">
+          <span class="receipt-pill-label">{_e(receipt.get("label", ""))}</span>
+          <span class="receipt-pill-time">{_e(receipt.get("display_timestamp", ""))}</span>
+        </button>"""
+        )
+    if not rows:
+        return ""
+    return f"""
+        <div class="receipts-strip" data-testid="receipts-strip" aria-live="polite">
+          {"".join(rows)}
+        </div>"""
 
 
 def _suggestion_action_label(intent: str) -> str:
