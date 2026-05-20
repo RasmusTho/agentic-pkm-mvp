@@ -27,7 +27,7 @@ def _clear_sessions():
 @pytest.fixture()
 def vault(tmp_path: Path) -> Path:
     note = tmp_path / "note.md"
-    note.write_text("# Hello\n\nOriginal body.\n", encoding="utf-8")
+    note.write_text("---\nuuid: note-uuid-canvas\n---\n\n# Hello\n\nOriginal body.\n", encoding="utf-8")
     return tmp_path
 
 
@@ -192,7 +192,30 @@ def test_governance_action_stages_panel_proposal(client: TestClient, vault: Path
     staged = confirm_module._proposal_store.get(intent_id)
     assert staged is not None
     assert staged.artifact_id == artifact_id
+    assert artifact_id == "note-uuid-canvas"
+    assert staged.intent_event.payload.note.uuid == "note-uuid-canvas"
+    assert staged.intent_event.payload.note.path == "note.md"
     assert staged.intent_event.payload.actions[0].mapping.params["field"] == "maturity"
+
+
+def test_canvas_governance_proposal_uses_workspace_artifact_uuid(client: TestClient, vault: Path) -> None:
+    confirm_module._proposal_store.clear()
+    open_resp = client.post(
+        "/api/canvas/sessions", json={"note_path": "note.md", "label": "gov-identity-test"}
+    )
+    session_id = open_resp.json()["session_id"]
+
+    gov_resp = client.post(
+        f"/api/canvas/sessions/{session_id}/governance",
+        json={"action_type": "frontmatter_update", "payload": {"field": "maturity", "value": "evergreen"}},
+    )
+
+    assert gov_resp.status_code == 200
+    artifact_id = gov_resp.json()["artifact_id"]
+    assert artifact_id == "note-uuid-canvas"
+    staged = confirm_module._proposal_store.get(gov_resp.json()["intent_id"])
+    assert staged is not None
+    assert staged.artifact_id == artifact_id
 
 
 def test_canvas_disabled_returns_403(monkeypatch, vault: Path) -> None:

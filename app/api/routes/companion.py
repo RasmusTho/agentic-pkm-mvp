@@ -8,23 +8,28 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-import yaml
 
 import app.api.routes.canvas as canvas_module
 import app.panel.confirmation as confirm_module
 from app.api.routes.artifacts import _content_hash, _extract_title
 from app.config.paths import resolve_vault_root
+from app.services.artifact_identity import resolve_note_artifact_identity
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
 router = APIRouter(prefix="/companion", tags=["companion"])
 
 
 class ArtifactState(BaseModel):
-    artifact_id: str
+    artifact_id: str | None
+    artifact_kind: str = "human_note"
     note_path: str
     title: str
     body: str
     content_hash: str
+    identity_source: str = "unknown"
+    identity_state: str = "unknown"
+    companion_of: str | None = None
+    owns_identity: bool = True
 
 
 class RuntimeState(BaseModel):
@@ -122,26 +127,6 @@ def _find_workspace_note(vault_root: Path, safe_note_path: str) -> Path | None:
     return None
 
 
-def _frontmatter_artifact_id(body: str) -> str | None:
-    if not body.startswith("---\n"):
-        return None
-    _, remainder = body.split("---\n", 1)
-    if "\n---" not in remainder:
-        return None
-    frontmatter_raw, _ = remainder.split("\n---", 1)
-    try:
-        loaded = yaml.safe_load(frontmatter_raw) or {}
-    except yaml.YAMLError:
-        return None
-    if not isinstance(loaded, dict):
-        return None
-    value = loaded.get("uuid") or loaded.get("id")
-    if value is None:
-        return None
-    artifact_id = str(value).strip()
-    return artifact_id or None
-
-
 def _vault_relative(path: Path, vault_root: Path) -> str | None:
     try:
         return path.relative_to(vault_root).as_posix()
@@ -197,12 +182,14 @@ def _undo_available_for_session(*, session: object, applied_edits: list[object])
     return current_body == getattr(latest, "body_after", None)
 
 
-def _proposal_count_for_artifact(artifact_id: str) -> int:
+def _proposal_count_for_artifact(artifact_id: str | None) -> int:
+    if artifact_id is None:
+        return 0
     proposals = getattr(confirm_module._proposal_store, "_proposals", {})
     return sum(1 for proposal in proposals.values() if proposal.artifact_id == artifact_id)
 
 
-def _panel_state(artifact_id: str) -> PanelState:
+def _panel_state(artifact_id: str | None) -> PanelState:
     proposal_count = _proposal_count_for_artifact(artifact_id)
     cache = getattr(confirm_module._idempotency_store, "_cache", {})
     relevant = [resp for resp in cache.values() if resp.artifact_id == artifact_id]
@@ -261,17 +248,29 @@ def read_companion_workspace(
         )
 
     body = artifact_path.read_text(encoding="utf-8")
-    artifact_id = _frontmatter_artifact_id(body) or _content_hash(safe_note_path)
+    identity = resolve_note_artifact_identity(
+        artifact_path=artifact_path,
+        vault_root=vault_root,
+        safe_note_path=safe_note_path,
+        body=body,
+    )
+    if identity.identity_state == "healed":
+        body = artifact_path.read_text(encoding="utf-8")
     canvas_enabled = _truthy_env("CANVAS_ENABLED")
     writeguard_status = _writeguard_status()
 
     return WorkspaceStateResponse(
         artifact=ArtifactState(
-            artifact_id=artifact_id,
+            artifact_id=identity.artifact_id,
+            artifact_kind=identity.artifact_kind,
             note_path=safe_note_path,
             title=_extract_title(body, fallback=artifact_path.stem),
             body=body,
             content_hash=_content_hash(body),
+            identity_source=identity.identity_source,
+            identity_state=identity.identity_state,
+            companion_of=identity.companion_of,
+            owns_identity=identity.owns_identity,
         ),
         runtime=RuntimeState(
             environment_label=_safe_environment_label(),
@@ -279,7 +278,7 @@ def read_companion_workspace(
             trace_id=trace_id,
         ),
         canvas=_canvas_state(safe_note_path, vault_root, canvas_enabled),
-        panel=_panel_state(artifact_id),
+        panel=_panel_state(identity.artifact_id),
         suggestions=SuggestionsState(),
         guards=GuardState(
             canvas_enabled=canvas_enabled,

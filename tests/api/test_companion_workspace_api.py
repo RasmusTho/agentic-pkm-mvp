@@ -91,6 +91,9 @@ def test_workspace_returns_artifact_payload(client: TestClient, vault_note: Path
     assert "Body text." in data["artifact"]["body"]
     assert data["artifact"]["content_hash"]
     assert data["artifact"]["artifact_id"] == "note-uuid-1"
+    assert data["artifact"]["artifact_kind"] == "human_note"
+    assert data["artifact"]["identity_source"] == "frontmatter.uuid"
+    assert data["artifact"]["identity_state"] == "resolved"
 
 
 def test_workspace_canvas_state_no_session(client: TestClient, vault_note: Path) -> None:
@@ -184,6 +187,149 @@ def test_workspace_panel_state(client: TestClient, vault_note: Path) -> None:
     assert panel["proposal_count"] == 1
     assert panel["receipt_count"] == 0
     assert panel["blocked_reason"] is None
+
+
+def test_workspace_artifact_id_uses_frontmatter_uuid(client: TestClient, vault_note: Path) -> None:
+    resp = _workspace(client)
+
+    assert resp.status_code == 200
+    artifact = resp.json()["artifact"]
+    assert artifact["artifact_id"] == "note-uuid-1"
+    assert artifact["identity_source"] == "frontmatter.uuid"
+    assert artifact["identity_state"] == "resolved"
+
+
+def test_workspace_missing_uuid_heals_eligible_note_without_hash_identity(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    note = tmp_path / "notes" / "uuidless.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("---\ntitle: UUIDless\n---\n\n# UUIDless\n\nBody.\n", encoding="utf-8")
+
+    resp = _workspace(client, "notes/uuidless.md")
+
+    assert resp.status_code == 200
+    artifact = resp.json()["artifact"]
+    assert artifact["artifact_id"]
+    assert artifact["artifact_id"] != companion_module._content_hash("notes/uuidless.md")
+    assert artifact["identity_source"] == "uuid_healing"
+    assert artifact["identity_state"] == "healed"
+    assert f"uuid: {artifact['artifact_id']}" in note.read_text(encoding="utf-8")
+
+
+def test_workspace_missing_uuid_unresolved_state_has_no_hash_artifact_id(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    note = tmp_path / "notes" / "blocked.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("# Blocked\n\nBody.\n", encoding="utf-8")
+
+    def _blocked(_path: Path) -> str:
+        raise WritesBlockedError("blocked", "write guard active", "ensure uuid")
+
+    monkeypatch.setattr(companion_module, "ensure_note_uuid", _blocked, raising=False)
+    monkeypatch.setattr("app.services.artifact_identity.ensure_note_uuid", _blocked)
+
+    resp = _workspace(client, "notes/blocked.md")
+
+    assert resp.status_code == 200
+    artifact = resp.json()["artifact"]
+    assert artifact["artifact_id"] is None
+    assert artifact["identity_source"] == "missing"
+    assert artifact["identity_state"] == "unresolved_missing_uuid"
+    assert artifact["artifact_id"] != companion_module._content_hash("notes/blocked.md")
+
+
+def test_workspace_companion_note_has_no_path_hash_identity(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    note_uuid = "note-uuid-1"
+    companion = tmp_path / "⚙️ System" / "companions" / f"{note_uuid}.md"
+    companion.parent.mkdir(parents=True, exist_ok=True)
+    companion.write_text(
+        "---\n"
+        f"uuid: {note_uuid}\n"
+        "source_ref: notes/note.md\n"
+        "content_hash: abc123\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resp = _workspace(client, f"⚙️ System/companions/{note_uuid}.md")
+
+    assert resp.status_code == 200
+    artifact = resp.json()["artifact"]
+    assert artifact["artifact_id"] == f"companion:{note_uuid}"
+    assert artifact["artifact_kind"] == "companion_note"
+    assert artifact["identity_source"] == "companion_path"
+    assert artifact["identity_state"] == "companion_of_resolved"
+    assert artifact["companion_of"] == note_uuid
+    assert artifact["owns_identity"] is False
+
+
+def test_workspace_legacy_companion_note_has_companion_identity(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    note_uuid = "legacy-note-uuid-1"
+    companion = tmp_path / "_system" / "companions" / f"{note_uuid}.md"
+    companion.parent.mkdir(parents=True, exist_ok=True)
+    companion.write_text(
+        "---\n"
+        f"uuid: {note_uuid}\n"
+        "source_ref: notes/note.md\n"
+        "content_hash: abc123\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resp = _workspace(client, f"_system/companions/{note_uuid}.md")
+
+    assert resp.status_code == 200
+    artifact = resp.json()["artifact"]
+    assert artifact["artifact_id"] == f"companion:{note_uuid}"
+    assert artifact["artifact_kind"] == "companion_note"
+    assert artifact["identity_source"] == "companion_path"
+    assert artifact["identity_state"] == "companion_of_resolved"
+    assert artifact["companion_of"] == note_uuid
+    assert artifact["owns_identity"] is False
+
+
+def test_workspace_panel_counts_canvas_origin_proposals_by_uuid(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("CANVAS_ENABLED", "1")
+    note = tmp_path / "notes" / "canvas.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(
+        "---\nuuid: note-uuid-canvas-workspace\n---\n\n# Canvas\n\nBody.\n",
+        encoding="utf-8",
+    )
+
+    open_resp = client.post(
+        "/api/canvas/sessions",
+        json={"note_path": "notes/canvas.md", "label": "workspace-panel-count"},
+    )
+    session_id = open_resp.json()["session_id"]
+    gov_resp = client.post(
+        f"/api/canvas/sessions/{session_id}/governance",
+        json={"action_type": "frontmatter_update", "payload": {"field": "maturity", "value": "evergreen"}},
+    )
+
+    assert gov_resp.status_code == 200
+    assert gov_resp.json()["artifact_id"] == "note-uuid-canvas-workspace"
+
+    resp = _workspace(client, "notes/canvas.md")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["artifact"]["artifact_id"] == "note-uuid-canvas-workspace"
+    assert data["panel"]["state"] == "proposals-staged"
+    assert data["panel"]["proposal_count"] == 1
 
 
 def test_workspace_guards(

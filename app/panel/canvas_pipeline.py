@@ -7,8 +7,8 @@ so the Companion UI can later confirm or reject it via POST /api/panel/confirm.
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
+from uuid import uuid4
 
 from app.events.panel import (
     NoteRef,
@@ -21,14 +21,6 @@ from app.events.panel import (
 )
 from app.panel.confirmation import ProposalStore, StagedProposal
 
-# Stable namespace for deterministic note UUIDs derived from note paths.
-_CANVAS_NS = uuid.UUID("6ba7b814-9dad-11d1-80b4-00c04fd430c8")
-
-
-def _note_uuid_from_path(note_path: str) -> str:
-    return str(uuid.uuid5(_CANVAS_NS, note_path))
-
-
 class CanvasPanelPipeline:
     """Route a canvas governance intent into the Panel ProposalStore.
 
@@ -40,9 +32,10 @@ class CanvasPanelPipeline:
     with artifact_id equal to the note_path relative to vault_root.
     """
 
-    def __init__(self, proposal_store: ProposalStore, artifact_id: str) -> None:
+    def __init__(self, proposal_store: ProposalStore, artifact_id: str, note_path: str) -> None:
         self._store = proposal_store
         self._artifact_id = artifact_id
+        self._note_path = note_path
 
     def submit_intent(
         self,
@@ -50,13 +43,13 @@ class CanvasPanelPipeline:
         payload: dict[str, Any],
         session_id: str,
     ) -> str:
-        proposal_id = uuid.uuid4().hex
+        proposal_id = uuid4().hex
         intent_event = PanelIntentEvent(
             source=PanelEventSource(component="canvas", trigger="governance"),
             payload=PanelIntentPayload(
                 note=NoteRef(
-                    uuid=_note_uuid_from_path(self._artifact_id),
-                    path=self._artifact_id,
+                    uuid=self._artifact_id,
+                    path=self._note_path,
                     origin=f"canvas/{session_id}",
                 ),
                 panel=PanelInfo(
