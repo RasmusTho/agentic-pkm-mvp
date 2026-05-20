@@ -365,3 +365,23 @@ All six task specs are complete and closed; promotion and rollback skills are au
 - Browser dev server delivered (#1103 / PR #1109): the Companion UI target architecture now includes a local browser dev server for the real-note workspace surface. Promoted to **Shipped** in the target architecture doc.
 - Target architecture for the Companion UI is defined as a local-first web app at `companion-ui/docs/TARGET_ARCHITECTURE.md` (#1102). The architecture preserves vault-first durability constraints and defines the local-first, browser-rendered posture.
 - Production Companion UI surface (full multi-note workspace, navigation, persistence) remains **planned** and not yet shipped. The delivered slices are the real-note rendering foundation.
+
+## Companion UI integration roadmap (2026-05-19)
+
+- First visual alignment pass delivered (#1119): Yggdrasil design tokens, note body as primary surface, companion rail placeholder, dev/staging marker. This is a dev/staging shell, not a production Companion UI contract.
+- Existing model/runtime foundations confirmed shipped and not to be rebuilt: Canvas Core models and session API (`canvas_core/`, `app/api/routes/canvas.py`), Panel models and confirmation service (`panel/`, `app/panel/confirmation.py`), Canvas Suggestion Flow models (`canvas_suggestion_flow/`), `GET /api/artifacts/note` artifact read endpoint. Remaining Companion UI work is browser wiring, read-side state discovery, stub replacement, and production shell hardening.
+- Governance stub replaced: `_StubPipeline` in `app/api/routes/canvas.py` wired to real `CanvasPanelPipeline` that stages proposals in `ProposalStore`; Panel correction path in `PanelConfirmationService` implemented.
+- **Issue-first policy**: all future Companion UI implementation changes must be governed by a bounded GitHub issue before implementation begins. Docs-first where contracts are undecided. Any issue that discovers a shipped model must be rescoped as integration work, not reimplementation.
+- Next implementation sequence (immediate queue — items 7–8 shipped above; items 3–6 and 9–10 are the active forward line):
+  1. `docs(companion-ui)`: define post-dev-server implementation roadmap
+  2. `companion-ui`: complete real-note workspace shell gaps after visual alignment pass
+  3. `docs(companion-ui)`: define workspace state read-side contract (defines `GET /api/companion/workspace` aggregate; cross-references existing Canvas API; includes explicit `session_persistence` capability field; resolves canvas registry durability)
+  4. `runtime-api`: expose read-side Companion workspace state endpoint
+  5. `docs(companion-ui)`: define local auth and trusted-device access model (trigger: after #4 merges)
+  6. `companion-ui`: bind browser shell to workspace state endpoint
+  7. ~~`canvas-api`: wire governance endpoint stub to real Panel pipeline~~ — **shipped**
+  8. ~~`panel`: implement correction payload path in PanelConfirmationService~~ — **shipped**
+  9. `docs(canvas-ui)`: decide browser editor integration for shipped Canvas API (blocked on #3)
+  10. `docs(panel-ui)`: define missing Panel state discovery delta — scoped as gap analysis against existing `PANEL_COMPANION_UI_CONTRACT.md`; not a new contract from scratch
+  - Items 3–6 and items 9–10 are sequential; items in each group can run in parallel where independent.
+  - Then: Canvas browser integration (wire existing models), suggestion-flow browser integration, Panel browser data-binding, product modes (Find/Reorient/Resurface/Act).

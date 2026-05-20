@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api.routes.canvas as canvas_module
+import app.panel.confirmation as confirm_module
 from app.api.app import app
 from app.api.routes.artifacts import _content_hash
 
@@ -169,6 +170,29 @@ def test_governance_action_creates_intent_not_note_edit(client: TestClient, vaul
     assert body["intent_id"]
     # Note file must NOT have been modified by the governance route
     assert note.read_text(encoding="utf-8") == original
+
+
+def test_governance_action_stages_panel_proposal(client: TestClient, vault: Path) -> None:
+    confirm_module._proposal_store.clear()
+    open_resp = client.post(
+        "/api/canvas/sessions", json={"note_path": "note.md", "label": "gov-stage-test"}
+    )
+    session_id = open_resp.json()["session_id"]
+
+    gov_resp = client.post(
+        f"/api/canvas/sessions/{session_id}/governance",
+        json={"action_type": "frontmatter_update", "payload": {"field": "maturity", "value": "evergreen"}},
+    )
+    assert gov_resp.status_code == 200
+    body = gov_resp.json()
+    intent_id = body["intent_id"]
+    artifact_id = body["artifact_id"]
+
+    # Proposal must be staged under intent_id, retrievable by Panel confirm service
+    staged = confirm_module._proposal_store.get(intent_id)
+    assert staged is not None
+    assert staged.artifact_id == artifact_id
+    assert staged.intent_event.payload.actions[0].mapping.params["field"] == "maturity"
 
 
 def test_canvas_disabled_returns_403(monkeypatch, vault: Path) -> None:
