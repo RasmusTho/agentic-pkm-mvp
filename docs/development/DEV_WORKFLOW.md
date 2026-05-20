@@ -73,6 +73,9 @@ Run narrower or broader suites when the touched area requires it.
 
 Enforcement note:
 - The command list above is a required pre-merge gate, not advisory.
+- Any PR that changes files under `app/` or `tests/` must run the repo-standard lint gate, currently `ruff check app tests`, before merge.
+- Docs-only PRs can keep validation lightweight and should not run full smoke by default unless their touched surface requires it.
+- When `app/` or `tests/` changed, include the `ruff check app tests` output or an explicit tooling limitation in the PR body.
 - If CI is not currently blocking these checks, treat merge as blocked until either:
   - the checks pass locally and evidence is attached to the PR, or
   - blocking CI coverage is added for the missing check and enabled.

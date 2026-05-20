@@ -257,6 +257,8 @@ Only move to Review when the PR is the **explicit review handoff artifact** (nor
 - Preserve architecture boundaries and event/outbox compatibility where relevant.
 - Update docs in the same change if behavior, contracts, or architecture change.
 - If the work turns a roadmap/plan item into shipped reality, update the owner doc and rewrite roadmap/plan wording so it no longer reads as pending.
+- For any PR that changes files under `app/` or `tests/`, run the repo-standard lint gate, currently `ruff check app tests`, before merge and include the lint output or explicit tooling limitation in the PR body.
+- Keep docs-only validation lightweight: docs-only PRs should run appropriate docs/governance checks, not the full code/test smoke by default.
 - Do not collapse parent feature validation and owner-doc promotion into one slice PR by default.
 - Use `Fixes #<issue>` in the PR.
 - Default to publishing a branch and PR in the same turn once implementation and validation are complete.
