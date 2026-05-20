@@ -131,6 +131,47 @@ def test_apply_correction_targets_specific_action_id() -> None:
     assert corrected.payload.actions[1].mapping.params["v"] == "old"
 
 
+def test_apply_correction_selects_corrected_action_without_parameters() -> None:
+    intent = PanelIntentEvent(
+        payload=PanelIntentPayload(
+            note=NoteRef(uuid="note-uuid-1"),
+            panel=PanelInfo(panel_id="p1", instruction="multi"),
+            actions=[
+                PanelIntentAction(
+                    id="act-original",
+                    label="original action",
+                    checked=True,
+                    mapping=PanelActionMapping(
+                        id="act-original",
+                        intent_type="frontmatter_update",
+                        downstream_event="panel.original",
+                        params={"field": "maturity", "value": "draft"},
+                    ),
+                ),
+                PanelIntentAction(
+                    id="act-corrected",
+                    label="corrected action",
+                    checked=False,
+                    mapping=PanelActionMapping(
+                        id="act-corrected",
+                        intent_type="frontmatter_update",
+                        downstream_event="panel.corrected",
+                        params={"field": "status", "value": "active"},
+                    ),
+                ),
+            ],
+        )
+    )
+    correction = CorrectionFields(enabled=True, corrected_action_id="act-corrected")
+
+    corrected = _apply_correction(intent, correction)
+
+    assert corrected.payload.actions[0].checked is False
+    assert corrected.payload.actions[1].checked is True
+    assert intent.payload.actions[0].checked is True
+    assert intent.payload.actions[1].checked is False
+
+
 # ---------------------------------------------------------------------------
 # Service-level correction path
 # ---------------------------------------------------------------------------
@@ -156,7 +197,7 @@ def test_correction_confirm_executes_corrected_intent() -> None:
         return result
 
     with patch.object(confirm_module, "execute_panel_intent", side_effect=_fake_execute):
-        resp = svc.confirm(
+        svc.confirm(
             ConfirmRequest(
                 proposal_id="prop-corr-1",
                 artifact_id="note-uuid-1",

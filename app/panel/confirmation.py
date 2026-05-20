@@ -222,15 +222,15 @@ def _apply_correction(
 ) -> "PanelIntentEvent":
     """Return a deep copy of intent_event with the correction applied.
 
-    If correction.corrected_action_id is set, only that action's mapping.params
-    is updated. If None, the correction is applied to all actions. The original
-    proposal is never mutated.
+    If correction.corrected_action_id is set, that action becomes the selected
+    action for confirmation. If corrected_parameters is also set, parameters are
+    merged into the selected action only. The original proposal is never mutated.
     """
-    from app.events.panel import PanelIntentEvent  # local import to avoid circular
-
     corrected = intent_event.model_copy(deep=True)
     for action in corrected.payload.actions:
         target = correction.corrected_action_id is None or action.id == correction.corrected_action_id
+        if correction.corrected_action_id is not None:
+            action.checked = target
         if target and correction.corrected_parameters is not None and action.mapping is not None:
             action.mapping.params = {**action.mapping.params, **correction.corrected_parameters}
     return corrected
