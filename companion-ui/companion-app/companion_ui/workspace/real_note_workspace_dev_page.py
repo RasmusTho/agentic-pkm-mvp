@@ -36,6 +36,8 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from uuid import uuid4
 
+from companion_ui.canvas_suggestion_flow.keyboard_shortcuts import SuggestionShortcutMap
+from companion_ui.canvas_suggestion_flow.portrait_sheet import PortraitSheet, SheetSnap
 from companion_ui.canvas_suggestion_flow.receipt_strip import ReceiptPill, ReceiptsStrip
 from companion_ui.canvas_suggestion_flow.suggested_insertion import (
     SuggestedInsertion,
@@ -121,6 +123,8 @@ class DevPageState:
     governance_pending_transition_path: list[str] | None = None
     governance_actions: list[dict[str, Any]] | None = None
     governance_receipts: list[dict[str, Any]] | None = None
+    portrait_sheet: dict[str, Any] | None = None
+    keyboard_shortcuts: dict[str, Any] | None = None
     suggestion_cards: list[dict[str, Any]] | None = None
     suggested_insertions: list[dict[str, Any]] | None = None
     guard_writeguard_status: str = "ok"
@@ -242,6 +246,7 @@ class RealNoteWorkspaceDevPage:
         panel_last_response = self.state.panel_last_response
         if panel_last_response and panel_last_response.get("artifact_id") != resolved_artifact_id:
             panel_last_response = None
+        suggestion_cards = _suggestion_cards_from_payload(suggestions)
         self.state = DevPageState(
             shell=shell,
             panel_rail_placeholder=panel_render.get("label", "Panel ready"),
@@ -267,8 +272,16 @@ class RealNoteWorkspaceDevPage:
             suggestion_dom_alias=suggestion_machine.dom_alias,
             suggestion_allowed_transitions=sorted(suggestion_machine.allowed_transitions()),
             suggestion_composer_enabled=suggestion_machine.composer_enabled,
-            suggestion_cards=_suggestion_cards_from_payload(suggestions),
+            suggestion_cards=suggestion_cards,
             governance_actions=_governance_actions_from_payload(suggestions),
+            portrait_sheet=_portrait_sheet_from_cards(
+                suggestion_cards,
+                rail_state=suggestion_machine.state,
+            ),
+            keyboard_shortcuts=_shortcut_map_from_cards(
+                suggestion_cards,
+                rail_state=suggestion_machine.state,
+            ),
             suggested_insertions=_suggested_insertions_from_payload(suggestions),
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
             guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
@@ -651,6 +664,8 @@ class RealNoteWorkspaceDevPage:
             "governance_pending_transition_path": self.state.governance_pending_transition_path
             or [],
             "governance_receipts": self.state.governance_receipts or [],
+            "portrait_sheet": self.state.portrait_sheet or {},
+            "keyboard_shortcuts": self.state.keyboard_shortcuts or {},
             "suggestion_cards": self.state.suggestion_cards or [],
             "suggested_insertions": self.state.suggested_insertions or [],
             "guard_writeguard_status": self.state.guard_writeguard_status,
@@ -771,6 +786,37 @@ def _governance_actions_from_payload(suggestions: dict[str, Any]) -> list[dict[s
             }
         )
     return actions
+
+
+def _portrait_sheet_from_cards(
+    cards: list[dict[str, Any]],
+    *,
+    rail_state: str,
+) -> dict[str, Any]:
+    suggestion_id = str(cards[0].get("data_suggestion_id") or "suggestion") if cards else "none"
+    sheet = PortraitSheet(
+        suggestion_id=suggestion_id,
+        current_snap=SheetSnap.PEEK if cards else SheetSnap.CLOSED,
+        rail_state=rail_state,
+    )
+    if rail_state in {"staged_body", "staged_governance"}:
+        sheet = sheet.auto_snap_on_proposal()
+    return sheet.to_render_dict()
+
+
+def _shortcut_map_from_cards(
+    cards: list[dict[str, Any]],
+    *,
+    rail_state: str,
+) -> dict[str, Any]:
+    variant = str(cards[0].get("data_variant") or "terminal") if cards else "terminal"
+    if rail_state in {"applied", "discarded"}:
+        variant = "terminal"
+    return SuggestionShortcutMap(
+        variant=variant,
+        rail_state=rail_state,
+        terminal_state=rail_state in {"applied", "discarded", "blocked"},
+    ).to_render_dict()
 
 
 def _suggested_insertions_from_payload(suggestions: dict[str, Any]) -> list[dict[str, Any]]:
