@@ -166,6 +166,7 @@ class RealNoteWorkspaceDevPage:
         try:
             raw = self._http.get("/api/companion/workspace", params=params)
         except WorkspaceClientError as exc:
+            self._trusted_hash_refresh_notes.discard(intent.note_path)
             self.state = DevPageState(error=str(exc))
             return self.state
 
