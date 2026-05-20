@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from uuid import uuid4
 
+from companion_ui.canvas_suggestion_flow.receipt_strip import ReceiptPill, ReceiptsStrip
 from companion_ui.canvas_suggestion_flow.suggested_insertion import (
     SuggestedInsertion,
 )
@@ -117,6 +118,9 @@ class DevPageState:
     suggestion_allowed_transitions: list[str] | None = None
     suggestion_composer_enabled: bool = True
     suggestion_apply_transition_path: list[str] | None = None
+    governance_pending_transition_path: list[str] | None = None
+    governance_actions: list[dict[str, Any]] | None = None
+    governance_receipts: list[dict[str, Any]] | None = None
     suggestion_cards: list[dict[str, Any]] | None = None
     suggested_insertions: list[dict[str, Any]] | None = None
     guard_writeguard_status: str = "ok"
@@ -264,6 +268,7 @@ class RealNoteWorkspaceDevPage:
             suggestion_allowed_transitions=sorted(suggestion_machine.allowed_transitions()),
             suggestion_composer_enabled=suggestion_machine.composer_enabled,
             suggestion_cards=_suggestion_cards_from_payload(suggestions),
+            governance_actions=_governance_actions_from_payload(suggestions),
             suggested_insertions=_suggested_insertions_from_payload(suggestions),
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
             guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
@@ -396,6 +401,91 @@ class RealNoteWorkspaceDevPage:
         refreshed.suggestion_allowed_transitions = sorted(machine.allowed_transitions())
         refreshed.suggestion_composer_enabled = machine.composer_enabled
         refreshed.suggestion_apply_transition_path = transition_path
+        return refreshed
+
+    def queue_governance_suggestion(
+        self,
+        *,
+        suggestion_id: str,
+        session_id: str,
+        note_path: str,
+    ) -> DevPageState:
+        """Queue a staged governance suggestion through the Canvas Panel pipeline."""
+        if self.state.shell is None:
+            self.state.error = "No workspace note is loaded"
+            self.state.is_loaded = False
+            return self.state
+        if self.state.suggestion_state != "staged_governance":
+            self.state.error = "Governance queue requires staged_governance state"
+            self.state.is_loaded = False
+            return self.state
+
+        action = next(
+            (
+                item
+                for item in (self.state.governance_actions or [])
+                if item.get("suggestion_id") == suggestion_id
+            ),
+            None,
+        )
+        if action is None:
+            self.state.error = f"Unknown governance suggestion: {suggestion_id}"
+            self.state.is_loaded = False
+            return self.state
+
+        machine = CanvasRailStateMachine(self.state.suggestion_state)
+        transition_path = [machine.state]
+        machine.transition("governance_pending")
+        transition_path.append(machine.state)
+
+        try:
+            response = self._http.post(
+                f"/api/canvas/sessions/{session_id}/governance",
+                json={
+                    "action_type": action["action_type"],
+                    "payload": action["payload"],
+                },
+            )
+        except WorkspaceClientError as exc:
+            machine.transition("staged_governance", error=str(exc))
+            self.state.suggestion_state = machine.state
+            self.state.suggestion_dom_alias = machine.dom_alias
+            self.state.suggestion_allowed_transitions = sorted(machine.allowed_transitions())
+            self.state.suggestion_composer_enabled = machine.composer_enabled
+            self.state.governance_pending_transition_path = transition_path + [machine.state]
+            self.state.error = str(exc)
+            self.state.is_loaded = False
+            return self.state
+
+        receipt = ReceiptPill(
+            receipt_id=str(response.get("intent_id") or ""),
+            suggestion_id=suggestion_id,
+            artifact_id=str(response.get("artifact_id") or self.state.shell.artifact_id),
+            outcome="queued",
+            label=f"queued · {response.get('intent_id')} · {action['action_type']}",
+            display_timestamp="queued",
+            message=action.get("summary"),
+        ).to_render_dict()
+
+        refreshed = self.load(NoteLoadIntent(note_path=note_path))
+        refreshed.suggestion_state = machine.state
+        refreshed.suggestion_dom_alias = machine.dom_alias
+        refreshed.suggestion_allowed_transitions = sorted(machine.allowed_transitions())
+        refreshed.suggestion_composer_enabled = machine.composer_enabled
+        refreshed.governance_pending_transition_path = transition_path
+        refreshed.governance_receipts = ReceiptsStrip(
+            pills=[
+                ReceiptPill(
+                    receipt_id=receipt["data_receipt_id"],
+                    suggestion_id=receipt["data_suggestion_id"],
+                    artifact_id=receipt["data_artifact_id"],
+                    outcome=receipt["data_status"],
+                    label=receipt["label"],
+                    display_timestamp=receipt["display_timestamp"],
+                    message=receipt.get("message"),
+                )
+            ]
+        ).to_render_dict()["non_terminal_pills"]
         return refreshed
 
     def acknowledge_canvas_recovery(self, *, note_path: str) -> DevPageState:
@@ -558,6 +648,9 @@ class RealNoteWorkspaceDevPage:
             "suggestion_composer_enabled": self.state.suggestion_composer_enabled,
             "suggestion_apply_transition_path": self.state.suggestion_apply_transition_path
             or [],
+            "governance_pending_transition_path": self.state.governance_pending_transition_path
+            or [],
+            "governance_receipts": self.state.governance_receipts or [],
             "suggestion_cards": self.state.suggestion_cards or [],
             "suggested_insertions": self.state.suggested_insertions or [],
             "guard_writeguard_status": self.state.guard_writeguard_status,
@@ -652,6 +745,32 @@ def _suggestion_cards_from_payload(suggestions: dict[str, Any]) -> list[dict[str
         )
         cards.append(card.as_render_dict())
     return cards
+
+
+def _governance_actions_from_payload(suggestions: dict[str, Any]) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    fallback_classification = suggestions.get("server_declared_classification")
+    for index, raw in enumerate(_suggestion_payloads(suggestions), start=1):
+        variant = raw.get("server_declared_classification") or fallback_classification
+        if variant != "governance":
+            continue
+        suggestion_id = str(raw.get("suggestion_id") or f"suggestion-{index}")
+        payload = raw.get("payload")
+        if not isinstance(payload, dict):
+            payload = {
+                "suggestion_id": suggestion_id,
+                "title": raw.get("title"),
+                "summary": raw.get("summary") or raw.get("preview_text"),
+            }
+        actions.append(
+            {
+                "suggestion_id": suggestion_id,
+                "action_type": str(raw.get("action_type") or "frontmatter_update"),
+                "payload": payload,
+                "summary": raw.get("summary") or raw.get("preview_text"),
+            }
+        )
+    return actions
 
 
 def _suggested_insertions_from_payload(suggestions: dict[str, Any]) -> list[dict[str, Any]]:
