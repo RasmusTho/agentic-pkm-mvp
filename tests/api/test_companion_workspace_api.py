@@ -123,7 +123,7 @@ def test_workspace_canvas_state_with_open_session(
         canvas_module._AppliedBodyEdit(
             edit_id="edit-1",
             body_before="Body text.\n",
-            body_after="Updated body.\n",
+            body_after=canvas_module._note_body(vault_note),
             change_summary="updated",
         )
     ]
@@ -140,6 +140,36 @@ def test_workspace_canvas_state_with_open_session(
     assert canvas["applied_edit_count"] == 1
     assert canvas["undone_edit_count"] == 0
     assert canvas["session_persistence"] == "in_memory"
+
+
+def test_workspace_undo_unavailable_when_note_body_diverged(
+    client: TestClient, vault_note: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CANVAS_ENABLED", "1")
+    log_path = tmp_path / ".chats" / "note" / "session.md"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("session", encoding="utf-8")
+    canvas_module._sessions["session-1"] = SessionLog(
+        log_path=log_path,
+        session_id="session-1",
+        note_path=vault_note,
+        label="test",
+    )
+    canvas_module._edit_history["session-1"] = [
+        canvas_module._AppliedBodyEdit(
+            edit_id="edit-1",
+            body_before="Body text.\n",
+            body_after="Updated body.\n",
+            change_summary="updated",
+        )
+    ]
+
+    resp = _workspace(client)
+
+    assert resp.status_code == 200
+    canvas = resp.json()["canvas"]
+    assert canvas["applied_edit_count"] == 1
+    assert canvas["undo_available"] is False
 
 
 def test_workspace_panel_state(client: TestClient, vault_note: Path) -> None:

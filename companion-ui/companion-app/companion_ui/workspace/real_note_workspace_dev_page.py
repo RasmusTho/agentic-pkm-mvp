@@ -41,6 +41,7 @@ from companion_ui.canvas_suggestion_flow.suggested_insertion import (
 )
 from companion_ui.canvas_suggestion_flow.rail_state_machine import (
     CanvasRailStateMachine,
+    RAIL_STATES,
 )
 from companion_ui.canvas_suggestion_flow.suggestion_card import SuggestionCard
 from companion_ui.panel.proposal_row import ProposalEvidence, ProposalRow
@@ -150,7 +151,8 @@ class RealNoteWorkspaceDevPage:
         self._http = http_client
         self.state: DevPageState = DevPageState()
         self._last_content_hash_by_note: dict[str, str] = {}
-        self._acknowledged_recovery_notes: set[str] = set()
+        self._acknowledged_recovery_tokens: set[tuple[str, str, str, str]] = set()
+        self._trusted_hash_refresh_notes: set[str] = set()
 
     def load(self, intent: NoteLoadIntent) -> DevPageState:
         """Load a note via the runtime API.
@@ -193,13 +195,20 @@ class RealNoteWorkspaceDevPage:
         previous_hash = self._last_content_hash_by_note.get(resolved_note_path)
         session_state = canvas.get("session_state") or "idle"
         recovery_needed = bool(canvas.get("recovery_needed", False))
-        recovery_acknowledged = resolved_note_path in self._acknowledged_recovery_notes
+        recovery_token = _recovery_token(
+            note_path=resolved_note_path,
+            session_id=canvas.get("session_id"),
+            session_state=session_state,
+            content_hash=content_hash,
+        )
+        recovery_acknowledged = recovery_token in self._acknowledged_recovery_tokens
         hash_conflict = (
-            recovery_needed
-            and previous_hash is not None
+            previous_hash is not None
             and bool(content_hash)
             and previous_hash != content_hash
+            and resolved_note_path not in self._trusted_hash_refresh_notes
         )
+        self._trusted_hash_refresh_notes.discard(resolved_note_path)
         state_conflict = session_state in {"paused", "interrupted"}
         conflict_detected = recovery_needed or hash_conflict or state_conflict
         runtime_can_edit_body = bool(canvas.get("can_edit_body", False))
@@ -222,8 +231,11 @@ class RealNoteWorkspaceDevPage:
             artifact_id=resolved_artifact_id,
         )
         suggestion_machine = CanvasRailStateMachine(
-            suggestions.get("current_suggestion_state") or "idle"
+            _normalise_suggestion_state(suggestions.get("current_suggestion_state"))
         )
+        panel_last_response = self.state.panel_last_response
+        if panel_last_response and panel_last_response.get("artifact_id") != resolved_artifact_id:
+            panel_last_response = None
         self.state = DevPageState(
             shell=shell,
             panel_rail_placeholder=panel_render.get("label", "Panel ready"),
@@ -244,7 +256,7 @@ class RealNoteWorkspaceDevPage:
             panel_proposal_count=panel_count,
             panel_render=panel_render,
             panel_proposals=panel_proposals,
-            panel_last_response=self.state.panel_last_response,
+            panel_last_response=panel_last_response,
             suggestion_state=suggestion_machine.state,
             suggestion_dom_alias=suggestion_machine.dom_alias,
             suggestion_allowed_transitions=sorted(suggestion_machine.allowed_transitions()),
@@ -312,12 +324,20 @@ class RealNoteWorkspaceDevPage:
         except WorkspaceClientError as exc:
             self.state = DevPageState(error=str(exc))
             return self.state
+        self._trusted_hash_refresh_notes.add(note_path)
         return self.load(NoteLoadIntent(note_path=note_path))
 
     def acknowledge_canvas_recovery(self, *, note_path: str) -> DevPageState:
         """Acknowledge recovery/conflict state before body edits resume."""
-        self._acknowledged_recovery_notes.add(note_path)
         if self.state.shell is not None and self.state.shell.note_path == note_path:
+            self._acknowledged_recovery_tokens.add(
+                _recovery_token(
+                    note_path=note_path,
+                    session_id=self.state.canvas_session_id,
+                    session_state=self.state.canvas_session_state,
+                    content_hash=self.state.shell.content_hash,
+                )
+            )
             self.state.canvas_recovery_acknowledged = True
             self.state.canvas_conflict_detected = False
             self.state.canvas_can_edit_body = self.state.canvas_runtime_can_edit_body
@@ -485,6 +505,21 @@ def _proposal_affordance_set(raw: Any) -> set[str]:
     return {"confirm", "correct", "reject"}
 
 
+def _normalise_suggestion_state(raw_state: Any) -> str:
+    state = str(raw_state or "idle")
+    return state if state in RAIL_STATES else "idle"
+
+
+def _recovery_token(
+    *,
+    note_path: str,
+    session_id: Any,
+    session_state: str,
+    content_hash: str,
+) -> tuple[str, str, str, str]:
+    return (note_path, str(session_id or ""), session_state, content_hash)
+
+
 def _suggestion_payloads(suggestions: dict[str, Any]) -> list[dict[str, Any]]:
     raw = suggestions.get("proposals") or suggestions.get("proposal")
     if raw is None and suggestions.get("server_declared_classification"):
@@ -521,10 +556,13 @@ def _suggested_insertions_from_payload(suggestions: dict[str, Any]) -> list[dict
         variant = raw.get("server_declared_classification") or fallback_classification
         if variant != "body":
             continue
+        proposed_text = str(raw.get("proposed_text") or raw.get("preview_text") or "")
+        if not proposed_text:
+            continue
         insertion = SuggestedInsertion(
             suggestion_id=str(raw.get("suggestion_id") or f"suggestion-{index}"),
             anchor_description=str(raw.get("anchor_description") or "current note body"),
-            proposed_text=str(raw.get("proposed_text") or raw.get("preview_text") or ""),
+            proposed_text=proposed_text,
         )
         insertions.append(insertion.as_render_dict())
     return insertions
